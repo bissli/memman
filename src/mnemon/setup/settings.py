@@ -5,6 +5,15 @@ import os
 from pathlib import Path
 
 
+def _unexpand_home(path: str) -> str:
+    """Replace home directory prefix with ~ for portability.
+    """
+    home = str(Path.home())
+    if path.startswith(home):
+        return '~' + path[len(home):]
+    return path
+
+
 def strip_json5(s: str) -> str:
     """Remove // line comments and trailing commas from JSON5 input."""
     result = []
@@ -127,7 +136,7 @@ def add_claude_hooks_selective(
         'hooks': [
             {
                 'type': 'command',
-                'command': os.path.join(hooks_dir, 'prime.sh'),
+                'command': _unexpand_home(os.path.join(hooks_dir, 'prime.sh')),
                 },
             ],
         }
@@ -142,8 +151,8 @@ def add_claude_hooks_selective(
             'hooks': [
                 {
                     'type': 'command',
-                    'command': os.path.join(
-                        hooks_dir, 'user_prompt.sh'),
+                    'command': _unexpand_home(os.path.join(
+                        hooks_dir, 'user_prompt.sh')),
                     },
                 ],
             }
@@ -158,7 +167,7 @@ def add_claude_hooks_selective(
             'hooks': [
                 {
                     'type': 'command',
-                    'command': os.path.join(hooks_dir, 'stop.sh'),
+                    'command': _unexpand_home(os.path.join(hooks_dir, 'stop.sh')),
                     },
                 ],
             }
@@ -173,7 +182,7 @@ def add_claude_hooks_selective(
             'hooks': [
                 {
                     'type': 'command',
-                    'command': os.path.join(hooks_dir, 'compact.sh'),
+                    'command': _unexpand_home(os.path.join(hooks_dir, 'compact.sh')),
                     },
                 ],
             }
@@ -188,8 +197,8 @@ def add_claude_hooks_selective(
             'hooks': [
                 {
                     'type': 'command',
-                    'command': os.path.join(
-                        hooks_dir, 'task_recall.sh'),
+                    'command': _unexpand_home(os.path.join(
+                        hooks_dir, 'task_recall.sh')),
                     },
                 ],
             'matcher': 'Task',
