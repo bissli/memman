@@ -1,4 +1,4 @@
-"""Click CLI for mnemon — all 14 commands."""
+"""Click CLI for mnemon — all 15 commands."""
 
 import json
 import os
@@ -155,7 +155,8 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
         db.close()
 
 
-def _remember_impl(db: 'DB', insight: Insight, content: str, no_diff: bool) -> None:
+def _remember_impl(db: 'DB', insight: Insight, content: str,
+                   no_diff: bool, replaced_id: str = '') -> None:
     """Core remember implementation."""
     from mnemon.embed.ollama import Client as EmbedClient
     from mnemon.embed.vector import deserialize_vector, serialize_vector
@@ -193,10 +194,12 @@ def _remember_impl(db: 'DB', insight: Insight, content: str, no_diff: bool) -> N
                     embed_cache[eid] = v
 
     diff_action = 'added'
-    replaced_id = ''
     diff_suggestion = 'ADD'
 
-    if no_diff:
+    if replaced_id:
+        diff_action = 'replaced'
+        diff_suggestion = 'REPLACE'
+    elif no_diff:
         diff_action = 'added'
         diff_suggestion = 'ADD'
     else:
@@ -245,10 +248,11 @@ def _remember_impl(db: 'DB', insight: Insight, content: str, no_diff: bool) -> N
     def tx_body() -> None:
         nonlocal edge_stats, ei, pruned, embedded, embed_cache
 
-        if diff_action == 'updated' and replaced_id:
+        if diff_action in {'updated', 'replaced'} and replaced_id:
+            op_name = 'replace' if diff_action == 'replaced' else 'diff-replace'
             try:
                 soft_delete_insight(db, replaced_id)
-                log_op(db, 'diff-replace', replaced_id,
+                log_op(db, op_name, replaced_id,
                        f'replaced by {insight.id}')
                 if embed_cache and replaced_id in embed_cache:
                     del embed_cache[replaced_id]
@@ -458,6 +462,102 @@ def forget(ctx: click.Context, id: str) -> None:
             })
     except ValueError as e:
         raise click.ClickException(str(e))
+    finally:
+        db.close()
+
+
+@cli.command()
+@click.argument('id')
+@click.argument('content', nargs=-1, required=True)
+@click.option('--cat', default='general', help='Category')
+@click.option('--imp', default=3, type=int, help='Importance (1-5)')
+@click.option('--tags', default='', help='Comma-separated tags')
+@click.option('--source', default='user', help='Source')
+@click.option('--entities', default='', help='Comma-separated entities')
+@click.pass_context
+def replace(ctx: click.Context, id: str, content: tuple[str, ...],
+            cat: str, imp: int, tags: str, source: str,
+            entities: str) -> None:
+    """Replace an insight by ID with new content."""
+    from mnemon.store.node import get_insight_by_id
+
+    content_str = ' '.join(content)
+    content_bytes = len(content_str.encode('utf-8'))
+    if content_bytes > 8000:
+        raise click.ClickException(
+            f'content too long ({content_bytes} chars, max 8000);'
+            ' consider chunking into multiple remember calls')
+
+    if cat not in VALID_CATEGORIES:
+        raise click.ClickException(
+            f'invalid category {cat!r}; valid: preference, decision,'
+            ' fact, insight, context, general')
+    if imp < 1 or imp > 5:
+        raise click.ClickException(
+            f'importance must be 1-5, got {imp}')
+
+    db = _open_db(ctx)
+    try:
+        old = get_insight_by_id(db, id)
+        if old is None:
+            raise click.ClickException(
+                f'insight {id} not found or already deleted')
+
+        cat_src = ctx.get_parameter_source('cat')
+        imp_src = ctx.get_parameter_source('imp')
+        tags_src = ctx.get_parameter_source('tags')
+        source_src = ctx.get_parameter_source('source')
+        entities_src = ctx.get_parameter_source('entities')
+
+        if cat_src != click.core.ParameterSource.COMMANDLINE:
+            cat = old.category
+        if imp_src != click.core.ParameterSource.COMMANDLINE:
+            imp = old.importance
+        if tags_src != click.core.ParameterSource.COMMANDLINE:
+            tags = ','.join(old.tags) if old.tags else ''
+        if source_src != click.core.ParameterSource.COMMANDLINE:
+            source = old.source
+        if entities_src != click.core.ParameterSource.COMMANDLINE:
+            entities = ','.join(old.entities) if old.entities else ''
+
+        tag_list: list[str] = []
+        if tags:
+            for t in tags.split(','):
+                t = t.strip()
+                if t:
+                    if len(t) > 100:
+                        raise click.ClickException(
+                            f'tag too long ({len(t)} chars, max 100):'
+                            f' {t[:50]}')
+                    tag_list.append(t)
+            if len(tag_list) > 20:
+                raise click.ClickException(
+                    f'too many tags ({len(tag_list)}, max 20)')
+
+        entity_list: list[str] = []
+        if entities:
+            for e in entities.split(','):
+                e = e.strip()
+                if e:
+                    if len(e) > 200:
+                        raise click.ClickException(
+                            f'entity too long ({len(e)} chars, max 200):'
+                            f' {e[:50]}')
+                    entity_list.append(e)
+            if len(entity_list) > 50:
+                raise click.ClickException(
+                    f'too many entities ({len(entity_list)}, max 50)')
+
+        now = datetime.now(timezone.utc)
+        new_insight = Insight(
+            id=str(uuid.uuid4()), content=content_str,
+            category=cat, importance=imp, tags=tag_list,
+            entities=entity_list, source=source,
+            access_count=old.access_count,
+            created_at=now, updated_at=now)
+
+        _remember_impl(db, new_insight, content_str,
+                       no_diff=True, replaced_id=id)
     finally:
         db.close()
 

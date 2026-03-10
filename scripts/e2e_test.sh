@@ -236,6 +236,19 @@ OUT=$($M --data-dir "$TESTDIR" status)
 assert_jq "total now 0"    "$OUT" '.total_insights'   '0'
 assert_jq "deleted now 1"  "$OUT" '.deleted_insights'  '1'
 
+step "replace — atomic replacement with traceability"
+OUT=$($M --data-dir "$TESTDIR" remember --no-diff "Python is best for scripting" --cat fact --imp 3)
+ID_REPL=$(extract_id "$OUT")
+
+OUT=$($M --data-dir "$TESTDIR" replace "$ID_REPL" "Python is excellent for scripting")
+show_json "$OUT" 15
+assert_jq "action is replaced" "$OUT" '.action' 'replaced'
+assert_jq "replaced_id set"   "$OUT" '.replaced_id' "$ID_REPL"
+
+OUT=$($M --data-dir "$TESTDIR" search "Python scripting")
+assert_contains "new content present" "$OUT" "Python is excellent"
+assert_not_contains "old content gone" "$OUT" "Python is best"
+
 # ══════════════════════════════════════════════════════════════════════
 banner "Milestone 2: Graph Edge Auto-Generation"
 # ══════════════════════════════════════════════════════════════════════

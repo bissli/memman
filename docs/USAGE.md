@@ -75,6 +75,9 @@ mnemon recall "auth" --basic
 # Search — token-scored keyword search
 mnemon search "authentication" --limit 10
 
+# Replace — deterministic replacement by ID (inherits metadata from original)
+mnemon replace <id> "Updated content" --cat decision --imp 5
+
 # Forget — soft-delete an insight
 mnemon forget <id>
 ```

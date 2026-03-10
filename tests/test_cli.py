@@ -212,3 +212,105 @@ def test_gc_review_empty(runner):
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data['total_flagged'] == 0
+
+
+def test_replace_basic(runner):
+    """Replace an insight, verify old soft-deleted, new exists."""
+    result = invoke(runner, ['remember', 'old fact', '--no-diff',
+                             '--cat', 'fact', '--imp', '3'])
+    old_id = json.loads(result.output)['id']
+
+    result = invoke(runner, ['replace', old_id, 'new fact'])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data['action'] == 'replaced'
+    assert data['replaced_id'] == old_id
+    assert data['content'] == 'new fact'
+
+    result = invoke(runner, ['recall', 'new fact', '--basic'])
+    hits = json.loads(result.output)
+    assert any(h['content'] == 'new fact' for h in hits)
+
+    result = invoke(runner, ['recall', 'old fact', '--basic'])
+    hits = json.loads(result.output)
+    assert not any(h['content'] == 'old fact' for h in hits)
+
+
+def test_replace_inherits_metadata(runner):
+    """Replace without flags inherits cat/imp/tags from original."""
+    result = invoke(runner, ['remember', 'original insight', '--no-diff',
+                             '--cat', 'decision', '--imp', '5',
+                             '--tags', 'arch,design'])
+    old_id = json.loads(result.output)['id']
+
+    result = invoke(runner, ['replace', old_id, 'updated insight'])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data['category'] == 'decision'
+    assert data['importance'] == 5
+    assert 'arch' in data['tags']
+    assert 'design' in data['tags']
+
+
+def test_replace_overrides_metadata(runner):
+    """Replace with explicit flags uses new values."""
+    result = invoke(runner, ['remember', 'original', '--no-diff',
+                             '--cat', 'fact', '--imp', '2'])
+    old_id = json.loads(result.output)['id']
+
+    result = invoke(runner, ['replace', old_id, 'updated',
+                             '--cat', 'decision', '--imp', '5'])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data['category'] == 'decision'
+    assert data['importance'] == 5
+
+
+def test_replace_preserves_access_count(runner):
+    """Replace carries over access_count from original."""
+    result = invoke(runner, ['remember', 'accessed insight', '--no-diff'])
+    old_id = json.loads(result.output)['id']
+    invoke(runner, ['recall', 'accessed', '--basic'])
+    invoke(runner, ['recall', 'accessed', '--basic'])
+
+    result = invoke(runner, ['replace', old_id, 'replacement'])
+    assert result.exit_code == 0
+    new_id = json.loads(result.output)['id']
+
+    result = invoke(runner, ['recall', 'replacement', '--basic'])
+    hits = json.loads(result.output)
+    match = [h for h in hits if h['id'] == new_id]
+    assert match
+    assert match[0]['access_count'] >= 2
+
+
+def test_replace_nonexistent_id(runner):
+    """Replace a nonexistent ID produces error."""
+    result = invoke(runner, ['replace', 'nonexistent-id', 'content'])
+    assert result.exit_code != 0
+    assert 'not found' in result.output
+
+
+def test_replace_already_deleted(runner):
+    """Replace an already-deleted insight produces error."""
+    result = invoke(runner, ['remember', 'to delete', '--no-diff'])
+    old_id = json.loads(result.output)['id']
+    invoke(runner, ['forget', old_id])
+
+    result = invoke(runner, ['replace', old_id, 'new content'])
+    assert result.exit_code != 0
+    assert 'not found' in result.output
+
+
+def test_replace_oplog_entries(runner):
+    """Replace logs both replace and remember ops."""
+    result = invoke(runner, ['remember', 'oplog test', '--no-diff'])
+    old_id = json.loads(result.output)['id']
+
+    result = invoke(runner, ['replace', old_id, 'oplog replacement'])
+    new_id = json.loads(result.output)['id']
+
+    result = invoke(runner, ['log', '--limit', '5'])
+    assert result.exit_code == 0
+    assert 'replace' in result.output
+    assert 'remember' in result.output

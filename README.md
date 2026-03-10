@@ -151,7 +151,7 @@ You don't run mnemon commands yourself. The agent does — driven by hooks and g
 - **Four-graph architecture** — temporal, entity, causal, and semantic edges, not just vector similarity
 - **Intent-native protocol** — three primitives (`remember`, `link`, `recall`) map to the LLM's cognitive vocabulary, not database syntax; structured JSON output with signal transparency
 - **Intent-aware recall** — graph traversal + optional vector search (RRF fusion), enabled by default for all queries
-- **Built-in deduplication** — `remember` auto-detects duplicates and conflicts; skips or auto-replaces
+- **Built-in deduplication** — `remember` auto-detects duplicates and conflicts; skips or auto-replaces; `replace` provides deterministic, atomic replacement by ID
 - **Retention lifecycle** — importance decay, access-count boosting, and garbage collection
 - **Optional embeddings** — works fully without Ollama; add local [Ollama](https://ollama.ai) for enhanced vector+keyword hybrid search
 
