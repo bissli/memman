@@ -10,8 +10,8 @@ import click
 import mnemon
 from mnemon.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge, Insight
 from mnemon.model import format_timestamp, is_immune
-from mnemon.store.db import default_data_dir, list_stores
-from mnemon.store.db import open_db, open_read_only, read_active, store_dir
+from mnemon.store.db import default_data_dir, list_stores, open_db
+from mnemon.store.db import open_read_only, read_active, store_dir
 from mnemon.store.db import store_exists, valid_store_name, write_active
 
 
@@ -69,6 +69,44 @@ def _insight_to_dict(i: Insight) -> dict:
     return d
 
 
+def _parse_tags(tags: str) -> list[str]:
+    """Parse and validate comma-separated tags."""
+    tag_list: list[str] = []
+    if not tags:
+        return tag_list
+    for t in tags.split(','):
+        t = t.strip()
+        if t:
+            if len(t) > 100:
+                raise click.ClickException(
+                    f'tag too long ({len(t)} chars, max 100):'
+                    f' {t[:50]}')
+            tag_list.append(t)
+    if len(tag_list) > 20:
+        raise click.ClickException(
+            f'too many tags ({len(tag_list)}, max 20)')
+    return tag_list
+
+
+def _parse_entities(entities: str) -> list[str]:
+    """Parse and validate comma-separated entities."""
+    entity_list: list[str] = []
+    if not entities:
+        return entity_list
+    for e in entities.split(','):
+        e = e.strip()
+        if e:
+            if len(e) > 200:
+                raise click.ClickException(
+                    f'entity too long ({len(e)} chars, max 200):'
+                    f' {e[:50]}')
+            entity_list.append(e)
+    if len(entity_list) > 50:
+        raise click.ClickException(
+            f'too many entities ({len(entity_list)}, max 50)')
+    return entity_list
+
+
 @click.group()
 @click.version_option(version=mnemon.__version__, prog_name='mnemon')
 @click.option('--data-dir', default=None, help='Base data directory (env: MNEMON_DATA_DIR)')
@@ -113,33 +151,8 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
         raise click.ClickException(
             f'importance must be 1-5, got {imp}')
 
-    tag_list: list[str] = []
-    if tags:
-        for t in tags.split(','):
-            t = t.strip()
-            if t:
-                if len(t) > 100:
-                    raise click.ClickException(
-                        f'tag too long ({len(t)} chars, max 100):'
-                        f' {t[:50]}')
-                tag_list.append(t)
-        if len(tag_list) > 20:
-            raise click.ClickException(
-                f'too many tags ({len(tag_list)}, max 20)')
-
-    entity_list: list[str] = []
-    if entities:
-        for e in entities.split(','):
-            e = e.strip()
-            if e:
-                if len(e) > 200:
-                    raise click.ClickException(
-                        f'entity too long ({len(e)} chars, max 200):'
-                        f' {e[:50]}')
-                entity_list.append(e)
-        if len(entity_list) > 50:
-            raise click.ClickException(
-                f'too many entities ({len(entity_list)}, max 50)')
+    tag_list = _parse_tags(tags)
+    entity_list = _parse_entities(entities)
 
     now = datetime.now(timezone.utc)
     insight = Insight(
@@ -166,9 +179,8 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
     from mnemon.search.diff import diff as run_diff
     from mnemon.search.quality import check_content_quality
     from mnemon.store.node import MAX_INSIGHTS, auto_prune
-    from mnemon.store.node import get_all_active_insights
-    from mnemon.store.node import get_all_embeddings, insert_insight
-    from mnemon.store.node import refresh_effective_importance
+    from mnemon.store.node import get_all_active_insights, get_all_embeddings
+    from mnemon.store.node import insert_insight, refresh_effective_importance
     from mnemon.store.node import soft_delete_insight, update_embedding
     from mnemon.store.node import update_entities
     from mnemon.store.oplog import log_op
@@ -199,10 +211,7 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
     if replaced_id:
         diff_action = 'replaced'
         diff_suggestion = 'REPLACE'
-    elif no_diff:
-        diff_action = 'added'
-        diff_suggestion = 'ADD'
-    else:
+    elif not no_diff:
         all_insights = get_all_active_insights(db)
         existing_embed = None
         if embed_cache:
@@ -514,39 +523,15 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         if imp_src != click.core.ParameterSource.COMMANDLINE:
             imp = old.importance
         if tags_src != click.core.ParameterSource.COMMANDLINE:
-            tags = ','.join(old.tags) if old.tags else ''
+            tag_list = list(old.tags)
+        else:
+            tag_list = _parse_tags(tags)
         if source_src != click.core.ParameterSource.COMMANDLINE:
             source = old.source
         if entities_src != click.core.ParameterSource.COMMANDLINE:
-            entities = ','.join(old.entities) if old.entities else ''
-
-        tag_list: list[str] = []
-        if tags:
-            for t in tags.split(','):
-                t = t.strip()
-                if t:
-                    if len(t) > 100:
-                        raise click.ClickException(
-                            f'tag too long ({len(t)} chars, max 100):'
-                            f' {t[:50]}')
-                    tag_list.append(t)
-            if len(tag_list) > 20:
-                raise click.ClickException(
-                    f'too many tags ({len(tag_list)}, max 20)')
-
-        entity_list: list[str] = []
-        if entities:
-            for e in entities.split(','):
-                e = e.strip()
-                if e:
-                    if len(e) > 200:
-                        raise click.ClickException(
-                            f'entity too long ({len(e)} chars, max 200):'
-                            f' {e[:50]}')
-                    entity_list.append(e)
-            if len(entity_list) > 50:
-                raise click.ClickException(
-                    f'too many entities ({len(entity_list)}, max 50)')
+            entity_list = list(old.entities)
+        else:
+            entity_list = _parse_entities(entities)
 
         now = datetime.now(timezone.utc)
         new_insight = Insight(
@@ -806,8 +791,7 @@ def gc(ctx: click.Context, threshold: float, limit: int, keep: str,
        review: bool) -> None:
     """Garbage collection / retention lifecycle."""
     from mnemon.store.node import MAX_INSIGHTS, boost_retention
-    from mnemon.store.node import get_insight_by_id
-    from mnemon.store.node import get_retention_candidates
+    from mnemon.store.node import get_insight_by_id, get_retention_candidates
     from mnemon.store.node import refresh_effective_importance
     from mnemon.store.node import review_content_quality
     from mnemon.store.oplog import log_op

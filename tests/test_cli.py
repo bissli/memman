@@ -192,8 +192,8 @@ def test_remember_no_quality_warnings(runner):
 def test_gc_review(runner):
     """GC --review flags transient content."""
     invoke(runner, [
-        'remember', 'i-0c220c2402a5245bc deployed via Terraform.'
-        ' 32 resources total.', '--no-diff'])
+        'remember', ('i-0c220c2402a5245bc deployed via Terraform.'
+                     ' 32 resources total.'), '--no-diff'])
     invoke(runner, [
         'remember', 'SQLite chosen for simplicity', '--no-diff'])
     result = invoke(runner, ['gc', '--review'])
