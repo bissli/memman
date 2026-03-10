@@ -10,7 +10,7 @@ Mnemon integrates with LLM CLIs through lifecycle hooks, a skill file, and a beh
 
 ## 7.1 Integration Architecture
 
-Five hooks drive the memory lifecycle:
+Six hooks drive the memory lifecycle:
 
 ```
 Session starts
@@ -40,19 +40,23 @@ Session starts
     ▼
   (before delegating to sub-agents)
   Recall (PreToolUse) ─── task_recall.sh ──→ remind agent to recall before delegation
+    │
+    ▼
+  (before exiting plan mode)
+  ExitPlan (PreToolUse) ─── exit_plan.sh ──→ prompt memory storage before transition
 ```
 
 Three layers work together:
 
-| Layer     | What                                                                        | Where                    | Role                                                                                                               |
-| --------- | --------------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| **Hooks** | Shell scripts triggered by Claude Code lifecycle events                     | `.claude/hooks/mnemon/`  | Prime (guide), Remind (recall & remember), Nudge (remember), Compact (pre-compact bridge), Recall (pre-delegation) |
-| **Skill** | `SKILL.md` — command reference in Claude Code skill format                  | `.claude/skills/mnemon/` | Teaches the LLM *how* to use mnemon commands                                                                       |
-| **Guide** | `guide.md` — detailed execution manual for recall, remember, and delegation | `~/.mnemon/prompt/`      | Teaches the LLM *when* to recall, *what* to remember, and *how* to delegate                                        |
+| Layer     | What                                                                        | Where                    | Role                                                                                                                                                |
+| --------- | --------------------------------------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Hooks** | Shell scripts triggered by Claude Code lifecycle events                     | `.claude/hooks/mnemon/`  | Prime (guide), Remind (recall & remember), Nudge (remember), Compact (pre-compact bridge), Recall (pre-delegation), ExitPlan (plan-mode transition) |
+| **Skill** | `SKILL.md` — command reference in Claude Code skill format                  | `.claude/skills/mnemon/` | Teaches the LLM *how* to use mnemon commands                                                                                                        |
+| **Guide** | `guide.md` — detailed execution manual for recall, remember, and delegation | `~/.mnemon/prompt/`      | Teaches the LLM *when* to recall, *what* to remember, and *how* to delegate                                                                         |
 
 ## 7.2 Hook Details
 
-Claude Code fires hooks at specific lifecycle events. Mnemon registers up to five, each with a distinct role in the memory lifecycle:
+Claude Code fires hooks at specific lifecycle events. Mnemon registers up to six, each with a distinct role in the memory lifecycle:
 
 **Prime (SessionStart) — `prime.sh`**
 
@@ -125,6 +129,26 @@ Fires before the agent delegates to a sub-agent. Reminds the agent to recall rel
 echo "[mnemon] Before delegating: recall relevant context first (mnemon recall \"<query>\" --limit 5) unless already done for this topic."
 ```
 
+**ExitPlan (PreToolUse) — `exit_plan.sh` (optional)**
+
+Fires before the agent exits plan mode. Uses exit-code-2 blocking to give the agent one chance to store memories before context is cleared by the plan-to-execute transition. A session-scoped flag file ensures the second attempt (after the agent stores memories) passes through:
+
+```bash
+# First call: create flag, block with exit 2 + stderr feedback
+# Second call: detect flag, remove it, exit 0 (pass through)
+FLAG="${HOME}/.mnemon/exit_plan/${SESSION_ID}.flag"
+if [ -f "$FLAG" ]; then
+    rm -f "$FLAG"
+    exit 0
+fi
+mkdir -p "$FLAG_DIR"
+touch "$FLAG"
+echo "[mnemon] Plan-to-execute transition: evaluate for memories..." >&2
+exit 2
+```
+
+Stale flag files (older than 1 hour) are cleaned up by `prime.sh` at session start.
+
 ## 7.3 Automated Setup
 
 `mnemon setup` handles all deployment automatically:
@@ -150,9 +174,10 @@ Install scope: Local — this project only (.claude/)
     [x] Nudge   — remind about memory on session end
     [x] Compact — save context before compaction (recommended)
     [x] Recall  — remind agent to recall before delegating (recommended)
+    [x] ExitPlan — store memories before leaving plan mode (recommended)
 
 Setup complete!
-  Hooks   prime, remind, nudge, compact, recall
+  Hooks   prime, remind, nudge, compact, recall, exit_plan
   Prompts ~/.mnemon/prompt/ (guide.md, skill.md)
 
 Start a new Claude Code session to activate.
@@ -169,7 +194,7 @@ Key setup options:
 | `--eject`              | Remove all mnemon integrations                                               |
 | `--yes`                | Auto-confirm all prompts (CI-friendly)                                       |
 
-The Prime hook is always installed. Remind, Nudge, Compact, and Recall hooks are optional (all enabled by default).
+The Prime hook is always installed. Remind, Nudge, Compact, Recall, and ExitPlan hooks are optional (all enabled by default).
 
 ## 7.4 Sub-Agent Delegation
 

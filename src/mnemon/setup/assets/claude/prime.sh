@@ -11,6 +11,10 @@ else
 fi
 SOURCE=$(echo "$INPUT" | sed -n 's/.*"source": *"\([^"]*\)".*/\1/p' | head -1)
 
+# Clean stale exit_plan flags (older than 1 hour)
+find "${HOME}/.mnemon/exit_plan" -name '*.flag' -mmin +60 \
+    -delete 2>/dev/null
+
 if ! command -v mnemon >/dev/null 2>&1; then
   echo "[mnemon] Warning: mnemon not found in PATH."
   [ -f "${PROMPT_DIR}/guide.md" ] && cat "${PROMPT_DIR}/guide.md"

@@ -133,9 +133,13 @@ Session starts
     ▼
   (when context compacts)
   Compact (PreCompact) ─── compact.sh ──→ flag file for post-compact recall
+    │
+    ▼
+  (before exiting plan mode)
+  ExitPlan (PreToolUse) ─── exit_plan.sh ──→ prompt memory storage before transition
 ```
 
-Five hooks drive the memory lifecycle. **Prime** loads the behavioral guide — a detailed execution manual for recall, remember, and sub-agent delegation. **Remind** prompts the agent to evaluate recall and remember before starting work. **Nudge** reminds the agent to consider remember after finishing work. **Compact** bridges context across compaction via a two-part relay: `compact.sh` writes a flag file at PreCompact time, then `prime.sh` detects the post-compact SessionStart and injects a recall instruction the agent can see. **Recall** reminds the agent to recall before delegating to sub-agents. **The skill file** teaches command syntax. **The guide** (`~/.mnemon/prompt/guide.md`) defines the detailed rules for when to recall, what to remember, and how to delegate.
+Six hooks drive the memory lifecycle. **Prime** loads the behavioral guide — a detailed execution manual for recall, remember, and sub-agent delegation. **Remind** prompts the agent to evaluate recall and remember before starting work. **Nudge** reminds the agent to consider remember after finishing work. **Compact** bridges context across compaction via a two-part relay: `compact.sh` writes a flag file at PreCompact time, then `prime.sh` detects the post-compact SessionStart and injects a recall instruction the agent can see. **Recall** reminds the agent to recall before delegating to sub-agents. **ExitPlan** blocks the plan-to-execute transition, giving the agent one chance to store memories before context is cleared. **The skill file** teaches command syntax. **The guide** (`~/.mnemon/prompt/guide.md`) defines the detailed rules for when to recall, what to remember, and how to delegate.
 
 You don't run mnemon commands yourself. The agent does — driven by hooks and guided by the skill and behavioral guide.
 
@@ -143,7 +147,7 @@ You don't run mnemon commands yourself. The agent does — driven by hooks and g
 
 - **Zero user-side operation** — install once, memory runs in the background via hooks
 - **LLM-supervised** — the host LLM decides what to remember, update, and forget; no embedded LLM, no API keys
-- **Hook-based integration** — five lifecycle hooks: Prime (load guide), Remind (recall & remember), Nudge (remember), Compact (bridge context across compaction), and Recall (pre-delegation)
+- **Hook-based integration** — six lifecycle hooks: Prime (load guide), Remind (recall & remember), Nudge (remember), Compact (bridge context across compaction), Recall (pre-delegation), and ExitPlan (plan-mode transition)
 - **Four-graph architecture** — temporal, entity, causal, and semantic edges, not just vector similarity
 - **Intent-native protocol** — three primitives (`remember`, `link`, `recall`) map to the LLM's cognitive vocabulary, not database syntax; structured JSON output with signal transparency
 - **Intent-aware recall** — graph traversal + optional vector search (RRF fusion), enabled by default for all queries

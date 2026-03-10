@@ -364,6 +364,102 @@ def test_prime_hook_normal_source(tmp_path):
     assert 'compacted' not in result.stdout
 
 
+def test_add_claude_hooks_with_exit_plan():
+    """exit_plan=True produces PreToolUse entry with ExitPlanMode matcher."""
+    data = {}
+    add_claude_hooks_selective(
+        data, '/hooks/dir', exit_plan=True)
+    hooks = data['hooks']
+    assert 'PreToolUse' in hooks
+    entries = hooks['PreToolUse']
+    assert len(entries) == 1
+    assert entries[0]['matcher'] == 'ExitPlanMode'
+    assert entries[0]['hooks'][0]['command'].endswith(
+        'exit_plan.sh')
+
+
+def test_add_claude_hooks_task_recall_and_exit_plan():
+    """Both task_recall and exit_plan produce two PreToolUse entries."""
+    data = {}
+    add_claude_hooks_selective(
+        data, '/hooks/dir', task_recall=True, exit_plan=True)
+    hooks = data['hooks']
+    entries = hooks['PreToolUse']
+    assert len(entries) == 2
+    matchers = {e['matcher'] for e in entries}
+    assert matchers == {'Task', 'ExitPlanMode'}
+
+
+def test_exit_plan_hook_first_call_blocks(tmp_path):
+    """Exit plan hook blocks on first call (exit 2, stderr message)."""
+    from importlib.resources import files as pkg_files
+    script = str(
+        pkg_files('mnemon.setup.assets')
+        .joinpath('claude/exit_plan.sh'))
+
+    result = subprocess.run(
+        ['bash', script],
+        check=False, input='{"session_id": "test-plan-123"}',
+        capture_output=True, text=True,
+        env={**os.environ, 'HOME': str(tmp_path)})
+    assert result.returncode == 2
+    assert 'mnemon' in result.stderr.lower()
+    assert 'plan' in result.stderr.lower()
+
+    flag = tmp_path / '.mnemon' / 'exit_plan' / 'test-plan-123.flag'
+    assert flag.exists()
+
+
+def test_exit_plan_hook_second_call_passes(tmp_path):
+    """Exit plan hook passes on second call (flag exists)."""
+    from importlib.resources import files as pkg_files
+    script = str(
+        pkg_files('mnemon.setup.assets')
+        .joinpath('claude/exit_plan.sh'))
+
+    flag_dir = tmp_path / '.mnemon' / 'exit_plan'
+    flag_dir.mkdir(parents=True)
+    flag = flag_dir / 'test-plan-456.flag'
+    flag.write_text('')
+
+    result = subprocess.run(
+        ['bash', script],
+        check=False, input='{"session_id": "test-plan-456"}',
+        capture_output=True, text=True,
+        env={**os.environ, 'HOME': str(tmp_path)})
+    assert result.returncode == 0
+    assert not flag.exists()
+
+
+def test_prime_hook_cleans_stale_exit_plan_flags(tmp_path):
+    """Prime hook removes exit_plan flags older than 60 minutes."""
+    from importlib.resources import files as pkg_files
+    script = str(
+        pkg_files('mnemon.setup.assets')
+        .joinpath('claude/prime.sh'))
+
+    flag_dir = tmp_path / '.mnemon' / 'exit_plan'
+    flag_dir.mkdir(parents=True)
+
+    stale_flag = flag_dir / 'old-session.flag'
+    stale_flag.write_text('')
+    past = '197001010000.00'
+    subprocess.run(
+        ['touch', '-t', past, str(stale_flag)], check=True)
+
+    fresh_flag = flag_dir / 'new-session.flag'
+    fresh_flag.write_text('')
+
+    subprocess.run(
+        ['bash', script],
+        check=False, input='{"source": "startup"}',
+        capture_output=True, text=True,
+        env={**os.environ, 'HOME': str(tmp_path)})
+
+    assert not stale_flag.exists()
+    assert fresh_flag.exists()
+
+
 def test_stop_hook_script():
     """Stop hook outputs JSON block when inactive, silent when active."""
     from importlib.resources import files as pkg_files

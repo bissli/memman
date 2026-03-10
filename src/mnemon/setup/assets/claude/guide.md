@@ -106,3 +106,11 @@ skip only when candidates are clearly unrelated.
 compact.sh only writes a flag file, NOT memories. Ensure conclusions are written
 during the session via phase-aware timing above. After compaction, the Prime hook
 prompts recall to restore critical context.
+
+### Plan-mode transition
+
+The exit_plan.sh hook blocks ExitPlanMode to prompt memory evaluation.
+When blocked, store any conclusions, decisions, or preferences from the
+planning session directly via Bash (`mnemon remember ...`) -- do NOT
+delegate to a Task sub-agent (plan mode restricts tool use). After
+storing, call ExitPlanMode again to proceed.

@@ -62,7 +62,8 @@ def claude_write_hook(config_dir: str, filename: str, content: bytes) -> str:
 def claude_register_hooks(config_dir: str,
                           remind: bool, nudge: bool,
                           compact: bool = False,
-                          task_recall: bool = False) -> str:
+                          task_recall: bool = False,
+                          exit_plan: bool = False) -> str:
     """Register selected hooks in settings.json."""
     hooks_dir = os.path.join(config_dir, 'hooks', 'mnemon')
     settings_path = os.path.join(config_dir, 'settings.json')
@@ -70,7 +71,8 @@ def claude_register_hooks(config_dir: str,
     add_claude_hooks_selective(
         data, hooks_dir,
         remind=remind, nudge=nudge,
-        compact=compact, task_recall=task_recall)
+        compact=compact, task_recall=task_recall,
+        exit_plan=exit_plan)
     write_json_file(settings_path, data)
     return settings_path
 
@@ -114,11 +116,13 @@ def claude_eject(config_dir: str) -> list[Exception]:
     return errs
 
 
-def _select_optional_hooks(auto_yes: bool) -> tuple[bool, bool, bool, bool]:
+def _select_optional_hooks(
+        auto_yes: bool) -> tuple[bool, bool, bool, bool, bool]:
     """Prompt user for which optional hooks to enable."""
-    remind, nudge, compact, task_recall = True, True, True, True
+    remind, nudge, compact, task_recall, exit_plan = (
+        True, True, True, True, True)
     if auto_yes or not is_interactive():
-        return remind, nudge, compact, task_recall
+        return remind, nudge, compact, task_recall, exit_plan
 
     opts = [
         ('Remind  \u2014 remind agent to recall & remember'
@@ -128,15 +132,18 @@ def _select_optional_hooks(auto_yes: bool) -> tuple[bool, bool, bool, bool]:
          ' (recommended)'),
         ('Recall  \u2014 remind agent to recall before'
          ' delegating to sub-agents (recommended)'),
+        ('ExitPlan \u2014 store memories before leaving'
+         ' plan mode (recommended)'),
         ]
-    defs = [True, True, True, True]
+    defs = [True, True, True, True, True]
     choices = select_multi('Select hooks to enable', opts, defs)
-    return choices[0], choices[1], choices[2], choices[3]
+    return (choices[0], choices[1], choices[2],
+            choices[3], choices[4])
 
 
 def _init_default_store(data_dir: str) -> None:
     """Ensure the default store exists."""
-    from mnemon.store.db import store_dir, store_exists, open_db
+    from mnemon.store.db import open_db, store_dir, store_exists
 
     if not store_exists(data_dir, 'default'):
         sdir = store_dir(data_dir, 'default')
@@ -177,7 +184,8 @@ def _install_claude_code(env: dict, auto_yes: bool,
     status_ok(0, 0, 'Hook: prime', path)
 
     print('\n[3/3] Optional hooks')
-    remind, nudge, compact, task_recall = _select_optional_hooks(auto_yes)
+    remind, nudge, compact, task_recall, exit_plan = (
+        _select_optional_hooks(auto_yes))
 
     if remind:
         path = claude_write_hook(
@@ -199,10 +207,16 @@ def _install_claude_code(env: dict, auto_yes: bool,
             config_dir, 'task_recall.sh',
             _asset_bytes('claude/task_recall.sh'))
         status_ok(0, 0, 'Hook: recall', path)
+    if exit_plan:
+        path = claude_write_hook(
+            config_dir, 'exit_plan.sh',
+            _asset_bytes('claude/exit_plan.sh'))
+        status_ok(0, 0, 'Hook: exit_plan', path)
 
     path = claude_register_hooks(
         config_dir, remind=remind, nudge=nudge,
-        compact=compact, task_recall=task_recall)
+        compact=compact, task_recall=task_recall,
+        exit_plan=exit_plan)
     status_updated(0, 0, 'Settings', path)
 
     add_perm = auto_yes or (
@@ -230,6 +244,8 @@ def _install_claude_code(env: dict, auto_yes: bool,
         hook_names.append('compact')
     if task_recall:
         hook_names.append('recall')
+    if exit_plan:
+        hook_names.append('exit_plan')
 
     print()
     print('Setup complete!')

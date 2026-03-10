@@ -127,7 +127,8 @@ def add_claude_hooks_selective(
         data: dict, hooks_dir: str,
         remind: bool = False, nudge: bool = False,
         compact: bool = False,
-        task_recall: bool = False) -> None:
+        task_recall: bool = False,
+        exit_plan: bool = False) -> None:
     """Idempotently set mnemon hooks in Claude Code settings."""
     remove_claude_hooks(data)
     hooks = data.setdefault('hooks', {})
@@ -207,6 +208,23 @@ def add_claude_hooks_selective(
         if not isinstance(arr, list):
             arr = []
         arr.append(task_recall_entry)
+        hooks['PreToolUse'] = arr
+
+    if exit_plan:
+        exit_plan_entry = {
+            'hooks': [
+                {
+                    'type': 'command',
+                    'command': _unexpand_home(os.path.join(
+                        hooks_dir, 'exit_plan.sh')),
+                    },
+                ],
+            'matcher': 'ExitPlanMode',
+            }
+        arr = hooks.get('PreToolUse', [])
+        if not isinstance(arr, list):
+            arr = []
+        arr.append(exit_plan_entry)
         hooks['PreToolUse'] = arr
 
 
