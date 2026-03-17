@@ -79,7 +79,7 @@
         <mxCell id="r_caus" value="&lt;b&gt;Causal&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;keyword regex&lt;br&gt;(because/decided/due to)&lt;br&gt;auto edge if signal&lt;br&gt;found in content&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#FFE6E6;strokeColor=#b85450;" vertex="1" parent="1">
           <mxGeometry x="450" y="700" width="130" height="75" as="geometry" />
         </mxCell>
-        <mxCell id="r_sema" value="&lt;b&gt;Semantic&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;cosine similarity&lt;br&gt;AUTO: ≥ 0.80 (max 3)&lt;br&gt;bidirectional edges&lt;br&gt;needs embedding&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
+        <mxCell id="r_sema" value="&lt;b&gt;Semantic&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;cosine similarity&lt;br&gt;AUTO: ≥ 0.70 (max 3)&lt;br&gt;bidirectional edges&lt;br&gt;needs embedding&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
           <mxGeometry x="590" y="700" width="130" height="75" as="geometry" />
         </mxCell>
         <mxCell id="r_e5a" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#6c8ebf;" edge="1" parent="1" source="r_engine" target="r_temp">

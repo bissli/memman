@@ -35,31 +35,40 @@
           <mxGeometry x="165" y="235" width="90" height="55" as="geometry" />
         </mxCell>
         <mxCell id="a_cmd_sea" value="&lt;b&gt;search&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="270" y="235" width="75" height="55" as="geometry" />
+          <mxGeometry x="270" y="235" width="70" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="a_cmd_rep" value="&lt;b&gt;replace&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="355" y="235" width="70" height="55" as="geometry" />
         </mxCell>
         <mxCell id="a_cmd_lnk" value="&lt;b&gt;link&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="450" y="235" width="75" height="55" as="geometry" />
+          <mxGeometry x="440" y="235" width="60" height="55" as="geometry" />
         </mxCell>
         <mxCell id="a_cmd_gc" value="&lt;b&gt;gc&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="540" y="235" width="75" height="55" as="geometry" />
+          <mxGeometry x="515" y="235" width="50" height="55" as="geometry" />
         </mxCell>
         <mxCell id="a_cmd_for" value="&lt;b&gt;forget&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="630" y="235" width="75" height="55" as="geometry" />
+          <mxGeometry x="580" y="235" width="60" height="55" as="geometry" />
         </mxCell>
         <mxCell id="a_cmd_rel" value="&lt;b&gt;related&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="720" y="235" width="75" height="55" as="geometry" />
+          <mxGeometry x="655" y="235" width="65" height="55" as="geometry" />
         </mxCell>
         <mxCell id="a_cmd_emb" value="&lt;b&gt;embed&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="810" y="235" width="75" height="55" as="geometry" />
+          <mxGeometry x="735" y="235" width="60" height="55" as="geometry" />
         </mxCell>
         <mxCell id="a_cmd_sta" value="&lt;b&gt;status&lt;/b&gt; / &lt;b&gt;log&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="900" y="235" width="100" height="55" as="geometry" />
+          <mxGeometry x="810" y="235" width="85" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="a_cmd_store" value="&lt;b&gt;store&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="910" y="235" width="50" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="a_cmd_graph" value="&lt;b&gt;graph&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="975" y="235" width="50" height="55" as="geometry" />
         </mxCell>
         <mxCell id="a_cmd_setup" value="&lt;b&gt;setup&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="1015" y="235" width="60" height="55" as="geometry" />
+          <mxGeometry x="1040" y="235" width="50" height="55" as="geometry" />
         </mxCell>
         <mxCell id="a_cmd_viz" value="&lt;b&gt;viz&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="1085" y="235" width="55" height="55" as="geometry" />
+          <mxGeometry x="1105" y="235" width="45" height="55" as="geometry" />
         </mxCell>
         <mxCell id="a_l3" value="&lt;b&gt;Core Engine Layer&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
           <mxGeometry x="40" y="340" width="1120" height="180" as="geometry" />
@@ -88,7 +97,7 @@
         <mxCell id="a_ent" value="&lt;b&gt;entity.py&lt;/b&gt;&lt;br&gt;regex + dict&lt;br&gt;co-occurrence" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6F3FF;strokeColor=#6c8ebf;" vertex="1" parent="1">
           <mxGeometry x="620" y="395" width="100" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="a_sem" value="&lt;b&gt;semantic.py&lt;/b&gt;&lt;br&gt;auto: cos≥0.80&lt;br&gt;review: 0.40-0.80" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
+        <mxCell id="a_sem" value="&lt;b&gt;semantic.py&lt;/b&gt;&lt;br&gt;auto: cos≥0.70&lt;br&gt;review: 0.40-0.80" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
           <mxGeometry x="510" y="455" width="100" height="50" as="geometry" />
         </mxCell>
         <mxCell id="a_cau" value="&lt;b&gt;causal.py&lt;/b&gt;&lt;br&gt;keyword signal&lt;br&gt;BFS candidates" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#FFE6E6;strokeColor=#b85450;" vertex="1" parent="1">

@@ -113,7 +113,13 @@ mnemon link <source_id> <target_id> --type causal --weight 0.8 \
 
 # Related — BFS traversal from an insight
 mnemon related <id> --edge causal --depth 2
+
+# Rebuild — regenerate auto-computed edges (triggered automatically on constants change)
+mnemon graph rebuild              # live rebuild
+mnemon graph rebuild --dry-run    # preview changes without modifying DB
 ```
+
+Auto-rebuild fires transparently when `open_db()` detects graph constants (thresholds, weights) have changed. Manual rebuild is available for debugging or forcing regeneration. Use `--dry-run` to preview what would change without writing to the database.
 
 ### Lifecycle Management
 
