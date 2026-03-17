@@ -171,7 +171,7 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
 def _remember_impl(db: 'DB', insight: Insight, content: str,
                    no_diff: bool, replaced_id: str = '') -> None:
     """Core remember implementation."""
-    from mnemon.embed.ollama import Client as EmbedClient
+    from mnemon.embed import get_client
     from mnemon.embed.vector import deserialize_vector, serialize_vector
     from mnemon.graph.causal import find_causal_candidates
     from mnemon.graph.engine import on_insight_created
@@ -185,10 +185,10 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
     from mnemon.store.node import update_entities
     from mnemon.store.oplog import log_op
 
-    ec = EmbedClient()
+    ec = get_client()
     embedding_blob = None
     embedding_vec = None
-    if ec.available():
+    if ec is not None and ec.available():
         try:
             embedding_vec = ec.embed(content)
             embedding_blob = serialize_vector(embedding_vec)
@@ -196,7 +196,7 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
             pass
 
     embed_cache: dict[str, list[float]] | None = None
-    if ec.available():
+    if ec is not None and ec.available():
         db_embeds = get_all_embeddings(db)
         if db_embeds:
             embed_cache = {}
@@ -350,7 +350,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
            limit: int, source: str, basic: bool, smart: bool,
            intent: str) -> None:
     """Retrieve insights by keyword."""
-    from mnemon.embed.ollama import Client as EmbedClient
+    from mnemon.embed import get_client
     from mnemon.graph.entity import extract_entities
     from mnemon.search.intent import intent_from_string
     from mnemon.search.recall import intent_aware_recall
@@ -378,9 +378,9 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
             except ValueError as e:
                 raise click.ClickException(str(e))
 
-        ec = EmbedClient()
+        ec = get_client()
         query_vec = None
-        if ec.available():
+        if ec is not None and ec.available():
             try:
                 query_vec = ec.embed(keyword_str)
             except Exception:
@@ -905,7 +905,7 @@ def viz(ctx: click.Context, fmt: str, output_path: str) -> None:
 @click.pass_context
 def embed(ctx: click.Context, id: str | None, backfill: bool, show_status: bool) -> None:
     """Manage embeddings."""
-    from mnemon.embed.ollama import Client as EmbedClient
+    from mnemon.embed import get_client
     from mnemon.embed.vector import serialize_vector
     from mnemon.store.node import embedding_stats, get_insight_by_id
     from mnemon.store.node import get_insights_without_embedding
@@ -913,23 +913,26 @@ def embed(ctx: click.Context, id: str | None, backfill: bool, show_status: bool)
 
     db = _open_db(ctx)
     try:
-        ec = EmbedClient()
+        ec = get_client()
 
         if show_status:
             total, embedded = embedding_stats(db)
             coverage = f'{embedded * 100 // total}%' if total > 0 else '0%'
+            available = ec is not None and ec.available()
+            model = ec.model if ec is not None else ''
             _json_out({
                 'total_insights': total,
                 'embedded': embedded,
                 'coverage': coverage,
-                'ollama_available': ec.available(),
-                'model': ec.model,
+                'ollama_available': available,
+                'model': model,
                 })
             return
 
         if backfill:
-            if not ec.available():
-                raise click.ClickException(ec.unavailable_message())
+            if ec is None or not ec.available():
+                msg = ec.unavailable_message() if ec else 'no embedding provider available'
+                raise click.ClickException(msg)
             missing = get_insights_without_embedding(db, 1000)
             if not missing:
                 _json_out({
@@ -957,8 +960,9 @@ def embed(ctx: click.Context, id: str | None, backfill: bool, show_status: bool)
             return
 
         if id:
-            if not ec.available():
-                raise click.ClickException(ec.unavailable_message())
+            if ec is None or not ec.available():
+                msg = ec.unavailable_message() if ec else 'no embedding provider available'
+                raise click.ClickException(msg)
             ins = get_insight_by_id(db, id)
             if ins is None:
                 raise click.ClickException(
@@ -977,6 +981,31 @@ def embed(ctx: click.Context, id: str | None, backfill: bool, show_status: bool)
         raise click.ClickException(
             'specify --all to backfill, --status to check coverage,'
             ' or provide an insight ID')
+    finally:
+        db.close()
+
+
+@cli.group()
+def graph() -> None:
+    """Graph management commands."""
+
+
+@graph.command('rebuild')
+@click.option('--dry-run', is_flag=True, default=False,
+              help='Show stats without modifying DB')
+@click.pass_context
+def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
+    """Rebuild auto-created graph edges."""
+    from mnemon.graph.engine import rebuild_auto_edges
+
+    db = _open_db(ctx)
+    try:
+        stats = rebuild_auto_edges(db, dry_run=dry_run)
+        if dry_run:
+            click.echo('Dry run (no changes):')
+        else:
+            click.echo('Rebuild complete:')
+        _json_out(stats)
     finally:
         db.close()
 
