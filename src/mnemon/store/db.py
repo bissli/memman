@@ -119,6 +119,22 @@ def open_db(data_dir: str) -> DB:
     conn.execute('PRAGMA foreign_keys=ON')
     db = DB(conn, db_path)
     _migrate(db)
+
+    from mnemon.graph.engine import compute_constants_hash, rebuild_auto_edges
+    current_hash = compute_constants_hash()
+    row = db._conn.execute(
+        "SELECT value FROM meta WHERE key = 'constants_hash'"
+        ).fetchone()
+    stored_hash = row[0] if row else None
+    if stored_hash != current_hash:
+        stats = rebuild_auto_edges(db)
+        db._conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value)"
+            " VALUES ('constants_hash', ?)",
+            (current_hash,))
+        logger.debug(
+            f'auto-rebuild on constants change: {stats}')
+
     return db
 
 
@@ -182,6 +198,11 @@ CREATE TABLE IF NOT EXISTS oplog (
     created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_oplog_created ON oplog(created_at);
+
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
     db._conn.executescript(schema)
 
