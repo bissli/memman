@@ -14,7 +14,7 @@ MAX_TOTAL_ENTITY_EDGES = 50
 ENTITY_PATTERNS = [
     re.compile(r'\b([A-Z][a-z]+(?:[A-Z][a-z]+)+)\b'),
     re.compile(r'\b([A-Z]{2,6})\b'),
-    re.compile(r'(?:^|[\s"\'(])([.\w/-]+\.\w{1,10})(?:[\s"\'),.]|$)'),
+    re.compile(r'(?:^|[\s"\'(])([a-zA-Z][.\w/-]*\.\w{1,10})(?:[\s"\'),.]|$)'),
     re.compile(r'https?://[^\s"\'<>)]+'),
     re.compile(r'@([a-zA-Z_]\w+)'),
     ]
@@ -36,6 +36,8 @@ TECH_DICTIONARY = {
     'Vitest', 'gRPC', 'GraphQL', 'WebSocket', 'OAuth', 'JWT', 'YAML',
     'TOML', 'Protobuf', 'MAGMA', 'MCP', 'RLM',
     }
+
+ENTITY_STOPWORDS = {'e.g', 'i.e', 'etc', 'vs'}
 
 ACRONYM_STOPWORDS = {
     'IN', 'ON', 'AT', 'TO', 'BY', 'OR', 'AN', 'IF', 'IS', 'IT',
@@ -66,6 +68,8 @@ def extract_entities(text: str) -> list[str]:
             if not entity or entity in seen:
                 continue
             if entity in ACRONYM_STOPWORDS:
+                continue
+            if entity in ENTITY_STOPWORDS:
                 continue
             seen.add(entity)
             entities.append(entity)

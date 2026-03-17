@@ -1,7 +1,7 @@
 """Entity extraction, merging, and IDF weighting tests."""
 
-from mnemon.graph.entity import entity_idf_weight
-from mnemon.graph.entity import extract_entities, merge_entities, split_words
+from mnemon.graph.entity import entity_idf_weight, extract_entities
+from mnemon.graph.entity import merge_entities, split_words
 
 
 class TestExtractCamelCase:
@@ -142,6 +142,45 @@ class TestSplitWords:
         assert 'foo' in words
         assert 'bar' in words
         assert '42' in words
+
+
+class TestExtractRejectsFloats:
+    """Dotted-path regex rejects numeric-leading tokens like floats."""
+
+    def test_rejects_float(self):
+        """3.14 not extracted as entity."""
+        entities = extract_entities('The value is 3.14 radians')
+        assert '3.14' not in entities
+
+    def test_accepts_dotted_path(self):
+        """config.yaml extracted as file path entity."""
+        entities = extract_entities('Edit config.yaml to change settings')
+        found = any('config.yaml' in e for e in entities)
+        assert found
+
+
+class TestEntityStopwords:
+    """Abbreviation noise filtered by ENTITY_STOPWORDS."""
+
+    def test_filters_eg(self):
+        """e.g filtered as entity stopword."""
+        entities = extract_entities('Use e.g. a proxy server')
+        assert 'e.g' not in entities
+
+    def test_filters_ie(self):
+        """i.e filtered as entity stopword."""
+        entities = extract_entities('The server i.e. the main node')
+        assert 'i.e' not in entities
+
+    def test_filters_etc(self):
+        """Etc filtered as entity stopword."""
+        entities = extract_entities('Python, Go, etc are popular')
+        assert 'etc' not in entities
+
+    def test_filters_vs(self):
+        """Vs filtered as entity stopword."""
+        entities = extract_entities('Redis vs Memcached comparison')
+        assert 'vs' not in entities
 
 
 class TestEntityIdfWeightRare:

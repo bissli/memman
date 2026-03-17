@@ -9,6 +9,7 @@ from mnemon.store.node import get_recent_insights_in_window
 
 TEMPORAL_WINDOW_HOURS = 24.0
 MAX_PROXIMITY_EDGES = 10
+MIN_PROXIMITY_WEIGHT = 0.10
 
 
 def create_temporal_edge(db: 'DB', insight: Insight) -> int:
@@ -51,6 +52,8 @@ def create_temporal_edge(db: 'DB', insight: Insight) -> int:
         hours_diff = abs(
             (insight.created_at - near.created_at).total_seconds() / 3600)
         weight = 1.0 / (1.0 + hours_diff)
+        if weight < MIN_PROXIMITY_WEIGHT:
+            continue
 
         meta = {
             'sub_type': 'proximity',

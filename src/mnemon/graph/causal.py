@@ -9,7 +9,7 @@ from mnemon.store.edge import insert_edge
 from mnemon.store.node import get_recent_active_insights
 
 MIN_CAUSAL_OVERLAP = 0.15
-CAUSAL_LOOKBACK = 10
+CAUSAL_LOOKBACK = 20
 MAX_CAUSAL_CANDIDATES = 10
 
 CAUSAL_PATTERN = re.compile(
