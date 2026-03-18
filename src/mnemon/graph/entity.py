@@ -109,7 +109,8 @@ def entity_idf_weight(doc_freq: int, total_docs: int) -> float:
     return max(raw, 0.1)
 
 
-def create_entity_edges(db: 'DB', insight: Insight) -> int:
+def create_entity_edges(
+        db: 'DB', insight: Insight, dry_run: bool = False) -> int:
     """Create entity co-occurrence edges between the insight and existing insights."""
     if not insight.entities:
         return 0
@@ -141,21 +142,23 @@ def create_entity_edges(db: 'DB', insight: Insight) -> int:
         for target_id in ids:
             if count >= MAX_TOTAL_ENTITY_EDGES:
                 break
-            try:
-                insert_edge(db, Edge(
-                    source_id=insight.id, target_id=target_id,
-                    edge_type='entity', weight=weight,
-                    metadata={'entity': entity}, created_at=now))
-                count += 1
-            except Exception:
-                pass
-            try:
-                insert_edge(db, Edge(
-                    source_id=target_id, target_id=insight.id,
-                    edge_type='entity', weight=weight,
-                    metadata={'entity': entity}, created_at=now))
-                count += 1
-            except Exception:
-                pass
+            if not dry_run:
+                try:
+                    insert_edge(db, Edge(
+                        source_id=insight.id, target_id=target_id,
+                        edge_type='entity', weight=weight,
+                        metadata={'entity': entity}, created_at=now))
+                except Exception:
+                    pass
+            count += 1
+            if not dry_run:
+                try:
+                    insert_edge(db, Edge(
+                        source_id=target_id, target_id=insight.id,
+                        edge_type='entity', weight=weight,
+                        metadata={'entity': entity}, created_at=now))
+                except Exception:
+                    pass
+            count += 1
 
     return count

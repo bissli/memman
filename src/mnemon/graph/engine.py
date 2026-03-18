@@ -71,7 +71,7 @@ def rebuild_auto_edges(
         (MIN_PROXIMITY_WEIGHT,)).fetchone()[0]
 
     if dry_run:
-        return {
+        stats = {
             'semantic_deleted': semantic_del,
             'entity_deleted': entity_del,
             'temporal_pruned': temporal_del,
@@ -80,6 +80,20 @@ def rebuild_auto_edges(
             'causal_created': 0,
             'dry_run': 1,
             }
+        insights = get_all_active_insights(db)
+        if insights:
+            embed_cache = build_embed_cache(db)
+            for insight in insights:
+                extracted = extract_entities(insight.content)
+                insight.entities = merge_entities(
+                    insight.entities, extracted)
+                stats['entity_created'] += create_entity_edges(
+                    db, insight, dry_run=True)
+                stats['semantic_created'] += create_semantic_edges(
+                    db, insight, embed_cache, dry_run=True)
+                stats['causal_created'] += create_causal_edges(
+                    db, insight, dry_run=True)
+        return stats
 
     stats: dict[str, int] = {
         'semantic_deleted': 0,

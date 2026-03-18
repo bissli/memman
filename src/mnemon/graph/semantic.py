@@ -31,7 +31,8 @@ def build_embed_cache(db: 'DB') -> dict[str, list[float]] | None:
 
 def create_semantic_edges(
         db: 'DB', insight: Insight,
-        embed_cache: dict[str, list[float]] | None = None) -> int:
+        embed_cache: dict[str, list[float]] | None = None,
+        dry_run: bool = False) -> int:
     """Auto-create semantic edges for insights with high cosine similarity."""
     if embed_cache is None:
         embed_cache = build_embed_cache(db)
@@ -64,22 +65,24 @@ def create_semantic_edges(
             'created_by': 'auto',
             'cosine': format_float(sim),
             }
-        try:
-            insert_edge(db, Edge(
-                source_id=insight.id, target_id=eid,
-                edge_type='semantic', weight=sim,
-                metadata=meta, created_at=now))
-            count += 1
-        except Exception:
-            pass
-        try:
-            insert_edge(db, Edge(
-                source_id=eid, target_id=insight.id,
-                edge_type='semantic', weight=sim,
-                metadata=meta, created_at=now))
-            count += 1
-        except Exception:
-            pass
+        if not dry_run:
+            try:
+                insert_edge(db, Edge(
+                    source_id=insight.id, target_id=eid,
+                    edge_type='semantic', weight=sim,
+                    metadata=meta, created_at=now))
+            except Exception:
+                pass
+        count += 1
+        if not dry_run:
+            try:
+                insert_edge(db, Edge(
+                    source_id=eid, target_id=insight.id,
+                    edge_type='semantic', weight=sim,
+                    metadata=meta, created_at=now))
+            except Exception:
+                pass
+        count += 1
 
     return count
 

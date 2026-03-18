@@ -185,6 +185,28 @@ class TestTemporalDeleteOnlySubThreshold:
         assert len(backbones) >= 1
 
 
+class TestRebuildDryRunCreationCounts:
+    """Dry run returns non-zero creation counts without writing edges."""
+
+    def test_dry_run_counts_entity_edges(self, tmp_db):
+        """Seed two insights sharing an entity; dry run reports entity_created > 0."""
+        ins1 = make_insight(
+            id='drc-1', content='Python web framework',
+            entities=['Python'])
+        ins2 = make_insight(
+            id='drc-2', content='Python data analysis',
+            entities=['Python'])
+        insert_insight(tmp_db, ins1)
+        insert_insight(tmp_db, ins2)
+
+        stats = rebuild_auto_edges(tmp_db, dry_run=True)
+
+        assert stats['entity_created'] > 0
+        edges = get_all_edges(tmp_db)
+        entity_edges = [e for e in edges if e.edge_type == 'entity']
+        assert len(entity_edges) == 0
+
+
 class TestGraphRebuildCliDryRun:
     """CLI dry run shows stats without modifying DB."""
 
@@ -194,8 +216,12 @@ class TestGraphRebuildCliDryRun:
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
         db = open_db(str(store_path))
-        ins = make_insight(id='dr-1', content='test')
-        insert_insight(db, ins)
+        ins1 = make_insight(id='dr-1', content='Python web app',
+                            entities=['Python'])
+        ins2 = make_insight(id='dr-2', content='Python data tool',
+                            entities=['Python'])
+        insert_insight(db, ins1)
+        insert_insight(db, ins2)
         auto_edge = make_edge(
             source_id='dr-1', target_id='dr-1',
             edge_type='semantic',
@@ -208,6 +234,9 @@ class TestGraphRebuildCliDryRun:
             '--data-dir', data_dir,
             'graph', 'rebuild', '--dry-run',
             ])
+
+        assert 'entity_created' in result.output
+        assert '"entity_created": 0' not in result.output
 
         db = open_db(str(store_path))
         edges = get_all_edges(db)

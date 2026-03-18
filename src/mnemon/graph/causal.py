@@ -55,7 +55,8 @@ def token_overlap(a: set[str], b: set[str]) -> float:
     return intersection / max(len(a), len(b))
 
 
-def create_causal_edges(db: 'DB', insight: Insight) -> int:
+def create_causal_edges(
+        db: 'DB', insight: Insight, dry_run: bool = False) -> int:
     """Create causal edges when insights share token overlap and causal signals."""
     recent = get_recent_active_insights(
         db, insight.id, CAUSAL_LOOKBACK)
@@ -88,18 +89,19 @@ def create_causal_edges(db: 'DB', insight: Insight) -> int:
 
         sub_type = suggest_sub_type(insight.content + ' ' + prev.content)
 
-        try:
-            insert_edge(db, Edge(
-                source_id=source_id, target_id=target_id,
-                edge_type='causal', weight=overlap,
-                metadata={
-                    'overlap': format_float(overlap),
-                    'sub_type': sub_type,
-                    },
-                created_at=now))
-            count += 1
-        except Exception:
-            pass
+        if not dry_run:
+            try:
+                insert_edge(db, Edge(
+                    source_id=source_id, target_id=target_id,
+                    edge_type='causal', weight=overlap,
+                    metadata={
+                        'overlap': format_float(overlap),
+                        'sub_type': sub_type,
+                        },
+                    created_at=now))
+            except Exception:
+                pass
+        count += 1
 
     return count
 
