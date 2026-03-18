@@ -12,13 +12,19 @@ MAX_ENTITY_LINKS = 5
 MAX_TOTAL_ENTITY_EDGES = 50
 
 ENTITY_PATTERNS = [
+    #  CamelCase -> DataProcessor, FastAPI
     re.compile(r'\b([A-Z][a-z]+(?:[A-Z][a-z]+)+)\b'),
+    # Uppercase -> SQL, API, AWS
     re.compile(r'\b([A-Z]{2,6})\b'),
+    # Dotted identifiers -> foo.py, bar.py
     re.compile(r'(?:^|[\s"\'(])([a-zA-Z][.\w/-]*\.\w{1,10})(?:[\s"\'),.]|$)'),
+    # URLS -> https?://
     re.compile(r'https?://[^\s"\'<>)]+'),
+    # @mentions -> @user_name
     re.compile(r'@([a-zA-Z_]\w+)'),
     ]
 
+# Exact matches for entities
 TECH_DICTIONARY = {
     'Go', 'Rust', 'Python', 'Java', 'Kotlin', 'Swift', 'Ruby', 'Elixir',
     'Zig', 'Lua', 'Dart', 'Scala', 'Perl', 'Haskell', 'OCaml', 'Julia',
