@@ -1,5 +1,6 @@
 """Auto-rebuild tests for constants hash change detection and edge management."""
 
+import json
 from datetime import datetime, timedelta, timezone
 
 from click.testing import CliRunner
@@ -249,7 +250,7 @@ class TestGraphRebuildCliLive:
     """CLI live rebuild modifies DB and logs to oplog."""
 
     def test_live_rebuild(self, tmp_path, monkeypatch):
-        """Verify rebuild creates oplog entry."""
+        """Verify rebuild creates oplog entry with accurate edge counts."""
         monkeypatch.delenv('MNEMON_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
@@ -273,4 +274,36 @@ class TestGraphRebuildCliLive:
             "SELECT COUNT(*) FROM oplog"
             " WHERE operation = 'rebuild'").fetchone()
         assert row[0] >= 1
+
+        oplog_row = db._conn.execute(
+            "SELECT detail FROM oplog WHERE operation = 'rebuild'"
+            " ORDER BY id DESC LIMIT 1").fetchone()
+        logged_stats = json.loads(oplog_row[0])
+
+        actual_entity = db._conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE edge_type = 'entity'"
+            " AND (json_extract(metadata, '$.created_by') IS NULL"
+            "      OR json_extract(metadata, '$.created_by') <> 'claude')"
+            ).fetchone()[0]
+        assert logged_stats['entity_created'] == actual_entity
         db.close()
+
+
+class TestRebuildCleansStoredStopwords:
+    """Rebuild strips stopword entities from stored insight entity lists."""
+
+    def test_cleans_stored_stopwords(self, tmp_db):
+        """Insight with stopword 'e.g' in entities has it removed after rebuild."""
+        ins = make_insight(
+            id='csw-1', content='e.g Python example',
+            entities=['e.g', 'Python'])
+        insert_insight(tmp_db, ins)
+
+        rebuild_auto_edges(tmp_db)
+
+        row = tmp_db._conn.execute(
+            "SELECT entities FROM insights WHERE id = 'csw-1'"
+            ).fetchone()
+        stored = json.loads(row[0])
+        assert 'e.g' not in stored
+        assert 'Python' in stored

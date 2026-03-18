@@ -123,6 +123,10 @@ def create_entity_edges(
     count = 0
 
     for entity in insight.entities:
+        if entity in ACRONYM_STOPWORDS:
+            continue
+        if entity in ENTITY_STOPWORDS:
+            continue
         if count >= MAX_TOTAL_ENTITY_EDGES:
             break
         ids = find_insights_with_entity(

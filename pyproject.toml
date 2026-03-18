@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "mnemon"
-version = "0.6.0"
+version = "0.7.0"
 description = "Persistent memory for LLM agents"
 authors = ["mnemon-dev"]
 license = "MIT"

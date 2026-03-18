@@ -183,6 +183,52 @@ class TestEntityIdfWeightedEdges:
         assert rare_edges[0].weight > common_edges[0].weight
 
 
+class TestStopwordEntityFiltering:
+    """Stopword entities are skipped during entity edge creation."""
+
+    def test_stopword_filtered_valid_kept(self, tmp_db):
+        """Stopword 'e.g' creates no edges; shared 'Python' does."""
+        ins_a = make_insight(
+            id='sw-a', content='e.g Python example',
+            entities=['e.g', 'Python'])
+        ins_b = make_insight(
+            id='sw-b', content='e.g Go patterns',
+            entities=['e.g', 'Go'])
+        ins_c = make_insight(
+            id='sw-c', content='Python web',
+            entities=['Python'])
+        insert_insight(tmp_db, ins_a)
+        insert_insight(tmp_db, ins_b)
+        insert_insight(tmp_db, ins_c)
+
+        create_entity_edges(tmp_db, ins_a)
+
+        edges = get_edges_by_node_and_type(tmp_db, 'sw-a', 'entity')
+        stopword_edges = [
+            e for e in edges
+            if e.metadata.get('entity') == 'e.g']
+        assert len(stopword_edges) == 0
+
+        python_edges = [
+            e for e in edges
+            if e.metadata.get('entity') == 'Python']
+        assert len(python_edges) >= 1
+
+    def test_stopword_only_entities_no_edges(self, tmp_db):
+        """Insights with only stopword entities produce zero edges."""
+        ins_a = make_insight(
+            id='swo-a', content='e.g example',
+            entities=['e.g'])
+        ins_b = make_insight(
+            id='swo-b', content='e.g another',
+            entities=['e.g'])
+        insert_insight(tmp_db, ins_a)
+        insert_insight(tmp_db, ins_b)
+
+        count = create_entity_edges(tmp_db, ins_a)
+        assert count == 0
+
+
 # --- Causal ---
 
 

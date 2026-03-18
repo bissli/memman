@@ -12,7 +12,7 @@ from mnemon.graph.semantic import AUTO_SEMANTIC_THRESHOLD, build_embed_cache
 from mnemon.graph.semantic import create_semantic_edges
 from mnemon.graph.temporal import MIN_PROXIMITY_WEIGHT, create_temporal_edge
 from mnemon.model import Insight
-from mnemon.store.node import get_all_active_insights
+from mnemon.store.node import get_all_active_insights, update_entities
 
 logger = logging.getLogger('mnemon')
 
@@ -87,6 +87,10 @@ def rebuild_auto_edges(
                 extracted = extract_entities(insight.content)
                 insight.entities = merge_entities(
                     insight.entities, extracted)
+                insight.entities = [
+                    e for e in insight.entities
+                    if e not in ENTITY_STOPWORDS
+                    and e not in ACRONYM_STOPWORDS]
                 stats['entity_created'] += create_entity_edges(
                     db, insight, dry_run=True)
                 stats['semantic_created'] += create_semantic_edges(
@@ -143,12 +147,28 @@ def rebuild_auto_edges(
             extracted = extract_entities(insight.content)
             insight.entities = merge_entities(
                 insight.entities, extracted)
+            insight.entities = [
+                e for e in insight.entities
+                if e not in ENTITY_STOPWORDS
+                and e not in ACRONYM_STOPWORDS]
+            update_entities(db, insight.id, insight.entities)
             stats['entity_created'] += create_entity_edges(
                 db, insight)
             stats['semantic_created'] += create_semantic_edges(
                 db, insight, embed_cache)
             stats['causal_created'] += create_causal_edges(
                 db, insight)
+
+        stats['entity_created'] = db._conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE edge_type = 'entity'"
+            " AND (json_extract(metadata, '$.created_by') IS NULL"
+            "      OR json_extract(metadata, '$.created_by') <> 'claude')"
+            ).fetchone()[0]
+        stats['semantic_created'] = db._conn.execute(
+            "SELECT COUNT(*) FROM edges"
+            " WHERE edge_type = 'semantic'"
+            " AND json_extract(metadata, '$.created_by') = 'auto'"
+            ).fetchone()[0]
 
         for row in manual_entity_rows:
             db._conn.execute(
