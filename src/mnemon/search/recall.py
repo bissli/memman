@@ -2,14 +2,13 @@
 
 import heapq
 
-from mnemon.embed.vector import cosine_similarity, deserialize_vector
+from mnemon.embed.vector import cosine_similarity
 from mnemon.graph.semantic import build_embed_cache
 from mnemon.model import Insight
 from mnemon.search.intent import detect_intent, get_weights
 from mnemon.search.keyword import insight_tokens, keyword_search, tokenize
 from mnemon.store.edge import get_edges_by_node, get_edges_by_source_and_type
-from mnemon.store.node import get_all_active_insights, get_all_embeddings
-from mnemon.store.node import get_insight_by_id
+from mnemon.store.node import get_all_active_insights, get_insight_by_id
 
 ANCHOR_TOP_K = 20
 LAMBDA1 = 1.0
@@ -68,21 +67,6 @@ def vector_search_from_cache(
         result.append((id, sim))
     result.reverse()
     return result
-
-
-def vector_search(
-        db: 'DB', query_vec: list[float],
-        limit: int) -> list[tuple[str, float]] | None:
-    """Brute-force cosine similarity search, loading embeddings from DB."""
-    db_embeds = get_all_embeddings(db)
-    if not db_embeds:
-        return None
-    cache: dict[str, list[float]] = {}
-    for eid, _content, blob in db_embeds:
-        v = deserialize_vector(blob)
-        if v is not None:
-            cache[eid] = v
-    return vector_search_from_cache(cache, query_vec, limit)
 
 
 def beam_search_from_anchor(

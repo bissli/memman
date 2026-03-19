@@ -76,7 +76,7 @@
         <mxCell id="a_search" value="&lt;b&gt;search/&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=11;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="60" y="370" width="310" height="130" as="geometry" />
         </mxCell>
-        <mxCell id="a_recall" value="&lt;b&gt;recall.py&lt;/b&gt;&lt;br&gt;intent_aware_recall&lt;br&gt;beam_search_from_anchor&lt;br&gt;vector_search&lt;br&gt;causal_topological_sort" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=5;" vertex="1" parent="1">
+        <mxCell id="a_recall" value="&lt;b&gt;recall.py&lt;/b&gt;&lt;br&gt;intent_aware_recall&lt;br&gt;beam_search_from_anchor&lt;br&gt;causal_topological_sort" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=5;" vertex="1" parent="1">
           <mxGeometry x="70" y="395" width="140" height="90" as="geometry" />
         </mxCell>
         <mxCell id="a_kw" value="&lt;b&gt;keyword.py&lt;/b&gt;&lt;br&gt;keyword_search&lt;br&gt;content_similarity&lt;br&gt;tokenize (stopwords)" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=5;" vertex="1" parent="1">
