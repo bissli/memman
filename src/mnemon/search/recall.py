@@ -88,13 +88,12 @@ def beam_search_from_anchor(
         db: 'DB',
         start_id: str,
         start_score: float,
-        query_vec: list[float] | None,
         weights: dict[str, float],
         params: tuple[int, int, int],
         score_map: dict[str, float],
         via_map: dict[str, str],
         insight_map: dict[str, Insight],
-        embed_cache: dict[str, list[float]] | None) -> None:
+        sim_cache: dict[str, float] | None) -> None:
     """Perform beam search from a single anchor node."""
     beam_width, max_depth, max_visited = params
     visited = {start_id: True}
@@ -125,13 +124,9 @@ def beam_search_from_anchor(
                     neighbor_id = e.source_id
 
                 structural = weights.get(e.edge_type, 0.0) * e.weight
-                semantic = 0.0
-                if query_vec is not None and embed_cache is not None:
-                    n_vec = embed_cache.get(neighbor_id)
-                    if n_vec is not None:
-                        cos_sim = cosine_similarity(query_vec, n_vec)
-                        if cos_sim > 0:
-                            semantic = cos_sim
+                semantic = (
+                    sim_cache.get(neighbor_id, 0.0)
+                    if sim_cache is not None else 0.0)
                 neighbor_score = (
                     cur_score + LAMBDA1 * structural
                     + LAMBDA2 * semantic)
@@ -238,6 +233,14 @@ def intent_aware_recall(
                     embed_cache[eid] = v
     has_embeddings = embed_cache is not None and len(embed_cache) > 0
 
+    sim_cache: dict[str, float] | None = None
+    if has_embeddings:
+        sim_cache = {}
+        for eid, vec in embed_cache.items():
+            s = cosine_similarity(query_vec, vec)
+            if s > 0:
+                sim_cache[eid] = s
+
     anchor_map: dict[str, tuple[Insight, float, str]] = {}
 
     token_cache: dict[str, set[str]] = {}
@@ -298,8 +301,8 @@ def intent_aware_recall(
 
     for aid, (ins, score, via) in anchor_map.items():
         beam_search_from_anchor(
-            db, aid, score, query_vec, weights, params,
-            score_map, via_map, insight_map, embed_cache)
+            db, aid, score, weights, params,
+            score_map, via_map, insight_map, sim_cache)
 
     traversed_count = len(score_map)
 
@@ -348,12 +351,8 @@ def intent_aware_recall(
             ent_score = matched / max(1, len(query_entity_set))
 
         sim_score = 0.0
-        if has_embeddings:
-            n_vec = embed_cache.get(c['id'])
-            if n_vec is not None:
-                sim = cosine_similarity(query_vec, n_vec)
-                if sim > 0:
-                    sim_score = sim
+        if sim_cache is not None:
+            sim_score = sim_cache.get(c['id'], 0.0)
 
         graph_score = (c['graph_raw'] - graph_min) / graph_range
 
