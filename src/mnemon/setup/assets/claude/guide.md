@@ -96,6 +96,9 @@ In normal mode, delegate to a Task sub-agent (`subagent_type="Bash"`,
 
 After writing stable memories, evaluate `causal_candidates` from the remember output.
 When cause-effect relationships exist between memories, call `mnemon link --type causal`.
+Pass the candidate's `suggested_sub_type` back via `--meta`:
+`mnemon link <src> <tgt> --type causal --meta '{"sub_type": "causes"}'`
+(values: `causes`, `enables`, `prevents`).
 Look for reason/consequence pairs — e.g., a decision and the constraint that drove it,
 a problem discovery and the fix it led to, or a tool limitation and the workaround adopted.
 Always link when causal_candidates are returned and a relationship is plausible;

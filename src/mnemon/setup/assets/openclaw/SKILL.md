@@ -78,6 +78,7 @@ mnemon setup --eject --target openclaw --yes
    - Review `causal_candidates`: does a genuine cause-effect relationship exist? `causal_signal` is regex-based and prone to false positives — only link if the memories are truly causally related.
    - Review `semantic_candidates`: are these memories meaningfully related? High `similarity` alone is not sufficient — skip candidates that share keywords but discuss unrelated topics.
    - Syntax: `mnemon link <id> <candidate> --type <causal|semantic> --weight <0-1> [--meta '<json>']`
+   - For causal links, pass `suggested_sub_type` from the candidate via `--meta`: `mnemon link <id> <candidate> --type causal --meta '{"sub_type": "causes"}'` (values: `causes`, `enables`, `prevents`)
 3. **Recall**: `mnemon recall "<query>" --limit 10`
 
 ## Commands
