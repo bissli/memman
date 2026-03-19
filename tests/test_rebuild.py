@@ -307,3 +307,19 @@ class TestRebuildCleansStoredStopwords:
         stored = json.loads(row[0])
         assert 'e.g' not in stored
         assert 'Python' in stored
+
+
+class TestConstantsHashIncludesTechDict:
+    """compute_constants_hash changes when TECH_DICTIONARY changes."""
+
+    def test_hash_changes_on_tech_dict_mutation(self, monkeypatch):
+        """Adding an entry to TECH_DICTIONARY changes the hash."""
+        import mnemon.graph.engine as engine_mod
+        import mnemon.graph.entity as entity_mod
+
+        hash_before = compute_constants_hash()
+        extended = entity_mod.TECH_DICTIONARY | {'__TestOnly__'}
+        monkeypatch.setattr(entity_mod, 'TECH_DICTIONARY', extended)
+        monkeypatch.setattr(engine_mod, 'TECH_DICTIONARY', extended)
+        hash_after = compute_constants_hash()
+        assert hash_before != hash_after

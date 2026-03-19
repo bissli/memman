@@ -7,7 +7,7 @@ from mnemon.store.edge import insert_edge
 from mnemon.store.node import get_latest_insight_by_source
 from mnemon.store.node import get_recent_insights_in_window
 
-TEMPORAL_WINDOW_HOURS = 24.0
+TEMPORAL_WINDOW_HOURS = 4.0
 MAX_PROXIMITY_EDGES = 10
 MIN_PROXIMITY_WEIGHT = 0.10
 

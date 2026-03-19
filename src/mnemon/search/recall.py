@@ -24,17 +24,17 @@ TRAVERSAL_PARAMS: dict[str, tuple[int, int, int]] = {
     }
 
 RERANK_WEIGHTS: dict[str, tuple[float, float, float, float]] = {
-    'WHY':     (0.10, 0.10, 0.30, 0.50),
-    'WHEN':    (0.15, 0.15, 0.30, 0.40),
-    'ENTITY':  (0.20, 0.40, 0.20, 0.20),
-    'GENERAL': (0.25, 0.25, 0.25, 0.25),
+    'WHY':     (0.15, 0.10, 0.45, 0.30),
+    'WHEN':    (0.20, 0.10, 0.40, 0.30),
+    'ENTITY':  (0.20, 0.35, 0.35, 0.10),
+    'GENERAL': (0.25, 0.15, 0.45, 0.15),
     }
 
 RERANK_WEIGHTS_NO_EMBED: dict[str, tuple[float, float, float, float]] = {
-    'WHY':     (0.20, 0.10, 0.0, 0.70),
-    'WHEN':    (0.25, 0.15, 0.0, 0.60),
+    'WHY':     (0.25, 0.15, 0.0, 0.60),
+    'WHEN':    (0.30, 0.15, 0.0, 0.55),
     'ENTITY':  (0.30, 0.50, 0.0, 0.20),
-    'GENERAL': (0.35, 0.35, 0.0, 0.30),
+    'GENERAL': (0.45, 0.25, 0.0, 0.30),
     }
 
 

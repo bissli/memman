@@ -46,12 +46,12 @@ def test_rerank_weights_no_embed_zero_similarity():
         assert w[2] == 0.0, f'{intent} no-embed similarity weight should be 0'
 
 
-def test_rerank_why_emphasizes_graph():
-    """WHY intent weights graph score highest."""
+def test_rerank_why_emphasizes_similarity():
+    """WHY intent weights similarity score highest."""
     w_kw, w_ent, w_sim, w_gr = RERANK_WEIGHTS['WHY']
-    assert w_gr > w_kw
-    assert w_gr > w_ent
-    assert w_gr > w_sim
+    assert w_sim > w_gr
+    assert w_sim > w_kw
+    assert w_sim > w_ent
 
 
 def test_rerank_entity_emphasizes_entity():
@@ -62,7 +62,14 @@ def test_rerank_entity_emphasizes_entity():
     assert w_ent >= w_gr
 
 
-def test_rerank_general_is_uniform():
-    """GENERAL intent uses uniform weights."""
-    w = RERANK_WEIGHTS['GENERAL']
-    assert w[0] == w[1] == w[2] == w[3]
+def test_rerank_general_similarity_highest():
+    """GENERAL intent weights similarity highest."""
+    w_kw, w_ent, w_sim, w_gr = RERANK_WEIGHTS['GENERAL']
+    assert w_sim > max(w_kw, w_ent, w_gr)
+
+
+def test_rerank_no_embed_why_emphasizes_graph():
+    """WHY no-embed weights graph score highest."""
+    w_kw, w_ent, w_sim, w_gr = RERANK_WEIGHTS_NO_EMBED['WHY']
+    assert w_gr > w_kw
+    assert w_gr > w_ent

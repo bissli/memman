@@ -11,17 +11,19 @@ from mnemon.store.edge import find_insights_with_entity, insert_edge
 MAX_ENTITY_LINKS = 5
 MAX_TOTAL_ENTITY_EDGES = 50
 
+CAMELCASE_PATTERN = re.compile(r'\b([A-Z][a-z]+(?:[A-Z][a-z]+)+)\b')
+UPPERCASE_PATTERN = re.compile(r'\b([A-Z]{2,6})\b')
+DOTTED_PATTERN = re.compile(
+    r'(?:^|[\s"\'(])([a-zA-Z][.\w/-]*\.\w{1,10})(?:[\s"\'),.]|$)')
+URL_PATTERN = re.compile(r'https?://[^\s"\'<>)]+')
+MENTION_PATTERN = re.compile(r'@([a-zA-Z_]\w+)')
+
 ENTITY_PATTERNS = [
-    #  CamelCase -> DataProcessor, FastAPI
-    re.compile(r'\b([A-Z][a-z]+(?:[A-Z][a-z]+)+)\b'),
-    # Uppercase -> SQL, API, AWS
-    re.compile(r'\b([A-Z]{2,6})\b'),
-    # Dotted identifiers -> foo.py, bar.py
-    re.compile(r'(?:^|[\s"\'(])([a-zA-Z][.\w/-]*\.\w{1,10})(?:[\s"\'),.]|$)'),
-    # URLS -> https?://
-    re.compile(r'https?://[^\s"\'<>)]+'),
-    # @mentions -> @user_name
-    re.compile(r'@([a-zA-Z_]\w+)'),
+    CAMELCASE_PATTERN,
+    UPPERCASE_PATTERN,
+    DOTTED_PATTERN,
+    URL_PATTERN,
+    MENTION_PATTERN,
     ]
 
 # Exact matches for entities
@@ -41,6 +43,7 @@ TECH_DICTIONARY = {
     'Spring', 'Express', 'Gin', 'Echo', 'Fiber', 'Pytest', 'Jest',
     'Vitest', 'gRPC', 'GraphQL', 'WebSocket', 'OAuth', 'JWT', 'YAML',
     'TOML', 'Protobuf', 'MAGMA', 'MCP', 'RLM',
+    'LLM', 'JSON', 'HTML', 'CLI', 'URL',
     }
 
 ENTITY_STOPWORDS = {'e.g', 'i.e', 'etc', 'vs'}
@@ -132,6 +135,11 @@ def create_entity_edges(
         if entity in ACRONYM_STOPWORDS:
             continue
         if entity in ENTITY_STOPWORDS:
+            continue
+        if not (entity in TECH_DICTIONARY
+                or CAMELCASE_PATTERN.search(entity)
+                or DOTTED_PATTERN.search(entity)
+                or URL_PATTERN.search(entity)):
             continue
         if count >= MAX_TOTAL_ENTITY_EDGES:
             break

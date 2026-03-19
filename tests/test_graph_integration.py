@@ -157,14 +157,14 @@ class TestEntityIdfWeightedEdges:
         for i in range(10):
             insert_insight(tmp_db, make_insight(
                 id=f'idf-{i}', content=f'content {i}',
-                entities=['common']))
+                entities=['Python']))
         rare = make_insight(
             id='idf-rare', content='rare thing',
             entities=['UniqueEntity'])
         insert_insight(tmp_db, rare)
         target = make_insight(
             id='idf-rare2', content='also rare',
-            entities=['UniqueEntity', 'common'])
+            entities=['UniqueEntity', 'Python'])
         insert_insight(tmp_db, target)
 
         create_entity_edges(tmp_db, target)
@@ -176,7 +176,7 @@ class TestEntityIdfWeightedEdges:
             ]
         common_edges = [
             e for e in edges
-            if e.metadata.get('entity') == 'common'
+            if e.metadata.get('entity') == 'Python'
             ]
         assert len(rare_edges) > 0
         assert len(common_edges) > 0
@@ -549,3 +549,84 @@ class TestBuildEmbedCacheEmpty:
         """Empty DB (no embeddings) returns None from build_embed_cache."""
         cache = build_embed_cache(tmp_db)
         assert cache is None
+
+
+# --- Edge-worthy filtering ---
+
+
+class TestEdgeWorthyFiltering:
+    """Bare acronyms blocked; CamelCase and tech-dict entries allowed."""
+
+    def test_bare_acronym_blocked(self, tmp_db):
+        """Two insights sharing 'SQL' produce 0 entity edges."""
+        ins1 = make_insight(
+            id='ew-1', content='SQL query', entities=['SQL'])
+        ins2 = make_insight(
+            id='ew-2', content='SQL index', entities=['SQL'])
+        insert_insight(tmp_db, ins1)
+        insert_insight(tmp_db, ins2)
+        count = create_entity_edges(tmp_db, ins2)
+        assert count == 0
+
+    def test_tech_dict_allowed(self, tmp_db):
+        """Two insights sharing 'Redis' produce entity edges."""
+        ins1 = make_insight(
+            id='ew-3', content='Redis cache',
+            entities=['Redis'])
+        ins2 = make_insight(
+            id='ew-4', content='Redis session store',
+            entities=['Redis'])
+        insert_insight(tmp_db, ins1)
+        insert_insight(tmp_db, ins2)
+        count = create_entity_edges(tmp_db, ins2)
+        assert count >= 2
+
+    def test_camelcase_allowed(self, tmp_db):
+        """Two insights sharing 'DataProcessor' produce entity edges."""
+        ins1 = make_insight(
+            id='ew-5', content='DataProcessor init',
+            entities=['DataProcessor'])
+        ins2 = make_insight(
+            id='ew-6', content='DataProcessor run',
+            entities=['DataProcessor'])
+        insert_insight(tmp_db, ins1)
+        insert_insight(tmp_db, ins2)
+        count = create_entity_edges(tmp_db, ins2)
+        assert count >= 2
+
+    def test_url_allowed(self, tmp_db):
+        """Two insights sharing a URL produce entity edges."""
+        url = 'https://example.com/api'
+        ins1 = make_insight(
+            id='ew-7', content='see docs', entities=[url])
+        ins2 = make_insight(
+            id='ew-8', content='api ref', entities=[url])
+        insert_insight(tmp_db, ins1)
+        insert_insight(tmp_db, ins2)
+        count = create_entity_edges(tmp_db, ins2)
+        assert count >= 2
+
+
+# --- Temporal window ---
+
+
+class TestTemporalOutsideWindow:
+    """Insight outside the 4h window gets no proximity edges."""
+
+    def test_outside_window_no_proximity(self, tmp_db):
+        """5-hour-old insight produces 0 proximity edges."""
+        now = datetime.now(timezone.utc)
+        old = make_insight(
+            id='tw-1', content='old', source='p',
+            created_at=now - timedelta(hours=5))
+        new = make_insight(
+            id='tw-2', content='new', source='q',
+            created_at=now)
+        insert_insight(tmp_db, old)
+        insert_insight(tmp_db, new)
+        create_temporal_edge(tmp_db, new)
+        proximity_edges = [
+            e for e in get_edges_by_node_and_type(
+                tmp_db, 'tw-2', 'temporal')
+            if e.metadata.get('sub_type') == 'proximity']
+        assert len(proximity_edges) == 0

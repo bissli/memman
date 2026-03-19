@@ -6,11 +6,13 @@ import logging
 
 from mnemon.graph.causal import CAUSAL_LOOKBACK, create_causal_edges
 from mnemon.graph.entity import ACRONYM_STOPWORDS, ENTITY_PATTERNS
-from mnemon.graph.entity import ENTITY_STOPWORDS, create_entity_edges
-from mnemon.graph.entity import extract_entities, merge_entities
+from mnemon.graph.entity import ENTITY_STOPWORDS, TECH_DICTIONARY
+from mnemon.graph.entity import create_entity_edges, extract_entities
+from mnemon.graph.entity import merge_entities
 from mnemon.graph.semantic import AUTO_SEMANTIC_THRESHOLD, build_embed_cache
 from mnemon.graph.semantic import create_semantic_edges
-from mnemon.graph.temporal import MIN_PROXIMITY_WEIGHT, create_temporal_edge
+from mnemon.graph.temporal import MIN_PROXIMITY_WEIGHT, TEMPORAL_WINDOW_HOURS
+from mnemon.graph.temporal import create_temporal_edge
 from mnemon.model import Insight
 from mnemon.store.node import get_all_active_insights, update_entities
 
@@ -41,8 +43,10 @@ def compute_constants_hash() -> str:
         'entity_patterns': [p.pattern for p in ENTITY_PATTERNS],
         'acronym_stopwords': sorted(ACRONYM_STOPWORDS),
         'entity_stopwords': sorted(ENTITY_STOPWORDS),
+        'tech_dictionary': sorted(TECH_DICTIONARY),
         'causal_lookback': CAUSAL_LOOKBACK,
         'min_proximity_weight': MIN_PROXIMITY_WEIGHT,
+        'temporal_window_hours': TEMPORAL_WINDOW_HOURS,
         }, sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
