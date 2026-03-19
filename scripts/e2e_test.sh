@@ -676,12 +676,12 @@ assert_contains "React extracted via dictionary" "$OUT" '"React"'
 assert_contains "TypeScript extracted via dictionary" "$OUT" '"TypeScript"'
 assert_contains "Redis extracted via dictionary" "$OUT" '"Redis"'
 
-step "entity extraction — acronyms (ALLCAPS)"
-OUT=$($M --data-dir "$TESTDIR_DICT" remember --no-diff "The API uses gRPC and JWT for authentication over HTTP" --cat fact --imp 3)
+step "entity extraction — acronyms (ALLCAPS via TECH_DICTIONARY)"
+OUT=$($M --data-dir "$TESTDIR_DICT" remember --no-diff "The LLM uses gRPC and JWT for authentication with JSON" --cat fact --imp 3)
 echo -e "    ${DIM}entities: $(echo "$OUT" | jq -c '.entities')${RESET}"
-assert_contains "API extracted" "$OUT" '"API"'
+assert_contains "LLM extracted" "$OUT" '"LLM"'
 assert_contains "JWT extracted" "$OUT" '"JWT"'
-assert_contains "HTTP extracted" "$OUT" '"HTTP"'
+assert_contains "JSON extracted" "$OUT" '"JSON"'
 
 step "entity extraction — stopwords not extracted"
 OUT=$($M --data-dir "$TESTDIR_DICT" remember --no-diff "IF YOU CAN SEE THE WAY TO DO IT" --cat fact --imp 2)

@@ -56,6 +56,16 @@ ACRONYM_STOPWORDS = {
     'MAN', 'NEW', 'NOW', 'OLD', 'SEE', 'WAY', 'MAY', 'SAY', 'SHE',
     'TWO', 'USE', 'BOY', 'DID', 'GET', 'HIM', 'HIS', 'LET', 'PUT',
     'TOP', 'TOO', 'ANY',
+    'MUST', 'KEPT', 'KEEP', 'SAVE', 'SAME', 'ONLY', 'NONE', 'FULL',
+    'NEVER', 'ADDED', 'AFTER', 'BEFORE', 'DATES', 'PAUSE', 'RENAME',
+    'TODAY', 'UNIT', 'ONLINE', 'SYSTEM',
+    'SQL', 'NULL', 'SET', 'LEFT', 'JOIN', 'DROP', 'TABLE', 'WHERE',
+    'INSERT', 'ALTER', 'INTO', 'SELECT', 'UPSERT', 'VIEW',
+    'API', 'JS', 'CSS', 'DOM', 'DB', 'UI', 'HTTP', 'HTTPS', 'FTP',
+    'SFTP', 'TCP', 'IP', 'DNS', 'RPC', 'GPU', 'SDK', 'SSH', 'RDP',
+    'CDN', 'NET', 'AD', 'SMB',
+    'PNL', 'SPAC', 'USD', 'EUR', 'AED', 'FX', 'ETL', 'CSRF', 'SEC',
+    'YTD', 'CR',
     }
 
 _WORD_SPLIT_RE = re.compile(r'[a-zA-Z0-9]+')

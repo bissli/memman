@@ -15,14 +15,23 @@ class TestExtractCamelCase:
 
 
 class TestExtractAcronyms:
-    """Uppercase acronyms (2-6 chars) extracted."""
+    """Uppercase acronyms (2-6 chars) extracted when not stopwords."""
 
-    def test_extract_acronyms(self):
-        """API, HTTP, SQL recognized as acronym entities."""
+    def test_noise_acronyms_filtered(self):
+        """API, HTTP, SQL filtered as noise acronym stopwords."""
         entities = extract_entities('The API uses HTTP and SQL')
-        assert 'API' in entities
-        assert 'HTTP' in entities
-        assert 'SQL' in entities
+        assert 'API' not in entities
+        assert 'HTTP' not in entities
+        assert 'SQL' not in entities
+
+    def test_tech_dictionary_acronyms_extracted(self):
+        """LLM, JSON, HTML, CLI, URL still extracted via tech dictionary."""
+        entities = extract_entities('The LLM outputs JSON and HTML for CLI and URL')
+        assert 'LLM' in entities
+        assert 'JSON' in entities
+        assert 'HTML' in entities
+        assert 'CLI' in entities
+        assert 'URL' in entities
 
 
 class TestExtractAcronymStopwords:
@@ -92,9 +101,9 @@ class TestNoDuplicates:
     """Duplicate entities collapsed to single occurrence."""
 
     def test_no_duplicates(self):
-        """API mentioned twice appears only once in output."""
-        entities = extract_entities('API calls the API endpoint')
-        count = sum(1 for e in entities if e == 'API')
+        """LLM mentioned twice appears only once in output."""
+        entities = extract_entities('LLM calls the LLM endpoint')
+        count = sum(1 for e in entities if e == 'LLM')
         assert count == 1
 
 
