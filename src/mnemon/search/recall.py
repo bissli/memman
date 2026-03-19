@@ -3,6 +3,7 @@
 import heapq
 
 from mnemon.embed.vector import cosine_similarity, deserialize_vector
+from mnemon.graph.semantic import build_embed_cache
 from mnemon.model import Insight
 from mnemon.search.intent import detect_intent, get_weights
 from mnemon.search.keyword import insight_tokens, keyword_search, tokenize
@@ -222,15 +223,7 @@ def intent_aware_recall(
 
     all_insights = get_all_active_insights(db)
 
-    embed_cache: dict[str, list[float]] | None = None
-    if query_vec is not None:
-        db_embeds = get_all_embeddings(db)
-        if db_embeds:
-            embed_cache = {}
-            for eid, _content, blob in db_embeds:
-                v = deserialize_vector(blob)
-                if v is not None:
-                    embed_cache[eid] = v
+    embed_cache = build_embed_cache(db) if query_vec is not None else None
     has_embeddings = embed_cache is not None and len(embed_cache) > 0
 
     sim_cache: dict[str, float] | None = None
