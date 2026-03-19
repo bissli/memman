@@ -92,12 +92,7 @@ def beam_search_from_anchor(
 
         next_items: list[tuple[float, str, int]] = []
 
-        new_current = []
-        for neg_score, nid, d in current:
-            if d != depth:
-                new_current.append((neg_score, nid, d))
-                continue
-
+        for neg_score, nid, _d in current:
             cur_score = -neg_score
             edges = get_edges_by_node(db, nid)
 
@@ -131,8 +126,6 @@ def beam_search_from_anchor(
                     heapq.heappush(
                         next_items,
                         (-neighbor_score, neighbor_id, depth + 1))
-
-        current = new_current
 
         pruned = []
         count = 0
