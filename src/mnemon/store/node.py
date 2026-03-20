@@ -2,7 +2,6 @@
 
 import logging
 import math
-import sys
 from datetime import datetime, timezone
 
 from mnemon.model import Insight, base_weight, format_timestamp, is_immune
@@ -217,18 +216,15 @@ def get_retention_candidates(
                 })
 
     if updates:
-        try:
-            db._conn.execute('BEGIN')
+        def apply_ei_updates() -> None:
             for ei_val, uid in updates:
                 db._conn.execute(
                     'UPDATE insights SET effective_importance = ?'
                     ' WHERE id = ?', (ei_val, uid))
-            db._conn.execute('COMMIT')
+        try:
+            db.in_transaction(apply_ei_updates)
         except Exception as e:
-            db._conn.execute('ROLLBACK')
-            print(
-                f'warning: batch EI update failed, rolled back: {e}',
-                file=sys.stderr)
+            logger.warning('batch EI update failed, rolled back: %s', e)
 
     candidates.sort(key=lambda c: c['effective_importance'])
     total = len(insight_rows)

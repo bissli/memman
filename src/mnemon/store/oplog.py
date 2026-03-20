@@ -1,7 +1,6 @@
 """Operation logging with auto-trim."""
 
 import logging
-import sys
 from datetime import datetime, timezone
 
 from mnemon.model import format_timestamp
@@ -22,7 +21,7 @@ def log_op(db: 'DB', operation: str, insight_id: str,
             ' VALUES (?, ?, ?, ?)',
             (operation, insight_id, detail, now))
     except Exception as e:
-        print(f'warning: oplog insert: {e}', file=sys.stderr)
+        logger.warning('oplog insert failed: %s', e)
 
     try:
         db._exec(
@@ -30,7 +29,7 @@ def log_op(db: 'DB', operation: str, insight_id: str,
             ' (SELECT MAX(id) FROM oplog) - ?',
             (MAX_OPLOG_ENTRIES,))
     except Exception as e:
-        print(f'warning: oplog trim: {e}', file=sys.stderr)
+        logger.warning('oplog trim failed: %s', e)
 
 
 def get_oplog(db: 'DB', limit: int = 20) -> list[dict]:
