@@ -26,6 +26,10 @@ def on_insight_created(
     """Run all edge generators for a newly created insight."""
     extracted = extract_entities(insight.content)
     insight.entities = merge_entities(insight.entities, extracted)
+    insight.entities = [
+        e for e in insight.entities
+        if e not in ENTITY_STOPWORDS
+        and e not in ACRONYM_STOPWORDS]
 
     stats = {
         'temporal': create_temporal_edge(db, insight),

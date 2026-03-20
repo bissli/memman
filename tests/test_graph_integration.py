@@ -228,6 +228,16 @@ class TestStopwordEntityFiltering:
         count = create_entity_edges(tmp_db, ins_a)
         assert count == 0
 
+    def test_on_insight_created_strips_stopwords(self, tmp_db):
+        """User-provided stopword entity stripped at creation time."""
+        ins = make_insight(
+            id='strip-1', content='The API uses SQL queries',
+            entities=['SQL', 'Python'])
+        insert_insight(tmp_db, ins)
+        on_insight_created(tmp_db, ins)
+        assert 'SQL' not in ins.entities
+        assert 'Python' in ins.entities
+
 
 # --- Causal ---
 
