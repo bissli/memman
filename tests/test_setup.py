@@ -460,25 +460,126 @@ def test_prime_hook_cleans_stale_exit_plan_flags(tmp_path):
     assert fresh_flag.exists()
 
 
-def test_stop_hook_script():
-    """Stop hook outputs JSON block when inactive, silent when active."""
+def _stop_script():
+    """Return path to stop.sh asset."""
     from importlib.resources import files as pkg_files
-    script = str(
+    return str(
         pkg_files('mnemon.setup.assets')
         .joinpath('claude/stop.sh'))
 
-    result_inactive = subprocess.run(
+
+def _prompt_script():
+    """Return path to user_prompt.sh asset."""
+    from importlib.resources import files as pkg_files
+    return str(
+        pkg_files('mnemon.setup.assets')
+        .joinpath('claude/user_prompt.sh'))
+
+
+def _run_hook(script: str, input_json: str,
+              tmp_home: pathlib.Path) -> subprocess.CompletedProcess:
+    """Run a hook script with HOME overridden."""
+    return subprocess.run(
         ['bash', script],
-        check=False, input='{"stop_hook_active": false}',
-        capture_output=True, text=True)
-    assert result_inactive.returncode == 0
-    output = json.loads(result_inactive.stdout.strip())
+        check=False, input=input_json,
+        capture_output=True, text=True,
+        env={**os.environ, 'HOME': str(tmp_home)})
+
+
+def test_stop_hook_first_stop_blocks(tmp_path):
+    """First stop with session_id blocks for memory eval."""
+    result = _run_hook(
+        _stop_script(),
+        '{"stop_hook_active": false, "session_id": "sess-1"}',
+        tmp_path)
+    assert result.returncode == 0
+    output = json.loads(result.stdout.strip())
     assert output['decision'] == 'block'
     assert 'mnemon' in output['reason'].lower()
 
-    result_active = subprocess.run(
-        ['bash', script],
-        check=False, input='{"stop_hook_active": true}',
-        capture_output=True, text=True)
-    assert result_active.returncode == 0
-    assert result_active.stdout.strip() == ''
+
+def test_stop_hook_second_stop_silent(tmp_path):
+    """Second stop in same turn is silent (flag dir exists)."""
+    _run_hook(
+        _stop_script(),
+        '{"stop_hook_active": false, "session_id": "sess-2"}',
+        tmp_path)
+    result = _run_hook(
+        _stop_script(),
+        '{"stop_hook_active": false, "session_id": "sess-2"}',
+        tmp_path)
+    assert result.returncode == 0
+    assert result.stdout.strip() == ''
+
+
+def test_stop_hook_blocks_again_after_reset(tmp_path):
+    """After rmdir reset, stop blocks again."""
+    _run_hook(
+        _stop_script(),
+        '{"stop_hook_active": false, "session_id": "sess-3"}',
+        tmp_path)
+    flag_dir = tmp_path / '.mnemon' / 'stop_fired' / 'sess-3'
+    assert flag_dir.is_dir()
+    flag_dir.rmdir()
+
+    result = _run_hook(
+        _stop_script(),
+        '{"stop_hook_active": false, "session_id": "sess-3"}',
+        tmp_path)
+    output = json.loads(result.stdout.strip())
+    assert output['decision'] == 'block'
+
+
+def test_stop_hook_active_silent(tmp_path):
+    """stop_hook_active=true bypasses gate entirely."""
+    result = _run_hook(
+        _stop_script(),
+        '{"stop_hook_active": true, "session_id": "sess-4"}',
+        tmp_path)
+    assert result.returncode == 0
+    assert result.stdout.strip() == ''
+
+
+def test_stop_hook_no_session_id_blocks(tmp_path):
+    """Missing session_id falls back to always blocking."""
+    result = _run_hook(
+        _stop_script(),
+        '{"stop_hook_active": false}',
+        tmp_path)
+    assert result.returncode == 0
+    output = json.loads(result.stdout.strip())
+    assert output['decision'] == 'block'
+
+
+def test_user_prompt_clears_stop_flag(tmp_path):
+    """user_prompt.sh removes stop_fired flag dir."""
+    flag_dir = tmp_path / '.mnemon' / 'stop_fired' / 'sess-5'
+    flag_dir.mkdir(parents=True)
+
+    result = _run_hook(
+        _prompt_script(),
+        '{"session_id": "sess-5"}',
+        tmp_path)
+    assert result.returncode == 0
+    assert not flag_dir.exists()
+    assert 'recall' in result.stdout.lower()
+
+
+def test_user_prompt_no_flag_dir(tmp_path):
+    """user_prompt.sh exits cleanly when no flag dir exists."""
+    result = _run_hook(
+        _prompt_script(),
+        '{"session_id": "sess-6"}',
+        tmp_path)
+    assert result.returncode == 0
+    assert 'recall' in result.stdout.lower()
+
+
+def test_user_prompt_no_session_id(tmp_path):
+    """user_prompt.sh exits cleanly when session_id is missing."""
+    result = _run_hook(
+        _prompt_script(),
+        '{}',
+        tmp_path)
+    assert result.returncode == 0
+    assert 'recall' in result.stdout.lower()

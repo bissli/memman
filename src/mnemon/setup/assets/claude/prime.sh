@@ -15,6 +15,10 @@ SOURCE=$(echo "$INPUT" | sed -n 's/.*"source": *"\([^"]*\)".*/\1/p' | head -1)
 find "${HOME}/.mnemon/exit_plan" -name '*.flag' -mmin +60 \
     -delete 2>/dev/null
 
+# Clean stale stop-fired flags (older than 2 hours)
+find "$HOME/.mnemon/stop_fired" -mindepth 1 -maxdepth 1 -type d -mmin +120 \
+    -exec rmdir {} \; 2>/dev/null
+
 if ! command -v mnemon >/dev/null 2>&1; then
   echo "[mnemon] Warning: mnemon not found in PATH."
   [ -f "${PROMPT_DIR}/guide.md" ] && cat "${PROMPT_DIR}/guide.md"
