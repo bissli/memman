@@ -1,5 +1,6 @@
 """Insight CRUD, lifecycle, statistics, and embedding operations."""
 
+import json
 import logging
 import math
 from datetime import datetime, timezone
@@ -58,8 +59,10 @@ def query_insights(db: 'DB', keyword: str = '', category: str = '',
     args: list = []
 
     if keyword:
-        conditions.append('content LIKE ?')
-        args.append(f'%{keyword}%')
+        for word in keyword.split():
+            conditions.append(
+                '(content LIKE ? OR tags LIKE ? OR entities LIKE ?)')
+            args.extend([f'%{word}%', f'%{word}%', f'%{word}%'])
     if category:
         conditions.append('category = ?')
         args.append(category)
@@ -99,7 +102,6 @@ def soft_delete_insight(db: 'DB', id: str) -> None:
 
 def update_entities(db: 'DB', id: str, entities: list[str]) -> None:
     """Update the entities field for an insight."""
-    import json
     now = format_timestamp(datetime.now(timezone.utc))
     db._exec(
         'UPDATE insights SET entities = ?, updated_at = ? WHERE id = ?',

@@ -366,6 +366,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                 source=source, limit=limit)
             for r in results:
                 increment_access_count(db, r.id)
+                r.access_count += 1
             log_op(db, 'recall:basic', '',
                    f'q={keyword_str} hits={len(results)}')
             _json_out([_insight_to_dict(r) for r in results])
@@ -391,6 +392,10 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
         resp = intent_aware_recall(
             db, keyword_str, query_vec, query_entities,
             limit, intent_override)
+        if cat:
+            resp['results'] = [
+                r for r in resp['results']
+                if r['insight'].category == cat]
 
         for r in resp['results']:
             increment_access_count(db, r['insight'].id)
