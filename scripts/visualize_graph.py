@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Generate a knowledge-graph visualization from ~/.mnemon/mnemon.db for README."""
+"""Generate a knowledge-graph visualization from a mnemon database."""
 
+import argparse
 import math
 import os
 import sqlite3
@@ -11,9 +12,6 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import networkx as nx
 import numpy as np
-
-DB_PATH = Path.home() / ".mnemon" / "data" / "default" / "mnemon.db"
-OUT_PATH = Path(__file__).resolve().parent.parent / "docs" / "diagrams" / "10-mnemon-graph.jpg"
 
 # ── colour palette ──────────────────────────────────────────────────
 CATEGORY_COLOURS = {
@@ -36,9 +34,10 @@ EDGE_COLOURS = {
 BG_COLOUR = "#0d1117"
 
 
-def load_data():
-    """Return nodes dict and edges grouped by type."""
-    conn = sqlite3.connect(str(DB_PATH))
+def load_data(db_path: Path) -> tuple:
+    """Return nodes dict and edges grouped by type.
+    """
+    conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
 
     nodes = {}
@@ -80,7 +79,7 @@ def build_layout_graph(nodes, edges_by_type):
     return G
 
 
-def draw(nodes, edges_by_type) -> None:
+def draw(nodes: dict, edges_by_type: dict, out_path: Path) -> None:
     fig, ax = plt.subplots(figsize=(16, 10), facecolor=BG_COLOUR)
     ax.set_facecolor(BG_COLOUR)
 
@@ -192,17 +191,31 @@ def draw(nodes, edges_by_type) -> None:
     ax.axis("off")
     plt.tight_layout(pad=0.5)
 
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(str(OUT_PATH), dpi=200, facecolor=BG_COLOUR,
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(str(out_path), dpi=200, facecolor=BG_COLOUR,
                 bbox_inches="tight", pad_inches=0.3)
     plt.close(fig)
-    print(f"✓ Saved → {OUT_PATH}  ({os.path.getsize(OUT_PATH) / 1024:.0f} KB)")
+    print(f"Saved {out_path}  ({os.path.getsize(out_path) / 1024:.0f} KB)")
 
 
 if __name__ == "__main__":
-    nodes, edges_by_type = load_data()
+    parser = argparse.ArgumentParser(
+        description='Generate a knowledge-graph visualization from a mnemon database.')
+    parser.add_argument(
+        'name',
+        help='database profile name (loaded from ~/.mnemon/data/<name>/mnemon.db)')
+    parser.add_argument(
+        '-o', '--output',
+        help='output file path (default: ~/Downloads/mnemon-<name>-graph.jpg)')
+    args = parser.parse_args()
+
+    db_path = Path.home() / '.mnemon' / 'data' / args.name / 'mnemon.db'
+    out_path = (Path(args.output) if args.output
+                else Path.home() / 'Downloads' / f'mnemon-{args.name}-graph.jpg')
+
+    nodes, edges_by_type = load_data(db_path)
     total = sum(len(v) for v in edges_by_type.values())
     print(f"Loaded {len(nodes)} nodes, {total} edges")
     for t, e in sorted(edges_by_type.items()):
         print(f"  {t}: {len(e)}")
-    draw(nodes, edges_by_type)
+    draw(nodes, edges_by_type, out_path)
