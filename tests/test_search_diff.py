@@ -1,6 +1,7 @@
 """Tests for mnemon.search.diff -- duplicate/conflict detection."""
 
 from mnemon.model import Insight
+from mnemon.search.antonyms import ANTONYM_PAIRS
 from mnemon.search.diff import classify_suggestion, diff
 
 
@@ -31,17 +32,18 @@ def test_classify_conflict_negation():
 
 
 def test_classify_boundary():
-    """Boundary values: 0.65 not ADD, 0.9 not DUPLICATE."""
-    got = classify_suggestion(0.65, 'some content', 'other content')
+    """Boundary values: 0.55 not ADD, 0.9 not DUPLICATE."""
+    got = classify_suggestion(0.55, 'some content', 'other content')
     assert got != 'ADD'
     got = classify_suggestion(0.9, 'some content', 'other content')
     assert got != 'DUPLICATE'
 
 
 def test_classify_below_new_threshold():
-    """Similarity below 0.65 classifies as ADD."""
+    """Similarity below 0.55 classifies as ADD."""
     assert classify_suggestion(0.5, 'some text', 'other text') == 'ADD'
-    assert classify_suggestion(0.6, 'some text', 'other text') == 'ADD'
+    assert classify_suggestion(0.54, 'some text', 'other text') == 'ADD'
+    assert classify_suggestion(0.6, 'some text', 'other text') == 'UPDATE'
 
 
 def test_diff_token_only():
@@ -91,3 +93,49 @@ def test_diff_limit_default():
     ]
     result = diff(insights, 'shared words database memory')
     assert len(result['matches']) <= 5
+
+
+def test_classify_conflict_antonym_tech():
+    """Tech antonym pairs trigger CONFLICT classification."""
+    cases = [
+        ('use synchronous calls', 'use asynchronous calls'),
+        ('the API is stateful', 'the API is stateless'),
+        ('data is mutable', 'data is immutable'),
+        ('use blocking IO', 'use non-blocking IO'),
+        ('centralized architecture', 'decentralized architecture'),
+        ('schema is normalized', 'schema is denormalized'),
+    ]
+    for new_text, existing in cases:
+        result = classify_suggestion(0.7, new_text, existing)
+        assert result == 'CONFLICT', (
+            f'Expected CONFLICT for {new_text!r} vs {existing!r}, got {result}')
+
+
+def test_classify_conflict_antonym_general():
+    """General antonym pairs trigger CONFLICT classification."""
+    cases = [
+        ('the change is reversible', 'the change is irreversible'),
+        ('this field is required', 'this field is optional'),
+        ('uses explicit configuration', 'uses implicit configuration'),
+        ('the system is stable', 'the system is unstable'),
+    ]
+    for new_text, existing in cases:
+        result = classify_suggestion(0.7, new_text, existing)
+        assert result == 'CONFLICT', (
+            f'Expected CONFLICT for {new_text!r} vs {existing!r}, got {result}')
+
+
+def test_antonym_pairs_minimum_term_length():
+    """All antonym terms are at least 4 characters to avoid false matches."""
+    for term_a, term_b in ANTONYM_PAIRS:
+        assert len(term_a) >= 4, f'Term too short: {term_a!r}'
+        assert len(term_b) >= 4, f'Term too short: {term_b!r}'
+
+
+def test_antonym_pairs_no_duplicates():
+    """No duplicate pairs in ANTONYM_PAIRS."""
+    normalized = set()
+    for a, b in ANTONYM_PAIRS:
+        pair = tuple(sorted([a.lower(), b.lower()]))
+        assert pair not in normalized, f'Duplicate pair: {pair}'
+        normalized.add(pair)

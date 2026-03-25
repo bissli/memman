@@ -2,6 +2,7 @@
 
 from mnemon.embed.vector import cosine_similarity
 from mnemon.model import Insight
+from mnemon.search.antonyms import ANTONYM_PAIRS
 from mnemon.search.keyword import content_similarity, keyword_search
 
 NEGATION_WORDS = [
@@ -14,15 +15,20 @@ def classify_suggestion(
         similarity: float, new_text: str,
         existing_text: str) -> str:
     """Classify the relationship based on similarity and negation signals."""
-    if similarity < 0.65:
-        return 'ADD'
-
     new_lower = new_text.lower()
     exist_lower = existing_text.lower()
+
+    for term_a, term_b in ANTONYM_PAIRS:
+        if ((term_a in new_lower and term_b in exist_lower)
+                or (term_b in new_lower and term_a in exist_lower)):
+            return 'CONFLICT'
+
     for neg in NEGATION_WORDS:
         if neg in new_lower or neg in exist_lower:
             return 'CONFLICT'
 
+    if similarity < 0.55:
+        return 'ADD'
     if similarity > 0.9:
         return 'DUPLICATE'
     return 'UPDATE'
