@@ -156,18 +156,21 @@ def _install_claude_code(env: dict, auto_yes: bool,
                          use_global: bool,
                          data_dir: str) -> None:
     """Install mnemon into Claude Code."""
-    config_dir = env['config_dir']
+    home = home_dir()
+    global_dir = home + '/.claude'
 
-    if not use_global and not auto_yes and is_interactive():
-        home = home_dir()
+    if use_global:
+        config_dir = global_dir
+    elif not auto_yes and is_interactive():
         local_dir = '.claude'
-        global_dir = home + '/.claude'
         idx = select_one(
             'Install scope',
             [f'Local \u2014 this project only ({local_dir}/)',
              f'Global \u2014 all projects ({global_dir}/)'],
-            0)
+            1)
         config_dir = global_dir if idx == 1 else local_dir
+    else:
+        config_dir = global_dir
 
     print(f'\nSetting up Claude Code ({config_dir})...')
 
