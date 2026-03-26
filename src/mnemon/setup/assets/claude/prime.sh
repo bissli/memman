@@ -11,10 +11,6 @@ else
 fi
 SOURCE=$(echo "$INPUT" | sed -n 's/.*"source": *"\([^"]*\)".*/\1/p' | head -1)
 
-# Clean stale exit_plan flags (older than 1 hour)
-find "${HOME}/.mnemon/exit_plan" -name '*.flag' -mmin +60 \
-    -delete 2>/dev/null
-
 # Clean stale stop-fired flags (older than 2 hours)
 find "$HOME/.mnemon/stop_fired" -mindepth 1 -maxdepth 1 -type d -mmin +120 \
     -exec rmdir {} \; 2>/dev/null
