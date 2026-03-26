@@ -169,14 +169,15 @@ def test_viz_dot(runner):
 
 
 def test_remember_quality_warnings(runner):
-    """Remember output includes quality_warnings for transient content."""
+    """Content with 2+ quality warnings is rejected."""
     result = invoke(runner, [
         'remember', 'i-0c220c2402a5245bc deployed via Terraform',
         '--no-diff'])
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert 'quality_warnings' in data
+    assert data['action'] == 'rejected'
     assert 'AWS instance ID' in data['quality_warnings']
+    assert 'deployment receipt' in data['quality_warnings']
 
 
 def test_remember_no_quality_warnings(runner):
@@ -190,10 +191,10 @@ def test_remember_no_quality_warnings(runner):
 
 
 def test_gc_review(runner):
-    """GC --review flags transient content."""
+    """GC --review flags transient content with 1 warning (stored)."""
     invoke(runner, [
-        'remember', ('i-0c220c2402a5245bc deployed via Terraform.'
-                     ' 32 resources total.'), '--no-diff'])
+        'remember', 'i-0c220c2402a5245bc shows the issue',
+        '--no-diff'])
     invoke(runner, [
         'remember', 'SQLite chosen for simplicity', '--no-diff'])
     result = invoke(runner, ['gc', '--review'])
@@ -202,6 +203,39 @@ def test_gc_review(runner):
     assert data['total_flagged'] == 1
     assert len(data['review_results']) == 1
     assert 'AWS instance ID' in data['review_results'][0]['quality_warnings']
+
+
+def test_remember_quality_rejection(runner):
+    """2+ warnings rejected, 1 warning stored, quality-reject in oplog."""
+    result = invoke(runner, [
+        'remember', 'Stack deployed via Terraform. 32 resources total.',
+        '--no-diff'])
+    data = json.loads(result.output)
+    assert data['action'] == 'rejected'
+    assert len(data['quality_warnings']) >= 2
+
+    result = invoke(runner, [
+        'remember', 'i-0c220c2402a5245bc shows the issue',
+        '--no-diff'])
+    data = json.loads(result.output)
+    assert data['action'] == 'added'
+    assert len(data['quality_warnings']) == 1
+
+    result = invoke(runner, ['log', '--limit', '10'])
+    assert 'quality-reject' in result.output
+
+
+def test_replace_quality_rejection(runner):
+    """Replace path also rejects content with 2+ quality warnings."""
+    result = invoke(runner, ['remember', 'original fact', '--no-diff'])
+    old_id = json.loads(result.output)['id']
+
+    result = invoke(runner, [
+        'replace', old_id,
+        'Stack deployed via Terraform. 32 resources total.'])
+    data = json.loads(result.output)
+    assert data['action'] == 'rejected'
+    assert len(data['quality_warnings']) >= 2
 
 
 def test_gc_review_empty(runner):
@@ -310,7 +344,7 @@ def test_replace_oplog_entries(runner):
     result = invoke(runner, ['replace', old_id, 'oplog replacement'])
     new_id = json.loads(result.output)['id']
 
-    result = invoke(runner, ['log', '--limit', '5'])
+    result = invoke(runner, ['log', '--limit', '10'])
     assert result.exit_code == 0
     assert 'replace' in result.output
     assert 'remember' in result.output

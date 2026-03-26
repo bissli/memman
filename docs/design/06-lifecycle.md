@@ -75,7 +75,7 @@ mnemon gc --keep <id>
 mnemon gc --review
 ```
 
-`gc --review` scans all active insights against transient content patterns (AWS instance IDs, resource counts, verification receipts, deployment receipts, state observations). Returns flagged entries sorted by warning count. Aligns with MAGMA's slow-path philosophy: the fast path (remember) stores quickly with advisory warnings; the slow path (gc --review) enables async quality review.
+`gc --review` scans all active insights against transient content patterns (AWS instance IDs, resource counts, verification receipts, deployment receipts, state observations, line number references). Returns flagged entries sorted by warning count. Note: since the remember pipeline now **rejects** content with 2+ quality warnings at write time, `gc --review` primarily catches insights stored before the hard gate was introduced, or single-warning content that accumulated additional transient characteristics over time.
 
 **Rationale:**
 

@@ -3,8 +3,9 @@
 import json
 import os
 import pathlib
+import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import click
 import mnemon
@@ -48,6 +49,19 @@ def _open_db(ctx: click.Context) -> 'DB':
 def _trunc_id(id: str) -> str:
     """Truncate an ID to 8 characters for display."""
     return id[:8] if len(id) > 8 else id
+
+
+def _parse_since(since: str) -> str:
+    """Parse a relative time string (e.g. '7d', '24h') to ISO timestamp."""
+    m = re.match(r'^(\d+)([dhm])$', since)
+    if not m:
+        raise click.ClickException(
+            f'Invalid --since format: {since} (use e.g. 7d, 24h, 30m)')
+    val, unit = int(m.group(1)), m.group(2)
+    delta = {'d': timedelta(days=val), 'h': timedelta(hours=val),
+             'm': timedelta(minutes=val)}[unit]
+    cutoff = datetime.now(timezone.utc) - delta
+    return format_timestamp(cutoff)
 
 
 def _insight_to_dict(i: Insight) -> dict:
@@ -185,6 +199,18 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
     from mnemon.store.node import update_entities
     from mnemon.store.oplog import log_op
 
+    quality_warnings = check_content_quality(content)
+    if len(quality_warnings) >= 2:
+        log_op(db, 'quality-reject', insight.id,
+               f'{content[:200]}|warnings={quality_warnings}')
+        _json_out({
+            'id': insight.id,
+            'content': content,
+            'action': 'rejected',
+            'quality_warnings': quality_warnings,
+            })
+        return
+
     ec = get_client()
     embedding_blob = None
     embedding_vec = None
@@ -232,8 +258,6 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
                 replaced_id = result['matches'][0]['id']
         else:
             diff_action = 'added'
-
-    quality_warnings = check_content_quality(content)
 
     if diff_action == 'skipped':
         log_op(db, 'diff-skip', insight.id,
@@ -400,8 +424,16 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
         for r in resp['results']:
             increment_access_count(db, r['insight'].id)
 
-        log_op(db, 'recall', '',
-               f'q={keyword_str} hits={len(resp["results"])}')
+        hits = [{'id': r['insight'].id[:8], 'via': r.get('via', ''),
+                 'score': round(r['score'], 3),
+                 'kw': round(r['signals']['keyword'], 3),
+                 'sim': round(r['signals']['similarity'], 3),
+                 'gr': round(r['signals']['graph'], 3),
+                 'ent': round(r['signals']['entity'], 3)}
+                for r in resp['results']]
+        log_op(db, 'recall-detail', '',
+               json.dumps({'intent': resp['meta']['intent'],
+                           'q': keyword_str[:80], 'hits': hits}))
 
         out = {
             'results': [
@@ -745,14 +777,29 @@ def status(ctx: click.Context) -> None:
 
 @cli.command()
 @click.option('--limit', default=20, type=int, help='Max entries')
+@click.option('--since', default='', help='Time window (e.g. 7d, 24h)')
+@click.option('--group-by', 'group_by', default='',
+              help='Group by field (operation)')
+@click.option('--stats', is_flag=True, default=False,
+              help='Show summary statistics')
 @click.pass_context
-def log(ctx: click.Context, limit: int) -> None:
+def log(ctx: click.Context, limit: int, since: str, group_by: str,
+        stats: bool) -> None:
     """Show operation log."""
-    from mnemon.store.oplog import get_oplog
+    from mnemon.store.oplog import get_oplog, get_oplog_stats
+
+    since_ts = ''
+    if since:
+        since_ts = _parse_since(since)
 
     db = _open_db(ctx)
     try:
-        entries = get_oplog(db, limit)
+        if stats or group_by:
+            stats_data = get_oplog_stats(db, since_ts)
+            _json_out(stats_data)
+            return
+
+        entries = get_oplog(db, limit, since_ts)
         if not entries:
             click.echo('No operations recorded yet.')
             return

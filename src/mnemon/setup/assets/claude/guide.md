@@ -92,6 +92,15 @@ Importance 2 is the floor — if imp=2 feels weak, reconsider storing at all.
 In normal mode, delegate to a Task sub-agent (`subagent_type="Bash"`,
 `model="sonnet"`). See skill doc for execution details.
 
+### Behavioral rules — route to CLAUDE.md
+
+When storing a memory that is a **behavioral rule** (importance >= 4, uses universal
+language like "never"/"always"/"mandatory", and contains no project-specific entities),
+also append it under a `## Directives` section in the project CLAUDE.md. Create the
+section if absent. This ensures guaranteed recall on every turn without depending on
+query-based search. Still store in mnemon for graph context. The user prunes CLAUDE.md
+periodically — no confirmation needed.
+
 ### Causal links — after writing
 
 After writing stable memories, evaluate `causal_candidates` from the remember output.

@@ -94,7 +94,7 @@ mnemon related <id> --edge causal
 mnemon gc --threshold 0.4
 mnemon gc --keep <id>
 mnemon status
-mnemon log
+mnemon log [--since 7d] [--group-by operation] [--stats]
 mnemon store list
 mnemon store create <name>
 mnemon store set <name>

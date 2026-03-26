@@ -32,14 +32,22 @@ def log_op(db: 'DB', operation: str, insight_id: str,
         logger.warning('oplog trim failed: %s', e)
 
 
-def get_oplog(db: 'DB', limit: int = 20) -> list[dict]:
-    """Return the most recent N oplog entries."""
+def get_oplog(db: 'DB', limit: int = 20,
+              since: str = '') -> list[dict]:
+    """Return the most recent N oplog entries, optionally filtered by date."""
     if limit <= 0:
         limit = 20
-    rows = db._query(
-        'SELECT id, operation, insight_id, detail, created_at'
-        ' FROM oplog ORDER BY id DESC LIMIT ?',
-        (limit,)).fetchall()
+    if since:
+        rows = db._query(
+            'SELECT id, operation, insight_id, detail, created_at'
+            ' FROM oplog WHERE created_at >= ?'
+            ' ORDER BY id DESC LIMIT ?',
+            (since, limit)).fetchall()
+    else:
+        rows = db._query(
+            'SELECT id, operation, insight_id, detail, created_at'
+            ' FROM oplog ORDER BY id DESC LIMIT ?',
+            (limit,)).fetchall()
     entries = [{
             'id': row[0],
             'operation': row[1],
@@ -48,3 +56,37 @@ def get_oplog(db: 'DB', limit: int = 20) -> list[dict]:
             'created_at': row[4],
             } for row in rows]
     return entries
+
+
+def get_oplog_stats(db: 'DB', since: str = '') -> dict:
+    """Return grouped operation counts and never-accessed insight count."""
+    if since:
+        rows = db._query(
+            'SELECT operation, COUNT(*) FROM oplog'
+            ' WHERE created_at >= ? GROUP BY operation'
+            ' ORDER BY COUNT(*) DESC',
+            (since,)).fetchall()
+    else:
+        rows = db._query(
+            'SELECT operation, COUNT(*) FROM oplog'
+            ' GROUP BY operation ORDER BY COUNT(*) DESC',
+            ()).fetchall()
+
+    op_counts = {row[0]: row[1] for row in rows}
+
+    never_row = db._query(
+        'SELECT COUNT(*) FROM insights'
+        ' WHERE deleted = 0 AND access_count = 0',
+        ()).fetchone()
+    never_accessed = never_row[0] if never_row else 0
+
+    total_row = db._query(
+        'SELECT COUNT(*) FROM insights WHERE deleted = 0',
+        ()).fetchone()
+    total_active = total_row[0] if total_row else 0
+
+    return {
+        'operation_counts': op_counts,
+        'never_accessed': never_accessed,
+        'total_active': total_active,
+        }

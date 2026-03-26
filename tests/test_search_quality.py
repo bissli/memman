@@ -174,9 +174,54 @@ class TestNoFalsePositives:
         assert w == []
 
     def test_port_number_no_false_positive(self):
-        """'port:5432' should not trigger symbol line reference."""
+        """'port:5' should not trigger symbol line reference."""
         w = check_content_quality('Connect to port:5 for the service')
         assert 'function/symbol line reference' not in w
+
+    def test_localhost_port(self):
+        """'localhost:8080' should not trigger symbol line reference."""
+        w = check_content_quality('Server running on localhost:8080')
+        assert 'function/symbol line reference' not in w
+
+    def test_postgres_port(self):
+        """'postgres:5432' should not trigger symbol line reference."""
+        w = check_content_quality('PostgreSQL on port:5432')
+        assert 'function/symbol line reference' not in w
+
+    def test_python_version(self):
+        """'python:3.11' should not trigger symbol line reference."""
+        w = check_content_quality('Using python:3.11 base image')
+        assert 'function/symbol line reference' not in w
+
+    def test_docker_tag(self):
+        """'alpine:3.18' should not trigger symbol line reference."""
+        w = check_content_quality('FROM alpine:3.18 in Dockerfile')
+        assert 'function/symbol line reference' not in w
+
+    def test_node_version(self):
+        """'node:20' should not trigger symbol line reference."""
+        w = check_content_quality('docker pull node:20')
+        assert 'function/symbol line reference' not in w
+
+    def test_redis_port(self):
+        """'redis:6379' should not trigger symbol line reference."""
+        w = check_content_quality('Connect to redis:6379 in compose')
+        assert 'function/symbol line reference' not in w
+
+    def test_baseline_no_false_positive(self):
+        """'baseline' should not trigger line number reference."""
+        w = check_content_quality('baseline performance improved 20%')
+        assert 'line number reference' not in w
+
+    def test_deadline_no_false_positive(self):
+        """'deadline' should not trigger line number reference."""
+        w = check_content_quality('deadline for milestone is next week')
+        assert 'line number reference' not in w
+
+    def test_pipeline_no_false_positive(self):
+        """'pipeline' should not trigger line number reference."""
+        w = check_content_quality('CI pipeline runs on every commit')
+        assert 'line number reference' not in w
 
 
 class TestMultipleWarnings:

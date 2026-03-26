@@ -25,6 +25,11 @@ mnemon remember "Chose Qdrant as the vector database" \
 
 **Rationale:** Content limit 8000 chars is a practical upper bound for a single insight — keeps token overlap computation fast and embedding generation within model input limits. Larger content should be decomposed into multiple insights. Max tags = 20 discourages tag abuse while remaining generous. Max entities = 50 accommodates automatic extraction (regex + dictionary) which can produce many matches.
 
+**Step 1.5: Quality Gate (before embedding)**
+- Scan content against transient patterns (AWS instance IDs, resource counts, verification/deployment receipts, state observations, line references)
+- If 2+ patterns match: reject immediately with `action="rejected"`, log `quality-reject` to oplog
+- If 0–1 patterns match: continue to embedding
+
 **Step 2: Generate Embedding (outside transaction)**
 - If Ollama is available: HTTP POST -> nomic-embed-text -> 768-dim float64 vector
 - If unavailable: embedding = nil, falls back to token overlap downstream
@@ -83,7 +88,7 @@ COMMIT
 
 The `action` field indicates what the built-in diff decided: `"added"` (new entry), `"replaced"` (conflict auto-replaced, `replaced_id` contains the old insight ID), or `"skipped"` (duplicate detected, no insert).
 
-The `quality_warnings` field lists any transient content patterns detected (e.g., AWS instance IDs, deployment receipts, state observations). These are advisory — the calling LLM should evaluate whether to revise or accept.
+The `quality_warnings` field lists any transient content patterns detected (e.g., AWS instance IDs, deployment receipts, state observations). Content with **2 or more** quality warnings is **rejected** before embedding or diff computation — the response returns `action: "rejected"` with the warning list. Content with 0–1 warnings is stored normally (1 warning is advisory). This hard gate fires early in the pipeline to avoid wasting embedding and diff compute on transient content.
 
 After receiving this output, the LLM can evaluate candidates and establish edges it considers appropriate via the `mnemon link` command.
 

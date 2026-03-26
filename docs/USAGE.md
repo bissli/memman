@@ -164,9 +164,12 @@ Different agents or processes can use different stores via the `MNEMON_STORE` en
 ### Observability
 
 ```bash
-mnemon status           # memory statistics
-mnemon log              # operation log (default: last 20)
-mnemon log --limit 50   # show more entries
+mnemon status                                       # memory statistics
+mnemon log                                          # operation log (default: last 20)
+mnemon log --limit 50                               # show more entries
+mnemon log --since 7d                               # entries from last 7 days
+mnemon log --since 24h                              # entries from last 24 hours
+mnemon log --since 7d --group-by operation --stats  # grouped counts + never-accessed
 ```
 
 ### Visualization

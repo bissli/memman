@@ -753,7 +753,7 @@ class TestGarbageCollection:
     def test_gc_review_flags_transient_not_durable(self, runner):
         """GC --review flags transient content, not durable content."""
         remember(runner,
-                 'i-0c220c2402a5245bc deployed via Terraform 32 resources',
+                 'i-0c220c2402a5245bc shows the issue',
                  no_diff=True)
         remember(runner, 'Chose SQLite for single-node simplicity',
                  no_diff=True)
