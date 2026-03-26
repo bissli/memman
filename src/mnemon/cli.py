@@ -814,7 +814,7 @@ def log(ctx: click.Context, limit: int, since: str, group_by: str,
             rows.append([
                 e['created_at'],
                 e['operation'],
-                _trunc_id(e['insight_id']) if e['insight_id'] else '',
+                e['insight_id'] if e['insight_id'] else '',
                 detail,
                 ])
 
