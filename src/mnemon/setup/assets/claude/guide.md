@@ -96,9 +96,9 @@ In normal mode, delegate to a Task sub-agent (`subagent_type="Bash"`,
 
 When storing a memory that is a **behavioral rule** (importance >= 4, uses universal
 language like "never"/"always"/"mandatory", and contains no project-specific entities),
-also append it under a `## Directives` section in the project CLAUDE.md. Create the
-section if absent. This ensures guaranteed recall on every turn without depending on
-query-based search. Still store in mnemon for graph context. The user prunes CLAUDE.md
+write it to the project CLAUDE.md under a `## Directives` section instead of calling
+`mnemon remember`. Create the section if absent. Directives need guaranteed recall
+(CLAUDE.md is loaded every turn), not graph connectivity. The user prunes CLAUDE.md
 periodically — no confirmation needed.
 
 ### Causal links — after writing
@@ -113,6 +113,9 @@ a problem discovery and the fix it led to, or a tool limitation and the workarou
 Always link when causal_candidates are returned and a relationship is plausible;
 skip only when candidates are clearly unrelated.
 
+This applies to memories stored via `mnemon remember`; directives written
+to CLAUDE.md only (see above) are not in the graph and cannot be linked.
+
 ### Pre-compaction note
 
 Compaction only writes a flag file, NOT memories. Ensure conclusions are written
@@ -121,8 +124,7 @@ prompted to recall critical context.
 
 ### Plan-mode transition
 
-ExitPlanMode is blocked once to prompt memory evaluation.
-When blocked, store any conclusions, decisions, or preferences from the
-planning session directly via Bash (`mnemon remember ...`) -- do NOT
-delegate to a Task sub-agent (plan mode restricts tool use). After
-storing, call ExitPlanMode again to proceed.
+ExitPlanMode triggers an advisory reminder to store memories.
+Store any conclusions, decisions, or preferences from the planning
+session directly via Bash (`mnemon remember ...`) -- do NOT delegate
+to a Task sub-agent (plan mode restricts tool use).
