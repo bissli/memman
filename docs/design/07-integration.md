@@ -131,23 +131,15 @@ echo "[mnemon] Before delegating: recall relevant context first (mnemon recall \
 
 **ExitPlan (PreToolUse) — `exit_plan.sh` (optional)**
 
-Fires before the agent exits plan mode. Uses exit-code-2 blocking to give the agent one chance to store memories before context is cleared by the plan-to-execute transition. A session-scoped flag file ensures the second attempt (after the agent stores memories) passes through:
+Fires before the agent exits plan mode. Outputs an advisory reminder to store memories before the plan-to-execute transition. Non-blocking — the agent always proceeds:
 
 ```bash
-# First call: create flag, block with exit 2 + stderr feedback
-# Second call: detect flag, remove it, exit 0 (pass through)
-FLAG="${HOME}/.mnemon/exit_plan/${SESSION_ID}.flag"
-if [ -f "$FLAG" ]; then
-    rm -f "$FLAG"
-    exit 0
-fi
-mkdir -p "$FLAG_DIR"
-touch "$FLAG"
-echo "[mnemon] Plan-to-execute transition: evaluate for memories..." >&2
-exit 2
+cat > /dev/null
+echo "[mnemon] Plan-to-execute transition: store any conclusions, decisions, or preferences from this planning session via Bash (mnemon remember ...) before proceeding."
+exit 0
 ```
 
-Stale flag files (older than 1 hour) are cleaned up by `prime.sh` at session start.
+Stale `stop_fired/` directories (older than 2 hours) are cleaned up by `prime.sh` at session start.
 
 ## 7.3 Automated Setup
 

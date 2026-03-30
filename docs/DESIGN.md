@@ -16,7 +16,7 @@ Why Mnemon exists — the amnesia problem in LLM agents, structural bottlenecks 
 
 ### [2. Design Philosophy](design/02-philosophy.md)
 
-The LLM-Supervised pattern, Organs vs Textbooks metaphor, Memory Gateway protocol (the MCP analogy for LLM↔DB interaction), key design insights, and theoretical foundations from RLM, MAGMA, and Graph-LLM structural analysis.
+The LLM-Supervised pattern, Organs vs Textbooks metaphor, Memory Gateway protocol (the MCP analogy for LLM↔DB interaction), key design insights, and theoretical foundations from MAGMA and RRF.
 
 ### [3. Core Concepts & Architecture](design/03-concepts.md)
 

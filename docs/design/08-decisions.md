@@ -38,17 +38,17 @@
 
 ### Key Deviations from the MAGMA Paper
 
-| Aspect            | MAGMA Paper                        | Mnemon Implementation                                         |
-| ----------------- | ---------------------------------- | ------------------------------------------------------------- |
-| Entity Extraction | LLM-driven full pipeline           | Regex + dictionary + LLM supplementation; IDF-weighted edges  |
-| Causal Reasoning  | Embedded prompt chain              | Auto candidates + LLM review                                  |
-| Node Types        | EVENT, EPISODE, SESSION, NARRATIVE | Insight only (flat)                                           |
-| Storage           | NetworkX (in-memory)               | SQLite (persistent)                                           |
-| Embeddings        | FAISS + OpenAI                     | Ollama (local, optional)                                      |
-| Quality Review    | Slow-path LLM refinement (Alg. 3)  | Pattern-based quality warnings (remember) + async gc --review |
-| Deployment        | Python library                     | Python package (CLI)                                          |
+| Aspect            | MAGMA Paper                        | Mnemon Implementation                                                |
+| ----------------- | ---------------------------------- | -------------------------------------------------------------------- |
+| Entity Extraction | LLM-driven full pipeline           | Regex + dictionary (fully deterministic); IDF-weighted edges         |
+| Causal Reasoning  | Embedded prompt chain              | Auto candidates (token overlap + keywords); LLM evaluates via `link` |
+| Node Types        | EVENT, EPISODE, SESSION, NARRATIVE | Insight only (flat)                                                  |
+| Storage           | NetworkX (in-memory)               | SQLite (persistent)                                                  |
+| Embeddings        | FAISS + OpenAI                     | Ollama (local, optional)                                             |
+| Quality Review    | Slow-path LLM refinement (Alg. 3)  | Pattern-based quality warnings (remember) + async gc --review        |
+| Deployment        | Python library                     | Python package (CLI)                                                 |
 
-Mnemon retains MAGMA's **architectural skeleton** (four-graph separation, intent-adaptive retrieval, multi-signal fusion) while replacing academic implementation details with production-ready simplifications. This two-tier approach — deterministic automation for the majority of cases, LLM judgment for the complex minority — is precisely the pattern validated by the [RLM paper](02-philosophy.md#25-theoretical-foundations): regex-based filtering plus LLM-driven semantic verification consistently outperforms either approach alone. The core trade-off is: **use regex/heuristics to handle 80% of automation scenarios, and delegate the 20% requiring deep understanding to the host LLM.**
+Mnemon retains MAGMA's **architectural skeleton** (four-graph separation, intent-adaptive retrieval, multi-signal fusion) while replacing academic implementation details with production-ready simplifications. The core trade-off is: **use regex/heuristics to handle 80% of automation scenarios, and delegate the 20% requiring deep understanding to the host LLM.** This is the LLM-Supervised pattern — deterministic automation for the majority of cases, LLM judgment for the complex minority.
 
 ---
 

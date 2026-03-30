@@ -38,8 +38,8 @@ mnemon remember "Chose Qdrant as the vector database" \
 
 Compute similarity against all active insights:
 - **DUPLICATE** (sim > 0.90) → skip insert entirely, return `action="skipped"`
-- **CONFLICT/UPDATE** (sim 0.65–0.90) → soft-delete old insight, insert new as replacement
-- **ADD** (sim < 0.65) → normal insert
+- **CONFLICT/UPDATE** (sim 0.55–0.90) → soft-delete old insight, insert new as replacement
+- **ADD** (sim < 0.55) → normal insert
 
 This step uses embedding cosine similarity when available, falling back to token overlap. The `--no-diff` flag disables this check. When embedding cosine similarity >= 0.7 and exceeds the token overlap score, cosine overrides — this allows embeddings to detect semantic overlap that token-level comparison misses (e.g., synonyms, paraphrases).
 
@@ -51,17 +51,17 @@ BEGIN TRANSACTION
   ① INSERT insight (UUID, content, category, importance, tags, entities, source)
   ② UPDATE embedding (if vector is available)
   ③ Graph Engine: OnInsightCreated
-     ├── CreateTemporalEdge    → backbone + 24h proximity
+     ├── CreateTemporalEdge    → backbone + 4h proximity
      ├── CreateEntityEdges     → regex + dictionary extraction → co-occurrence links
      ├── CreateCausalEdges     → keywords + token overlap → auto causal edges
-     └── CreateSemanticEdges   → cos >= 0.80 auto-link
+     └── CreateSemanticEdges   → cos >= 0.70 auto-link
   ④ RefreshEffectiveImportance → update EI decay values
   ⑤ AutoPrune                 → soft-delete lowest EI when total > 1000
 COMMIT
 ```
 
 **Step 4: Candidate Output (post-transaction, read-only)**
-- `FindSemanticCandidates`: Semantic candidates with cos in [0.40, 0.80)
+- `FindSemanticCandidates`: Semantic candidates with cos in [0.40, 0.70)
 - `FindCausalCandidates`: Causal candidates in the 2-hop BFS neighborhood
 
 **Step 5: JSON Output**
@@ -104,12 +104,12 @@ After receiving this output, the LLM can evaluate candidates and establish edges
 
 Query intent is automatically identified via regex matching:
 
-| Intent  | Trigger Patterns                                                            |
-| ------- | --------------------------------------------------------------------------- |
-| WHY     | `why`, `reason`, `because`, `cause`, `motivation`, `为什么`, `原因`, `理由` |
-| WHEN    | `when`, `time`, `before`, `after`, `timeline`, `什么时候`, `何时`, `时间`   |
-| ENTITY  | `what is`, `who is`, `tell me about`, `是什么`, `谁是`, `关于`              |
-| GENERAL | None of the above match                                                     |
+| Intent  | Trigger Patterns                                  |
+| ------- | ------------------------------------------------- |
+| WHY     | `why`, `reason`, `because`, `cause`, `motivation` |
+| WHEN    | `when`, `time`, `before`, `after`, `timeline`     |
+| ENTITY  | `what is`, `who is`, `tell me about`              |
+| GENERAL | None of the above match                           |
 
 Supports the `--intent` flag to manually override automatic detection.
 
@@ -121,7 +121,6 @@ Multiple signals run in parallel and are merged via Reciprocal Rank Fusion:
 Signal 1: Keyword     → KeywordSearch(all_insights, query, top-20)
 Signal 2: Vector      → CosineSimilarity(query_vec, all_embeddings, top-20)
 Signal 3: Recency     → sort by created_at DESC, top-20
-Signal 4: Entity      → insights sharing entities with the query
 
 RRF Score = Σ  1 / (k + rank_i + 1)    (k = 60)
                  for each signal
@@ -192,19 +191,19 @@ Weights vary by intent:
 
 | Intent  | Keyword | Entity   | Similarity | Graph    |
 | ------- | ------- | -------- | ---------- | -------- |
-| WHY     | 0.10    | 0.10     | 0.30       | **0.50** |
-| WHEN    | 0.15    | 0.15     | 0.30       | **0.40** |
-| ENTITY  | 0.20    | **0.40** | 0.20       | 0.20     |
-| GENERAL | 0.25    | 0.25     | 0.25       | 0.25     |
+| WHY     | 0.15    | 0.10     | **0.45**   | **0.30** |
+| WHEN    | 0.20    | 0.10     | **0.40**   | **0.30** |
+| ENTITY  | 0.20    | **0.35** | **0.35**   | 0.10     |
+| GENERAL | 0.25    | 0.15     | **0.45**   | 0.15     |
 
 **Rationale:** These extend MAGMA's intent-adaptive philosophy (which steers beam search via edge type weights) into the final reranking stage. MAGMA does not define a separate reranking stage — this is mnemon's own extension.
 
-- **WHY**: Graph traversal captures causal chains — the primary signal for "why" queries, weighted at 0.50.
-- **WHEN**: Graph captures temporal ordering; keyword/entity provide supporting context.
-- **ENTITY**: Entity matching is the primary signal (0.40); other signals provide balanced support.
-- **GENERAL**: Uniform weights (0.25 each) — no bias without clear intent.
+- **WHY**: Similarity and graph traversal capture causal chains — the primary signals for "why" queries, weighted at 0.45 and 0.30 respectively.
+- **WHEN**: Similarity (0.40) and graph (0.30) capture temporal ordering; keyword provides supporting context.
+- **ENTITY**: Entity matching (0.35) and similarity (0.35) are co-primary; graph is de-emphasized (0.10) since entity edges are already captured in entity score.
+- **GENERAL**: Similarity-weighted (0.45) with keyword (0.25) as secondary — no strong bias without clear intent, but semantic match is the default discriminator.
 
-**No-embed fallback:** When embeddings are unavailable, the similarity weight redistributes to keyword and graph proportionally. For example, WHY becomes (0.20, 0.10, 0.0, 0.70) — graph dominance increases further since there is no semantic signal to offset it.
+**No-embed fallback:** When embeddings are unavailable, the similarity weight redistributes to keyword and graph proportionally. For example, WHY becomes (0.25, 0.15, 0.0, 0.60) and WHEN becomes (0.30, 0.15, 0.0, 0.55) — keyword and graph share the redistributed similarity weight.
 
 ### Step 5: WHY Post-Processing — Causal Topological Sort
 
@@ -247,14 +246,14 @@ When `remember` is called, the built-in diff runs before the transaction:
 | Similarity  | Action              | Behavior                                           |
 | ----------- | ------------------- | -------------------------------------------------- |
 | > 0.90      | **DUPLICATE**       | Skip insert entirely, return `action="skipped"`    |
-| 0.65 ~ 0.90 | **CONFLICT/UPDATE** | Soft-delete old insight, insert new as replacement |
-| < 0.65      | **ADD**             | Normal insert                                      |
+| 0.55 ~ 0.90 | **CONFLICT/UPDATE** | Soft-delete old insight, insert new as replacement |
+| < 0.55      | **ADD**             | Normal insert                                      |
 
 **Rationale:**
 
 - **`> 0.90` DUPLICATE**: Standard near-duplicate threshold in dedup literature. At 0.90+ similarity, content is functionally identical.
-- **`0.65–0.90` CONFLICT/UPDATE**: Below 0.65, content is sufficiently distinct to coexist; the higher threshold prevents false-positive replacements in small stores where domain vocabulary overlap is common.
-- **`< 0.65` ADD**: Content is distinct enough to stand as an independent insight.
+- **`0.55–0.90` CONFLICT/UPDATE**: Below 0.55, content is sufficiently distinct to coexist. Conflict detection is further refined by linguistic signals — antonym pairs and negation words in the content trigger CONFLICT classification within this range.
+- **`< 0.55` ADD**: Content is distinct enough to stand as an independent insight.
 
 The `--no-diff` flag disables this check for cases where the caller wants unconditional insertion.
 

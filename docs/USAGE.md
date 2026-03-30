@@ -210,9 +210,9 @@ Mnemon works fully without Ollama — all core features (remember, recall, link,
 | Capability            | Without Ollama                     | With Ollama                                        |
 | --------------------- | ---------------------------------- | -------------------------------------------------- |
 | **Recall anchors**    | Keyword + recency                  | Keyword + vector + recency (RRF hybrid)            |
-| **Semantic edges**    | Token overlap (coarser)            | Cosine similarity ≥ 0.50 (precise)                 |
+| **Semantic edges**    | Token overlap (coarser)            | Cosine similarity ≥ 0.70 (precise)                 |
 | **Traversal scoring** | Pure structural                    | Structural + semantic                              |
-| **Rerank weights**    | Keyword 45%, Entity 25%, Graph 30% | Keyword 30%, Entity 15%, Similarity 35%, Graph 20% |
+| **Rerank weights**    | Keyword 45%, Entity 25%, Graph 30% | Keyword 25%, Entity 15%, Similarity 45%, Graph 15% |
 
 When Ollama is unavailable, the reranking system automatically redistributes similarity weight to keyword and graph signals — no configuration needed, no degraded mode flag. The system detects Ollama availability at runtime with a 2-second timeout.
 

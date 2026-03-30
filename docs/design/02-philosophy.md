@@ -93,92 +93,42 @@ This mirrors Claude Code's foundational design insight: **separate engineering p
 
 ## 2.5 Theoretical Foundations
 
-Mnemon's design draws on the **paradigm** of one paper and the **methodology** of another, while making its own engineering choices for the bridge between them.
+Mnemon's design draws on two directly implemented papers and makes its own engineering choices for the bridge between them.
 
-**RLM Paradigm: LLM as Orchestrator**
+**MAGMA: Four-Graph Memory Architecture**
 
-The [Recursive Language Models](https://arxiv.org/abs/2512.24601) paper (Zhang, Kraska & Khattab, MIT 2025) establishes the paradigm that LLMs are more effective as orchestrators of external structured environments than as direct data processors. The paper's key findings at the paradigm level:
-
-- An 8B model handles inputs **100x beyond its context window** by treating data as external environment variables
-- **Two-stage pipelines** (fast filtering + LLM semantic verification) consistently outperform single-pass approaches
-- Passing **constant-size metadata** — not raw data — to the model is more effective
-
-The RLM paper's own implementation uses **code generation + Python REPL** as the interaction mechanism: the LLM writes Python code, a sandbox executes it, and results feed back. Mnemon shares the paradigm but takes a different path at the protocol level (see below).
-
-**RLM Corollary: Why Memory Protocols Must Be Intent-Native**
-
-The three RLM findings above are not just about LLM capability — they constrain what a memory protocol must look like. If the LLM is an orchestrator, the protocol must speak at the orchestrator's level: **intent and semantics**, not mechanism and syntax.
-
-| RLM Finding                                | Protocol Implication                                                                          | Anti-Pattern It Explains                                                                |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| LLM as orchestrator, not data processor    | Protocol should let the LLM express *what it needs* (intent), not *how to get it* (mechanism) | Embedding an LLM to do entity extraction demotes it from orchestrator to data processor |
-| Constant-size metadata over raw data       | Protocol output should be semantic summaries with signal transparency, not database rows      | Systems that return raw query results force the LLM to re-derive meaning from data      |
-| Two-stage pipeline outperforms single-pass | Deterministic filtering and LLM judgment must be separated into distinct stages               | Mixing both inside an embedded LLM call is the single-pass pattern RLM disproves        |
-
-Many existing projects embed LLM calls into the memory pipeline — for entity extraction, conflict detection, causal reasoning. This reveals a diagnostic pattern: **when a protocol cannot express semantic intent, the system compensates by injecting an LLM to bridge the gap.** The embedded LLM is doing two jobs simultaneously: **semantic compensation** (the protocol lacks expressiveness, so the LLM translates between intent and mechanism) and **intelligent judgment** (genuinely requires LLM reasoning). Mnemon separates these concerns: raise the protocol's expressiveness to handle the first, and delegate the second to the host LLM as supervisor.
-
-RLM's own implementation choice offers indirect support. The paper chose code generation + Python REPL because no domain-specific semantic protocol existed for structured data interaction — Python is the universal fallback. But for the memory domain, code generation is over-generic: the LLM must translate its intent ("find causally related memories") into Python code (`graph.query(type='causal', ...)`), introducing a translation step that is both an information-loss point and an error surface. A domain-specific protocol eliminates this translation:
-
-```
-Code generation (RLM):    intent → Python code → execute → result → interpret
-Semantic protocol (Mnemon): intent → mnemon recall "..." --intent causal → result
-```
-
-The fewer translation steps between LLM intent and system action, the more faithful the interaction. This is why the protocol surface uses `remember` instead of INSERT, `link` instead of CREATE EDGE, `recall` instead of SELECT — **command names are semantic, not syntactic**, mapping directly to the LLM's cognitive vocabulary rather than the database's operational vocabulary.
-
-**MAGMA Methodology: Four-Graph Memory Architecture**
-
-The [MAGMA](https://arxiv.org/abs/2601.03236) paper provides the concrete methodology for **what the external environment should contain**. Its key contribution: a single edge type (e.g., vector similarity) is insufficient for memory — different query intents require different relational perspectives. MAGMA's four-graph architecture (temporal, entity, causal, semantic) with intent-adaptive retrieval and multi-signal fusion gives Mnemon its data model and retrieval algorithms.
+The [MAGMA](https://arxiv.org/abs/2601.03236) paper (Jiang et al., 2025) provides the concrete methodology for **what the memory environment should contain**. Its key contribution: a single edge type (e.g., vector similarity) is insufficient for memory — different query intents require different relational perspectives. MAGMA's four-graph architecture (temporal, entity, causal, semantic) with intent-adaptive retrieval and multi-signal fusion gives Mnemon its data model and retrieval algorithms.
 
 MAGMA also provides specific hyperparameter values adopted by mnemon. See Table 5 of the MAGMA paper for: anchor top-K (20), RRF constant (60), structural/semantic coefficients (λ1=1.0, λ2=0.3–0.7), max traversal depth (5), and similarity threshold range (0.10–0.30). These values and their derivations are documented inline in [Pipelines](05-pipelines.md) and [Graph Model](04-graph-model.md).
 
-**Graph-LLM Structural Insight: Why This Protocol Shape**
+**RRF: Reciprocal Rank Fusion**
 
-Graph data models are structurally isomorphic to how LLMs organize information. LLM attention, graph data models, and natural language all describe the same thing — weighted associations between entities:
+The [RRF paper](https://dl.acm.org/doi/10.1145/1571941.1572114) (Cormack, Clarke & Buttcher, SIGIR 2009) provides the multi-signal fusion algorithm used in the recall anchor selection phase. Mnemon uses the exact `1/(k + rank)` formula with k=60, fusing keyword, vector, and recency signals into a composite anchor ranking.
 
-```
-LLM Attention:     token ←weight→ token
-Graph Model:       node  ←edge→   node
-Natural Language:  subject ←predicate→ object
-```
+**LLM-as-Orchestrator: Mnemon's Design Choice**
 
-This is not a metaphor. The Transformers-as-GNNs literature (arXiv 2506.22084, 2012.09699) has formally proven that transformer attention is computationally equivalent to GNN operations on complete graphs. Mnemon extends this insight from the computational level to the storage level: **if the LLM internally operates on graphs, then external memory stored as graphs is a structural match, not an engineering convenience.**
+Mnemon adopts the LLM-Supervised pattern: the host LLM orchestrates memory operations as a supervisor, while the binary handles deterministic computation. This is a deliberate engineering choice driven by practical observation:
 
-Other storage types are degenerate forms of graphs — each loses a dimension of relational semantics:
+- **Two-stage pipelines work**: Deterministic filtering (regex, token overlap, keyword matching) followed by LLM judgment (evaluating candidates, deciding what to link) consistently outperforms embedding an LLM inside the pipeline to do both.
+- **Intent-native protocol**: The protocol surface uses `remember` instead of INSERT, `link` instead of CREATE EDGE, `recall` instead of SELECT — command names are semantic, mapping directly to the LLM's cognitive vocabulary rather than the database's operational vocabulary.
+- **Stronger judgment capability**: An Opus-class host LLM evaluates candidate links, not an embedded gpt-4o-mini doing double duty as both data processor and judge.
 
-| Storage Type   | What's Lost                                                         |
-| -------------- | ------------------------------------------------------------------- |
-| **KV**         | Isolated nodes, zero edges                                          |
-| **Relational** | Edges compressed to foreign keys, types fixed at schema design time |
-| **Document**   | Edges inlined as nesting, global traversability lost                |
-| **Vector**     | All edges are a single type (similarity), no semantic distinction   |
-
-A vector database can answer "what is **similar** to what" but cannot answer "what **caused** what" or "what **belongs to** what". This observation aligns with the Graph-based Agent Memory survey (Chang Yang et al., arXiv 2602.05665, Feb 2026), which independently concludes that "traditional memory forms can be viewed as degenerate or simplified cases within the graph memory paradigm."
-
-This structural analysis yields two results that directly shape Mnemon's protocol:
-
-1. **Universal algebra**: `remember` (Extract), `link` (Associate), `recall` (Retrieve) are the minimal complete interface for any agent memory system. Every system — from native RAG to OpenViking to Mem0 — instantiates these three primitives, with varying degeneracy of `link`. The more degenerate the `link` operation, the more burden falls on the LLM at recall time to infer associations that were never stored. Separating `link` as a first-class primitive — rather than folding it into the write or read path — is a contribution not found in prior frameworks (CoALA's retrieval/reasoning/learning, or standard CRUD APIs).
-2. **Read-write symmetry**: On graph-structured storage, both the write path (text → graph) and the read path (graph → text) follow the same Extract → Candidate → Associate model. This means the LLM needs to master only one cognitive pattern for both `remember` and `recall` — a property that does not hold for relational or document databases.
-
-For the full analysis including cross-system validation, degeneracy spectrum, protocol gap analysis, and academic positioning, see [Graph Model & Theory](04-graph-model.md).
+Many existing projects embed LLM calls into the memory pipeline — for entity extraction, conflict detection, causal reasoning. Mnemon separates these concerns: raise the protocol's expressiveness to handle deterministic operations, and delegate genuine judgment to the host LLM as supervisor.
 
 **Mnemon's Own Contribution: The Engineering Bridge**
 
-None of these theoretical sources address how to connect an LLM orchestrator to a graph-structured memory in production. Mnemon fills this gap:
+Neither paper addresses how to connect an LLM orchestrator to a graph-structured memory in production. Mnemon fills this gap:
 
-| Layer                                        | Source            | Choice                                                                  |
-| -------------------------------------------- | ----------------- | ----------------------------------------------------------------------- |
-| **Paradigm** — who orchestrates?             | RLM               | The host LLM, not an embedded model                                     |
-| **Protocol semantics** — why intent-native?  | RLM               | LLM expresses intent, not mechanism; two-stage validates the separation |
-| **Methodology** — what's in the environment? | MAGMA             | Four-graph with intent-adaptive retrieval                               |
-| **Protocol algebra** — why this shape?       | Graph-LLM Insight | remember/link/recall as universal primitives; read-write symmetry       |
-| **Protocol** — how do they talk?             | Mnemon            | CLI commands + structured JSON (not code generation)                    |
-| **Lifecycle** — how does memory evolve?      | Mnemon            | Hook-driven remember → diff → link → gc                                 |
-| **Distribution** — how to ship it?           | Mnemon            | Python package, zero API dependencies                                   |
+| Layer                                        | Source | Choice                                    |
+| -------------------------------------------- | ------ | ----------------------------------------- |
+| **Paradigm** — who orchestrates?             | Mnemon | The host LLM, not an embedded model       |
+| **Methodology** — what's in the environment? | MAGMA  | Four-graph with intent-adaptive retrieval |
+| **Fusion** — how are signals combined?       | RRF    | Reciprocal rank fusion with k=60          |
+| **Protocol** — how do they talk?             | Mnemon | CLI commands + structured JSON            |
+| **Lifecycle** — how does memory evolve?      | Mnemon | Hook-driven remember → diff → link → gc   |
+| **Distribution** — how to ship it?           | Mnemon | Python package, zero API dependencies     |
 
-Where the RLM implementation relies on code generation in a sandboxed REPL (flexible but requires a runtime and raises safety concerns), Mnemon uses deterministic CLI commands as the symbolic interface — constrained, but auditable, portable, and zero-sandbox. Where MAGMA's reference implementation is a Python library with in-memory NetworkX graphs, Mnemon persists everything in SQLite with a complete write-back lifecycle.
-
-The result is: **RLM's paradigm + MAGMA's methodology + a CLI-native engineering path** that runs on any LLM CLI without sandboxes, without API keys.
+Where MAGMA's reference implementation is a Python library with in-memory NetworkX graphs, Mnemon persists everything in SQLite with a complete write-back lifecycle. Mnemon uses deterministic CLI commands as the symbolic interface — constrained, but auditable, portable, and zero-sandbox.
 
 ![LLM-Supervised Architecture](../diagrams/05-llm-supervised.drawio.png)
 

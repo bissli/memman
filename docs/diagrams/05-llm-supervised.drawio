@@ -31,7 +31,7 @@
         <mxCell id="cl_b6" value="&lt;b&gt;Vector Computation&lt;/b&gt;&lt;br&gt;cosine similarity, embedding serialization" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="70" y="420" width="390" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="cl_b7" value="&lt;b&gt;Entity Extraction&lt;/b&gt;&lt;br&gt;regex + 200-word tech dictionary + CamelCase/ALLCAPS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="cl_b7" value="&lt;b&gt;Entity Extraction&lt;/b&gt;&lt;br&gt;regex + ~100-word tech dictionary + CamelCase/ALLCAPS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="70" y="475" width="390" height="40" as="geometry" />
         </mxCell>
         <mxCell id="cl_b8" value="&lt;b&gt;Lifecycle Decay&lt;/b&gt;&lt;br&gt;EI formula, auto-prune, immunity rules, GC" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
@@ -49,7 +49,7 @@
         <mxCell id="cl_l1" value="&lt;b&gt;Causal Chain Evaluation&lt;/b&gt;&lt;br&gt;Review causal candidates: did A really cause B?" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="640" y="145" width="390" height="45" as="geometry" />
         </mxCell>
-        <mxCell id="cl_l2" value="&lt;b&gt;Semantic Relevance Judgment&lt;/b&gt;&lt;br&gt;Review grey-zone candidates (cos 0.40-0.80), decide whether to link" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="cl_l2" value="&lt;b&gt;Semantic Relevance Judgment&lt;/b&gt;&lt;br&gt;Review grey-zone candidates (cos 0.40-0.70), decide whether to link" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="640" y="210" width="390" height="45" as="geometry" />
         </mxCell>
         <mxCell id="cl_l3" value="&lt;b&gt;Entity Enrichment&lt;/b&gt;&lt;br&gt;Add entities that regex missed (via --entities flag)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">

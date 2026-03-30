@@ -213,7 +213,7 @@
         </mxCell>
 
         <!-- Candidate: +48 -->
-        <mxCell id="o_cand" value="&lt;b&gt;Candidate Discovery&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;Semantic (cos 0.40–0.80) + Causal (regex + 2-hop BFS)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1565C0;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="o_cand" value="&lt;b&gt;Candidate Discovery&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;Semantic (cos 0.40–0.70) + Causal (regex + 2-hop BFS)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1565C0;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="890" y="645" width="360" height="38" as="geometry"/>
         </mxCell>
 

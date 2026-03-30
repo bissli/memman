@@ -99,7 +99,7 @@ Mnemon ──HTTP──→ Ollama (localhost:11434)
 
 - **Availability detection**: 2-second timeout to avoid blocking
 - **Graceful degradation**: Automatically falls back to token overlap when Ollama is unavailable
-- **Zero new dependencies**: Pure stdlib `net/http`
+- **Zero new dependencies**: Uses `httpx` (already a runtime dependency)
 
 ### Vector Storage
 

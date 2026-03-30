@@ -4,7 +4,7 @@
 
 ---
 
-Within the [RLM paradigm](02-philosophy.md#25-theoretical-foundations), MAGMA provides the specific data structure for the external environment that the LLM orchestrates. The core idea of the MAGMA paper is: **a single edge type (such as pure vector similarity) is insufficient to capture the multidimensional relationships between memories.** Different query intents require different relational perspectives — asking "why" requires causal chains, asking "when" requires timelines, asking "about X" requires entity associations.
+MAGMA provides the specific data structure for the external environment that the LLM orchestrates. The core idea of the MAGMA paper is: **a single edge type (such as pure vector similarity) is insufficient to capture the multidimensional relationships between memories.** Different query intents require different relational perspectives — asking "why" requires causal chains, asking "when" requires timelines, asking "about X" requires entity associations.
 
 Mnemon implements four graphs, each capturing one dimension of relationships:
 
@@ -18,7 +18,7 @@ Mnemon implements four graphs, each capturing one dimension of relationships:
 
 - **Backbone**: New insight → most recent insight from the same source (bidirectional)
   - Ensures memories from each source (user/agent) form a continuous timeline
-- **Proximity**: New insight <-> insights within a 24-hour window (bidirectional)
+- **Proximity**: New insight <-> insights within a 4-hour window (bidirectional)
   - Weight formula: `w = 1 / (1 + hours_diff)`
   - Up to 10 proximity edges
 
@@ -32,7 +32,7 @@ Insight A (2h ago) ←── backbone ──→ Insight B (1h ago) ←── bac
 
 **Rationale:**
 
-- **`TEMPORAL_WINDOW_HOURS = 24`**: One calendar day — a natural session boundary. Memories created within the same day are likely contextually related.
+- **`TEMPORAL_WINDOW_HOURS = 4`**: A focused session window. Memories created within the same few hours are likely contextually related.
 - **`MAX_PROXIMITY_EDGES = 10`**: Limits fan-out per insert. With ~10 insights/day as typical usage, this connects to most same-day memories without excessive edge density.
 
 ## 4.2 Entity Graph
@@ -40,8 +40,8 @@ Insight A (2h ago) ←── backbone ──→ Insight B (1h ago) ←── bac
 **Purpose**: Link insights that mention the same entities.
 
 **Entity extraction (hybrid approach)**:
-1. **Regex patterns**: CamelCase (`HttpServer`), ALL_CAPS (`API`), file paths (`./cmd/root.go`), URLs, @-mentions, Chinese book title marks
-2. **Technical dictionary**: 200+ common terms (Go, React, SQLite, Kubernetes...)
+1. **Regex patterns**: CamelCase (`HttpServer`), ALL_CAPS (`API`), file paths (`./cmd/root.go`), URLs, @-mentions
+2. **Technical dictionary**: ~100 common terms (Go, React, SQLite, Kubernetes...)
 3. **User-provided**: `--entities` flag for direct specification
 
 **Automatically created edges**: New insight <-> up to 5 existing insights per shared entity (bidirectional). Edge weight is computed via IDF: rare entities (appearing in few insights) produce high-weight edges; common entities produce low-weight edges. When the store has ≤5 insights, all entity edges use weight 1.0 (IDF is not meaningful at that scale).
@@ -87,7 +87,7 @@ This is a quintessential example of the LLM-Supervised philosophy: Binary handle
 **Rationale:**
 
 - **`MIN_CAUSAL_OVERLAP = 0.15` (15%)**: Requires at least 15% token overlap to suggest a causal link. Below this threshold, shared tokens are likely stopwords or incidental.
-- **`CAUSAL_LOOKBACK = 10`**: Scans the 10 most recent active insights (regardless of source) for causal overlap. Cross-source causal edges allow connections between user-authored and agent-authored insights that share topic overlap. Balances coverage against scan cost; causal relationships typically form with recent context.
+- **`CAUSAL_LOOKBACK = 20`**: Scans the 20 most recent active insights (regardless of source) for causal overlap. Cross-source causal edges allow connections between user-authored and agent-authored insights that share topic overlap. Balances coverage against scan cost; causal relationships typically form with recent context.
 - **`MAX_CAUSAL_CANDIDATES = 10`**: Caps BFS candidates returned for LLM evaluation. Keeps the LLM's review task manageable.
 
 ## 4.4 Semantic Graph
@@ -98,7 +98,7 @@ This is a quintessential example of the LLM-Supervised philosophy: Binary handle
 
 | Tier                 | Cosine Similarity | Behavior                                                            |
 | -------------------- | ----------------- | ------------------------------------------------------------------- |
-| **Auto-link**        | >= 0.80           | Automatically create bidirectional edges (high confidence), up to 3 |
+| **Auto-link**        | >= 0.70           | Automatically create bidirectional edges (high confidence), up to 3 |
 | **Candidate review** | 0.40 ~ 0.79       | Output to LLM for evaluation; LLM decides whether to link           |
 | **Ignore**           | < 0.40            | No action                                                           |
 
@@ -108,7 +108,7 @@ This is a quintessential example of the LLM-Supervised philosophy: Binary handle
 
 - **`MIN_SEMANTIC_SIMILARITY = 0.10`**: Lower bound from MAGMA Table 5 ("Sim. Threshold: 0.10–0.30"). Below 0.10, token overlap is noise. *(Cite: MAGMA, Jiang et al., arXiv 2601.03236, Table 5: Sim. Threshold 0.10–0.30)*
 - **`REVIEW_SEMANTIC_THRESHOLD = 0.40`**: Extends MAGMA's single threshold into a three-tier system. 0.40 is the midpoint between the noise floor (0.10) and auto-link (0.80), providing a "worth surfacing for LLM review" zone. Not directly from any paper — mnemon's own tiering.
-- **`AUTO_SEMANTIC_THRESHOLD = 0.80`**: High-confidence cutoff for creating edges without LLM review. With `nomic-embed-text`, 0.80 cosine similarity represents strong semantic overlap in practice. Not from MAGMA (the paper does not define a specific auto-link threshold).
+- **`AUTO_SEMANTIC_THRESHOLD = 0.70`**: High-confidence cutoff for creating edges without LLM review. With `nomic-embed-text`, 0.70 cosine similarity represents strong semantic overlap in practice. Not from MAGMA (the paper does not define a specific auto-link threshold).
 - **`MAX_SEMANTIC_CANDIDATES = 5`**: Caps candidates surfaced for LLM review. Keeps the review manageable without missing strong matches.
 - **`MAX_AUTO_SEMANTIC_EDGES = 3`**: Limits auto-created edges per insert to prevent over-linking on dense topics.
 
@@ -136,21 +136,9 @@ When asking "why was SQLite chosen," the causal edge weight is highest, so the s
 
 ---
 
-## 4.6 Graph-LLM Theoretical Foundations
+## 4.6 Graph Memory Theory
 
-The following sections establish the theoretical basis for why graph databases are the native storage model for LLMs, and why `remember / link / recall` constitutes a universal protocol for agent memory systems.
-
-### Structural Isomorphism
-
-LLM attention, graph data models, and natural language all describe the same thing: weighted associations between entities.
-
-```
-LLM Attention:     token ←weight→ token
-Graph Model:       node  ←edge→   node
-Natural Language:  subject ←predicate→ object
-```
-
-Relational databases force network relationships into tables. Vector databases retain only one relationship type (similarity). Only graphs preserve full relational semantics.
+The following sections establish why graph databases are well-suited for agent memory, and why `remember / link / recall` constitutes a universal protocol for agent memory systems.
 
 ### The Three-Step Paradigm: Extract → Candidate → Associate
 
@@ -160,7 +148,7 @@ Graph construction engines universally decompose into three steps:
 | ------------- | ------------------------------------- | ------------------------------------------- |
 | **Extract**   | Parse raw input into structured units | `remember` → nodes + entities               |
 | **Candidate** | Find potential connections            | `semantic_candidates` / `causal_candidates` |
-| **Associate** | Establish typed, weighted edges       | `link` → 5 edge types                       |
+| **Associate** | Establish typed, weighted edges       | `link` → 4 edge types                       |
 
 ### Spectrum Across Database Types
 
@@ -233,7 +221,7 @@ Any memory system = remember(write) + link(associate) + recall(retrieve)
 
 | System           | remember                | link                                             | recall                            |
 | ---------------- | ----------------------- | ------------------------------------------------ | --------------------------------- |
-| **mnemon**       | Explicit three-step     | Explicit 5 edge types                            | Graph traversal                   |
+| **mnemon**       | Explicit three-step     | Explicit 4 edge types                            | Graph traversal                   |
 | **OpenViking**   | File write to viking:// | Directory placement (implicit, containment only) | Path navigation + semantic search |
 | **mem0**         | add()                   | Auto dedup/merge                                 | search()                          |
 | **Letta/MemGPT** | insert()                | Tiered storage (core/recall/archival)            | query()                           |
@@ -380,37 +368,13 @@ MemGPT──┘                         │── SQLite adapter (mnemon current
 
 ### Prior Art Assessment
 
-| Claim                                                    | Closest Prior Art                                                                                                                                  | Novelty                                               |
-| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| **Structural isomorphism** (graphs = native LLM storage) | Transformers-as-GNNs (arXiv 2506.22084, 2012.09699) — computational equivalence proven, but not extended to external storage                       | **High**                                              |
-| **remember/link/recall as universal algebra**            | CoALA (Princeton, TMLR 2024) — retrieval/reasoning/learning, but link not separated as first-class primitive                                       | **High**                                              |
-| **Extract → Candidate → Associate**                      | NER → Entity Linking → Relation Extraction — classical KG pipeline                                                                                 | **Low** (generalization across memory systems is new) |
-| **Read-write symmetry on graphs**                        | MAGMA (arXiv 2601.03236) argues for intentional asymmetry (fast write / slow read)                                                                 | **High** (counter-evidence exists)                    |
-| **Other storage as degenerate graphs**                   | arXiv 2602.05665 (HK PolyU, Feb 2026): "traditional memory forms can be viewed as degenerate or simplified cases within the graph memory paradigm" | **Medium** (convergent discovery)                     |
-| **LLM ↔ DB interaction protocol**                        | No prior art found — all existing systems couple protocol with storage                                                                             | **High**                                              |
-
-### Positioning in the Field
-
-```
-Textbook-level (established)
-  │  NER → Entity Linking → Relation Extraction
-  │
-Widely recognized (high-citation papers)
-  │  CoALA retrieval/reasoning/learning (Princeton, TMLR)
-  │  Transformers = GNNs (computational equivalence)
-  │
-Emerging consensus (2026 surveys)
-  │  Storage types as degenerate graphs (arXiv 2602.05665)
-  │  GraphRAG > Vector RAG (Neo4j Manifesto)
-  │
-── our position ──────────────────────────────
-  │
-Original contributions (no prior formulation found)
-  │  ① remember/link/recall universal algebra with link as first-class primitive
-  │  ② Structural isomorphism → external storage prescription
-  │  ③ Read-write symmetry on graphs (note: MAGMA's asymmetry is an engineering counter-argument)
-  │  ④ LLM ↔ DB protocol layer — separating protocol from storage engine
-```
+| Claim                                         | Closest Prior Art                                                                                                                                  | Novelty                                               |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| **remember/link/recall as universal algebra** | CoALA (Princeton, TMLR 2024) — retrieval/reasoning/learning, but link not separated as first-class primitive                                       | **High**                                              |
+| **Extract → Candidate → Associate**           | NER → Entity Linking → Relation Extraction — classical KG pipeline                                                                                 | **Low** (generalization across memory systems is new) |
+| **Read-write symmetry on graphs**             | MAGMA (arXiv 2601.03236) argues for intentional asymmetry (fast write / slow read)                                                                 | **High** (counter-evidence exists)                    |
+| **Other storage as degenerate graphs**        | arXiv 2602.05665 (HK PolyU, Feb 2026): "traditional memory forms can be viewed as degenerate or simplified cases within the graph memory paradigm" | **Medium** (convergent discovery)                     |
+| **LLM ↔ DB interaction protocol**             | No prior art found — all existing systems couple protocol with storage                                                                             | **High**                                              |
 
 ### Key References
 
@@ -424,9 +388,8 @@ Original contributions (no prior formulation found)
 - Graphiti/Zep (Rasmussen et al., arXiv 2501.13956, Jan 2025)
 - Mem0 (arXiv 2504.19413, Apr 2025)
 
-**Transformers-as-graphs:**
-- Transformers are Graph Neural Networks (arXiv 2506.22084, Jun 2025)
-- A Generalization of Transformer Networks to Graphs (arXiv 2012.09699, 2020)
+**Recall fusion:**
+- Reciprocal Rank Fusion (Cormack, Clarke & Buttcher, SIGIR 2009)
 
 ### Validation: mnemon Architecture
 
@@ -434,11 +397,11 @@ mnemon's design directly reflects these insights:
 
 ```
 remember → Extract + Candidate (semantic_candidates / causal_candidates)
-link     → Associate (semantic / causal / entity / temporal / narrative)
+link     → Associate (semantic / causal / entity / temporal)
 recall   → Extract + Candidate + Associate (intent detection → multi-signal retrieval → graph traversal)
 ```
 
-Five edge types preserve five distinct relational semantics. Degenerating to pure vector retrieval would retain only `semantic` — losing ~80% of relational information. MAGMA ablation studies confirm: removing causal edges drops accuracy 3-5%, removing temporal edges drops it further.
+Four edge types preserve four distinct relational semantics. Degenerating to pure vector retrieval would retain only `semantic` — losing ~75% of relational information. MAGMA ablation studies confirm: removing causal edges drops accuracy 3-5%, removing temporal edges drops it further.
 
 ### Summary
 
@@ -446,7 +409,7 @@ Five edge types preserve five distinct relational semantics. Degenerating to pur
 - This three-step model achieves its **most complete expression** on graphs and degenerates toward KV
 - On graphs, read and write paths are **symmetric** — both follow the same three-step model in opposite directions
 - From the LLM perspective, reads universally collapse to **Query → Reason**
-- Graphs are the native storage model for LLMs because they are **structurally isomorphic**: both represent weighted associations between entities
+- Graphs preserve full relational semantics that other storage types lose (see degeneracy spectrum above)
 - **remember / link / recall** is the universal algebra for agent memory systems — every system is an instantiation of these three primitives, with varying degeneracy of `link`
 - The three primitives define an **LLM ↔ Database interaction protocol** — analogous to MCP for tools, filling the missing layer between LLMs and the database ecosystem
 - mnemon's strategic position is **protocol gateway**, not database engine — separating the LLM interaction problem from the storage optimization problem
