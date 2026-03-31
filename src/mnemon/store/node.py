@@ -60,9 +60,13 @@ def query_insights(db: 'DB', keyword: str = '', category: str = '',
 
     if keyword:
         for word in keyword.split():
+            escaped = word.replace(
+                '\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
             conditions.append(
-                '(content LIKE ? OR tags LIKE ? OR entities LIKE ?)')
-            args.extend([f'%{word}%', f'%{word}%', f'%{word}%'])
+                "(content LIKE ? ESCAPE '\\'"
+                " OR tags LIKE ? ESCAPE '\\'"
+                " OR entities LIKE ? ESCAPE '\\')")
+            args.extend([f'%{escaped}%', f'%{escaped}%', f'%{escaped}%'])
     if category:
         conditions.append('category = ?')
         args.append(category)
