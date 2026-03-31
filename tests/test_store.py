@@ -501,6 +501,24 @@ class TestAutoPrune:
         pruned = auto_prune(tmp_db, 10)
         assert pruned == 0
 
+    def test_prefers_stale_over_fresh(self, tmp_db):
+        """Never-accessed insight pruned before recently-accessed one."""
+        from mnemon.store.node import increment_access_count
+
+        insert_insight(tmp_db, make_insight(
+            id='stale-1', content='never accessed', importance=2))
+        insert_insight(tmp_db, make_insight(
+            id='fresh-1', content='recently accessed', importance=2))
+
+        for _ in range(5):
+            increment_access_count(tmp_db, 'fresh-1')
+
+        pruned = auto_prune(tmp_db, 1)
+        assert pruned == 1
+
+        assert get_insight_by_id(tmp_db, 'fresh-1') is not None
+        assert get_insight_by_id(tmp_db, 'stale-1') is None
+
 
 # --- Oplog ---
 

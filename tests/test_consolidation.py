@@ -99,14 +99,14 @@ class TestConsolidatePending:
         processed = consolidate_pending(tmp_db)
         assert processed == 0
 
-    def test_rebuild_stamps_consolidated_at(self, tmp_db):
-        """rebuild_auto_edges sets consolidated_at on all active insights."""
+    def test_rebuild_clears_consolidated_at(self, tmp_db):
+        """rebuild_auto_edges clears consolidated_at for re-consolidation."""
         insert_insight(tmp_db, make_insight(
             id='rb-1', content='rebuild test one'))
         insert_insight(tmp_db, make_insight(
             id='rb-2', content='rebuild test two'))
         tmp_db._conn.execute(
-            'UPDATE insights SET consolidated_at = NULL')
+            'UPDATE insights SET consolidated_at = created_at')
 
         rebuild_auto_edges(tmp_db)
 
@@ -114,4 +114,4 @@ class TestConsolidatePending:
             'SELECT COUNT(*) FROM insights'
             ' WHERE consolidated_at IS NULL AND deleted_at IS NULL'
             ).fetchone()[0]
-        assert pending == 0
+        assert pending == 2

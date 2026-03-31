@@ -285,16 +285,11 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
 
         if diff_action in {'updated', 'replaced'} and replaced_id:
             op_name = 'replace' if diff_action == 'replaced' else 'diff-replace'
-            try:
-                soft_delete_insight(db, replaced_id)
-                log_op(db, op_name, replaced_id,
-                       f'replaced by {insight.id}')
-                if embed_cache and replaced_id in embed_cache:
-                    del embed_cache[replaced_id]
-            except Exception as e:
-                click.echo(
-                    f'warning: soft-delete {replaced_id}: {e}',
-                    err=True)
+            soft_delete_insight(db, replaced_id)
+            log_op(db, op_name, replaced_id,
+                   f'replaced by {insight.id}')
+            if embed_cache and replaced_id in embed_cache:
+                del embed_cache[replaced_id]
 
         insert_insight(db, insight)
 
@@ -620,6 +615,10 @@ def link(ctx: click.Context, source_id: str, target_id: str,
         except json.JSONDecodeError as e:
             raise click.ClickException(
                 f'invalid JSON metadata: {e}')
+        if not isinstance(metadata, dict):
+            raise click.ClickException(
+                'metadata must be a JSON object, not '
+                + type(metadata).__name__)
     metadata['created_by'] = 'claude'
 
     now = datetime.now(timezone.utc)
@@ -632,16 +631,19 @@ def link(ctx: click.Context, source_id: str, target_id: str,
             raise click.ClickException(
                 f'insight {target_id} not found')
 
-        insert_edge(db, Edge(
-            source_id=source_id, target_id=target_id,
-            edge_type=edge_type, weight=weight,
-            metadata=metadata, created_at=now))
-        insert_edge(db, Edge(
-            source_id=target_id, target_id=source_id,
-            edge_type=edge_type, weight=weight,
-            metadata=metadata, created_at=now))
-        log_op(db, 'link', source_id,
-               f'{source_id} <-> {target_id} ({edge_type})')
+        def do_link() -> None:
+            insert_edge(db, Edge(
+                source_id=source_id, target_id=target_id,
+                edge_type=edge_type, weight=weight,
+                metadata=metadata, created_at=now))
+            insert_edge(db, Edge(
+                source_id=target_id, target_id=source_id,
+                edge_type=edge_type, weight=weight,
+                metadata=metadata, created_at=now))
+            log_op(db, 'link', source_id,
+                   f'{source_id} <-> {target_id} ({edge_type})')
+
+        db.in_transaction(do_link)
         _json_out({
             'status': 'linked',
             'source_id': source_id,

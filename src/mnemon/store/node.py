@@ -260,8 +260,20 @@ def auto_prune(db: 'DB', max_insights: int,
     if exclude_ids:
         placeholders = ','.join('?' for _ in exclude_ids)
         exclude_clause = f'AND id NOT IN ({placeholders})'
-    args.append(excess)
 
+    candidate_rows = db._query(
+        f'SELECT id FROM insights'
+        f' WHERE deleted_at IS NULL AND importance < 4'
+        f' AND access_count < 3 {exclude_clause}'
+        f' LIMIT {PRUNE_BATCH_SIZE}',
+        tuple(args)).fetchall()
+    for (cid,) in candidate_rows:
+        try:
+            refresh_effective_importance(db, cid)
+        except ValueError:
+            pass
+
+    args.append(excess)
     rows = db._query(
         f'SELECT id FROM insights'
         f' WHERE deleted_at IS NULL AND importance < 4'

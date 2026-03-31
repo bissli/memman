@@ -13,10 +13,10 @@ from mnemon.graph.entity import create_entity_edges, extract_entities
 from mnemon.graph.entity import merge_entities
 from mnemon.graph.semantic import AUTO_SEMANTIC_THRESHOLD, build_embed_cache
 from mnemon.graph.semantic import create_semantic_edges
-from mnemon.graph.temporal import MAX_PROXIMITY_EDGES
-from mnemon.graph.temporal import MIN_PROXIMITY_WEIGHT, TEMPORAL_WINDOW_HOURS
-from mnemon.graph.temporal import create_temporal_edge
-from mnemon.model import Insight, format_timestamp
+from mnemon.graph.temporal import MAX_PROXIMITY_EDGES, MIN_PROXIMITY_WEIGHT
+from mnemon.graph.temporal import TEMPORAL_WINDOW_HOURS, create_temporal_edge
+from mnemon.model import Edge, Insight, format_timestamp, parse_timestamp
+from mnemon.store.edge import insert_edge
 from mnemon.store.node import get_all_active_insights, get_insight_by_id
 from mnemon.store.node import update_entities
 
@@ -229,15 +229,25 @@ def rebuild_auto_edges(
 
         for row in manual_entity_rows:
             db._conn.execute(
-                'INSERT OR REPLACE INTO edges'
-                ' (source_id, target_id, edge_type, weight,'
-                '  metadata, created_at)'
-                ' VALUES (?, ?, ?, ?, ?, ?)', row)
+                'UPDATE edges SET metadata = ?,'
+                ' weight = MAX(weight, ?)'
+                ' WHERE source_id = ? AND target_id = ?'
+                ' AND edge_type = ?',
+                (row[4], row[3], row[0], row[1], row[2]))
+            if db._conn.execute(
+                    'SELECT COUNT(*) FROM edges'
+                    ' WHERE source_id = ? AND target_id = ?'
+                    ' AND edge_type = ?',
+                    (row[0], row[1], row[2])).fetchone()[0] == 0:
+                insert_edge(db, Edge(
+                    source_id=row[0], target_id=row[1],
+                    edge_type=row[2], weight=row[3],
+                    metadata=json.loads(row[4]) if row[4] else {},
+                    created_at=parse_timestamp(row[5])))
 
-        now = format_timestamp(datetime.now(timezone.utc))
         db._conn.execute(
-            'UPDATE insights SET consolidated_at = ?'
-            ' WHERE deleted_at IS NULL', (now,))
+            'UPDATE insights SET consolidated_at = NULL'
+            ' WHERE deleted_at IS NULL')
 
         log_op(db, 'rebuild', '', json.dumps(stats))
 

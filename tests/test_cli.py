@@ -381,3 +381,41 @@ def test_replace_oplog_entries(runner):
     assert result.exit_code == 0
     assert 'replace' in result.output
     assert 'remember' in result.output
+
+
+def test_link_creates_both_directions(runner):
+    """Link creates edges in both directions atomically."""
+    r1 = invoke(runner, ['remember', 'first insight', '--no-diff'])
+    id1 = json.loads(r1.output)['id']
+    r2 = invoke(runner, ['remember', 'second insight', '--no-diff'])
+    id2 = json.loads(r2.output)['id']
+
+    result = invoke(runner, [
+        'link', id1, id2, '--type', 'causal'])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data['status'] == 'linked'
+
+    fwd = invoke(runner, ['related', id1, '--edge', 'causal'])
+    assert fwd.exit_code == 0
+    fwd_data = json.loads(fwd.output)
+    assert any(e['id'] == id2 for e in fwd_data)
+
+    rev = invoke(runner, ['related', id2, '--edge', 'causal'])
+    assert rev.exit_code == 0
+    rev_data = json.loads(rev.output)
+    assert any(e['id'] == id1 for e in rev_data)
+
+
+def test_link_meta_non_dict_fails(runner):
+    """Non-dict JSON metadata is rejected."""
+    r1 = invoke(runner, ['remember', 'first', '--no-diff'])
+    id1 = json.loads(r1.output)['id']
+    r2 = invoke(runner, ['remember', 'second', '--no-diff'])
+    id2 = json.loads(r2.output)['id']
+
+    result = invoke(runner, [
+        'link', id1, id2, '--type', 'semantic',
+        '--meta', '[1, 2]'])
+    assert result.exit_code != 0
+    assert 'object' in result.output.lower() or 'dict' in result.output.lower()
