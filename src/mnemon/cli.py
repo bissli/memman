@@ -1105,6 +1105,16 @@ def consolidate(ctx: click.Context) -> None:
     db = _open_db(ctx)
     try:
         llm_client = get_llm_client()
+        pending_count = db._conn.execute(
+            'SELECT COUNT(*) FROM insights'
+            ' WHERE consolidated_at IS NULL AND deleted_at IS NULL'
+            ).fetchone()[0]
+        if pending_count == 0:
+            _json_out({'processed': 0, 'remaining': 0})
+            return
+        click.echo(
+            f'Consolidating {pending_count} pending insights...',
+            err=True)
         embed_cache = build_embed_cache(db)
         total = 0
         while True:
@@ -1113,10 +1123,13 @@ def consolidate(ctx: click.Context) -> None:
             total += batch
             if batch == 0:
                 break
+            click.echo(
+                f'  processed {total}/{pending_count}', err=True)
         pending = db._conn.execute(
             'SELECT COUNT(*) FROM insights'
             ' WHERE consolidated_at IS NULL AND deleted_at IS NULL'
             ).fetchone()[0]
+        click.echo(f'Done. {total} processed, {pending} remaining.', err=True)
         _json_out({
             'processed': total,
             'remaining': pending,
