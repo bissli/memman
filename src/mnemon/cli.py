@@ -154,7 +154,7 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     content_bytes = len(content_str.encode('utf-8'))
     if content_bytes > 8000:
         raise click.ClickException(
-            f'content too long ({content_bytes} chars, max 8000);'
+            f'content too long ({content_bytes} bytes, max 8000);'
             ' consider chunking into multiple remember calls')
 
     if cat not in VALID_CATEGORIES:
@@ -247,14 +247,15 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
             existing_embed=existing_embed)
         diff_suggestion = result['suggestion']
 
+        best_idx = result.get('best_match_idx', 0)
         if diff_suggestion == 'DUPLICATE':
             diff_action = 'skipped'
             if result['matches']:
-                replaced_id = result['matches'][0]['id']
+                replaced_id = result['matches'][best_idx]['id']
         elif diff_suggestion in {'CONFLICT', 'UPDATE'}:
             diff_action = 'updated'
             if result['matches']:
-                replaced_id = result['matches'][0]['id']
+                replaced_id = result['matches'][best_idx]['id']
         else:
             diff_action = 'added'
 
@@ -318,7 +319,6 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
         except Exception:
             pruned_val = 0
 
-        nonlocal ei, pruned
         ei = ei_val
         pruned = pruned_val
 
@@ -331,8 +331,6 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
         raise
 
     causal_candidates = find_causal_candidates(db, insight)
-    if causal_candidates is None:
-        causal_candidates = []
 
     pending = db._conn.execute(
         'SELECT COUNT(*) FROM insights'
@@ -536,7 +534,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
     content_bytes = len(content_str.encode('utf-8'))
     if content_bytes > 8000:
         raise click.ClickException(
-            f'content too long ({content_bytes} chars, max 8000);'
+            f'content too long ({content_bytes} bytes, max 8000);'
             ' consider chunking into multiple remember calls')
 
     if cat not in VALID_CATEGORIES:

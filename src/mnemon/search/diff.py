@@ -109,12 +109,23 @@ def diff(insights: list[Insight], new_content: str,
                     'suggestion': suggestion,
                     })
 
+    _PRIORITY = {'DUPLICATE': 3, 'CONFLICT': 2, 'UPDATE': 1, 'ADD': 0}
     overall = 'ADD'
+    best_match_idx = None
     if matches:
-        overall = matches[0]['suggestion']
-        for m in matches:
-            if m['suggestion'] == 'DUPLICATE':
-                overall = 'DUPLICATE'
-                break
+        best_p = -1
+        best_sim = -1.0
+        for i, m in enumerate(matches):
+            p = _PRIORITY.get(m['suggestion'], 0)
+            sim = m.get('similarity', 0.0)
+            if p > best_p or (p == best_p and sim > best_sim):
+                best_p = p
+                best_sim = sim
+                overall = m['suggestion']
+                best_match_idx = i
 
-    return {'suggestion': overall, 'matches': matches}
+    return {
+        'suggestion': overall,
+        'matches': matches,
+        'best_match_idx': best_match_idx,
+        }

@@ -71,7 +71,6 @@ class DB:
 
     def __init__(self, conn: sqlite3.Connection, path: str) -> None:
         self._conn = conn
-        self._tx: sqlite3.Cursor | None = None
         self._in_tx = False
         self.path = path
 
@@ -85,9 +84,7 @@ class DB:
         self._conn.close()
 
     def _exec(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
-        """Execute SQL using the transaction cursor or connection."""
-        if self._in_tx:
-            return self._conn.execute(sql, params)
+        """Execute a write SQL statement."""
         return self._conn.execute(sql, params)
 
     def _query(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
@@ -257,12 +254,15 @@ def _add_column_if_not_exists(
 
 def _migrate_remove_narrative_edges(db: DB) -> None:
     """Recreate edges table without narrative type if old schema allows it."""
+    db._conn.execute('PRAGMA foreign_keys=OFF')
     try:
         db._conn.execute(
             "INSERT INTO edges VALUES"
             " ('__test','__test','narrative',0,'{}',datetime('now'))")
     except sqlite3.IntegrityError:
         return
+    finally:
+        db._conn.execute('PRAGMA foreign_keys=ON')
 
     db._conn.execute("DELETE FROM edges WHERE source_id = '__test'")
     db._conn.execute("DELETE FROM edges WHERE edge_type = 'narrative'")

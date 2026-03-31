@@ -76,12 +76,12 @@ def get_oplog_stats(db: 'DB', since: str = '') -> dict:
 
     never_row = db._query(
         'SELECT COUNT(*) FROM insights'
-        ' WHERE deleted = 0 AND access_count = 0',
+        ' WHERE deleted_at IS NULL AND access_count = 0',
         ()).fetchone()
     never_accessed = never_row[0] if never_row else 0
 
     total_row = db._query(
-        'SELECT COUNT(*) FROM insights WHERE deleted = 0',
+        'SELECT COUNT(*) FROM insights WHERE deleted_at IS NULL',
         ()).fetchone()
     total_active = total_row[0] if total_row else 0
 

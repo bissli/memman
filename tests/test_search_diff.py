@@ -139,3 +139,49 @@ def test_antonym_pairs_no_duplicates():
         pair = tuple(sorted([a.lower(), b.lower()]))
         assert pair not in normalized, f'Duplicate pair: {pair}'
         normalized.add(pair)
+
+
+def test_diff_best_match_idx_present():
+    """Diff result always includes best_match_idx."""
+    insights = [Insight(id='1', content='Go uses SQLite')]
+    result = diff(insights, 'Go uses SQLite for storage')
+    assert 'best_match_idx' in result
+
+
+def test_diff_cosine_conflict_overrides_keyword_add():
+    """Cosine-only CONFLICT overrides keyword ADD overall."""
+    kw_insight = Insight(
+        id='kw', content='alpha bravo charlie delta echo foxtrot')
+    cos_insight = Insight(
+        id='cos', content='not using Redis cache anymore')
+    insights = [kw_insight, cos_insight]
+
+    new_vec = [1.0] + [0.0] * 767
+    kw_vec = [0.0] * 384 + [1.0] * 384
+    cos_vec = [0.95] + [0.0] * 767
+    existing_embed = [
+        ('kw', kw_vec),
+        ('cos', cos_vec),
+        ]
+    result = diff(
+        insights, 'using Redis cache for sessions',
+        new_embedding=new_vec, existing_embed=existing_embed)
+    assert result['suggestion'] == 'CONFLICT'
+    best_idx = result['best_match_idx']
+    assert result['matches'][best_idx]['id'] == 'cos'
+
+
+def test_diff_same_priority_prefers_higher_similarity():
+    """Within same priority tier, higher similarity wins."""
+    ins_a = Insight(id='a', content='chose SQLite because embedded database')
+    ins_b = Insight(
+        id='b', content='chose SQLite because embedded and simple')
+    insights = [ins_a, ins_b]
+    result = diff(
+        insights, 'chose SQLite because embedded database works')
+    if result['suggestion'] != 'ADD':
+        best_idx = result['best_match_idx']
+        best = result['matches'][best_idx]
+        for m in result['matches']:
+            if m['suggestion'] == best['suggestion']:
+                assert m['similarity'] <= best['similarity']

@@ -52,7 +52,7 @@ def keyword_search(
     if not query_tokens:
         return []
 
-    heap_list: list[tuple[float, int, Insight]] = []
+    heap_list: list[tuple[float, int, str, Insight]] = []
     for ins in insights:
         content_tokens = insight_tokens(ins)
         if token_cache is not None:
