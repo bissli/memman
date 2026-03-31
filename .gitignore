@@ -34,3 +34,4 @@ dist/
 # Test artifacts
 /tmp/
 .testdata/
+M/

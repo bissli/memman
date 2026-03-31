@@ -107,8 +107,10 @@ class TestEntitySignal:
         d2 = _find_result(result['results'], 'ent-docker-2')
         k8s = _find_result(result['results'], 'ent-k8s')
 
-        assert d1 is not None and d1['signals']['entity'] > 0
-        assert d2 is not None and d2['signals']['entity'] > 0
+        assert d1 is not None
+        assert d1['signals']['entity'] > 0
+        assert d2 is not None
+        assert d2['signals']['entity'] > 0
         if k8s is not None:
             assert k8s['signals']['entity'] == 0
 
@@ -178,7 +180,8 @@ class TestWhyIntentCausalOrdering:
 
         cause = _find_result(result['results'], 'why-cause')
         effect = _find_result(result['results'], 'why-effect')
-        assert cause is not None and effect is not None
+        assert cause is not None
+        assert effect is not None
 
         cause_idx = next(
             i for i, r in enumerate(result['results'])
@@ -187,6 +190,81 @@ class TestWhyIntentCausalOrdering:
             i for i, r in enumerate(result['results'])
             if r['insight'].id == 'why-effect')
         assert cause_idx < effect_idx
+
+
+class TestWhenIntentChronologicalOrdering:
+    """WHEN intent returns results newest-first by created_at."""
+
+    def test_when_intent_chronological_ordering(self, tmp_db):
+        """Newer insights appear before older ones under WHEN intent."""
+        _insert_fillers(tmp_db)
+        insert_insight(tmp_db, make_insight(
+            id='when-old',
+            content='database migration completed for production deploy',
+            importance=4, created_at=OLD - timedelta(hours=2)))
+        insert_insight(tmp_db, make_insight(
+            id='when-mid',
+            content='database schema updated production migration',
+            importance=4, created_at=OLD - timedelta(hours=1)))
+        insert_insight(tmp_db, make_insight(
+            id='when-new',
+            content='database rollback production migration issue',
+            importance=4, created_at=OLD))
+
+        result = intent_aware_recall(
+            tmp_db,
+            query='database production migration',
+            query_vec=None, query_entities=[],
+            limit=20, intent_override='WHEN')
+
+        old = _find_result(result['results'], 'when-old')
+        mid = _find_result(result['results'], 'when-mid')
+        new = _find_result(result['results'], 'when-new')
+        assert old is not None
+        assert mid is not None
+        assert new is not None
+
+        new_idx = next(
+            i for i, r in enumerate(result['results'])
+            if r['insight'].id == 'when-new')
+        mid_idx = next(
+            i for i, r in enumerate(result['results'])
+            if r['insight'].id == 'when-mid')
+        old_idx = next(
+            i for i, r in enumerate(result['results'])
+            if r['insight'].id == 'when-old')
+        assert new_idx < mid_idx < old_idx
+
+    def test_when_intent_equal_timestamp_tiebreak(self, tmp_db):
+        """Same created_at: higher-scoring insight ranks first."""
+        _insert_fillers(tmp_db)
+        ts = OLD
+        insert_insight(tmp_db, make_insight(
+            id='when-tie-hi',
+            content='database production migration rollback strategy',
+            importance=5, created_at=ts))
+        insert_insight(tmp_db, make_insight(
+            id='when-tie-lo',
+            content='database production migration backup strategy',
+            importance=2, created_at=ts))
+
+        result = intent_aware_recall(
+            tmp_db,
+            query='database production migration',
+            query_vec=None, query_entities=[],
+            limit=20, intent_override='WHEN')
+
+        hi = _find_result(result['results'], 'when-tie-hi')
+        lo = _find_result(result['results'], 'when-tie-lo')
+        assert hi is not None
+        assert lo is not None
+        hi_idx = next(
+            i for i, r in enumerate(result['results'])
+            if r['insight'].id == 'when-tie-hi')
+        lo_idx = next(
+            i for i, r in enumerate(result['results'])
+            if r['insight'].id == 'when-tie-lo')
+        assert hi_idx < lo_idx
 
 
 class TestWhyIntentGraphWeight:
@@ -218,7 +296,8 @@ class TestWhyIntentGraphWeight:
 
         why_r1 = _find_result(why_result['results'], 'wg-1')
         gen_r1 = _find_result(gen_result['results'], 'wg-1')
-        assert why_r1 is not None and gen_r1 is not None
+        assert why_r1 is not None
+        assert gen_r1 is not None
 
         from mnemon.search.recall import RERANK_WEIGHTS_NO_EMBED
         why_w = RERANK_WEIGHTS_NO_EMBED['WHY']
@@ -279,7 +358,8 @@ class TestImportanceTiebreaker:
 
         high = _find_result(result['results'], 'tie-high')
         low = _find_result(result['results'], 'tie-low')
-        assert high is not None and low is not None
+        assert high is not None
+        assert low is not None
 
         high_idx = next(
             i for i, r in enumerate(result['results'])

@@ -1,25 +1,21 @@
 """Store layer tests ported from Go store_test.go."""
 
-import os
-import pathlib
 
 import pytest
 from mnemon.model import base_weight, is_immune
-from mnemon.store.db import DEFAULT_STORE_NAME, list_stores
-from mnemon.store.db import open_db, read_active, store_dir, store_exists
+from mnemon.store.db import DEFAULT_STORE_NAME, list_stores, open_db
+from mnemon.store.db import read_active, store_dir, store_exists
 from mnemon.store.db import valid_store_name, write_active
 from mnemon.store.edge import count_insights_with_entity
 from mnemon.store.edge import find_insights_with_entity, get_edges_by_node
 from mnemon.store.edge import get_edges_by_source_and_type, insert_edge
 from mnemon.store.node import auto_prune, compute_effective_importance
-from mnemon.store.node import count_active_insights
-from mnemon.store.node import get_all_active_insights, get_embedding
-from mnemon.store.node import review_content_quality
-from mnemon.store.node import get_insight_by_id
+from mnemon.store.node import count_active_insights, get_all_active_insights
+from mnemon.store.node import get_embedding, get_insight_by_id
 from mnemon.store.node import get_insight_by_id_include_deleted
 from mnemon.store.node import increment_access_count, insert_insight
-from mnemon.store.node import query_insights, soft_delete_insight
-from mnemon.store.node import update_embedding
+from mnemon.store.node import query_insights, review_content_quality
+from mnemon.store.node import soft_delete_insight, update_embedding
 from mnemon.store.oplog import get_oplog, log_op
 from tests.conftest import make_edge, make_insight
 
@@ -174,6 +170,106 @@ class TestInsertAndGetEdges:
 
         edges = get_edges_by_node(tmp_db, 'e-2')
         assert len(edges) == 1
+
+
+class TestEdgeUpsert:
+    """ON CONFLICT upsert preserves max weight, updates metadata, keeps created_at."""
+
+    def test_edge_upsert_preserves_max_weight(self, tmp_db):
+        """Re-inserting with lower weight keeps the original higher weight."""
+        insert_insight(tmp_db, make_insight(id='up-1', content='a'))
+        insert_insight(tmp_db, make_insight(id='up-2', content='b'))
+        insert_edge(tmp_db, make_edge(
+            source_id='up-1', target_id='up-2',
+            edge_type='semantic', weight=0.8))
+        insert_edge(tmp_db, make_edge(
+            source_id='up-1', target_id='up-2',
+            edge_type='semantic', weight=0.6))
+        edges = get_edges_by_node(tmp_db, 'up-1')
+        assert len(edges) == 1
+        assert edges[0].weight == 0.8
+
+    def test_edge_upsert_updates_metadata(self, tmp_db):
+        """Re-inserting with lower weight does NOT replace metadata."""
+        insert_insight(tmp_db, make_insight(id='um-1', content='a'))
+        insert_insight(tmp_db, make_insight(id='um-2', content='b'))
+        insert_edge(tmp_db, make_edge(
+            source_id='um-1', target_id='um-2',
+            edge_type='causal', weight=0.7,
+            metadata={'created_by': 'regex'}))
+        insert_edge(tmp_db, make_edge(
+            source_id='um-1', target_id='um-2',
+            edge_type='causal', weight=0.5,
+            metadata={'created_by': 'llm', 'confidence': 0.9}))
+        edges = get_edges_by_node(tmp_db, 'um-1')
+        assert len(edges) == 1
+        assert edges[0].metadata['created_by'] == 'regex'
+
+    def test_edge_upsert_higher_weight_updates_metadata(self, tmp_db):
+        """Re-inserting with higher weight replaces metadata."""
+        insert_insight(tmp_db, make_insight(id='uh-1', content='a'))
+        insert_insight(tmp_db, make_insight(id='uh-2', content='b'))
+        insert_edge(tmp_db, make_edge(
+            source_id='uh-1', target_id='uh-2',
+            edge_type='causal', weight=0.5,
+            metadata={'created_by': 'regex'}))
+        insert_edge(tmp_db, make_edge(
+            source_id='uh-1', target_id='uh-2',
+            edge_type='causal', weight=0.9,
+            metadata={'created_by': 'llm', 'confidence': 0.9}))
+        edges = get_edges_by_node(tmp_db, 'uh-1')
+        assert len(edges) == 1
+        assert edges[0].weight == 0.9
+        assert edges[0].metadata['created_by'] == 'llm'
+
+    def test_edge_upsert_equal_weight_updates_metadata(self, tmp_db):
+        """Re-inserting with equal weight replaces metadata (improved rationale)."""
+        insert_insight(tmp_db, make_insight(id='ueq-1', content='a'))
+        insert_insight(tmp_db, make_insight(id='ueq-2', content='b'))
+        insert_edge(tmp_db, make_edge(
+            source_id='ueq-1', target_id='ueq-2',
+            edge_type='causal', weight=0.8,
+            metadata={'created_by': 'regex', 'rationale': 'v1'}))
+        insert_edge(tmp_db, make_edge(
+            source_id='ueq-1', target_id='ueq-2',
+            edge_type='causal', weight=0.8,
+            metadata={'created_by': 'llm', 'rationale': 'v2'}))
+        edges = get_edges_by_node(tmp_db, 'ueq-1')
+        assert len(edges) == 1
+        assert edges[0].metadata['rationale'] == 'v2'
+
+    def test_edge_upsert_preserves_created_at(self, tmp_db):
+        """Re-inserting does not change the original created_at timestamp."""
+        from datetime import datetime, timedelta, timezone
+        insert_insight(tmp_db, make_insight(id='uc-1', content='a'))
+        insert_insight(tmp_db, make_insight(id='uc-2', content='b'))
+        original_time = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        insert_edge(tmp_db, make_edge(
+            source_id='uc-1', target_id='uc-2',
+            edge_type='temporal', weight=0.9,
+            created_at=original_time))
+        later_time = original_time + timedelta(hours=1)
+        insert_edge(tmp_db, make_edge(
+            source_id='uc-1', target_id='uc-2',
+            edge_type='temporal', weight=0.5,
+            created_at=later_time))
+        edges = get_edges_by_node(tmp_db, 'uc-1')
+        assert len(edges) == 1
+        assert edges[0].created_at == original_time
+
+    def test_edge_upsert_new_higher_replaces_weight(self, tmp_db):
+        """Re-inserting with higher weight replaces the stored weight."""
+        insert_insight(tmp_db, make_insight(id='uw-1', content='a'))
+        insert_insight(tmp_db, make_insight(id='uw-2', content='b'))
+        insert_edge(tmp_db, make_edge(
+            source_id='uw-1', target_id='uw-2',
+            edge_type='semantic', weight=0.4))
+        insert_edge(tmp_db, make_edge(
+            source_id='uw-1', target_id='uw-2',
+            edge_type='semantic', weight=0.9))
+        edges = get_edges_by_node(tmp_db, 'uw-1')
+        assert len(edges) == 1
+        assert edges[0].weight == 0.9
 
 
 class TestGetEdgesBySourceAndType:
@@ -639,5 +735,3 @@ class TestReviewContentQuality:
 
         flagged = review_content_quality(tmp_db, limit=2)
         assert len(flagged) == 2
-
-

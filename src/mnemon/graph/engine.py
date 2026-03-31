@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+from datetime import datetime, timezone
 
 from mnemon.graph.causal import CAUSAL_LOOKBACK, create_causal_edges
 from mnemon.graph.entity import ACRONYM_STOPWORDS, ENTITY_PATTERNS
@@ -13,17 +14,15 @@ from mnemon.graph.semantic import AUTO_SEMANTIC_THRESHOLD, build_embed_cache
 from mnemon.graph.semantic import create_semantic_edges
 from mnemon.graph.temporal import MIN_PROXIMITY_WEIGHT, TEMPORAL_WINDOW_HOURS
 from mnemon.graph.temporal import create_temporal_edge
-from mnemon.model import Insight
-from mnemon.store.node import get_all_active_insights, update_entities
+from mnemon.model import Insight, format_timestamp
+from mnemon.store.node import get_all_active_insights, get_insight_by_id
+from mnemon.store.node import update_entities
 
 logger = logging.getLogger('mnemon')
 
 
-def on_insight_created(
-        db: 'DB', insight: Insight,
-        embed_cache: dict[str, list[float]] | None = None,
-        ) -> dict[str, int]:
-    """Run all edge generators for a newly created insight."""
+def _prepare_entities(insight: Insight) -> None:
+    """Extract, merge, and filter entities for an insight in place."""
     extracted = extract_entities(insight.content)
     insight.entities = merge_entities(insight.entities, extracted)
     insight.entities = [
@@ -31,13 +30,70 @@ def on_insight_created(
         if e not in ENTITY_STOPWORDS
         and e not in ACRONYM_STOPWORDS]
 
-    stats = {
+
+def fast_edges(db: 'DB', insight: Insight) -> dict[str, int]:
+    """Run cheap edge generators only (temporal + entity + causal).
+
+    Semantic edges are deferred to consolidate_pending().
+    """
+    _prepare_entities(insight)
+
+    return {
         'temporal': create_temporal_edge(db, insight),
         'entity': create_entity_edges(db, insight),
         'causal': create_causal_edges(db, insight),
-        'semantic': create_semantic_edges(db, insight, embed_cache),
         }
-    return stats
+
+
+MAX_CONSOLIDATION_BATCH = 20
+
+
+def consolidate_pending(
+        db: 'DB',
+        embed_cache: dict[str, list[float]] | None = None,
+        llm_client: object | None = None,
+        max_batch: int = MAX_CONSOLIDATION_BATCH,
+        ) -> int:
+    """Process insights where consolidated_at IS NULL.
+
+    Creates semantic edges (and optionally LLM causal edges) for pending
+    insights. Returns the number of insights processed.
+    """
+    rows = db._conn.execute(
+        'SELECT id FROM insights'
+        ' WHERE consolidated_at IS NULL AND deleted_at IS NULL'
+        ' ORDER BY created_at ASC'
+        f' LIMIT {max_batch}'
+        ).fetchall()
+    if not rows:
+        return 0
+
+    if embed_cache is None:
+        embed_cache = build_embed_cache(db)
+
+    now = format_timestamp(datetime.now(timezone.utc))
+    processed = 0
+
+    for (insight_id,) in rows:
+        insight = get_insight_by_id(db, insight_id)
+        if insight is None:
+            continue
+
+        _prepare_entities(insight)
+        semantic_count = create_semantic_edges(db, insight, embed_cache)
+
+        if llm_client is not None:
+            from mnemon.graph.causal import create_llm_causal_edges
+            create_llm_causal_edges(db, insight, llm_client)
+
+        db._conn.execute(
+            'UPDATE insights SET consolidated_at = ? WHERE id = ?',
+            (now, insight_id))
+        processed += 1
+        logger.debug(
+            f'Consolidated {insight_id}: {semantic_count} semantic edges')
+
+    return processed
 
 
 def compute_constants_hash() -> str:
@@ -92,13 +148,7 @@ def rebuild_auto_edges(
         if insights:
             embed_cache = build_embed_cache(db)
             for insight in insights:
-                extracted = extract_entities(insight.content)
-                insight.entities = merge_entities(
-                    insight.entities, extracted)
-                insight.entities = [
-                    e for e in insight.entities
-                    if e not in ENTITY_STOPWORDS
-                    and e not in ACRONYM_STOPWORDS]
+                _prepare_entities(insight)
                 stats['entity_created'] += create_entity_edges(
                     db, insight, dry_run=True)
                 stats['semantic_created'] += create_semantic_edges(
@@ -152,13 +202,7 @@ def rebuild_auto_edges(
         embed_cache = build_embed_cache(db)
 
         for insight in insights:
-            extracted = extract_entities(insight.content)
-            insight.entities = merge_entities(
-                insight.entities, extracted)
-            insight.entities = [
-                e for e in insight.entities
-                if e not in ENTITY_STOPWORDS
-                and e not in ACRONYM_STOPWORDS]
+            _prepare_entities(insight)
             update_entities(db, insight.id, insight.entities)
             stats['entity_created'] += create_entity_edges(
                 db, insight)
@@ -184,6 +228,11 @@ def rebuild_auto_edges(
                 ' (source_id, target_id, edge_type, weight,'
                 '  metadata, created_at)'
                 ' VALUES (?, ?, ?, ?, ?, ?)', row)
+
+        now = format_timestamp(datetime.now(timezone.utc))
+        db._conn.execute(
+            'UPDATE insights SET consolidated_at = ?'
+            ' WHERE deleted_at IS NULL', (now,))
 
         log_op(db, 'rebuild', '', json.dumps(stats))
 

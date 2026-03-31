@@ -146,11 +146,6 @@ def create_entity_edges(
             continue
         if entity in ENTITY_STOPWORDS:
             continue
-        if not (entity in TECH_DICTIONARY
-                or CAMELCASE_PATTERN.search(entity)
-                or DOTTED_PATTERN.search(entity)
-                or URL_PATTERN.search(entity)):
-            continue
         if count >= MAX_TOTAL_ENTITY_EDGES:
             break
         ids = find_insights_with_entity(

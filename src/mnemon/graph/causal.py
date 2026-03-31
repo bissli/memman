@@ -1,5 +1,7 @@
 """Causal edge creation and causal candidate discovery."""
 
+import json
+import logging
 import re
 from datetime import datetime, timezone
 
@@ -8,9 +10,14 @@ from mnemon.search.keyword import tokenize
 from mnemon.store.edge import insert_edge
 from mnemon.store.node import get_recent_active_insights
 
+logger = logging.getLogger('mnemon')
+
 MIN_CAUSAL_OVERLAP = 0.15
 CAUSAL_LOOKBACK = 20
 MAX_CAUSAL_CANDIDATES = 10
+LLM_CONFIDENCE_FLOOR = 0.75
+LLM_BFS_NEIGHBORS = 10
+LLM_RECENT_COUNT = 20
 
 CAUSAL_PATTERN = re.compile(
     r'\b(because|therefore|due to|caused by|as a result|decided to|'
@@ -135,3 +142,125 @@ def find_causal_candidates(
             })
 
     return candidates
+
+
+LLM_SYSTEM_PROMPT = (
+    'You are a causal relationship detector for a memory graph. '
+    'Given a NEW insight and CONTEXT insights, identify causal '
+    'relationships the NEW insight has with any context insight. '
+    'Return a JSON array of objects with fields: '
+    '"source_id", "target_id", "confidence" (0.0-1.0), '
+    '"sub_type" ("causes"|"enables"|"prevents"), "rationale" (one sentence). '
+    'Only include relationships with confidence >= 0.75. '
+    'Return [] if no causal relationships exist.'
+    )
+
+
+def _build_llm_prompt(
+        insight: Insight,
+        neighbors: list[dict],
+        recent: list[Insight],
+        ) -> str:
+    """Build the user prompt for LLM causal inference."""
+    parts = [f'NEW INSIGHT (id={insight.id}):\n{insight.content}\n']
+
+    if neighbors:
+        parts.append('GRAPH NEIGHBORS:')
+        parts.extend(f'- id={n["insight"].id}: {n["insight"].content}' for n in neighbors[:LLM_BFS_NEIGHBORS])
+
+    if recent:
+        parts.append('\nRECENT INSIGHTS:')
+        parts.extend(f'- id={r.id}: {r.content}' for r in recent[:LLM_RECENT_COUNT])
+
+    return '\n'.join(parts)
+
+
+def create_llm_causal_edges(
+        db: 'DB', insight: Insight, llm_client: object) -> int:
+    """Create causal edges using LLM inference on 2-hop neighborhood."""
+    from mnemon.graph.bfs import BFSOptions, bfs
+
+    neighbors = bfs(db, insight.id, BFSOptions(
+        max_depth=2, max_nodes=LLM_BFS_NEIGHBORS))
+    recent = get_recent_active_insights(
+        db, insight.id, LLM_RECENT_COUNT)
+
+    new_tokens = tokenize(insight.content)
+    candidates = []
+    for n in neighbors:
+        prev_tokens = tokenize(n['insight'].content)
+        overlap = token_overlap(new_tokens, prev_tokens)
+        if overlap >= MIN_CAUSAL_OVERLAP:
+            candidates.append(n)
+
+    for r in recent:
+        prev_tokens = tokenize(r.content)
+        overlap = token_overlap(new_tokens, prev_tokens)
+        if overlap >= MIN_CAUSAL_OVERLAP:
+            if not any(n['insight'].id == r.id for n in candidates):
+                candidates.append({'insight': r, 'hop': 0, 'via_edge': ''})
+
+    if not candidates:
+        return 0
+
+    prompt = _build_llm_prompt(insight, candidates, [])
+
+    try:
+        raw = llm_client.complete(LLM_SYSTEM_PROMPT, prompt)
+    except Exception:
+        logger.debug(f'LLM causal inference unavailable for {insight.id}')
+        return 0
+
+    try:
+        edges = json.loads(raw)
+        if not isinstance(edges, list):
+            return 0
+    except (json.JSONDecodeError, ValueError):
+        return 0
+
+    now = datetime.now(timezone.utc)
+    count = 0
+    valid_ids = {insight.id} | {
+        n['insight'].id for n in candidates}
+
+    for edge_data in edges:
+        if not isinstance(edge_data, dict):
+            continue
+        try:
+            confidence = float(edge_data.get('confidence', 0))
+        except (ValueError, TypeError):
+            continue
+        if confidence < LLM_CONFIDENCE_FLOOR:
+            continue
+
+        source_id = edge_data.get('source_id', '')
+        target_id = edge_data.get('target_id', '')
+        if source_id not in valid_ids or target_id not in valid_ids:
+            continue
+        if source_id == target_id:
+            continue
+
+        sub_type = edge_data.get('sub_type', 'causes')
+        if sub_type not in {'causes', 'enables', 'prevents'}:
+            sub_type = 'causes'
+
+        try:
+            insert_edge(db, Edge(
+                source_id=source_id,
+                target_id=target_id,
+                edge_type='causal',
+                weight=confidence,
+                metadata={
+                    'created_by': 'llm',
+                    'confidence': confidence,
+                    'rationale': edge_data.get('rationale', ''),
+                    'sub_type': sub_type,
+                    },
+                created_at=now))
+            count += 1
+        except Exception:
+            pass
+
+    logger.debug(
+        f'LLM causal inference for {insight.id}: {count} edges created')
+    return count

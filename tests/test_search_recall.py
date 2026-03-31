@@ -1,7 +1,10 @@
 """Tests for mnemon.search.recall -- beam search, traversal params, reranking."""
 
-from mnemon.search.recall import RERANK_WEIGHTS, RERANK_WEIGHTS_NO_EMBED
-from mnemon.search.recall import get_traversal_params
+from mnemon.search.recall import RECALL_HINTS, RERANK_WEIGHTS
+from mnemon.search.recall import RERANK_WEIGHTS_NO_EMBED, get_traversal_params
+from mnemon.search.recall import intent_aware_recall
+from mnemon.store.node import insert_insight
+from tests.conftest import make_insight
 
 
 def test_get_traversal_params_known():
@@ -73,3 +76,55 @@ def test_rerank_no_embed_why_emphasizes_graph():
     w_kw, w_ent, w_sim, w_gr = RERANK_WEIGHTS_NO_EMBED['WHY']
     assert w_gr > w_kw
     assert w_gr > w_ent
+
+
+class TestRecallMeta:
+    """Meta dict fields: hint, ordering, sparse."""
+
+    def _recall(self, db, intent):
+        """Run recall with given intent override and a single matching insight."""
+        insert_insight(db, make_insight(
+            id=f'meta-{intent}',
+            content='test content for recall meta fields'))
+        return intent_aware_recall(
+            db, query='test content recall',
+            query_vec=None, query_entities=[],
+            limit=5, intent_override=intent)
+
+    def test_hint_field_by_intent(self, tmp_db):
+        """Each intent produces its expected hint string."""
+        for intent in ['WHY', 'WHEN', 'ENTITY', 'GENERAL']:
+            result = self._recall(tmp_db, intent)
+            assert result['meta']['hint'] == RECALL_HINTS[intent]
+
+    def test_ordering_field_by_intent(self, tmp_db):
+        """Ordering field matches intent-specific sort strategy."""
+        expected = {
+            'WHY': 'causal_topological',
+            'WHEN': 'chronological',
+            'ENTITY': 'score',
+            'GENERAL': 'score',
+            }
+        for intent, ordering in expected.items():
+            result = self._recall(tmp_db, intent)
+            assert result['meta']['ordering'] == ordering
+
+    def test_sparse_flag_present(self, tmp_db):
+        """Sparse flag set when results are below half the requested limit."""
+        result = intent_aware_recall(
+            tmp_db, query='nonexistent query xyz',
+            query_vec=None, query_entities=[],
+            limit=10, intent_override='GENERAL')
+        assert result['meta']['sparse'] is True
+
+    def test_sparse_flag_absent(self, tmp_db):
+        """Sparse flag absent when result count meets threshold."""
+        for i in range(5):
+            insert_insight(tmp_db, make_insight(
+                id=f'sparse-{i}',
+                content=f'common keyword topic alpha {i}'))
+        result = intent_aware_recall(
+            tmp_db, query='common keyword topic alpha',
+            query_vec=None, query_entities=[],
+            limit=5, intent_override='GENERAL')
+        assert 'sparse' not in result['meta']

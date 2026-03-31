@@ -216,9 +216,9 @@ OUT=$($M --data-dir "$TESTDIR" recall "Qdrant")
 show_json "$OUT" 10
 assert_contains "found Qdrant insight" "$OUT" "User prefers Qdrant"
 
-step "recall — no match returns sparse hint"
+step "recall — no match returns sparse flag"
 OUT=$($M --data-dir "$TESTDIR" recall "nonexistent_xyz")
-assert_contains "sparse hint" "$OUT" "sparse_results"
+assert_jq "sparse flag" "$OUT" '.meta.sparse' 'true'
 
 step "status — statistics"
 OUT=$($M --data-dir "$TESTDIR" status)
@@ -391,37 +391,23 @@ fi
 banner "Milestone 5: Semantic Edges (Claude-in-the-loop)"
 # ══════════════════════════════════════════════════════════════════════
 
-step "remember — output includes semantic_candidates field"
+step "remember — deferred consolidation (no semantic in edges_created)"
 TESTDIR5="$TESTDATA/m5"
 mkdir -p "$TESTDIR5"
 OUT=$($M --data-dir "$TESTDIR5" remember --no-diff "Go is great for building CLI tools" --cat fact --imp 3)
-assert_contains "has semantic_candidates" "$OUT" '"semantic_candidates"'
-assert_jq "semantic field is 0 in edges_created" "$OUT" '.edges_created.semantic' '0'
+assert_jq "no semantic in edges_created" "$OUT" '.edges_created.semantic' 'null'
 ID_S1=$(extract_id "$OUT")
 
 sleep 1
 
-step "remember — similar content generates candidates"
+step "remember — consolidation_pending when semantic edges deferred"
 OUT=$($M --data-dir "$TESTDIR5" remember --no-diff "Building CLI tools in Go is efficient" --cat fact --imp 3)
-assert_contains "has semantic_candidates" "$OUT" '"semantic_candidates"'
 ID_S2=$(extract_id "$OUT")
-# Should find the first insight as a candidate (high token overlap)
-SC_COUNT=$(echo "$OUT" | jq '.semantic_candidates | length')
-TOTAL=$((TOTAL + 1))
-if [ "$SC_COUNT" -ge 1 ]; then
-  PASS=$((PASS + 1))
-  echo -e "    ${GREEN}✔${RESET} Found $SC_COUNT semantic candidate(s)"
-else
-  FAIL=$((FAIL + 1))
-  echo -e "    ${RED}✘${RESET} Expected >= 1 semantic candidates, got $SC_COUNT"
-fi
 
-step "remember — unrelated content has fewer candidates"
-OUT=$($M --data-dir "$TESTDIR5" remember --no-diff "Xylophone zebra quantum platypus" --cat fact --imp 2)
-SC_COUNT=$(echo "$OUT" | jq '.semantic_candidates | length')
-# With embeddings, generic similarity may still produce low-score candidates (cosine > 0.30).
-# Verify count is within bounds (≤ maxSemanticCandidates=5).
-assert_jq_lte "unrelated: limited candidates" "$OUT" '.semantic_candidates | length' '5'
+step "consolidate — processes pending insights"
+OUT=$($M --data-dir "$TESTDIR5" consolidate)
+show_json "$OUT" 5
+assert_jq_gte "processed >= 1" "$OUT" '.processed' '1'
 
 step "link — create semantic edge"
 OUT=$($M --data-dir "$TESTDIR5" link "$ID_S1" "$ID_S2" --type semantic --weight 0.85)
@@ -795,6 +781,8 @@ step "smart recall — meta fields present"
 assert_contains "has anchor_count" "$OUT" '"anchor_count"'
 assert_contains "has traversed" "$OUT" '"traversed"'
 assert_jq_gte "anchor_count >= 1" "$OUT" '.meta.anchor_count' '1'
+assert_contains "has hint" "$OUT" '"hint"'
+assert_contains "has ordering" "$OUT" '"ordering"'
 
 step "smart recall — invalid intent rejected"
 OUT=$($M --data-dir "$TESTDIR3" recall "test" --smart --intent INVALID 2>&1 || true)

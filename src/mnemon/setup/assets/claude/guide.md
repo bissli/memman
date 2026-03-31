@@ -15,6 +15,14 @@
 To recall: `mnemon recall "<query>" --limit 5`.
 Craft a focused, keyword-rich query — do not pass the raw user prompt.
 
+The recall response includes a `meta` object with:
+- `hint`: intent-specific reasoning guidance (always present) — use it to
+  frame your synthesis of the results
+- `ordering`: how results are sorted — `causal_topological` (WHY),
+  `chronological` (WHEN), or `score` (ENTITY/GENERAL)
+- `sparse`: boolean, present only when results are below half the requested
+  limit — signals low-confidence retrieval; consider broadening the query
+
 ### Phase awareness — when to write
 
 **Store immediately** when the user states a preference, makes a decision, gives a
@@ -100,6 +108,20 @@ write it to the project CLAUDE.md under a `## Directives` section instead of cal
 `mnemon remember`. Create the section if absent. Directives need guaranteed recall
 (CLAUDE.md is loaded every turn), not graph connectivity. The user prunes CLAUDE.md
 periodically — no confirmation needed.
+
+### Semantic consolidation — deferred background pass
+
+Semantic edge detection (embedding-based similarity) runs asynchronously. When
+`remember` returns `consolidation_pending: true`, semantic edges for that memory
+have been queued but not yet written. To process the queue immediately, run:
+
+```bash
+mnemon consolidate
+```
+
+This is optional — consolidation also runs automatically in the background.
+`edges_created` in the `remember` response reflects only the synchronous edges
+created inline (`temporal`, `entity`, `causal`).
 
 ### Causal links — after writing
 

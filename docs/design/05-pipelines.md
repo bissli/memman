@@ -50,11 +50,11 @@ BEGIN TRANSACTION
   ⓪ Soft-delete replaced insight (if diff found CONFLICT/UPDATE)
   ① INSERT insight (UUID, content, category, importance, tags, entities, source)
   ② UPDATE embedding (if vector is available)
-  ③ Graph Engine: OnInsightCreated
+  ③ Graph Engine: fast_edges
      ├── CreateTemporalEdge    → backbone + 4h proximity
      ├── CreateEntityEdges     → regex + dictionary extraction → co-occurrence links
-     ├── CreateCausalEdges     → keywords + token overlap → auto causal edges
-     └── CreateSemanticEdges   → cos >= 0.70 auto-link
+     └── CreateCausalEdges     → keywords + token overlap → auto causal edges
+  ③b Deferred: consolidate_pending (semantic edges deferred to async batch)
   ④ RefreshEffectiveImportance → update EI decay values
   ⑤ AutoPrune                 → soft-delete lowest EI when total > 1000
 COMMIT

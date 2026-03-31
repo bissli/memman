@@ -188,8 +188,7 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
     from mnemon.embed import get_client
     from mnemon.embed.vector import deserialize_vector, serialize_vector
     from mnemon.graph.causal import find_causal_candidates
-    from mnemon.graph.engine import on_insight_created
-    from mnemon.graph.semantic import find_semantic_candidates
+    from mnemon.graph.engine import consolidate_pending, fast_edges
     from mnemon.search.diff import diff as run_diff
     from mnemon.search.quality import check_content_quality
     from mnemon.store.node import MAX_INSIGHTS, auto_prune
@@ -273,7 +272,9 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
         _json_out(output)
         return
 
-    edge_stats = {'temporal': 0, 'entity': 0, 'causal': 0, 'semantic': 0}
+    consolidate_pending(db, max_batch=2)
+
+    edge_stats = {'temporal': 0, 'entity': 0, 'causal': 0}
     ei = 0.0
     pruned = 0
     embedded = False
@@ -302,7 +303,7 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
             if embed_cache is not None:
                 embed_cache[insight.id] = embedding_vec
 
-        edge_stats = on_insight_created(db, insight, embed_cache)
+        edge_stats = fast_edges(db, insight)
 
         if insight.entities:
             update_entities(db, insight.id, insight.entities)
@@ -329,14 +330,14 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
         embed_cache = None
         raise
 
-    semantic_candidates = find_semantic_candidates(
-        db, insight, embed_cache)
-    if semantic_candidates is None:
-        semantic_candidates = []
-
     causal_candidates = find_causal_candidates(db, insight)
     if causal_candidates is None:
         causal_candidates = []
+
+    pending = db._conn.execute(
+        'SELECT COUNT(*) FROM insights'
+        ' WHERE consolidated_at IS NULL AND deleted_at IS NULL'
+        ).fetchone()[0]
 
     output: dict = {
         'id': insight.id,
@@ -349,13 +350,14 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
         'diff_suggestion': diff_suggestion,
         'created_at': format_timestamp(insight.created_at),
         'edges_created': edge_stats,
-        'semantic_candidates': semantic_candidates,
         'causal_candidates': causal_candidates,
         'quality_warnings': quality_warnings,
         'embedded': embedded,
         'effective_importance': ei,
         'auto_pruned': pruned,
         }
+    if pending > 0:
+        output['consolidation_pending'] = True
     if replaced_id:
         output['replaced_id'] = replaced_id
     _json_out(output)
@@ -375,6 +377,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
            intent: str) -> None:
     """Retrieve insights by keyword."""
     from mnemon.embed import get_client
+    from mnemon.graph.engine import consolidate_pending as _consolidate
     from mnemon.graph.entity import extract_entities
     from mnemon.search.intent import intent_from_string
     from mnemon.search.recall import intent_aware_recall
@@ -384,6 +387,8 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
     keyword_str = ' '.join(keyword)
     db = _open_db(ctx)
     try:
+        _consolidate(db, max_batch=2)
+
         if basic:
             results = query_insights(
                 db, keyword=keyword_str, category=cat,
@@ -814,7 +819,7 @@ def log(ctx: click.Context, limit: int, since: str, group_by: str,
             rows.append([
                 e['created_at'],
                 e['operation'],
-                e['insight_id'] if e['insight_id'] else '',
+                e['insight_id'] or '',
                 detail,
                 ])
 
@@ -1074,6 +1079,37 @@ def setup(ctx: click.Context, target: str, eject: bool, auto_yes: bool, use_glob
     data_dir = ctx.obj['data_dir']
     run_setup(data_dir, target=target, eject=eject,
               auto_yes=auto_yes, use_global=use_global)
+
+
+@cli.command()
+@click.pass_context
+def consolidate(ctx: click.Context) -> None:
+    """Process pending semantic edge consolidation."""
+    from mnemon.graph.engine import consolidate_pending
+    from mnemon.graph.semantic import build_embed_cache
+    from mnemon.llm.client import get_llm_client
+
+    db = _open_db(ctx)
+    try:
+        llm_client = get_llm_client()
+        embed_cache = build_embed_cache(db)
+        total = 0
+        while True:
+            batch = consolidate_pending(
+                db, embed_cache=embed_cache, llm_client=llm_client)
+            total += batch
+            if batch == 0:
+                break
+        pending = db._conn.execute(
+            'SELECT COUNT(*) FROM insights'
+            ' WHERE consolidated_at IS NULL AND deleted_at IS NULL'
+            ).fetchone()[0]
+        _json_out({
+            'processed': total,
+            'remaining': pending,
+            })
+    finally:
+        db.close()
 
 
 def _node_label(i: Insight) -> str:

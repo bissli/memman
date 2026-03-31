@@ -37,6 +37,13 @@ RERANK_WEIGHTS_NO_EMBED: dict[str, tuple[float, float, float, float]] = {
     'GENERAL': (0.45, 0.25, 0.0, 0.30),
     }
 
+RECALL_HINTS: dict[str, str] = {
+    'WHY': 'Trace the causal chain: earlier results cause later ones',
+    'WHEN': 'Results are newest-first: reconstruct the timeline',
+    'ENTITY': 'Describe the entity using evidence across these memories',
+    'GENERAL': 'Synthesize key points across these related memories',
+    }
+
 
 def get_traversal_params(intent: str) -> tuple[int, int, int]:
     """Return (beam_width, max_depth, max_visited) for the given intent."""
@@ -363,18 +370,29 @@ def intent_aware_recall(
 
     if intent == 'WHY':
         results = causal_topological_sort(db, results)
+    elif intent == 'WHEN':
+        results.sort(
+            key=lambda r: (r['insight'].created_at, r['score']),
+            reverse=True)
 
-    hint = ''
-    if not results or (limit > 0 and len(results) < limit // 2):
-        hint = 'sparse_results'
+    sparse = not results or (limit > 0 and len(results) < limit // 2)
+
+    if intent == 'WHY':
+        ordering = 'causal_topological'
+    elif intent == 'WHEN':
+        ordering = 'chronological'
+    else:
+        ordering = 'score'
 
     meta = {
         'intent': intent,
         'intent_source': intent_source,
         'anchor_count': anchor_count,
         'traversed': traversed_count,
+        'hint': RECALL_HINTS.get(intent, RECALL_HINTS['GENERAL']),
+        'ordering': ordering,
         }
-    if hint:
-        meta['hint'] = hint
+    if sparse:
+        meta['sparse'] = True
 
     return {'results': results, 'meta': meta}

@@ -54,11 +54,10 @@ Run this decision tree after every substantive response:
 
 1. **Remember**: `mnemon remember "<fact>" --cat <cat> --imp <1-5> --entities "e1,e2" --source agent`
    - Diff is built-in: duplicates skipped, conflicts auto-replaced.
-   - Output includes `action` (added/updated/skipped/replaced), `semantic_candidates`, `causal_candidates`.
+   - Output includes `action` (added/updated/skipped/replaced), `causal_candidates`, and `consolidation_pending: true` when semantic edges are deferred.
    - **Replace**: `mnemon replace <id> "<new content>"` — deterministic replacement by ID. Inherits metadata from original unless overridden. Carries `access_count` forward.
 2. **Link** (evaluate candidates from step 1 — use judgment, not mechanical rules):
    - Review `causal_candidates`: does a genuine cause-effect relationship exist? `causal_signal` is regex-based and prone to false positives — only link if the memories are truly causally related.
-   - Review `semantic_candidates`: are these memories meaningfully related? High `similarity` alone is not sufficient — skip candidates that share keywords but discuss unrelated topics.
    - Syntax: `mnemon link <id> <candidate> --type <causal|semantic> --weight <0-1> [--meta '<json>']`
    - For causal links, pass `suggested_sub_type` from the candidate via `--meta`: `mnemon link <id> <candidate> --type causal --meta '{"sub_type": "causes"}'` (values: `causes`, `enables`, `prevents`)
 3. **Recall**: `mnemon recall "<query>" --limit 10`
@@ -76,6 +75,7 @@ mnemon forget <id>
 mnemon related <id> --edge causal
 mnemon gc --threshold 0.4
 mnemon gc --keep <id>
+mnemon consolidate
 mnemon status
 mnemon log
 ```

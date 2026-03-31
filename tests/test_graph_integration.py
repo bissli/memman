@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from mnemon.embed.vector import serialize_vector
 from mnemon.graph.bfs import BFSOptions, bfs
 from mnemon.graph.causal import create_causal_edges
-from mnemon.graph.engine import on_insight_created
+from mnemon.graph.engine import fast_edges
 from mnemon.graph.entity import create_entity_edges
 from mnemon.graph.semantic import build_embed_cache, create_semantic_edges
 from mnemon.graph.semantic import find_semantic_candidates
@@ -149,6 +149,23 @@ class TestEntityEmpty:
         assert count == 0
 
 
+class TestEntityHyphenatedUserProvided:
+    """User-provided entities with non-standard patterns create edges."""
+
+    def test_user_provided_hyphenated_entity_creates_edges(self, tmp_db):
+        """User-provided entity like 'caching-layer' creates entity edges."""
+        ins1 = make_insight(
+            id='hyp-1', content='caching layer design',
+            entities=['caching-layer'])
+        ins2 = make_insight(
+            id='hyp-2', content='caching layer implementation',
+            entities=['caching-layer'])
+        insert_insight(tmp_db, ins1)
+        insert_insight(tmp_db, ins2)
+        count = create_entity_edges(tmp_db, ins2)
+        assert count >= 2
+
+
 class TestEntityIdfWeightedEdges:
     """Entity edges carry IDF-based weights, not fixed 1.0."""
 
@@ -228,13 +245,13 @@ class TestStopwordEntityFiltering:
         count = create_entity_edges(tmp_db, ins_a)
         assert count == 0
 
-    def test_on_insight_created_strips_stopwords(self, tmp_db):
+    def test_fast_edges_strips_stopwords(self, tmp_db):
         """User-provided stopword entity stripped at creation time."""
         ins = make_insight(
             id='strip-1', content='The API uses SQL queries',
             entities=['SQL', 'Python'])
         insert_insight(tmp_db, ins)
-        on_insight_created(tmp_db, ins)
+        fast_edges(tmp_db, ins)
         assert 'SQL' not in ins.entities
         assert 'Python' in ins.entities
 
@@ -504,10 +521,10 @@ class TestSemanticCandidatesTokenOverlap:
 # --- Engine ---
 
 
-class TestEngineOnInsightCreated:
-    """on_insight_created generates temporal + entity edges."""
+class TestFastEdgesEngine:
+    """fast_edges generates temporal + entity + causal edges (no semantic)."""
 
-    def test_engine_on_insight_created(self, tmp_db):
+    def test_fast_edges_creates_edges(self, tmp_db):
         """Two insights with shared entity and same source create edges."""
         now = datetime.now(timezone.utc)
         ins1 = make_insight(
@@ -521,9 +538,10 @@ class TestEngineOnInsightCreated:
         insert_insight(tmp_db, ins1)
         insert_insight(tmp_db, ins2)
 
-        stats = on_insight_created(tmp_db, ins2)
-        assert stats['temporal'] >= 2
-        assert stats['entity'] >= 1
+        result = fast_edges(tmp_db, ins2)
+        assert set(result.keys()) == {'temporal', 'entity', 'causal'}
+        assert result['temporal'] >= 2
+        assert result['entity'] >= 1
 
 
 # --- Build Embed Cache ---

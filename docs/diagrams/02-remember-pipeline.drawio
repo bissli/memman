@@ -76,7 +76,7 @@
         <mxCell id="r_e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_ins" target="r_store_emb">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="r_engine" value="③ Graph Engine: on_insight_created" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+        <mxCell id="r_engine" value="③ Graph Engine: fast_edges" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="280" y="760" width="340" height="30" as="geometry" />
         </mxCell>
         <mxCell id="r_e4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_store_emb" target="r_engine">

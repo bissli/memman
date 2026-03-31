@@ -8,11 +8,17 @@ logger = logging.getLogger('mnemon')
 
 
 def insert_edge(db: 'DB', e: Edge) -> None:
-    """Insert or replace an edge."""
+    """Insert or update an edge, keeping the higher weight."""
     db._exec(
-        'INSERT OR REPLACE INTO edges'
+        'INSERT INTO edges'
         ' (source_id, target_id, edge_type, weight, metadata, created_at)'
-        ' VALUES (?, ?, ?, ?, ?, ?)',
+        ' VALUES (?, ?, ?, ?, ?, ?)'
+        ' ON CONFLICT(source_id, target_id, edge_type)'
+        ' DO UPDATE SET metadata = CASE'
+        '                  WHEN excluded.weight >= weight'
+        '                  THEN excluded.metadata'
+        '                  ELSE metadata END,'
+        '              weight = MAX(weight, excluded.weight)',
         (e.source_id, e.target_id, e.edge_type, e.weight,
          e.metadata_json(), format_timestamp(e.created_at)))
 

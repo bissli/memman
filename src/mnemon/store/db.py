@@ -117,6 +117,7 @@ def open_db(data_dir: str) -> DB:
     conn = sqlite3.connect(db_path, isolation_level=None)
     conn.execute('PRAGMA journal_mode=WAL')
     conn.execute('PRAGMA foreign_keys=ON')
+    conn.execute('PRAGMA busy_timeout=5000')
     db = DB(conn, db_path)
     _migrate(db)
 
@@ -222,6 +223,14 @@ CREATE TABLE IF NOT EXISTS meta (
         ' ON insights(deleted_at, importance, access_count,'
         ' effective_importance)')
 
+    added = _add_column_if_not_exists(
+        db._conn,
+        'ALTER TABLE insights ADD COLUMN consolidated_at TEXT')
+    if added:
+        db._conn.execute(
+            'UPDATE insights SET consolidated_at = created_at'
+            ' WHERE consolidated_at IS NULL')
+
     _migrate_remove_narrative_edges(db)
 
     row = db._conn.execute(
@@ -235,13 +244,15 @@ CREATE TABLE IF NOT EXISTS meta (
 
 
 def _add_column_if_not_exists(
-        conn: sqlite3.Connection, stmt: str) -> None:
+        conn: sqlite3.Connection, stmt: str) -> bool:
     """Run ALTER TABLE ADD COLUMN, ignoring duplicate column errors."""
     try:
         conn.execute(stmt)
+        return True
     except sqlite3.OperationalError as e:
         if 'duplicate column' not in str(e).lower():
             raise
+        return False
 
 
 def _migrate_remove_narrative_edges(db: DB) -> None:
