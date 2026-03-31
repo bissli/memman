@@ -11,6 +11,7 @@ LLM_ENDPOINT_VAR = 'MNEMON_LLM_ENDPOINT'
 LLM_API_KEY_VAR = 'MNEMON_LLM_API_KEY'
 LLM_MODEL_VAR = 'MNEMON_LLM_MODEL'
 DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
+DEFAULT_ENDPOINT = 'https://api.anthropic.com'
 
 
 class LLMClient:
@@ -52,9 +53,9 @@ class LLMClient:
 
 def get_llm_client() -> LLMClient | None:
     """Return an LLMClient from env vars, or None if not configured."""
-    endpoint = os.environ.get(LLM_ENDPOINT_VAR)
-    api_key = os.environ.get(LLM_API_KEY_VAR)
-    if not endpoint or not api_key:
+    endpoint = os.environ.get(LLM_ENDPOINT_VAR, DEFAULT_ENDPOINT)
+    api_key = os.environ.get(LLM_API_KEY_VAR) or os.environ.get('ANTHROPIC_API_KEY')
+    if not api_key:
         return None
     model = os.environ.get(LLM_MODEL_VAR, DEFAULT_MODEL)
     return LLMClient(endpoint, api_key, model)

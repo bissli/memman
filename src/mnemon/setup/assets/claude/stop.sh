@@ -16,7 +16,7 @@ SESSION_ID=$(echo "$INPUT" | sed -n 's/.*"session_id": *"\([^"]*\)".*/\1/p' | he
 if [ -z "$SESSION_ID" ]; then
   # Can't determine session — fall back to always blocking (safe default)
   cat <<'EOF'
-{"decision": "block", "reason": "[mnemon] Memory check: did the user state a preference, make a decision, give a correction, or reach a conclusion? If yes, store via Task(Bash, model=sonnet) sub-agent. Only skip if the exchange was purely open-ended questions with no resolution."}
+{"decision": "block", "reason": "[mnemon] Memory check: did the user state a preference, make a decision, give a correction, or reach a conclusion? If yes, store via Agent(model=sonnet) sub-agent. Only skip if the exchange was purely open-ended questions with no resolution."}
 EOF
   exit 0
 fi
@@ -27,7 +27,7 @@ mkdir -p "$HOME/.mnemon/stop_fired" 2>/dev/null
 # Atomic gate: only first mkdir succeeds per user turn
 if mkdir "$HOME/.mnemon/stop_fired/$SESSION_ID" 2>/dev/null; then
   cat <<'EOF'
-{"decision": "block", "reason": "[mnemon] Memory check: did the user state a preference, make a decision, give a correction, or reach a conclusion? If yes, store via Task(Bash, model=sonnet) sub-agent. Only skip if the exchange was purely open-ended questions with no resolution."}
+{"decision": "block", "reason": "[mnemon] Memory check: did the user state a preference, make a decision, give a correction, or reach a conclusion? If yes, store via Agent(model=sonnet) sub-agent. Only skip if the exchange was purely open-ended questions with no resolution."}
 EOF
 else
   # Flag already set — subsequent stop in same turn, skip silently

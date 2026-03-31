@@ -12,6 +12,7 @@ These flags are available on every command:
 | ------------------- | ----------- | ------------------------------------------------------------- |
 | `--store <name>`    | (auto)      | Named memory store (overrides `MNEMON_STORE` and active file) |
 | `--data-dir <path>` | `~/.mnemon` | Base data directory                                           |
+| `--readonly`        | `false`     | Open database in read-only mode                               |
 | `--version`         |             | Print version and exit                                        |
 
 ---
@@ -121,6 +122,15 @@ mnemon graph rebuild --dry-run    # preview changes without modifying DB
 
 Auto-rebuild fires transparently when `open_db()` detects graph constants (thresholds, weights) have changed. Manual rebuild is available for debugging or forcing regeneration. Use `--dry-run` to preview what would change without writing to the database.
 
+### Consolidation
+
+```bash
+# Process pending semantic edges and LLM causal inference
+mnemon consolidate
+```
+
+Drains all insights with `consolidated_at IS NULL`, creating semantic edges (embedding-based similarity) and optionally LLM causal edges (when `ANTHROPIC_API_KEY` is set). Processes in batches of 20 until fully drained. Returns `{"processed": N, "remaining": 0}`.
+
 ### Lifecycle Management
 
 ```bash
@@ -192,12 +202,18 @@ Nodes are colored by category (decision, fact, insight, preference, context); ed
 
 ## Configuration
 
-| Variable                | Default                  | Description            |
-| ----------------------- | ------------------------ | ---------------------- |
-| `MNEMON_DATA_DIR`       | `~/.mnemon`              | Base data directory    |
-| `MNEMON_STORE`          | `default`                | Active named store     |
-| `MNEMON_EMBED_ENDPOINT` | `http://localhost:11434` | Ollama API endpoint    |
-| `MNEMON_EMBED_MODEL`    | `nomic-embed-text`       | Ollama embedding model |
+| Variable                | Default                         | Description                                |
+| ----------------------- | ------------------------------- | ------------------------------------------ |
+| `MNEMON_DATA_DIR`       | `~/.mnemon`                     | Base data directory                        |
+| `MNEMON_STORE`          | `default`                       | Active named store                         |
+| `ANTHROPIC_API_KEY`     | —                               | Enables LLM causal inference automatically |
+| `MNEMON_LLM_ENDPOINT`   | `https://api.anthropic.com`     | Override LLM endpoint                      |
+| `MNEMON_LLM_API_KEY`    | falls back to ANTHROPIC_API_KEY | Override API key for LLM endpoint          |
+| `MNEMON_LLM_MODEL`      | `claude-haiku-4-5-20251001`     | Model for causal inference                 |
+| `MNEMON_EMBED_PROVIDER` | `ollama`                        | Embedding provider: `ollama` or `openai`   |
+| `MNEMON_EMBED_ENDPOINT` | `http://localhost:11434`        | Embedding API endpoint                     |
+| `MNEMON_EMBED_MODEL`    | `nomic-embed-text`              | Embedding model name                       |
+| `MNEMON_EMBED_API_KEY`  | —                               | API key for OpenAI-compatible endpoint     |
 
 ---
 
@@ -244,7 +260,8 @@ mnemon embed --status
 If you install Ollama after already using mnemon, existing insights won't have embeddings. Backfill them in one command:
 
 ```bash
-mnemon embed --all
+mnemon embed --all           # backfill all un-embedded insights
+mnemon embed <id>            # embed a single insight by ID
 ```
 
 This generates embeddings for all un-embedded insights and automatically creates semantic edges. You can check coverage before and after with `mnemon embed --status`.

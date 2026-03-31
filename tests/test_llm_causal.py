@@ -185,7 +185,18 @@ class TestLLMCausalInference:
         mock_client.complete.assert_called_once()
 
     def test_env_var_opt_in(self, monkeypatch):
-        """Without MNEMON_LLM_ENDPOINT set, get_llm_client returns None."""
+        """Without any API key set, get_llm_client returns None."""
         monkeypatch.delenv('MNEMON_LLM_ENDPOINT', raising=False)
         monkeypatch.delenv('MNEMON_LLM_API_KEY', raising=False)
+        monkeypatch.delenv('ANTHROPIC_API_KEY', raising=False)
         assert get_llm_client() is None
+
+    def test_anthropic_api_key_fallback(self, monkeypatch):
+        """ANTHROPIC_API_KEY used when MNEMON_LLM_API_KEY absent."""
+        monkeypatch.delenv('MNEMON_LLM_ENDPOINT', raising=False)
+        monkeypatch.delenv('MNEMON_LLM_API_KEY', raising=False)
+        monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-ant-test')
+        client = get_llm_client()
+        assert client is not None
+        assert client.endpoint == 'https://api.anthropic.com'
+        assert client.api_key == 'sk-ant-test'

@@ -13,7 +13,7 @@
 
 LLM agents forget everything between sessions. Context compaction drops critical decisions, cross-session knowledge vanishes, and long conversations push early information out of the window.
 
-Mnemon gives your agent persistent, cross-session memory — a four-graph knowledge store with intent-aware recall, importance decay, and automatic deduplication. Zero API keys, one setup command.
+Mnemon gives your agent persistent, cross-session memory — a four-graph knowledge store with intent-aware recall, importance decay, and automatic deduplication. One setup command.
 
 > **Claude Max / Pro subscriber?** Mnemon works entirely through your existing subscription — no separate API key required. Your LLM subscription *is* the intelligence layer. Two commands and you're done.
 
@@ -131,6 +131,10 @@ Session starts
   Nudge (Stop) ─── stop.sh ──→ remind agent to remember
     │
     ▼
+  (before delegating to sub-agents)
+  Recall (PreToolUse) ─── task_recall.sh ──→ remind agent to recall before delegation
+    │
+    ▼
   (when context compacts)
   Compact (PreCompact) ─── compact.sh ──→ flag file for post-compact recall
     │
@@ -192,7 +196,7 @@ MNEMON_STORE=work mnemon recall "query"  # or use env var per-process
 Different agents/processes can use different stores via the `MNEMON_STORE` environment variable — no global state contention.
 
 **Local or global mode?**
-`mnemon setup` defaults to **local** (project-scoped `.claude/`), recommended for most users. **Global** (`mnemon setup --global`, installed to `~/.claude/`) activates mnemon across all projects — convenient if you want other frameworks (e.g., OpenClaw) to share memory by forwarding requests through Claude Code CLI, but may add maintenance overhead.
+`mnemon setup` defaults to **global** (user-wide `~/.claude/`), activating mnemon across all projects. **Local** (project-scoped `.claude/`) can be selected interactively or used when you want project-isolated memory. Global is convenient if you want other frameworks (e.g., OpenClaw) to share memory by forwarding requests through Claude Code CLI.
 
 **How do I customize the behavior?**
 Edit `~/.mnemon/prompt/guide.md`. This file controls when the agent recalls memories and what it considers worth remembering. The skill file (`SKILL.md`) is auto-deployed and should not need manual editing.
@@ -207,12 +211,23 @@ Memory writes don't happen in the main conversation. The host LLM (e.g., Opus) d
 | `MNEMON_DATA_DIR`    | `~/.mnemon`                  | Base data directory                   |
 | `MNEMON_STORE`       | *(active file or `default`)* | Named memory store for data isolation |
 
-**Ollama-specific** (only relevant if using embeddings):
+**LLM causal inference** (automatic when `ANTHROPIC_API_KEY` is set):
 
-| Environment Variable    | Default                  | Description          |
-| ----------------------- | ------------------------ | -------------------- |
-| `MNEMON_EMBED_ENDPOINT` | `http://localhost:11434` | Ollama API endpoint  |
-| `MNEMON_EMBED_MODEL`    | `nomic-embed-text`       | Embedding model name |
+| Environment Variable  | Default                         | Description                                  |
+| --------------------- | ------------------------------- | -------------------------------------------- |
+| `ANTHROPIC_API_KEY`   | —                               | Enables LLM causal inference automatically   |
+| `MNEMON_LLM_ENDPOINT` | `https://api.anthropic.com`     | Override for custom/local inference endpoint |
+| `MNEMON_LLM_API_KEY`  | falls back to ANTHROPIC_API_KEY | Override API key for LLM endpoint            |
+| `MNEMON_LLM_MODEL`    | `claude-haiku-4-5-20251001`     | Model for causal inference                   |
+
+**Embeddings** (optional — works fully without):
+
+| Environment Variable    | Default                  | Description                              |
+| ----------------------- | ------------------------ | ---------------------------------------- |
+| `MNEMON_EMBED_PROVIDER` | `ollama`                 | Embedding provider: `ollama` or `openai` |
+| `MNEMON_EMBED_ENDPOINT` | `http://localhost:11434` | Embedding API endpoint                   |
+| `MNEMON_EMBED_MODEL`    | `nomic-embed-text`       | Embedding model name                     |
+| `MNEMON_EMBED_API_KEY`  | —                        | API key for OpenAI-compatible endpoint   |
 
 ## Development
 

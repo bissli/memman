@@ -54,14 +54,14 @@ BEGIN TRANSACTION
      ├── CreateTemporalEdge    → backbone + 4h proximity
      ├── CreateEntityEdges     → regex + dictionary extraction → co-occurrence links
      └── CreateCausalEdges     → keywords + token overlap → auto causal edges
-  ③b Deferred: consolidate_pending (semantic edges deferred to async batch)
+  ③b Deferred: consolidate_pending (semantic edges deferred to batch processing)
   ④ RefreshEffectiveImportance → update EI decay values
   ⑤ AutoPrune                 → soft-delete lowest EI when total > 1000
 COMMIT
 ```
 
 **Step 4: Candidate Output (post-transaction, read-only)**
-- `FindSemanticCandidates`: Semantic candidates with cos in [0.40, 0.70)
+- `FindSemanticCandidates`: Semantic candidates with cos >= 0.40 (`auto_linked` flag marks >= 0.70)
 - `FindCausalCandidates`: Causal candidates in the 2-hop BFS neighborhood
 
 **Step 5: JSON Output**
@@ -104,12 +104,12 @@ After receiving this output, the LLM can evaluate candidates and establish edges
 
 Query intent is automatically identified via regex matching:
 
-| Intent  | Trigger Patterns                                  |
-| ------- | ------------------------------------------------- |
-| WHY     | `why`, `reason`, `because`, `cause`, `motivation` |
-| WHEN    | `when`, `time`, `before`, `after`, `timeline`     |
-| ENTITY  | `what is`, `who is`, `tell me about`              |
-| GENERAL | None of the above match                           |
+| Intent  | Trigger Patterns                                                                       |
+| ------- | -------------------------------------------------------------------------------------- |
+| WHY     | `why`, `reason`, `because`, `cause`, `motivation`, `rationale`                         |
+| WHEN    | `when`, `time`, `date`, `before`, `after`, `during`, `timeline`, `history`, `sequence` |
+| ENTITY  | `what is`, `who is`, `tell me about`, `describe`, `about`                              |
+| GENERAL | None of the above match                                                                |
 
 Supports the `--intent` flag to manually override automatic detection.
 
@@ -208,6 +208,10 @@ Weights vary by intent:
 ### Step 5: WHY Post-Processing — Causal Topological Sort
 
 If the intent is WHY, an additional topological sort using Kahn's algorithm is performed: results are arranged along causal edges so that **causes come first, effects follow**.
+
+### Step 5b: WHEN Post-Processing — Chronological Sort
+
+If the intent is WHEN, results are re-sorted chronologically: **newest first** by `created_at`, with score as tiebreaker for equal timestamps.
 
 ### Signal Transparency
 

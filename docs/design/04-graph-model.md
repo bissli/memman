@@ -99,7 +99,7 @@ This is a quintessential example of the LLM-Supervised philosophy: Binary handle
 | Tier                 | Cosine Similarity | Behavior                                                            |
 | -------------------- | ----------------- | ------------------------------------------------------------------- |
 | **Auto-link**        | >= 0.70           | Automatically create bidirectional edges (high confidence), up to 3 |
-| **Candidate review** | 0.40 ~ 0.79       | Output to LLM for evaluation; LLM decides whether to link           |
+| **Candidate review** | >= 0.40           | Output to LLM for evaluation; `auto_linked` flag marks >= 0.70      |
 | **Ignore**           | < 0.40            | No action                                                           |
 
 **Fallback** (without embeddings): Token overlap rate is used instead of cosine similarity.

@@ -97,8 +97,9 @@ Importance 2 is the floor — if imp=2 feels weak, reconsider storing at all.
 
 **What to store**: conclusions AND sufficient context to understand them.
 **How to store**: in plan mode, run `mnemon remember` directly via Bash.
-In normal mode, delegate to a Task sub-agent (`subagent_type="Bash"`,
-`model="sonnet"`). See skill doc for execution details.
+In normal mode, delegate to an Agent sub-agent (`model="sonnet"`) whose
+prompt runs the `mnemon remember` command via Bash. See skill doc for
+execution details.
 
 ### Behavioral rules — route to CLAUDE.md
 

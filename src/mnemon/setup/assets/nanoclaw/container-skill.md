@@ -77,7 +77,7 @@ mnemon gc --threshold 0.4
 mnemon gc --keep <id>
 mnemon consolidate
 mnemon status
-mnemon log
+mnemon log [--limit N] [--since 7d]
 ```
 
 ## Guardrails
