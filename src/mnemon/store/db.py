@@ -118,20 +118,20 @@ def open_db(data_dir: str) -> DB:
     db = DB(conn, db_path)
     _migrate(db)
 
-    from mnemon.graph.engine import compute_constants_hash, rebuild_auto_edges
+    from mnemon.graph.engine import compute_constants_hash, relink_auto_edges
     current_hash = compute_constants_hash()
     row = db._conn.execute(
         "SELECT value FROM meta WHERE key = 'constants_hash'"
         ).fetchone()
     stored_hash = row[0] if row else None
     if stored_hash != current_hash:
-        stats = rebuild_auto_edges(db)
+        stats = relink_auto_edges(db)
         db._conn.execute(
             "INSERT OR REPLACE INTO meta (key, value)"
             " VALUES ('constants_hash', ?)",
             (current_hash,))
         logger.debug(
-            f'auto-rebuild on constants change: {stats}')
+            f'auto-relink on constants change: {stats}')
 
     return db
 
@@ -222,11 +222,11 @@ CREATE TABLE IF NOT EXISTS meta (
 
     added = _add_column_if_not_exists(
         db._conn,
-        'ALTER TABLE insights ADD COLUMN consolidated_at TEXT')
+        'ALTER TABLE insights ADD COLUMN linked_at TEXT')
     if added:
         db._conn.execute(
-            'UPDATE insights SET consolidated_at = created_at'
-            ' WHERE consolidated_at IS NULL')
+            'UPDATE insights SET linked_at = created_at'
+            ' WHERE linked_at IS NULL')
 
     _migrate_remove_narrative_edges(db)
 

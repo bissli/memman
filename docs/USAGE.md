@@ -115,21 +115,21 @@ mnemon link <source_id> <target_id> --type causal --weight 0.8 \
 # Related — BFS traversal from an insight
 mnemon related <id> --edge causal --depth 2
 
-# Rebuild — regenerate auto-computed edges (triggered automatically on constants change)
-mnemon graph rebuild              # live rebuild
-mnemon graph rebuild --dry-run    # preview changes without modifying DB
+# Relink — regenerate auto-computed edges (triggered automatically on constants change)
+mnemon graph relink              # live relink
+mnemon graph relink --dry-run    # preview changes without modifying DB
 ```
 
-Auto-rebuild fires transparently when `open_db()` detects graph constants (thresholds, weights) have changed. Manual rebuild is available for debugging or forcing regeneration. Use `--dry-run` to preview what would change without writing to the database.
+Auto-relink fires transparently when `open_db()` detects graph constants (thresholds, weights) have changed. Manual relink is available for debugging or forcing regeneration. Use `--dry-run` to preview what would change without writing to the database.
 
-### Consolidation
+### Linking
 
 ```bash
 # Process pending semantic edges and LLM causal inference
-mnemon consolidate
+mnemon graph link
 ```
 
-Drains all insights with `consolidated_at IS NULL`, creating semantic edges (embedding-based similarity) and optionally LLM causal edges (when `ANTHROPIC_API_KEY` is set). Processes in batches of 20 until fully drained. Returns `{"processed": N, "remaining": 0}`.
+Drains all insights with `linked_at IS NULL`, creating semantic edges (embedding-based similarity) and optionally LLM causal edges (when `ANTHROPIC_API_KEY` is set). Processes in batches of 20 until fully drained. Returns `{"processed": N, "remaining": 0}`.
 
 ### Lifecycle Management
 

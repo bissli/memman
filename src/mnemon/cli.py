@@ -188,7 +188,7 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
     from mnemon.embed import get_client
     from mnemon.embed.vector import deserialize_vector, serialize_vector
     from mnemon.graph.causal import find_causal_candidates
-    from mnemon.graph.engine import consolidate_pending, fast_edges
+    from mnemon.graph.engine import fast_edges, link_pending
     from mnemon.search.diff import diff as run_diff
     from mnemon.search.quality import check_content_quality
     from mnemon.store.node import MAX_INSIGHTS, auto_prune
@@ -273,7 +273,7 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
         _json_out(output)
         return
 
-    consolidate_pending(db, max_batch=2)
+    link_pending(db, max_batch=2)
 
     edge_stats = {'temporal': 0, 'entity': 0, 'causal': 0}
     ei = 0.0
@@ -329,7 +329,7 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
 
     pending = db._conn.execute(
         'SELECT COUNT(*) FROM insights'
-        ' WHERE consolidated_at IS NULL AND deleted_at IS NULL'
+        ' WHERE linked_at IS NULL AND deleted_at IS NULL'
         ).fetchone()[0]
 
     output: dict = {
@@ -350,7 +350,7 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
         'auto_pruned': pruned,
         }
     if pending > 0:
-        output['consolidation_pending'] = True
+        output['link_pending'] = True
     if replaced_id:
         output['replaced_id'] = replaced_id
     _json_out(output)
@@ -370,7 +370,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
            intent: str) -> None:
     """Retrieve insights by keyword."""
     from mnemon.embed import get_client
-    from mnemon.graph.engine import consolidate_pending as _consolidate
+    from mnemon.graph.engine import link_pending as _link
     from mnemon.graph.entity import extract_entities
     from mnemon.search.intent import intent_from_string
     from mnemon.search.recall import intent_aware_recall
@@ -380,7 +380,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
     keyword_str = ' '.join(keyword)
     db = _open_db(ctx)
     try:
-        _consolidate(db, max_batch=2)
+        _link(db, max_batch=2)
 
         if basic:
             results = query_insights(
@@ -1060,21 +1060,21 @@ def graph() -> None:
     """Graph management commands."""
 
 
-@graph.command('rebuild')
+@graph.command('relink')
 @click.option('--dry-run', is_flag=True, default=False,
               help='Show stats without modifying DB')
 @click.pass_context
-def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
-    """Rebuild auto-created graph edges."""
-    from mnemon.graph.engine import rebuild_auto_edges
+def graph_relink(ctx: click.Context, dry_run: bool) -> None:
+    """Relink auto-created graph edges."""
+    from mnemon.graph.engine import relink_auto_edges
 
     db = _open_db(ctx)
     try:
-        stats = rebuild_auto_edges(db, dry_run=dry_run)
+        stats = relink_auto_edges(db, dry_run=dry_run)
         if dry_run:
             click.echo('Dry run (no changes):')
         else:
-            click.echo('Rebuild complete:')
+            click.echo('Relink complete:')
         _json_out(stats)
     finally:
         db.close()
@@ -1094,11 +1094,11 @@ def setup(ctx: click.Context, target: str, eject: bool, auto_yes: bool, use_glob
               auto_yes=auto_yes, use_global=use_global)
 
 
-@cli.command()
+@graph.command('link')
 @click.pass_context
-def consolidate(ctx: click.Context) -> None:
-    """Process pending semantic edge consolidation."""
-    from mnemon.graph.engine import consolidate_pending
+def graph_link(ctx: click.Context) -> None:
+    """Process pending semantic edge linking."""
+    from mnemon.graph.engine import link_pending
     from mnemon.graph.semantic import build_embed_cache
     from mnemon.llm.client import get_llm_client
 
@@ -1107,18 +1107,18 @@ def consolidate(ctx: click.Context) -> None:
         llm_client = get_llm_client()
         pending_count = db._conn.execute(
             'SELECT COUNT(*) FROM insights'
-            ' WHERE consolidated_at IS NULL AND deleted_at IS NULL'
+            ' WHERE linked_at IS NULL AND deleted_at IS NULL'
             ).fetchone()[0]
         if pending_count == 0:
             _json_out({'processed': 0, 'remaining': 0})
             return
         click.echo(
-            f'Consolidating {pending_count} pending insights...',
+            f'Linking {pending_count} pending insights...',
             err=True)
         embed_cache = build_embed_cache(db)
         total = 0
         while True:
-            batch = consolidate_pending(
+            batch = link_pending(
                 db, embed_cache=embed_cache, llm_client=llm_client)
             total += batch
             if batch == 0:
@@ -1127,7 +1127,7 @@ def consolidate(ctx: click.Context) -> None:
                 f'  processed {total}/{pending_count}', err=True)
         pending = db._conn.execute(
             'SELECT COUNT(*) FROM insights'
-            ' WHERE consolidated_at IS NULL AND deleted_at IS NULL'
+            ' WHERE linked_at IS NULL AND deleted_at IS NULL'
             ).fetchone()[0]
         click.echo(f'Done. {total} processed, {pending} remaining.', err=True)
         _json_out({

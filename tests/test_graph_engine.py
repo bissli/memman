@@ -1,7 +1,7 @@
 """Tests for mnemon.graph.engine — constants hash and edge orchestration."""
 
-from mnemon.graph.engine import compute_constants_hash, consolidate_pending
-from mnemon.graph.engine import rebuild_auto_edges
+from mnemon.graph.engine import compute_constants_hash, link_pending
+from mnemon.graph.engine import relink_auto_edges
 from mnemon.store.edge import get_all_edges, insert_edge
 from mnemon.store.node import insert_insight
 from tests.conftest import make_edge, make_insight
@@ -30,20 +30,20 @@ def test_constants_hash_changes_on_proximity_limit(monkeypatch):
     assert changed != original
 
 
-def test_rebuild_does_not_block_consolidation(tmp_db):
-    """After rebuild, consolidate_pending can still process insights."""
+def test_relink_does_not_block_linking(tmp_db):
+    """After relink, link_pending can still process insights."""
     insert_insight(tmp_db, make_insight(
-        id='rbc-1', content='rebuild then consolidate test'))
+        id='rbc-1', content='relink then link test'))
     insert_insight(tmp_db, make_insight(
-        id='rbc-2', content='second insight for consolidation'))
+        id='rbc-2', content='second insight for linking'))
 
-    rebuild_auto_edges(tmp_db)
-    processed = consolidate_pending(tmp_db)
+    relink_auto_edges(tmp_db)
+    processed = link_pending(tmp_db)
     assert processed > 0
 
 
-def test_rebuild_preserves_manual_edge_metadata(tmp_db):
-    """Manual claude entity edge metadata survives rebuild with auto edges."""
+def test_relink_preserves_manual_edge_metadata(tmp_db):
+    """Manual claude entity edge metadata survives relink with auto edges."""
     ins1 = make_insight(
         id='hw-1', content='Python web framework',
         entities=['Python'])
@@ -59,7 +59,7 @@ def test_rebuild_preserves_manual_edge_metadata(tmp_db):
         metadata={'entity': 'Python', 'created_by': 'claude'})
     insert_edge(tmp_db, manual_edge)
 
-    rebuild_auto_edges(tmp_db)
+    relink_auto_edges(tmp_db)
 
     edges = get_all_edges(tmp_db)
     match = [e for e in edges

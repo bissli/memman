@@ -1,21 +1,21 @@
-"""Auto-rebuild tests for constants hash change detection and edge management."""
+"""Auto-relink tests for constants hash change detection and edge management."""
 
 import json
 from datetime import datetime, timedelta, timezone
 
 from click.testing import CliRunner
 from mnemon.cli import cli
-from mnemon.graph.engine import compute_constants_hash, rebuild_auto_edges
+from mnemon.graph.engine import compute_constants_hash, relink_auto_edges
 from mnemon.store.db import open_db
 from mnemon.store.edge import get_all_edges, insert_edge
 from mnemon.store.node import insert_insight
 from tests.conftest import make_edge, make_insight
 
 
-class TestOpenDbTriggersRebuild:
-    """open_db triggers rebuild when stored hash differs from current."""
+class TestOpenDbTriggersRelink:
+    """open_db triggers relink when stored hash differs from current."""
 
-    def test_triggers_rebuild_on_hash_mismatch(self, tmp_path):
+    def test_triggers_relink_on_hash_mismatch(self, tmp_path):
         """Seed meta with wrong hash, open DB, verify hash updated."""
         db = open_db(str(tmp_path))
         db._conn.execute(
@@ -32,10 +32,10 @@ class TestOpenDbTriggersRebuild:
         db.close()
 
 
-class TestOpenDbSkipsRebuild:
-    """open_db skips rebuild when stored hash matches current."""
+class TestOpenDbSkipsRelink:
+    """open_db skips relink when stored hash matches current."""
 
-    def test_skips_rebuild_when_hash_matches(self, tmp_path):
+    def test_skips_relink_when_hash_matches(self, tmp_path):
         """Seed meta with correct hash; open DB does not modify edges."""
         db = open_db(str(tmp_path))
         current_hash = compute_constants_hash()
@@ -60,11 +60,11 @@ class TestOpenDbSkipsRebuild:
         db.close()
 
 
-class TestRebuildPreservesManualSemanticEdges:
-    """Manual semantic edges (created_by: claude) survive rebuild."""
+class TestRelinkPreservesManualSemanticEdges:
+    """Manual semantic edges (created_by: claude) survive relink."""
 
     def test_preserves_manual_semantic(self, tmp_db):
-        """Insert claude-created semantic edge, run rebuild, verify survival."""
+        """Insert claude-created semantic edge, run relink, verify survival."""
         ins1 = make_insight(id='ms-1', content='first')
         ins2 = make_insight(id='ms-2', content='second')
         insert_insight(tmp_db, ins1)
@@ -76,7 +76,7 @@ class TestRebuildPreservesManualSemanticEdges:
             metadata={'created_by': 'claude', 'cosine': '0.5'})
         insert_edge(tmp_db, manual_edge)
 
-        rebuild_auto_edges(tmp_db)
+        relink_auto_edges(tmp_db)
 
         edges = get_all_edges(tmp_db)
         manual = [e for e in edges
@@ -85,11 +85,11 @@ class TestRebuildPreservesManualSemanticEdges:
         assert len(manual) == 1
 
 
-class TestRebuildPreservesManualEntityEdges:
-    """Manual entity edges (created_by: claude) survive rebuild."""
+class TestRelinkPreservesManualEntityEdges:
+    """Manual entity edges (created_by: claude) survive relink."""
 
     def test_preserves_manual_entity(self, tmp_db):
-        """Insert claude-created entity edge, run rebuild, verify survival."""
+        """Insert claude-created entity edge, run relink, verify survival."""
         ins1 = make_insight(id='me-1', content='first',
                             entities=['Python'])
         ins2 = make_insight(id='me-2', content='second',
@@ -103,7 +103,7 @@ class TestRebuildPreservesManualEntityEdges:
             metadata={'entity': 'Python', 'created_by': 'claude'})
         insert_edge(tmp_db, manual_edge)
 
-        rebuild_auto_edges(tmp_db)
+        relink_auto_edges(tmp_db)
 
         edges = get_all_edges(tmp_db)
         manual = [e for e in edges
@@ -112,11 +112,11 @@ class TestRebuildPreservesManualEntityEdges:
         assert len(manual) == 1
 
 
-class TestRebuildDeletesAutoEntityEdges:
-    """Auto entity edges (no created_by) are replaced during rebuild."""
+class TestRelinkDeletesAutoEntityEdges:
+    """Auto entity edges (no created_by) are replaced during relink."""
 
     def test_deletes_auto_entity(self, tmp_db):
-        """Insert auto entity edges, run rebuild, verify replaced."""
+        """Insert auto entity edges, run relink, verify replaced."""
         ins1 = make_insight(id='ae-1', content='Go uses SQLite',
                             entities=['Go', 'SQLite'])
         ins2 = make_insight(id='ae-2', content='SQLite for storage',
@@ -130,7 +130,7 @@ class TestRebuildDeletesAutoEntityEdges:
             metadata={'entity': 'SQLite'})
         insert_edge(tmp_db, auto_edge)
 
-        rebuild_auto_edges(tmp_db)
+        relink_auto_edges(tmp_db)
 
         edges = get_all_edges(tmp_db)
         entity_edges = [e for e in edges if e.edge_type == 'entity']
@@ -138,7 +138,7 @@ class TestRebuildDeletesAutoEntityEdges:
 
 
 class TestTemporalDeleteOnlySubThreshold:
-    """Only low-weight proximity edges deleted during rebuild."""
+    """Only low-weight proximity edges deleted during relink."""
 
     def test_removes_only_sub_threshold(self, tmp_db):
         """Mix of low/high weight proximity edges; only low deleted."""
@@ -169,7 +169,7 @@ class TestTemporalDeleteOnlySubThreshold:
         insert_edge(tmp_db, low_weight)
         insert_edge(tmp_db, backbone)
 
-        rebuild_auto_edges(tmp_db)
+        relink_auto_edges(tmp_db)
 
         edges = get_all_edges(tmp_db)
         temporal = [e for e in edges if e.edge_type == 'temporal']
@@ -186,7 +186,7 @@ class TestTemporalDeleteOnlySubThreshold:
         assert len(backbones) >= 1
 
 
-class TestRebuildDryRunCreationCounts:
+class TestRelinkDryRunCreationCounts:
     """Dry run returns non-zero creation counts without writing edges."""
 
     def test_dry_run_counts_entity_edges(self, tmp_db):
@@ -200,7 +200,7 @@ class TestRebuildDryRunCreationCounts:
         insert_insight(tmp_db, ins1)
         insert_insight(tmp_db, ins2)
 
-        stats = rebuild_auto_edges(tmp_db, dry_run=True)
+        stats = relink_auto_edges(tmp_db, dry_run=True)
 
         assert stats['entity_created'] > 0
         edges = get_all_edges(tmp_db)
@@ -208,7 +208,7 @@ class TestRebuildDryRunCreationCounts:
         assert len(entity_edges) == 0
 
 
-class TestGraphRebuildCliDryRun:
+class TestGraphRelinkCliDryRun:
     """CLI dry run shows stats without modifying DB."""
 
     def test_dry_run(self, tmp_path, monkeypatch):
@@ -233,7 +233,7 @@ class TestGraphRebuildCliDryRun:
         runner = CliRunner()
         result = runner.invoke(cli, [
             '--data-dir', data_dir,
-            'graph', 'rebuild', '--dry-run',
+            'graph', 'relink', '--dry-run',
             ])
 
         assert 'entity_created' in result.output
@@ -246,11 +246,11 @@ class TestGraphRebuildCliDryRun:
         db.close()
 
 
-class TestGraphRebuildCliLive:
-    """CLI live rebuild modifies DB and logs to oplog."""
+class TestGraphRelinkCliLive:
+    """CLI live relink modifies DB and logs to oplog."""
 
-    def test_live_rebuild(self, tmp_path, monkeypatch):
-        """Verify rebuild creates oplog entry with accurate edge counts."""
+    def test_live_relink(self, tmp_path, monkeypatch):
+        """Verify relink creates oplog entry with accurate edge counts."""
         monkeypatch.delenv('MNEMON_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
@@ -266,17 +266,17 @@ class TestGraphRebuildCliLive:
         runner = CliRunner()
         result = runner.invoke(cli, [
             '--data-dir', data_dir,
-            'graph', 'rebuild',
+            'graph', 'relink',
             ])
 
         db = open_db(str(store_path))
         row = db._conn.execute(
             "SELECT COUNT(*) FROM oplog"
-            " WHERE operation = 'rebuild'").fetchone()
+            " WHERE operation = 'relink'").fetchone()
         assert row[0] >= 1
 
         oplog_row = db._conn.execute(
-            "SELECT detail FROM oplog WHERE operation = 'rebuild'"
+            "SELECT detail FROM oplog WHERE operation = 'relink'"
             " ORDER BY id DESC LIMIT 1").fetchone()
         logged_stats = json.loads(oplog_row[0])
 
@@ -289,17 +289,17 @@ class TestGraphRebuildCliLive:
         db.close()
 
 
-class TestRebuildCleansStoredStopwords:
-    """Rebuild strips stopword entities from stored insight entity lists."""
+class TestRelinkCleansStoredStopwords:
+    """Relink strips stopword entities from stored insight entity lists."""
 
     def test_cleans_stored_stopwords(self, tmp_db):
-        """Insight with stopword 'e.g' in entities has it removed after rebuild."""
+        """Insight with stopword 'e.g' in entities has it removed after relink."""
         ins = make_insight(
             id='csw-1', content='e.g Python example',
             entities=['e.g', 'Python'])
         insert_insight(tmp_db, ins)
 
-        rebuild_auto_edges(tmp_db)
+        relink_auto_edges(tmp_db)
 
         row = tmp_db._conn.execute(
             "SELECT entities FROM insights WHERE id = 'csw-1'"

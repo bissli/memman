@@ -110,17 +110,17 @@ write it to the project CLAUDE.md under a `## Directives` section instead of cal
 (CLAUDE.md is loaded every turn), not graph connectivity. The user prunes CLAUDE.md
 periodically — no confirmation needed.
 
-### Semantic consolidation — deferred background pass
+### Semantic linking — deferred background pass
 
 Semantic edge detection (embedding-based similarity) runs asynchronously. When
-`remember` returns `consolidation_pending: true`, semantic edges for that memory
+`remember` returns `link_pending: true`, semantic edges for that memory
 have been queued but not yet written. To process the queue immediately, run:
 
 ```bash
-mnemon consolidate
+mnemon graph link
 ```
 
-This is optional — consolidation also runs automatically in the background.
+This is optional — linking also runs automatically in the background.
 `edges_created` in the `remember` response reflects only the synchronous edges
 created inline (`temporal`, `entity`, `causal`).
 

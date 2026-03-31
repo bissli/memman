@@ -391,7 +391,7 @@ fi
 banner "Milestone 5: Semantic Edges (Claude-in-the-loop)"
 # ══════════════════════════════════════════════════════════════════════
 
-step "remember — deferred consolidation (no semantic in edges_created)"
+step "remember — deferred linking (no semantic in edges_created)"
 TESTDIR5="$TESTDATA/m5"
 mkdir -p "$TESTDIR5"
 OUT=$($M --data-dir "$TESTDIR5" remember --no-diff "Go is great for building CLI tools" --cat fact --imp 3)
@@ -400,12 +400,12 @@ ID_S1=$(extract_id "$OUT")
 
 sleep 1
 
-step "remember — consolidation_pending when semantic edges deferred"
+step "remember — link_pending when semantic edges deferred"
 OUT=$($M --data-dir "$TESTDIR5" remember --no-diff "Building CLI tools in Go is efficient" --cat fact --imp 3)
 ID_S2=$(extract_id "$OUT")
 
-step "consolidate — processes pending insights"
-OUT=$($M --data-dir "$TESTDIR5" consolidate)
+step "graph link — processes pending insights"
+OUT=$($M --data-dir "$TESTDIR5" graph link)
 show_json "$OUT" 5
 assert_jq_gte "processed >= 1" "$OUT" '.processed' '1'
 

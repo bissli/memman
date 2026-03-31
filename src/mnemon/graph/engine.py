@@ -36,7 +36,7 @@ def _prepare_entities(insight: Insight) -> None:
 def fast_edges(db: 'DB', insight: Insight) -> dict[str, int]:
     """Run cheap edge generators only (temporal + entity + causal).
 
-    Semantic edges are deferred to consolidate_pending().
+    Semantic edges are deferred to link_pending().
     """
     _prepare_entities(insight)
 
@@ -47,23 +47,23 @@ def fast_edges(db: 'DB', insight: Insight) -> dict[str, int]:
         }
 
 
-MAX_CONSOLIDATION_BATCH = 20
+MAX_LINK_BATCH = 20
 
 
-def consolidate_pending(
+def link_pending(
         db: 'DB',
         embed_cache: dict[str, list[float]] | None = None,
         llm_client: object | None = None,
-        max_batch: int = MAX_CONSOLIDATION_BATCH,
+        max_batch: int = MAX_LINK_BATCH,
         ) -> int:
-    """Process insights where consolidated_at IS NULL.
+    """Process insights where linked_at IS NULL.
 
     Creates semantic edges (and optionally LLM causal edges) for pending
     insights. Returns the number of insights processed.
     """
     rows = db._conn.execute(
         'SELECT id FROM insights'
-        ' WHERE consolidated_at IS NULL AND deleted_at IS NULL'
+        ' WHERE linked_at IS NULL AND deleted_at IS NULL'
         ' ORDER BY created_at ASC'
         f' LIMIT {max_batch}'
         ).fetchall()
@@ -89,11 +89,11 @@ def consolidate_pending(
             create_llm_causal_edges(db, insight, llm_client)
 
         db._conn.execute(
-            'UPDATE insights SET consolidated_at = ? WHERE id = ?',
+            'UPDATE insights SET linked_at = ? WHERE id = ?',
             (now, insight_id))
         processed += 1
         logger.debug(
-            f'Consolidated {insight_id}: {semantic_count} semantic edges')
+            f'Linked {insight_id}: {semantic_count} semantic edges')
 
     return processed
 
@@ -116,7 +116,7 @@ def compute_constants_hash() -> str:
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
-def rebuild_auto_edges(
+def relink_auto_edges(
         db: 'DB', dry_run: bool = False) -> dict[str, int]:
     """Delete auto-created edges and re-create semantic/entity/causal edges."""
     from mnemon.store.oplog import log_op
@@ -246,10 +246,10 @@ def rebuild_auto_edges(
                     created_at=parse_timestamp(row[5])))
 
         db._conn.execute(
-            'UPDATE insights SET consolidated_at = NULL'
+            'UPDATE insights SET linked_at = NULL'
             ' WHERE deleted_at IS NULL')
 
-        log_op(db, 'rebuild', '', json.dumps(stats))
+        log_op(db, 'relink', '', json.dumps(stats))
 
     db.in_transaction(tx_body)
     return stats

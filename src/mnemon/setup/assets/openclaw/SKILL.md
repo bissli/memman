@@ -72,7 +72,7 @@ mnemon setup --eject --target openclaw --yes
 
 1. **Remember**: `mnemon remember "<fact>" --cat <cat> --imp <1-5> --entities "e1,e2" --source agent`
    - Diff is built-in: duplicates skipped, conflicts auto-replaced.
-   - Output includes `action` (added/updated/skipped/replaced), `causal_candidates`, and `consolidation_pending: true` when semantic edges are deferred.
+   - Output includes `action` (added/updated/skipped/replaced), `causal_candidates`, and `link_pending: true` when semantic edges are deferred.
    - **Replace**: `mnemon replace <id> "<new content>"` — deterministic replacement by ID. Inherits metadata from original unless overridden. Carries `access_count` forward.
 2. **Link** (evaluate candidates from step 1 — use judgment, not mechanical rules):
    - Review `causal_candidates`: does a genuine cause-effect relationship exist? `causal_signal` is regex-based and prone to false positives — only link if the memories are truly causally related.
@@ -92,7 +92,7 @@ mnemon forget <id>
 mnemon related <id> --edge causal
 mnemon gc --threshold 0.4
 mnemon gc --keep <id>
-mnemon consolidate
+mnemon graph link
 mnemon status
 mnemon log [--since 7d] [--group-by operation] [--stats]
 mnemon store list

@@ -54,7 +54,7 @@ BEGIN TRANSACTION
      ├── CreateTemporalEdge    → backbone + 4h proximity
      ├── CreateEntityEdges     → regex + dictionary extraction → co-occurrence links
      └── CreateCausalEdges     → keywords + token overlap → auto causal edges
-  ③b Deferred: consolidate_pending (semantic edges deferred to batch processing)
+  ③b Deferred: link_pending (semantic edges deferred to batch processing)
   ④ RefreshEffectiveImportance → update EI decay values
   ⑤ AutoPrune                 → soft-delete lowest EI when total > 1000
 COMMIT
