@@ -50,7 +50,8 @@ def detect_intent(query: str) -> str:
     if (when_score > why_score and when_score > entity_score
             and when_score > 0):
         return 'WHEN'
-    if entity_score > 0:
+    if (entity_score > why_score and entity_score > when_score
+            and entity_score > 0):
         return 'ENTITY'
     return 'GENERAL'
 

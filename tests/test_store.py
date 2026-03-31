@@ -510,7 +510,7 @@ class TestAutoPrune:
         insert_insight(tmp_db, make_insight(
             id='fresh-1', content='recently accessed', importance=2))
 
-        for _ in range(5):
+        for _ in range(2):
             increment_access_count(tmp_db, 'fresh-1')
 
         pruned = auto_prune(tmp_db, 1)

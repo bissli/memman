@@ -265,6 +265,7 @@ def auto_prune(db: 'DB', max_insights: int,
         f'SELECT id FROM insights'
         f' WHERE deleted_at IS NULL AND importance < 4'
         f' AND access_count < 3 {exclude_clause}'
+        f' ORDER BY effective_importance ASC'
         f' LIMIT {PRUNE_BATCH_SIZE}',
         tuple(args)).fetchall()
     for (cid,) in candidate_rows:

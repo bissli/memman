@@ -35,11 +35,12 @@ def classify_suggestion(
                 or (pat_b.search(new_lower) and pat_a.search(exist_lower))):
             return 'CONFLICT'
 
+    if similarity < 0.55:
+        return 'ADD'
+
     if _NEGATION_RE.search(new_lower) or _NEGATION_RE.search(exist_lower):
         return 'CONFLICT'
 
-    if similarity < 0.55:
-        return 'ADD'
     if similarity > 0.9:
         return 'DUPLICATE'
     return 'UPDATE'

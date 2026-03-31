@@ -87,3 +87,8 @@ def test_get_weights_unknown_fallback():
     general = get_weights('GENERAL')
     for k, v in general.items():
         assert w[k] == v
+
+
+def test_detect_intent_tie_returns_general():
+    """Tied WHY and ENTITY scores fall through to GENERAL."""
+    assert detect_intent('describe why') == 'GENERAL'

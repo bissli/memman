@@ -419,9 +419,14 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
             resp['results'] = [
                 r for r in resp['results']
                 if r['insight'].category == cat][:limit]
+        if source:
+            resp['results'] = [
+                r for r in resp['results']
+                if r['insight'].source == source]
 
         for r in resp['results']:
             increment_access_count(db, r['insight'].id)
+            r['insight'].access_count += 1
 
         hits = [{'id': r['insight'].id[:8], 'via': r.get('via', ''),
                  'score': round(r['score'], 3),
@@ -620,6 +625,10 @@ def link(ctx: click.Context, source_id: str, target_id: str,
                 'metadata must be a JSON object, not '
                 + type(metadata).__name__)
     metadata['created_by'] = 'claude'
+
+    if source_id == target_id:
+        raise click.ClickException(
+            'cannot link an insight to itself')
 
     now = datetime.now(timezone.utc)
     db = _open_db(ctx)

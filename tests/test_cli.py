@@ -419,3 +419,27 @@ def test_link_meta_non_dict_fails(runner):
         '--meta', '[1, 2]'])
     assert result.exit_code != 0
     assert 'object' in result.output.lower() or 'dict' in result.output.lower()
+
+
+def test_link_self_edge_rejected(runner):
+    """Linking an insight to itself is rejected."""
+    r1 = invoke(runner, ['remember', 'self-link test', '--no-diff'])
+    id1 = json.loads(r1.output)['id']
+
+    result = invoke(runner, ['link', id1, id1, '--type', 'semantic'])
+    assert result.exit_code != 0
+    assert 'itself' in result.output.lower()
+
+
+def test_recall_source_filter_smart(runner):
+    """Smart recall respects --source filter."""
+    invoke(runner, ['remember', 'Go uses SQLite for storage',
+                    '--no-diff', '--source', 'agent'])
+    invoke(runner, ['remember', 'Python uses PostgreSQL for storage',
+                    '--no-diff', '--source', 'human'])
+
+    result = invoke(runner, ['recall', 'uses storage', '--source', 'agent'])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    for r in data['results']:
+        assert r['insight']['source'] == 'agent'

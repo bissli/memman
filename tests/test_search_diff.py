@@ -241,3 +241,17 @@ def test_classify_antonym_opposite_direction():
     result = classify_suggestion(
         0.7, 'data is immutable', 'data is mutable')
     assert result == 'CONFLICT'
+
+
+def test_classify_negation_low_similarity_is_add():
+    """Negation with low similarity returns ADD, not false CONFLICT."""
+    result = classify_suggestion(
+        0.2, 'this is not deprecated', 'Go uses SQLite')
+    assert result == 'ADD'
+
+
+def test_classify_negation_high_similarity_is_conflict():
+    """Negation with high similarity returns CONFLICT."""
+    result = classify_suggestion(
+        0.7, 'do not use Redis', 'use Redis for caching')
+    assert result == 'CONFLICT'
