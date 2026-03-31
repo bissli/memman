@@ -416,13 +416,14 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
 
         query_entities = extract_entities(keyword_str)
 
+        fetch_limit = limit * 3 if cat else limit
         resp = intent_aware_recall(
             db, keyword_str, query_vec, query_entities,
-            limit, intent_override)
+            fetch_limit, intent_override)
         if cat:
             resp['results'] = [
                 r for r in resp['results']
-                if r['insight'].category == cat]
+                if r['insight'].category == cat][:limit]
 
         for r in resp['results']:
             increment_access_count(db, r['insight'].id)
@@ -502,8 +503,11 @@ def forget(ctx: click.Context, id: str) -> None:
 
     db = _open_db(ctx)
     try:
-        soft_delete_insight(db, id)
-        log_op(db, 'forget', id, '')
+        def do_forget() -> None:
+            soft_delete_insight(db, id)
+            log_op(db, 'forget', id, '')
+
+        db.in_transaction(do_forget)
         _json_out({
             'id': id,
             'status': 'deleted',
@@ -1176,8 +1180,8 @@ def _render_dot(insights: list[Insight],
 
 
 def _js_str(s: str) -> str:
-    """Return a JSON-encoded string for JS embedding."""
-    return json.dumps(s)
+    """Return a JSON-encoded string safe for script embedding."""
+    return json.dumps(s).replace('</', '<\\/')
 
 
 def _render_html(insights: list[Insight], edges: list[Edge]) -> str:

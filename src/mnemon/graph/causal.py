@@ -91,8 +91,9 @@ def create_causal_edges(
         source_id = prev.id
         target_id = insight.id
         if not new_has_signal and prev_has_signal:
-            source_id = insight.id
-            target_id = prev.id
+            if CAUSES_PATTERN.search(prev.content):
+                source_id = insight.id
+                target_id = prev.id
 
         sub_type = suggest_sub_type(insight.content + ' ' + prev.content)
 

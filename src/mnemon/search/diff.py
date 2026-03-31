@@ -1,5 +1,7 @@
 """Duplicate/conflict detection for new content."""
 
+import re
+
 from mnemon.embed.vector import cosine_similarity
 from mnemon.model import Insight
 from mnemon.search.antonyms import ANTONYM_PAIRS
@@ -10,6 +12,16 @@ NEGATION_WORDS = [
     'switched from', 'instead of', 'rather than', 'replaced', 'deprecated',
     ]
 
+_NEGATION_RE = re.compile(
+    '|'.join(r'\b' + re.escape(w) + r'\b' for w in NEGATION_WORDS),
+    re.IGNORECASE)
+
+_ANTONYM_PATTERNS: list[tuple[re.Pattern, re.Pattern]] = [
+    (re.compile(r'\b' + re.escape(a) + r'\b', re.IGNORECASE),
+     re.compile(r'\b' + re.escape(b) + r'\b', re.IGNORECASE))
+    for a, b in ANTONYM_PAIRS
+    ]
+
 
 def classify_suggestion(
         similarity: float, new_text: str,
@@ -18,14 +30,13 @@ def classify_suggestion(
     new_lower = new_text.lower()
     exist_lower = existing_text.lower()
 
-    for term_a, term_b in ANTONYM_PAIRS:
-        if ((term_a in new_lower and term_b in exist_lower)
-                or (term_b in new_lower and term_a in exist_lower)):
+    for pat_a, pat_b in _ANTONYM_PATTERNS:
+        if ((pat_a.search(new_lower) and pat_b.search(exist_lower))
+                or (pat_b.search(new_lower) and pat_a.search(exist_lower))):
             return 'CONFLICT'
 
-    for neg in NEGATION_WORDS:
-        if neg in new_lower or neg in exist_lower:
-            return 'CONFLICT'
+    if _NEGATION_RE.search(new_lower) or _NEGATION_RE.search(exist_lower):
+        return 'CONFLICT'
 
     if similarity < 0.55:
         return 'ADD'

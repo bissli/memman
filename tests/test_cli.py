@@ -99,6 +99,24 @@ def test_forget_basic(runner):
     assert fdata['status'] == 'deleted'
 
 
+def test_forget_writes_oplog(runner):
+    """Forget command writes an oplog entry atomically."""
+    result = invoke(runner, ['remember', 'oplog test content', '--no-diff'])
+    data = json.loads(result.output)
+    iid = data['id']
+    invoke(runner, ['forget', iid])
+    result = invoke(runner, ['log', '--stats'])
+    assert result.exit_code == 0
+    log_data = json.loads(result.output)
+    assert 'forget' in log_data['operation_counts']
+
+
+def test_forget_nonexistent_fails(runner):
+    """Forget with nonexistent ID returns error."""
+    result = invoke(runner, ['forget', 'nonexistent-id-12345'])
+    assert result.exit_code != 0
+
+
 def test_store_list(runner):
     """Store list shows stores."""
     result = invoke(runner, ['store', 'list'])
@@ -166,6 +184,21 @@ def test_viz_dot(runner):
     result = invoke(runner, ['viz'])
     assert result.exit_code == 0
     assert 'digraph' in result.output
+
+
+def test_js_str_escapes_script_close():
+    """_js_str prevents XSS via </script> in content."""
+    from mnemon.cli import _js_str
+    result = _js_str('</script><script>alert(1)</script>')
+    assert '</script>' not in result
+    assert '<\\/' in result
+
+
+def test_js_str_normal_string():
+    """_js_str handles regular strings correctly."""
+    from mnemon.cli import _js_str
+    result = _js_str('hello world')
+    assert result == '"hello world"'
 
 
 def test_remember_quality_warnings(runner):

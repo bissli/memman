@@ -7,11 +7,13 @@ from datetime import datetime, timezone
 
 from mnemon.graph.causal import CAUSAL_LOOKBACK, create_causal_edges
 from mnemon.graph.entity import ACRONYM_STOPWORDS, ENTITY_PATTERNS
-from mnemon.graph.entity import ENTITY_STOPWORDS, TECH_DICTIONARY
+from mnemon.graph.entity import ENTITY_STOPWORDS, MAX_ENTITY_LINKS
+from mnemon.graph.entity import MAX_TOTAL_ENTITY_EDGES, TECH_DICTIONARY
 from mnemon.graph.entity import create_entity_edges, extract_entities
 from mnemon.graph.entity import merge_entities
 from mnemon.graph.semantic import AUTO_SEMANTIC_THRESHOLD, build_embed_cache
 from mnemon.graph.semantic import create_semantic_edges
+from mnemon.graph.temporal import MAX_PROXIMITY_EDGES
 from mnemon.graph.temporal import MIN_PROXIMITY_WEIGHT, TEMPORAL_WINDOW_HOURS
 from mnemon.graph.temporal import create_temporal_edge
 from mnemon.model import Insight, format_timestamp
@@ -107,6 +109,9 @@ def compute_constants_hash() -> str:
         'causal_lookback': CAUSAL_LOOKBACK,
         'min_proximity_weight': MIN_PROXIMITY_WEIGHT,
         'temporal_window_hours': TEMPORAL_WINDOW_HOURS,
+        'max_entity_links': MAX_ENTITY_LINKS,
+        'max_total_entity_edges': MAX_TOTAL_ENTITY_EDGES,
+        'max_proximity_edges': MAX_PROXIMITY_EDGES,
         }, sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 

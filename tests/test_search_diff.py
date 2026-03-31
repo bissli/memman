@@ -185,3 +185,59 @@ def test_diff_same_priority_prefers_higher_similarity():
         for m in result['matches']:
             if m['suggestion'] == best['suggestion']:
                 assert m['similarity'] <= best['similarity']
+
+
+def test_classify_no_false_conflict_annotation():
+    """Words containing 'not' as substring must not trigger negation."""
+    result = classify_suggestion(
+        0.7, 'add annotation support', 'add documentation support')
+    assert result == 'UPDATE'
+
+
+def test_classify_no_false_conflict_notable():
+    """'notable' must not match 'not' negation word."""
+    result = classify_suggestion(
+        0.7, 'notable performance gain', 'performance improvement')
+    assert result == 'UPDATE'
+
+
+def test_classify_real_negation_still_works():
+    """Actual 'not' as a word still triggers CONFLICT."""
+    result = classify_suggestion(
+        0.7, 'do not use Redis', 'use Redis for caching')
+    assert result == 'CONFLICT'
+
+
+def test_classify_negation_in_existing_only():
+    """Negation in existing text also triggers CONFLICT."""
+    result = classify_suggestion(
+        0.7, 'recommended approach', 'not recommended for production')
+    assert result == 'CONFLICT'
+
+
+def test_classify_no_false_conflict_same_antonym():
+    """Both texts with same antonym term must not trigger CONFLICT."""
+    result = classify_suggestion(
+        0.7, 'the API is insecure', 'insecure by default')
+    assert result == 'UPDATE'
+
+
+def test_classify_no_false_conflict_substring_valid():
+    """Both texts with 'invalid' must not trigger CONFLICT."""
+    result = classify_suggestion(
+        0.7, 'invalid input handling', 'invalid data rejected')
+    assert result == 'UPDATE'
+
+
+def test_classify_antonym_real_pair_still_works():
+    """Actual antonym pair still triggers CONFLICT."""
+    result = classify_suggestion(
+        0.7, 'data is mutable', 'data is immutable')
+    assert result == 'CONFLICT'
+
+
+def test_classify_antonym_opposite_direction():
+    """Antonym detection is bidirectional."""
+    result = classify_suggestion(
+        0.7, 'data is immutable', 'data is mutable')
+    assert result == 'CONFLICT'
