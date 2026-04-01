@@ -1,8 +1,10 @@
-"""LLM HTTP client for causal inference."""
+"""LLM HTTP client and JSON response parsing."""
 
+import json
 import logging
 import os
 
+import click
 import httpx
 
 logger = logging.getLogger('mnemon')
@@ -12,6 +14,7 @@ LLM_API_KEY_VAR = 'MNEMON_LLM_API_KEY'
 LLM_MODEL_VAR = 'MNEMON_LLM_MODEL'
 DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
 DEFAULT_ENDPOINT = 'https://api.anthropic.com'
+ENRICHMENT_TIMEOUT = 10.0
 
 
 class LLMClient:
@@ -23,7 +26,7 @@ class LLMClient:
             api_key: str,
             model: str = DEFAULT_MODEL,
             max_tokens: int = 1024,
-            timeout: float = 10.0,
+            timeout: float = ENRICHMENT_TIMEOUT,
             ) -> None:
         """Initialize with endpoint, API key, and model name."""
         self.endpoint = endpoint.rstrip('/')
@@ -55,11 +58,50 @@ class LLMClient:
         return data['content'][0]['text']
 
 
-def get_llm_client() -> LLMClient | None:
-    """Return an LLMClient from env vars, or None if not configured."""
+def strip_code_fences(raw: str) -> str:
+    """Strip markdown code fences from LLM output."""
+    text = raw.strip()
+    if text.startswith('```'):
+        lines = text.split('\n')
+        text = '\n'.join(lines[1:])
+        text = text.removesuffix('```').strip()
+    return text
+
+
+def parse_json_response(raw: str) -> dict | None:
+    """Parse JSON dict from LLM response, handling code blocks."""
+    for text in (raw, strip_code_fences(raw)):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return None
+
+
+def parse_json_list_response(raw: str) -> list | None:
+    """Parse JSON list from LLM response, handling code blocks."""
+    for text in (raw, strip_code_fences(raw)):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return None
+
+
+def get_llm_client() -> LLMClient:
+    """Return an LLMClient from env vars.
+
+    Raises click.ClickException if no API key is configured.
+    """
     endpoint = os.environ.get(LLM_ENDPOINT_VAR, DEFAULT_ENDPOINT)
-    api_key = os.environ.get(LLM_API_KEY_VAR) or os.environ.get('ANTHROPIC_API_KEY')
+    api_key = (os.environ.get(LLM_API_KEY_VAR)
+               or os.environ.get('ANTHROPIC_API_KEY'))
     if not api_key:
-        return None
+        raise click.ClickException(
+            'ANTHROPIC_API_KEY or MNEMON_LLM_API_KEY must be set')
     model = os.environ.get(LLM_MODEL_VAR, DEFAULT_MODEL)
     return LLMClient(endpoint, api_key, model)

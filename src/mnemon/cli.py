@@ -144,11 +144,11 @@ def cli(ctx: click.Context, data_dir: str | None, store_name: str, readonly: boo
 @click.option('--tags', default='', help='Comma-separated tags')
 @click.option('--source', default='user', help='Source')
 @click.option('--entities', default='', help='Comma-separated entities')
-@click.option('--no-diff', is_flag=True, default=False, help='Skip duplicate detection')
+@click.option('--no-reconcile', is_flag=True, default=False, help='Skip LLM reconciliation')
 @click.pass_context
 def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
              imp: int, tags: str, source: str, entities: str,
-             no_diff: bool) -> None:
+             no_reconcile: bool) -> None:
     """Store a new insight."""
     content_str = ' '.join(content)
     content_bytes = len(content_str.encode('utf-8'))
@@ -179,11 +179,18 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     store_flag = ctx.obj['store']
     name = _resolve_store_name(data_dir_val, store_flag)
 
+    cat_explicit = (ctx.get_parameter_source('cat')
+                    == click.core.ParameterSource.COMMANDLINE)
+    imp_explicit = (ctx.get_parameter_source('imp')
+                    == click.core.ParameterSource.COMMANDLINE)
+
     db = _open_db(ctx)
     try:
-        _remember_impl(db, insight, content_str, no_diff,
+        _remember_impl(db, insight, content_str, no_reconcile,
                        data_dir=data_dir_val,
-                       store_name=name)
+                       store_name=name,
+                       cat_explicit=cat_explicit,
+                       imp_explicit=imp_explicit)
     finally:
         db.close()
 
@@ -193,11 +200,6 @@ def _trigger_background_link(
     """Tier 3: fire-and-forget subprocess for LLM enrichment."""
     import subprocess
     import sys
-
-    from mnemon.llm.client import get_llm_client
-
-    if get_llm_client() is None:
-        return
 
     cmd = [sys.executable, '-m', 'mnemon', '--store', store_name,
            'graph', 'link']
@@ -215,17 +217,26 @@ def _trigger_background_link(
 
 
 def _remember_impl(db: 'DB', insight: Insight, content: str,
-                   no_diff: bool, replaced_id: str = '',
+                   no_reconcile: bool, replaced_id: str = '',
                    data_dir: str = '',
-                   store_name: str = '') -> None:
-    """Core remember implementation — two-tier write path."""
+                   store_name: str = '',
+                   cat_explicit: bool = False,
+                   imp_explicit: bool = False) -> None:
+    """Core remember implementation — LLM-first two-tier write path.
+
+    Tier 1 (sync): quality check, embed, LLM fact extraction,
+    LLM reconciliation, insert, fast edges, EI, prune.
+    Tier 2 (async): background subprocess for LLM enrichment.
+    """
     from mnemon.embed import get_client
-    from mnemon.embed.vector import deserialize_vector, serialize_vector
+    from mnemon.embed.vector import cosine_similarity, deserialize_vector
+    from mnemon.embed.vector import serialize_vector
     from mnemon.graph.causal import find_causal_candidates
     from mnemon.graph.engine import fast_edges
-    from mnemon.graph.entity import extract_entities, merge_entities
     from mnemon.graph.semantic import create_semantic_edges
-    from mnemon.search.diff import diff as run_diff
+    from mnemon.llm.client import get_llm_client
+    from mnemon.llm.extract import extract_facts, reconcile_memories
+    from mnemon.search.keyword import keyword_search
     from mnemon.search.quality import check_content_quality
     from mnemon.store.node import MAX_INSIGHTS, auto_prune
     from mnemon.store.node import get_all_active_insights, get_all_embeddings
@@ -246,120 +257,220 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
             })
         return
 
+    llm_client = get_llm_client()
     ec = get_client()
-    embedding_blob = None
-    embedding_vec = None
-    embed_ok = ec is not None and ec.available()
-    if embed_ok:
-        try:
-            embedding_vec = ec.embed(content)
-            embedding_blob = serialize_vector(embedding_vec)
-        except Exception:
-            embed_ok = False
+    llm_calls = 0
 
-    embed_cache: dict[str, list[float]] | None = None
-    if embed_ok:
-        db_embeds = get_all_embeddings(db)
-        if db_embeds:
-            embed_cache = {}
-            for eid, _content, blob in db_embeds:
-                v = deserialize_vector(blob)
-                if v is not None:
-                    embed_cache[eid] = v
+    facts = extract_facts(llm_client, content)
+    llm_calls += 1
 
-    diff_action = 'added'
-    diff_suggestion = 'ADD'
-
-    if replaced_id:
-        diff_action = 'replaced'
-        diff_suggestion = 'REPLACE'
-    elif not no_diff:
-        all_insights = get_all_active_insights(db)
-        existing_embed = None
-        if embed_cache:
-            existing_embed = list(embed_cache.items())
-        result = run_diff(
-            all_insights, content, limit=5,
-            new_embedding=embedding_vec,
-            existing_embed=existing_embed)
-        diff_suggestion = result['suggestion']
-
-        best_idx = result.get('best_match_idx', 0)
-        if diff_suggestion == 'DUPLICATE':
-            diff_action = 'skipped'
-            if result['matches']:
-                replaced_id = result['matches'][best_idx]['id']
-        elif diff_suggestion in {'CONFLICT', 'UPDATE'}:
-            diff_action = 'updated'
-            if result['matches']:
-                replaced_id = result['matches'][best_idx]['id']
-        else:
-            diff_action = 'added'
-
-    if diff_action == 'skipped':
-        log_op(db, 'diff-skip', insight.id,
-               f'duplicate of {replaced_id}')
-        output = {
+    if not facts:
+        _json_out({
             'id': insight.id,
             'content': content,
             'action': 'skipped',
-            'diff_suggestion': diff_suggestion,
-            'replaced_id': replaced_id,
+            'skip_reason': 'trivial content',
             'quality_warnings': quality_warnings,
-            }
-        _json_out(output)
+            'llm_calls': llm_calls,
+            })
         return
 
-    embedded = False
+    embed_cache: dict[str, list[float]] = {}
+    db_embeds = get_all_embeddings(db)
+    if db_embeds:
+        for eid, _content, blob in db_embeds:
+            v = deserialize_vector(blob)
+            if v is not None:
+                embed_cache[eid] = v
 
-    extracted = extract_entities(content)
-    insight.entities = merge_entities(insight.entities, extracted)
+    all_insights = get_all_active_insights(db)
+    fact_results = []
+    deleted_ids: set[str] = set()
 
-    def tx_body() -> None:
-        nonlocal embedded
+    for fact in facts:
+        fact_text = fact['text']
+        fact_category = (insight.category if cat_explicit
+                         else fact.get('category', insight.category))
+        fact_importance = (insight.importance if imp_explicit
+                           else fact.get('importance', insight.importance))
+        fact_entities = fact.get('entities', [])
 
-        if diff_action in {'updated', 'replaced'} and replaced_id:
-            op_name = 'replace' if diff_action == 'replaced' else 'diff-replace'
-            soft_delete_insight(db, replaced_id)
-            log_op(db, op_name, replaced_id,
-                   f'replaced by {insight.id}')
-
-        insert_insight(db, insight)
-
-        if embedding_blob is not None:
-            update_embedding(db, insight.id, embedding_blob)
-            embedded = True
-
-        if insight.entities:
-            update_entities(db, insight.id, insight.entities)
-
-        log_op(db, 'remember', insight.id, insight.content)
-
-    db.in_transaction(tx_body)
-
-    if embed_cache is not None and embedding_vec is not None:
-        embed_cache[insight.id] = embedding_vec
-
-    edge_stats = {'temporal': 0, 'entity': 0, 'causal': 0}
-    ei = 0.0
-    pruned = 0
-
-    def edge_tx() -> None:
-        nonlocal edge_stats, ei, pruned
-        edge_stats = fast_edges(db, insight)
-        create_semantic_edges(db, insight, embed_cache)
+        fact_vec = None
+        fact_blob = None
         try:
-            ei = refresh_effective_importance(db, insight.id)
+            fact_vec = ec.embed(fact_text)
+            fact_blob = serialize_vector(fact_vec)
         except Exception:
-            ei = 0.0
-        try:
-            pruned = auto_prune(db, MAX_INSIGHTS, [insight.id])
-        except Exception:
-            pruned = 0
+            pass
 
-    db.in_transaction(edge_tx)
+        action = 'ADD'
+        target_id = None
+        merged_text = None
 
-    causal_candidates = find_causal_candidates(db, insight)
+        if replaced_id:
+            action = 'REPLACE'
+            target_id = replaced_id
+            replaced_id = None
+        elif not no_reconcile:
+            keyword_hits = keyword_search(
+                all_insights, fact_text, limit=5)
+            similar: list[tuple[str, str]] = []
+            seen_ids: set[str] = set()
+
+            for hit_ins, _score in keyword_hits:
+                if hit_ins.id not in seen_ids:
+                    similar.append((hit_ins.id, hit_ins.content))
+                    seen_ids.add(hit_ins.id)
+
+            if fact_vec is not None:
+                for eid, evec in embed_cache.items():
+                    if eid in seen_ids:
+                        continue
+                    sim = cosine_similarity(fact_vec, evec)
+                    if sim >= 0.5:
+                        ins = next(
+                            (i for i in all_insights if i.id == eid),
+                            None)
+                        if ins is not None:
+                            similar.append((ins.id, ins.content))
+                            seen_ids.add(eid)
+                    if len(similar) >= 10:
+                        break
+
+            if similar:
+                recon = reconcile_memories(
+                    llm_client, [fact], similar)
+                llm_calls += 1
+                if recon:
+                    r = recon[0]
+                    action = r['action']
+                    target_id = r.get('target_id')
+                    merged_text = r.get('merged_text')
+
+        fact_id = str(uuid.uuid4())
+        effective_text = merged_text or fact_text
+
+        fact_insight = Insight(
+            id=fact_id,
+            content=effective_text,
+            category=fact_category,
+            importance=fact_importance,
+            tags=list(insight.tags),
+            entities=fact_entities + list(insight.entities),
+            source=insight.source,
+            access_count=insight.access_count,
+            created_at=insight.created_at,
+            updated_at=insight.updated_at)
+
+        embedded = False
+        embed_vec = fact_vec
+        embed_blob = fact_blob
+        if merged_text:
+            try:
+                embed_vec = ec.embed(effective_text)
+                embed_blob = serialize_vector(embed_vec)
+            except Exception:
+                pass
+
+        if action == 'NONE':
+            fact_results.append({
+                'id': fact_id,
+                'content': effective_text,
+                'action': 'skipped',
+                'reason': 'already captured',
+                })
+            continue
+
+        if action == 'DELETE' and target_id:
+            if target_id in deleted_ids:
+                action = 'ADD'
+            else:
+                deleted_ids.add(target_id)
+
+                def delete_tx(tid: str = target_id) -> None:
+                    soft_delete_insight(db, tid)
+                    log_op(db, 'reconcile-delete', tid,
+                           f'contradicted by: {fact_text[:200]}')
+                db.in_transaction(delete_tx)
+            fact_results.append({
+                'id': fact_id,
+                'content': effective_text,
+                'action': 'deleted',
+                'target_id': target_id,
+                })
+            continue
+
+        edge_stats = {'temporal': 0, 'entity': 0, 'causal': 0}
+        ei = 0.0
+        pruned = 0
+
+        def insert_tx(
+                fi: Insight = fact_insight,
+                eb: bytes | None = embed_blob,
+                act: str = action,
+                tid: str | None = target_id) -> None:
+            nonlocal embedded
+
+            if act in {'UPDATE', 'REPLACE'} and tid:
+                if tid not in deleted_ids:
+                    deleted_ids.add(tid)
+                    op_name = ('replace' if act == 'REPLACE'
+                               else 'reconcile-update')
+                    soft_delete_insight(db, tid)
+                    log_op(db, op_name, tid,
+                           f'replaced by {fi.id}')
+
+            insert_insight(db, fi)
+
+            if eb is not None:
+                update_embedding(db, fi.id, eb)
+                embedded = True
+
+            if fi.entities:
+                update_entities(db, fi.id, fi.entities)
+
+            log_op(db, 'remember', fi.id, fi.content)
+
+        db.in_transaction(insert_tx)
+
+        if embed_vec is not None:
+            embed_cache[fact_insight.id] = embed_vec
+
+        def edge_tx(
+                fi: Insight = fact_insight) -> None:
+            nonlocal edge_stats, ei, pruned
+            edge_stats = fast_edges(db, fi)
+            create_semantic_edges(db, fi, embed_cache)
+            try:
+                ei = refresh_effective_importance(db, fi.id)
+            except Exception:
+                ei = 0.0
+            try:
+                pruned = auto_prune(db, MAX_INSIGHTS, [fi.id])
+            except Exception:
+                pruned = 0
+
+        db.in_transaction(edge_tx)
+
+        causal_candidates = find_causal_candidates(
+            db, fact_insight)
+
+        fact_results.append({
+            'id': fact_insight.id,
+            'content': fact_insight.content,
+            'category': fact_insight.category,
+            'importance': fact_insight.importance,
+            'tags': fact_insight.tags,
+            'entities': fact_insight.entities,
+            'action': action.lower(),
+            'created_at': format_timestamp(fact_insight.created_at),
+            'edges_created': edge_stats,
+            'causal_candidates': causal_candidates,
+            'embedded': embedded,
+            'effective_importance': ei,
+            'auto_pruned': pruned,
+            **({'replaced_id': target_id} if target_id else {}),
+            })
 
     pending = db._conn.execute(
         'SELECT COUNT(*) FROM insights'
@@ -367,26 +478,12 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
         ).fetchone()[0]
 
     output: dict = {
-        'id': insight.id,
-        'content': insight.content,
-        'category': insight.category,
-        'importance': insight.importance,
-        'tags': insight.tags,
-        'entities': insight.entities,
-        'action': diff_action,
-        'diff_suggestion': diff_suggestion,
-        'created_at': format_timestamp(insight.created_at),
-        'edges_created': edge_stats,
-        'causal_candidates': causal_candidates,
+        'facts': fact_results,
         'quality_warnings': quality_warnings,
-        'embedded': embedded,
-        'effective_importance': ei,
-        'auto_pruned': pruned,
+        'llm_calls': llm_calls,
         }
     if pending > 0:
         output['link_pending'] = True
-    if replaced_id:
-        output['replaced_id'] = replaced_id
     _json_out(output)
 
     _trigger_background_link(data_dir, store_name)
@@ -398,15 +495,15 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
 @click.option('--limit', default=10, type=int, help='Max results')
 @click.option('--source', default='', help='Filter by source')
 @click.option('--basic', is_flag=True, default=False, help='Simple SQL LIKE matching')
-@click.option('--smart', is_flag=True, default=False, hidden=True)
 @click.option('--intent', default='', help='Override intent')
 @click.pass_context
 def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
-           limit: int, source: str, basic: bool, smart: bool,
+           limit: int, source: str, basic: bool,
            intent: str) -> None:
     """Retrieve insights by keyword."""
     from mnemon.embed import get_client
-    from mnemon.graph.entity import extract_entities
+    from mnemon.llm.client import get_llm_client
+    from mnemon.llm.extract import expand_query
     from mnemon.search.intent import intent_from_string
     from mnemon.search.recall import intent_aware_recall
     from mnemon.store.node import increment_access_count, query_insights
@@ -427,22 +524,31 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
             _json_out([_insight_to_dict(r) for r in results])
             return
 
+        llm_client = get_llm_client()
+        expansion = expand_query(llm_client, keyword_str)
+        keyword_str = expansion['expanded_query']
+
         intent_override = None
         if intent:
             try:
                 intent_override = intent_from_string(intent)
             except ValueError as e:
                 raise click.ClickException(str(e))
+        elif expansion.get('intent'):
+            try:
+                intent_override = intent_from_string(
+                    expansion['intent'])
+            except ValueError:
+                pass
 
         ec = get_client()
         query_vec = None
-        if ec is not None and ec.available():
-            try:
-                query_vec = ec.embed(keyword_str)
-            except Exception:
-                pass
+        try:
+            query_vec = ec.embed(keyword_str)
+        except Exception:
+            pass
 
-        query_entities = extract_entities(keyword_str)
+        query_entities = list(expansion.get('entities', []))
 
         fetch_limit = limit * 3 if cat else limit
         resp = intent_aware_recall(
@@ -623,9 +729,11 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         name = _resolve_store_name(data_dir_val, store_flag)
 
         _remember_impl(db, new_insight, content_str,
-                       no_diff=True, replaced_id=id,
+                       no_reconcile=True, replaced_id=id,
                        data_dir=data_dir_val,
-                       store_name=name)
+                       store_name=name,
+                       cat_explicit=True,
+                       imp_explicit=True)
     finally:
         db.close()
 
@@ -1038,21 +1146,16 @@ def embed(ctx: click.Context, id: str | None, backfill: bool, show_status: bool)
         if show_status:
             total, embedded = embedding_stats(db)
             coverage = f'{embedded * 100 // total}%' if total > 0 else '0%'
-            available = ec is not None and ec.available()
-            model = ec.model if ec is not None else ''
             _json_out({
                 'total_insights': total,
                 'embedded': embedded,
                 'coverage': coverage,
-                'ollama_available': available,
-                'model': model,
+                'embed_available': ec.available(),
+                'model': ec.model,
                 })
             return
 
         if backfill:
-            if ec is None or not ec.available():
-                msg = ec.unavailable_message() if ec else 'no embedding provider available'
-                raise click.ClickException(msg)
             missing = get_insights_without_embedding(db, 1000)
             if not missing:
                 _json_out({
@@ -1080,9 +1183,6 @@ def embed(ctx: click.Context, id: str | None, backfill: bool, show_status: bool)
             return
 
         if id:
-            if ec is None or not ec.available():
-                msg = ec.unavailable_message() if ec else 'no embedding provider available'
-                raise click.ClickException(msg)
             ins = get_insight_by_id(db, id)
             if ins is None:
                 raise click.ClickException(
