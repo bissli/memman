@@ -178,76 +178,14 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     data_dir_val = ctx.obj['data_dir']
     store_flag = ctx.obj['store']
     name = _resolve_store_name(data_dir_val, store_flag)
-    sdir = store_dir(data_dir_val, name)
 
     db = _open_db(ctx)
     try:
         _remember_impl(db, insight, content_str, no_diff,
-                       store_dir_path=sdir,
                        data_dir=data_dir_val,
                        store_name=name)
     finally:
         db.close()
-
-
-def _background_edges(
-        store_dir: str, insight_dict: dict,
-        result: dict) -> None:
-    """Tier 2: create edges in a background thread with own DB connection."""
-    import logging
-
-    from mnemon.graph.engine import fast_edges
-    from mnemon.graph.semantic import build_embed_cache, create_semantic_edges
-    from mnemon.model import Insight, parse_timestamp
-    from mnemon.store.db import open_db_lightweight
-    from mnemon.store.node import MAX_INSIGHTS, auto_prune
-    from mnemon.store.node import refresh_effective_importance
-    from mnemon.store.node import update_entities
-
-    bg_logger = logging.getLogger('mnemon')
-    try:
-        db_bg = open_db_lightweight(store_dir)
-        try:
-            insight = Insight(
-                id=insight_dict['id'],
-                content=insight_dict['content'],
-                category=insight_dict['category'],
-                importance=insight_dict['importance'],
-                tags=insight_dict['tags'],
-                entities=insight_dict['entities'],
-                source=insight_dict['source'],
-                created_at=parse_timestamp(insight_dict['created_at']),
-                updated_at=parse_timestamp(insight_dict['updated_at']))
-
-            embed_cache = build_embed_cache(db_bg)
-
-            edge_stats: dict[str, int] = {}
-            ei = 0.0
-            pruned = 0
-
-            def tx_body() -> None:
-                nonlocal edge_stats, ei, pruned
-                edge_stats = fast_edges(db_bg, insight)
-                if insight.entities:
-                    update_entities(db_bg, insight.id, insight.entities)
-                create_semantic_edges(db_bg, insight, embed_cache)
-                try:
-                    ei = refresh_effective_importance(db_bg, insight.id)
-                except Exception:
-                    ei = 0.0
-                try:
-                    pruned = auto_prune(db_bg, MAX_INSIGHTS, [insight.id])
-                except Exception:
-                    pruned = 0
-
-            db_bg.in_transaction(tx_body)
-            result['edges_created'] = edge_stats
-            result['effective_importance'] = ei
-            result['auto_pruned'] = pruned
-        finally:
-            db_bg.close()
-    except Exception:
-        bg_logger.debug('Background edge creation failed', exc_info=True)
 
 
 def _trigger_background_link(
@@ -278,20 +216,22 @@ def _trigger_background_link(
 
 def _remember_impl(db: 'DB', insight: Insight, content: str,
                    no_diff: bool, replaced_id: str = '',
-                   store_dir_path: str = '',
                    data_dir: str = '',
                    store_name: str = '') -> None:
-    """Core remember implementation — three-tier non-blocking."""
-    import threading
-
+    """Core remember implementation — two-tier write path."""
     from mnemon.embed import get_client
     from mnemon.embed.vector import deserialize_vector, serialize_vector
+    from mnemon.graph.causal import find_causal_candidates
+    from mnemon.graph.engine import fast_edges
     from mnemon.graph.entity import extract_entities, merge_entities
+    from mnemon.graph.semantic import create_semantic_edges
     from mnemon.search.diff import diff as run_diff
     from mnemon.search.quality import check_content_quality
+    from mnemon.store.node import MAX_INSIGHTS, auto_prune
     from mnemon.store.node import get_all_active_insights, get_all_embeddings
-    from mnemon.store.node import insert_insight, soft_delete_insight
-    from mnemon.store.node import update_embedding, update_entities
+    from mnemon.store.node import insert_insight, refresh_effective_importance
+    from mnemon.store.node import soft_delete_insight, update_embedding
+    from mnemon.store.node import update_entities
     from mnemon.store.oplog import log_op
 
     quality_warnings = check_content_quality(content)
@@ -397,26 +337,28 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
 
     db.in_transaction(tx_body)
 
-    insight_dict = {
-        'id': insight.id,
-        'content': insight.content,
-        'category': insight.category,
-        'importance': insight.importance,
-        'tags': insight.tags,
-        'entities': insight.entities,
-        'source': insight.source,
-        'created_at': format_timestamp(insight.created_at),
-        'updated_at': format_timestamp(insight.updated_at),
-        }
+    if embed_cache is not None and embedding_vec is not None:
+        embed_cache[insight.id] = embedding_vec
 
-    bg_result: dict = {}
-    bg_thread = threading.Thread(
-        target=_background_edges,
-        args=(store_dir_path, insight_dict, bg_result))
-    bg_thread.start()
-    bg_thread.join()
+    edge_stats = {'temporal': 0, 'entity': 0, 'causal': 0}
+    ei = 0.0
+    pruned = 0
 
-    from mnemon.graph.causal import find_causal_candidates
+    def edge_tx() -> None:
+        nonlocal edge_stats, ei, pruned
+        edge_stats = fast_edges(db, insight)
+        create_semantic_edges(db, insight, embed_cache)
+        try:
+            ei = refresh_effective_importance(db, insight.id)
+        except Exception:
+            ei = 0.0
+        try:
+            pruned = auto_prune(db, MAX_INSIGHTS, [insight.id])
+        except Exception:
+            pruned = 0
+
+    db.in_transaction(edge_tx)
+
     causal_candidates = find_causal_candidates(db, insight)
 
     pending = db._conn.execute(
@@ -434,13 +376,12 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
         'action': diff_action,
         'diff_suggestion': diff_suggestion,
         'created_at': format_timestamp(insight.created_at),
-        'edges_created': bg_result.get('edges_created',
-                                       {'temporal': 0, 'entity': 0, 'causal': 0}),
+        'edges_created': edge_stats,
         'causal_candidates': causal_candidates,
         'quality_warnings': quality_warnings,
         'embedded': embedded,
-        'effective_importance': bg_result.get('effective_importance', 0.0),
-        'auto_pruned': bg_result.get('auto_pruned', 0),
+        'effective_importance': ei,
+        'auto_pruned': pruned,
         }
     if pending > 0:
         output['link_pending'] = True
@@ -680,11 +621,9 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         data_dir_val = ctx.obj['data_dir']
         store_flag = ctx.obj['store']
         name = _resolve_store_name(data_dir_val, store_flag)
-        sdir = store_dir(data_dir_val, name)
 
         _remember_impl(db, new_insight, content_str,
                        no_diff=True, replaced_id=id,
-                       store_dir_path=sdir,
                        data_dir=data_dir_val,
                        store_name=name)
     finally:
