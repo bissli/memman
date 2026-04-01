@@ -1,10 +1,10 @@
 """Causal edge creation and causal candidate discovery."""
 
-import json
 import logging
 import re
 from datetime import datetime, timezone
 
+from mnemon.llm.client import parse_json_list_response
 from mnemon.model import Edge, Insight, format_float
 from mnemon.search.keyword import tokenize
 from mnemon.store.edge import insert_edge
@@ -214,11 +214,8 @@ def infer_llm_causal_edges(
         logger.debug(f'LLM causal inference unavailable for {insight.id}')
         return []
 
-    try:
-        edges = json.loads(raw)
-        if not isinstance(edges, list):
-            return []
-    except (json.JSONDecodeError, ValueError):
+    edges = parse_json_list_response(raw)
+    if edges is None:
         return []
 
     now = datetime.now(timezone.utc)

@@ -30,12 +30,6 @@ RERANK_WEIGHTS: dict[str, tuple[float, float, float, float]] = {
     'GENERAL': (0.25, 0.15, 0.45, 0.15),
     }
 
-RERANK_WEIGHTS_NO_EMBED: dict[str, tuple[float, float, float, float]] = {
-    'WHY':     (0.25, 0.15, 0.0, 0.60),
-    'WHEN':    (0.30, 0.15, 0.0, 0.55),
-    'ENTITY':  (0.30, 0.50, 0.0, 0.20),
-    'GENERAL': (0.45, 0.25, 0.0, 0.30),
-    }
 
 RECALL_HINTS: dict[str, str] = {
     'WHY': 'Trace the causal chain: earlier results cause later ones',
@@ -207,12 +201,10 @@ def intent_aware_recall(
 
     all_insights = get_all_active_insights(db)
 
-    embed_cache = build_embed_cache(db) if query_vec is not None else None
-    has_embeddings = embed_cache is not None and len(embed_cache) > 0
+    embed_cache = build_embed_cache(db)
 
-    sim_cache: dict[str, float] | None = None
-    if has_embeddings:
-        sim_cache = {}
+    sim_cache: dict[str, float] = {}
+    if query_vec is not None and embed_cache:
         for eid, vec in embed_cache.items():
             s = cosine_similarity(query_vec, vec)
             if s > 0:
@@ -227,7 +219,7 @@ def intent_aware_recall(
         anchor_map[ins.id] = (
             ins, 1.0 / (RRF_K + rank + 1), 'keyword')
 
-    if has_embeddings:
+    if query_vec is not None and embed_cache:
         vector_hits = vector_search_from_cache(
             embed_cache, query_vec, ANCHOR_TOP_K)
         for rank, (vid, _sim) in enumerate(vector_hits):
@@ -338,12 +330,8 @@ def intent_aware_recall(
         c['sim_score'] = sim_score
         c['graph_score'] = graph_score
 
-    if has_embeddings:
-        w_kw, w_ent, w_sim, w_gr = RERANK_WEIGHTS.get(
-            intent, RERANK_WEIGHTS['GENERAL'])
-    else:
-        w_kw, w_ent, w_sim, w_gr = RERANK_WEIGHTS_NO_EMBED.get(
-            intent, RERANK_WEIGHTS_NO_EMBED['GENERAL'])
+    w_kw, w_ent, w_sim, w_gr = RERANK_WEIGHTS.get(
+        intent, RERANK_WEIGHTS['GENERAL'])
 
     results = []
     for c in candidates:

@@ -5,12 +5,9 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from mnemon.graph.causal import CAUSAL_LOOKBACK, create_causal_edges
-from mnemon.graph.entity import ACRONYM_STOPWORDS, ENTITY_PATTERNS
-from mnemon.graph.entity import ENTITY_STOPWORDS, MAX_ENTITY_LINKS
-from mnemon.graph.entity import MAX_TOTAL_ENTITY_EDGES, TECH_DICTIONARY
-from mnemon.graph.entity import create_entity_edges, extract_entities
-from mnemon.graph.entity import merge_entities
+from mnemon.graph.causal import create_causal_edges
+from mnemon.graph.entity import MAX_ENTITY_LINKS, MAX_TOTAL_ENTITY_EDGES
+from mnemon.graph.entity import create_entity_edges
 from mnemon.graph.semantic import AUTO_SEMANTIC_THRESHOLD, build_embed_cache
 from mnemon.graph.semantic import create_semantic_edges
 from mnemon.graph.temporal import MAX_PROXIMITY_EDGES, MIN_PROXIMITY_WEIGHT
@@ -23,24 +20,12 @@ from mnemon.store.node import update_entities
 logger = logging.getLogger('mnemon')
 
 
-def _prepare_entities(insight: Insight) -> None:
-    """Extract, merge, and filter entities for an insight in place."""
-    extracted = extract_entities(insight.content)
-    insight.entities = merge_entities(insight.entities, extracted)
-    insight.entities = [
-        e for e in insight.entities
-        if e not in ENTITY_STOPWORDS
-        and e not in ACRONYM_STOPWORDS]
-
-
 def fast_edges(db: 'DB', insight: Insight) -> dict[str, int]:
     """Run cheap edge generators (temporal + entity + heuristic causal).
 
     LLM causal inference is deferred to link_pending().
     Semantic edges are deferred to link_pending().
     """
-    _prepare_entities(insight)
-
     return {
         'temporal': create_temporal_edge(db, insight),
         'entity': create_entity_edges(db, insight),
@@ -83,12 +68,8 @@ def link_pending(
         if insight is None:
             continue
 
-        _prepare_entities(insight)
-
-        enrichment = {}
-        if llm_client is not None:
-            from mnemon.graph.enrichment import enrich_with_llm
-            enrichment = enrich_with_llm(insight, llm_client)
+        from mnemon.graph.enrichment import enrich_with_llm
+        enrichment = enrich_with_llm(insight, llm_client)
 
         keywords = enrichment.get('keywords', [])
         new_vec = None
@@ -103,11 +84,9 @@ def link_pending(
             except Exception:
                 logger.debug(f'Re-embed failed for {insight.id}')
 
-        causal_edges = []
-        if llm_client is not None:
-            from mnemon.graph.causal import infer_llm_causal_edges
-            causal_edges = infer_llm_causal_edges(
-                db, insight, llm_client)
+        from mnemon.graph.causal import infer_llm_causal_edges
+        causal_edges = infer_llm_causal_edges(
+            db, insight, llm_client)
 
         def _write_results() -> int:
             if enrichment:
@@ -157,10 +136,6 @@ def compute_constants_hash() -> str:
     """Return a short SHA-256 hash of all edge-relevant constants."""
     blob = json.dumps({
         'auto_semantic_threshold': AUTO_SEMANTIC_THRESHOLD,
-        'entity_patterns': [p.pattern for p in ENTITY_PATTERNS],
-        'acronym_stopwords': sorted(ACRONYM_STOPWORDS),
-        'entity_stopwords': sorted(ENTITY_STOPWORDS),
-        'tech_dictionary': sorted(TECH_DICTIONARY),
         'min_proximity_weight': MIN_PROXIMITY_WEIGHT,
         'temporal_window_hours': TEMPORAL_WINDOW_HOURS,
         'max_entity_links': MAX_ENTITY_LINKS,
@@ -218,7 +193,6 @@ def relink_auto_edges(
         if insights:
             embed_cache = build_embed_cache(db)
             for insight in insights:
-                _prepare_entities(insight)
                 stats['entity_created'] += create_entity_edges(
                     db, insight, dry_run=True)
                 stats['semantic_created'] += create_semantic_edges(
@@ -278,8 +252,6 @@ def relink_auto_edges(
         embed_cache = build_embed_cache(db)
 
         for insight in insights:
-            _prepare_entities(insight)
-            update_entities(db, insight.id, insight.entities)
             stats['entity_created'] += create_entity_edges(
                 db, insight)
             stats['semantic_created'] += create_semantic_edges(

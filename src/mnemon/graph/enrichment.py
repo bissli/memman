@@ -1,14 +1,11 @@
 """LLM-based insight enrichment: entities, keywords, summary, semantic facts."""
 
-import json
 import logging
 
+from mnemon.llm.client import parse_json_response
 from mnemon.model import Insight
 
 logger = logging.getLogger('mnemon')
-
-ENRICHMENT_MAX_TOKENS = 2048
-ENRICHMENT_TIMEOUT = 30.0
 
 ENRICHMENT_SYSTEM_PROMPT = (
     'You are a memory graph enrichment engine. Given a memory insight, '
@@ -39,23 +36,10 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
         logger.debug(f'LLM enrichment unavailable for {insight.id}')
         return {}
 
-    try:
-        parsed = json.loads(raw)
-        if not isinstance(parsed, dict):
-            return {}
-    except (json.JSONDecodeError, ValueError):
-        text = raw.strip()
-        if text.startswith('```'):
-            lines = text.split('\n')
-            text = '\n'.join(lines[1:])
-            text = text.removesuffix('```').strip()
-        try:
-            parsed = json.loads(text)
-            if not isinstance(parsed, dict):
-                return {}
-        except (json.JSONDecodeError, ValueError):
-            logger.debug(f'LLM enrichment parse error for {insight.id}')
-            return {}
+    parsed = parse_json_response(raw)
+    if parsed is None:
+        logger.debug(f'LLM enrichment parse error for {insight.id}')
+        return {}
 
     llm_entities = parsed.get('entities', [])
     if not isinstance(llm_entities, list):

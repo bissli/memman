@@ -4,15 +4,10 @@ from datetime import datetime, timezone
 
 from mnemon.embed.vector import cosine_similarity, deserialize_vector
 from mnemon.model import Edge, Insight, format_float
-from mnemon.search.keyword import content_similarity
 from mnemon.store.edge import insert_edge
-from mnemon.store.node import get_all_active_insights, get_all_embeddings
-from mnemon.store.node import get_insight_by_id
+from mnemon.store.node import get_all_embeddings
 
-MIN_SEMANTIC_SIMILARITY = 0.10
-REVIEW_SEMANTIC_THRESHOLD = 0.40
 AUTO_SEMANTIC_THRESHOLD = 0.70
-MAX_SEMANTIC_CANDIDATES = 5
 MAX_AUTO_SEMANTIC_EDGES = 3
 
 
@@ -85,91 +80,3 @@ def create_semantic_edges(
         count += 1
 
     return count
-
-
-def find_semantic_candidates(
-        db: 'DB', insight: Insight,
-        embed_cache: dict[str, list[float]] | None = None,
-        ) -> list[dict]:
-    """Return insights that are potential semantic matches."""
-    if embed_cache is None:
-        embed_cache = build_embed_cache(db)
-
-    candidates = _find_candidates_by_embedding(db, insight, embed_cache)
-    if candidates is not None:
-        return candidates
-    return _find_candidates_by_token_overlap(db, insight)
-
-
-def _find_candidates_by_embedding(
-        db: 'DB', insight: Insight,
-        embed_cache: dict[str, list[float]] | None,
-        ) -> list[dict] | None:
-    """Use cosine similarity over the embed cache."""
-    if embed_cache is None:
-        return None
-
-    insight_vec = embed_cache.get(insight.id)
-    if insight_vec is None:
-        return None
-
-    scored = []
-    for eid, other_vec in embed_cache.items():
-        if eid == insight.id:
-            continue
-        cos_sim = cosine_similarity(insight_vec, other_vec)
-        if cos_sim >= REVIEW_SEMANTIC_THRESHOLD:
-            scored.append((eid, cos_sim))
-
-    if not scored:
-        return None
-
-    scored.sort(key=lambda x: x[1], reverse=True)
-    if len(scored) > MAX_SEMANTIC_CANDIDATES:
-        scored = scored[:MAX_SEMANTIC_CANDIDATES]
-
-    result = []
-    for eid, sim in scored:
-        ins = get_insight_by_id(db, eid)
-        if ins is None:
-            continue
-        result.append({
-            'id': ins.id,
-            'content': ins.content,
-            'category': ins.category,
-            'similarity': sim,
-            'auto_linked': sim >= AUTO_SEMANTIC_THRESHOLD,
-            })
-
-    return result or None
-
-
-def _find_candidates_by_token_overlap(
-        db: 'DB', insight: Insight) -> list[dict]:
-    """Fallback: token overlap when embeddings unavailable."""
-    all_insights = get_all_active_insights(db)
-    if not all_insights:
-        return []
-
-    scored = []
-    for other in all_insights:
-        if other.id == insight.id:
-            continue
-        sim = content_similarity(insight.content, other.content)
-        if sim >= MIN_SEMANTIC_SIMILARITY:
-            scored.append((other, sim))
-
-    scored.sort(key=lambda x: x[1], reverse=True)
-    if len(scored) > MAX_SEMANTIC_CANDIDATES:
-        scored = scored[:MAX_SEMANTIC_CANDIDATES]
-
-    return [
-        {
-            'id': ins.id,
-            'content': ins.content,
-            'category': ins.category,
-            'similarity': sim,
-            'auto_linked': False,
-            }
-        for ins, sim in scored
-        ]

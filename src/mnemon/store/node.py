@@ -471,19 +471,6 @@ def get_all_embeddings(db: 'DB') -> list[tuple[str, str, bytes]]:
     return results
 
 
-def scan_embeddings(
-        db: 'DB',
-        fn: callable) -> None:
-    """Stream embeddings one at a time via callback."""
-    rows = db._query(
-        'SELECT id, embedding FROM insights'
-        ' WHERE deleted_at IS NULL AND embedding IS NOT NULL'
-        ).fetchall()
-    for id, blob in rows:
-        if blob and len(blob) > 0 and not fn(id, blob):
-            break
-
-
 def embedding_stats(db: 'DB') -> tuple[int, int]:
     """Return (total_active, embedded_count)."""
     total = db._query(

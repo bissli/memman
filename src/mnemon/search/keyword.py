@@ -79,16 +79,3 @@ def keyword_search(
         result.append((ins, score))
     result.reverse()
     return result
-
-
-def content_similarity(a: str, b: str) -> float:
-    """Compute bidirectional token overlap between two texts."""
-    tok_a = tokenize(a)
-    tok_b = tokenize(b)
-    if not tok_a or not tok_b:
-        return 0.0
-
-    intersection = sum(1 for t in tok_a if t in tok_b)
-    score_a = intersection / len(tok_a)
-    score_b = intersection / len(tok_b)
-    return max(score_a, score_b)
