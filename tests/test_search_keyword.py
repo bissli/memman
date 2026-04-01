@@ -1,7 +1,7 @@
 """Tests for mnemon.search.keyword -- tokenization and keyword search."""
 
 from mnemon.model import Insight
-from mnemon.search.keyword import content_similarity, keyword_search, tokenize
+from mnemon.search.keyword import keyword_search, tokenize
 
 
 def test_tokenize_english():
@@ -33,28 +33,6 @@ def test_tokenize_empty():
 def test_tokenize_all_stopwords():
     """All-stopword input produces empty set."""
     assert len(tokenize('the is a an')) == 0
-
-
-def test_content_similarity_identical():
-    """Identical text has similarity 1.0."""
-    assert content_similarity('Go uses SQLite', 'Go uses SQLite') == 1.0
-
-
-def test_content_similarity_disjoint():
-    """Disjoint text has similarity 0.0."""
-    assert content_similarity('apple banana cherry', 'dog elephant fox') == 0.0
-
-
-def test_content_similarity_bidirectional():
-    """Bidirectional max: short text fully contained = 1.0."""
-    sim = content_similarity('Go', 'Go SQLite memory graph')
-    assert sim == 1.0
-
-
-def test_content_similarity_empty():
-    """Empty string has 0.0 similarity."""
-    assert content_similarity('', 'hello') == 0.0
-    assert content_similarity('hello', '') == 0.0
 
 
 def test_keyword_search_ranking():

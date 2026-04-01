@@ -1,8 +1,7 @@
 """Tests for mnemon.search.recall -- beam search, traversal params, reranking."""
 
 from mnemon.search.recall import RECALL_HINTS, RERANK_WEIGHTS
-from mnemon.search.recall import RERANK_WEIGHTS_NO_EMBED, get_traversal_params
-from mnemon.search.recall import intent_aware_recall
+from mnemon.search.recall import get_traversal_params, intent_aware_recall
 from mnemon.store.node import insert_insight
 from tests.conftest import make_insight
 
@@ -29,24 +28,15 @@ def test_get_traversal_params_unknown_fallback():
 
 
 def test_rerank_weights_all_intents_present():
-    """Both weight dicts cover all four intents."""
+    """Weight dict covers all four intents."""
     for intent in ['WHY', 'WHEN', 'ENTITY', 'GENERAL']:
         assert intent in RERANK_WEIGHTS
-        assert intent in RERANK_WEIGHTS_NO_EMBED
 
 
 def test_rerank_weights_sum_to_one():
     """Each intent's weights sum to 1.0."""
     for intent, w in RERANK_WEIGHTS.items():
-        assert abs(sum(w) - 1.0) < 1e-9, f'{intent} embed weights sum={sum(w)}'
-    for intent, w in RERANK_WEIGHTS_NO_EMBED.items():
-        assert abs(sum(w) - 1.0) < 1e-9, f'{intent} no-embed weights sum={sum(w)}'
-
-
-def test_rerank_weights_no_embed_zero_similarity():
-    """No-embed weights have zero similarity component."""
-    for intent, w in RERANK_WEIGHTS_NO_EMBED.items():
-        assert w[2] == 0.0, f'{intent} no-embed similarity weight should be 0'
+        assert abs(sum(w) - 1.0) < 1e-9, f'{intent} weights sum={sum(w)}'
 
 
 def test_rerank_why_emphasizes_similarity():
@@ -69,13 +59,6 @@ def test_rerank_general_similarity_highest():
     """GENERAL intent weights similarity highest."""
     w_kw, w_ent, w_sim, w_gr = RERANK_WEIGHTS['GENERAL']
     assert w_sim > max(w_kw, w_ent, w_gr)
-
-
-def test_rerank_no_embed_why_emphasizes_graph():
-    """WHY no-embed weights graph score highest."""
-    w_kw, w_ent, w_sim, w_gr = RERANK_WEIGHTS_NO_EMBED['WHY']
-    assert w_gr > w_kw
-    assert w_gr > w_ent
 
 
 class TestRecallMeta:

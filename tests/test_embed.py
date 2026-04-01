@@ -1,14 +1,9 @@
-"""Tests for mnemon.embed — vector math and Ollama integration."""
+"""Tests for mnemon.embed — vector math."""
 
 import math
 
-import pytest
-from mnemon.embed.ollama import Client
 from mnemon.embed.vector import cosine_similarity, deserialize_vector
 from mnemon.embed.vector import serialize_vector
-from tests.fixtures.ollama import ollama_client, ollama_endpoint  # noqa: F401
-
-# --- Vector unit tests ---
 
 
 def test_cosine_identical():
@@ -82,48 +77,3 @@ def test_deserialize_empty():
 def test_deserialize_invalid_length():
     """Blob with length not multiple of 8 returns None."""
     assert deserialize_vector(bytes(7)) is None
-
-
-# --- Ollama integration tests ---
-
-
-def test_available(ollama_client):
-    """Ollama container is reachable."""
-    assert ollama_client.available() is True
-
-
-def test_embed_returns_floats(ollama_client):
-    """Embedding returns a list of floats."""
-    result = ollama_client.embed('hello world')
-    assert isinstance(result, list)
-    assert all(isinstance(x, float) for x in result)
-
-
-def test_embed_dimension(ollama_client):
-    """all-minilm:22m produces 384-dimensional embeddings."""
-    result = ollama_client.embed('test sentence')
-    assert len(result) == 384
-
-
-def test_embed_similarity(ollama_client):
-    """Similar texts score higher than dissimilar ones."""
-    cat = ollama_client.embed('the cat sat on the mat')
-    kitten = ollama_client.embed('the kitten rested on the rug')
-    car = ollama_client.embed('the stock market crashed today')
-    similar = cosine_similarity(cat, kitten)
-    dissimilar = cosine_similarity(cat, car)
-    assert similar > dissimilar
-
-
-def test_embed_empty_raises(ollama_client):
-    """Empty string raises RuntimeError."""
-    with pytest.raises(RuntimeError):
-        ollama_client.embed('')
-
-
-def test_unavailable_endpoint(monkeypatch):
-    """Client with bad endpoint reports unavailable."""
-    monkeypatch.setenv('MNEMON_EMBED_ENDPOINT', 'http://localhost:1')
-    monkeypatch.setenv('MNEMON_EMBED_MODEL', 'all-minilm:22m')
-    bad_client = Client()
-    assert bad_client.available() is False

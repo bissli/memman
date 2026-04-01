@@ -287,39 +287,3 @@ class TestGraphRelinkCliLive:
             ).fetchone()[0]
         assert logged_stats['entity_created'] == actual_entity
         db.close()
-
-
-class TestRelinkCleansStoredStopwords:
-    """Relink strips stopword entities from stored insight entity lists."""
-
-    def test_cleans_stored_stopwords(self, tmp_db):
-        """Insight with stopword 'e.g' in entities has it removed after relink."""
-        ins = make_insight(
-            id='csw-1', content='e.g Python example',
-            entities=['e.g', 'Python'])
-        insert_insight(tmp_db, ins)
-
-        relink_auto_edges(tmp_db)
-
-        row = tmp_db._conn.execute(
-            "SELECT entities FROM insights WHERE id = 'csw-1'"
-            ).fetchone()
-        stored = json.loads(row[0])
-        assert 'e.g' not in stored
-        assert 'Python' in stored
-
-
-class TestConstantsHashIncludesTechDict:
-    """compute_constants_hash changes when TECH_DICTIONARY changes."""
-
-    def test_hash_changes_on_tech_dict_mutation(self, monkeypatch):
-        """Adding an entry to TECH_DICTIONARY changes the hash."""
-        import mnemon.graph.engine as engine_mod
-        import mnemon.graph.entity as entity_mod
-
-        hash_before = compute_constants_hash()
-        extended = entity_mod.TECH_DICTIONARY | {'__TestOnly__'}
-        monkeypatch.setattr(entity_mod, 'TECH_DICTIONARY', extended)
-        monkeypatch.setattr(engine_mod, 'TECH_DICTIONARY', extended)
-        hash_after = compute_constants_hash()
-        assert hash_before != hash_after

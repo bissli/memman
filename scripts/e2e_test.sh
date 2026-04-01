@@ -653,27 +653,14 @@ else
   echo -e "    ${RED}✘${RESET} Expected >= 2 causal candidates (hop-1 + hop-2), got $CC_COUNT2"
 fi
 
-step "entity extraction — dictionary-based (tech terms)"
+step "entity extraction — LLM extracts tech entities"
 TESTDIR_DICT="$TESTDATA/m_dict"
 mkdir -p "$TESTDIR_DICT"
 OUT=$($M --data-dir "$TESTDIR_DICT" remember --no-diff "We use React and TypeScript with Redis for caching" --cat fact --imp 3)
 echo -e "    ${DIM}entities: $(echo "$OUT" | jq -c '.entities')${RESET}"
-assert_contains "React extracted via dictionary" "$OUT" '"React"'
-assert_contains "TypeScript extracted via dictionary" "$OUT" '"TypeScript"'
-assert_contains "Redis extracted via dictionary" "$OUT" '"Redis"'
-
-step "entity extraction — acronyms (ALLCAPS via TECH_DICTIONARY)"
-OUT=$($M --data-dir "$TESTDIR_DICT" remember --no-diff "The LLM uses gRPC and JWT for authentication with JSON" --cat fact --imp 3)
-echo -e "    ${DIM}entities: $(echo "$OUT" | jq -c '.entities')${RESET}"
-assert_contains "LLM extracted" "$OUT" '"LLM"'
-assert_contains "JWT extracted" "$OUT" '"JWT"'
-assert_contains "JSON extracted" "$OUT" '"JSON"'
-
-step "entity extraction — stopwords not extracted"
-OUT=$($M --data-dir "$TESTDIR_DICT" remember --no-diff "IF YOU CAN SEE THE WAY TO DO IT" --cat fact --imp 2)
-echo -e "    ${DIM}entities: $(echo "$OUT" | jq -c '.entities')${RESET}"
-assert_not_contains "IF not extracted" "$OUT" '"IF"'
-assert_not_contains "YOU not extracted" "$OUT" '"YOU"'
+assert_contains "React extracted by LLM" "$OUT" '"React"'
+assert_contains "TypeScript extracted by LLM" "$OUT" '"TypeScript"'
+assert_contains "Redis extracted by LLM" "$OUT" '"Redis"'
 
 # ══════════════════════════════════════════════════════════════════════
 banner "Milestone 9: LLM Entity Injection (--entities flag)"

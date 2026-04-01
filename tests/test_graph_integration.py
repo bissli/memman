@@ -11,7 +11,6 @@ from mnemon.graph.bfs import BFSOptions, bfs
 from mnemon.graph.engine import fast_edges
 from mnemon.graph.entity import create_entity_edges
 from mnemon.graph.semantic import build_embed_cache, create_semantic_edges
-from mnemon.graph.semantic import find_semantic_candidates
 from mnemon.graph.temporal import create_temporal_edge
 from mnemon.store.edge import get_edges_by_node_and_type, insert_edge
 from mnemon.store.node import insert_insight, soft_delete_insight
@@ -199,62 +198,6 @@ class TestEntityIdfWeightedEdges:
         assert rare_edges[0].weight > common_edges[0].weight
 
 
-class TestStopwordEntityFiltering:
-    """Stopword entities are skipped during entity edge creation."""
-
-    def test_stopword_filtered_valid_kept(self, tmp_db):
-        """Stopword 'e.g' creates no edges; shared 'Python' does."""
-        ins_a = make_insight(
-            id='sw-a', content='e.g Python example',
-            entities=['e.g', 'Python'])
-        ins_b = make_insight(
-            id='sw-b', content='e.g Go patterns',
-            entities=['e.g', 'Go'])
-        ins_c = make_insight(
-            id='sw-c', content='Python web',
-            entities=['Python'])
-        insert_insight(tmp_db, ins_a)
-        insert_insight(tmp_db, ins_b)
-        insert_insight(tmp_db, ins_c)
-
-        create_entity_edges(tmp_db, ins_a)
-
-        edges = get_edges_by_node_and_type(tmp_db, 'sw-a', 'entity')
-        stopword_edges = [
-            e for e in edges
-            if e.metadata.get('entity') == 'e.g']
-        assert len(stopword_edges) == 0
-
-        python_edges = [
-            e for e in edges
-            if e.metadata.get('entity') == 'Python']
-        assert len(python_edges) >= 1
-
-    def test_stopword_only_entities_no_edges(self, tmp_db):
-        """Insights with only stopword entities produce zero edges."""
-        ins_a = make_insight(
-            id='swo-a', content='e.g example',
-            entities=['e.g'])
-        ins_b = make_insight(
-            id='swo-b', content='e.g another',
-            entities=['e.g'])
-        insert_insight(tmp_db, ins_a)
-        insert_insight(tmp_db, ins_b)
-
-        count = create_entity_edges(tmp_db, ins_a)
-        assert count == 0
-
-    def test_fast_edges_strips_stopwords(self, tmp_db):
-        """User-provided stopword entity stripped at creation time."""
-        ins = make_insight(
-            id='strip-1', content='The API uses SQL queries',
-            entities=['SQL', 'Python'])
-        insert_insight(tmp_db, ins)
-        fast_edges(tmp_db, ins)
-        assert 'SQL' not in ins.entities
-        assert 'Python' in ins.entities
-
-
 # --- BFS ---
 
 
@@ -410,24 +353,6 @@ class TestSemanticEdgesNoEmbedding:
         assert count == 0
 
 
-class TestSemanticCandidatesTokenOverlap:
-    """Fallback to token overlap when embeddings are unavailable."""
-
-    def test_semantic_candidates_token_overlap(self, tmp_db):
-        """Without embeddings, find_semantic_candidates uses token overlap."""
-        ins1 = make_insight(
-            id='stc-1', content='Go concurrency patterns and goroutines')
-        ins2 = make_insight(
-            id='stc-2', content='Go concurrency channels and goroutines')
-        insert_insight(tmp_db, ins1)
-        insert_insight(tmp_db, ins2)
-
-        candidates = find_semantic_candidates(
-            tmp_db, ins1, embed_cache=None)
-        assert len(candidates) >= 1
-        assert candidates[0]['id'] == 'stc-2'
-
-
 # --- Engine ---
 
 
@@ -493,18 +418,7 @@ class TestBuildEmbedCacheEmpty:
 
 
 class TestEdgeWorthyFiltering:
-    """Bare acronyms blocked; CamelCase and tech-dict entries allowed."""
-
-    def test_bare_acronym_blocked(self, tmp_db):
-        """Two insights sharing 'SQL' produce 0 entity edges."""
-        ins1 = make_insight(
-            id='ew-1', content='SQL query', entities=['SQL'])
-        ins2 = make_insight(
-            id='ew-2', content='SQL index', entities=['SQL'])
-        insert_insight(tmp_db, ins1)
-        insert_insight(tmp_db, ins2)
-        count = create_entity_edges(tmp_db, ins2)
-        assert count == 0
+    """Entity edges created for legitimate shared entities."""
 
     def test_tech_dict_allowed(self, tmp_db):
         """Two insights sharing 'Redis' produce entity edges."""

@@ -299,9 +299,9 @@ class TestWhyIntentGraphWeight:
         assert why_r1 is not None
         assert gen_r1 is not None
 
-        from mnemon.search.recall import RERANK_WEIGHTS_NO_EMBED
-        why_w = RERANK_WEIGHTS_NO_EMBED['WHY']
-        gen_w = RERANK_WEIGHTS_NO_EMBED['GENERAL']
+        from mnemon.search.recall import RERANK_WEIGHTS
+        why_w = RERANK_WEIGHTS['WHY']
+        gen_w = RERANK_WEIGHTS['GENERAL']
         graph_sig = why_r1['signals']['graph']
         why_graph_contrib = why_w[3] * graph_sig
         gen_graph_contrib = gen_w[3] * graph_sig
