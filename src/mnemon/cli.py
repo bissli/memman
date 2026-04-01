@@ -175,27 +175,123 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
         entities=entity_list, source=source,
         created_at=now, updated_at=now)
 
+    data_dir_val = ctx.obj['data_dir']
+    store_flag = ctx.obj['store']
+    name = _resolve_store_name(data_dir_val, store_flag)
+    sdir = store_dir(data_dir_val, name)
+
     db = _open_db(ctx)
     try:
-        _remember_impl(db, insight, content_str, no_diff)
+        _remember_impl(db, insight, content_str, no_diff,
+                       store_dir_path=sdir,
+                       data_dir=data_dir_val,
+                       store_name=name)
     finally:
         db.close()
 
 
+def _background_edges(
+        store_dir: str, insight_dict: dict,
+        result: dict) -> None:
+    """Tier 2: create edges in a background thread with own DB connection."""
+    import logging
+
+    from mnemon.graph.engine import fast_edges
+    from mnemon.graph.semantic import build_embed_cache, create_semantic_edges
+    from mnemon.model import Insight, parse_timestamp
+    from mnemon.store.db import open_db_lightweight
+    from mnemon.store.node import MAX_INSIGHTS, auto_prune
+    from mnemon.store.node import refresh_effective_importance
+    from mnemon.store.node import update_entities
+
+    bg_logger = logging.getLogger('mnemon')
+    try:
+        db_bg = open_db_lightweight(store_dir)
+        try:
+            insight = Insight(
+                id=insight_dict['id'],
+                content=insight_dict['content'],
+                category=insight_dict['category'],
+                importance=insight_dict['importance'],
+                tags=insight_dict['tags'],
+                entities=insight_dict['entities'],
+                source=insight_dict['source'],
+                created_at=parse_timestamp(insight_dict['created_at']),
+                updated_at=parse_timestamp(insight_dict['updated_at']))
+
+            embed_cache = build_embed_cache(db_bg)
+
+            edge_stats: dict[str, int] = {}
+            ei = 0.0
+            pruned = 0
+
+            def tx_body() -> None:
+                nonlocal edge_stats, ei, pruned
+                edge_stats = fast_edges(db_bg, insight)
+                if insight.entities:
+                    update_entities(db_bg, insight.id, insight.entities)
+                create_semantic_edges(db_bg, insight, embed_cache)
+                try:
+                    ei = refresh_effective_importance(db_bg, insight.id)
+                except Exception:
+                    ei = 0.0
+                try:
+                    pruned = auto_prune(db_bg, MAX_INSIGHTS, [insight.id])
+                except Exception:
+                    pruned = 0
+
+            db_bg.in_transaction(tx_body)
+            result['edges_created'] = edge_stats
+            result['effective_importance'] = ei
+            result['auto_pruned'] = pruned
+        finally:
+            db_bg.close()
+    except Exception:
+        bg_logger.debug('Background edge creation failed', exc_info=True)
+
+
+def _trigger_background_link(
+        data_dir: str, store_name: str) -> None:
+    """Tier 3: fire-and-forget subprocess for LLM enrichment."""
+    import subprocess
+    import sys
+
+    from mnemon.llm.client import get_llm_client
+
+    if get_llm_client() is None:
+        return
+
+    cmd = [sys.executable, '-m', 'mnemon', '--store', store_name,
+           'graph', 'link']
+    if data_dir != default_data_dir():
+        cmd = [sys.executable, '-m', 'mnemon',
+               '--data-dir', data_dir, '--store', store_name,
+               'graph', 'link']
+
+    try:
+        subprocess.Popen(
+            cmd, start_new_session=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
 def _remember_impl(db: 'DB', insight: Insight, content: str,
-                   no_diff: bool, replaced_id: str = '') -> None:
-    """Core remember implementation."""
+                   no_diff: bool, replaced_id: str = '',
+                   store_dir_path: str = '',
+                   data_dir: str = '',
+                   store_name: str = '') -> None:
+    """Core remember implementation — three-tier non-blocking."""
+    import threading
+
     from mnemon.embed import get_client
     from mnemon.embed.vector import deserialize_vector, serialize_vector
-    from mnemon.graph.causal import find_causal_candidates
-    from mnemon.graph.engine import fast_edges
+    from mnemon.graph.entity import extract_entities, merge_entities
     from mnemon.search.diff import diff as run_diff
     from mnemon.search.quality import check_content_quality
-    from mnemon.store.node import MAX_INSIGHTS, auto_prune
     from mnemon.store.node import get_all_active_insights, get_all_embeddings
-    from mnemon.store.node import insert_insight, refresh_effective_importance
-    from mnemon.store.node import soft_delete_insight, update_embedding
-    from mnemon.store.node import update_entities
+    from mnemon.store.node import insert_insight, soft_delete_insight
+    from mnemon.store.node import update_embedding, update_entities
     from mnemon.store.oplog import log_op
 
     quality_warnings = check_content_quality(content)
@@ -213,15 +309,16 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
     ec = get_client()
     embedding_blob = None
     embedding_vec = None
-    if ec is not None and ec.available():
+    embed_ok = ec is not None and ec.available()
+    if embed_ok:
         try:
             embedding_vec = ec.embed(content)
             embedding_blob = serialize_vector(embedding_vec)
         except Exception:
-            pass
+            embed_ok = False
 
     embed_cache: dict[str, list[float]] | None = None
-    if ec is not None and ec.available():
+    if embed_ok:
         db_embeds = get_all_embeddings(db)
         if db_embeds:
             embed_cache = {}
@@ -273,56 +370,53 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
         _json_out(output)
         return
 
-    edge_stats = {'temporal': 0, 'entity': 0, 'causal': 0}
-    ei = 0.0
-    pruned = 0
     embedded = False
 
+    extracted = extract_entities(content)
+    insight.entities = merge_entities(insight.entities, extracted)
+
     def tx_body() -> None:
-        nonlocal edge_stats, ei, pruned, embedded, embed_cache
+        nonlocal embedded
 
         if diff_action in {'updated', 'replaced'} and replaced_id:
             op_name = 'replace' if diff_action == 'replaced' else 'diff-replace'
             soft_delete_insight(db, replaced_id)
             log_op(db, op_name, replaced_id,
                    f'replaced by {insight.id}')
-            if embed_cache and replaced_id in embed_cache:
-                del embed_cache[replaced_id]
 
         insert_insight(db, insight)
 
         if embedding_blob is not None:
             update_embedding(db, insight.id, embedding_blob)
             embedded = True
-            if embed_cache is not None:
-                embed_cache[insight.id] = embedding_vec
-
-        edge_stats = fast_edges(db, insight)
 
         if insight.entities:
             update_entities(db, insight.id, insight.entities)
 
-        try:
-            ei_val = refresh_effective_importance(db, insight.id)
-        except Exception:
-            ei_val = 0.0
-
-        try:
-            pruned_val = auto_prune(db, MAX_INSIGHTS, [insight.id])
-        except Exception:
-            pruned_val = 0
-
-        ei = ei_val
-        pruned = pruned_val
-
         log_op(db, 'remember', insight.id, insight.content)
 
-    try:
-        db.in_transaction(tx_body)
-    except Exception:
-        embed_cache = None
-        raise
+    db.in_transaction(tx_body)
 
+    insight_dict = {
+        'id': insight.id,
+        'content': insight.content,
+        'category': insight.category,
+        'importance': insight.importance,
+        'tags': insight.tags,
+        'entities': insight.entities,
+        'source': insight.source,
+        'created_at': format_timestamp(insight.created_at),
+        'updated_at': format_timestamp(insight.updated_at),
+        }
+
+    bg_result: dict = {}
+    bg_thread = threading.Thread(
+        target=_background_edges,
+        args=(store_dir_path, insight_dict, bg_result))
+    bg_thread.start()
+    bg_thread.join()
+
+    from mnemon.graph.causal import find_causal_candidates
     causal_candidates = find_causal_candidates(db, insight)
 
     pending = db._conn.execute(
@@ -340,18 +434,21 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
         'action': diff_action,
         'diff_suggestion': diff_suggestion,
         'created_at': format_timestamp(insight.created_at),
-        'edges_created': edge_stats,
+        'edges_created': bg_result.get('edges_created',
+                                       {'temporal': 0, 'entity': 0, 'causal': 0}),
         'causal_candidates': causal_candidates,
         'quality_warnings': quality_warnings,
         'embedded': embedded,
-        'effective_importance': ei,
-        'auto_pruned': pruned,
+        'effective_importance': bg_result.get('effective_importance', 0.0),
+        'auto_pruned': bg_result.get('auto_pruned', 0),
         }
     if pending > 0:
         output['link_pending'] = True
     if replaced_id:
         output['replaced_id'] = replaced_id
     _json_out(output)
+
+    _trigger_background_link(data_dir, store_name)
 
 
 @cli.command()
@@ -580,8 +677,16 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             access_count=old.access_count,
             created_at=now, updated_at=now)
 
+        data_dir_val = ctx.obj['data_dir']
+        store_flag = ctx.obj['store']
+        name = _resolve_store_name(data_dir_val, store_flag)
+        sdir = store_dir(data_dir_val, name)
+
         _remember_impl(db, new_insight, content_str,
-                       no_diff=True, replaced_id=id)
+                       no_diff=True, replaced_id=id,
+                       store_dir_path=sdir,
+                       data_dir=data_dir_val,
+                       store_name=name)
     finally:
         db.close()
 
@@ -635,6 +740,12 @@ def link(ctx: click.Context, source_id: str, target_id: str,
             raise click.ClickException(
                 f'insight {target_id} not found')
 
+        existing = db._query(
+            'SELECT weight FROM edges'
+            ' WHERE source_id = ? AND target_id = ? AND edge_type = ?',
+            (source_id, target_id, edge_type)).fetchone()
+        existing_weight = existing[0] if existing else None
+
         def do_link() -> None:
             insert_edge(db, Edge(
                 source_id=source_id, target_id=target_id,
@@ -648,14 +759,19 @@ def link(ctx: click.Context, source_id: str, target_id: str,
                    f'{source_id} <-> {target_id} ({edge_type})')
 
         db.in_transaction(do_link)
-        _json_out({
+        out = {
             'status': 'linked',
             'source_id': source_id,
             'target_id': target_id,
             'edge_type': edge_type,
             'weight': weight,
             'metadata': metadata,
-            })
+            }
+        if existing_weight is not None and existing_weight > weight:
+            out['warning'] = (
+                f'existing weight {existing_weight} > requested'
+                f' {weight}; kept higher')
+        _json_out(out)
     finally:
         db.close()
 

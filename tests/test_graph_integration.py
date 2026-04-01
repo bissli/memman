@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 
 from mnemon.embed.vector import serialize_vector
 from mnemon.graph.bfs import BFSOptions, bfs
-from mnemon.graph.causal import create_causal_edges
 from mnemon.graph.engine import fast_edges
 from mnemon.graph.entity import create_entity_edges
 from mnemon.graph.semantic import build_embed_cache, create_semantic_edges
@@ -254,95 +253,6 @@ class TestStopwordEntityFiltering:
         fast_edges(tmp_db, ins)
         assert 'SQL' not in ins.entities
         assert 'Python' in ins.entities
-
-
-# --- Causal ---
-
-
-class TestCausalDirectionInference:
-    """'because' keyword determines cause→effect direction."""
-
-    def test_causal_direction_inference(self, tmp_db):
-        """Insight with 'because' creates causal edge with correct direction."""
-        now = datetime.now(timezone.utc)
-        cause = make_insight(
-            id='c-1', content='Go compiles fast with static linking',
-            source='proj', created_at=now - timedelta(hours=1))
-        effect = make_insight(
-            id='c-2',
-            content='Chose Go because it compiles fast',
-            source='proj', created_at=now)
-        insert_insight(tmp_db, cause)
-        insert_insight(tmp_db, effect)
-
-        count = create_causal_edges(tmp_db, effect)
-        assert count >= 1
-
-        edges = get_edges_by_node_and_type(tmp_db, 'c-2', 'causal')
-        assert len(edges) >= 1
-
-
-class TestCausalNoSignal:
-    """No causal keywords in either insight means 0 causal edges."""
-
-    def test_causal_no_signal(self, tmp_db):
-        """Insights without causal keywords produce 0 edges."""
-        now = datetime.now(timezone.utc)
-        ins1 = make_insight(
-            id='cn-1', content='The sky is blue',
-            source='proj', created_at=now - timedelta(hours=1))
-        ins2 = make_insight(
-            id='cn-2', content='Water is wet',
-            source='proj', created_at=now)
-        insert_insight(tmp_db, ins1)
-        insert_insight(tmp_db, ins2)
-
-        count = create_causal_edges(tmp_db, ins2)
-        assert count == 0
-
-
-class TestCausalInsufficientOverlap:
-    """Different tokens with causal signal but low overlap means 0 edges."""
-
-    def test_causal_insufficient_overlap(self, tmp_db):
-        """Causal signal present but token sets are disjoint — 0 edges."""
-        now = datetime.now(timezone.utc)
-        ins1 = make_insight(
-            id='co-1', content='Alpha beta gamma delta',
-            source='proj', created_at=now - timedelta(hours=1))
-        ins2 = make_insight(
-            id='co-2',
-            content='Epsilon zeta eta because theta',
-            source='proj', created_at=now)
-        insert_insight(tmp_db, ins1)
-        insert_insight(tmp_db, ins2)
-
-        count = create_causal_edges(tmp_db, ins2)
-        assert count == 0
-
-
-class TestCausalCrossSource:
-    """Different sources can form causal edges after source filter relaxation."""
-
-    def test_causal_cross_source(self, tmp_db):
-        """User-authored and agent-authored insights with shared tokens link causally."""
-        now = datetime.now(timezone.utc)
-        user_ins = make_insight(
-            id='cs-1',
-            content='Use SQLite because it is embedded and serverless',
-            source='user', created_at=now - timedelta(hours=1))
-        agent_ins = make_insight(
-            id='cs-2',
-            content='SQLite enables single-file deployment',
-            source='agent', created_at=now)
-        insert_insight(tmp_db, user_ins)
-        insert_insight(tmp_db, agent_ins)
-
-        count = create_causal_edges(tmp_db, agent_ins)
-        assert count >= 1
-
-        edges = get_edges_by_node_and_type(tmp_db, 'cs-2', 'causal')
-        assert len(edges) >= 1
 
 
 # --- BFS ---

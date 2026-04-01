@@ -272,22 +272,33 @@ This generates embeddings for all un-embedded insights and automatically creates
 
 ```
 ┌──────────────────┐     CLI commands      ┌──────────────────┐
-│   LLM Agent      │ ───────────────────── │     Mnemon          │
-│ (Claude Code,       │  remember, recall,    │                  │
-│  Cursor, etc.)      │  link, forget, gc     │  SQLite (WAL)    │
-└──────────────────┘                       │  ┌────────────┐  │
-                                           │  │ Insights   │  │
-        The LLM decides WHAT               │  ├────────────┤  │
-        to remember and link.              │  │ 4 Edge     │  │
-                                           │  │ Types:     │  │
-        Mnemon handles HOW                 │  │ temporal   │  │
-        to store, index, and               │  │ entity     │  │
-        retrieve.                          │  │ causal     │  │
-                                           │  │ semantic   │  │
-      ┌──────────────────┐                 │  ├────────────┤  │
-      │  Ollama          │  (optional)     │  │ Embeddings │  │
-      │  nomic-embed-text │ ◄───────────── │  └────────────┘  │
-      └──────────────────┘                 └──────────────────┘
+│   LLM Agent      │ ──────────────────── │     Mnemon          │
+│ (Claude Code,     │  remember, recall,   │                    │
+│  Cursor, etc.)    │  link, forget, gc    │  SQLite (WAL)      │
+└──────────────────┘                      │  ┌────────────┐    │
+                                          │  │ Insights   │    │
+        The LLM decides WHAT              │  ├────────────┤    │
+        to remember and link.             │  │ 4 Edge     │    │
+                                          │  │ Types:     │    │
+        Mnemon handles HOW               │  │ temporal   │    │
+        to store, index, and              │  │ entity     │    │
+        retrieve.                         │  │ causal     │    │
+                                          │  │ semantic   │    │
+      ┌──────────────────┐                │  ├────────────┤    │
+      │  Ollama          │  (optional)    │  │ Embeddings │    │
+      │  nomic-embed-text │ ◄──────────── │  └────────────┘    │
+      └──────────────────┘                └──────────────────┘
 ```
+
+### Write Pipeline (Three-Tier)
+
+`remember` uses a non-blocking pipeline so the user gets a response fast:
+
+1. **Tier 1 (sync)** — Quality check, embedding, diff detection, insert.
+   Returns JSON immediately (~120ms).
+2. **Tier 2 (background thread)** — Creates temporal, entity, and semantic
+   edges. Refreshes importance, runs auto-prune (~200ms).
+3. **Tier 3 (detached subprocess)** — LLM enrichment and causal edge
+   inference via `graph link`. Only runs when an LLM API key is configured.
 
 Inspired by [MAGMA](https://arxiv.org/abs/2601.03236) four-graph model. See [Design & Architecture](DESIGN.md) for the full deep dive.

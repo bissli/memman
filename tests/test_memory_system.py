@@ -217,9 +217,14 @@ class TestReplaceAtomicity:
         result = invoke(runner, ['replace', data['id'],
                                  'chose CQRS with event sourcing for audit'])
         new = json.loads(result.output)
-        assert new['category'] == 'decision'
-        assert new['importance'] == 5
-        assert 'arch' in new['tags']
+        assert 'id' in new
+
+        result = invoke(runner, ['search', 'CQRS'])
+        hits = json.loads(result.output)
+        match = [h for h in hits if h['id'] == new['id']][0]
+        assert match['category'] == 'decision'
+        assert match['importance'] == 5
+        assert 'arch' in match['tags']
 
     def test_replace_override_metadata(self, runner):
         """Replace with explicit flags overrides original metadata."""
@@ -229,8 +234,13 @@ class TestReplaceAtomicity:
                                  'caching strategy is now a core decision',
                                  '--cat', 'decision', '--imp', '5'])
         new = json.loads(result.output)
-        assert new['category'] == 'decision'
-        assert new['importance'] == 5
+        assert 'id' in new
+
+        result = invoke(runner, ['search', 'caching strategy'])
+        hits = json.loads(result.output)
+        match = [h for h in hits if h['id'] == new['id']][0]
+        assert match['category'] == 'decision'
+        assert match['importance'] == 5
 
     def test_replace_preserves_access_count(self, runner):
         """Replace carries forward accumulated access count."""

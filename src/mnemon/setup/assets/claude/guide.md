@@ -121,23 +121,10 @@ mnemon graph link
 ```
 
 This is optional — linking also runs automatically in the background.
-`edges_created` in the `remember` response reflects only the synchronous edges
-created inline (`temporal`, `entity`, `causal`).
-
-### Causal links — after writing
-
-After writing stable memories, evaluate `causal_candidates` from the remember output.
-When cause-effect relationships exist between memories, call `mnemon link --type causal`.
-Pass the candidate's `suggested_sub_type` back via `--meta`:
-`mnemon link <src> <tgt> --type causal --meta '{"sub_type": "causes"}'`
-(values: `causes`, `enables`, `prevents`).
-Look for reason/consequence pairs — e.g., a decision and the constraint that drove it,
-a problem discovery and the fix it led to, or a tool limitation and the workaround adopted.
-Always link when causal_candidates are returned and a relationship is plausible;
-skip only when candidates are clearly unrelated.
-
-This applies to memories stored via `mnemon remember`; directives written
-to CLAUDE.md only (see above) are not in the graph and cannot be linked.
+Edge creation (temporal, entity, semantic) runs in a background thread
+after `remember` returns, so `link_pending: true` indicates work is queued.
+LLM-based causal edges and enrichment run in a detached subprocess via
+`graph link` when an LLM API key is configured.
 
 ### Pre-compaction note
 

@@ -34,8 +34,9 @@ def _prepare_entities(insight: Insight) -> None:
 
 
 def fast_edges(db: 'DB', insight: Insight) -> dict[str, int]:
-    """Run cheap edge generators only (temporal + entity + causal).
+    """Run cheap edge generators (temporal + entity + heuristic causal).
 
+    LLM causal inference is deferred to link_pending().
     Semantic edges are deferred to link_pending().
     """
     _prepare_entities(insight)
@@ -138,6 +139,10 @@ def link_pending(
             db._conn.execute(
                 'UPDATE insights SET linked_at = ? WHERE id = ?',
                 (now, insight_id))
+            if enrichment:
+                db._conn.execute(
+                    'UPDATE insights SET enriched_at = ? WHERE id = ?',
+                    (now, insight_id))
             return sem_count
 
         semantic_count = db.in_transaction(_write_results)
@@ -156,7 +161,6 @@ def compute_constants_hash() -> str:
         'acronym_stopwords': sorted(ACRONYM_STOPWORDS),
         'entity_stopwords': sorted(ENTITY_STOPWORDS),
         'tech_dictionary': sorted(TECH_DICTIONARY),
-        'causal_lookback': CAUSAL_LOOKBACK,
         'min_proximity_weight': MIN_PROXIMITY_WEIGHT,
         'temporal_window_hours': TEMPORAL_WINDOW_HOURS,
         'max_entity_links': MAX_ENTITY_LINKS,
@@ -168,7 +172,11 @@ def compute_constants_hash() -> str:
 
 def relink_auto_edges(
         db: 'DB', dry_run: bool = False) -> dict[str, int]:
-    """Delete auto-created edges and re-create semantic/entity/causal edges."""
+    """Delete auto-created edges and re-create semantic/entity edges.
+
+    Heuristic causal edges are deleted (replaced by LLM in Tier 3).
+    LLM/manual causal edges are preserved.
+    """
     from mnemon.store.oplog import log_op
 
     semantic_del = db._conn.execute(
@@ -188,15 +196,22 @@ def relink_auto_edges(
         " AND json_extract(metadata, '$.sub_type') = 'proximity'"
         " AND weight < ?",
         (MIN_PROXIMITY_WEIGHT,)).fetchone()[0]
+    causal_del = db._conn.execute(
+        "SELECT COUNT(*) FROM edges"
+        " WHERE edge_type = 'causal'"
+        " AND (json_extract(metadata, '$.created_by') IS NULL"
+        "      OR json_extract(metadata, '$.created_by')"
+        "         NOT IN ('llm', 'claude', 'manual'))"
+        ).fetchone()[0]
 
     if dry_run:
         stats = {
             'semantic_deleted': semantic_del,
             'entity_deleted': entity_del,
             'temporal_pruned': temporal_del,
+            'causal_deleted': causal_del,
             'semantic_created': 0,
             'entity_created': 0,
-            'causal_created': 0,
             'dry_run': 1,
             }
         insights = get_all_active_insights(db)
@@ -208,17 +223,15 @@ def relink_auto_edges(
                     db, insight, dry_run=True)
                 stats['semantic_created'] += create_semantic_edges(
                     db, insight, embed_cache, dry_run=True)
-                stats['causal_created'] += create_causal_edges(
-                    db, insight, dry_run=True)
         return stats
 
     stats: dict[str, int] = {
         'semantic_deleted': 0,
         'entity_deleted': 0,
         'temporal_pruned': 0,
+        'causal_deleted': 0,
         'semantic_created': 0,
         'entity_created': 0,
-        'causal_created': 0,
         }
 
     def tx_body() -> None:
@@ -243,6 +256,14 @@ def relink_auto_edges(
             (MIN_PROXIMITY_WEIGHT,))
         stats['temporal_pruned'] = temporal_del
 
+        db._conn.execute(
+            "DELETE FROM edges"
+            " WHERE edge_type = 'causal'"
+            " AND (json_extract(metadata, '$.created_by') IS NULL"
+            "      OR json_extract(metadata, '$.created_by')"
+            "         NOT IN ('llm', 'claude', 'manual'))")
+        stats['causal_deleted'] = causal_del
+
         manual_entity_rows = db._conn.execute(
             "SELECT source_id, target_id, edge_type, weight,"
             " metadata, created_at FROM edges"
@@ -263,8 +284,6 @@ def relink_auto_edges(
                 db, insight)
             stats['semantic_created'] += create_semantic_edges(
                 db, insight, embed_cache)
-            stats['causal_created'] += create_causal_edges(
-                db, insight)
 
         stats['entity_created'] = db._conn.execute(
             "SELECT COUNT(*) FROM edges WHERE edge_type = 'entity'"

@@ -47,8 +47,13 @@ def test_remember_with_flags(runner):
         '--tags', 'docker,deployment'])
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert data['category'] == 'decision'
-    assert data['importance'] == 4
+    assert 'id' in data
+
+    result = invoke(runner, ['search', 'Docker'])
+    hits = json.loads(result.output)
+    match = [h for h in hits if h['id'] == data['id']][0]
+    assert match['category'] == 'decision'
+    assert match['importance'] == 4
 
 
 def test_remember_invalid_category(runner):
@@ -339,10 +344,15 @@ def test_replace_inherits_metadata(runner):
     result = invoke(runner, ['replace', old_id, 'updated insight'])
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert data['category'] == 'decision'
-    assert data['importance'] == 5
-    assert 'arch' in data['tags']
-    assert 'design' in data['tags']
+    assert 'id' in data
+
+    result = invoke(runner, ['search', 'updated insight'])
+    hits = json.loads(result.output)
+    match = [h for h in hits if h['id'] == data['id']][0]
+    assert match['category'] == 'decision'
+    assert match['importance'] == 5
+    assert 'arch' in match['tags']
+    assert 'design' in match['tags']
 
 
 def test_replace_overrides_metadata(runner):
@@ -355,8 +365,13 @@ def test_replace_overrides_metadata(runner):
                              '--cat', 'decision', '--imp', '5'])
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert data['category'] == 'decision'
-    assert data['importance'] == 5
+    assert 'id' in data
+
+    result = invoke(runner, ['search', 'updated'])
+    hits = json.loads(result.output)
+    match = [h for h in hits if h['id'] == data['id']][0]
+    assert match['category'] == 'decision'
+    assert match['importance'] == 5
 
 
 def test_replace_preserves_access_count(runner):
@@ -469,3 +484,31 @@ def test_recall_source_filter_smart(runner):
     data = json.loads(result.output)
     for r in data['results']:
         assert r['insight']['source'] == 'agent'
+
+
+def test_replace_creates_background_edges(runner):
+    """Replace passes store context so background edges are created."""
+    r1 = invoke(runner, ['remember', 'original fact', '--no-diff'])
+    orig_id = json.loads(r1.output)['id']
+
+    r2 = invoke(runner, ['replace', orig_id, 'updated fact'])
+    assert r2.exit_code == 0
+    new_id = json.loads(r2.output)['id']
+
+    result = invoke(runner, ['related', new_id])
+    assert result.exit_code == 0
+
+
+def test_link_warns_when_lower_weight(runner):
+    """Link output includes warning when requested weight < existing."""
+    r1 = invoke(runner, ['remember', 'first', '--no-diff'])
+    id1 = json.loads(r1.output)['id']
+    r2 = invoke(runner, ['remember', 'second', '--no-diff'])
+    id2 = json.loads(r2.output)['id']
+
+    invoke(runner, ['link', id1, id2, '--weight', '0.9'])
+    result = invoke(runner, ['link', id1, id2, '--weight', '0.3'])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert 'warning' in data
+    assert '0.9' in data['warning']

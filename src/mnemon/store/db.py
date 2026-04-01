@@ -137,6 +137,16 @@ def open_db(data_dir: str) -> DB:
     return db
 
 
+def open_db_lightweight(data_dir: str) -> DB:
+    """Open DB without migration or relink — for background threads."""
+    db_path = os.path.join(data_dir, 'mnemon.db')
+    conn = sqlite3.connect(db_path, isolation_level=None)
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA foreign_keys=ON')
+    conn.execute('PRAGMA busy_timeout=5000')
+    return DB(conn, db_path)
+
+
 def open_read_only(data_dir: str) -> DB:
     """Open the SQLite database in read-only mode."""
     db_path = os.path.join(data_dir, 'mnemon.db')
@@ -231,6 +241,14 @@ CREATE TABLE IF NOT EXISTS meta (
         db._conn.execute(
             'UPDATE insights SET linked_at = created_at'
             ' WHERE linked_at IS NULL')
+
+    added = _add_column_if_not_exists(
+        db._conn,
+        'ALTER TABLE insights ADD COLUMN enriched_at TEXT')
+    if added:
+        db._conn.execute(
+            'UPDATE insights SET enriched_at = linked_at'
+            ' WHERE linked_at IS NOT NULL')
 
     _migrate_remove_narrative_edges(db)
 

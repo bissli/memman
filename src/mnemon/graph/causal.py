@@ -12,8 +12,8 @@ from mnemon.store.node import get_recent_active_insights
 
 logger = logging.getLogger('mnemon')
 
-MIN_CAUSAL_OVERLAP = 0.15
 CAUSAL_LOOKBACK = 20
+MIN_CAUSAL_OVERLAP = 0.15
 MAX_CAUSAL_CANDIDATES = 10
 LLM_CONFIDENCE_FLOOR = 0.75
 LLM_BFS_NEIGHBORS = 10
@@ -64,7 +64,8 @@ def token_overlap(a: set[str], b: set[str]) -> float:
 
 def create_causal_edges(
         db: 'DB', insight: Insight, dry_run: bool = False) -> int:
-    """Create causal edges when insights share token overlap and causal signals."""
+    """Create causal edges when insights share token overlap and causal signals.
+    """
     recent = get_recent_active_insights(
         db, insight.id, CAUSAL_LOOKBACK)
     if not recent:
