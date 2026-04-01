@@ -4,7 +4,7 @@
 >
 > The word shares its root with Mnemosyne (Μνημοσύνη), the goddess of memory — from her union with Zeus the nine Muses were born, symbolizing memory as the wellspring of all knowledge and creativity.
 
-Mnemon is a persistent memory system designed for LLM agents. It adopts the **LLM-Supervised** pattern: the host LLM acts as external orchestrator of a standalone memory binary through symbolic CLI interfaces, while the binary handles deterministic storage, graph indexing, and lifecycle management. Memory is organized as a four-graph knowledge structure with temporal, entity, causal, and semantic edges. Implemented as a single Python package + SQLite, with no external API dependencies.
+Mnemon is a persistent memory system designed for LLM agents. It adopts the **LLM-Supervised** pattern: the host LLM acts as external orchestrator of a standalone memory binary through symbolic CLI interfaces, while Haiku handles pipeline intelligence (fact extraction, reconciliation, query expansion). Memory is organized as a four-graph knowledge structure with temporal, entity, causal, and semantic edges. Implemented as a Python package + SQLite, requiring Anthropic and Voyage AI API keys.
 
 ---
 
@@ -12,7 +12,7 @@ Mnemon is a persistent memory system designed for LLM agents. It adopts the **LL
 
 ### [1. Vision & Problem](design/01-vision.md)
 
-Why Mnemon exists — the amnesia problem in LLM agents, structural bottlenecks of traditional approaches, and a comparison with existing solutions (Mem0, MemGPT, Claude Code Memory).
+Why Mnemon exists — the amnesia problem in LLM agents and structural bottlenecks of traditional approaches.
 
 ### [2. Design Philosophy](design/02-philosophy.md)
 
@@ -24,15 +24,15 @@ The Insight/Edge data model, database schema (SQLite WAL), system architecture (
 
 ### [4. Graph Model & Structural Theory](design/04-graph-model.md)
 
-MAGMA four-graph model (temporal, entity, causal, semantic), structural isomorphism between LLM attention and graph storage, the Extract→Candidate→Associate paradigm, read-write symmetry, `remember/link/recall` as universal algebra, the LLM↔DB protocol gap, and academic positioning.
+MAGMA four-graph model (temporal, entity, causal, semantic), the Extract→Candidate→Associate paradigm, read-write symmetry, and `remember/link/recall` as universal algebra.
 
 ### [5. Read & Write Pipelines](design/05-pipelines.md)
 
-The write pipeline (`remember` with built-in diff), read pipeline (Smart Recall with intent detection, RRF anchor fusion, Beam Search traversal, multi-factor re-ranking), and deduplication/conflict detection.
+The two-tier write pipeline (`remember` with LLM fact extraction and reconciliation), read pipeline (LLM query expansion, RRF anchor fusion, Beam Search traversal, multi-factor re-ranking).
 
 ### [6. Lifecycle & Embedding](design/06-lifecycle.md)
 
-Effective Importance (EI) decay formula, immunity rules, auto-pruning, GC commands, and optional embedding support via Ollama (nomic-embed-text).
+Effective Importance (EI) decay formula, immunity rules, auto-pruning, GC commands, and Voyage AI embedding support.
 
 ### [7. LLM CLI Integration](design/07-integration.md)
 

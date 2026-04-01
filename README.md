@@ -42,8 +42,6 @@ Mnemon stores knowledge that accumulates value across sessions and cannot be rec
 | `insight`    | Conclusions from multi-source reasoning | "Beam search outperforms BFS here"     |
 | `context`    | Project background, user environment    | "Monorepo, deploys to AWS ECS"         |
 
-Memory has a **compound interest effect** — the longer it accumulates, the greater its value. LLM engines iterate constantly, skill files cost nearly nothing to write, but memory is a private asset that grows with the user. It is the only component in the agent ecosystem worth deep investment.
-
 <p align="center">
   <img src="docs/diagrams/llm-supervised-concept.drawio.png" width="720" alt="LLM-Supervised Architecture — three patterns compared, with detailed Mnemon implementation showing hooks, brain/organ split, and sub-agent delegation" />
   <br />
@@ -150,34 +148,14 @@ You don't run mnemon commands yourself. The agent does — driven by hooks and g
 ## Features
 
 - **Zero user-side operation** — install once, memory runs in the background via hooks
-- **LLM-supervised** — the host LLM decides what to remember, update, and forget; no embedded LLM, no API keys
+- **LLM-supervised** — the host LLM decides what to remember, update, and forget; Haiku handles fact extraction, reconciliation, and query expansion
 - **Hook-based integration** — six lifecycle hooks: Prime (load guide), Remind (recall & remember), Nudge (remember), Compact (bridge context across compaction), Recall (pre-delegation), and ExitPlan (plan-mode transition)
 - **Four-graph architecture** — temporal, entity, causal, and semantic edges, not just vector similarity
 - **Intent-native protocol** — three primitives (`remember`, `link`, `recall`) map to the LLM's cognitive vocabulary, not database syntax; structured JSON output with signal transparency
 - **Intent-aware recall** — graph traversal + optional vector search (RRF fusion), enabled by default for all queries
-- **Built-in deduplication** — `remember` auto-detects duplicates and conflicts; skips or auto-replaces; `replace` provides deterministic, atomic replacement by ID
+- **LLM reconciliation** — `remember` uses LLM to classify each fact as ADD, UPDATE, DELETE, or NONE vs existing memories; `replace` provides deterministic, atomic replacement by ID
 - **Retention lifecycle** — importance decay, access-count boosting, and garbage collection
-- **Optional embeddings** — works fully without Ollama; add local [Ollama](https://ollama.ai) for enhanced vector+keyword hybrid search
-
-## Vision
-
-All your local agentic AIs — across sessions and frameworks — sharing one pool of live memory.
-
-```
-  Claude Code ──┐
-                │
-  OpenClaw ─────┤
-                │
-  NanoClaw ─────┤
-                ├──▶  ~/.mnemon  ◀── shared memory
-  OpenCode ─────┤
-                │
-  Gemini CLI ───┘
-```
-
-The foundation is in place: a single `~/.mnemon` database that any agent can read and write. Claude Code's hook integration is the reference implementation; OpenClaw uses a plugin-based approach; NanoClaw integrates via container skills and volume mounts. The same pattern can be replicated for any LLM CLI that supports event hooks or system prompts.
-
-The longer-term direction is a **memory gateway**: protocol decoupled from storage engine. The current SQLite backend is the first adapter; the protocol surface (`remember / link / recall`) can sit on top of PostgreSQL, Neo4j, or any graph database. Agent-side optimization (when to recall, what to remember) and storage-side optimization (indexing, graph algorithms) evolve independently. See [Future Direction](docs/design/08-decisions.md#82-future-direction) for details.
+- **Voyage embeddings** — 512-dim vectors via Voyage AI for semantic search and graph connectivity
 
 ## FAQ
 
@@ -211,23 +189,20 @@ Memory writes don't happen in the main conversation. The host LLM (e.g., Opus) d
 | `MNEMON_DATA_DIR`    | `~/.mnemon`                  | Base data directory                   |
 | `MNEMON_STORE`       | *(active file or `default`)* | Named memory store for data isolation |
 
-**LLM causal inference** (automatic when `ANTHROPIC_API_KEY` is set):
+**Required API keys**:
 
-| Environment Variable  | Default                         | Description                                  |
-| --------------------- | ------------------------------- | -------------------------------------------- |
-| `ANTHROPIC_API_KEY`   | —                               | Enables LLM causal inference automatically   |
-| `MNEMON_LLM_ENDPOINT` | `https://api.anthropic.com`     | Override for custom/local inference endpoint |
-| `MNEMON_LLM_API_KEY`  | falls back to ANTHROPIC_API_KEY | Override API key for LLM endpoint            |
-| `MNEMON_LLM_MODEL`    | `claude-haiku-4-5-20251001`     | Model for causal inference                   |
+| Environment Variable | Default | Description                                   |
+| -------------------- | ------- | --------------------------------------------- |
+| `ANTHROPIC_API_KEY`  | —       | LLM (fact extraction, reconciliation, recall) |
+| `VOYAGE_API_KEY`     | —       | Voyage AI embeddings (512-dim)                |
 
-**Embeddings** (optional — works fully without):
+**Optional overrides**:
 
-| Environment Variable    | Default                  | Description                              |
-| ----------------------- | ------------------------ | ---------------------------------------- |
-| `MNEMON_EMBED_PROVIDER` | `ollama`                 | Embedding provider: `ollama` or `openai` |
-| `MNEMON_EMBED_ENDPOINT` | `http://localhost:11434` | Embedding API endpoint                   |
-| `MNEMON_EMBED_MODEL`    | `nomic-embed-text`       | Embedding model name                     |
-| `MNEMON_EMBED_API_KEY`  | —                        | API key for OpenAI-compatible endpoint   |
+| Environment Variable  | Default                         | Description                       |
+| --------------------- | ------------------------------- | --------------------------------- |
+| `MNEMON_LLM_ENDPOINT` | `https://api.anthropic.com`     | Custom LLM inference endpoint     |
+| `MNEMON_LLM_API_KEY`  | falls back to ANTHROPIC_API_KEY | Override API key for LLM endpoint |
+| `MNEMON_LLM_MODEL`    | `claude-haiku-4-5-20251001`     | Model for LLM inference           |
 
 ## Development
 
@@ -240,7 +215,7 @@ mnemon setup     # interactive setup
 mnemon setup --eject  # remove all integrations
 ```
 
-**Dependencies**: Python 3.11+, Click, httpx. **Optional**: Ollama with `nomic-embed-text` for embeddings.
+**Dependencies**: Python 3.11+, Click, httpx. **Required**: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`.
 
 ## Documentation
 

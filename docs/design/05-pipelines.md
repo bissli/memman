@@ -6,103 +6,61 @@
 
 ## 5.1 Write Pipeline: Remember
 
-`mnemon remember` is the core command for writing memories. It includes a built-in diff step that automatically detects duplicates and conflicts before storage. The write transaction executes atomically within a single SQLite transaction.
+`mnemon remember` is the core command for writing memories. It uses LLM fact extraction to decompose input into atomic facts, LLM reconciliation to classify each fact against existing memories, and Voyage AI embeddings for semantic search.
 
 ![Remember Pipeline](../diagrams/02-remember-pipeline.drawio.png)
 
-### Detailed Flow
+### Two-Tier Pipeline
 
-```
-mnemon remember "Chose Qdrant as the vector database" \
-  --cat decision --imp 5 --entities "Qdrant,Milvus"
-```
+**Tier 1 (synchronous — user waits)**
 
-**Step 1: Validate Input**
-- Category must be one of the six types
-- Importance 1-5
-- Content must not exceed 8000 characters
-- Up to 20 tags and 50 entities
+1. **Quality gate** — `check_content_quality()` scans for transient patterns (AWS IDs, deployment receipts, state observations). 2+ matches → reject.
+2. **LLM fact extraction** — `extract_facts(llm_client, content)` decomposes input into 1-5 atomic facts with category, importance, and entities. Trivial content (greetings, filler) returns `[]` → skip.
+3. **Per-fact processing**:
+   a. Embed fact text via Voyage AI (512-dim).
+   b. Find similar existing insights: keyword search (top 5) + cosine scan (threshold 0.5).
+   c. `reconcile_memories(llm_client, [fact], similar)` → action:
+      - **ADD**: new content, insert as new insight
+      - **UPDATE**: refines existing, insert and link to original
+      - **DELETE**: contradicts existing, soft-delete target
+      - **NONE**: already captured, skip
+   d. Create edges: `fast_edges()` (temporal + entity) + `create_semantic_edges()`.
+   e. `refresh_effective_importance()`, `auto_prune()`.
+4. **JSON output** — `{facts: [...], quality_warnings, llm_calls, link_pending}`.
 
-**Rationale:** Content limit 8000 chars is a practical upper bound for a single insight — keeps token overlap computation fast and embedding generation within model input limits. Larger content should be decomposed into multiple insights. Max tags = 20 discourages tag abuse while remaining generous. Max entities = 50 accommodates automatic extraction (regex + dictionary) which can produce many matches.
+**Tier 2 (async subprocess — `graph link` → `link_pending()`)**
 
-**Step 1.5: Quality Gate (before embedding)**
-- Scan content against transient patterns (AWS instance IDs, resource counts, verification/deployment receipts, state observations, line references)
-- If 2+ patterns match: reject immediately with `action="rejected"`, log `quality-reject` to oplog
-- If 0–1 patterns match: continue to embedding
+Spawned by `_trigger_background_link()` as a detached subprocess.
 
-**Step 2: Generate Embedding (outside transaction)**
-- If Ollama is available: HTTP POST -> nomic-embed-text -> 768-dim float64 vector
-- If unavailable: embedding = nil, falls back to token overlap downstream
+1. **LLM enrichment** — `enrich_with_llm()` extracts keywords, summary, semantic facts, and additional entities.
+2. **Re-embedding** — rebuilds embedding from enriched text (content + keywords).
+3. **LLM causal inference** — `infer_llm_causal_edges()` uses 2-hop BFS + recent insights as candidates.
+4. **Edge rebuild** — deletes old auto entity/semantic/causal edges, re-creates from enriched data.
+5. **Stamps** — `linked_at` and `enriched_at`.
 
-**Step 2.5: Built-in Diff (outside transaction, read-only)**
-
-Compute similarity against all active insights:
-- **DUPLICATE** (sim > 0.90) → skip insert entirely, return `action="skipped"`
-- **CONFLICT/UPDATE** (sim 0.55–0.90) → soft-delete old insight, insert new as replacement
-- **ADD** (sim < 0.55) → normal insert
-
-This step uses embedding cosine similarity when available, falling back to token overlap. The `--no-diff` flag disables this check. When embedding cosine similarity >= 0.7 and exceeds the token overlap score, cosine overrides — this allows embeddings to detect semantic overlap that token-level comparison misses (e.g., synonyms, paraphrases).
-
-**Step 3: Atomic Transaction**
-
-```
-BEGIN TRANSACTION
-  ⓪ Soft-delete replaced insight (if diff found CONFLICT/UPDATE)
-  ① INSERT insight (UUID, content, category, importance, tags, entities, source)
-  ② UPDATE embedding (if vector is available)
-  ③ Graph Engine: fast_edges
-     ├── CreateTemporalEdge    → backbone + 4h proximity
-     ├── CreateEntityEdges     → regex + dictionary extraction → co-occurrence links
-     └── CreateCausalEdges     → keywords + token overlap → auto causal edges
-  ③b Deferred: link_pending (semantic edges deferred to batch processing)
-  ④ RefreshEffectiveImportance → update EI decay values
-  ⑤ AutoPrune                 → soft-delete lowest EI when total > 1000
-COMMIT
-```
-
-**Step 4: Candidate Output (post-transaction, read-only)**
-- `FindSemanticCandidates`: Semantic candidates with cos >= 0.40 (`auto_linked` flag marks >= 0.70)
-- `FindCausalCandidates`: Causal candidates in the 2-hop BFS neighborhood
-
-**Step 5: JSON Output**
-
-```json
-{
-  "id": "abc-123",
-  "action": "added",
-  "diff_suggestion": "ADD",
-  "replaced_id": null,
-  "edges_created": {"temporal": 2, "entity": 3, "causal": 1, "semantic": 1},
-  "semantic_candidates": [
-    {"id": "def-456", "content": "...", "cosine": 0.72, "auto_linked": false}
-  ],
-  "causal_candidates": [
-    {"id": "ghi-789", "content": "...", "hop": 1, "suggested_sub_type": "causes"}
-  ],
-  "quality_warnings": [],
-  "embedded": true,
-  "effective_importance": 0.85,
-  "auto_pruned": 0
-}
-```
-
-The `action` field indicates what the built-in diff decided: `"added"` (new entry), `"replaced"` (conflict auto-replaced, `replaced_id` contains the old insight ID), or `"skipped"` (duplicate detected, no insert).
-
-The `quality_warnings` field lists any transient content patterns detected (e.g., AWS instance IDs, deployment receipts, state observations). Content with **2 or more** quality warnings is **rejected** before embedding or diff computation — the response returns `action: "rejected"` with the warning list. Content with 0–1 warnings is stored normally (1 warning is advisory). This hard gate fires early in the pipeline to avoid wasting embedding and diff compute on transient content.
-
-After receiving this output, the LLM can evaluate candidates and establish edges it considers appropriate via the `mnemon link` command.
+The `--no-reconcile` flag skips LLM reconciliation for direct insert.
 
 ---
 
 ## 5.2 Read Pipeline: Smart Recall
 
-`mnemon recall` is Mnemon's core retrieval algorithm. Smart recall is the default mode for all queries. It combines intent detection, multi-signal anchor selection, Beam Search graph traversal, and multi-factor re-ranking to achieve intent-aware graph-enhanced retrieval. Use `--basic` for legacy SQL LIKE fallback.
+`mnemon recall` is Mnemon's core retrieval algorithm. Smart recall is the default mode for all queries. It combines LLM query expansion, intent detection, multi-signal anchor selection, Beam Search graph traversal, and multi-factor re-ranking. Use `--basic` for SQL LIKE fallback.
 
 ![Smart Recall Pipeline](../diagrams/03-smart-recall-pipeline.drawio.png)
 
+### Step 0: LLM Query Expansion
+
+`expand_query(llm_client, query)` sends the raw query to the LLM, which returns:
+- **expanded_query**: original + synonyms and related terms
+- **keywords**: extracted search keywords
+- **entities**: entities mentioned or implied in the query
+- **intent**: WHY / WHEN / ENTITY / GENERAL (can override regex detection)
+
+The expanded query and extracted entities feed into anchor selection.
+
 ### Step 1: Intent Detection
 
-Query intent is automatically identified via regex matching:
+Query intent is identified via regex matching (or LLM override from Step 0):
 
 | Intent  | Trigger Patterns                                                                       |
 | ------- | -------------------------------------------------------------------------------------- |
@@ -203,7 +161,7 @@ Weights vary by intent:
 - **ENTITY**: Entity matching (0.35) and similarity (0.35) are co-primary; graph is de-emphasized (0.10) since entity edges are already captured in entity score.
 - **GENERAL**: Similarity-weighted (0.45) with keyword (0.25) as secondary — no strong bias without clear intent, but semantic match is the default discriminator.
 
-**No-embed fallback:** When embeddings are unavailable, the similarity weight redistributes to keyword and graph proportionally. For example, WHY becomes (0.25, 0.15, 0.0, 0.60) and WHEN becomes (0.30, 0.15, 0.0, 0.55) — keyword and graph share the redistributed similarity weight.
+Embeddings are Voyage AI 512-dim vectors. The expanded query from Step 0 is embedded for vector search and reranking.
 
 ### Step 5: WHY Post-Processing — Causal Topological Sort
 
@@ -234,43 +192,3 @@ Each retrieval result includes a detailed signal breakdown:
 
 This is a unique innovation in Mnemon: **exposing the retrieval pipeline's internal signals to the host LLM**. Since the host LLM has the full conversation context, it can make better re-ranking judgments than any algorithm inside the pipeline.
 
----
-
-## 5.3 Deduplication & Conflict Detection: Diff
-
-![Diff & Dedup Pipeline](../diagrams/07-diff-dedup-pipeline.drawio.png)
-
-Diff is **built into `remember`** — no separate call needed. When `mnemon remember` is invoked, it automatically runs a diff check before inserting.
-
-When `remember` is called, the built-in diff runs before the transaction:
-
-1. Compute similarity against all active insights (embedding cosine when available, token overlap as fallback)
-2. Determine the action based on similarity thresholds:
-
-| Similarity  | Action              | Behavior                                           |
-| ----------- | ------------------- | -------------------------------------------------- |
-| > 0.90      | **DUPLICATE**       | Skip insert entirely, return `action="skipped"`    |
-| 0.55 ~ 0.90 | **CONFLICT/UPDATE** | Soft-delete old insight, insert new as replacement |
-| < 0.55      | **ADD**             | Normal insert                                      |
-
-**Rationale:**
-
-- **`> 0.90` DUPLICATE**: Standard near-duplicate threshold in dedup literature. At 0.90+ similarity, content is functionally identical.
-- **`0.55–0.90` CONFLICT/UPDATE**: Below 0.55, content is sufficiently distinct to coexist. Conflict detection is further refined by linguistic signals — antonym pairs and negation words in the content trigger CONFLICT classification within this range.
-- **`< 0.55` ADD**: Content is distinct enough to stand as an independent insight.
-
-The `--no-diff` flag disables this check for cases where the caller wants unconditional insertion.
-
-### Typical Workflow
-
-A single `remember` call handles everything:
-
-```bash
-# Single command — diff is automatic
-mnemon remember "Chose PostgreSQL to replace SQLite as the primary database" \
-  --cat decision --imp 5 --source agent
-# → If conflict with existing "Chose SQLite as storage":
-#   auto-replaces old insight, returns action="replaced", replaced_id="<old_id>"
-# → If duplicate: returns action="skipped"
-# → If new: returns action="added"
-```

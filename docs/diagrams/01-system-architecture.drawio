@@ -112,7 +112,7 @@
         <mxCell id="a_embed" value="&lt;b&gt;embed/&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=11;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="870" y="370" width="270" height="130" as="geometry" />
         </mxCell>
-        <mxCell id="a_ollama_c" value="&lt;b&gt;ollama.py&lt;/b&gt;&lt;br&gt;EmbedClient class&lt;br&gt;nomic-embed-text&lt;br&gt;graceful fallback" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=5;" vertex="1" parent="1">
+        <mxCell id="a_ollama_c" value="&lt;b&gt;voyage.py&lt;/b&gt;&lt;br&gt;Client class&lt;br&gt;voyage-3-lite&lt;br&gt;512-dim vectors" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=5;" vertex="1" parent="1">
           <mxGeometry x="880" y="395" width="120" height="70" as="geometry" />
         </mxCell>
         <mxCell id="a_vec" value="&lt;b&gt;vector.py&lt;/b&gt;&lt;br&gt;cosine_similarity&lt;br&gt;serialize_vector / deserialize_vector" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=5;" vertex="1" parent="1">
@@ -139,7 +139,7 @@
         <mxCell id="a_l5" value="&lt;b&gt;External Services&lt;/b&gt;  (optional)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;verticalAlign=top;fontSize=11;align=left;spacingLeft=10;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="40" y="700" width="1120" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="a_ollama_s" value="&lt;b&gt;Ollama&lt;/b&gt;&lt;br&gt;localhost:11434 | nomic-embed-text (768d)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;dashed=1;" vertex="1" parent="1">
+        <mxCell id="a_ollama_s" value="&lt;b&gt;Voyage AI&lt;/b&gt;&lt;br&gt;api.voyageai.com | voyage-3-lite (512d)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="60" y="725" width="300" height="40" as="geometry" />
         </mxCell>
         <mxCell id="a_fs" value="&lt;b&gt;File System&lt;/b&gt;&lt;br&gt;~/.mnemon/data/&amp;lt;store&amp;gt;/mnemon.db" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;dashed=1;" vertex="1" parent="1">

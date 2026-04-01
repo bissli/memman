@@ -85,39 +85,32 @@ mnemon gc --review
 
 ## 6.5 Embedding Support
 
-Embedding vectors are an optional enhancement. Without embeddings, Mnemon operates entirely on keywords and graph structure; with embeddings, semantic retrieval capabilities are significantly enhanced.
+Voyage AI provides 512-dim embeddings for semantic search and graph connectivity.
 
-### Ollama Integration
-
-Via the local Ollama service (no external API required):
+### Voyage AI Integration
 
 ```
-Mnemon ──HTTP──→ Ollama (localhost:11434)
-                  └── nomic-embed-text
-                      768-dim vector
+Mnemon ──HTTP──→ Voyage AI (api.voyageai.com)
+                  └── voyage-3-lite
+                      512-dim vector
 ```
 
-- **Availability detection**: 2-second timeout to avoid blocking
-- **Graceful degradation**: Automatically falls back to token overlap when Ollama is unavailable
-- **Zero new dependencies**: Uses `httpx` (already a runtime dependency)
+- **Required**: `VOYAGE_API_KEY` environment variable
+- Uses `httpx` (already a runtime dependency)
 
 ### Vector Storage
 
-Vectors are serialized as little-endian float64 BLOBs stored in the `insights.embedding` column (768 x 8 = 6144 bytes/insight).
+Vectors are serialized as little-endian float64 BLOBs stored in the `insights.embedding` column (512 x 8 = 4096 bytes/insight).
 
-### Usage Scenarios
+### Embedding in the Pipeline
 
-| Scenario                   | Without Embedding     | With Embedding                   |
-| -------------------------- | --------------------- | -------------------------------- |
-| remember -> semantic edges | Token overlap > 0.10  | cos >= 0.80 auto-link            |
-| recall -> anchors          | Keyword + recency     | Keyword + vector + recency       |
-| recall -> traversal        | Pure structural score | Structural + semantic similarity |
-| recall -> re-ranking       | KW + Entity + Graph   | KW + Entity + Similarity + Graph |
+- **Tier 1 (remember)**: Each fact is embedded immediately after extraction
+- **Tier 2 (link_pending)**: Insights are re-embedded with enriched text (content + LLM-extracted keywords)
+- **Recall**: Expanded query is embedded for vector search anchors and reranking
 
 ### Management Commands
 
 ```bash
-ollama pull nomic-embed-text    # Install the model
 mnemon embed --status           # View coverage
 mnemon embed --all              # Batch-generate embeddings for all insights
 mnemon embed <id>               # Generate for a single insight

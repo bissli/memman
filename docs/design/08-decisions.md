@@ -8,12 +8,12 @@
 
 ### Why LLM-Supervised Instead of an Embedded LLM?
 
-| Dimension          | LLM-Embedded (Mem0, etc.)     | LLM-Supervised (Mnemon) |
-| ------------------ | ----------------------------- | ----------------------- |
-| LLM Capability     | gpt-4o-mini (constrained)     | Host LLM (Opus-class)   |
-| API Cost           | Every operation incurs a call | Zero                    |
-| Network Dependency | Required                      | Not required            |
-| Swappability       | API-bound                     | Any LLM CLI             |
+| Dimension          | LLM-Embedded (Mem0, etc.) | LLM-Supervised (Mnemon)                       |
+| ------------------ | ------------------------- | --------------------------------------------- |
+| LLM Capability     | gpt-4o-mini (constrained) | Host LLM (Opus-class) + Haiku for pipeline    |
+| Pipeline LLM       | Same model for everything | Haiku for extraction/reconciliation/expansion |
+| Network Dependency | Required                  | Required (Anthropic + Voyage APIs)            |
+| Swappability       | API-bound                 | Any LLM CLI                                   |
 
 ### Why SQLite WAL Instead of an Embedded Graph Database?
 
@@ -38,17 +38,18 @@
 
 ### Key Deviations from the MAGMA Paper
 
-| Aspect            | MAGMA Paper                        | Mnemon Implementation                                                |
-| ----------------- | ---------------------------------- | -------------------------------------------------------------------- |
-| Entity Extraction | LLM-driven full pipeline           | Regex + dictionary (fully deterministic); IDF-weighted edges         |
-| Causal Reasoning  | Embedded prompt chain              | Auto candidates (token overlap + keywords); LLM evaluates via `link` |
-| Node Types        | EVENT, EPISODE, SESSION, NARRATIVE | Insight only (flat)                                                  |
-| Storage           | NetworkX (in-memory)               | SQLite (persistent)                                                  |
-| Embeddings        | FAISS + OpenAI                     | Ollama (local, optional)                                             |
-| Quality Review    | Slow-path LLM refinement (Alg. 3)  | Pattern-based quality warnings (remember) + async gc --review        |
-| Deployment        | Python library                     | Python package (CLI)                                                 |
+| Aspect            | MAGMA Paper                        | Mnemon Implementation                                     |
+| ----------------- | ---------------------------------- | --------------------------------------------------------- |
+| Entity Extraction | LLM-driven full pipeline           | LLM-based via Haiku (`extract_facts` + `enrich_with_llm`) |
+| Causal Reasoning  | Embedded prompt chain              | LLM causal inference (`infer_llm_causal_edges`) in Tier 2 |
+| Deduplication     | Not addressed                      | LLM reconciliation (ADD/UPDATE/DELETE/NONE)               |
+| Node Types        | EVENT, EPISODE, SESSION, NARRATIVE | Insight only (flat)                                       |
+| Storage           | NetworkX (in-memory)               | SQLite (persistent)                                       |
+| Embeddings        | FAISS + OpenAI                     | Voyage AI (voyage-3-lite, 512-dim)                        |
+| Quality Review    | Slow-path LLM refinement (Alg. 3)  | Pattern-based quality warnings + async gc --review        |
+| Deployment        | Python library                     | Python package (CLI)                                      |
 
-Mnemon retains MAGMA's **architectural skeleton** (four-graph separation, intent-adaptive retrieval, multi-signal fusion) while replacing academic implementation details with production-ready simplifications. The core trade-off is: **use regex/heuristics to handle 80% of automation scenarios, and delegate the 20% requiring deep understanding to the host LLM.** This is the LLM-Supervised pattern — deterministic automation for the majority of cases, LLM judgment for the complex minority.
+Mnemon retains MAGMA's **architectural skeleton** (four-graph separation, intent-adaptive retrieval, multi-signal fusion) while using Haiku for pipeline intelligence (fact extraction, reconciliation, query expansion, enrichment, causal inference) and the host LLM for high-level judgment.
 
 ---
 

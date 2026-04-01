@@ -26,8 +26,7 @@ Under the LLM-Supervised pattern, responsibilities are clearly separated into tw
 
 This means:
 
-- **Zero additional API cost**: All computation happens locally
-- **Stronger judgment capability**: An Opus-class LLM evaluates candidate links, not gpt-4o-mini
+- **Stronger judgment capability**: The host LLM (e.g., Opus) evaluates candidate links, while Haiku handles fact extraction and reconciliation
 - **LLM swappable**: The same Binary + Skill works across Claude Code, Cursor, or any LLM CLI
 
 ## 2.2 Tools are Organs, Skills are Textbooks
@@ -109,26 +108,13 @@ The [RRF paper](https://dl.acm.org/doi/10.1145/1571941.1572114) (Cormack, Clarke
 
 Mnemon adopts the LLM-Supervised pattern: the host LLM orchestrates memory operations as a supervisor, while the binary handles deterministic computation. This is a deliberate engineering choice driven by practical observation:
 
-- **Two-stage pipelines work**: Deterministic filtering (regex, token overlap, keyword matching) followed by LLM judgment (evaluating candidates, deciding what to link) consistently outperforms embedding an LLM inside the pipeline to do both.
+- **LLM-first pipelines work**: LLM fact extraction and reconciliation (Haiku) handle write-path intelligence, while the host LLM handles high-value judgment (evaluating candidates, deciding what to link).
 - **Intent-native protocol**: The protocol surface uses `remember` instead of INSERT, `link` instead of CREATE EDGE, `recall` instead of SELECT — command names are semantic, mapping directly to the LLM's cognitive vocabulary rather than the database's operational vocabulary.
 - **Stronger judgment capability**: An Opus-class host LLM evaluates candidate links, not an embedded gpt-4o-mini doing double duty as both data processor and judge.
 
-Many existing projects embed LLM calls into the memory pipeline — for entity extraction, conflict detection, causal reasoning. Mnemon separates these concerns: raise the protocol's expressiveness to handle deterministic operations, and delegate genuine judgment to the host LLM as supervisor.
+Mnemon uses Haiku for fact extraction, reconciliation, and query expansion in the pipeline, while the host LLM handles higher-level judgment. The write path uses LLM reconciliation (ADD/UPDATE/DELETE/NONE) instead of threshold-based diff. The lifecycle is hook-driven: remember → reconcile → link → gc.
 
-**Mnemon's Own Contribution: The Engineering Bridge**
-
-Neither paper addresses how to connect an LLM orchestrator to a graph-structured memory in production. Mnemon fills this gap:
-
-| Layer                                        | Source | Choice                                    |
-| -------------------------------------------- | ------ | ----------------------------------------- |
-| **Paradigm** — who orchestrates?             | Mnemon | The host LLM, not an embedded model       |
-| **Methodology** — what's in the environment? | MAGMA  | Four-graph with intent-adaptive retrieval |
-| **Fusion** — how are signals combined?       | RRF    | Reciprocal rank fusion with k=60          |
-| **Protocol** — how do they talk?             | Mnemon | CLI commands + structured JSON            |
-| **Lifecycle** — how does memory evolve?      | Mnemon | Hook-driven remember → diff → link → gc   |
-| **Distribution** — how to ship it?           | Mnemon | Python package, zero API dependencies     |
-
-Where MAGMA's reference implementation is a Python library with in-memory NetworkX graphs, Mnemon persists everything in SQLite with a complete write-back lifecycle. Mnemon uses deterministic CLI commands as the symbolic interface — constrained, but auditable, portable, and zero-sandbox.
+Where MAGMA's reference implementation is a Python library with in-memory NetworkX graphs, Mnemon persists everything in SQLite with a complete write-back lifecycle. CLI commands as the interface — constrained, but auditable, portable, and sandboxed.
 
 ![LLM-Supervised Architecture](../diagrams/05-llm-supervised.drawio.png)
 

@@ -39,10 +39,7 @@ Insight A (2h ago) ←── backbone ──→ Insight B (1h ago) ←── bac
 
 **Purpose**: Link insights that mention the same entities.
 
-**Entity extraction (hybrid approach)**:
-1. **Regex patterns**: CamelCase (`HttpServer`), ALL_CAPS (`API`), file paths (`./cmd/root.go`), URLs, @-mentions
-2. **Technical dictionary**: ~100 common terms (Go, React, SQLite, Kubernetes...)
-3. **User-provided**: `--entities` flag for direct specification
+**Entity extraction**: LLM-based via `extract_facts()` (Tier 1) and `enrich_with_llm()` (Tier 2). The LLM extracts entities as part of fact decomposition — no regex patterns or dictionaries. User-provided entities via `--entities` flag are merged with LLM-extracted ones.
 
 **Automatically created edges**: New insight <-> up to 5 existing insights per shared entity (bidirectional). Edge weight is computed via IDF: rare entities (appearing in few insights) produce high-weight edges; common entities produce low-weight edges. When the store has ≤5 insights, all entity edges use weight 1.0 (IDF is not meaningful at that scale).
 
@@ -57,60 +54,45 @@ Insight A ←── entity ──→ Insight B ←── entity ──→ Insigh
 
 **Rationale:**
 
-- **`MAX_ENTITY_LINKS = 5` per entity**: Caps edge creation per shared entity to prevent popular entities (e.g., "Python", "SQLite") from creating O(n) edges on every insert.
-- **`MAX_TOTAL_ENTITY_EDGES = 50`**: Hard cap across all entities per insert. With typical insights mentioning 2–5 entities × 5 links each, 50 is a generous upper bound that prevents pathological cases.
-- **IDF weighting**: Entity edge weight uses `log(N/df) / log(N)` (floored at 0.1), where N = total active insights and df = count of insights containing the entity. This compensates for MAGMA's hub-node architecture — without explicit hub nodes, IDF ensures common entities (e.g., "Python") create weak edges while rare entities (e.g., a specific project name) create strong edges, achieving similar traversal discrimination. IDF is disabled when N ≤ 5 (too few documents for meaningful frequency discrimination). IDF affects beam search traversal weight only — Effective Importance uses integer edge count, not weighted sum.
+- **`MAX_ENTITY_LINKS = 5` per entity**: Caps edge creation per shared entity to prevent popular entities from creating O(n) edges on every insert.
+- **`MAX_TOTAL_ENTITY_EDGES = 50`**: Hard cap across all entities per insert.
+- **IDF weighting**: Entity edge weight uses `log(N/df) / log(N)` (floored at 0.1), where N = total active insights and df = count of insights containing the entity. Common entities create weak edges; rare entities create strong edges. IDF is disabled when N ≤ 5.
 
 ## 4.3 Causal Graph
 
 **Purpose**: Capture the reasons behind decisions and cause-effect relationships.
 
-**Automatic detection**:
-1. Content contains causal keywords (`because`, `therefore`, `due to`, `caused by`, `as a result`, etc.)
-2. Token overlap with recent insights >= 15%
-3. Direction inference: causal direction is determined based on whether the causal keyword appears in the new or existing insight
-
-**LLM-assisted evaluation**:
-- `remember` outputs a causal candidate list (discovered via 2-hop BFS)
-- The host LLM evaluates these candidates and decides whether to establish connections via `link --type causal`
-- Supports sub-type hints: `causes` (direct cause), `enables` (enabling condition), `prevents` (preventing factor)
+**LLM-only inference** (Tier 2, via `infer_llm_causal_edges()`):
+1. Candidate discovery: 2-hop BFS neighbors + recent insights (up to 20), filtered by token overlap >= 15%
+2. LLM evaluates candidates and returns edges with confidence scores
+3. Edges below `LLM_CONFIDENCE_FLOOR` (0.75) are rejected
+4. Sub-types: `causes` (direct cause), `enables` (enabling condition), `prevents` (preventing factor)
 
 ```
 Insight A ──── causal ────→ Insight B
 ("Team lacks Redis exp.")   ("Chose SQLite as storage")
   sub_type: "causes"
-  weight: 0.75
+  weight: 0.80 (LLM confidence)
 ```
-
-This is a quintessential example of the LLM-Supervised philosophy: Binary handles low-cost candidate discovery (regex + token overlap), while the LLM handles high-value causal judgment.
 
 **Rationale:**
 
-- **`MIN_CAUSAL_OVERLAP = 0.15` (15%)**: Requires at least 15% token overlap to suggest a causal link. Below this threshold, shared tokens are likely stopwords or incidental.
-- **`CAUSAL_LOOKBACK = 20`**: Scans the 20 most recent active insights (regardless of source) for causal overlap. Cross-source causal edges allow connections between user-authored and agent-authored insights that share topic overlap. Balances coverage against scan cost; causal relationships typically form with recent context.
-- **`MAX_CAUSAL_CANDIDATES = 10`**: Caps BFS candidates returned for LLM evaluation. Keeps the LLM's review task manageable.
+- **`MIN_CAUSAL_OVERLAP = 0.15`**: Filters BFS candidates — below this, shared tokens are incidental.
+- **`MAX_CAUSAL_CANDIDATES = 10`**: Caps candidates sent to LLM.
+- **`LLM_CONFIDENCE_FLOOR = 0.75`**: High bar for accepting inferred edges.
 
 ## 4.4 Semantic Graph
 
 **Purpose**: Connect semantically similar insights based on meaning.
 
-**Two-tier confidence system**:
+**Auto-link**: Cosine similarity >= 0.70 (`AUTO_SEMANTIC_THRESHOLD`), top 3 per insight (`MAX_AUTO_SEMANTIC_EDGES`). Bidirectional edges created automatically.
 
-| Tier                 | Cosine Similarity | Behavior                                                            |
-| -------------------- | ----------------- | ------------------------------------------------------------------- |
-| **Auto-link**        | >= 0.70           | Automatically create bidirectional edges (high confidence), up to 3 |
-| **Candidate review** | >= 0.40           | Output to LLM for evaluation; `auto_linked` flag marks >= 0.70      |
-| **Ignore**           | < 0.40            | No action                                                           |
-
-**Fallback** (without embeddings): Token overlap rate is used instead of cosine similarity.
+Embeddings are Voyage AI 512-dim vectors. Both Tier 1 (initial insert) and Tier 2 (post-enrichment re-embed) create semantic edges.
 
 **Rationale:**
 
-- **`MIN_SEMANTIC_SIMILARITY = 0.10`**: Lower bound from MAGMA Table 5 ("Sim. Threshold: 0.10–0.30"). Below 0.10, token overlap is noise. *(Cite: MAGMA, Jiang et al., arXiv 2601.03236, Table 5: Sim. Threshold 0.10–0.30)*
-- **`REVIEW_SEMANTIC_THRESHOLD = 0.40`**: Extends MAGMA's single threshold into a three-tier system. 0.40 is the midpoint between the noise floor (0.10) and auto-link (0.80), providing a "worth surfacing for LLM review" zone. Not directly from any paper — mnemon's own tiering.
-- **`AUTO_SEMANTIC_THRESHOLD = 0.70`**: High-confidence cutoff for creating edges without LLM review. With `nomic-embed-text`, 0.70 cosine similarity represents strong semantic overlap in practice. Not from MAGMA (the paper does not define a specific auto-link threshold).
-- **`MAX_SEMANTIC_CANDIDATES = 5`**: Caps candidates surfaced for LLM review. Keeps the review manageable without missing strong matches.
-- **`MAX_AUTO_SEMANTIC_EDGES = 3`**: Limits auto-created edges per insert to prevent over-linking on dense topics.
+- **`AUTO_SEMANTIC_THRESHOLD = 0.70`**: High-confidence cutoff. With Voyage `voyage-3-lite`, 0.70 cosine represents strong semantic overlap.
+- **`MAX_AUTO_SEMANTIC_EDGES = 3`**: Limits edges per insert to prevent over-linking on dense topics.
 
 ```
 Insight A ←── semantic (auto, cos=0.92) ──→ Insight B
@@ -253,163 +235,4 @@ Native RAG      link absent entirely
 
 The more degenerate the `link` operation, the more burden falls on the LLM at recall time to infer associations that were never stored.
 
-### The Protocol Gap: LLM ↔ Database
-
-### The Missing Layer
-
-The existing protocol stack has a gap between LLMs and databases:
-
-```
-  LLM
-   ↕  MCP (LLM ↔ Tools)         ← standardized
-  Tools
-   ↕  ??? (LLM ↔ Database)      ← no protocol exists
-  Database
-   ↕  ODBC/JDBC (App ↔ Database) ← standardized
-  Storage
-```
-
-MCP standardizes how LLMs discover and invoke tools. ODBC/JDBC standardizes how applications access databases. But **how LLMs interact with databases using memory semantics** — this layer has no protocol.
-
-Every project reinvents this layer independently: Mem0 builds its own, OpenViking builds its own, Claude Code's CLAUDE.md builds its own (by bypassing the problem entirely with file injection). Each conflates two fundamentally different problems:
-
-1. **LLM-DB interaction protocol** (how to read and write) — an LLM problem
-2. **DB engine optimization** (how to store and query efficiently) — a database problem
-
-### The Industry Anti-Pattern
-
-Current agent memory systems are monoliths that couple protocol and storage:
-
-```
-Mem0             = protocol + custom storage engine
-Claude Code Mem  = no protocol (file injection into context window)
-OpenViking       = protocol + virtual filesystem engine
-MemGPT           = protocol + tiered memory manager
-```
-
-This is equivalent to every web application inventing its own HTTP. The result: no interoperability, no backend portability, no leverage of the existing database ecosystem.
-
-### remember / link / recall as Protocol Primitives
-
-The three primitives derived from our analysis are not just a taxonomy — they are the specification of an **LLM-to-Database interaction protocol**, analogous to MCP:
-
-```
-MCP:  LLM ↔ Tool
-      3 primitives: resources / tools / prompts
-
-MLP:  LLM ↔ Database
-      3 primitives: remember / link / recall
-      Write path = remember + link
-      Read path  = recall
-```
-
-| Dimension            | MCP                                | Memory Layer Protocol                               |
-| -------------------- | ---------------------------------- | --------------------------------------------------- |
-| **Problem**          | How LLMs discover and invoke tools | How LLMs read/write databases with memory semantics |
-| **Primitives**       | 3 (resources / tools / prompts)    | 3 (remember / link / recall)                        |
-| **Backend-agnostic** | Any tool implements MCP server     | Any DB implements protocol adapter                  |
-| **Protocol nature**  | Discovery + invocation             | Write + associate + retrieve                        |
-
-### Protocol Definition
-
-```
-Write protocol:
-  remember(content, metadata) → node_id, candidates[]
-  link(source, target, type, weight) → edge_id
-
-Read protocol:
-  recall(query, options) → ranked_results[]
-```
-
-Three verbs covering all LLM-DB memory interactions. Any database that implements an adapter for these three interfaces can serve as an LLM memory backend.
-
-### Backend Adapter Spectrum
-
-The protocol naturally accommodates different storage backends with varying levels of expressiveness:
-
-```
-              remember    link              recall
-              ─────────   ────────────────   ──────────────────
-Neo4j         CREATE node  CREATE edge       MATCH + traverse
-TigerGraph    add vertex   add edge          GSQL query
-Milvus        upsert vec   metadata ref      ANN search
-PostgreSQL    INSERT row   INSERT FK/join     SELECT + JOIN
-Redis         SET key      _(degenerate)_     GET key
-SQLite        INSERT row   INSERT edge table  multi-signal query
-```
-
-Graph databases implement the protocol most naturally — all three primitives map directly. Relational databases need a translation layer. KV stores can only implement remember + recall (link degenerates).
-
-### Strategic Implication
-
-This reframes mnemon's position in the ecosystem:
-
-```
-         Monolithic systems              Protocol layer
-         (product approach)              (platform approach)
-
-Mem0  ──┐                         ┌── Neo4j adapter
-CC Mem──┤ Each reinvents its      │── TigerGraph adapter
-Viking──┤ own storage layer       │── Milvus adapter
-MemGPT──┘                         │── SQLite adapter (mnemon current)
-                                   └── PostgreSQL adapter
-
-                                   ↑
-                              mnemon's position:
-                              not another database,
-                              but the LLM ↔ DB protocol gateway
-```
-
-- **Not competing with Neo4j** on storage engines (DB problems belong to DB)
-- **Not competing with Mem0** on product features (it is a product bound to its implementation)
-- **Analogous to MCP** — MCP connected LLMs to the tool ecosystem; this protocol connects LLMs to the database ecosystem
-
-### Academic Landscape and Positioning
-
-### Prior Art Assessment
-
-| Claim                                         | Closest Prior Art                                                                                                                                  | Novelty                                               |
-| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| **remember/link/recall as universal algebra** | CoALA (Princeton, TMLR 2024) — retrieval/reasoning/learning, but link not separated as first-class primitive                                       | **High**                                              |
-| **Extract → Candidate → Associate**           | NER → Entity Linking → Relation Extraction — classical KG pipeline                                                                                 | **Low** (generalization across memory systems is new) |
-| **Read-write symmetry on graphs**             | MAGMA (arXiv 2601.03236) argues for intentional asymmetry (fast write / slow read)                                                                 | **High** (counter-evidence exists)                    |
-| **Other storage as degenerate graphs**        | arXiv 2602.05665 (HK PolyU, Feb 2026): "traditional memory forms can be viewed as degenerate or simplified cases within the graph memory paradigm" | **Medium** (convergent discovery)                     |
-| **LLM ↔ DB interaction protocol**             | No prior art found — all existing systems couple protocol with storage                                                                             | **High**                                              |
-
-### Key References
-
-**Foundational frameworks:**
-- CoALA: Cognitive Architectures for Language Agents (Sumers et al., Princeton, TMLR 2024)
-- Memory in the Age of AI Agents (Yuyang Hu et al., arXiv 2512.13564, Dec 2025)
-- Graph-based Agent Memory survey (Chang Yang et al., arXiv 2602.05665, Feb 2026)
-
-**Graph memory systems:**
-- MAGMA (Jiang et al., arXiv 2601.03236, Jan 2026)
-- Graphiti/Zep (Rasmussen et al., arXiv 2501.13956, Jan 2025)
-- Mem0 (arXiv 2504.19413, Apr 2025)
-
-**Recall fusion:**
-- Reciprocal Rank Fusion (Cormack, Clarke & Buttcher, SIGIR 2009)
-
-### Validation: mnemon Architecture
-
-mnemon's design directly reflects these insights:
-
-```
-remember → Extract + Candidate (semantic_candidates / causal_candidates)
-link     → Associate (semantic / causal / entity / temporal)
-recall   → Extract + Candidate + Associate (intent detection → multi-signal retrieval → graph traversal)
-```
-
-Four edge types preserve four distinct relational semantics. Degenerating to pure vector retrieval would retain only `semantic` — losing ~75% of relational information. MAGMA ablation studies confirm: removing causal edges drops accuracy 3-5%, removing temporal edges drops it further.
-
-### Summary
-
-- **Extract → Candidate → Associate** is the universal paradigm for graph construction engines
-- This three-step model achieves its **most complete expression** on graphs and degenerates toward KV
-- On graphs, read and write paths are **symmetric** — both follow the same three-step model in opposite directions
-- From the LLM perspective, reads universally collapse to **Query → Reason**
-- Graphs preserve full relational semantics that other storage types lose (see degeneracy spectrum above)
-- **remember / link / recall** is the universal algebra for agent memory systems — every system is an instantiation of these three primitives, with varying degeneracy of `link`
-- The three primitives define an **LLM ↔ Database interaction protocol** — analogous to MCP for tools, filling the missing layer between LLMs and the database ecosystem
-- mnemon's strategic position is **protocol gateway**, not database engine — separating the LLM interaction problem from the storage optimization problem
+See [Design Philosophy](02-philosophy.md#23-memory-gateway-protocol-not-database) for the protocol gap analysis and protocol primitives.

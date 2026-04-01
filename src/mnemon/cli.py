@@ -400,7 +400,7 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
                 })
             continue
 
-        edge_stats = {'temporal': 0, 'entity': 0, 'causal': 0}
+        edge_stats = {'temporal': 0, 'entity': 0}
         ei = 0.0
         pruned = 0
 

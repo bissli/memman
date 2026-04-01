@@ -21,7 +21,7 @@ A clear description of what you expected to happen.
 - OS: [e.g. macOS 15.3, Ubuntu 24.04]
 - mnemon version: [e.g. 0.1.0 — run `mnemon --version`]
 - LLM CLI: [e.g. Claude Code 1.x, OpenClaw 0.x]
-- Ollama (if relevant): [e.g. installed, model nomic-embed-text]
+- API keys configured: [ANTHROPIC_API_KEY, VOYAGE_API_KEY]
 
 **Additional context**
 Paste any relevant output from `mnemon status` or `mnemon log`.

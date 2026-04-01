@@ -54,12 +54,12 @@ mnemon setup --eject --target claude-code
 ### Core
 
 ```bash
-# Remember — store a new insight (built-in diff: duplicates skipped, conflicts auto-replaced)
+# Remember — store a new insight (LLM reconciliation: duplicates skipped, conflicts resolved)
 mnemon remember "Chose Qdrant over Milvus for vector search" \
   --cat decision --imp 5 --entities "Qdrant,Milvus" --tags "architecture,search" --source agent
 
-# Skip duplicate/conflict detection
-mnemon remember "Raw note" --no-diff
+# Skip LLM reconciliation (direct insert)
+mnemon remember "Raw note" --no-reconcile
 
 # Recall — intent-aware graph-enhanced retrieval (default)
 mnemon recall "vector database" --limit 10
@@ -85,14 +85,14 @@ mnemon forget <id>
 
 **Remember flags:**
 
-| Flag         | Default   | Description                                                                 |
-| ------------ | --------- | --------------------------------------------------------------------------- |
-| `--cat`      | `general` | Category: `preference`, `decision`, `fact`, `insight`, `context`, `general` |
-| `--imp`      | `3`       | Importance: 1–5                                                             |
-| `--tags`     |           | Comma-separated tags                                                        |
-| `--entities` |           | Comma-separated entities (merged with auto-extraction)                      |
-| `--source`   | `user`    | Source: `user`, `agent`, `external`                                         |
-| `--no-diff`  | `false`   | Skip duplicate/conflict detection                                           |
+| Flag             | Default   | Description                                                                 |
+| ---------------- | --------- | --------------------------------------------------------------------------- |
+| `--cat`          | `general` | Category: `preference`, `decision`, `fact`, `insight`, `context`, `general` |
+| `--imp`          | `3`       | Importance: 1–5                                                             |
+| `--tags`         |           | Comma-separated tags                                                        |
+| `--entities`     |           | Comma-separated entities (merged with LLM-extracted)                        |
+| `--source`       | `user`    | Source: `user`, `agent`, `external`                                         |
+| `--no-reconcile` | `false`   | Skip LLM reconciliation (direct insert)                                     |
 
 **Recall flags:**
 
@@ -129,7 +129,7 @@ Auto-relink fires transparently when `open_db()` detects graph constants (thresh
 mnemon graph link
 ```
 
-Drains all insights with `linked_at IS NULL`, creating semantic edges (embedding-based similarity) and optionally LLM causal edges (when `ANTHROPIC_API_KEY` is set). Processes in batches of 20 until fully drained. Returns `{"processed": N, "remaining": 0}`.
+Drains all insights with `linked_at IS NULL`: LLM enrichment, re-embedding, LLM causal inference, and edge rebuild (entity + semantic + causal). Processes in batches of 20 until fully drained. Returns `{"processed": N, "remaining": 0}`.
 
 ### Lifecycle Management
 
@@ -202,103 +202,38 @@ Nodes are colored by category (decision, fact, insight, preference, context); ed
 
 ## Configuration
 
-| Variable                | Default                         | Description                                |
-| ----------------------- | ------------------------------- | ------------------------------------------ |
-| `MNEMON_DATA_DIR`       | `~/.mnemon`                     | Base data directory                        |
-| `MNEMON_STORE`          | `default`                       | Active named store                         |
-| `ANTHROPIC_API_KEY`     | —                               | Enables LLM causal inference automatically |
-| `MNEMON_LLM_ENDPOINT`   | `https://api.anthropic.com`     | Override LLM endpoint                      |
-| `MNEMON_LLM_API_KEY`    | falls back to ANTHROPIC_API_KEY | Override API key for LLM endpoint          |
-| `MNEMON_LLM_MODEL`      | `claude-haiku-4-5-20251001`     | Model for causal inference                 |
-| `MNEMON_EMBED_PROVIDER` | `ollama`                        | Embedding provider: `ollama` or `openai`   |
-| `MNEMON_EMBED_ENDPOINT` | `http://localhost:11434`        | Embedding API endpoint                     |
-| `MNEMON_EMBED_MODEL`    | `nomic-embed-text`              | Embedding model name                       |
-| `MNEMON_EMBED_API_KEY`  | —                               | API key for OpenAI-compatible endpoint     |
-
----
-
-## Embedding Support (Optional)
-
-Mnemon works fully without Ollama — all core features (remember, recall, link, graph traversal) function out of the box. Adding Ollama enhances recall precision through vector similarity, but is never required.
-
-### What changes with and without embeddings
-
-| Capability            | Without Ollama                     | With Ollama                                        |
-| --------------------- | ---------------------------------- | -------------------------------------------------- |
-| **Recall anchors**    | Keyword + recency                  | Keyword + vector + recency (RRF hybrid)            |
-| **Semantic edges**    | Token overlap (coarser)            | Cosine similarity ≥ 0.70 (precise)                 |
-| **Traversal scoring** | Pure structural                    | Structural + semantic                              |
-| **Rerank weights**    | Keyword 45%, Entity 25%, Graph 30% | Keyword 25%, Entity 15%, Similarity 45%, Graph 15% |
-
-When Ollama is unavailable, the reranking system automatically redistributes similarity weight to keyword and graph signals — no configuration needed, no degraded mode flag. The system detects Ollama availability at runtime with a 2-second timeout.
-
-### Setup
-
-```bash
-brew install ollama              # or see https://ollama.ai
-ollama pull nomic-embed-text     # download the embedding model
-```
-
-Verify with:
-
-```bash
-mnemon embed --status
-```
-
-```json
-{
-  "total_insights": 87,
-  "embedded": 87,
-  "coverage": "100%",
-  "ollama_available": true,
-  "model": "nomic-embed-text"
-}
-```
-
-### Backfilling existing insights
-
-If you install Ollama after already using mnemon, existing insights won't have embeddings. Backfill them in one command:
-
-```bash
-mnemon embed --all           # backfill all un-embedded insights
-mnemon embed <id>            # embed a single insight by ID
-```
-
-This generates embeddings for all un-embedded insights and automatically creates semantic edges. You can check coverage before and after with `mnemon embed --status`.
+| Variable              | Default                         | Description                                           |
+| --------------------- | ------------------------------- | ----------------------------------------------------- |
+| `MNEMON_DATA_DIR`     | `~/.mnemon`                     | Base data directory                                   |
+| `MNEMON_STORE`        | `default`                       | Active named store                                    |
+| `ANTHROPIC_API_KEY`   | —                               | Required: LLM fact extraction, reconciliation, recall |
+| `VOYAGE_API_KEY`      | —                               | Required: Voyage AI embeddings (512-dim)              |
+| `MNEMON_LLM_ENDPOINT` | `https://api.anthropic.com`     | Override LLM endpoint                                 |
+| `MNEMON_LLM_API_KEY`  | falls back to ANTHROPIC_API_KEY | Override API key for LLM endpoint                     |
+| `MNEMON_LLM_MODEL`    | `claude-haiku-4-5-20251001`     | Model for LLM inference                               |
 
 ---
 
 ## Architecture
 
-```
-┌──────────────────┐     CLI commands      ┌──────────────────┐
-│   LLM Agent      │ ──────────────────── │     Mnemon          │
-│ (Claude Code,     │  remember, recall,   │                    │
-│  Cursor, etc.)    │  link, forget, gc    │  SQLite (WAL)      │
-└──────────────────┘                      │  ┌────────────┐    │
-                                          │  │ Insights   │    │
-        The LLM decides WHAT              │  ├────────────┤    │
-        to remember and link.             │  │ 4 Edge     │    │
-                                          │  │ Types:     │    │
-        Mnemon handles HOW               │  │ temporal   │    │
-        to store, index, and              │  │ entity     │    │
-        retrieve.                         │  │ causal     │    │
-                                          │  │ semantic   │    │
-      ┌──────────────────┐                │  ├────────────┤    │
-      │  Ollama          │  (optional)    │  │ Embeddings │    │
-      │  nomic-embed-text │ ◄──────────── │  └────────────┘    │
-      └──────────────────┘                └──────────────────┘
-```
+### Write Pipeline (Two-Tier)
 
-### Write Pipeline (Three-Tier)
+`remember` uses a two-tier pipeline:
 
-`remember` uses a non-blocking pipeline so the user gets a response fast:
+1. **Tier 1 (sync)** — Quality check, LLM fact extraction, Voyage embedding,
+   LLM reconciliation (ADD/UPDATE/DELETE/NONE), insert, fast edges
+   (temporal + entity), semantic edges, EI refresh, auto-prune. Returns
+   JSON with `facts` array.
+2. **Tier 2 (async subprocess)** — `graph link` runs `link_pending()`: LLM
+   enrichment (keywords, summary, entities), re-embedding with enriched text,
+   LLM causal edge inference, edge rebuild.
 
-1. **Tier 1 (sync)** — Quality check, embedding, diff detection, insert.
-   Returns JSON immediately (~120ms).
-2. **Tier 2 (background thread)** — Creates temporal, entity, and semantic
-   edges. Refreshes importance, runs auto-prune (~200ms).
-3. **Tier 3 (detached subprocess)** — LLM enrichment and causal edge
-   inference via `graph link`. Only runs when an LLM API key is configured.
+### Recall Pipeline
+
+1. **LLM query expansion** — synonyms, entity extraction, intent detection
+2. **RRF anchor selection** — keyword + vector + recency fused with K=60
+3. **Beam search** — intent-weighted graph traversal from anchors
+4. **4-signal rerank** — keyword, entity, similarity, graph (intent-weighted)
+5. **Post-sort** — causal topological (WHY), chronological (WHEN), score (default)
 
 Inspired by [MAGMA](https://arxiv.org/abs/2601.03236) four-graph model. See [Design & Architecture](DESIGN.md) for the full deep dive.

@@ -73,7 +73,7 @@ Each named store has its own SQLite file under `~/.mnemon/data/<store>/mnemon.db
 insights (
   id, content, category, importance,
   tags, entities, source,
-  embedding,                    -- Optional, 768-dim vector
+  embedding,                    -- Voyage AI 512-dim vector
   access_count, last_accessed_at,
   effective_importance,          -- Decayed effective importance
   created_at, updated_at, deleted_at
@@ -106,11 +106,13 @@ Mnemon's architecture is divided into five layers:
 │  Core Engine          search/ (recall, intent, keyword)      │
 │                       graph/  (temporal, entity, causal,     │
 │                                semantic)                     │
-│                       embed/  (ollama, vector)               │
+│                       embed/  (voyage, vector)               │
+│                       llm/   (client, extract)               │
 ├─────────────────────────────────────────────────────────────┤
 │  Storage Layer        store/  (db, node, edge, oplog)        │
 ├─────────────────────────────────────────────────────────────┤
-│  External (Optional)  Ollama (localhost:11434)               │
+│  External             Anthropic API (Haiku)                  │
+│                       Voyage AI (embeddings)                 │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -126,13 +128,13 @@ mnemon/
 │   ├── store/                # SQLite persistence
 │   ├── graph/                # MAGMA four-graph implementation
 │   ├── search/               # Retrieval algorithms
-│   ├── embed/                # Embedding support (Ollama)
+│   ├── embed/                # Embedding support (Voyage AI)
+│   ├── llm/                  # LLM client + extraction/reconciliation
 │   └── setup/                # LLM CLI integration setup
 ├── tests/
 ├── scripts/
 │   └── e2e_test.sh
 ├── pyproject.toml            # Poetry package config
-├── CLAUDE.md
 └── Makefile
 ```
 
