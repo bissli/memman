@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import time
 
 import click
 import httpx
@@ -15,6 +16,9 @@ LLM_MODEL_VAR = 'MNEMON_LLM_MODEL'
 DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
 DEFAULT_ENDPOINT = 'https://api.anthropic.com'
 ENRICHMENT_TIMEOUT = 10.0
+MAX_RETRIES = 3
+RETRY_BACKOFF = (1.0, 2.0)
+RETRYABLE_STATUS_CODES = (500, 502, 503, 529)
 
 
 class LLMClient:
@@ -48,14 +52,28 @@ class LLMClient:
             'system': system,
             'messages': [{'role': 'user', 'content': user}],
             }
-        resp = httpx.post(
-            f'{self.endpoint}/v1/messages',
-            headers=headers,
-            json=body,
-            timeout=self.timeout)
-        resp.raise_for_status()
-        data = resp.json()
-        return data['content'][0]['text']
+        for attempt in range(MAX_RETRIES):
+            resp = httpx.post(
+                f'{self.endpoint}/v1/messages',
+                headers=headers,
+                json=body,
+                timeout=self.timeout)
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError:
+                if (resp.status_code in RETRYABLE_STATUS_CODES
+                        and attempt < MAX_RETRIES - 1):
+                    delay = RETRY_BACKOFF[min(
+                        attempt, len(RETRY_BACKOFF) - 1)]
+                    logger.debug(
+                        f'LLM {resp.status_code}, retry '
+                        f'{attempt + 1}/{MAX_RETRIES - 1} '
+                        f'in {delay}s')
+                    time.sleep(delay)
+                    continue
+                raise
+            data = resp.json()
+            return data['content'][0]['text']
 
 
 def strip_code_fences(raw: str) -> str:

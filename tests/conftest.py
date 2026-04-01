@@ -171,6 +171,7 @@ def _mock_enrichment(content: str) -> str:
     return json.dumps({
         'keywords': content.lower().split()[:5],
         'summary': content[:100],
+        'entities': _extract_mock_entities(content),
         })
 
 

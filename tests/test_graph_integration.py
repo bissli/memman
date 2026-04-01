@@ -374,7 +374,7 @@ class TestFastEdgesEngine:
         insert_insight(tmp_db, ins2)
 
         result = fast_edges(tmp_db, ins2)
-        assert set(result.keys()) == {'temporal', 'entity', 'causal'}
+        assert set(result.keys()) == {'temporal', 'entity'}
         assert result['temporal'] >= 2
         assert result['entity'] >= 1
 

@@ -5,14 +5,12 @@ import re
 from datetime import datetime, timezone
 
 from mnemon.llm.client import parse_json_list_response
-from mnemon.model import Edge, Insight, format_float
+from mnemon.model import Edge, Insight
 from mnemon.search.keyword import tokenize
-from mnemon.store.edge import insert_edge
 from mnemon.store.node import get_recent_active_insights
 
 logger = logging.getLogger('mnemon')
 
-CAUSAL_LOOKBACK = 20
 MIN_CAUSAL_OVERLAP = 0.15
 MAX_CAUSAL_CANDIDATES = 10
 LLM_CONFIDENCE_FLOOR = 0.75
@@ -26,7 +24,6 @@ CAUSAL_PATTERN = re.compile(
     r'\bthis (ensures|means)\b',
     re.IGNORECASE)
 
-CAUSES_PATTERN = re.compile(r'(?i)\b(because|caused by|due to)\b')
 ENABLES_PATTERN = re.compile(
     r'(?i)\b(so that|in order to|enables|leads to)\b')
 PREVENTS_PATTERN = re.compile(
@@ -60,59 +57,6 @@ def token_overlap(a: set[str], b: set[str]) -> float:
     small, big = (a, b) if len(a) <= len(b) else (b, a)
     intersection = sum(1 for k in small if k in big)
     return intersection / max(len(a), len(b))
-
-
-def create_causal_edges(
-        db: 'DB', insight: Insight, dry_run: bool = False) -> int:
-    """Create causal edges when insights share token overlap and causal signals.
-    """
-    recent = get_recent_active_insights(
-        db, insight.id, CAUSAL_LOOKBACK)
-    if not recent:
-        return 0
-
-    new_tokens = tokenize(insight.content)
-    if not new_tokens:
-        return 0
-
-    new_has_signal = has_causal_signal(insight.content)
-    now = datetime.now(timezone.utc)
-    count = 0
-
-    for prev in recent:
-        prev_has_signal = has_causal_signal(prev.content)
-        if not new_has_signal and not prev_has_signal:
-            continue
-
-        prev_tokens = tokenize(prev.content)
-        overlap = token_overlap(new_tokens, prev_tokens)
-        if overlap < MIN_CAUSAL_OVERLAP:
-            continue
-
-        source_id = prev.id
-        target_id = insight.id
-        if not new_has_signal and prev_has_signal:
-            if CAUSES_PATTERN.search(prev.content):
-                source_id = insight.id
-                target_id = prev.id
-
-        sub_type = suggest_sub_type(insight.content + ' ' + prev.content)
-
-        if not dry_run:
-            try:
-                insert_edge(db, Edge(
-                    source_id=source_id, target_id=target_id,
-                    edge_type='causal', weight=overlap,
-                    metadata={
-                        'overlap': format_float(overlap),
-                        'sub_type': sub_type,
-                        },
-                    created_at=now))
-            except Exception:
-                pass
-        count += 1
-
-    return count
 
 
 def find_causal_candidates(
@@ -260,17 +204,3 @@ def infer_llm_causal_edges(
     logger.debug(
         f'LLM causal inference for {insight.id}: {len(result)} edges')
     return result
-
-
-def create_llm_causal_edges(
-        db: 'DB', insight: Insight, llm_client: object) -> int:
-    """Infer and insert causal edges using LLM (convenience wrapper)."""
-    edges = infer_llm_causal_edges(db, insight, llm_client)
-    count = 0
-    for edge in edges:
-        try:
-            insert_edge(db, edge)
-            count += 1
-        except Exception:
-            pass
-    return count

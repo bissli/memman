@@ -5,7 +5,6 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from mnemon.graph.causal import create_causal_edges
 from mnemon.graph.entity import MAX_ENTITY_LINKS, MAX_TOTAL_ENTITY_EDGES
 from mnemon.graph.entity import create_entity_edges
 from mnemon.graph.semantic import AUTO_SEMANTIC_THRESHOLD, build_embed_cache
@@ -21,7 +20,7 @@ logger = logging.getLogger('mnemon')
 
 
 def fast_edges(db: 'DB', insight: Insight) -> dict[str, int]:
-    """Run cheap edge generators (temporal + entity + heuristic causal).
+    """Run cheap edge generators (temporal + entity).
 
     LLM causal inference is deferred to link_pending().
     Semantic edges are deferred to link_pending().
@@ -29,7 +28,6 @@ def fast_edges(db: 'DB', insight: Insight) -> dict[str, int]:
     return {
         'temporal': create_temporal_edge(db, insight),
         'entity': create_entity_edges(db, insight),
-        'causal': create_causal_edges(db, insight),
         }
 
 
@@ -98,6 +96,7 @@ def link_pending(
                     enrichment.get('semantic_facts', []))
                 update_entities(
                     db, insight.id, enrichment.get('entities', []))
+                insight.entities = enrichment.get('entities', [])
 
             if new_vec is not None:
                 from mnemon.embed.vector import serialize_vector
@@ -106,9 +105,29 @@ def link_pending(
                 update_embedding(
                     db, insight.id, serialize_vector(new_vec))
 
+            db._conn.execute(
+                "DELETE FROM edges WHERE (source_id = ? OR target_id = ?)"
+                " AND edge_type = 'entity'"
+                " AND (json_extract(metadata, '$.created_by') IS NULL"
+                "      OR json_extract(metadata, '$.created_by')"
+                "         NOT IN ('claude', 'manual'))",
+                (insight.id, insight.id))
+            create_entity_edges(db, insight)
+
+            db._conn.execute(
+                "DELETE FROM edges WHERE (source_id = ? OR target_id = ?)"
+                " AND edge_type = 'semantic'"
+                " AND (json_extract(metadata, '$.created_by') IS NULL"
+                "      OR json_extract(metadata, '$.created_by') = 'auto')",
+                (insight.id, insight.id))
             sem_count = create_semantic_edges(
                 db, insight, embed_cache)
 
+            db._conn.execute(
+                "DELETE FROM edges WHERE (source_id = ? OR target_id = ?)"
+                " AND edge_type = 'causal'"
+                " AND json_extract(metadata, '$.created_by') = 'llm'",
+                (insight.id, insight.id))
             for edge in causal_edges:
                 try:
                     insert_edge(db, edge)
