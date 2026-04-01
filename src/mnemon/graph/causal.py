@@ -176,9 +176,10 @@ def _build_llm_prompt(
     return '\n'.join(parts)
 
 
-def create_llm_causal_edges(
-        db: 'DB', insight: Insight, llm_client: object) -> int:
-    """Create causal edges using LLM inference on 2-hop neighborhood."""
+def infer_llm_causal_edges(
+        db: 'DB', insight: Insight,
+        llm_client: object) -> list[Edge]:
+    """Infer causal edges via LLM, returning Edge objects without inserting."""
     from mnemon.graph.bfs import BFSOptions, bfs
 
     neighbors = bfs(db, insight.id, BFSOptions(
@@ -202,7 +203,7 @@ def create_llm_causal_edges(
                 candidates.append({'insight': r, 'hop': 0, 'via_edge': ''})
 
     if not candidates:
-        return 0
+        return []
 
     prompt = _build_llm_prompt(insight, candidates, [])
 
@@ -210,17 +211,17 @@ def create_llm_causal_edges(
         raw = llm_client.complete(LLM_SYSTEM_PROMPT, prompt)
     except Exception:
         logger.debug(f'LLM causal inference unavailable for {insight.id}')
-        return 0
+        return []
 
     try:
         edges = json.loads(raw)
         if not isinstance(edges, list):
-            return 0
+            return []
     except (json.JSONDecodeError, ValueError):
-        return 0
+        return []
 
     now = datetime.now(timezone.utc)
-    count = 0
+    result = []
     valid_ids = {insight.id} | {
         n['insight'].id for n in candidates}
 
@@ -245,23 +246,33 @@ def create_llm_causal_edges(
         if sub_type not in {'causes', 'enables', 'prevents'}:
             sub_type = 'causes'
 
+        result.append(Edge(
+            source_id=source_id,
+            target_id=target_id,
+            edge_type='causal',
+            weight=confidence,
+            metadata={
+                'created_by': 'llm',
+                'confidence': confidence,
+                'rationale': edge_data.get('rationale', ''),
+                'sub_type': sub_type,
+                },
+            created_at=now))
+
+    logger.debug(
+        f'LLM causal inference for {insight.id}: {len(result)} edges')
+    return result
+
+
+def create_llm_causal_edges(
+        db: 'DB', insight: Insight, llm_client: object) -> int:
+    """Infer and insert causal edges using LLM (convenience wrapper)."""
+    edges = infer_llm_causal_edges(db, insight, llm_client)
+    count = 0
+    for edge in edges:
         try:
-            insert_edge(db, Edge(
-                source_id=source_id,
-                target_id=target_id,
-                edge_type='causal',
-                weight=confidence,
-                metadata={
-                    'created_by': 'llm',
-                    'confidence': confidence,
-                    'rationale': edge_data.get('rationale', ''),
-                    'sub_type': sub_type,
-                    },
-                created_at=now))
+            insert_edge(db, edge)
             count += 1
         except Exception:
             pass
-
-    logger.debug(
-        f'LLM causal inference for {insight.id}: {count} edges created')
     return count

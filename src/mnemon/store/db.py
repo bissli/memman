@@ -91,15 +91,16 @@ class DB:
         """Query SQL using the transaction cursor or connection."""
         return self._conn.execute(sql, params)
 
-    def in_transaction(self, fn: callable) -> None:
-        """Run fn inside a single SQL transaction."""
+    def in_transaction(self, fn: callable):
+        """Run fn inside a single SQL transaction, returning its result."""
         if self._in_tx:
             raise RuntimeError('nested transactions not supported')
         self._in_tx = True
         try:
             self._conn.execute('BEGIN IMMEDIATE')
-            fn()
+            result = fn()
             self._conn.execute('COMMIT')
+            return result
         except Exception:
             self._conn.execute('ROLLBACK')
             raise
@@ -160,6 +161,9 @@ CREATE TABLE IF NOT EXISTS insights (
     entities    TEXT DEFAULT '[]',
     source      TEXT DEFAULT 'user',
     access_count INTEGER DEFAULT 0,
+    keywords    TEXT,
+    summary     TEXT,
+    semantic_facts TEXT,
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
     deleted_at  TEXT

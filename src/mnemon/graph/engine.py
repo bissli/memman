@@ -54,12 +54,13 @@ def link_pending(
         db: 'DB',
         embed_cache: dict[str, list[float]] | None = None,
         llm_client: object | None = None,
+        embed_client: object | None = None,
         max_batch: int = MAX_LINK_BATCH,
         ) -> int:
     """Process insights where linked_at IS NULL.
 
-    Creates semantic edges (and optionally LLM causal edges) for pending
-    insights. Returns the number of insights processed.
+    Creates semantic edges (and optionally LLM causal/enrichment edges)
+    for pending insights. Returns the number of insights processed.
     """
     rows = db._conn.execute(
         'SELECT id FROM insights'
@@ -82,15 +83,64 @@ def link_pending(
             continue
 
         _prepare_entities(insight)
-        semantic_count = create_semantic_edges(db, insight, embed_cache)
 
+        enrichment = {}
         if llm_client is not None:
-            from mnemon.graph.causal import create_llm_causal_edges
-            create_llm_causal_edges(db, insight, llm_client)
+            from mnemon.graph.enrichment import enrich_with_llm
+            enrichment = enrich_with_llm(insight, llm_client)
 
-        db._conn.execute(
-            'UPDATE insights SET linked_at = ? WHERE id = ?',
-            (now, insight_id))
+        keywords = enrichment.get('keywords', [])
+        new_vec = None
+        if (keywords
+                and embed_client is not None
+                and embed_client.available()):
+            from mnemon.graph.enrichment import build_enriched_text
+            enriched_text = build_enriched_text(
+                insight.content, keywords)
+            try:
+                new_vec = embed_client.embed(enriched_text)
+            except Exception:
+                logger.debug(f'Re-embed failed for {insight.id}')
+
+        causal_edges = []
+        if llm_client is not None:
+            from mnemon.graph.causal import infer_llm_causal_edges
+            causal_edges = infer_llm_causal_edges(
+                db, insight, llm_client)
+
+        def _write_results() -> int:
+            if enrichment:
+                from mnemon.store.node import update_enrichment
+                update_enrichment(
+                    db, insight.id,
+                    enrichment.get('keywords', []),
+                    enrichment.get('summary', ''),
+                    enrichment.get('semantic_facts', []))
+                update_entities(
+                    db, insight.id, enrichment.get('entities', []))
+
+            if new_vec is not None:
+                from mnemon.embed.vector import serialize_vector
+                from mnemon.store.node import update_embedding
+                embed_cache[insight.id] = new_vec
+                update_embedding(
+                    db, insight.id, serialize_vector(new_vec))
+
+            sem_count = create_semantic_edges(
+                db, insight, embed_cache)
+
+            for edge in causal_edges:
+                try:
+                    insert_edge(db, edge)
+                except Exception:
+                    pass
+
+            db._conn.execute(
+                'UPDATE insights SET linked_at = ? WHERE id = ?',
+                (now, insight_id))
+            return sem_count
+
+        semantic_count = db.in_transaction(_write_results)
         processed += 1
         logger.debug(
             f'Linked {insight_id}: {semantic_count} semantic edges')

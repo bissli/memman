@@ -70,6 +70,32 @@ def test_recall_basic(runner):
     assert result.exit_code == 0
 
 
+def test_recall_does_not_call_link_pending(runner, monkeypatch):
+    """Recall path must not call link_pending (performance regression guard)."""
+    invoke(runner, ['remember', 'Go uses SQLite for storage', '--no-diff'])
+
+    from unittest.mock import patch
+    with patch('mnemon.graph.engine.link_pending',
+               side_effect=AssertionError('link_pending called')) as mock_lp:
+        result = invoke(runner, ['recall', 'Go SQLite'])
+        assert result.exit_code == 0
+        mock_lp.assert_not_called()
+
+
+def test_remember_does_not_link_old_pending_insights(runner, monkeypatch):
+    """Remember must not call link_pending (performance + quality guard)."""
+    invoke(runner, ['remember', 'first pending insight', '--no-diff'])
+
+    from unittest.mock import patch
+    with patch('mnemon.graph.engine.link_pending',
+               side_effect=AssertionError(
+                   'link_pending called from remember')) as mock_lp:
+        result = invoke(runner, [
+            'remember', 'second insight', '--no-diff'])
+        assert result.exit_code == 0
+        mock_lp.assert_not_called()
+
+
 def test_recall_basic_mode(runner):
     """Basic recall returns array."""
     invoke(runner, ['remember', 'Go uses SQLite', '--no-diff'])

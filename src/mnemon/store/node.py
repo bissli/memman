@@ -65,8 +65,9 @@ def query_insights(db: 'DB', keyword: str = '', category: str = '',
             conditions.append(
                 "(content LIKE ? ESCAPE '\\'"
                 " OR tags LIKE ? ESCAPE '\\'"
-                " OR entities LIKE ? ESCAPE '\\')")
-            args.extend([f'%{escaped}%', f'%{escaped}%', f'%{escaped}%'])
+                " OR entities LIKE ? ESCAPE '\\'"
+                " OR keywords LIKE ? ESCAPE '\\')")
+            args.extend([f'%{escaped}%'] * 4)
     if category:
         conditions.append('category = ?')
         args.append(category)
@@ -110,6 +111,16 @@ def update_entities(db: 'DB', id: str, entities: list[str]) -> None:
     db._exec(
         'UPDATE insights SET entities = ?, updated_at = ? WHERE id = ?',
         (json.dumps(entities, sort_keys=True), now, id))
+
+
+def update_enrichment(
+        db: 'DB', id: str, keywords: list[str],
+        summary: str, semantic_facts: list[str]) -> None:
+    """Update LLM enrichment columns for an insight."""
+    db._exec(
+        'UPDATE insights SET keywords = ?, summary = ?,'
+        ' semantic_facts = ? WHERE id = ?',
+        (json.dumps(keywords), summary, json.dumps(semantic_facts), id))
 
 
 def increment_access_count(db: 'DB', id: str) -> None:

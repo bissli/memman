@@ -753,3 +753,47 @@ class TestReviewContentQuality:
 
         flagged = review_content_quality(tmp_db, limit=2)
         assert len(flagged) == 2
+
+
+class TestInTransactionReturn:
+    """in_transaction should return callback value."""
+
+    def test_in_transaction_returns_callback_value(self, tmp_db):
+        """in_transaction returns the callback's return value."""
+        result = tmp_db.in_transaction(lambda: 42)
+        assert result == 42
+
+    def test_in_transaction_returns_none_from_void(self, tmp_db):
+        """Void callback returns None."""
+        result = tmp_db.in_transaction(lambda: None)
+        assert result is None
+
+
+class TestKeywordColumnSearch:
+    """LIKE search covers the keywords enrichment column."""
+
+    def test_keyword_search_matches_keywords_column(self, tmp_db):
+        """LIKE search finds insights via enrichment keywords column."""
+        insight = make_insight(
+            id='ks-1', content='unrelated words only')
+        insert_insight(tmp_db, insight)
+        tmp_db._conn.execute(
+            'UPDATE insights SET keywords = ? WHERE id = ?',
+            ('["targetkw", "otherkw"]', 'ks-1'))
+
+        results = query_insights(tmp_db, keyword='targetkw')
+        assert len(results) == 1
+        assert results[0].id == 'ks-1'
+
+
+class TestEnrichmentSchema:
+    """Verify enrichment columns exist in fresh databases."""
+
+    def test_new_columns_in_schema(self, tmp_db):
+        """Fresh DB has keywords, summary, semantic_facts columns."""
+        cols = tmp_db._conn.execute(
+            'PRAGMA table_info(insights)').fetchall()
+        col_names = {row[1] for row in cols}
+        assert 'keywords' in col_names
+        assert 'summary' in col_names
+        assert 'semantic_facts' in col_names

@@ -22,11 +22,15 @@ class LLMClient:
             endpoint: str,
             api_key: str,
             model: str = DEFAULT_MODEL,
+            max_tokens: int = 1024,
+            timeout: float = 10.0,
             ) -> None:
         """Initialize with endpoint, API key, and model name."""
         self.endpoint = endpoint.rstrip('/')
         self.api_key = api_key
         self.model = model
+        self.max_tokens = max_tokens
+        self.timeout = timeout
 
     def complete(self, system: str, user: str) -> str:
         """Send a completion request and return the text response."""
@@ -37,7 +41,7 @@ class LLMClient:
             }
         body = {
             'model': self.model,
-            'max_tokens': 1024,
+            'max_tokens': self.max_tokens,
             'system': system,
             'messages': [{'role': 'user', 'content': user}],
             }
@@ -45,7 +49,7 @@ class LLMClient:
             f'{self.endpoint}/v1/messages',
             headers=headers,
             json=body,
-            timeout=10.0)
+            timeout=self.timeout)
         resp.raise_for_status()
         data = resp.json()
         return data['content'][0]['text']

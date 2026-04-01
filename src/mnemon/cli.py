@@ -188,7 +188,7 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
     from mnemon.embed import get_client
     from mnemon.embed.vector import deserialize_vector, serialize_vector
     from mnemon.graph.causal import find_causal_candidates
-    from mnemon.graph.engine import fast_edges, link_pending
+    from mnemon.graph.engine import fast_edges
     from mnemon.search.diff import diff as run_diff
     from mnemon.search.quality import check_content_quality
     from mnemon.store.node import MAX_INSIGHTS, auto_prune
@@ -272,8 +272,6 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
             }
         _json_out(output)
         return
-
-    link_pending(db, max_batch=2)
 
     edge_stats = {'temporal': 0, 'entity': 0, 'causal': 0}
     ei = 0.0
@@ -370,7 +368,6 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
            intent: str) -> None:
     """Retrieve insights by keyword."""
     from mnemon.embed import get_client
-    from mnemon.graph.engine import link_pending as _link
     from mnemon.graph.entity import extract_entities
     from mnemon.search.intent import intent_from_string
     from mnemon.search.recall import intent_aware_recall
@@ -380,8 +377,6 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
     keyword_str = ' '.join(keyword)
     db = _open_db(ctx)
     try:
-        _link(db, max_batch=2)
-
         if basic:
             results = query_insights(
                 db, keyword=keyword_str, category=cat,
@@ -1097,7 +1092,8 @@ def setup(ctx: click.Context, target: str, eject: bool, auto_yes: bool, use_glob
 @graph.command('link')
 @click.pass_context
 def graph_link(ctx: click.Context) -> None:
-    """Process pending semantic edge linking."""
+    """Process pending semantic edge linking and LLM enrichment."""
+    from mnemon.embed import get_client
     from mnemon.graph.engine import link_pending
     from mnemon.graph.semantic import build_embed_cache
     from mnemon.llm.client import get_llm_client
@@ -1105,6 +1101,7 @@ def graph_link(ctx: click.Context) -> None:
     db = _open_db(ctx)
     try:
         llm_client = get_llm_client()
+        ec = get_client()
         pending_count = db._conn.execute(
             'SELECT COUNT(*) FROM insights'
             ' WHERE linked_at IS NULL AND deleted_at IS NULL'
@@ -1119,7 +1116,8 @@ def graph_link(ctx: click.Context) -> None:
         total = 0
         while True:
             batch = link_pending(
-                db, embed_cache=embed_cache, llm_client=llm_client)
+                db, embed_cache=embed_cache, llm_client=llm_client,
+                embed_client=ec)
             total += batch
             if batch == 0:
                 break

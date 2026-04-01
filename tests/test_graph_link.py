@@ -62,8 +62,8 @@ class TestLinkPending:
             ).fetchone()[0]
         assert pending == 5
 
-    def test_recall_path_batch_cap(self, tmp_db):
-        """max_batch=2 limits processing to 2 insights."""
+    def test_max_batch_parameter_respected(self, tmp_db):
+        """max_batch parameter caps processing to the given count."""
         for i in range(5):
             _insert_pending(tmp_db, f'rb-{i}', f'recall batch {i}')
 
@@ -97,6 +97,26 @@ class TestLinkPending:
             " WHERE id = 'zp-1'")
         processed = link_pending(tmp_db)
         assert processed == 0
+
+    def test_llm_calls_outside_transaction(self, tmp_db):
+        """LLM HTTP calls must not occur inside BEGIN IMMEDIATE."""
+        _insert_pending(tmp_db, 'tx-1', 'transaction test content')
+
+        call_log = []
+
+        class TxTrackingLLM:
+            def complete(self, system, user):
+                call_log.append({
+                    'in_tx': tmp_db._in_tx,
+                    'call': 'complete',
+                    })
+                return '[]'
+
+        link_pending(tmp_db, llm_client=TxTrackingLLM())
+
+        llm_calls_in_tx = [c for c in call_log if c['in_tx']]
+        assert llm_calls_in_tx == [], (
+            f'LLM calls made inside transaction: {llm_calls_in_tx}')
 
     def test_relink_clears_linked_at(self, tmp_db):
         """relink_auto_edges clears linked_at for re-linking."""
