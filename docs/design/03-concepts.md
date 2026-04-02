@@ -73,9 +73,11 @@ Each named store has its own SQLite file under `~/.mnemon/data/<store>/mnemon.db
 insights (
   id, content, category, importance,
   tags, entities, source,
-  embedding,                    -- Voyage AI 512-dim vector
+  embedding,                    -- Voyage AI 512-dim vector (BLOB)
+  keywords, summary, semantic_facts,  -- LLM enrichment columns
   access_count, last_accessed_at,
   effective_importance,          -- Decayed effective importance
+  linked_at, enriched_at,        -- Pipeline progress timestamps
   created_at, updated_at, deleted_at
 )
 

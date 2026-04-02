@@ -104,8 +104,10 @@ Vectors are serialized as little-endian float64 BLOBs stored in the `insights.em
 
 ### Embedding in the Pipeline
 
-- **Tier 1 (remember)**: Each fact is embedded immediately after extraction
-- **Tier 2 (link_pending)**: Insights are re-embedded with enriched text (content + LLM-extracted keywords)
+- **Initial (remember — sequential)**: Each fact is embedded immediately after extraction
+- **Merged (remember — sequential)**: If reconciliation merges facts, the merged text is re-embedded
+- **Enriched (remember — parallel)**: After LLM enrichment extracts keywords, the insight is re-embedded with enriched text (content + keywords)
+- **Recovery (`graph link`)**: Processes insights that lack enrichment (e.g., if `remember` crashed mid-pipeline) and updates embeddings
 - **Recall**: Expanded query is embedded for vector search anchors and reranking
 
 ### Management Commands

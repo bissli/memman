@@ -6,13 +6,13 @@
 
 ## 5.1 Write Pipeline: Remember
 
-`mnemon remember` is the core command for writing memories. It uses LLM fact extraction to decompose input into atomic facts, LLM reconciliation to classify each fact against existing memories, and Voyage AI embeddings for semantic search.
+`mnemon remember` decomposes input into atomic facts, classifies each against existing memories, and builds graph edges — all synchronously in a single tier.
 
 ![Remember Pipeline](../diagrams/02-remember-pipeline.drawio.png)
 
-### Two-Tier Pipeline
+### Single-Tier Synchronous Pipeline
 
-**Tier 1 (synchronous — user waits)**
+**Sequential phase:**
 
 1. **Quality gate** — `check_content_quality()` scans for transient patterns (AWS IDs, deployment receipts, state observations). 2+ matches → reject.
 2. **LLM fact extraction** — `extract_facts(llm_client, content)` decomposes input into 1-5 atomic facts with category, importance, and entities. Trivial content (greetings, filler) returns `[]` → skip.
@@ -26,25 +26,29 @@
       - **NONE**: already captured, skip
    d. Create edges: `fast_edges()` (temporal + entity) + `create_semantic_edges()`.
    e. `refresh_effective_importance()`, `auto_prune()`.
-4. **JSON output** — `{facts: [...], quality_warnings, llm_calls, link_pending}`.
 
-**Tier 2 (async subprocess — `graph link` → `link_pending()`)**
+**Parallel phase (ThreadPoolExecutor, 2 workers):**
 
-Spawned by `_trigger_background_link()` as a detached subprocess.
+4. **LLM enrichment** — `enrich_with_llm()` extracts keywords, summary, semantic facts, and additional entities.
+5. **LLM causal inference** — `infer_llm_causal_edges()` uses 2-hop BFS neighbors + recent insights as candidates (token overlap ≥ 15%, LLM confidence ≥ 0.75).
 
-1. **LLM enrichment** — `enrich_with_llm()` extracts keywords, summary, semantic facts, and additional entities.
-2. **Re-embedding** — rebuilds embedding from enriched text (content + keywords).
-3. **LLM causal inference** — `infer_llm_causal_edges()` uses 2-hop BFS + recent insights as candidates.
-4. **Edge rebuild** — deletes old auto entity/semantic/causal edges, re-creates from enriched data.
-5. **Stamps** — `linked_at` and `enriched_at`.
+**Sequential finalization:**
+
+6. **Write enrichment results** — updates entities, keywords, summary in DB.
+7. **Re-embedding** — rebuilds embedding from enriched text (content + keywords).
+8. **Edge rebuild** — deletes old auto entity/semantic edges, re-creates from enriched data. Writes causal edges from LLM inference.
+9. **Stamps** — `linked_at` and `enriched_at`.
+10. **JSON output** — `{facts: [...], quality_warnings, llm_calls}`.
 
 The `--no-reconcile` flag skips LLM reconciliation for direct insert.
+
+`graph link` exists as a recovery command — if `remember` crashes after insertion but before enrichment completes, `graph link` processes orphaned insights (those with `linked_at IS NULL`).
 
 ---
 
 ## 5.2 Read Pipeline: Smart Recall
 
-`mnemon recall` is Mnemon's core retrieval algorithm. Smart recall is the default mode for all queries. It combines LLM query expansion, intent detection, multi-signal anchor selection, Beam Search graph traversal, and multi-factor re-ranking. Use `--basic` for SQL LIKE fallback.
+`mnemon recall` combines LLM query expansion, intent detection, multi-signal anchor selection, beam search graph traversal, and multi-factor re-ranking. Use `--basic` for SQL LIKE fallback.
 
 ![Smart Recall Pipeline](../diagrams/03-smart-recall-pipeline.drawio.png)
 
@@ -88,13 +92,13 @@ Each insight may rank differently across signals; RRF fusion produces a robust c
 
 **Rationale:**
 
-- **`ANCHOR_TOP_K = 20`**: Directly from MAGMA Table 5 ("Vector Top-K: 20"). *(Cite: MAGMA, Jiang et al., arXiv 2601.03236, Table 5: Vector Top-K: 20)*
-- **`RRF_K = 60`**: Standard value from the original RRF paper. Pilot experiments showed MAP scores nearly flat from k=50–90, with k=60 fixed early and validated across four TREC collections. The constant mitigates the impact of high rankings by outlier systems. *(Cite: Cormack, Clarke & Büttcher, "Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods", SIGIR 2009, Table 1: k=60 near-optimal across k=0–500)*
+- **`ANCHOR_TOP_K = 20`**: Directly from MAGMA Table 5 ("Vector Top-K: 20").
+- **`RRF_K = 60`**: Standard value from the original RRF paper (Cormack, Clarke & Büttcher, SIGIR 2009). MAP scores nearly flat from k=50–90, with k=60 validated across four TREC collections.
 - **`VECTOR_SEARCH_MIN_SIM = 0.10`**: Noise floor matching MAGMA's lower similarity threshold bound. Below 0.10, vector search hits add noise rather than signal.
 
 ### Step 3: Beam Search Graph Traversal
 
-Starting from each anchor, Beam Search is performed across the four graphs:
+Starting from each anchor, beam search traverses the four graphs:
 
 ```
 for each anchor:
@@ -129,8 +133,8 @@ WHY queries use a wider beam and deeper traversal because causal chains typicall
 **Rationale:**
 
 - **`LAMBDA1 = 1.0`**: Directly from MAGMA Table 5 ("λ1 (Structure Coef.): 1.0 (Base)").
-- **`LAMBDA2 = 0.4`**: Falls within MAGMA's empirically tuned range ("λ2 (Semantic Coef.): 0.3–0.7"). 0.4 chosen as a conservative value — structural signal is weighted 2.5× semantic, prioritizing graph topology over embedding similarity during traversal. *(Cite: MAGMA, Jiang et al., arXiv 2601.03236, Table 5: λ1=1.0, λ2=0.3–0.7)*
-- **Max depth 5** (WHY/WHEN): Directly from MAGMA Table 5 ("Max Depth: 5 hops"). WHY gets beam width 15 (50% wider than base 10) because causal chains typically span more hops — same reasoning as MAGMA's wider traversal for causal queries. GENERAL gets max_visited=500 (matching WHY) because unknown intent should not restrict exploration. WHEN/ENTITY get 400 as a moderate budget — their primary edges (temporal/entity) form shorter chains. *(Cite: MAGMA, Jiang et al., arXiv 2601.03236, Table 5: Max Depth: 5, Max Nodes: 200, scaled up for mnemon's smaller personal-use graphs)*
+- **`LAMBDA2 = 0.4`**: Falls within MAGMA's empirically tuned range ("λ2 (Semantic Coef.): 0.3–0.7"). 0.4 chosen as a conservative value — structural signal is weighted 2.5× semantic, prioritizing graph topology over embedding similarity during traversal.
+- **Max depth 5** (WHY/WHEN): Directly from MAGMA Table 5. WHY gets beam width 15 (50% wider than base 10) because causal chains typically span more hops. GENERAL gets max_visited=500 (matching WHY) because unknown intent should not restrict exploration. WHEN/ENTITY get 400 as a moderate budget — their primary edges (temporal/entity) form shorter chains.
 
 ### Step 4: Multi-Factor Re-Ranking
 
@@ -154,12 +158,7 @@ Weights vary by intent:
 | ENTITY  | 0.20    | **0.35** | **0.35**   | 0.10     |
 | GENERAL | 0.25    | 0.15     | **0.45**   | 0.15     |
 
-**Rationale:** These extend MAGMA's intent-adaptive philosophy (which steers beam search via edge type weights) into the final reranking stage. MAGMA does not define a separate reranking stage — this is mnemon's own extension.
-
-- **WHY**: Similarity and graph traversal capture causal chains — the primary signals for "why" queries, weighted at 0.45 and 0.30 respectively.
-- **WHEN**: Similarity (0.40) and graph (0.30) capture temporal ordering; keyword provides supporting context.
-- **ENTITY**: Entity matching (0.35) and similarity (0.35) are co-primary; graph is de-emphasized (0.10) since entity edges are already captured in entity score.
-- **GENERAL**: Similarity-weighted (0.45) with keyword (0.25) as secondary — no strong bias without clear intent, but semantic match is the default discriminator.
+These extend MAGMA's intent-adaptive philosophy (which steers beam search via edge type weights) into the final reranking stage. MAGMA does not define a separate reranking stage — this is Mnemon's extension.
 
 Embeddings are Voyage AI 512-dim vectors. The expanded query from Step 0 is embedded for vector search and reranking.
 
@@ -171,9 +170,9 @@ If the intent is WHY, an additional topological sort using Kahn's algorithm is p
 
 If the intent is WHEN, results are re-sorted chronologically: **newest first** by `created_at`, with score as tiebreaker for equal timestamps.
 
-### Signal Transparency
+### Signal Breakdown
 
-Each retrieval result includes a detailed signal breakdown:
+Each retrieval result includes signal details:
 
 ```json
 {
@@ -190,5 +189,4 @@ Each retrieval result includes a detailed signal breakdown:
 }
 ```
 
-This is a unique innovation in Mnemon: **exposing the retrieval pipeline's internal signals to the host LLM**. Since the host LLM has the full conversation context, it can make better re-ranking judgments than any algorithm inside the pipeline.
-
+The host LLM sees these signals and can apply its own judgment with full conversation context.

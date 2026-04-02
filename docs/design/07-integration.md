@@ -80,7 +80,7 @@ The guide content appears in the LLM's system context, establishing recall/remem
 Runs on every user message. A lightweight prompt that reminds the agent to evaluate whether recall and remember are needed before starting work:
 
 ```bash
-echo "[mnemon] Evaluate: recall needed? After responding, evaluate: remember needed?"
+echo '[mnemon] Recall: run mnemon recall "<focused query>" --limit 5 unless topic is already in context. After responding, evaluate: remember needed?'
 ```
 
 The agent decides whether to act on this reminder based on the guide.md rules — it is a suggestion, not forced execution.
@@ -91,11 +91,11 @@ Runs after each LLM response. Returns a `decision: block` JSON so the agent gets
 
 ```bash
 INPUT=$(cat)
-if echo "$INPUT" | grep -q '"stop_hook_active".*true'; then
+if echo "$INPUT" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
   exit 0
 fi
 cat <<'EOF'
-{"decision": "block", "reason": "[mnemon] Memory check: did the user state a preference, make a decision, give a correction, or reach a conclusion? If yes, store via Task(Bash, model=sonnet) sub-agent. Only skip if the exchange was purely open-ended questions with no resolution."}
+{"decision": "block", "reason": "[mnemon] Memory check: did the user state a preference, make a decision, give a correction, or reach a conclusion? If yes, store via Agent(model=sonnet) sub-agent. Only skip if the exchange was purely open-ended questions with no resolution."}
 EOF
 ```
 
@@ -224,9 +224,7 @@ This separation means:
 
 For CLIs with hook support, replicate the Claude Code pattern: register lifecycle hooks that call mnemon commands, deploy the skill file, and provide the behavioral guide.
 
-For CLIs without hook support, merge the recall/remember guidance into the corresponding system prompt file:
+For CLIs without hook support, merge the recall/remember guidance into the corresponding system prompt or rules file:
 
-- Cursor -> `.cursorrules`
-- Windsurf -> `RULES.md`
 - OpenClaw -> `mnemon setup --target openclaw` deploys skill + guide, but hooks require manual plugin configuration
 - Others -> System prompt / rules file

@@ -216,17 +216,18 @@ Nodes are colored by category (decision, fact, insight, preference, context); ed
 
 ## Architecture
 
-### Write Pipeline (Two-Tier)
+### Write Pipeline (Single-Tier Synchronous)
 
-`remember` uses a two-tier pipeline:
+`remember` uses a single synchronous pipeline:
 
-1. **Tier 1 (sync)** — Quality check, LLM fact extraction, Voyage embedding,
+1. **Sequential** — Quality check, LLM fact extraction, Voyage embedding,
    LLM reconciliation (ADD/UPDATE/DELETE/NONE), insert, fast edges
-   (temporal + entity), semantic edges, EI refresh, auto-prune. Returns
-   JSON with `facts` array.
-2. **Tier 2 (async subprocess)** — `graph link` runs `link_pending()`: LLM
-   enrichment (keywords, summary, entities), re-embedding with enriched text,
-   LLM causal edge inference, edge rebuild.
+   (temporal + entity), semantic edges, EI refresh, auto-prune.
+2. **Parallel (ThreadPoolExecutor)** — LLM enrichment (keywords, summary,
+   entities) + LLM causal edge inference run concurrently.
+3. **Sequential finalization** — Write enrichment results, re-embed with
+   keywords, rebuild entity/semantic/causal edges, stamp `linked_at`.
+   Returns JSON with `facts` array.
 
 ### Recall Pipeline
 

@@ -11,28 +11,7 @@
 
 ---
 
-LLM agents forget everything between sessions. Context compaction drops critical decisions, cross-session knowledge vanishes, and long conversations push early information out of the window.
-
-Mnemon gives your agent persistent, cross-session memory — a four-graph knowledge store with intent-aware recall, importance decay, and automatic deduplication. One setup command.
-
-> **Claude Max / Pro subscriber?** Mnemon works entirely through your existing subscription — no separate API key required. Your LLM subscription *is* the intelligence layer. Two commands and you're done.
-
-### Why Mnemon?
-
-Most memory tools embed their own LLM inside the pipeline. Mnemon takes a different approach: **your host LLM is the supervisor.** The binary handles deterministic computation (storage, graph indexing, search, decay); the LLM makes judgment calls (what to remember, how to link, when to forget). No middleman, no extra inference cost.
-
-| Pattern            | LLM Role                                   | Representative     |
-| ------------------ | ------------------------------------------ | ------------------ |
-| **LLM-Embedded**   | Executor inside the pipeline               | Mem0, Letta        |
-| **File Injection** | None — reads file at session start         | Claude Code Memory |
-| **MCP Server**     | Tool provider via MCP protocol             | claude-mem         |
-| **LLM-Supervised** | External supervisor of a standalone binary | **Mnemon**         |
-
-Mnemon also addresses a gap in the protocol stack. MCP standardizes how LLMs discover and invoke tools. ODBC/JDBC standardizes how applications access databases. But how LLMs interact with databases using memory semantics — this layer has no protocol. Mnemon's three primitives — `remember`, `link`, `recall` — form an intent-native protocol: command names map to the LLM's cognitive vocabulary (`remember` not INSERT, `recall` not SELECT), and output is structured JSON with signal transparency rather than raw database rows.
-
-### What Gets Remembered
-
-Mnemon stores knowledge that accumulates value across sessions and cannot be recovered from code, config, or infrastructure. It explicitly excludes state snapshots, deployment receipts, bug reports, and anything recoverable from source.
+### Memory Categories
 
 | Category     | Captures                                | Example                                |
 | ------------ | --------------------------------------- | -------------------------------------- |
@@ -41,18 +20,6 @@ Mnemon stores knowledge that accumulates value across sessions and cannot be rec
 | `fact`       | Durable truths about systems/domains    | "API rate limit is 100 req/s"          |
 | `insight`    | Conclusions from multi-source reasoning | "Beam search outperforms BFS here"     |
 | `context`    | Project background, user environment    | "Monorepo, deploys to AWS ECS"         |
-
-<p align="center">
-  <img src="docs/diagrams/llm-supervised-concept.drawio.png" width="720" alt="LLM-Supervised Architecture — three patterns compared, with detailed Mnemon implementation showing hooks, brain/organ split, and sub-agent delegation" />
-  <br />
-  <sub>The LLM-Supervised pattern: hooks drive the lifecycle, the host LLM makes judgment calls, the binary handles deterministic computation.</sub>
-</p>
-
-<p align="center">
-  <img src="docs/diagrams/10-knowledge-graph.jpg" width="720" alt="Knowledge graph — 87 insights connected by temporal, entity, semantic, and causal edges" />
-  <br />
-  <sub>A real knowledge graph built by Mnemon — 87 insights, 2150 edges across four graph types.</sub>
-</p>
 
 See [Design & Architecture](docs/DESIGN.md) for details.
 
@@ -80,7 +47,7 @@ make dev
 mnemon setup
 ```
 
-`mnemon setup` auto-detects Claude Code, then interactively deploys skill, hooks, and behavioral guide. Start a new session — memory just works.
+`mnemon setup` auto-detects Claude Code, then interactively deploys skill, hooks, and behavioral guide. Start a new session — memory is active.
 
 ### [OpenClaw](https://github.com/openclaw/openclaw)
 
@@ -88,7 +55,7 @@ mnemon setup
 mnemon setup --target openclaw --yes
 ```
 
-One command deploys skill, hook, plugin, and behavioral guide to `~/.openclaw/`. Restart the OpenClaw gateway to activate.
+Deploys skill, hook, plugin, and behavioral guide to `~/.openclaw/`. Restart the gateway to activate.
 
 ### [NanoClaw](https://github.com/qwibitai/nanoclaw)
 
@@ -106,9 +73,9 @@ The skill is available at `.claude/skills/add-mnemon/` in the NanoClaw repo.
 mnemon setup --eject
 ```
 
-## How it works
+## How It Works
 
-Once set up, memory operates transparently — you use your LLM CLI as usual. Mnemon integrates via Claude Code's [hook system](https://docs.anthropic.com/en/docs/claude-code/hooks), injecting memory operations at key lifecycle points:
+Once set up, memory operates transparently via Claude Code's [hook system](https://docs.anthropic.com/en/docs/claude-code/hooks):
 
 ```
 Session starts
@@ -141,21 +108,19 @@ Session starts
   ExitPlan (PreToolUse) ─── exit_plan.sh ──→ prompt memory storage before transition
 ```
 
-Six hooks drive the memory lifecycle. **Prime** loads the behavioral guide — a detailed execution manual for recall, remember, and sub-agent delegation. **Remind** prompts the agent to evaluate recall and remember before starting work. **Nudge** reminds the agent to consider remember after finishing work. **Compact** bridges context across compaction via a two-part relay: `compact.sh` writes a flag file at PreCompact time, then `prime.sh` detects the post-compact SessionStart and injects a recall instruction the agent can see. **Recall** reminds the agent to recall before delegating to sub-agents. **ExitPlan** blocks the plan-to-execute transition, giving the agent one chance to store memories before context is cleared. **The skill file** teaches command syntax. **The guide** (`~/.mnemon/prompt/guide.md`) defines the detailed rules for when to recall, what to remember, and how to delegate.
+Six hooks drive the lifecycle. **Prime** loads the behavioral guide at session start. **Remind** and **Nudge** prompt the agent to recall and remember before/after each response. **Compact** bridges context across compaction via a flag file that Prime detects on the next SessionStart. **Recall** fires before sub-agent delegation. **ExitPlan** prompts memory storage before plan-to-execute transitions.
 
 You don't run mnemon commands yourself. The agent does — driven by hooks and guided by the skill and behavioral guide.
 
 ## Features
 
-- **Zero user-side operation** — install once, memory runs in the background via hooks
-- **LLM-supervised** — the host LLM decides what to remember, update, and forget; Haiku handles fact extraction, reconciliation, and query expansion
-- **Hook-based integration** — six lifecycle hooks: Prime (load guide), Remind (recall & remember), Nudge (remember), Compact (bridge context across compaction), Recall (pre-delegation), and ExitPlan (plan-mode transition)
-- **Four-graph architecture** — temporal, entity, causal, and semantic edges, not just vector similarity
-- **Intent-native protocol** — three primitives (`remember`, `link`, `recall`) map to the LLM's cognitive vocabulary, not database syntax; structured JSON output with signal transparency
-- **Intent-aware recall** — graph traversal + optional vector search (RRF fusion), enabled by default for all queries
-- **LLM reconciliation** — `remember` uses LLM to classify each fact as ADD, UPDATE, DELETE, or NONE vs existing memories; `replace` provides deterministic, atomic replacement by ID
-- **Retention lifecycle** — importance decay, access-count boosting, and garbage collection
-- **Voyage embeddings** — 512-dim vectors via Voyage AI for semantic search and graph connectivity
+- **Hook-driven** — six lifecycle hooks handle all memory operations automatically
+- **LLM-supervised** — the host LLM decides what to remember and forget; Haiku handles fact extraction, reconciliation, enrichment, causal inference, and query expansion
+- **Four-graph architecture** — temporal, entity, causal, and semantic edges
+- **Intent-aware recall** — graph beam search with RRF fusion; query intent (WHY/WHEN/ENTITY/GENERAL) controls edge weights and result ordering
+- **LLM reconciliation** — each fact classified as ADD/UPDATE/DELETE/NONE against existing memories
+- **Retention lifecycle** — importance decay, access-count boosting, immunity rules, garbage collection
+- **Voyage embeddings** — 512-dim vectors via Voyage AI for semantic search and edge creation
 
 ## FAQ
 
@@ -171,16 +136,16 @@ mnemon store set work           # set as default
 MNEMON_STORE=work mnemon recall "query"  # or use env var per-process
 ```
 
-Different agents/processes can use different stores via the `MNEMON_STORE` environment variable — no global state contention.
+Different agents/processes can use different stores via the `MNEMON_STORE` environment variable.
 
 **Local or global mode?**
-`mnemon setup` defaults to **global** (user-wide `~/.claude/`), activating mnemon across all projects. **Local** (project-scoped `.claude/`) can be selected interactively or used when you want project-isolated memory. Global is convenient if you want other frameworks (e.g., OpenClaw) to share memory by forwarding requests through Claude Code CLI.
+`mnemon setup` defaults to **global** (user-wide `~/.claude/`), activating mnemon across all projects. **Local** (project-scoped `.claude/`) can be selected interactively.
 
 **How do I customize the behavior?**
 Edit `~/.mnemon/prompt/guide.md`. This file controls when the agent recalls memories and what it considers worth remembering. The skill file (`SKILL.md`) is auto-deployed and should not need manual editing.
 
 **What is sub-agent delegation?**
-Memory writes don't happen in the main conversation. The host LLM (e.g., Opus) decides *what* to remember, then delegates the actual `mnemon remember` execution to a lightweight sub-agent (e.g., Sonnet). This saves tokens and keeps memory operations out of the main context.
+The host LLM (e.g., Opus) decides *what* to remember, then delegates the actual `mnemon remember` execution to a lightweight sub-agent (e.g., Sonnet). This saves tokens and keeps memory operations out of the main context.
 
 ## Configuration
 
@@ -225,9 +190,7 @@ mnemon setup --eject  # remove all integrations
 
 ## References
 
-Mnemon implements MAGMA's four-graph memory model with RRF fusion for recall. See [Design Philosophy](docs/design/02-philosophy.md) for details.
-
-- **MAGMA** — Jiang et al. [A Multi-Graph based Agentic Memory Architecture](https://arxiv.org/abs/2601.03236). 2025. Provides the four-graph model (temporal, entity, causal, semantic) with intent-adaptive retrieval and beam search traversal.
+- **MAGMA** — Jiang et al. [A Multi-Graph based Agentic Memory Architecture](https://arxiv.org/abs/2601.03236). 2025. Four-graph model (temporal, entity, causal, semantic) with intent-adaptive retrieval and beam search traversal.
 - **RRF** — Cormack, Clarke & Buttcher. [Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods](https://dl.acm.org/doi/10.1145/1571941.1572114). SIGIR 2009. Multi-signal anchor fusion with k=60.
 
 ## License
