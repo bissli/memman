@@ -105,7 +105,7 @@ def test_recall_does_not_call_link_pending(runner, monkeypatch):
 
 
 def test_remember_does_not_link_old_pending_insights(runner, monkeypatch):
-    """Remember must not call link_pending (performance + quality guard)."""
+    """Remember does inline enrichment, never calls link_pending."""
     invoke(runner, [
         'remember', 'Redis cache eviction uses LRU algorithm',
         '--no-reconcile'])
@@ -608,3 +608,106 @@ def test_link_warns_when_lower_weight(runner):
     data = json.loads(result.output)
     assert 'warning' in data
     assert '0.9' in data['warning']
+
+
+class TestSingleTierEnrichment:
+    """Remember runs enrichment + causal inline via ThreadPoolExecutor."""
+
+    def test_output_has_enrichment_dict(self, runner):
+        """Remember output includes enrichment metadata."""
+        result = invoke(runner, [
+            'remember',
+            'Redis cache configured with LRU eviction policy',
+            '--no-reconcile'])
+        assert result.exit_code == 0
+        data = parse_remember(result)
+        assert 'enrichment' in data
+        enr = data['enrichment']
+        assert 'keywords' in enr
+        assert 'summary' in enr
+        assert 'entities' in enr
+        assert 'semantic_facts' in enr
+
+    def test_output_has_causal_count(self, runner):
+        """edges_created includes causal count."""
+        result = invoke(runner, [
+            'remember',
+            'PostgreSQL chosen for JSONB support in API layer',
+            '--no-reconcile'])
+        assert result.exit_code == 0
+        data = parse_remember(result)
+        assert 'causal' in data['edges_created']
+        assert isinstance(data['edges_created']['causal'], int)
+
+    def test_no_link_pending_in_output(self, runner):
+        """Output no longer includes link_pending field."""
+        result = invoke(runner, [
+            'remember',
+            'Docker containers orchestrated via Kubernetes',
+            '--no-reconcile'])
+        assert result.exit_code == 0
+        raw = json.loads(result.output)
+        assert 'link_pending' not in raw
+
+    def test_no_causal_candidates_in_output(self, runner):
+        """Output no longer includes causal_candidates field."""
+        result = invoke(runner, [
+            'remember',
+            'Terraform modules organized by service boundaries',
+            '--no-reconcile'])
+        assert result.exit_code == 0
+        data = parse_remember(result)
+        assert 'causal_candidates' not in data
+
+    def test_linked_at_stamped_after_remember(self, runner):
+        """linked_at is non-NULL after remember returns."""
+        from mnemon.store.db import open_read_only
+
+        result = invoke(runner, [
+            'remember',
+            'Consul service mesh enables secure service communication',
+            '--no-reconcile'])
+        assert result.exit_code == 0
+        data = parse_remember(result)
+        iid = data['id']
+
+        _, data_dir = runner
+        ro = open_read_only(data_dir + '/data/default')
+        row = ro._conn.execute(
+            'SELECT linked_at FROM insights WHERE id = ?',
+            (iid,)).fetchone()
+        ro.close()
+        assert row is not None
+        assert row[0] is not None
+
+    def test_graph_link_zero_pending_after_remember(self, runner):
+        """Graph link finds nothing pending after single-tier remember."""
+        invoke(runner, [
+            'remember',
+            'Kafka event streaming configured for microservices',
+            '--no-reconcile'])
+        result = invoke(runner, ['graph', 'link'])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data['processed'] == 0
+
+    def test_enriched_at_stamped_after_remember(self, runner):
+        """enriched_at is non-NULL after remember returns."""
+        from mnemon.store.db import open_read_only
+
+        result = invoke(runner, [
+            'remember',
+            'Elasticsearch full-text search with custom analyzers',
+            '--no-reconcile'])
+        assert result.exit_code == 0
+        data = parse_remember(result)
+        iid = data['id']
+
+        _, data_dir = runner
+        ro = open_read_only(data_dir + '/data/default')
+        row = ro._conn.execute(
+            'SELECT enriched_at FROM insights WHERE id = ?',
+            (iid,)).fetchone()
+        ro.close()
+        assert row is not None
+        assert row[0] is not None

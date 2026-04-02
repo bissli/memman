@@ -54,8 +54,8 @@ Run this decision tree after every substantive response:
 
 1. **Remember**: `mnemon remember "<fact>" --cat <cat> --imp <1-5> --entities "e1,e2" --source agent`
    - Diff is built-in: duplicates skipped, conflicts auto-replaced.
-   - Output includes `action` (added/updated/skipped/replaced) and `link_pending: true` when edges are deferred to background.
-   - Edge creation and LLM enrichment run automatically after `remember` returns.
+   - Output includes `action` (added/updated/skipped/replaced), `enrichment` (keywords, summary, entities), and `edges_created` (temporal, entity, causal).
+   - All edge creation, LLM enrichment, and causal inference run inline before `remember` returns.
    - **Replace**: `mnemon replace <id> "<new content>"` — deterministic replacement by ID. Inherits metadata from original unless overridden. Carries `access_count` forward.
 2. **Link** (manual linking when you identify relationships):
    - Syntax: `mnemon link <id> <target> --type <causal|semantic> --weight <0-1> [--meta '<json>']`

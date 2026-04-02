@@ -110,21 +110,15 @@ write it to the project CLAUDE.md under a `## Directives` section instead of cal
 (CLAUDE.md is loaded every turn), not graph connectivity. The user prunes CLAUDE.md
 periodically — no confirmation needed.
 
-### Semantic linking — deferred background pass
+### Edge creation and enrichment
 
-Semantic edge detection (embedding-based similarity) runs asynchronously. When
-`remember` returns `link_pending: true`, semantic edges for that memory
-have been queued but not yet written. To process the queue immediately, run:
+All edge creation (temporal, entity, semantic, causal) and LLM enrichment
+run inline during `remember`, before it returns. Enrichment and causal
+inference run in parallel via ThreadPoolExecutor for speed.
 
-```bash
-mnemon graph link
-```
-
-This is optional — linking also runs automatically in the background.
-Edge creation (temporal, entity, semantic) runs in a background thread
-after `remember` returns, so `link_pending: true` indicates work is queued.
-LLM-based causal edges and enrichment run in a detached subprocess via
-`graph link` when an LLM API key is configured.
+`graph link` exists as a recovery command — if `remember` crashes after
+inserting but before enrichment completes, `graph link` will process
+orphaned insights. Under normal operation it reports 0 pending.
 
 ### Pre-compaction note
 

@@ -195,54 +195,39 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
         db.close()
 
 
-def _trigger_background_link(
-        data_dir: str, store_name: str) -> None:
-    """Tier 3: fire-and-forget subprocess for LLM enrichment."""
-    import subprocess
-    import sys
-
-    cmd = [sys.executable, '-m', 'mnemon', '--store', store_name,
-           'graph', 'link']
-    if data_dir != default_data_dir():
-        cmd = [sys.executable, '-m', 'mnemon',
-               '--data-dir', data_dir, '--store', store_name,
-               'graph', 'link']
-
-    try:
-        subprocess.Popen(
-            cmd, start_new_session=True,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
-
-
 def _remember_impl(db: 'DB', insight: Insight, content: str,
                    no_reconcile: bool, replaced_id: str = '',
                    data_dir: str = '',
                    store_name: str = '',
                    cat_explicit: bool = False,
                    imp_explicit: bool = False) -> None:
-    """Core remember implementation — LLM-first two-tier write path.
+    """Core remember implementation — single-tier synchronous write path.
 
-    Tier 1 (sync): quality check, embed, LLM fact extraction,
+    Sequential: quality check, embed, LLM fact extraction,
     LLM reconciliation, insert, fast edges, EI, prune.
-    Tier 2 (async): background subprocess for LLM enrichment.
+    Parallel: LLM enrichment + LLM causal inference (ThreadPoolExecutor).
+    Sequential: write enrichment results, stamp linked_at.
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     from mnemon.embed import get_client
     from mnemon.embed.vector import cosine_similarity, deserialize_vector
     from mnemon.embed.vector import serialize_vector
-    from mnemon.graph.causal import find_causal_candidates
+    from mnemon.graph.causal import infer_llm_causal_edges
     from mnemon.graph.engine import fast_edges
+    from mnemon.graph.enrichment import build_enriched_text, enrich_with_llm
+    from mnemon.graph.entity import create_entity_edges
     from mnemon.graph.semantic import create_semantic_edges
     from mnemon.llm.client import get_llm_client
     from mnemon.llm.extract import extract_facts, reconcile_memories
     from mnemon.search.keyword import keyword_search
     from mnemon.search.quality import check_content_quality
+    from mnemon.store.edge import insert_edge
     from mnemon.store.node import MAX_INSIGHTS, auto_prune
     from mnemon.store.node import get_all_active_insights, get_all_embeddings
     from mnemon.store.node import insert_insight, refresh_effective_importance
     from mnemon.store.node import soft_delete_insight, update_embedding
-    from mnemon.store.node import update_entities
+    from mnemon.store.node import update_enrichment, update_entities
     from mnemon.store.oplog import log_op
 
     quality_warnings = check_content_quality(content)
@@ -452,8 +437,104 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
 
         db.in_transaction(edge_tx)
 
-        causal_candidates = find_causal_candidates(
-            db, fact_insight)
+        enrichment: dict = {}
+        causal_edges: list = []
+        data_dir_for_ro = pathlib.Path(db.path).parent
+
+        def _do_enrich() -> dict:
+            return enrich_with_llm(fact_insight, llm_client)
+
+        def _do_causal() -> list:
+            ro_db = open_read_only(data_dir_for_ro)
+            try:
+                return infer_llm_causal_edges(
+                    ro_db, fact_insight, llm_client)
+            finally:
+                ro_db.close()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fut_e = pool.submit(_do_enrich)
+            fut_c = pool.submit(_do_causal)
+            try:
+                enrichment = fut_e.result()
+            except Exception:
+                enrichment = {}
+            try:
+                causal_edges = fut_c.result()
+            except Exception:
+                causal_edges = []
+
+        llm_calls += 2
+
+        def enrichment_tx(
+                fi: Insight = fact_insight) -> None:
+            now = format_timestamp(datetime.now(timezone.utc))
+
+            if enrichment:
+                update_enrichment(
+                    db, fi.id,
+                    enrichment.get('keywords', []),
+                    enrichment.get('summary', ''),
+                    enrichment.get('semantic_facts', []))
+                update_entities(
+                    db, fi.id, enrichment.get('entities', []))
+                fi.entities = enrichment.get('entities', [])
+
+            keywords = enrichment.get('keywords', [])
+            if keywords and ec is not None and ec.available():
+                enriched_text = build_enriched_text(
+                    fi.content, keywords)
+                try:
+                    new_vec = ec.embed(enriched_text)
+                    embed_cache[fi.id] = new_vec
+                    update_embedding(
+                        db, fi.id, serialize_vector(new_vec))
+                except Exception:
+                    pass
+
+            db._conn.execute(
+                "DELETE FROM edges"
+                " WHERE (source_id = ? OR target_id = ?)"
+                " AND edge_type = 'entity'"
+                " AND (json_extract(metadata, '$.created_by') IS NULL"
+                "      OR json_extract(metadata, '$.created_by')"
+                "         NOT IN ('claude', 'manual'))",
+                (fi.id, fi.id))
+            create_entity_edges(db, fi)
+
+            db._conn.execute(
+                "DELETE FROM edges"
+                " WHERE (source_id = ? OR target_id = ?)"
+                " AND edge_type = 'semantic'"
+                " AND (json_extract(metadata, '$.created_by') IS NULL"
+                "      OR json_extract(metadata,"
+                "          '$.created_by') = 'auto')",
+                (fi.id, fi.id))
+            create_semantic_edges(db, fi, embed_cache)
+
+            db._conn.execute(
+                "DELETE FROM edges"
+                " WHERE (source_id = ? OR target_id = ?)"
+                " AND edge_type = 'causal'"
+                " AND json_extract(metadata,"
+                "     '$.created_by') = 'llm'",
+                (fi.id, fi.id))
+            for edge in causal_edges:
+                try:
+                    insert_edge(db, edge)
+                except Exception:
+                    pass
+
+            db._conn.execute(
+                'UPDATE insights SET linked_at = ? WHERE id = ?',
+                (now, fi.id))
+            if enrichment:
+                db._conn.execute(
+                    'UPDATE insights SET enriched_at = ?'
+                    ' WHERE id = ?',
+                    (now, fi.id))
+
+        db.in_transaction(enrichment_tx)
 
         fact_results.append({
             'id': fact_insight.id,
@@ -464,29 +545,28 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
             'entities': fact_insight.entities,
             'action': action.lower(),
             'created_at': format_timestamp(fact_insight.created_at),
-            'edges_created': edge_stats,
-            'causal_candidates': causal_candidates,
+            'edges_created': {
+                **edge_stats,
+                'causal': len(causal_edges),
+                },
+            'enrichment': {
+                'keywords': enrichment.get('keywords', []),
+                'summary': enrichment.get('summary', ''),
+                'entities': enrichment.get('entities', []),
+                'semantic_facts': enrichment.get(
+                    'semantic_facts', []),
+                },
             'embedded': embedded,
             'effective_importance': ei,
             'auto_pruned': pruned,
             **({'replaced_id': target_id} if target_id else {}),
             })
 
-    pending = db._conn.execute(
-        'SELECT COUNT(*) FROM insights'
-        ' WHERE linked_at IS NULL AND deleted_at IS NULL'
-        ).fetchone()[0]
-
-    output: dict = {
+    _json_out({
         'facts': fact_results,
         'quality_warnings': quality_warnings,
         'llm_calls': llm_calls,
-        }
-    if pending > 0:
-        output['link_pending'] = True
-    _json_out(output)
-
-    _trigger_background_link(data_dir, store_name)
+        })
 
 
 @cli.command()

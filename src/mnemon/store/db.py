@@ -154,7 +154,7 @@ def open_read_only(data_dir: str) -> DB:
         raise FileNotFoundError(f'database not found: {db_path}')
     uri = f'file:{db_path}?mode=ro'
     conn = sqlite3.connect(uri, uri=True, isolation_level=None)
-    conn.execute('PRAGMA journal_mode=OFF')
+    conn.execute('PRAGMA journal_mode=WAL')
     conn.execute('PRAGMA foreign_keys=ON')
     return DB(conn, db_path)
 
