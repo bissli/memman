@@ -8,13 +8,20 @@ logger = logging.getLogger('mnemon')
 
 
 def insert_edge(db: 'DB', e: Edge) -> None:
-    """Insert or update an edge, keeping the higher weight."""
+    """Insert or update an edge, keeping the higher weight.
+
+    Edges with created_by 'claude' or 'manual' are protected: their
+    metadata is never overwritten by auto-generated edges.
+    """
     db._exec(
         'INSERT INTO edges'
         ' (source_id, target_id, edge_type, weight, metadata, created_at)'
         ' VALUES (?, ?, ?, ?, ?, ?)'
         ' ON CONFLICT(source_id, target_id, edge_type)'
         ' DO UPDATE SET metadata = CASE'
+        "                  WHEN json_extract(metadata, '$.created_by')"
+        "                       IN ('claude', 'manual')"
+        '                  THEN metadata'
         '                  WHEN excluded.weight >= weight'
         '                  THEN excluded.metadata'
         '                  ELSE metadata END,'

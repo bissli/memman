@@ -385,7 +385,7 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
                 })
             continue
 
-        edge_stats = {'temporal': 0, 'entity': 0}
+        edge_stats = {'temporal': 0, 'entity': 0, 'semantic': 0}
         ei = 0.0
         pruned = 0
 
@@ -425,7 +425,8 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
                 fi: Insight = fact_insight) -> None:
             nonlocal edge_stats, ei, pruned
             edge_stats = fast_edges(db, fi)
-            create_semantic_edges(db, fi, embed_cache)
+            edge_stats['semantic'] = create_semantic_edges(
+                db, fi, embed_cache)
             try:
                 ei = refresh_effective_importance(db, fi.id)
             except Exception:
@@ -457,17 +458,30 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
             fut_c = pool.submit(_do_causal)
             try:
                 enrichment = fut_e.result()
+                llm_calls += 1
             except Exception:
                 enrichment = {}
             try:
                 causal_edges = fut_c.result()
+                llm_calls += 1
             except Exception:
                 causal_edges = []
 
-        llm_calls += 2
+        enriched_vec = None
+        keywords = enrichment.get('keywords', [])
+        if keywords and ec is not None and ec.available():
+            enriched_text = build_enriched_text(
+                fact_insight.content, keywords)
+            try:
+                enriched_vec = ec.embed(enriched_text)
+                embed_cache[fact_insight.id] = enriched_vec
+                embedded = True
+            except Exception:
+                pass
 
         def enrichment_tx(
-                fi: Insight = fact_insight) -> None:
+                fi: Insight = fact_insight,
+                evec: list[float] | None = enriched_vec) -> None:
             now = format_timestamp(datetime.now(timezone.utc))
 
             if enrichment:
@@ -480,17 +494,9 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
                     db, fi.id, enrichment.get('entities', []))
                 fi.entities = enrichment.get('entities', [])
 
-            keywords = enrichment.get('keywords', [])
-            if keywords and ec is not None and ec.available():
-                enriched_text = build_enriched_text(
-                    fi.content, keywords)
-                try:
-                    new_vec = ec.embed(enriched_text)
-                    embed_cache[fi.id] = new_vec
-                    update_embedding(
-                        db, fi.id, serialize_vector(new_vec))
-                except Exception:
-                    pass
+            if evec is not None:
+                update_embedding(
+                    db, fi.id, serialize_vector(evec))
 
             db._conn.execute(
                 "DELETE FROM edges"
@@ -630,7 +636,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
 
         query_entities = list(expansion.get('entities', []))
 
-        fetch_limit = limit * 3 if cat else limit
+        fetch_limit = limit * 3 if (cat or source) else limit
         resp = intent_aware_recall(
             db, keyword_str, query_vec, query_entities,
             fetch_limit, intent_override)
@@ -641,7 +647,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
         if source:
             resp['results'] = [
                 r for r in resp['results']
-                if r['insight'].source == source]
+                if r['insight'].source == source][:limit]
 
         for r in resp['results']:
             increment_access_count(db, r['insight'].id)
@@ -886,12 +892,17 @@ def link(ctx: click.Context, source_id: str, target_id: str,
                    f'{source_id} <-> {target_id} ({edge_type})')
 
         db.in_transaction(do_link)
+        actual = db._query(
+            'SELECT weight FROM edges'
+            ' WHERE source_id = ? AND target_id = ? AND edge_type = ?',
+            (source_id, target_id, edge_type)).fetchone()
+        actual_weight = actual[0] if actual else weight
         out = {
             'status': 'linked',
             'source_id': source_id,
             'target_id': target_id,
             'edge_type': edge_type,
-            'weight': weight,
+            'weight': actual_weight,
             'metadata': metadata,
             }
         if existing_weight is not None and existing_weight > weight:

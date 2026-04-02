@@ -11,7 +11,7 @@ from mnemon.graph.semantic import AUTO_SEMANTIC_THRESHOLD, build_embed_cache
 from mnemon.graph.semantic import create_semantic_edges
 from mnemon.graph.temporal import MAX_PROXIMITY_EDGES, MIN_PROXIMITY_WEIGHT
 from mnemon.graph.temporal import TEMPORAL_WINDOW_HOURS, create_temporal_edge
-from mnemon.model import Edge, Insight, format_timestamp, parse_timestamp
+from mnemon.model import Insight, format_timestamp
 from mnemon.store.edge import insert_edge
 from mnemon.store.node import get_all_active_insights, get_insight_by_id
 from mnemon.store.node import update_entities
@@ -238,7 +238,8 @@ def relink_auto_edges(
             "DELETE FROM edges"
             " WHERE edge_type = 'entity'"
             " AND (json_extract(metadata, '$.created_by') IS NULL"
-            "      OR json_extract(metadata, '$.created_by') <> 'claude')")
+            "      OR json_extract(metadata, '$.created_by')"
+            "         NOT IN ('claude', 'manual'))")
         stats['entity_deleted'] = entity_del
 
         db._conn.execute(
@@ -256,13 +257,6 @@ def relink_auto_edges(
             "      OR json_extract(metadata, '$.created_by')"
             "         NOT IN ('llm', 'claude', 'manual'))")
         stats['causal_deleted'] = causal_del
-
-        manual_entity_rows = db._conn.execute(
-            "SELECT source_id, target_id, edge_type, weight,"
-            " metadata, created_at FROM edges"
-            " WHERE edge_type = 'entity'"
-            " AND json_extract(metadata, '$.created_by') = 'claude'"
-            ).fetchall()
 
         insights = get_all_active_insights(db)
         if not insights:
@@ -286,24 +280,6 @@ def relink_auto_edges(
             " WHERE edge_type = 'semantic'"
             " AND json_extract(metadata, '$.created_by') = 'auto'"
             ).fetchone()[0]
-
-        for row in manual_entity_rows:
-            db._conn.execute(
-                'UPDATE edges SET metadata = ?,'
-                ' weight = MAX(weight, ?)'
-                ' WHERE source_id = ? AND target_id = ?'
-                ' AND edge_type = ?',
-                (row[4], row[3], row[0], row[1], row[2]))
-            if db._conn.execute(
-                    'SELECT COUNT(*) FROM edges'
-                    ' WHERE source_id = ? AND target_id = ?'
-                    ' AND edge_type = ?',
-                    (row[0], row[1], row[2])).fetchone()[0] == 0:
-                insert_edge(db, Edge(
-                    source_id=row[0], target_id=row[1],
-                    edge_type=row[2], weight=row[3],
-                    metadata=json.loads(row[4]) if row[4] else {},
-                    created_at=parse_timestamp(row[5])))
 
         db._conn.execute(
             'UPDATE insights SET linked_at = NULL'

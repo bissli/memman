@@ -711,3 +711,66 @@ class TestSingleTierEnrichment:
         ro.close()
         assert row is not None
         assert row[0] is not None
+
+
+def test_recall_source_filter_inflates_fetch_limit(runner):
+    """Recall --source must over-fetch so post-filter doesn't truncate results."""
+    topics = [
+        'PostgreSQL query optimization with EXPLAIN ANALYZE',
+        'PostgreSQL index types including B-tree GIN GiST',
+        'PostgreSQL vacuum autovacuum tuning parameters',
+        'PostgreSQL partitioning strategies for large tables',
+        'PostgreSQL connection pooling with PgBouncer setup',
+        'PostgreSQL replication streaming and logical decoding',
+        ]
+    for topic in topics:
+        invoke(runner, [
+            'remember', topic, '--no-reconcile', '--source', 'user'])
+    invoke(runner, [
+        'remember',
+        'PostgreSQL JSONB operators for document queries',
+        '--no-reconcile', '--source', 'agent'])
+
+    result = invoke(runner, [
+        'recall', 'PostgreSQL database',
+        '--source', 'agent', '--limit', '3'])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    agent_results = [r for r in data['results']
+                     if r['insight']['source'] == 'agent']
+    assert len(agent_results) >= 1, (
+        f'Expected at least 1 agent result, got {len(agent_results)}. '
+        f'--source filter without fetch inflation drops valid results')
+
+
+def test_remember_output_includes_semantic_edge_count(runner):
+    """Remember output edges_created must include semantic key."""
+    result = invoke(runner, [
+        'remember', 'Go uses SQLite for persistent storage',
+        '--no-reconcile'])
+    assert result.exit_code == 0
+    raw = json.loads(result.output)
+    edges = raw['facts'][0]['edges_created']
+    assert 'semantic' in edges, (
+        'edges_created missing semantic key in output JSON')
+
+
+def test_link_returns_actual_db_weight(runner):
+    """Link output weight reflects the DB value, not the user-supplied value."""
+    r1 = invoke(runner, [
+        'remember', 'FastAPI chosen for async API development',
+        '--no-reconcile'])
+    id1 = parse_remember(r1)['id']
+    r2 = invoke(runner, [
+        'remember', 'Uvicorn configured as ASGI server for FastAPI',
+        '--no-reconcile'])
+    id2 = parse_remember(r2)['id']
+
+    invoke(runner, ['link', id1, id2, '--type', 'causal', '--weight', '0.9'])
+    result = invoke(runner, [
+        'link', id1, id2, '--type', 'causal', '--weight', '0.3'])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data['weight'] == 0.9, (
+        f'Link output shows {data["weight"]} but DB has 0.9 '
+        f'(MAX of existing 0.9 and requested 0.3)')

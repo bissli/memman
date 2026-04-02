@@ -112,6 +112,35 @@ class TestRelinkPreservesManualEntityEdges:
         assert len(manual) == 1
 
 
+class TestRelinkPreservesManualCreatedByEntityEdges:
+    """Entity edges with created_by='manual' survive relink."""
+
+    def test_preserves_manual_created_by_entity(self, tmp_db):
+        """Insert manual-created entity edge, run relink, verify survival."""
+        ins1 = make_insight(id='mm-1', content='first',
+                            entities=['Go'])
+        ins2 = make_insight(id='mm-2', content='second',
+                            entities=['Go'])
+        insert_insight(tmp_db, ins1)
+        insert_insight(tmp_db, ins2)
+
+        manual_edge = make_edge(
+            source_id='mm-1', target_id='mm-2',
+            edge_type='entity',
+            metadata={'entity': 'Go', 'created_by': 'manual'})
+        insert_edge(tmp_db, manual_edge)
+
+        relink_auto_edges(tmp_db)
+
+        edges = get_all_edges(tmp_db)
+        manual = [e for e in edges
+                  if e.edge_type == 'entity'
+                  and e.metadata.get('created_by') == 'manual']
+        assert len(manual) == 1, (
+            'relink_auto_edges deleted manual entity edges — '
+            'filter should preserve both claude and manual created_by')
+
+
 class TestRelinkDeletesAutoEntityEdges:
     """Auto entity edges (no created_by) are replaced during relink."""
 

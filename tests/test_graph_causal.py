@@ -172,3 +172,51 @@ class TestFindCausalSignalNoMatch:
         """No keyword in text returns empty string."""
         result = find_causal_signal('The sky is blue')
         assert result == ''
+
+
+class TestInferLLMCausalIncludesRecent:
+    """infer_llm_causal_edges passes recent insights to LLM prompt."""
+
+    def test_recent_insights_in_llm_prompt(self, tmp_db):
+        """LLM prompt contains recent insights, not just graph neighbors."""
+
+        from mnemon.graph.causal import infer_llm_causal_edges
+        from mnemon.store.node import insert_insight
+
+        now = __import__('datetime').datetime.now(
+            __import__('datetime').timezone.utc)
+        from mnemon.model import Insight
+
+        def _make(**kw):
+            defaults = {
+                'id': 'x', 'content': 'x', 'category': 'fact', 'importance': 3,
+                'tags': [], 'entities': [], 'source': 'test', 'access_count': 0,
+                'created_at': now, 'updated_at': now, 'deleted_at': None,
+                'last_accessed_at': None, 'effective_importance': 0.0}
+            defaults.update(kw)
+            return Insight(**defaults)
+
+        for i in range(3):
+            insert_insight(tmp_db, _make(
+                id=f'old-{i}',
+                content=f'Database optimization technique {i} because of performance'))
+
+        new_ins = _make(
+            id='new-1',
+            content='Chose Redis because it improves cache hit rate for database queries')
+        insert_insight(tmp_db, new_ins)
+
+        captured_prompts = []
+
+        class MockLLM:
+            def complete(self, system, user):
+                captured_prompts.append(user)
+                return '[]'
+
+        infer_llm_causal_edges(tmp_db, new_ins, MockLLM())
+
+        assert captured_prompts, 'LLM was never called'
+        prompt = captured_prompts[0]
+        assert 'RECENT INSIGHTS' in prompt, (
+            'Recent insights section missing from LLM prompt — '
+            'recent list passed as [] instead of actual recent insights')

@@ -160,7 +160,7 @@ def open_read_only(data_dir: str) -> DB:
 
 
 def _migrate(db: DB) -> None:
-    """Run schema migrations."""
+    """Create schema tables and indexes."""
     schema = """
 CREATE TABLE IF NOT EXISTS insights (
     id          TEXT PRIMARY KEY,
@@ -174,6 +174,11 @@ CREATE TABLE IF NOT EXISTS insights (
     keywords    TEXT,
     summary     TEXT,
     semantic_facts TEXT,
+    last_accessed_at TEXT,
+    embedding   BLOB,
+    effective_importance REAL DEFAULT 0.5,
+    linked_at   TEXT,
+    enriched_at TEXT,
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
     deleted_at  TEXT
@@ -196,6 +201,8 @@ CREATE INDEX IF NOT EXISTS idx_insights_importance ON insights(importance);
 CREATE INDEX IF NOT EXISTS idx_insights_created ON insights(created_at);
 CREATE INDEX IF NOT EXISTS idx_insights_deleted ON insights(deleted_at);
 CREATE INDEX IF NOT EXISTS idx_insights_source ON insights(source);
+CREATE INDEX IF NOT EXISTS idx_insights_effective_imp ON insights(effective_importance);
+CREATE INDEX IF NOT EXISTS idx_prune_candidates ON insights(deleted_at, importance, access_count, effective_importance);
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
 CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(edge_type);
@@ -217,95 +224,3 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 """
     db._conn.executescript(schema)
-
-    _add_column_if_not_exists(
-        db._conn, 'ALTER TABLE insights ADD COLUMN last_accessed_at TEXT')
-    _add_column_if_not_exists(
-        db._conn, 'ALTER TABLE insights ADD COLUMN embedding BLOB')
-    _add_column_if_not_exists(
-        db._conn,
-        'ALTER TABLE insights ADD COLUMN effective_importance REAL DEFAULT 0.5')
-
-    db._conn.execute(
-        'CREATE INDEX IF NOT EXISTS idx_insights_effective_imp'
-        ' ON insights(effective_importance)')
-    db._conn.execute(
-        'CREATE INDEX IF NOT EXISTS idx_prune_candidates'
-        ' ON insights(deleted_at, importance, access_count,'
-        ' effective_importance)')
-
-    added = _add_column_if_not_exists(
-        db._conn,
-        'ALTER TABLE insights ADD COLUMN linked_at TEXT')
-    if added:
-        db._conn.execute(
-            'UPDATE insights SET linked_at = created_at'
-            ' WHERE linked_at IS NULL')
-
-    added = _add_column_if_not_exists(
-        db._conn,
-        'ALTER TABLE insights ADD COLUMN enriched_at TEXT')
-    if added:
-        db._conn.execute(
-            'UPDATE insights SET enriched_at = linked_at'
-            ' WHERE linked_at IS NOT NULL')
-
-    _migrate_remove_narrative_edges(db)
-
-    row = db._conn.execute(
-        "SELECT COUNT(*) FROM insights"
-        " WHERE category = 'narrative' AND deleted_at IS NULL"
-        ).fetchone()
-    if row[0] > 0:
-        db._conn.execute(
-            "UPDATE insights SET deleted_at = datetime('now')"
-            " WHERE category = 'narrative' AND deleted_at IS NULL")
-
-
-def _add_column_if_not_exists(
-        conn: sqlite3.Connection, stmt: str) -> bool:
-    """Run ALTER TABLE ADD COLUMN, ignoring duplicate column errors."""
-    try:
-        conn.execute(stmt)
-        return True
-    except sqlite3.OperationalError as e:
-        if 'duplicate column' not in str(e).lower():
-            raise
-        return False
-
-
-def _migrate_remove_narrative_edges(db: DB) -> None:
-    """Recreate edges table without narrative type if old schema allows it."""
-    db._conn.execute('PRAGMA foreign_keys=OFF')
-    try:
-        db._conn.execute(
-            "INSERT INTO edges VALUES"
-            " ('__test','__test','narrative',0,'{}',datetime('now'))")
-    except sqlite3.IntegrityError:
-        return
-    finally:
-        db._conn.execute('PRAGMA foreign_keys=ON')
-
-    db._conn.execute("DELETE FROM edges WHERE source_id = '__test'")
-    db._conn.execute("DELETE FROM edges WHERE edge_type = 'narrative'")
-    db._conn.execute('ALTER TABLE edges RENAME TO edges_old')
-    db._conn.execute("""
-        CREATE TABLE edges (
-            source_id   TEXT NOT NULL,
-            target_id   TEXT NOT NULL,
-            edge_type   TEXT NOT NULL CHECK(edge_type IN ('temporal','semantic','causal','entity')),
-            weight      REAL DEFAULT 1.0,
-            metadata    TEXT DEFAULT '{}',
-            created_at  TEXT NOT NULL,
-            PRIMARY KEY (source_id, target_id, edge_type),
-            FOREIGN KEY (source_id) REFERENCES insights(id) ON DELETE CASCADE,
-            FOREIGN KEY (target_id) REFERENCES insights(id) ON DELETE CASCADE
-        )""")
-    db._conn.execute('INSERT INTO edges SELECT * FROM edges_old')
-    db._conn.execute('DROP TABLE edges_old')
-    db._conn.execute(
-        'CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id)')
-    db._conn.execute(
-        'CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id)')
-    db._conn.execute(
-        'CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(edge_type)')

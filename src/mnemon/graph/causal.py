@@ -150,7 +150,7 @@ def infer_llm_causal_edges(
     if not candidates:
         return []
 
-    prompt = _build_llm_prompt(insight, candidates, [])
+    prompt = _build_llm_prompt(insight, candidates, recent)
 
     try:
         raw = llm_client.complete(LLM_SYSTEM_PROMPT, prompt)
