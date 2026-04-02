@@ -116,4 +116,4 @@ Different query intents activate different graph traversal weights:
 
 When asking "why was SQLite chosen," causal edge weight is highest — the system traces decision rationale along causal chains. When asking for "memories related to React," entity edge weight is highest.
 
-Weight distributions follow MAGMA's unnormalized weight ranges (Table 5), normalized to sum to 1.0. The relative ordering is preserved: causal dominates WHY, temporal dominates WHEN, entity dominates ENTITY. GENERAL uses uniform 0.25 as the unbiased baseline.
+Weight distributions are inspired by MAGMA's intent-adaptive traversal (§3.3) and the weight ranges in Table 5, normalized to sum to 1.0. MAGMA Table 5 provides per-edge-type ranges (e.g., `w_causal`: 3.0–5.0, `w_phrase`/semantic: 2.5–5.0) but not per-intent distributions; MemMan interpolates specific per-intent values from these ranges and the paper's qualitative guidance (e.g., "Why queries trigger a bias for Causal edges"). The relative ordering is preserved: causal dominates WHY, temporal dominates WHEN, entity dominates ENTITY. GENERAL uses uniform 0.25 as the unbiased baseline.

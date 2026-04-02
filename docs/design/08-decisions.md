@@ -38,16 +38,21 @@
 
 ### Key Deviations from the MAGMA Paper
 
-| Aspect            | MAGMA Paper                        | MemMan Implementation                                                  |
-| ----------------- | ---------------------------------- | ---------------------------------------------------------------------- |
-| Entity Extraction | LLM-driven full pipeline           | LLM-based via Haiku (`extract_facts` + `enrich_with_llm`)              |
-| Causal Reasoning  | Embedded prompt chain              | LLM causal inference (`infer_llm_causal_edges`) via ThreadPoolExecutor |
-| Deduplication     | Not addressed                      | LLM reconciliation (ADD/UPDATE/DELETE/NONE)                            |
-| Node Types        | EVENT, EPISODE, SESSION, NARRATIVE | Insight only (flat)                                                    |
-| Storage           | NetworkX (in-memory)               | SQLite (persistent)                                                    |
-| Embeddings        | FAISS + OpenAI                     | Voyage AI (voyage-3-lite, 512-dim)                                     |
-| Quality Review    | Slow-path LLM refinement (Alg. 3)  | Pattern-based quality warnings + async gc --review                     |
-| Deployment        | Python library                     | Python package (CLI)                                                   |
+| Aspect            | MAGMA Paper                                        | MemMan Implementation                                                                                                                                                                       |
+| ----------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Transition Score  | `exp(λ1·φ + λ2·sim)` (Eq. 5) — exponential wrapper | Linear `λ1·structural + λ2·semantic` — better discrimination (`exp` compresses score ratios; irrelevant edges with zero structural+semantic contribution score `exp(0) = 1.0` instead of 0) |
+| Depth Decay       | `score_v = score_u · γ + s_uv` (Alg. 1) — decay γ  | No decay — accumulative scoring. Mitigated by bounded depth (4-5), beam pruning, and min-max normalized multi-factor re-ranking. γ is unspecified in the paper                              |
+| RRF Weighting     | `w_keyword (Fusion): 2.0-5.0` (Table 5)            | Standard unweighted RRF — all three signals (keyword, vector, recency) contribute equally via `1/(k + rank)`                                                                                |
+| Traversal Budget  | `Max Nodes: 200` (Table 5)                         | 400-500 (intent-dependent). Flat node hierarchy (insights only, no episodes/narratives) requires a larger budget for equivalent coverage                                                    |
+| Intent Types      | {Why, When, Entity} — 3 types                      | Adds GENERAL (uniform 0.25 weights) as a 4th intent for queries that don't match specific patterns                                                                                          |
+| Entity Extraction | LLM-driven full pipeline                           | LLM-based via Haiku (`extract_facts` + `enrich_with_llm`)                                                                                                                                   |
+| Causal Reasoning  | Embedded prompt chain                              | LLM causal inference (`infer_llm_causal_edges`) via ThreadPoolExecutor                                                                                                                      |
+| Deduplication     | Not addressed                                      | LLM reconciliation (ADD/UPDATE/DELETE/NONE)                                                                                                                                                 |
+| Node Types        | EVENT, EPISODE, SESSION, NARRATIVE                 | Insight only (flat)                                                                                                                                                                         |
+| Storage           | NetworkX (in-memory)                               | SQLite (persistent)                                                                                                                                                                         |
+| Embeddings        | FAISS + OpenAI                                     | Voyage AI (voyage-3-lite, 512-dim)                                                                                                                                                          |
+| Quality Review    | Slow-path LLM refinement (Alg. 3)                  | Pattern-based quality warnings + async gc --review                                                                                                                                          |
+| Deployment        | Python library                                     | Python package (CLI)                                                                                                                                                                        |
 
 MemMan retains MAGMA's **architectural skeleton** (four-graph separation, intent-adaptive retrieval, multi-signal fusion) while using Haiku for pipeline intelligence (fact extraction, reconciliation, query expansion, enrichment, causal inference) and the host LLM for high-level judgment.
 

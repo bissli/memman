@@ -84,9 +84,11 @@ Signal 1: Keyword     → KeywordSearch(all_insights, query, top-20)
 Signal 2: Vector      → CosineSimilarity(query_vec, all_embeddings, top-20)
 Signal 3: Recency     → sort by created_at DESC, top-20
 
-RRF Score = Σ  1 / (k + rank_i + 1)    (k = 60)
+RRF Score = Σ  1 / (k + r)    (k = 60, r = 1-based rank)
                  for each signal
 ```
+
+> Code uses 0-based `enumerate` with `1/(k + rank + 1)` to produce equivalent 1-based ranks.
 
 Each insight may rank differently across signals; RRF fusion produces a robust composite ranking.
 
