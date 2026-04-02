@@ -1,5 +1,5 @@
 #!/bin/bash
-# mnemon Stop hook — evaluate memory storage once per user turn.
+# mnemon Stop hook - evaluate memory storage once per user turn.
 # Uses atomic mkdir to fire only on first Stop after each user message.
 # Reset via user_prompt.sh rmdir on new human input.
 
@@ -14,7 +14,7 @@ fi
 SESSION_ID=$(echo "$INPUT" | sed -n 's/.*"session_id": *"\([^"]*\)".*/\1/p' | head -1)
 
 if [ -z "$SESSION_ID" ]; then
-  # Can't determine session — fall back to always blocking (safe default)
+  # Can't determine session - fall back to always blocking (safe default)
   cat <<'EOF'
 {"decision": "block", "reason": "[mnemon] Memory check: did the user state a preference, make a decision, give a correction, or reach a conclusion? If yes, store via Agent(model=sonnet) sub-agent. Only skip if the exchange was purely open-ended questions with no resolution."}
 EOF
@@ -30,6 +30,6 @@ if mkdir "$HOME/.mnemon/stop_fired/$SESSION_ID" 2>/dev/null; then
 {"decision": "block", "reason": "[mnemon] Memory check: did the user state a preference, make a decision, give a correction, or reach a conclusion? If yes, store via Agent(model=sonnet) sub-agent. Only skip if the exchange was purely open-ended questions with no resolution."}
 EOF
 else
-  # Flag already set — subsequent stop in same turn, skip silently
+  # Flag already set - subsequent stop in same turn, skip silently
   exit 0
 fi

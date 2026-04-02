@@ -1,5 +1,5 @@
 #!/bin/bash
-# mnemon SessionStart hook — load memory context.
+# mnemon SessionStart hook - load memory context.
 # Reads SessionStart JSON input to detect post-compact restarts.
 
 PROMPT_DIR="${HOME}/.mnemon/prompt"

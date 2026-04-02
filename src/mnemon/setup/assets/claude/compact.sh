@@ -1,8 +1,8 @@
 #!/bin/bash
-# mnemon PreCompact hook — bridge context across compaction.
+# mnemon PreCompact hook - bridge context across compaction.
 # Writes a flag file so prime.sh can enrich the recall reminder
 # after compaction completes (SessionStart source=compact).
-# The flag is supplementary — prime.sh detects compaction from
+# The flag is supplementary - prime.sh detects compaction from
 # SessionStart source=compact regardless of whether this hook ran.
 
 INPUT=$(cat)

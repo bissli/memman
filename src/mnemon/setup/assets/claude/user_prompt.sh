@@ -1,5 +1,5 @@
 #!/bin/bash
-# mnemon UserPromptSubmit hook — remind agent to recall/remember,
+# mnemon UserPromptSubmit hook - remind agent to recall/remember,
 # and reset the stop-hook once-per-turn flag.
 
 INPUT=$(cat)
