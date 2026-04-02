@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="docs/logo/logo.svg" width="160" height="160" alt="Mnemon Logo" />
-</p>
-
 # Mnemon
 
 **LLM-supervised persistent memory for AI agents.**
