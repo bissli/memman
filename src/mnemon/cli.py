@@ -1416,6 +1416,7 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
                 if count == 0:
                     break
 
+        bar.set_description('Done')
         bar.close()
 
         remaining = db._conn.execute(
