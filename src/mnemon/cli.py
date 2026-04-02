@@ -4,6 +4,7 @@ import json
 import os
 import pathlib
 import re
+import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -14,6 +15,7 @@ from mnemon.model import format_timestamp, is_immune
 from mnemon.store.db import default_data_dir, list_stores, open_db
 from mnemon.store.db import open_read_only, read_active, store_dir
 from mnemon.store.db import store_exists, valid_store_name, write_active
+from tqdm import tqdm
 
 
 def _json_out(obj: object) -> None:
@@ -1385,10 +1387,20 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
             _json_out({'processed': 0, 'remaining': 0})
             return
 
-        click.echo(
-            f'Rebuilding {total_count} insights...', err=True)
         embed_cache = build_embed_cache(db)
         processed = 0
+
+        bar = tqdm(
+            total=total_count, desc='Rebuilding',
+            unit='insight', file=sys.stderr,
+            dynamic_ncols=True,
+            disable=not sys.stderr.isatty())
+
+        def _on_progress(stage: str, insight: Insight) -> None:
+            preview = insight.content[:40].replace('\n', ' ')
+            bar.set_description(f'{stage}: {preview}')
+            if stage == 'done':
+                bar.update(1)
 
         for i in range(0, total_count, MAX_LINK_BATCH):
             batch_ids = all_ids[i:i + MAX_LINK_BATCH]
@@ -1397,22 +1409,18 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
             while True:
                 count = link_pending(
                     db, embed_cache=embed_cache,
-                    llm_client=llm_client, embed_client=ec)
+                    llm_client=llm_client, embed_client=ec,
+                    on_progress=_on_progress)
                 processed += count
                 if count == 0:
                     break
 
-            click.echo(
-                f'  processed {min(processed, total_count)}'
-                f'/{total_count}', err=True)
+        bar.close()
 
         remaining = db._conn.execute(
             'SELECT COUNT(*) FROM insights'
             ' WHERE linked_at IS NULL AND deleted_at IS NULL'
             ).fetchone()[0]
-        click.echo(
-            f'Done. {processed} processed, {remaining} remaining.',
-            err=True)
 
         stats = {'processed': processed, 'remaining': remaining}
         log_op(db, 'rebuild', '', json.dumps(stats))

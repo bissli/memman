@@ -119,6 +119,23 @@ class TestLinkPending:
         assert llm_calls_in_tx == [], (
             f'LLM calls made inside transaction: {llm_calls_in_tx}')
 
+    def test_progress_callback_called(self, tmp_db):
+        """on_progress receives enrich, causal, done stages per insight."""
+        _insert_pending(tmp_db, 'pc-1', 'callback test content')
+
+        calls = []
+
+        def on_progress(stage, insight):
+            calls.append((stage, insight.id))
+
+        link_pending(tmp_db, on_progress=on_progress)
+
+        stages = [c[0] for c in calls]
+        assert 'enrich' in stages
+        assert 'causal' in stages
+        assert 'done' in stages
+        assert all(c[1] == 'pc-1' for c in calls)
+
     def test_relink_clears_linked_at(self, tmp_db):
         """reindex_auto_edges clears linked_at for re-linking."""
         insert_insight(tmp_db, make_insight(

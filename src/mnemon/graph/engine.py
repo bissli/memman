@@ -3,6 +3,8 @@
 import hashlib
 import json
 import logging
+import pathlib
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from mnemon.graph.entity import MAX_ENTITY_LINKS, MAX_TOTAL_ENTITY_EDGES
@@ -56,6 +58,7 @@ def link_pending(
         llm_client: object | None = None,
         embed_client: object | None = None,
         max_batch: int = MAX_LINK_BATCH,
+        on_progress: 'Callable[[str, Insight], None] | None' = None,
         ) -> int:
     """Process insights where linked_at IS NULL.
 
@@ -74,16 +77,44 @@ def link_pending(
     if embed_cache is None:
         embed_cache = build_embed_cache(db)
 
+    from mnemon.graph.causal import infer_llm_causal_edges
+    from mnemon.graph.enrichment import enrich_with_llm
+    from mnemon.store.db import open_read_only
+
     now = format_timestamp(datetime.now(timezone.utc))
     processed = 0
+    data_dir = str(pathlib.Path(db.path).parent)
 
     for (insight_id,) in rows:
         insight = get_insight_by_id(db, insight_id)
         if insight is None:
             continue
 
-        from mnemon.graph.enrichment import enrich_with_llm
-        enrichment = enrich_with_llm(insight, llm_client)
+        if on_progress:
+            on_progress('enrich', insight)
+
+        def _do_causal() -> list:
+            ro_db = open_read_only(data_dir)
+            try:
+                return infer_llm_causal_edges(
+                    ro_db, insight, llm_client)
+            finally:
+                ro_db.close()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fut_enrich = pool.submit(
+                enrich_with_llm, insight, llm_client)
+            fut_causal = pool.submit(_do_causal)
+            try:
+                enrichment = fut_enrich.result()
+            except Exception:
+                enrichment = {}
+            if on_progress:
+                on_progress('causal', insight)
+            try:
+                causal_edges = fut_causal.result()
+            except Exception:
+                causal_edges = []
 
         keywords = enrichment.get('keywords', [])
         new_vec = None
@@ -97,10 +128,6 @@ def link_pending(
                 new_vec = embed_client.embed(enriched_text)
             except Exception:
                 logger.debug(f'Re-embed failed for {insight.id}')
-
-        from mnemon.graph.causal import infer_llm_causal_edges
-        causal_edges = infer_llm_causal_edges(
-            db, insight, llm_client)
 
         def _write_results() -> int:
             if enrichment:
@@ -161,6 +188,8 @@ def link_pending(
             return sem_count
 
         semantic_count = db.in_transaction(_write_results)
+        if on_progress:
+            on_progress('done', insight)
         processed += 1
         logger.debug(
             f'Linked {insight_id}: {semantic_count} semantic edges')
