@@ -395,6 +395,7 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
                 log_op(db, 'reconcile-delete', tid,
                        f'contradicted by: {fact_text[:200]}')
             db.in_transaction(delete_tx)
+            embed_cache.pop(target_id, None)
             fact_results.append({
                 'id': fact_id,
                 'content': effective_text,
@@ -435,6 +436,9 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
             log_op(db, 'remember', fi.id, fi.content)
 
         db.in_transaction(insert_tx)
+
+        if action in {'UPDATE', 'REPLACE'} and target_id:
+            embed_cache.pop(target_id, None)
 
         if embed_vec is not None:
             embed_cache[fact_insight.id] = embed_vec

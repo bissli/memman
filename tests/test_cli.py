@@ -222,7 +222,7 @@ def test_store_auto_create_from_env(runner, monkeypatch):
     monkeypatch.setenv('MEMMAN_STORE', 'auto-created')
 
     result = r.invoke(cli, ['--data-dir', data_dir, 'recall', 'test',
-                             '--limit', '1'])
+                            '--limit', '1'])
     assert result.exit_code == 0, result.output
 
     store_path = pathlib.Path(data_dir) / 'data' / 'auto-created'
@@ -1294,3 +1294,67 @@ class TestIntraBatchDedup:
         active = json.loads(search_result.output)
         assert len(active) == 1, (
             f'expected 1 active Redis insight, got {len(active)}')
+
+    def test_update_reconciliation_no_dangling_edges(self, runner):
+        """Chained intra-batch UPDATEs must not leave semantic edges to soft-deleted insights."""
+        _r, data_dir = runner
+
+        def _three_paraphrase_facts(llm_client, content):
+            return [
+                {
+                    'text': 'Delta mode dropdown defaults'
+                            ' to incremental_sync with no empty option',
+                    'category': 'decision',
+                    'importance': 3,
+                    'entities': [],
+                    },
+                {
+                    'text': 'Delta mode dropdown defaults'
+                            ' to incremental_sync with no empty option'
+                            ' unlike filter dropdowns',
+                    'category': 'decision',
+                    'importance': 3,
+                    'entities': [],
+                    },
+                {
+                    'text': 'Delta mode dropdown defaults'
+                            ' to incremental_sync with no empty option'
+                            ' unlike filter dropdowns which have one',
+                    'category': 'decision',
+                    'importance': 3,
+                    'entities': [],
+                    },
+                ]
+
+        def _force_update(llm_client, facts, existing):
+            target_id = existing[0][0] if existing else None
+            return [{'fact': f['text'], 'action': 'UPDATE',
+                     'target_id': target_id,
+                     'merged_text': f['text']}
+                    for f in facts]
+
+        fixed_vec = [1.0] + [0.0] * 511
+
+        def _fixed_embed(self, text):
+            return list(fixed_vec)
+
+        with patch('memman.llm.extract.extract_facts',
+                   _three_paraphrase_facts), \
+        patch('memman.llm.extract.reconcile_memories',
+              _force_update), \
+        patch('memman.embed.voyage.Client.embed', _fixed_embed):
+            result = invoke(runner, [
+                'remember',
+                'Delta mode dropdown defaults to incremental_sync'])
+        assert result.exit_code == 0, result.output
+
+        store_path = pathlib.Path(data_dir) / 'data' / 'default'
+        from memman.doctor import check_dangling_edges
+        from memman.store.db import open_db
+        db = open_db(str(store_path))
+        doctor_result = check_dangling_edges(db)
+        db.close()
+
+        assert doctor_result['status'] == 'pass', (
+            f'dangling edges found: {doctor_result["detail"]}')
+        assert doctor_result['detail']['count'] == 0
