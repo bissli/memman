@@ -44,7 +44,7 @@ The [RRF paper](https://dl.acm.org/doi/10.1145/1571941.1572114) (Cormack, Clarke
 
 **Mnemon's Engineering Choices**
 
-Mnemon uses Haiku for fact extraction, reconciliation, enrichment, causal inference, and query expansion. The host LLM handles higher-level judgment (what to remember, when to recall). The write path uses LLM reconciliation (ADD/UPDATE/DELETE/NONE) instead of threshold-based diff. The lifecycle is hook-driven: remember → reconcile → link → gc.
+Mnemon uses Haiku for fact extraction, reconciliation, enrichment, causal inference, and query expansion. The host LLM handles higher-level judgment (what to remember, when to recall). The write path uses LLM reconciliation (ADD/UPDATE/DELETE/NONE) instead of threshold-based comparison. The lifecycle is hook-driven: remember → reconcile → link → gc.
 
 Where MAGMA's reference implementation is a Python library with in-memory NetworkX graphs, Mnemon persists everything in SQLite with a complete write-back lifecycle. CLI commands as the interface — constrained, but auditable, portable, and sandboxed.
 

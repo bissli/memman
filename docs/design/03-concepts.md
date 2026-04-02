@@ -103,7 +103,7 @@ Mnemon's architecture is divided into five layers:
 ┌──────────────────────────────────────────────────────────────┐
 │  Integration Layer    Hook / Skill / Guide                   │
 ├─────────────────────────────────────────────────────────────┤
-│  CLI Layer            remember, recall, diff, link, gc ...   │
+│  CLI Layer            remember, recall, search, link, gc ... │
 ├─────────────────────────────────────────────────────────────┤
 │  Core Engine          search/ (recall, intent, keyword)      │
 │                       graph/  (temporal, entity, causal,     │
@@ -135,7 +135,8 @@ mnemon/
 │   └── setup/                # LLM CLI integration setup
 ├── tests/
 ├── scripts/
-│   └── e2e_test.sh
+│   ├── e2e_test.sh
+│   └── visualize_graph.py
 ├── pyproject.toml            # Poetry package config
 └── Makefile
 ```

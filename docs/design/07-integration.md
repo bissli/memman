@@ -87,7 +87,7 @@ The agent decides whether to act on this reminder based on the guide.md rules â€
 
 **Nudge (Stop) â€” `stop.sh`**
 
-Runs after each LLM response. Returns a `decision: block` JSON so the agent gets one more turn to evaluate memory. Directive-aware: prompts the agent to store if a user preference, decision, or conclusion emerged. Stays silent when `stop_hook_active` is true (preventing infinite loops):
+Runs after each LLM response. Returns a `decision: block` JSON so the agent gets one more turn to evaluate memory. Directive-aware: prompts the agent to store if a user preference, decision, or conclusion emerged. Fires once per user turn (gated by a `stop_fired/` directory lock) and stays silent when `stop_hook_active` is true (preventing infinite loops). Simplified excerpt:
 
 ```bash
 INPUT=$(cat)

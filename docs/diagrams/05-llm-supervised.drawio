@@ -58,7 +58,7 @@
         <mxCell id="cl_l4" value="&lt;b&gt;Memory Triage&lt;/b&gt;&lt;br&gt;Decide what to remember: directives, conclusions, observations" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="640" y="340" width="390" height="45" as="geometry" />
         </mxCell>
-        <mxCell id="cl_l5" value="&lt;b&gt;Conflict Resolution&lt;/b&gt;&lt;br&gt;When diff returns CONFLICT, decide keep old or new" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="cl_l5" value="&lt;b&gt;LLM Reconciliation&lt;/b&gt;&lt;br&gt;When reconciliation returns DELETE/UPDATE, decide keep old or new" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="640" y="405" width="390" height="45" as="geometry" />
         </mxCell>
         <mxCell id="cl_l6" value="&lt;b&gt;Result Re-ranking&lt;/b&gt;&lt;br&gt;Use signals transparency + conversation context for final ranking" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">

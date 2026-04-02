@@ -145,29 +145,11 @@ Different agents/processes can use different stores via the `MNEMON_STORE` envir
 Edit `~/.mnemon/prompt/guide.md`. This file controls when the agent recalls memories and what it considers worth remembering. The skill file (`SKILL.md`) is auto-deployed and should not need manual editing.
 
 **What is sub-agent delegation?**
-The host LLM (e.g., Opus) decides *what* to remember, then delegates the actual `mnemon remember` execution to a lightweight sub-agent (e.g., Sonnet). This saves tokens and keeps memory operations out of the main context.
+The host model decides *what* to remember, then delegates the actual `mnemon remember` execution to a lightweight sub-agent. This saves tokens and keeps memory operations out of the main context.
 
 ## Configuration
 
-| Environment Variable | Default                      | Description                           |
-| -------------------- | ---------------------------- | ------------------------------------- |
-| `MNEMON_DATA_DIR`    | `~/.mnemon`                  | Base data directory                   |
-| `MNEMON_STORE`       | *(active file or `default`)* | Named memory store for data isolation |
-
-**Required API keys**:
-
-| Environment Variable | Default | Description                                   |
-| -------------------- | ------- | --------------------------------------------- |
-| `ANTHROPIC_API_KEY`  | —       | LLM (fact extraction, reconciliation, recall) |
-| `VOYAGE_API_KEY`     | —       | Voyage AI embeddings (512-dim)                |
-
-**Optional overrides**:
-
-| Environment Variable  | Default                         | Description                       |
-| --------------------- | ------------------------------- | --------------------------------- |
-| `MNEMON_LLM_ENDPOINT` | `https://api.anthropic.com`     | Custom LLM inference endpoint     |
-| `MNEMON_LLM_API_KEY`  | falls back to ANTHROPIC_API_KEY | Override API key for LLM endpoint |
-| `MNEMON_LLM_MODEL`    | `claude-haiku-4-5-20251001`     | Model for LLM inference           |
+See [Usage & Reference](docs/USAGE.md#configuration) for all environment variables, API keys, and optional overrides.
 
 ## Development
 
@@ -180,7 +162,7 @@ mnemon setup     # interactive setup
 mnemon setup --eject  # remove all integrations
 ```
 
-**Dependencies**: Python 3.11+, Click, httpx. **Required**: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`.
+**Dependencies**: Python 3.11+, Click, httpx, tqdm. **Required**: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`.
 
 ## Documentation
 
