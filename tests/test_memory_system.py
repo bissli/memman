@@ -1,4 +1,4 @@
-"""Black-box behavioral tests for mnemon memory management system.
+"""Black-box behavioral tests for memman memory management system.
 
 These tests verify behavioral invariants through the CLI only — no internal
 module imports.
@@ -9,14 +9,14 @@ import pathlib
 
 import pytest
 from click.testing import CliRunner
-from mnemon.cli import cli
+from memman.cli import cli
 
 
 @pytest.fixture
 def runner(tmp_path):
     """CliRunner with --data-dir pointing to temp directory."""
     r = CliRunner()
-    data_dir = str(tmp_path / 'mnemon_data')
+    data_dir = str(tmp_path / 'memman_data')
     pathlib.Path(data_dir).mkdir(exist_ok=True, parents=True)
     return r, data_dir
 

@@ -6,7 +6,7 @@
 
 ## 5.1 Write Pipeline: Remember
 
-`mnemon remember` decomposes input into atomic facts, classifies each against existing memories, and builds graph edges — all synchronously in a single tier.
+`memman remember` decomposes input into atomic facts, classifies each against existing memories, and builds graph edges — all synchronously in a single tier.
 
 ![Remember Pipeline](../diagrams/02-remember-pipeline.drawio.png)
 
@@ -48,7 +48,7 @@ The `--no-reconcile` flag skips LLM reconciliation for direct insert.
 
 ## 5.2 Read Pipeline: Smart Recall
 
-`mnemon recall` combines LLM query expansion, intent detection, multi-signal anchor selection, beam search graph traversal, and multi-factor re-ranking. Use `--basic` for SQL LIKE fallback.
+`memman recall` combines LLM query expansion, intent detection, multi-signal anchor selection, beam search graph traversal, and multi-factor re-ranking. Use `--basic` for SQL LIKE fallback.
 
 ![Smart Recall Pipeline](../diagrams/03-smart-recall-pipeline.drawio.png)
 
@@ -158,7 +158,7 @@ Weights vary by intent:
 | ENTITY  | 0.20    | **0.35** | **0.35**   | 0.10     |
 | GENERAL | 0.25    | 0.15     | **0.45**   | 0.15     |
 
-These extend MAGMA's intent-adaptive philosophy (which steers beam search via edge type weights) into the final reranking stage. MAGMA does not define a separate reranking stage — this is Mnemon's extension.
+These extend MAGMA's intent-adaptive philosophy (which steers beam search via edge type weights) into the final reranking stage. MAGMA does not define a separate reranking stage — this is MemMan's extension.
 
 Embeddings are Voyage AI 512-dim vectors. The expanded query from Step 0 is embedded for vector search and reranking.
 

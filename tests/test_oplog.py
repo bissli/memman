@@ -1,7 +1,7 @@
-"""Tests for mnemon.store.oplog — operation logging and stats."""
+"""Tests for memman.store.oplog — operation logging and stats."""
 
-from mnemon.store.node import insert_insight, soft_delete_insight
-from mnemon.store.oplog import get_oplog_stats
+from memman.store.node import insert_insight, soft_delete_insight
+from memman.store.oplog import get_oplog_stats
 from tests.conftest import make_insight
 
 

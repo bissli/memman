@@ -1,4 +1,4 @@
-VENV_DIR   := $(HOME)/.local/share/mnemon/venv
+VENV_DIR   := $(HOME)/.local/share/memman/venv
 BIN_DIR    := $(HOME)/.local/bin
 DRAWIO     := /snap/bin/drawio
 DIAGRAMS   := docs/diagrams
@@ -11,13 +11,13 @@ install:
 	python3 -m venv $(VENV_DIR)
 	$(VENV_DIR)/bin/pip install --quiet .
 	@mkdir -p $(BIN_DIR)
-	ln -sf $(VENV_DIR)/bin/mnemon $(BIN_DIR)/mnemon
-	@echo "Installed: $(BIN_DIR)/mnemon"
+	ln -sf $(VENV_DIR)/bin/memman $(BIN_DIR)/memman
+	@echo "Installed: $(BIN_DIR)/memman"
 
 uninstall:
-	rm -f $(BIN_DIR)/mnemon
+	rm -f $(BIN_DIR)/memman
 	rm -rf $(VENV_DIR)
-	@echo "Uninstalled mnemon"
+	@echo "Uninstalled memman"
 
 dev:
 	poetry install

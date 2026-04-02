@@ -1,4 +1,4 @@
-"""Tests for mnemon.cli — Click CLI commands via CliRunner.
+"""Tests for memman.cli — Click CLI commands via CliRunner.
 
 All tests use real Haiku LLM and Voyage embedding APIs.
 Requires ANTHROPIC_API_KEY and VOYAGE_API_KEY in environment.
@@ -10,14 +10,14 @@ from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
-from mnemon.cli import cli
+from memman.cli import cli
 
 
 @pytest.fixture
 def runner(tmp_path):
     """CliRunner with --data-dir pointing to temp directory."""
     r = CliRunner()
-    data_dir = str(tmp_path / 'mnemon_data')
+    data_dir = str(tmp_path / 'memman_data')
     pathlib.Path(data_dir).mkdir(exist_ok=True, parents=True)
     return r, data_dir
 
@@ -98,7 +98,7 @@ def test_recall_does_not_call_link_pending(runner, monkeypatch):
         '--no-reconcile'])
 
     from unittest.mock import patch
-    with patch('mnemon.graph.engine.link_pending',
+    with patch('memman.graph.engine.link_pending',
                side_effect=AssertionError('link_pending called')) as mock_lp:
         result = invoke(runner, ['recall', 'Go SQLite storage'])
         assert result.exit_code == 0
@@ -112,7 +112,7 @@ def test_remember_does_not_link_old_pending_insights(runner, monkeypatch):
         '--no-reconcile'])
 
     from unittest.mock import patch
-    with patch('mnemon.graph.engine.link_pending',
+    with patch('memman.graph.engine.link_pending',
                side_effect=AssertionError(
                    'link_pending called from remember')) as mock_lp:
         result = invoke(runner, [
@@ -272,7 +272,7 @@ def test_viz_dot(runner):
 
 def test_js_str_escapes_script_close():
     """_js_str prevents XSS via </script> in content."""
-    from mnemon.cli import _js_str
+    from memman.cli import _js_str
     result = _js_str('</script><script>alert(1)</script>')
     assert '</script>' not in result
     assert '<\\/' in result
@@ -280,7 +280,7 @@ def test_js_str_escapes_script_close():
 
 def test_js_str_normal_string():
     """_js_str handles regular strings correctly."""
-    from mnemon.cli import _js_str
+    from memman.cli import _js_str
     result = _js_str('hello world')
     assert result == '"hello world"'
 
@@ -675,7 +675,7 @@ class TestSingleTierEnrichment:
 
     def test_linked_at_stamped_after_remember(self, runner):
         """linked_at is non-NULL after remember returns."""
-        from mnemon.store.db import open_read_only
+        from memman.store.db import open_read_only
 
         result = invoke(runner, [
             'remember',
@@ -705,7 +705,7 @@ class TestSingleTierEnrichment:
 
     def test_enriched_at_stamped_after_remember(self, runner):
         """enriched_at is non-NULL after remember returns."""
-        from mnemon.store.db import open_read_only
+        from memman.store.db import open_read_only
 
         result = invoke(runner, [
             'remember',
@@ -795,11 +795,11 @@ class TestEmbedSubcommands:
 
     def test_embed_status_shows_coverage(self, tmp_path, monkeypatch):
         """Embed status reports total, embedded, and coverage."""
-        monkeypatch.delenv('MNEMON_STORE', raising=False)
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
-        from mnemon.store.db import open_db
-        from mnemon.store.node import insert_insight
+        from memman.store.db import open_db
+        from memman.store.node import insert_insight
         from tests.conftest import make_insight
         db = open_db(str(store_path))
         insert_insight(db, make_insight(
@@ -819,11 +819,11 @@ class TestEmbedSubcommands:
 
     def test_embed_backfill_embeds_missing(self, tmp_path, monkeypatch):
         """Embed backfill embeds insights without embeddings."""
-        monkeypatch.delenv('MNEMON_STORE', raising=False)
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
-        from mnemon.store.db import open_db
-        from mnemon.store.node import insert_insight
+        from memman.store.db import open_db
+        from memman.store.node import insert_insight
         from tests.conftest import make_insight
         db = open_db(str(store_path))
         insert_insight(db, make_insight(
@@ -839,11 +839,11 @@ class TestEmbedSubcommands:
 
     def test_embed_run_single(self, tmp_path, monkeypatch):
         """Embed run <id> embeds a specific insight."""
-        monkeypatch.delenv('MNEMON_STORE', raising=False)
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
-        from mnemon.store.db import open_db
-        from mnemon.store.node import insert_insight
+        from memman.store.db import open_db
+        from memman.store.node import insert_insight
         from tests.conftest import make_insight
         db = open_db(str(store_path))
         insert_insight(db, make_insight(
@@ -860,10 +860,10 @@ class TestEmbedSubcommands:
 
     def test_embed_run_missing_id_errors(self, tmp_path, monkeypatch):
         """Embed run with nonexistent ID returns error."""
-        monkeypatch.delenv('MNEMON_STORE', raising=False)
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
-        from mnemon.store.db import open_db
+        from memman.store.db import open_db
         open_db(str(store_path)).close()
 
         runner = CliRunner()
@@ -873,10 +873,10 @@ class TestEmbedSubcommands:
 
     def test_embed_bare_defaults_to_status(self, tmp_path, monkeypatch):
         """Bare embed with no subcommand shows status output."""
-        monkeypatch.delenv('MNEMON_STORE', raising=False)
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
-        from mnemon.store.db import open_db
+        from memman.store.db import open_db
         open_db(str(store_path)).close()
 
         runner = CliRunner()
@@ -910,11 +910,11 @@ class TestGraphRebuild:
 
     def test_rebuild_dry_run_reports_count(self, tmp_path, monkeypatch):
         """Dry run reports total insights without modifying DB."""
-        monkeypatch.delenv('MNEMON_STORE', raising=False)
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
-        from mnemon.store.db import open_db
-        from mnemon.store.node import insert_insight
+        from memman.store.db import open_db
+        from memman.store.node import insert_insight
         from tests.conftest import make_insight
         db = open_db(str(store_path))
         for i in range(3):
@@ -945,11 +945,11 @@ class TestGraphRebuild:
     def test_rebuild_reprocesses_stale_insights(
             self, tmp_path, monkeypatch):
         """Rebuild re-enriches insights with stale/empty keywords."""
-        monkeypatch.delenv('MNEMON_STORE', raising=False)
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
-        from mnemon.store.db import open_db
-        from mnemon.store.node import insert_insight
+        from memman.store.db import open_db
+        from memman.store.node import insert_insight
         from tests.conftest import make_insight
         db = open_db(str(store_path))
         insert_insight(db, make_insight(
@@ -991,11 +991,11 @@ class TestGraphRebuild:
     def test_rebuild_handles_mix_of_linked_and_unlinked(
             self, tmp_path, monkeypatch):
         """Rebuild processes both linked and unlinked insights."""
-        monkeypatch.delenv('MNEMON_STORE', raising=False)
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
-        from mnemon.store.db import open_db
-        from mnemon.store.node import insert_insight
+        from memman.store.db import open_db
+        from memman.store.node import insert_insight
         from tests.conftest import make_insight
         db = open_db(str(store_path))
         insert_insight(db, make_insight(
@@ -1027,12 +1027,12 @@ class TestGraphRebuild:
     def test_rebuild_preserves_manual_edges(
             self, tmp_path, monkeypatch):
         """Manual claude edges survive rebuild."""
-        monkeypatch.delenv('MNEMON_STORE', raising=False)
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
-        from mnemon.store.db import open_db
-        from mnemon.store.edge import get_all_edges, insert_edge
-        from mnemon.store.node import insert_insight
+        from memman.store.db import open_db
+        from memman.store.edge import get_all_edges, insert_edge
+        from memman.store.node import insert_insight
         from tests.conftest import make_edge, make_insight
         db = open_db(str(store_path))
         insert_insight(db, make_insight(
@@ -1091,7 +1091,7 @@ class TestIntraBatchDedup:
                     },
                 ]
 
-        with patch('mnemon.llm.extract.extract_facts',
+        with patch('memman.llm.extract.extract_facts',
                    _two_similar_facts):
             result = invoke(runner, [
                 'remember',
@@ -1123,7 +1123,7 @@ class TestIntraBatchDedup:
                     },
                 ]
 
-        with patch('mnemon.llm.extract.extract_facts',
+        with patch('memman.llm.extract.extract_facts',
                    _two_distinct_facts):
             result = invoke(runner, [
                 'remember',

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a knowledge-graph visualization from a mnemon database."""
+"""Generate a knowledge-graph visualization from a memman database."""
 
 import argparse
 import math
@@ -200,18 +200,18 @@ def draw(nodes: dict, edges_by_type: dict, out_path: Path) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description='Generate a knowledge-graph visualization from a mnemon database.')
+        description='Generate a knowledge-graph visualization from a memman database.')
     parser.add_argument(
         'name',
-        help='database profile name (loaded from ~/.mnemon/data/<name>/mnemon.db)')
+        help='database profile name (loaded from ~/.memman/data/<name>/memman.db)')
     parser.add_argument(
         '-o', '--output',
-        help='output file path (default: ~/Downloads/mnemon-<name>-graph.jpg)')
+        help='output file path (default: ~/Downloads/memman-<name>-graph.jpg)')
     args = parser.parse_args()
 
-    db_path = Path.home() / '.mnemon' / 'data' / args.name / 'mnemon.db'
+    db_path = Path.home() / '.memman' / 'data' / args.name / 'memman.db'
     out_path = (Path(args.output) if args.output
-                else Path.home() / 'Downloads' / f'mnemon-{args.name}-graph.jpg')
+                else Path.home() / 'Downloads' / f'memman-{args.name}-graph.jpg')
 
     nodes, edges_by_type = load_data(db_path)
     total = sum(len(v) for v in edges_by_type.values())

@@ -1,0 +1,437 @@
+"""Claude Code integration: install, eject, and setup orchestration."""
+
+import os
+import shutil
+from importlib.resources import files as pkg_files
+from pathlib import Path
+
+from memman.setup.detect import detect_environments, home_dir
+from memman.setup.markdown import eject_memory_block
+from memman.setup.prompt import confirm, detection_line, is_interactive
+from memman.setup.prompt import select_multi, select_one, status_error
+from memman.setup.prompt import status_ok, status_skipped, status_updated
+from memman.setup.settings import add_claude_hooks_selective
+from memman.setup.settings import add_memman_permission, read_json_file
+from memman.setup.settings import remove_claude_hooks, remove_if_empty
+from memman.setup.settings import remove_memman_permission, write_json_file
+from memman.setup.settings import write_or_remove_json_file
+
+
+def _asset_bytes(rel_path: str) -> bytes:
+    """Read an embedded asset file."""
+    return (pkg_files('memman.setup.assets')
+            .joinpath(rel_path).read_bytes())
+
+
+def write_prompt_files() -> str:
+    """Write guide.md and skill.md to ~/.memman/prompt/."""
+    prompt_dir = os.path.join(home_dir(), '.memman', 'prompt')
+    Path(prompt_dir).mkdir(mode=0o755, exist_ok=True, parents=True)
+
+    guide_path = os.path.join(prompt_dir, 'guide.md')
+    Path(guide_path).write_bytes(_asset_bytes('claude/guide.md'))
+    Path(guide_path).chmod(0o644)
+
+    skill_path = os.path.join(prompt_dir, 'skill.md')
+    Path(skill_path).write_bytes(_asset_bytes('claude/SKILL.md'))
+    Path(skill_path).chmod(0o644)
+
+    return prompt_dir
+
+
+def claude_write_skill(config_dir: str) -> str:
+    """Write the memman skill to the config dir."""
+    skill_dir = os.path.join(config_dir, 'skills', 'memman')
+    Path(skill_dir).mkdir(mode=0o755, exist_ok=True, parents=True)
+    skill_path = os.path.join(skill_dir, 'SKILL.md')
+    Path(skill_path).write_bytes(_asset_bytes('claude/SKILL.md'))
+    Path(skill_path).chmod(0o644)
+    return skill_path
+
+
+def claude_write_hook(config_dir: str, filename: str, content: bytes) -> str:
+    """Write a hook script to the hooks dir."""
+    hooks_dir = os.path.join(config_dir, 'hooks', 'memman')
+    Path(hooks_dir).mkdir(mode=0o755, exist_ok=True, parents=True)
+    hook_path = os.path.join(hooks_dir, filename)
+    Path(hook_path).write_bytes(content)
+    Path(hook_path).chmod(0o755)
+    return hook_path
+
+
+def claude_register_hooks(config_dir: str,
+                          remind: bool, nudge: bool,
+                          compact: bool = False,
+                          task_recall: bool = False,
+                          exit_plan: bool = False) -> str:
+    """Register selected hooks in settings.json."""
+    hooks_dir = os.path.join(config_dir, 'hooks', 'memman')
+    settings_path = os.path.join(config_dir, 'settings.json')
+    data = read_json_file(settings_path)
+    add_claude_hooks_selective(
+        data, hooks_dir,
+        remind=remind, nudge=nudge,
+        compact=compact, task_recall=task_recall,
+        exit_plan=exit_plan)
+    write_json_file(settings_path, data)
+    return settings_path
+
+
+def claude_eject(config_dir: str) -> list[Exception]:
+    """Remove memman integration from the given Claude Code config dir."""
+    errs: list[Exception] = []
+
+    print(f'\nRemoving Claude Code integration ({config_dir})...')
+
+    hooks_dir = os.path.join(config_dir, 'hooks', 'memman')
+    try:
+        shutil.rmtree(hooks_dir, ignore_errors=True)
+        status_ok(1, 3, 'Hooks', hooks_dir + ' removed')
+    except Exception as e:
+        status_error(1, 3, 'Hooks', e)
+        errs.append(e)
+    remove_if_empty(os.path.join(config_dir, 'hooks'))
+
+    settings_path = os.path.join(config_dir, 'settings.json')
+    try:
+        data = read_json_file(settings_path)
+        remove_claude_hooks(data)
+        remove_memman_permission(data)
+        write_or_remove_json_file(settings_path, data)
+        status_ok(2, 3, 'Settings', settings_path + ' cleaned')
+    except Exception as e:
+        status_error(2, 3, 'Settings', e)
+        errs.append(e)
+
+    skill_dir = os.path.join(config_dir, 'skills', 'memman')
+    try:
+        shutil.rmtree(skill_dir, ignore_errors=True)
+        status_ok(3, 3, 'Skill', skill_dir + ' removed')
+    except Exception as e:
+        status_error(3, 3, 'Skill', e)
+        errs.append(e)
+    remove_if_empty(os.path.join(config_dir, 'skills'))
+
+    remove_if_empty(config_dir)
+    return errs
+
+
+def _select_optional_hooks(
+        auto_yes: bool) -> tuple[bool, bool, bool, bool, bool]:
+    """Prompt user for which optional hooks to enable."""
+    remind, nudge, compact, task_recall, exit_plan = (
+        True, True, True, True, True)
+    if auto_yes or not is_interactive():
+        return remind, nudge, compact, task_recall, exit_plan
+
+    opts = [
+        ('Remind  \u2014 remind agent to recall & remember'
+         ' on each message (recommended)'),
+        'Nudge   \u2014 remind about memory on session end',
+        ('Compact \u2014 save context before compaction'
+         ' (recommended)'),
+        ('Recall  \u2014 remind agent to recall before'
+         ' delegating to sub-agents (recommended)'),
+        ('ExitPlan \u2014 store memories before leaving'
+         ' plan mode (recommended)'),
+        ]
+    defs = [True, True, True, True, True]
+    choices = select_multi('Select hooks to enable', opts, defs)
+    return (choices[0], choices[1], choices[2],
+            choices[3], choices[4])
+
+
+def _init_default_store(data_dir: str) -> None:
+    """Ensure the default store exists."""
+    from memman.store.db import open_db, store_dir, store_exists
+
+    if not store_exists(data_dir, 'default'):
+        sdir = store_dir(data_dir, 'default')
+        db = open_db(sdir)
+        db.close()
+        print(f'  Initialized default store at {sdir}')
+
+
+def _install_claude_code(env: dict, auto_yes: bool,
+                         use_global: bool,
+                         data_dir: str) -> None:
+    """Install memman into Claude Code."""
+    home = home_dir()
+    global_dir = home + '/.claude'
+
+    if use_global:
+        config_dir = global_dir
+    elif not auto_yes and is_interactive():
+        local_dir = '.claude'
+        idx = select_one(
+            'Install scope',
+            [f'Local \u2014 this project only ({local_dir}/)',
+             f'Global \u2014 all projects ({global_dir}/)'],
+            1)
+        config_dir = global_dir if idx == 1 else local_dir
+    else:
+        config_dir = global_dir
+
+    print(f'\nSetting up Claude Code ({config_dir})...')
+
+    print('\n[1/3] Skill')
+    path = claude_write_skill(config_dir)
+    status_ok(0, 0, 'Skill', path)
+
+    print('\n[2/3] Prompts')
+    path = write_prompt_files()
+    status_ok(0, 0, 'Prompts', path)
+
+    path = claude_write_hook(
+        config_dir, 'prime.sh', _asset_bytes('claude/prime.sh'))
+    status_ok(0, 0, 'Hook: prime', path)
+
+    print('\n[3/3] Optional hooks')
+    remind, nudge, compact, task_recall, exit_plan = (
+        _select_optional_hooks(auto_yes))
+
+    if remind:
+        path = claude_write_hook(
+            config_dir, 'user_prompt.sh',
+            _asset_bytes('claude/user_prompt.sh'))
+        status_ok(0, 0, 'Hook: remind', path)
+    if nudge:
+        path = claude_write_hook(
+            config_dir, 'stop.sh',
+            _asset_bytes('claude/stop.sh'))
+        status_ok(0, 0, 'Hook: nudge', path)
+    if compact:
+        path = claude_write_hook(
+            config_dir, 'compact.sh',
+            _asset_bytes('claude/compact.sh'))
+        status_ok(0, 0, 'Hook: compact', path)
+    if task_recall:
+        path = claude_write_hook(
+            config_dir, 'task_recall.sh',
+            _asset_bytes('claude/task_recall.sh'))
+        status_ok(0, 0, 'Hook: recall', path)
+    if exit_plan:
+        path = claude_write_hook(
+            config_dir, 'exit_plan.sh',
+            _asset_bytes('claude/exit_plan.sh'))
+        status_ok(0, 0, 'Hook: exit_plan', path)
+
+    path = claude_register_hooks(
+        config_dir, remind=remind, nudge=nudge,
+        compact=compact, task_recall=task_recall,
+        exit_plan=exit_plan)
+    status_updated(0, 0, 'Settings', path)
+
+    add_perm = auto_yes or (
+        is_interactive() and confirm(
+            'Add Bash(memman:*) to settings.json allow-list?'
+            ' (allows recall/remember without prompting)',
+            default_yes=True))
+    if add_perm:
+        settings_path = os.path.join(config_dir, 'settings.json')
+        data = read_json_file(settings_path)
+        add_memman_permission(data)
+        write_json_file(settings_path, data)
+        status_ok(0, 0, 'Permission',
+                  'Bash(memman:*) added to settings.json')
+    else:
+        status_skipped(0, 0, 'Permission',
+                       'Bash(memman:*) — skipped')
+
+    hook_names = ['prime']
+    if remind:
+        hook_names.append('remind')
+    if nudge:
+        hook_names.append('nudge')
+    if compact:
+        hook_names.append('compact')
+    if task_recall:
+        hook_names.append('recall')
+    if exit_plan:
+        hook_names.append('exit_plan')
+
+    print()
+    print('Setup complete!')
+    print(f'  Hooks   {", ".join(hook_names)}')
+    print('  Prompts ~/.memman/prompt/ (guide.md, skill.md)')
+    print()
+    print('Start a new Claude Code session to activate.')
+    print('Edit ~/.memman/prompt/guide.md to customize behavior.')
+    print("Run 'memman setup --eject' to remove.")
+
+    _init_default_store(data_dir)
+
+
+def _eject_markdown(file_path: str, prompt_text: str,
+                    auto_yes: bool) -> None:
+    """Optionally eject memory block from a markdown file."""
+    if auto_yes:
+        if eject_memory_block(file_path):
+            print(f'  Memory guidance removed from {file_path}')
+    elif is_interactive() and confirm(prompt_text, default_yes=True):
+        if eject_memory_block(file_path):
+            print(
+                f'  Memory guidance removed from {file_path}')
+
+
+def _eject_env(env: dict, auto_yes: bool) -> bool:
+    """Eject memman from a single environment."""
+    if env['name'] == 'claude-code':
+        errs = claude_eject(env['config_dir'])
+        _eject_markdown(
+            'CLAUDE.md',
+            'Remove memory guidance from ./CLAUDE.md?',
+            auto_yes)
+        return len(errs) > 0
+
+    if env['name'] == 'openclaw':
+        from memman.setup.openclaw import openclaw_eject
+        errs = openclaw_eject(env['config_dir'])
+        _eject_markdown(
+            'AGENTS.md',
+            'Remove memory guidance from ./AGENTS.md?',
+            auto_yes)
+        return len(errs) > 0
+
+    return False
+
+
+def run_setup(data_dir: str, target: str = '',
+              eject: bool = False, auto_yes: bool = False,
+              use_global: bool = False) -> None:
+    """Main setup orchestrator called by cli.py."""
+    if target and target not in {'claude-code', 'openclaw'}:
+        raise SystemExit(
+            f'invalid target {target!r}'
+            ' (must be claude-code or openclaw)')
+
+    envs = detect_environments(use_global)
+
+    if eject:
+        _run_eject_flow(
+            envs, target=target, auto_yes=auto_yes)
+        return
+    _run_install_flow(
+        envs, target=target, auto_yes=auto_yes,
+        use_global=use_global, data_dir=data_dir)
+
+
+def _run_install_flow(envs: list[dict], target: str,
+                      auto_yes: bool, use_global: bool,
+                      data_dir: str) -> None:
+    """Install flow: detect, select, install."""
+    if target:
+        for env in envs:
+            if env['name'] == target:
+                _install_env(
+                    env, auto_yes=auto_yes,
+                    use_global=use_global, data_dir=data_dir)
+                return
+        raise SystemExit(f'unknown target {target!r}')
+
+    print('Detecting LLM CLI environments...')
+    print()
+
+    detected = []
+    for env in envs:
+        detection_line(
+            env['detected'], env['display'],
+            env['version'], env['config_dir'])
+        if env['detected']:
+            detected.append(env)
+
+    if not detected:
+        print('\nNo supported LLM CLI environments detected.')
+        print("Install Claude Code or OpenClaw,"
+              " then run 'memman setup' again.")
+        return
+
+    if auto_yes:
+        selected = detected
+    elif is_interactive():
+        options = [e['display'] for e in detected]
+        idx = select_one('Select environment', options, 0)
+        selected = [detected[idx]]
+    else:
+        selected = detected
+
+    if not selected:
+        print('\nNo environments selected.')
+        return
+
+    err_count = 0
+    for env in selected:
+        try:
+            _install_env(
+                env, auto_yes=auto_yes,
+                use_global=use_global, data_dir=data_dir)
+        except Exception:
+            err_count += 1
+
+    if err_count > 0:
+        raise SystemExit(f'{err_count} error(s) during setup')
+
+
+def _install_env(env: dict, auto_yes: bool,
+                 use_global: bool, data_dir: str) -> None:
+    """Install memman into a single environment."""
+    if env['name'] == 'claude-code':
+        _install_claude_code(
+            env, auto_yes=auto_yes,
+            use_global=use_global, data_dir=data_dir)
+    elif env['name'] == 'openclaw':
+        from memman.setup.openclaw import install_openclaw
+        install_openclaw(
+            env, auto_yes=auto_yes,
+            use_global=use_global, data_dir=data_dir)
+
+
+def _run_eject_flow(envs: list[dict], target: str,
+                    auto_yes: bool) -> None:
+    """Eject flow: detect, select, remove."""
+    if target:
+        for env in envs:
+            if env['name'] == target:
+                _eject_env(env, auto_yes)
+                return
+        raise SystemExit(f'unknown target {target!r}')
+
+    print('Detecting LLM CLI environments...')
+    print()
+
+    installed = []
+    for env in envs:
+        detection_line(
+            env['detected'], env['display'],
+            env['version'], env['config_dir'])
+        if env['detected']:
+            installed.append(env)
+
+    if not installed:
+        print('\nNo environments detected.')
+        return
+
+    if auto_yes:
+        selected = installed
+    elif is_interactive():
+        options = [e['display'] for e in installed]
+        idx = select_one(
+            'Select environment to remove', options, 0)
+        selected = [installed[idx]]
+    else:
+        selected = installed
+
+    if not selected:
+        print('\nNo environments selected.')
+        return
+
+    err_count = 0
+    for env in selected:
+        if _eject_env(env, auto_yes):
+            err_count += 1
+
+    print()
+    print('Done! All selected integrations removed.')
+
+    if err_count > 0:
+        raise SystemExit(f'{err_count} error(s) during eject')

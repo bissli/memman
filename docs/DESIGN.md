@@ -1,6 +1,6 @@
-# Mnemon — Design & Architecture
+# MemMan — Design & Architecture
 
-Mnemon is a persistent memory system designed for LLM agents. It adopts the **LLM-Supervised** pattern: the host LLM acts as external orchestrator of a standalone memory binary through symbolic CLI interfaces, while Haiku handles pipeline intelligence (fact extraction, reconciliation, query expansion). Memory is organized as a four-graph knowledge structure with temporal, entity, causal, and semantic edges. Implemented as a Python package + SQLite, requiring Anthropic and Voyage AI API keys.
+MemMan is a persistent memory system designed for LLM agents. It adopts the **LLM-Supervised** pattern: the host LLM acts as external orchestrator of a standalone memory binary through symbolic CLI interfaces, while Haiku handles pipeline intelligence (fact extraction, reconciliation, query expansion). Memory is organized as a four-graph knowledge structure with temporal, entity, causal, and semantic edges. Implemented as a Python package + SQLite, requiring Anthropic and Voyage AI API keys.
 
 ---
 
@@ -8,7 +8,7 @@ Mnemon is a persistent memory system designed for LLM agents. It adopts the **LL
 
 ### [1. Vision & Problem](design/01-vision.md)
 
-Why Mnemon exists — the amnesia problem in LLM agents and structural limitations of traditional approaches.
+Why MemMan exists — the amnesia problem in LLM agents and structural limitations of traditional approaches.
 
 ### [2. Design Philosophy](design/02-philosophy.md)
 
@@ -32,7 +32,7 @@ Effective Importance (EI) decay formula, immunity rules, auto-pruning, GC comman
 
 ### [7. LLM CLI Integration](design/07-integration.md)
 
-Lifecycle hooks (Prime, Remind, Nudge, Compact, Recall), skill file, behavioral guide, automated setup via `mnemon setup`, sub-agent delegation pattern, and adaptation to other LLM CLIs.
+Lifecycle hooks (Prime, Remind, Nudge, Compact, Recall), skill file, behavioral guide, automated setup via `memman setup`, sub-agent delegation pattern, and adaptation to other LLM CLIs.
 
 ### [8. Design Decisions & Future Direction](design/08-decisions.md)
 

@@ -1,7 +1,7 @@
 # Binary
-/mnemon
+/meman
 
-# Local LLM CLI integration (use mnemon setup --global for user-wide install)
+# Local LLM CLI integration (use meman setup --global for user-wide install)
 .claude/
 .openclaw/
 
@@ -26,7 +26,7 @@ build/
 dist/
 .venv/
 
-# Mnemon data (local dev)
+# MemMan data (local dev)
 *.db
 *.db-wal
 *.db-shm

@@ -2,8 +2,8 @@
 
 from unittest.mock import MagicMock
 
-from mnemon.graph.engine import link_pending
-from mnemon.store.node import insert_insight
+from memman.graph.engine import link_pending
+from memman.store.node import insert_insight
 from tests.conftest import make_insight
 
 

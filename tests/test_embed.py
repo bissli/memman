@@ -1,9 +1,9 @@
-"""Tests for mnemon.embed — vector math."""
+"""Tests for memman.embed — vector math."""
 
 import math
 
-from mnemon.embed.vector import cosine_similarity, deserialize_vector
-from mnemon.embed.vector import serialize_vector
+from memman.embed.vector import cosine_similarity, deserialize_vector
+from memman.embed.vector import serialize_vector
 
 
 def test_cosine_identical():

@@ -13,9 +13,9 @@ is actually exercised.
 
 from datetime import datetime, timedelta, timezone
 
-from mnemon.search.recall import intent_aware_recall
-from mnemon.store.edge import insert_edge
-from mnemon.store.node import insert_insight
+from memman.search.recall import intent_aware_recall
+from memman.store.edge import insert_edge
+from memman.store.node import insert_insight
 from tests.conftest import make_edge, make_insight
 
 OLD = datetime(2024, 1, 1, tzinfo=timezone.utc)
@@ -299,7 +299,7 @@ class TestWhyIntentGraphWeight:
         assert why_r1 is not None
         assert gen_r1 is not None
 
-        from mnemon.search.recall import RERANK_WEIGHTS
+        from memman.search.recall import RERANK_WEIGHTS
         why_w = RERANK_WEIGHTS['WHY']
         gen_w = RERANK_WEIGHTS['GENERAL']
         graph_sig = why_r1['signals']['graph']

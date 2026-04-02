@@ -1,10 +1,10 @@
-"""Tests for mnemon.model -- Insight/Edge dataclasses and helpers."""
+"""Tests for memman.model -- Insight/Edge dataclasses and helpers."""
 
 from datetime import datetime, timezone
 
-from mnemon.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge, Insight
-from mnemon.model import base_weight, format_float, format_timestamp
-from mnemon.model import is_immune, parse_timestamp
+from memman.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge, Insight
+from memman.model import base_weight, format_float, format_timestamp
+from memman.model import is_immune, parse_timestamp
 
 
 def test_tags_json_roundtrip():

@@ -6,7 +6,7 @@
 
 MAGMA's core idea: a single edge type (such as pure vector similarity) is insufficient to capture the multidimensional relationships between memories. Different query intents require different relational perspectives — asking "why" requires causal chains, asking "when" requires timelines, asking "about X" requires entity associations.
 
-Mnemon implements four graphs, each capturing one dimension of relationships:
+MemMan implements four graphs, each capturing one dimension of relationships:
 
 ![MAGMA Four-Graph Model](../diagrams/04-magma-four-graph.drawio.png)
 

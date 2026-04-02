@@ -1,8 +1,8 @@
-# Mnemon
+# MemMan
 
 **LLM-supervised persistent memory for AI agents.**
 
-[![CI](https://github.com/bissli/mnemon/actions/workflows/ci.yml/badge.svg)](https://github.com/bissli/mnemon/actions/workflows/ci.yml)
+[![CI](https://github.com/bissli/memman/actions/workflows/ci.yml/badge.svg)](https://github.com/bissli/memman/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ---
@@ -26,47 +26,47 @@ See [Design & Architecture](docs/DESIGN.md) for details.
 **From source (Poetry)**:
 
 ```bash
-git clone https://github.com/bissli/mnemon.git && cd mnemon
+git clone https://github.com/bissli/memman.git && cd memman
 make install
 ```
 
 **Development**:
 
 ```bash
-git clone https://github.com/bissli/mnemon.git && cd mnemon
+git clone https://github.com/bissli/memman.git && cd memman
 make dev
 ```
 
 ### Claude Code
 
 ```bash
-mnemon setup
+memman setup
 ```
 
-`mnemon setup` auto-detects Claude Code, then interactively deploys skill, hooks, and behavioral guide. Start a new session — memory is active.
+`memman setup` auto-detects Claude Code, then interactively deploys skill, hooks, and behavioral guide. Start a new session — memory is active.
 
 ### [OpenClaw](https://github.com/openclaw/openclaw)
 
 ```bash
-mnemon setup --target openclaw --yes
+memman setup --target openclaw --yes
 ```
 
 Deploys skill, hook, plugin, and behavioral guide to `~/.openclaw/`. Restart the gateway to activate.
 
 ### [NanoClaw](https://github.com/qwibitai/nanoclaw)
 
-NanoClaw runs agents inside Linux containers. Use the `/add-mnemon` skill to integrate:
+NanoClaw runs agents inside Linux containers. Use the `/add-memman` skill to integrate:
 
-1. Install mnemon on the host (see above)
-2. In your NanoClaw project, run `/add-mnemon` — Claude Code will modify the Dockerfile, add a container skill, and set up volume mounts
+1. Install memman on the host (see above)
+2. In your NanoClaw project, run `/add-memman` — Claude Code will modify the Dockerfile, add a container skill, and set up volume mounts
 3. Each WhatsApp group gets its own isolated memory store, with optional global shared memory (read-only)
 
-The skill is available at `.claude/skills/add-mnemon/` in the NanoClaw repo.
+The skill is available at `.claude/skills/add-memman/` in the NanoClaw repo.
 
 ### Uninstall
 
 ```bash
-mnemon setup --eject
+memman setup --eject
 ```
 
 ## How It Works
@@ -106,7 +106,7 @@ Session starts
 
 Six hooks drive the lifecycle. **Prime** loads the behavioral guide at session start. **Remind** and **Nudge** prompt the agent to recall and remember before/after each response. **Compact** bridges context across compaction via a flag file that Prime detects on the next SessionStart. **Recall** fires before sub-agent delegation. **ExitPlan** prompts memory storage before plan-to-execute transitions.
 
-You don't run mnemon commands yourself. The agent does — driven by hooks and guided by the skill and behavioral guide.
+You don't run memman commands yourself. The agent does — driven by hooks and guided by the skill and behavioral guide.
 
 ## Features
 
@@ -127,21 +127,21 @@ Yes. By default, all sessions use the same `default` store — a decision rememb
 Yes. Use named stores to separate memory:
 
 ```bash
-mnemon store create work        # create a new store
-mnemon store set work           # set as default
-MNEMON_STORE=work mnemon recall "query"  # or use env var per-process
+memman store create work        # create a new store
+memman store set work           # set as default
+MEMMAN_STORE=work memman recall "query"  # or use env var per-process
 ```
 
-Different agents/processes can use different stores via the `MNEMON_STORE` environment variable.
+Different agents/processes can use different stores via the `MEMMAN_STORE` environment variable.
 
 **Local or global mode?**
-`mnemon setup` defaults to **global** (user-wide `~/.claude/`), activating mnemon across all projects. **Local** (project-scoped `.claude/`) can be selected interactively.
+`memman setup` defaults to **global** (user-wide `~/.claude/`), activating memman across all projects. **Local** (project-scoped `.claude/`) can be selected interactively.
 
 **How do I customize the behavior?**
-Edit `~/.mnemon/prompt/guide.md`. This file controls when the agent recalls memories and what it considers worth remembering. The skill file (`SKILL.md`) is auto-deployed and should not need manual editing.
+Edit `~/.memman/prompt/guide.md`. This file controls when the agent recalls memories and what it considers worth remembering. The skill file (`SKILL.md`) is auto-deployed and should not need manual editing.
 
 **What is sub-agent delegation?**
-The host model decides *what* to remember, then delegates the actual `mnemon remember` execution to a lightweight sub-agent. This saves tokens and keeps memory operations out of the main context.
+The host model decides *what* to remember, then delegates the actual `memman remember` execution to a lightweight sub-agent. This saves tokens and keeps memory operations out of the main context.
 
 ## Configuration
 
@@ -153,9 +153,9 @@ See [Usage & Reference](docs/USAGE.md#configuration) for all environment variabl
 make dev            # editable install with dev deps
 make test           # unit tests (pytest)
 make e2e            # end-to-end test suite
-make install        # production install (~/.local/share/mnemon/venv)
-mnemon setup     # interactive setup
-mnemon setup --eject  # remove all integrations
+make install        # production install (~/.local/share/memman/venv)
+memman setup     # interactive setup
+memman setup --eject  # remove all integrations
 ```
 
 **Dependencies**: Python 3.11+, Click, httpx, tqdm. **Required**: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`.

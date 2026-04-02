@@ -1,6 +1,6 @@
 """Content quality pattern detection tests."""
 
-from mnemon.search.quality import check_content_quality
+from memman.search.quality import check_content_quality
 
 
 class TestInstanceIdDetected:

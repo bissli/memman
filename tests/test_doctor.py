@@ -1,10 +1,10 @@
-"""Tests for mnemon.doctor health-check module."""
+"""Tests for memman.doctor health-check module."""
 
 import struct
 
-from mnemon.store.edge import insert_edge
-from mnemon.store.node import insert_insight, update_embedding
-from mnemon.store.node import update_enrichment
+from memman.store.edge import insert_edge
+from memman.store.node import insert_insight, update_embedding
+from memman.store.node import update_enrichment
 from tests.conftest import make_edge, make_insight
 
 
@@ -31,7 +31,7 @@ class TestSqliteIntegrity:
 
     def test_pass_on_fresh_db(self, tmp_db):
         """Fresh database passes integrity check."""
-        from mnemon.doctor import check_sqlite_integrity
+        from memman.doctor import check_sqlite_integrity
         result = check_sqlite_integrity(tmp_db)
         assert result['name'] == 'sqlite_integrity'
         assert result['status'] == 'pass'
@@ -42,7 +42,7 @@ class TestEnrichmentCoverage:
 
     def test_full_pass(self, tmp_db):
         """All enrichment fields populated returns pass."""
-        from mnemon.doctor import check_enrichment_coverage
+        from memman.doctor import check_enrichment_coverage
         _insert_healthy_insight(tmp_db, 'e-1')
         _insert_healthy_insight(tmp_db, 'e-2')
         result = check_enrichment_coverage(tmp_db)
@@ -51,7 +51,7 @@ class TestEnrichmentCoverage:
 
     def test_partial_warn(self, tmp_db):
         """Some fields missing returns warn when coverage >= 90%."""
-        from mnemon.doctor import check_enrichment_coverage
+        from memman.doctor import check_enrichment_coverage
         for i in range(10):
             _insert_healthy_insight(tmp_db, f'e-{i}', f'Content for insight number {i}')
         ins = make_insight(id='e-bare', content='Bare insight without enrichment')
@@ -65,7 +65,7 @@ class TestOrphanInsights:
 
     def test_none_pass(self, tmp_db):
         """No orphans returns pass."""
-        from mnemon.doctor import check_orphan_insights
+        from memman.doctor import check_orphan_insights
         _insert_healthy_insight(tmp_db, 'o-1')
         _insert_healthy_insight(tmp_db, 'o-2')
         _insert_edge_pair(tmp_db, 'o-1', 'o-2')
@@ -75,7 +75,7 @@ class TestOrphanInsights:
 
     def test_present_fail(self, tmp_db):
         """All insights orphaned returns fail."""
-        from mnemon.doctor import check_orphan_insights
+        from memman.doctor import check_orphan_insights
         _insert_healthy_insight(tmp_db, 'o-1')
         _insert_healthy_insight(tmp_db, 'o-2')
         result = check_orphan_insights(tmp_db)
@@ -87,7 +87,7 @@ class TestDanglingEdges:
 
     def test_none_pass(self, tmp_db):
         """Clean edges return pass."""
-        from mnemon.doctor import check_dangling_edges
+        from memman.doctor import check_dangling_edges
         _insert_healthy_insight(tmp_db, 'd-1')
         _insert_healthy_insight(tmp_db, 'd-2')
         _insert_edge_pair(tmp_db, 'd-1', 'd-2')
@@ -97,7 +97,7 @@ class TestDanglingEdges:
 
     def test_present_fail(self, tmp_db):
         """Edges pointing to soft-deleted insights return fail."""
-        from mnemon.doctor import check_dangling_edges
+        from memman.doctor import check_dangling_edges
         _insert_healthy_insight(tmp_db, 'd-1')
         _insert_healthy_insight(tmp_db, 'd-2')
         _insert_edge_pair(tmp_db, 'd-1', 'd-2')
@@ -113,7 +113,7 @@ class TestEmbeddingConsistency:
 
     def test_consistent_pass(self, tmp_db):
         """All embeddings same size returns pass."""
-        from mnemon.doctor import check_embedding_consistency
+        from memman.doctor import check_embedding_consistency
         _insert_healthy_insight(tmp_db, 'emb-1')
         _insert_healthy_insight(tmp_db, 'emb-2')
         result = check_embedding_consistency(tmp_db)
@@ -121,7 +121,7 @@ class TestEmbeddingConsistency:
 
     def test_mixed_fail(self, tmp_db):
         """Different embedding sizes returns fail."""
-        from mnemon.doctor import check_embedding_consistency
+        from memman.doctor import check_embedding_consistency
         _insert_healthy_insight(tmp_db, 'emb-1')
         ins2 = make_insight(id='emb-2', content='Different dim embedding')
         insert_insight(tmp_db, ins2)
@@ -135,7 +135,7 @@ class TestEdgeDegree:
 
     def test_healthy_pass(self, tmp_db):
         """Well-connected graph returns pass."""
-        from mnemon.doctor import check_edge_degree
+        from memman.doctor import check_edge_degree
         ids = [f'deg-{i}' for i in range(6)]
         for id in ids:
             _insert_healthy_insight(tmp_db, id, f'Content for {id} with enough length')
@@ -148,7 +148,7 @@ class TestEdgeDegree:
 
     def test_sparse_fail(self, tmp_db):
         """Insights with no edges returns fail."""
-        from mnemon.doctor import check_edge_degree
+        from memman.doctor import check_edge_degree
         _insert_healthy_insight(tmp_db, 'deg-1')
         _insert_healthy_insight(tmp_db, 'deg-2')
         result = check_edge_degree(tmp_db)
@@ -160,7 +160,7 @@ class TestRunAllChecks:
 
     def test_structure(self, tmp_db):
         """Verify output shape: status, checks list, total_active."""
-        from mnemon.doctor import run_all_checks
+        from memman.doctor import run_all_checks
         _insert_healthy_insight(tmp_db, 'all-1')
         result = run_all_checks(tmp_db)
         assert 'status' in result
@@ -171,7 +171,7 @@ class TestRunAllChecks:
 
     def test_empty_db(self, tmp_db):
         """Empty store returns status 'empty' with no checks."""
-        from mnemon.doctor import run_all_checks
+        from memman.doctor import run_all_checks
         result = run_all_checks(tmp_db)
         assert result['status'] == 'empty'
         assert result['total_active'] == 0
@@ -179,7 +179,7 @@ class TestRunAllChecks:
 
     def test_healthy_db(self, tmp_db):
         """Fully healthy DB returns status 'pass'."""
-        from mnemon.doctor import run_all_checks
+        from memman.doctor import run_all_checks
         ids = [f'h-{i}' for i in range(6)]
         for id in ids:
             _insert_healthy_insight(tmp_db, id, f'Healthy content for {id} insight')

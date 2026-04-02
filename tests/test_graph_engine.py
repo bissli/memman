@@ -1,9 +1,9 @@
-"""Tests for mnemon.graph.engine — constants hash and edge orchestration."""
+"""Tests for memman.graph.engine — constants hash and edge orchestration."""
 
-from mnemon.graph.engine import compute_constants_hash, link_pending
-from mnemon.graph.engine import reindex_auto_edges
-from mnemon.store.edge import get_all_edges, insert_edge
-from mnemon.store.node import insert_insight
+from memman.graph.engine import compute_constants_hash, link_pending
+from memman.graph.engine import reindex_auto_edges
+from memman.store.edge import get_all_edges, insert_edge
+from memman.store.node import insert_insight
 from tests.conftest import make_edge, make_insight
 
 
@@ -15,7 +15,7 @@ def test_constants_hash_deterministic():
 def test_constants_hash_changes_on_entity_limit(monkeypatch):
     """Changing MAX_ENTITY_LINKS produces a different hash."""
     original = compute_constants_hash()
-    from mnemon.graph import engine
+    from memman.graph import engine
     monkeypatch.setattr(engine, 'MAX_ENTITY_LINKS', 999)
     changed = compute_constants_hash()
     assert changed != original
@@ -24,7 +24,7 @@ def test_constants_hash_changes_on_entity_limit(monkeypatch):
 def test_constants_hash_changes_on_proximity_limit(monkeypatch):
     """Changing MAX_PROXIMITY_EDGES produces a different hash."""
     original = compute_constants_hash()
-    from mnemon.graph import engine
+    from memman.graph import engine
     monkeypatch.setattr(engine, 'MAX_PROXIMITY_EDGES', 999)
     changed = compute_constants_hash()
     assert changed != original

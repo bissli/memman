@@ -1,4 +1,4 @@
-"""Shared fixtures for mnemon tests.
+"""Shared fixtures for memman tests.
 
 Dual-mode API mocking: mocked by default, real APIs with --live flag.
 
@@ -17,7 +17,7 @@ import struct
 from datetime import datetime, timezone
 
 import pytest
-from mnemon.model import Edge, Insight
+from memman.model import Edge, Insight
 
 EMBEDDING_DIM = 512
 
@@ -41,11 +41,11 @@ def _mock_apis(request, monkeypatch):
         return
 
     monkeypatch.setattr(
-        'mnemon.llm.client.LLMClient.complete', _mock_llm_complete)
+        'memman.llm.client.LLMClient.complete', _mock_llm_complete)
     monkeypatch.setattr(
-        'mnemon.embed.voyage.Client.embed', _mock_embed)
+        'memman.embed.voyage.Client.embed', _mock_embed)
     monkeypatch.setattr(
-        'mnemon.embed.voyage.Client.available', lambda self: True)
+        'memman.embed.voyage.Client.available', lambda self: True)
     monkeypatch.setenv('ANTHROPIC_API_KEY', 'mock-key-for-testing')
 
 
@@ -241,7 +241,7 @@ def _mock_embed(self: object, text: str) -> list[float]:
 @pytest.fixture
 def tmp_db(tmp_path):
     """Fresh SQLite database in temp directory."""
-    from mnemon.store.db import open_db
+    from memman.store.db import open_db
     db = open_db(str(tmp_path))
     yield db
     db.close()
@@ -250,7 +250,7 @@ def tmp_db(tmp_path):
 @pytest.fixture
 def populated_db(tmp_db):
     """DB pre-loaded with 5 insights for query/graph tests."""
-    from mnemon.store.node import insert_insight
+    from memman.store.node import insert_insight
     insights = [
         make_insight(id='pop-1', content='Go uses SQLite for storage',
                      importance=3, tags=['go', 'sqlite'],

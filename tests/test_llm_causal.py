@@ -5,9 +5,9 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
-from mnemon.graph.causal import LLM_CONFIDENCE_FLOOR, infer_llm_causal_edges
-from mnemon.llm.client import get_llm_client
-from mnemon.store.node import insert_insight
+from memman.graph.causal import LLM_CONFIDENCE_FLOOR, infer_llm_causal_edges
+from memman.llm.client import get_llm_client
+from memman.store.node import insert_insight
 from tests.conftest import make_insight
 
 OLD = datetime(2024, 1, 1, tzinfo=timezone.utc)
@@ -176,16 +176,16 @@ class TestLLMCausalInference:
     def test_env_var_opt_in(self, monkeypatch):
         """Without any API key set, get_llm_client raises."""
         import click
-        monkeypatch.delenv('MNEMON_LLM_ENDPOINT', raising=False)
-        monkeypatch.delenv('MNEMON_LLM_API_KEY', raising=False)
+        monkeypatch.delenv('MEMMAN_LLM_ENDPOINT', raising=False)
+        monkeypatch.delenv('MEMMAN_LLM_API_KEY', raising=False)
         monkeypatch.delenv('ANTHROPIC_API_KEY', raising=False)
         with pytest.raises(click.ClickException):
             get_llm_client()
 
     def test_anthropic_api_key_fallback(self, monkeypatch):
-        """ANTHROPIC_API_KEY used when MNEMON_LLM_API_KEY absent."""
-        monkeypatch.delenv('MNEMON_LLM_ENDPOINT', raising=False)
-        monkeypatch.delenv('MNEMON_LLM_API_KEY', raising=False)
+        """ANTHROPIC_API_KEY used when MEMMAN_LLM_API_KEY absent."""
+        monkeypatch.delenv('MEMMAN_LLM_ENDPOINT', raising=False)
+        monkeypatch.delenv('MEMMAN_LLM_API_KEY', raising=False)
         monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-ant-test')
         client = get_llm_client()
         assert client is not None

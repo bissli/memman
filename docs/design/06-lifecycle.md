@@ -4,7 +4,7 @@
 
 ---
 
-Mnemon is not an append-only system. Effective memory management requires important memories to persist while outdated ones naturally decay.
+MemMan is not an append-only system. Effective memory management requires important memories to persist while outdated ones naturally decay.
 
 ![Lifecycle & Retention](../diagrams/06-lifecycle-retention.drawio.png)
 
@@ -66,13 +66,13 @@ Manual lifecycle management tool:
 
 ```bash
 # View low-retention candidates
-mnemon gc --threshold 0.5
+memman gc --threshold 0.5
 
 # Retain a specific insight (increases access_count by +3)
-mnemon gc --keep <id>
+memman gc --keep <id>
 
 # Review stored insights for content quality issues
-mnemon gc --review
+memman gc --review
 ```
 
 `gc --review` scans all active insights against transient content patterns (AWS instance IDs, resource counts, verification receipts, deployment receipts, state observations, line number references). Returns flagged entries sorted by warning count. Note: since the remember pipeline now **rejects** content with 2+ quality warnings at write time, `gc --review` primarily catches insights stored before the hard gate was introduced, or single-warning content that accumulated additional transient characteristics over time.
@@ -90,7 +90,7 @@ Voyage AI provides 512-dim embeddings for semantic search and graph connectivity
 ### Voyage AI Integration
 
 ```
-Mnemon ──HTTP──→ Voyage AI (api.voyageai.com)
+MemMan ──HTTP──→ Voyage AI (api.voyageai.com)
                   └── voyage-3-lite
                       512-dim vector
 ```
@@ -113,7 +113,7 @@ Vectors are serialized as little-endian float64 BLOBs stored in the `insights.em
 ### Management Commands
 
 ```bash
-mnemon embed status              # View coverage
-mnemon embed backfill            # Batch-generate embeddings for all insights
-mnemon embed run <id>            # Generate for a single insight
+memman embed status              # View coverage
+memman embed backfill            # Batch-generate embeddings for all insights
+memman embed run <id>            # Generate for a single insight
 ```

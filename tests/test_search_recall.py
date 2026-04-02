@@ -1,8 +1,8 @@
-"""Tests for mnemon.search.recall -- beam search, traversal params, reranking."""
+"""Tests for memman.search.recall -- beam search, traversal params, reranking."""
 
-from mnemon.search.recall import RECALL_HINTS, RERANK_WEIGHTS
-from mnemon.search.recall import get_traversal_params, intent_aware_recall
-from mnemon.store.node import insert_insight
+from memman.search.recall import RECALL_HINTS, RERANK_WEIGHTS
+from memman.search.recall import get_traversal_params, intent_aware_recall
+from memman.store.node import insert_insight
 from tests.conftest import make_insight
 
 

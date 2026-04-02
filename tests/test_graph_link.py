@@ -2,9 +2,9 @@
 
 from datetime import datetime, timedelta, timezone
 
-from mnemon.graph.engine import MAX_LINK_BATCH, link_pending
-from mnemon.graph.engine import reindex_auto_edges
-from mnemon.store.node import insert_insight
+from memman.graph.engine import MAX_LINK_BATCH, link_pending
+from memman.graph.engine import reindex_auto_edges
+from memman.store.node import insert_insight
 from tests.conftest import make_insight
 
 OLD = datetime(2024, 1, 1, tzinfo=timezone.utc)

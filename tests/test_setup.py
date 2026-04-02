@@ -1,17 +1,17 @@
-"""Tests for mnemon.setup — settings, markdown, detection."""
+"""Tests for memman.setup — settings, markdown, detection."""
 
 import json
 import os
 import pathlib
 import subprocess
 
-from mnemon.setup.claude import claude_register_hooks
-from mnemon.setup.markdown import eject_memory_block
-from mnemon.setup.settings import add_claude_hooks_selective
-from mnemon.setup.settings import add_mnemon_permission, read_json_file
-from mnemon.setup.settings import remove_claude_hooks
-from mnemon.setup.settings import remove_mnemon_permission, strip_json5
-from mnemon.setup.settings import write_json_file
+from memman.setup.claude import claude_register_hooks
+from memman.setup.markdown import eject_memory_block
+from memman.setup.settings import add_claude_hooks_selective
+from memman.setup.settings import add_memman_permission, read_json_file
+from memman.setup.settings import remove_claude_hooks
+from memman.setup.settings import remove_memman_permission, strip_json5
+from memman.setup.settings import write_json_file
 
 
 def test_strip_json5_line_comments():
@@ -63,18 +63,18 @@ def test_write_json_atomic(tmp_path):
 
 
 def test_remove_claude_hooks():
-    """Remove mnemon hooks from settings dict."""
+    """Remove memman hooks from settings dict."""
     data = {
         'hooks': {
             'SessionStart': [
-                {'hooks': [{'type': 'command', 'command': '/path/to/mnemon/prime.sh'}]},
+                {'hooks': [{'type': 'command', 'command': '/path/to/memman/prime.sh'}]},
                 {'hooks': [{'type': 'command', 'command': '/other/tool.sh'}]},
             ],
         },
     }
     remove_claude_hooks(data)
     assert len(data['hooks']['SessionStart']) == 1
-    assert 'mnemon' not in str(data['hooks']['SessionStart'][0])
+    assert 'memman' not in str(data['hooks']['SessionStart'][0])
 
 
 def test_add_claude_hooks_selective():
@@ -90,10 +90,10 @@ def test_add_claude_hooks_selective():
 def test_eject_memory_block(tmp_path):
     """Remove markers and content between them."""
     p = tmp_path / 'test.md'
-    p.write_text('before\n<!-- mnemon:start -->\nstuff\n<!-- mnemon:end -->\nafter\n')
+    p.write_text('before\n<!-- memman:start -->\nstuff\n<!-- memman:end -->\nafter\n')
     assert eject_memory_block(str(p)) is True
     content = p.read_text()
-    assert 'mnemon' not in content
+    assert 'memman' not in content
     assert 'before' in content
     assert 'after' in content
 
@@ -101,7 +101,7 @@ def test_eject_memory_block(tmp_path):
 def test_eject_memory_block_empty_file(tmp_path):
     """File deleted if empty after marker removal."""
     p = tmp_path / 'test.md'
-    p.write_text('<!-- mnemon:start -->\nstuff\n<!-- mnemon:end -->\n')
+    p.write_text('<!-- memman:start -->\nstuff\n<!-- memman:end -->\n')
     assert eject_memory_block(str(p)) is True
     assert not p.exists()
 
@@ -136,13 +136,13 @@ def test_add_claude_hooks_task_recall_default_false():
 
 
 def test_remove_claude_hooks_cleans_pretooluse():
-    """Mnemon PreToolUse entries removed, non-mnemon preserved."""
+    """MemMan PreToolUse entries removed, non-memman preserved."""
     data = {
         'hooks': {
             'PreToolUse': [
                 {
                     'hooks': [{'type': 'command',
-                               'command': '/mnemon/task_recall.sh'}],
+                               'command': '/memman/task_recall.sh'}],
                     'matcher': 'Task',
                     },
                 {
@@ -159,8 +159,8 @@ def test_remove_claude_hooks_cleans_pretooluse():
     assert entries[0]['matcher'] == 'Bash'
 
 
-def test_remove_claude_hooks_preserves_non_mnemon_pretooluse():
-    """PreToolUse with only non-mnemon entries is untouched."""
+def test_remove_claude_hooks_preserves_non_memman_pretooluse():
+    """PreToolUse with only non-memman entries is untouched."""
     data = {
         'hooks': {
             'PreToolUse': [
@@ -199,52 +199,52 @@ def test_add_claude_hooks_appends_to_existing_pretooluse():
     assert matchers == {'Bash', 'Task'}
 
 
-def test_add_mnemon_permission():
-    """Adds Bash(mnemon:*) to allow list. Idempotent."""
+def test_add_memman_permission():
+    """Adds Bash(memman:*) to allow list. Idempotent."""
     data = {}
-    add_mnemon_permission(data)
-    assert 'Bash(mnemon:*)' in data['permissions']['allow']
-    add_mnemon_permission(data)
+    add_memman_permission(data)
+    assert 'Bash(memman:*)' in data['permissions']['allow']
+    add_memman_permission(data)
     assert data['permissions']['allow'].count(
-        'Bash(mnemon:*)') == 1
+        'Bash(memman:*)') == 1
 
 
-def test_add_mnemon_permission_existing_allow():
+def test_add_memman_permission_existing_allow():
     """Appends without disturbing existing entries."""
     data = {'permissions': {'allow': ['Bash(git:*)']}}
-    add_mnemon_permission(data)
+    add_memman_permission(data)
     allow = data['permissions']['allow']
-    assert allow == ['Bash(git:*)', 'Bash(mnemon:*)']
+    assert allow == ['Bash(git:*)', 'Bash(memman:*)']
 
 
-def test_remove_mnemon_permission():
-    """Removes Bash(mnemon:*), preserves others."""
+def test_remove_memman_permission():
+    """Removes Bash(memman:*), preserves others."""
     data = {
         'permissions': {
-            'allow': ['Bash(git:*)', 'Bash(mnemon:*)'],
+            'allow': ['Bash(git:*)', 'Bash(memman:*)'],
             },
         }
-    remove_mnemon_permission(data)
+    remove_memman_permission(data)
     assert data['permissions']['allow'] == ['Bash(git:*)']
 
 
-def test_remove_mnemon_permission_missing():
-    """No-op when Bash(mnemon:*) not present."""
+def test_remove_memman_permission_missing():
+    """No-op when Bash(memman:*) not present."""
     data = {'permissions': {'allow': ['Bash(git:*)']}}
-    remove_mnemon_permission(data)
+    remove_memman_permission(data)
     assert data['permissions']['allow'] == ['Bash(git:*)']
 
 
 def test_register_hooks_no_permission(tmp_path):
-    """claude_register_hooks() does not add Bash(mnemon:*) to settings."""
+    """claude_register_hooks() does not add Bash(memman:*) to settings."""
     config_dir = str(tmp_path / '.claude')
-    hooks_dir = os.path.join(config_dir, 'hooks', 'mnemon')
+    hooks_dir = os.path.join(config_dir, 'hooks', 'memman')
     pathlib.Path(hooks_dir).mkdir(parents=True)
     claude_register_hooks(config_dir, remind=True, nudge=True,
                           task_recall=True)
     data = read_json_file(os.path.join(config_dir, 'settings.json'))
     allow = data.get('permissions', {}).get('allow', [])
-    assert 'Bash(mnemon:*)' not in allow
+    assert 'Bash(memman:*)' not in allow
 
 
 def test_add_claude_hooks_with_compact():
@@ -272,7 +272,7 @@ def test_compact_hook_script(tmp_path):
     """Compact hook writes flag file with session info."""
     from importlib.resources import files as pkg_files
     script = str(
-        pkg_files('mnemon.setup.assets')
+        pkg_files('memman.setup.assets')
         .joinpath('claude/compact.sh'))
 
     result = subprocess.run(
@@ -282,7 +282,7 @@ def test_compact_hook_script(tmp_path):
         env={**os.environ, 'HOME': str(tmp_path)})
     assert result.returncode == 0
 
-    flag = tmp_path / '.mnemon' / 'compact' / 'test-abc-123.json'
+    flag = tmp_path / '.memman' / 'compact' / 'test-abc-123.json'
     assert flag.exists()
     data = json.loads(flag.read_text())
     assert data['trigger'] == 'manual'
@@ -293,7 +293,7 @@ def test_compact_hook_script_no_session(tmp_path):
     """Compact hook writes no flag when session_id is missing."""
     from importlib.resources import files as pkg_files
     script = str(
-        pkg_files('mnemon.setup.assets')
+        pkg_files('memman.setup.assets')
         .joinpath('claude/compact.sh'))
 
     result = subprocess.run(
@@ -303,7 +303,7 @@ def test_compact_hook_script_no_session(tmp_path):
         env={**os.environ, 'HOME': str(tmp_path)})
     assert result.returncode == 0
 
-    compact_dir = tmp_path / '.mnemon' / 'compact'
+    compact_dir = tmp_path / '.memman' / 'compact'
     assert not compact_dir.exists()
 
 
@@ -311,10 +311,10 @@ def test_prime_hook_compact_source(tmp_path):
     """Prime hook outputs recall instruction on compact source."""
     from importlib.resources import files as pkg_files
     script = str(
-        pkg_files('mnemon.setup.assets')
+        pkg_files('memman.setup.assets')
         .joinpath('claude/prime.sh'))
 
-    compact_dir = tmp_path / '.mnemon' / 'compact'
+    compact_dir = tmp_path / '.memman' / 'compact'
     compact_dir.mkdir(parents=True)
     flag = compact_dir / 'sess-42.json'
     flag.write_text('{"trigger":"manual","ts":"2026-01-01T00:00:00Z"}')
@@ -335,7 +335,7 @@ def test_prime_hook_compact_no_flag(tmp_path):
     """Prime hook outputs recall instruction even without flag file."""
     from importlib.resources import files as pkg_files
     script = str(
-        pkg_files('mnemon.setup.assets')
+        pkg_files('memman.setup.assets')
         .joinpath('claude/prime.sh'))
 
     result = subprocess.run(
@@ -352,7 +352,7 @@ def test_prime_hook_normal_source(tmp_path):
     """Prime hook does NOT output recall instruction on normal startup."""
     from importlib.resources import files as pkg_files
     script = str(
-        pkg_files('mnemon.setup.assets')
+        pkg_files('memman.setup.assets')
         .joinpath('claude/prime.sh'))
 
     result = subprocess.run(
@@ -394,7 +394,7 @@ def test_exit_plan_hook_advisory(tmp_path):
     """Exit plan hook passes with advisory message (non-blocking)."""
     from importlib.resources import files as pkg_files
     script = str(
-        pkg_files('mnemon.setup.assets')
+        pkg_files('memman.setup.assets')
         .joinpath('claude/exit_plan.sh'))
 
     result = subprocess.run(
@@ -403,10 +403,10 @@ def test_exit_plan_hook_advisory(tmp_path):
         capture_output=True, text=True,
         env={**os.environ, 'HOME': str(tmp_path)})
     assert result.returncode == 0
-    assert 'mnemon' in result.stdout.lower()
+    assert 'memman' in result.stdout.lower()
     assert 'plan' in result.stdout.lower()
 
-    flag_dir = tmp_path / '.mnemon' / 'exit_plan'
+    flag_dir = tmp_path / '.memman' / 'exit_plan'
     assert not flag_dir.exists()
 
 
@@ -414,7 +414,7 @@ def _stop_script():
     """Return path to stop.sh asset."""
     from importlib.resources import files as pkg_files
     return str(
-        pkg_files('mnemon.setup.assets')
+        pkg_files('memman.setup.assets')
         .joinpath('claude/stop.sh'))
 
 
@@ -422,7 +422,7 @@ def _prompt_script():
     """Return path to user_prompt.sh asset."""
     from importlib.resources import files as pkg_files
     return str(
-        pkg_files('mnemon.setup.assets')
+        pkg_files('memman.setup.assets')
         .joinpath('claude/user_prompt.sh'))
 
 
@@ -445,7 +445,7 @@ def test_stop_hook_first_stop_blocks(tmp_path):
     assert result.returncode == 0
     output = json.loads(result.stdout.strip())
     assert output['decision'] == 'block'
-    assert 'mnemon' in output['reason'].lower()
+    assert 'memman' in output['reason'].lower()
 
 
 def test_stop_hook_second_stop_silent(tmp_path):
@@ -468,7 +468,7 @@ def test_stop_hook_blocks_again_after_reset(tmp_path):
         _stop_script(),
         '{"stop_hook_active": false, "session_id": "sess-3"}',
         tmp_path)
-    flag_dir = tmp_path / '.mnemon' / 'stop_fired' / 'sess-3'
+    flag_dir = tmp_path / '.memman' / 'stop_fired' / 'sess-3'
     assert flag_dir.is_dir()
     flag_dir.rmdir()
 
@@ -503,7 +503,7 @@ def test_stop_hook_no_session_id_blocks(tmp_path):
 
 def test_user_prompt_clears_stop_flag(tmp_path):
     """user_prompt.sh removes stop_fired flag dir."""
-    flag_dir = tmp_path / '.mnemon' / 'stop_fired' / 'sess-5'
+    flag_dir = tmp_path / '.memman' / 'stop_fired' / 'sess-5'
     flag_dir.mkdir(parents=True)
 
     result = _run_hook(

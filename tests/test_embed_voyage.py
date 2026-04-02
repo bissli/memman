@@ -1,4 +1,4 @@
-"""Tests for mnemon.embed.voyage -- Voyage AI embedding client.
+"""Tests for memman.embed.voyage -- Voyage AI embedding client.
 
 These tests mock httpx.post to test Client logic (error handling,
 response parsing, header construction) without hitting the API.
@@ -7,9 +7,9 @@ test_memory_system.py in both mock and --live modes.
 """
 
 import pytest
-from mnemon.embed import voyage
-from mnemon.embed.voyage import DEFAULT_ENDPOINT, DEFAULT_MODEL, EMBEDDING_DIM
-from mnemon.embed.voyage import Client
+from memman.embed import voyage
+from memman.embed.voyage import DEFAULT_ENDPOINT, DEFAULT_MODEL, EMBEDDING_DIM
+from memman.embed.voyage import Client
 
 _original_embed = Client.embed
 _original_available = Client.available

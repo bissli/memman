@@ -88,7 +88,7 @@
         <mxCell id="cl_cmp_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="40" y="690" width="1020" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="cl_cmp" value="&lt;b&gt;vs Embedded LLM (Mem0/MemCP)&lt;/b&gt;: gpt-4o-mini inside → API cost per operation, weaker reasoning, network dependency&lt;br&gt;&lt;b&gt;LLM-Supervised (Mnemon)&lt;/b&gt;: Host LLM (Opus/Sonnet) supervises → zero extra cost, stronger judgment, works offline" style="text;html=1;align=center;fontSize=10;fillColor=none;strokeColor=none;verticalAlign=middle;" vertex="1" parent="1">
+        <mxCell id="cl_cmp" value="&lt;b&gt;vs Embedded LLM (Mem0/MemCP)&lt;/b&gt;: gpt-4o-mini inside → API cost per operation, weaker reasoning, network dependency&lt;br&gt;&lt;b&gt;LLM-Supervised (MemMan)&lt;/b&gt;: Host LLM (Opus/Sonnet) supervises → zero extra cost, stronger judgment, works offline" style="text;html=1;align=center;fontSize=10;fillColor=none;strokeColor=none;verticalAlign=middle;" vertex="1" parent="1">
           <mxGeometry x="60" y="700" width="980" height="60" as="geometry" />
         </mxCell>
       </root>

@@ -1,15 +1,15 @@
 [tool.poetry]
-name = "mnemon"
+name = "memman"
 version = "0.7.0"
 description = "Persistent memory for LLM agents"
-authors = ["mnemon-dev"]
+authors = ["memman-dev"]
 license = "MIT"
 readme = "README.md"
-packages = [{include = "mnemon", from = "src"}]
-include = ["src/mnemon/setup/assets/**/*"]
+packages = [{include = "memman", from = "src"}]
+include = ["src/memman/setup/assets/**/*"]
 
 [tool.poetry.scripts]
-mnemon = "mnemon.cli:cli"
+memman = "memman.cli:cli"
 
 [tool.poetry.dependencies]
 python = "^3.11"

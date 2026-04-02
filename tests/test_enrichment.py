@@ -4,10 +4,10 @@ import json
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
-from mnemon.graph.engine import link_pending
-from mnemon.graph.enrichment import build_enriched_text, enrich_with_llm
-from mnemon.graph.semantic import build_embed_cache
-from mnemon.store.node import insert_insight
+from memman.graph.engine import link_pending
+from memman.graph.enrichment import build_enriched_text, enrich_with_llm
+from memman.graph.semantic import build_embed_cache
+from memman.store.node import insert_insight
 from tests.conftest import make_insight
 
 OLD = datetime(2024, 1, 1, tzinfo=timezone.utc)

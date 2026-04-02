@@ -4,11 +4,11 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from click.testing import CliRunner
-from mnemon.cli import cli
-from mnemon.graph.engine import compute_constants_hash, reindex_auto_edges
-from mnemon.store.db import open_db
-from mnemon.store.edge import get_all_edges, insert_edge
-from mnemon.store.node import insert_insight
+from memman.cli import cli
+from memman.graph.engine import compute_constants_hash, reindex_auto_edges
+from memman.store.db import open_db
+from memman.store.edge import get_all_edges, insert_edge
+from memman.store.node import insert_insight
 from tests.conftest import make_edge, make_insight
 
 
@@ -242,7 +242,7 @@ class TestGraphReindexCliDryRun:
 
     def test_dry_run(self, tmp_path, monkeypatch):
         """Verify dry run outputs stats and makes no changes."""
-        monkeypatch.delenv('MNEMON_STORE', raising=False)
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
         db = open_db(str(store_path))
@@ -280,7 +280,7 @@ class TestGraphReindexCliLive:
 
     def test_live_reindex(self, tmp_path, monkeypatch):
         """Verify reindex creates oplog entry with accurate edge counts."""
-        monkeypatch.delenv('MNEMON_STORE', raising=False)
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
         db = open_db(str(store_path))

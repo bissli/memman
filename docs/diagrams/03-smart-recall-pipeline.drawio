@@ -4,10 +4,10 @@
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="s_title" value="&lt;b&gt;mnemon recall Pipeline (Default)&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+        <mxCell id="s_title" value="&lt;b&gt;memman recall Pipeline (Default)&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;strokeColor=none;fillColor=none;" vertex="1" parent="1">
           <mxGeometry x="300" y="10" width="350" height="30" as="geometry" />
         </mxCell>
-        <mxCell id="s_start" value="mnemon recall &amp;lt;query&amp;gt;&lt;br&gt;[--intent WHY|WHEN|ENTITY|GENERAL] [--limit N] [--basic]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+        <mxCell id="s_start" value="memman recall &amp;lt;query&amp;gt;&lt;br&gt;[--intent WHY|WHEN|ENTITY|GENERAL] [--limit N] [--basic]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="250" y="50" width="400" height="45" as="geometry" />
         </mxCell>
         <mxCell id="s_emb" value="LLM expand_query() → embed expanded query → 512d vector&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;(Voyage AI voyage-3-lite)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">

@@ -1,7 +1,7 @@
 """Causal signal detection and token overlap tests ported from Go causal_test.go."""
 
-from mnemon.graph.causal import find_causal_signal, has_causal_signal
-from mnemon.graph.causal import suggest_sub_type, token_overlap
+from memman.graph.causal import find_causal_signal, has_causal_signal
+from memman.graph.causal import suggest_sub_type, token_overlap
 
 
 class TestHasCausalSignalEnglish:
@@ -180,12 +180,12 @@ class TestInferLLMCausalIncludesRecent:
     def test_recent_insights_in_llm_prompt(self, tmp_db):
         """LLM prompt contains recent insights, not just graph neighbors."""
 
-        from mnemon.graph.causal import infer_llm_causal_edges
-        from mnemon.store.node import insert_insight
+        from memman.graph.causal import infer_llm_causal_edges
+        from memman.store.node import insert_insight
 
         now = __import__('datetime').datetime.now(
             __import__('datetime').timezone.utc)
-        from mnemon.model import Insight
+        from memman.model import Insight
 
         def _make(**kw):
             defaults = {

@@ -6,15 +6,15 @@ modules against a real SQLite database.
 
 from datetime import datetime, timedelta, timezone
 
-from mnemon.embed.vector import serialize_vector
-from mnemon.graph.bfs import BFSOptions, bfs
-from mnemon.graph.engine import fast_edges
-from mnemon.graph.entity import create_entity_edges
-from mnemon.graph.semantic import build_embed_cache, create_semantic_edges
-from mnemon.graph.temporal import create_temporal_edge
-from mnemon.store.edge import get_edges_by_node_and_type, insert_edge
-from mnemon.store.node import insert_insight, soft_delete_insight
-from mnemon.store.node import update_embedding
+from memman.embed.vector import serialize_vector
+from memman.graph.bfs import BFSOptions, bfs
+from memman.graph.engine import fast_edges
+from memman.graph.entity import create_entity_edges
+from memman.graph.semantic import build_embed_cache, create_semantic_edges
+from memman.graph.temporal import create_temporal_edge
+from memman.store.edge import get_edges_by_node_and_type, insert_edge
+from memman.store.node import insert_insight, soft_delete_insight
+from memman.store.node import update_embedding
 from tests.conftest import make_edge, make_insight
 
 # --- Temporal ---

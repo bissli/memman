@@ -1,6 +1,6 @@
 """Entity IDF weighting tests."""
 
-from mnemon.graph.entity import entity_idf_weight
+from memman.graph.entity import entity_idf_weight
 
 
 class TestEntityIdfWeightRare:

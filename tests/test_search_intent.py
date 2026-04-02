@@ -1,7 +1,7 @@
-"""Tests for mnemon.search.intent -- intent detection and weights."""
+"""Tests for memman.search.intent -- intent detection and weights."""
 
 import pytest
-from mnemon.search.intent import detect_intent, get_weights, intent_from_string
+from memman.search.intent import detect_intent, get_weights, intent_from_string
 
 
 def test_detect_why():

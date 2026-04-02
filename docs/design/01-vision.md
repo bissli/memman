@@ -14,8 +14,8 @@ LLM agents suffer from three memory deficiencies:
 
 Users must repeatedly restate preferences, re-explain project context, and re-derive conclusions already reached.
 
-## 1.2 Mnemon's Goal
+## 1.2 MemMan's Goal
 
 Make an LLM remember decisions, preferences, and project context across arbitrarily many sessions.
 
-Mnemon is not a library embedded within an agent framework. It is a standalone memory engine — callable via the command line by Claude Code, Cursor, or any LLM CLI.
+MemMan is not a library embedded within an agent framework. It is a standalone memory engine — callable via the command line by Claude Code, Cursor, or any LLM CLI.

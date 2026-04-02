@@ -1,4 +1,4 @@
-"""Tests for mnemon.llm.extract -- fact extraction, reconciliation, query expansion.
+"""Tests for memman.llm.extract -- fact extraction, reconciliation, query expansion.
 
 These tests use FakeLLMClient to test parsing, validation, and error
 handling that can't be exercised through the CLI. Normal-path behavior
@@ -7,8 +7,8 @@ with real/mocked LLM is covered by test_cli.py and test_memory_system.py.
 
 import json
 
-from mnemon.llm.client import parse_json_response
-from mnemon.llm.extract import expand_query, extract_facts, reconcile_memories
+from memman.llm.client import parse_json_response
+from memman.llm.extract import expand_query, extract_facts, reconcile_memories
 
 
 class FakeLLMClient:

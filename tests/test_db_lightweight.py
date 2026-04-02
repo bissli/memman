@@ -1,6 +1,6 @@
 """Tests for open_db_lightweight — background thread DB connection."""
 
-from mnemon.store.db import open_db, open_db_lightweight
+from memman.store.db import open_db, open_db_lightweight
 
 
 class TestOpenDbLightweight:

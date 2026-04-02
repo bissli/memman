@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Mnemon E2E visual test
+# MemMan E2E visual test
 # Usage: ./scripts/e2e_test.sh
 #
 set -euo pipefail
@@ -111,7 +111,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 TESTDATA="$PROJECT_DIR/.testdata"
 TESTDIR="$TESTDATA/m1"
-M=mnemon
+M=memman
 
 # Clean previous test data
 rm -rf "$TESTDATA"
@@ -167,21 +167,21 @@ OUT=$($M --data-dir "$STORE_DIR" store remove temp)
 assert_contains "removed temp" "$OUT" 'Removed store "temp"'
 
 step "data isolation — memories in different stores are isolated"
-MNEMON_STORE=default $M --data-dir "$STORE_DIR" remember --no-reconcile "Configuration for the default store uses PostgreSQL database" --cat fact --imp 3 > /dev/null
-MNEMON_STORE=work $M --data-dir "$STORE_DIR" remember --no-reconcile "Work store configuration uses Redis for caching layer" --cat fact --imp 3 > /dev/null
+MEMMAN_STORE=default $M --data-dir "$STORE_DIR" remember --no-reconcile "Configuration for the default store uses PostgreSQL database" --cat fact --imp 3 > /dev/null
+MEMMAN_STORE=work $M --data-dir "$STORE_DIR" remember --no-reconcile "Work store configuration uses Redis for caching layer" --cat fact --imp 3 > /dev/null
 
-OUT=$(MNEMON_STORE=default $M --data-dir "$STORE_DIR" search "PostgreSQL database")
+OUT=$(MEMMAN_STORE=default $M --data-dir "$STORE_DIR" search "PostgreSQL database")
 assert_contains "default finds own data" "$OUT" "PostgreSQL"
 assert_not_contains "default not finds work data" "$OUT" "Redis"
 
-OUT=$(MNEMON_STORE=work $M --data-dir "$STORE_DIR" search "Redis caching")
+OUT=$(MEMMAN_STORE=work $M --data-dir "$STORE_DIR" search "Redis caching")
 assert_contains "work finds own data" "$OUT" "Redis"
 assert_not_contains "work not finds default data" "$OUT" "PostgreSQL"
 
-step "MNEMON_STORE env — overrides active file"
+step "MEMMAN_STORE env — overrides active file"
 # Active is "work", but env says "default"
-OUT=$(MNEMON_STORE=default $M --data-dir "$STORE_DIR" status)
-assert_contains "env override db path" "$OUT" "data/default/mnemon.db"
+OUT=$(MEMMAN_STORE=default $M --data-dir "$STORE_DIR" status)
+assert_contains "env override db path" "$OUT" "data/default/memman.db"
 
 step "migration — moves legacy DB to data/default/"
 MIGRATE_DIR="$TESTDATA/migrate_test"
@@ -193,9 +193,9 @@ if [ -d "$MIGRATE_DIR/data" ]; then
   # The openDB already created data layout — test is moot, skip
   pass "migration" "(auto-migrated by openDB)"
 else
-  # Legacy mnemon.db should exist
+  # Legacy memman.db should exist
   OUT=$($M --data-dir "$MIGRATE_DIR" status)
-  assert_contains "migrated db path" "$OUT" "data/default/mnemon.db"
+  assert_contains "migrated db path" "$OUT" "data/default/memman.db"
 fi
 
 # ══════════════════════════════════════════════════════════════════════
@@ -570,7 +570,7 @@ if [ "$OLLAMA_OK" = "true" ]; then
 
   step "embed backfill — backfill un-embedded insights"
   # Create an insight without auto-embedding by pointing Ollama to a dead endpoint
-  MNEMON_EMBED_ENDPOINT="http://127.0.0.1:1" $M --data-dir "$TESTDIR7" remember --no-reconcile "Un-embedded test insight" --cat fact --imp 2 > /dev/null
+  MEMMAN_EMBED_ENDPOINT="http://127.0.0.1:1" $M --data-dir "$TESTDIR7" remember --no-reconcile "Un-embedded test insight" --cat fact --imp 2 > /dev/null
 
   # Backfill all — should find the un-embedded one
   OUT=$($M --data-dir "$TESTDIR7" embed backfill)

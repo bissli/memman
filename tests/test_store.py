@@ -2,21 +2,21 @@
 
 
 import pytest
-from mnemon.model import base_weight, is_immune
-from mnemon.store.db import DEFAULT_STORE_NAME, list_stores, open_db
-from mnemon.store.db import read_active, store_dir, store_exists
-from mnemon.store.db import valid_store_name, write_active
-from mnemon.store.edge import count_insights_with_entity
-from mnemon.store.edge import find_insights_with_entity, get_edges_by_node
-from mnemon.store.edge import get_edges_by_source_and_type, insert_edge
-from mnemon.store.node import auto_prune, compute_effective_importance
-from mnemon.store.node import count_active_insights, get_all_active_insights
-from mnemon.store.node import get_embedding, get_insight_by_id
-from mnemon.store.node import get_insight_by_id_include_deleted
-from mnemon.store.node import increment_access_count, insert_insight
-from mnemon.store.node import query_insights, review_content_quality
-from mnemon.store.node import soft_delete_insight, update_embedding
-from mnemon.store.oplog import get_oplog, log_op
+from memman.model import base_weight, is_immune
+from memman.store.db import DEFAULT_STORE_NAME, list_stores, open_db
+from memman.store.db import read_active, store_dir, store_exists
+from memman.store.db import valid_store_name, write_active
+from memman.store.edge import count_insights_with_entity
+from memman.store.edge import find_insights_with_entity, get_edges_by_node
+from memman.store.edge import get_edges_by_source_and_type, insert_edge
+from memman.store.node import auto_prune, compute_effective_importance
+from memman.store.node import count_active_insights, get_all_active_insights
+from memman.store.node import get_embedding, get_insight_by_id
+from memman.store.node import get_insight_by_id_include_deleted
+from memman.store.node import increment_access_count, insert_insight
+from memman.store.node import query_insights, review_content_quality
+from memman.store.node import soft_delete_insight, update_embedding
+from memman.store.oplog import get_oplog, log_op
 from tests.conftest import make_edge, make_insight
 
 # --- Insight CRUD ---
@@ -503,7 +503,7 @@ class TestAutoPrune:
 
     def test_prefers_stale_over_fresh(self, tmp_db):
         """Never-accessed insight pruned before recently-accessed one."""
-        from mnemon.store.node import increment_access_count
+        from memman.store.node import increment_access_count
 
         insert_insight(tmp_db, make_insight(
             id='stale-1', content='never accessed', importance=2))

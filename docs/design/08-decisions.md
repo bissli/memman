@@ -8,7 +8,7 @@
 
 ### Why LLM-Supervised Instead of an Embedded LLM?
 
-| Dimension          | LLM-Embedded (Mem0, etc.) | LLM-Supervised (Mnemon)                                                       |
+| Dimension          | LLM-Embedded (Mem0, etc.) | LLM-Supervised (MemMan)                                                       |
 | ------------------ | ------------------------- | ----------------------------------------------------------------------------- |
 | LLM Capability     | Same model for everything | Host LLM + Haiku for pipeline                                                 |
 | Pipeline LLM       | Same model for everything | Haiku for extraction, reconciliation, expansion, enrichment, causal inference |
@@ -21,7 +21,7 @@
 - **ACID transactions**: Atomicity guarantee for the remember pipeline
 - **WAL concurrency**: Supports simultaneous hook reads and CLI writes
 - **Zero external dependencies**: No Redis/Neo4j/Qdrant required
-- **Store isolation**: Named stores (`~/.mnemon/data/<name>/mnemon.db`) provide lightweight data isolation via `MNEMON_STORE` env var
+- **Store isolation**: Named stores (`~/.memman/data/<name>/memman.db`) provide lightweight data isolation via `MEMMAN_STORE` env var
 
 ### Why Beam Search Instead of Full BFS?
 
@@ -38,7 +38,7 @@
 
 ### Key Deviations from the MAGMA Paper
 
-| Aspect            | MAGMA Paper                        | Mnemon Implementation                                                  |
+| Aspect            | MAGMA Paper                        | MemMan Implementation                                                  |
 | ----------------- | ---------------------------------- | ---------------------------------------------------------------------- |
 | Entity Extraction | LLM-driven full pipeline           | LLM-based via Haiku (`extract_facts` + `enrich_with_llm`)              |
 | Causal Reasoning  | Embedded prompt chain              | LLM causal inference (`infer_llm_causal_edges`) via ThreadPoolExecutor |
@@ -49,13 +49,13 @@
 | Quality Review    | Slow-path LLM refinement (Alg. 3)  | Pattern-based quality warnings + async gc --review                     |
 | Deployment        | Python library                     | Python package (CLI)                                                   |
 
-Mnemon retains MAGMA's **architectural skeleton** (four-graph separation, intent-adaptive retrieval, multi-signal fusion) while using Haiku for pipeline intelligence (fact extraction, reconciliation, query expansion, enrichment, causal inference) and the host LLM for high-level judgment.
+MemMan retains MAGMA's **architectural skeleton** (four-graph separation, intent-adaptive retrieval, multi-signal fusion) while using Haiku for pipeline intelligence (fact extraction, reconciliation, query expansion, enrichment, causal inference) and the host LLM for high-level judgment.
 
 ---
 
 ## 8.2 Future Direction
 
-Any LLM CLI can interact with Mnemon through the CLI protocol today (agent-side pluggability). The remaining work is on the storage side.
+Any LLM CLI can interact with MemMan through the CLI protocol today (agent-side pluggability). The remaining work is on the storage side.
 
 ### Storage-Side Pluggability
 
