@@ -78,6 +78,7 @@ mnemon gc --keep <id>
 mnemon graph rebuild
 mnemon graph reindex
 mnemon status
+mnemon doctor
 mnemon log [--limit N] [--since 7d]
 ```
 

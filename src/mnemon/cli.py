@@ -1,4 +1,4 @@
-"""Click CLI for mnemon — all 15 commands."""
+"""Click CLI for mnemon — all 16 commands."""
 
 import json
 import os
@@ -1041,6 +1041,23 @@ def status(ctx: click.Context) -> None:
         except OSError:
             stats['db_size_bytes'] = 0
         _json_out(stats)
+    finally:
+        db.close()
+
+
+@cli.command()
+@click.pass_context
+def doctor(ctx: click.Context) -> None:
+    """Run health checks on the database."""
+    from mnemon.doctor import run_all_checks
+
+    db = _open_db(ctx)
+    try:
+        result = run_all_checks(db)
+        result['store'] = _resolve_store_name(
+            ctx.obj['data_dir'], ctx.obj['store'])
+        result['db_path'] = db.path
+        _json_out(result)
     finally:
         db.close()
 

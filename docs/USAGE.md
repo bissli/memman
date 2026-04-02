@@ -172,6 +172,7 @@ Different agents or processes can use different stores via the `MNEMON_STORE` en
 
 ```bash
 mnemon status                                       # memory statistics
+mnemon doctor                                       # run health checks on the database
 mnemon log                                          # operation log (default: last 20)
 mnemon log --limit 50                               # show more entries
 mnemon log --since 7d                               # entries from last 7 days

@@ -227,6 +227,19 @@ def test_status_basic(runner):
     assert 'total_insights' in data
 
 
+def test_doctor_basic(runner):
+    """Doctor returns JSON with checks and status."""
+    invoke(runner, [
+        'remember', 'Go uses SQLite for persistent storage',
+        '--no-reconcile'])
+    result = invoke(runner, ['doctor'])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert 'status' in data
+    assert 'checks' in data
+    assert 'total_active' in data
+
+
 def test_log_basic(runner):
     """Log shows recent operations."""
     invoke(runner, [

@@ -33,6 +33,7 @@ mnemon gc --review
 mnemon graph rebuild
 mnemon graph reindex
 mnemon status
+mnemon doctor
 mnemon log [--since 7d] [--group-by operation] [--stats]
 mnemon store list
 mnemon store create <name>
