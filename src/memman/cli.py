@@ -270,11 +270,11 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
             if v is not None:
                 embed_cache[eid] = v
 
-    all_insights = get_all_active_insights(db)
     fact_results = []
     deleted_ids: set[str] = set()
 
     for fact in facts:
+        all_insights = get_all_active_insights(db)
         fact_text = fact['text']
         fact_category = (insight.category if cat_explicit
                          else fact.get('category', insight.category))
@@ -311,7 +311,7 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
 
             if fact_vec is not None:
                 for eid, evec in embed_cache.items():
-                    if eid in seen_ids:
+                    if eid in seen_ids or eid in deleted_ids:
                         continue
                     sim = cosine_similarity(fact_vec, evec)
                     if sim >= 0.5:
@@ -333,6 +333,17 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
                     action = r['action']
                     target_id = r.get('target_id')
                     merged_text = r.get('merged_text')
+
+        if (action in {'UPDATE', 'REPLACE'}
+                and target_id
+                and target_id in deleted_ids):
+            fact_results.append({
+                'id': str(uuid.uuid4()),
+                'content': merged_text or fact_text,
+                'action': 'skipped',
+                'reason': 'target already deleted',
+                })
+            continue
 
         fact_id = str(uuid.uuid4())
         effective_text = merged_text or fact_text
@@ -370,15 +381,20 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
 
         if action == 'DELETE' and target_id:
             if target_id in deleted_ids:
-                action = 'ADD'
-            else:
-                deleted_ids.add(target_id)
+                fact_results.append({
+                    'id': fact_id,
+                    'content': effective_text,
+                    'action': 'skipped',
+                    'reason': 'target already deleted',
+                    })
+                continue
+            deleted_ids.add(target_id)
 
-                def delete_tx(tid: str = target_id) -> None:
-                    soft_delete_insight(db, tid)
-                    log_op(db, 'reconcile-delete', tid,
-                           f'contradicted by: {fact_text[:200]}')
-                db.in_transaction(delete_tx)
+            def delete_tx(tid: str = target_id) -> None:
+                soft_delete_insight(db, tid)
+                log_op(db, 'reconcile-delete', tid,
+                       f'contradicted by: {fact_text[:200]}')
+            db.in_transaction(delete_tx)
             fact_results.append({
                 'id': fact_id,
                 'content': effective_text,
@@ -419,7 +435,6 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
             log_op(db, 'remember', fi.id, fi.content)
 
         db.in_transaction(insert_tx)
-        all_insights.append(fact_insight)
 
         if embed_vec is not None:
             embed_cache[fact_insight.id] = embed_vec

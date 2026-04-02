@@ -1154,3 +1154,124 @@ class TestIntraBatchDedup:
         assert len(stored) == 1, (
             f'expected 1 stored fact from single thought, got '
             f'{len(stored)}: {json.dumps(facts, indent=2)}')
+
+    def test_two_updates_same_target_no_duplicate(self, runner):
+        """Sibling UPDATEs must not create duplicates from stale candidates."""
+        invoke(runner, [
+            'remember',
+            'PostgreSQL chosen for ACID compliance and JSON support',
+            '--no-reconcile'])
+
+        def _two_update_facts(llm_client, content):
+            return [
+                {
+                    'text': 'PostgreSQL chosen for ACID compliance'
+                            ' and JSON support plus extensions',
+                    'category': 'decision',
+                    'importance': 4,
+                    'entities': ['PostgreSQL'],
+                    },
+                {
+                    'text': 'PostgreSQL chosen for ACID compliance'
+                            ' and JSON support with replication',
+                    'category': 'decision',
+                    'importance': 4,
+                    'entities': ['PostgreSQL'],
+                    },
+                ]
+
+        with patch('memman.llm.extract.extract_facts',
+                   _two_update_facts):
+            result = invoke(runner, [
+                'remember',
+                'PostgreSQL chosen for ACID compliance'])
+        assert result.exit_code == 0, result.output
+
+        search_result = invoke(runner, ['search', 'PostgreSQL'])
+        active = json.loads(search_result.output)
+        assert len(active) == 1, (
+            f'expected 1 active PostgreSQL insight, got {len(active)}')
+
+    def test_forced_update_stale_target_no_duplicate(self, runner):
+        """Forced UPDATE against stale target must not create a duplicate."""
+        invoke(runner, [
+            'remember',
+            'Kafka uses topic partitioning for message ordering',
+            '--no-reconcile'])
+
+        def _two_facts(llm_client, content):
+            return [
+                {
+                    'text': 'Kafka uses topic partitioning for'
+                            ' message ordering and consumer groups',
+                    'category': 'fact',
+                    'importance': 3,
+                    'entities': ['Kafka'],
+                    },
+                {
+                    'text': 'Kafka uses topic partitioning for'
+                            ' message ordering and replication',
+                    'category': 'fact',
+                    'importance': 3,
+                    'entities': ['Kafka'],
+                    },
+                ]
+
+        def _force_update(llm_client, facts, existing):
+            target_id = existing[0][0] if existing else None
+            return [{'fact': f['text'], 'action': 'UPDATE',
+                     'target_id': target_id,
+                     'merged_text': f['text']}
+                    for f in facts]
+
+        with patch('memman.llm.extract.extract_facts', _two_facts), \
+        patch('memman.llm.extract.reconcile_memories',
+              _force_update):
+            result = invoke(runner, [
+                'remember', 'Kafka topic partitioning'])
+        assert result.exit_code == 0, result.output
+
+        search_result = invoke(runner, ['search', 'Kafka'])
+        active = json.loads(search_result.output)
+        assert len(active) == 1, (
+            f'expected 1 active Kafka insight, got {len(active)}')
+
+    @pytest.mark.skipif(
+        'not config.getoption("--live")',
+        reason='requires --live for real LLM calls')
+    def test_near_identical_updates_no_duplicate_live(self, runner):
+        """Near-identical sibling facts must not create duplicates with real LLM."""
+        invoke(runner, [
+            'remember',
+            'Redis cache uses 4GB max memory for session storage',
+            '--no-reconcile'])
+
+        def _near_identical_facts(llm_client, content):
+            return [
+                {
+                    'text': 'Redis cache uses 4GB maximum memory'
+                            ' for session storage',
+                    'category': 'fact',
+                    'importance': 3,
+                    'entities': ['Redis'],
+                    },
+                {
+                    'text': 'Redis cache uses 4GB max memory'
+                            ' for session storage',
+                    'category': 'fact',
+                    'importance': 3,
+                    'entities': ['Redis'],
+                    },
+                ]
+
+        with patch('memman.llm.extract.extract_facts',
+                   _near_identical_facts):
+            result = invoke(runner, [
+                'remember',
+                'Redis cache memory configuration'])
+        assert result.exit_code == 0, result.output
+
+        search_result = invoke(runner, ['search', 'Redis'])
+        active = json.loads(search_result.output)
+        assert len(active) == 1, (
+            f'expected 1 active Redis insight, got {len(active)}')
