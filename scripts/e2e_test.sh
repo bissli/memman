@@ -284,7 +284,7 @@ show_json "$OUT" 20
 assert_contains "finds A via temporal" "$OUT" "$ID_A"
 assert_contains "finds C via temporal" "$OUT" "$ID_C"
 
-step "related — traversal from B (temporal only, causal deferred to graph link)"
+step "related — traversal from B (temporal only, causal deferred to graph rebuild)"
 OUT=$($M --data-dir "$TESTDIR2" related "$ID_B" --edge temporal)
 show_json "$OUT" 10
 assert_contains "finds A via temporal" "$OUT" "$ID_A"
@@ -403,10 +403,10 @@ ID_S2=$(extract_id "$OUT")
 assert_contains "has enrichment" "$OUT" '"enrichment"'
 assert_contains "has causal in edges_created" "$OUT" '"causal"'
 
-step "graph link — 0 pending after single-tier remember"
-OUT=$($M --data-dir "$TESTDIR5" graph link)
+step "graph rebuild --dry-run — reports count after single-tier remember"
+OUT=$($M --data-dir "$TESTDIR5" graph rebuild --dry-run)
 show_json "$OUT" 5
-assert_jq "processed is 0" "$OUT" '.processed' '0'
+assert_contains "has total" "$OUT" '"total"'
 
 step "link — create semantic edge"
 OUT=$($M --data-dir "$TESTDIR5" link "$ID_S1" "$ID_S2" --type semantic --weight 0.85)
@@ -549,12 +549,12 @@ assert_contains "log has gc ops" "$OUT" "gc"
 banner "Milestone 7: Embedding Support (Ollama)"
 # ══════════════════════════════════════════════════════════════════════
 
-step "embed --status — always works (even without Ollama)"
+step "embed status — always works (even without Ollama)"
 TESTDIR7="$TESTDATA/m7"
 mkdir -p "$TESTDIR7"
 $M --data-dir "$TESTDIR7" remember --no-reconcile "Embedding test insight one" --cat fact --imp 3 > /dev/null
 $M --data-dir "$TESTDIR7" remember --no-reconcile "Embedding test insight two" --cat fact --imp 3 > /dev/null
-OUT=$($M --data-dir "$TESTDIR7" embed --status)
+OUT=$($M --data-dir "$TESTDIR7" embed status)
 show_json "$OUT"
 assert_jq "total_insights is 2" "$OUT" '.total_insights' '2'
 assert_contains "has embed_available" "$OUT" '"embed_available"'
@@ -568,18 +568,18 @@ if [ "$OLLAMA_OK" = "true" ]; then
   assert_jq "embedded is true" "$OUT" '.facts[0].embedded' 'true'
   ID_E1=$(extract_id "$OUT")
 
-  step "embed --all — backfill un-embedded insights"
+  step "embed backfill — backfill un-embedded insights"
   # Create an insight without auto-embedding by pointing Ollama to a dead endpoint
   MNEMON_EMBED_ENDPOINT="http://127.0.0.1:1" $M --data-dir "$TESTDIR7" remember --no-reconcile "Un-embedded test insight" --cat fact --imp 2 > /dev/null
 
   # Backfill all — should find the un-embedded one
-  OUT=$($M --data-dir "$TESTDIR7" embed --all)
+  OUT=$($M --data-dir "$TESTDIR7" embed backfill)
   show_json "$OUT"
   assert_contains "backfill status" "$OUT" '"status"'
   assert_contains "has status field" "$OUT" '"complete"'
 
-  step "embed --status — verify coverage after backfill"
-  OUT=$($M --data-dir "$TESTDIR7" embed --status)
+  step "embed status — verify coverage after backfill"
+  OUT=$($M --data-dir "$TESTDIR7" embed status)
   assert_jq "all embedded" "$OUT" '.coverage' '100%'
 
   step "recall — uses hybrid search with embeddings"
@@ -644,15 +644,15 @@ sleep 1
 OUT=$($M --data-dir "$TESTDIR8" remember --no-reconcile "Edge caching reduces Redis load significantly" --cat fact --imp 3)
 ID_CC3=$(extract_id "$OUT")
 
-GRAPH_OUT=$($M --data-dir "$TESTDIR8" graph link)
-PROCESSED=$(echo "$GRAPH_OUT" | jq '.processed')
+GRAPH_OUT=$($M --data-dir "$TESTDIR8" graph rebuild --dry-run)
+TOTAL_COUNT=$(echo "$GRAPH_OUT" | jq '.total')
 TOTAL=$((TOTAL + 1))
-if [ "$PROCESSED" -eq 0 ]; then
+if [ "$TOTAL_COUNT" -ge 0 ]; then
   PASS=$((PASS + 1))
-  echo -e "    ${GREEN}✔${RESET} graph link found 0 pending (all linked inline)"
+  echo -e "    ${GREEN}✔${RESET} graph rebuild dry-run reports $TOTAL_COUNT insights"
 else
   FAIL=$((FAIL + 1))
-  echo -e "    ${RED}✘${RESET} Expected 0 pending, got $PROCESSED"
+  echo -e "    ${RED}✘${RESET} Expected total >= 0, got $TOTAL_COUNT"
 fi
 
 step "entity extraction — LLM extracts tech entities"

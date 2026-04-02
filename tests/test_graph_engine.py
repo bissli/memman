@@ -1,7 +1,7 @@
 """Tests for mnemon.graph.engine — constants hash and edge orchestration."""
 
 from mnemon.graph.engine import compute_constants_hash, link_pending
-from mnemon.graph.engine import relink_auto_edges
+from mnemon.graph.engine import reindex_auto_edges
 from mnemon.store.edge import get_all_edges, insert_edge
 from mnemon.store.node import insert_insight
 from tests.conftest import make_edge, make_insight
@@ -37,7 +37,7 @@ def test_relink_does_not_block_linking(tmp_db):
     insert_insight(tmp_db, make_insight(
         id='rbc-2', content='second insight for linking'))
 
-    relink_auto_edges(tmp_db)
+    reindex_auto_edges(tmp_db)
     processed = link_pending(tmp_db)
     assert processed > 0
 
@@ -59,7 +59,7 @@ def test_relink_preserves_manual_edge_metadata(tmp_db):
         metadata={'entity': 'Python', 'created_by': 'claude'})
     insert_edge(tmp_db, manual_edge)
 
-    relink_auto_edges(tmp_db)
+    reindex_auto_edges(tmp_db)
 
     edges = get_all_edges(tmp_db)
     match = [e for e in edges

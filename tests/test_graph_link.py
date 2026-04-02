@@ -2,7 +2,8 @@
 
 from datetime import datetime, timedelta, timezone
 
-from mnemon.graph.engine import MAX_LINK_BATCH, link_pending, relink_auto_edges
+from mnemon.graph.engine import MAX_LINK_BATCH, link_pending
+from mnemon.graph.engine import reindex_auto_edges
 from mnemon.store.node import insert_insight
 from tests.conftest import make_insight
 
@@ -119,7 +120,7 @@ class TestLinkPending:
             f'LLM calls made inside transaction: {llm_calls_in_tx}')
 
     def test_relink_clears_linked_at(self, tmp_db):
-        """relink_auto_edges clears linked_at for re-linking."""
+        """reindex_auto_edges clears linked_at for re-linking."""
         insert_insight(tmp_db, make_insight(
             id='rb-1', content='relink test one'))
         insert_insight(tmp_db, make_insight(
@@ -127,7 +128,7 @@ class TestLinkPending:
         tmp_db._conn.execute(
             'UPDATE insights SET linked_at = created_at')
 
-        relink_auto_edges(tmp_db)
+        reindex_auto_edges(tmp_db)
 
         pending = tmp_db._conn.execute(
             'SELECT COUNT(*) FROM insights'

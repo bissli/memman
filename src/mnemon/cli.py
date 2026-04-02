@@ -1217,81 +1217,100 @@ def viz(ctx: click.Context, fmt: str, output_path: str) -> None:
         db.close()
 
 
-@cli.command()
-@click.argument('id', required=False, default=None)
-@click.option('--all', 'backfill', is_flag=True, default=False, help='Backfill all insights')
-@click.option('--status', 'show_status', is_flag=True, default=False, help='Show coverage stats')
+@cli.group(invoke_without_command=True)
 @click.pass_context
-def embed(ctx: click.Context, id: str | None, backfill: bool, show_status: bool) -> None:
+def embed(ctx: click.Context) -> None:
     """Manage embeddings."""
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(embed_status)
+
+
+@embed.command('status')
+@click.pass_context
+def embed_status(ctx: click.Context) -> None:
+    """Show embedding coverage statistics."""
+    from mnemon.embed import get_client
+    from mnemon.store.node import embedding_stats
+
+    db = _open_db(ctx)
+    try:
+        ec = get_client()
+        total, embedded = embedding_stats(db)
+        coverage = f'{embedded * 100 // total}%' if total > 0 else '0%'
+        _json_out({
+            'total_insights': total,
+            'embedded': embedded,
+            'coverage': coverage,
+            'embed_available': ec.available(),
+            'model': ec.model,
+            })
+    finally:
+        db.close()
+
+
+@embed.command('backfill')
+@click.pass_context
+def embed_backfill(ctx: click.Context) -> None:
+    """Embed all insights missing embeddings."""
     from mnemon.embed import get_client
     from mnemon.embed.vector import serialize_vector
-    from mnemon.store.node import embedding_stats, get_insight_by_id
     from mnemon.store.node import get_insights_without_embedding
     from mnemon.store.node import update_embedding
 
     db = _open_db(ctx)
     try:
         ec = get_client()
-
-        if show_status:
-            total, embedded = embedding_stats(db)
-            coverage = f'{embedded * 100 // total}%' if total > 0 else '0%'
+        missing = get_insights_without_embedding(db, 1000)
+        if not missing:
             _json_out({
-                'total_insights': total,
-                'embedded': embedded,
-                'coverage': coverage,
-                'embed_available': ec.available(),
-                'model': ec.model,
+                'status': 'complete',
+                'message': 'all insights already have embeddings',
                 })
             return
+        succeeded = 0
+        failed = 0
+        for ins in missing:
+            try:
+                vec = ec.embed(ins.content)
+                blob = serialize_vector(vec)
+                update_embedding(db, ins.id, blob)
+                succeeded += 1
+            except Exception:
+                failed += 1
+        _json_out({
+            'status': 'backfill_complete',
+            'succeeded': succeeded,
+            'failed': failed,
+            'model': ec.model,
+            })
+    finally:
+        db.close()
 
-        if backfill:
-            missing = get_insights_without_embedding(db, 1000)
-            if not missing:
-                _json_out({
-                    'status': 'complete',
-                    'message':
-                        'all insights already have embeddings',
-                    })
-                return
-            succeeded = 0
-            failed = 0
-            for ins in missing:
-                try:
-                    vec = ec.embed(ins.content)
-                    blob = serialize_vector(vec)
-                    update_embedding(db, ins.id, blob)
-                    succeeded += 1
-                except Exception:
-                    failed += 1
-            _json_out({
-                'status': 'backfill_complete',
-                'succeeded': succeeded,
-                'failed': failed,
-                'model': ec.model,
-                })
-            return
 
-        if id:
-            ins = get_insight_by_id(db, id)
-            if ins is None:
-                raise click.ClickException(
-                    f'insight {id} not found')
-            vec = ec.embed(ins.content)
-            blob = serialize_vector(vec)
-            update_embedding(db, id, blob)
-            _json_out({
-                'status': 'embedded',
-                'id': id,
-                'dimension': len(vec),
-                'model': ec.model,
-                })
-            return
+@embed.command('run')
+@click.argument('id')
+@click.pass_context
+def embed_run(ctx: click.Context, id: str) -> None:
+    """Embed a single insight by ID."""
+    from mnemon.embed import get_client
+    from mnemon.embed.vector import serialize_vector
+    from mnemon.store.node import get_insight_by_id, update_embedding
 
-        raise click.ClickException(
-            'specify --all to backfill, --status to check coverage,'
-            ' or provide an insight ID')
+    db = _open_db(ctx)
+    try:
+        ec = get_client()
+        ins = get_insight_by_id(db, id)
+        if ins is None:
+            raise click.ClickException(f'insight {id} not found')
+        vec = ec.embed(ins.content)
+        blob = serialize_vector(vec)
+        update_embedding(db, id, blob)
+        _json_out({
+            'status': 'embedded',
+            'id': id,
+            'dimension': len(vec),
+            'model': ec.model,
+            })
     finally:
         db.close()
 
@@ -1301,21 +1320,21 @@ def graph() -> None:
     """Graph management commands."""
 
 
-@graph.command('relink')
+@graph.command('reindex')
 @click.option('--dry-run', is_flag=True, default=False,
               help='Show stats without modifying DB')
 @click.pass_context
-def graph_relink(ctx: click.Context, dry_run: bool) -> None:
-    """Relink auto-created graph edges."""
-    from mnemon.graph.engine import relink_auto_edges
+def graph_reindex(ctx: click.Context, dry_run: bool) -> None:
+    """Recalculate auto-created graph edges."""
+    from mnemon.graph.engine import reindex_auto_edges
 
     db = _open_db(ctx)
     try:
-        stats = relink_auto_edges(db, dry_run=dry_run)
+        stats = reindex_auto_edges(db, dry_run=dry_run)
         if dry_run:
             click.echo('Dry run (no changes):')
         else:
-            click.echo('Relink complete:')
+            click.echo('Reindex complete:')
         _json_out(stats)
     finally:
         db.close()
@@ -1335,49 +1354,69 @@ def setup(ctx: click.Context, target: str, eject: bool, auto_yes: bool, use_glob
               auto_yes=auto_yes, use_global=use_global)
 
 
-@graph.command('link')
+@graph.command('rebuild')
+@click.option('--dry-run', is_flag=True, default=False,
+              help='Show counts without modifying DB')
 @click.pass_context
-def graph_link(ctx: click.Context) -> None:
-    """Process pending semantic edge linking and LLM enrichment."""
+def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
+    """Re-enrich all insights through the full LLM pipeline."""
     from mnemon.embed import get_client
-    from mnemon.graph.engine import link_pending
+    from mnemon.graph.engine import MAX_LINK_BATCH, link_pending
+    from mnemon.graph.engine import reset_for_rebuild
     from mnemon.graph.semantic import build_embed_cache
     from mnemon.llm.client import get_llm_client
+    from mnemon.store.oplog import log_op
 
     db = _open_db(ctx)
     try:
         llm_client = get_llm_client()
         ec = get_client()
-        pending_count = db._conn.execute(
-            'SELECT COUNT(*) FROM insights'
-            ' WHERE linked_at IS NULL AND deleted_at IS NULL'
-            ).fetchone()[0]
-        if pending_count == 0:
+
+        all_ids = [r[0] for r in db._conn.execute(
+            'SELECT id FROM insights WHERE deleted_at IS NULL'
+            ' ORDER BY created_at ASC').fetchall()]
+        total_count = len(all_ids)
+
+        if dry_run:
+            _json_out({'total': total_count, 'dry_run': 1})
+            return
+
+        if total_count == 0:
             _json_out({'processed': 0, 'remaining': 0})
             return
+
         click.echo(
-            f'Linking {pending_count} pending insights...',
-            err=True)
+            f'Rebuilding {total_count} insights...', err=True)
         embed_cache = build_embed_cache(db)
-        total = 0
-        while True:
-            batch = link_pending(
-                db, embed_cache=embed_cache, llm_client=llm_client,
-                embed_client=ec)
-            total += batch
-            if batch == 0:
-                break
+        processed = 0
+
+        for i in range(0, total_count, MAX_LINK_BATCH):
+            batch_ids = all_ids[i:i + MAX_LINK_BATCH]
+            reset_for_rebuild(db, batch_ids)
+
+            while True:
+                count = link_pending(
+                    db, embed_cache=embed_cache,
+                    llm_client=llm_client, embed_client=ec)
+                processed += count
+                if count == 0:
+                    break
+
             click.echo(
-                f'  processed {total}/{pending_count}', err=True)
-        pending = db._conn.execute(
+                f'  processed {min(processed, total_count)}'
+                f'/{total_count}', err=True)
+
+        remaining = db._conn.execute(
             'SELECT COUNT(*) FROM insights'
             ' WHERE linked_at IS NULL AND deleted_at IS NULL'
             ).fetchone()[0]
-        click.echo(f'Done. {total} processed, {pending} remaining.', err=True)
-        _json_out({
-            'processed': total,
-            'remaining': pending,
-            })
+        click.echo(
+            f'Done. {processed} processed, {remaining} remaining.',
+            err=True)
+
+        stats = {'processed': processed, 'remaining': remaining}
+        log_op(db, 'rebuild', '', json.dumps(stats))
+        _json_out(stats)
     finally:
         db.close()
 

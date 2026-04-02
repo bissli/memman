@@ -115,21 +115,18 @@ mnemon link <source_id> <target_id> --type causal --weight 0.8 \
 # Related — BFS traversal from an insight
 mnemon related <id> --edge causal --depth 2
 
-# Relink — regenerate auto-computed edges (triggered automatically on constants change)
-mnemon graph relink              # live relink
-mnemon graph relink --dry-run    # preview changes without modifying DB
+# Reindex — regenerate auto-computed edges (triggered automatically on constants change)
+mnemon graph reindex              # live reindex
+mnemon graph reindex --dry-run    # preview changes without modifying DB
+
+# Rebuild — full LLM re-enrichment + re-embed + edge rebuild
+mnemon graph rebuild              # process all insights
+mnemon graph rebuild --dry-run    # preview count without modifying DB
 ```
 
-Auto-relink fires transparently when `open_db()` detects graph constants (thresholds, weights) have changed. Manual relink is available for debugging or forcing regeneration. Use `--dry-run` to preview what would change without writing to the database.
+Auto-reindex fires transparently when `open_db()` detects graph constants (thresholds, weights) have changed. Manual reindex is available for debugging or forcing edge regeneration. Use `--dry-run` to preview what would change.
 
-### Linking
-
-```bash
-# Process pending semantic edges and LLM causal inference
-mnemon graph link
-```
-
-Drains all insights with `linked_at IS NULL`: LLM enrichment, re-embedding, LLM causal inference, and edge rebuild (entity + semantic + causal). Processes in batches of 20 until fully drained. Returns `{"processed": N, "remaining": 0}`.
+Rebuild re-enriches all insights through the full LLM pipeline (enrichment, re-embedding, causal inference, edge recreation). Processes in batches of 20. Returns `{"processed": N, "remaining": 0}`.
 
 ### Lifecycle Management
 

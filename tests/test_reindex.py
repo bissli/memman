@@ -1,21 +1,21 @@
-"""Auto-relink tests for constants hash change detection and edge management."""
+"""Auto-reindex tests for constants hash change detection and edge management."""
 
 import json
 from datetime import datetime, timedelta, timezone
 
 from click.testing import CliRunner
 from mnemon.cli import cli
-from mnemon.graph.engine import compute_constants_hash, relink_auto_edges
+from mnemon.graph.engine import compute_constants_hash, reindex_auto_edges
 from mnemon.store.db import open_db
 from mnemon.store.edge import get_all_edges, insert_edge
 from mnemon.store.node import insert_insight
 from tests.conftest import make_edge, make_insight
 
 
-class TestOpenDbTriggersRelink:
-    """open_db triggers relink when stored hash differs from current."""
+class TestOpenDbTriggersReindex:
+    """open_db triggers reindex when stored hash differs from current."""
 
-    def test_triggers_relink_on_hash_mismatch(self, tmp_path):
+    def test_triggers_reindex_on_hash_mismatch(self, tmp_path):
         """Seed meta with wrong hash, open DB, verify hash updated."""
         db = open_db(str(tmp_path))
         db._conn.execute(
@@ -32,10 +32,10 @@ class TestOpenDbTriggersRelink:
         db.close()
 
 
-class TestOpenDbSkipsRelink:
-    """open_db skips relink when stored hash matches current."""
+class TestOpenDbSkipsReindex:
+    """open_db skips reindex when stored hash matches current."""
 
-    def test_skips_relink_when_hash_matches(self, tmp_path):
+    def test_skips_reindex_when_hash_matches(self, tmp_path):
         """Seed meta with correct hash; open DB does not modify edges."""
         db = open_db(str(tmp_path))
         current_hash = compute_constants_hash()
@@ -60,11 +60,11 @@ class TestOpenDbSkipsRelink:
         db.close()
 
 
-class TestRelinkPreservesManualSemanticEdges:
-    """Manual semantic edges (created_by: claude) survive relink."""
+class TestReindexPreservesManualSemanticEdges:
+    """Manual semantic edges (created_by: claude) survive reindex."""
 
     def test_preserves_manual_semantic(self, tmp_db):
-        """Insert claude-created semantic edge, run relink, verify survival."""
+        """Insert claude-created semantic edge, run reindex, verify survival."""
         ins1 = make_insight(id='ms-1', content='first')
         ins2 = make_insight(id='ms-2', content='second')
         insert_insight(tmp_db, ins1)
@@ -76,7 +76,7 @@ class TestRelinkPreservesManualSemanticEdges:
             metadata={'created_by': 'claude', 'cosine': '0.5'})
         insert_edge(tmp_db, manual_edge)
 
-        relink_auto_edges(tmp_db)
+        reindex_auto_edges(tmp_db)
 
         edges = get_all_edges(tmp_db)
         manual = [e for e in edges
@@ -85,11 +85,11 @@ class TestRelinkPreservesManualSemanticEdges:
         assert len(manual) == 1
 
 
-class TestRelinkPreservesManualEntityEdges:
-    """Manual entity edges (created_by: claude) survive relink."""
+class TestReindexPreservesManualEntityEdges:
+    """Manual entity edges (created_by: claude) survive reindex."""
 
     def test_preserves_manual_entity(self, tmp_db):
-        """Insert claude-created entity edge, run relink, verify survival."""
+        """Insert claude-created entity edge, run reindex, verify survival."""
         ins1 = make_insight(id='me-1', content='first',
                             entities=['Python'])
         ins2 = make_insight(id='me-2', content='second',
@@ -103,7 +103,7 @@ class TestRelinkPreservesManualEntityEdges:
             metadata={'entity': 'Python', 'created_by': 'claude'})
         insert_edge(tmp_db, manual_edge)
 
-        relink_auto_edges(tmp_db)
+        reindex_auto_edges(tmp_db)
 
         edges = get_all_edges(tmp_db)
         manual = [e for e in edges
@@ -112,11 +112,11 @@ class TestRelinkPreservesManualEntityEdges:
         assert len(manual) == 1
 
 
-class TestRelinkPreservesManualCreatedByEntityEdges:
-    """Entity edges with created_by='manual' survive relink."""
+class TestReindexPreservesManualCreatedByEntityEdges:
+    """Entity edges with created_by='manual' survive reindex."""
 
     def test_preserves_manual_created_by_entity(self, tmp_db):
-        """Insert manual-created entity edge, run relink, verify survival."""
+        """Insert manual-created entity edge, run reindex, verify survival."""
         ins1 = make_insight(id='mm-1', content='first',
                             entities=['Go'])
         ins2 = make_insight(id='mm-2', content='second',
@@ -130,22 +130,22 @@ class TestRelinkPreservesManualCreatedByEntityEdges:
             metadata={'entity': 'Go', 'created_by': 'manual'})
         insert_edge(tmp_db, manual_edge)
 
-        relink_auto_edges(tmp_db)
+        reindex_auto_edges(tmp_db)
 
         edges = get_all_edges(tmp_db)
         manual = [e for e in edges
                   if e.edge_type == 'entity'
                   and e.metadata.get('created_by') == 'manual']
         assert len(manual) == 1, (
-            'relink_auto_edges deleted manual entity edges — '
+            'reindex_auto_edges deleted manual entity edges — '
             'filter should preserve both claude and manual created_by')
 
 
-class TestRelinkDeletesAutoEntityEdges:
-    """Auto entity edges (no created_by) are replaced during relink."""
+class TestReindexDeletesAutoEntityEdges:
+    """Auto entity edges (no created_by) are replaced during reindex."""
 
     def test_deletes_auto_entity(self, tmp_db):
-        """Insert auto entity edges, run relink, verify replaced."""
+        """Insert auto entity edges, run reindex, verify replaced."""
         ins1 = make_insight(id='ae-1', content='Go uses SQLite',
                             entities=['Go', 'SQLite'])
         ins2 = make_insight(id='ae-2', content='SQLite for storage',
@@ -159,7 +159,7 @@ class TestRelinkDeletesAutoEntityEdges:
             metadata={'entity': 'SQLite'})
         insert_edge(tmp_db, auto_edge)
 
-        relink_auto_edges(tmp_db)
+        reindex_auto_edges(tmp_db)
 
         edges = get_all_edges(tmp_db)
         entity_edges = [e for e in edges if e.edge_type == 'entity']
@@ -167,7 +167,7 @@ class TestRelinkDeletesAutoEntityEdges:
 
 
 class TestTemporalDeleteOnlySubThreshold:
-    """Only low-weight proximity edges deleted during relink."""
+    """Only low-weight proximity edges deleted during reindex."""
 
     def test_removes_only_sub_threshold(self, tmp_db):
         """Mix of low/high weight proximity edges; only low deleted."""
@@ -198,7 +198,7 @@ class TestTemporalDeleteOnlySubThreshold:
         insert_edge(tmp_db, low_weight)
         insert_edge(tmp_db, backbone)
 
-        relink_auto_edges(tmp_db)
+        reindex_auto_edges(tmp_db)
 
         edges = get_all_edges(tmp_db)
         temporal = [e for e in edges if e.edge_type == 'temporal']
@@ -215,7 +215,7 @@ class TestTemporalDeleteOnlySubThreshold:
         assert len(backbones) >= 1
 
 
-class TestRelinkDryRunCreationCounts:
+class TestReindexDryRunCreationCounts:
     """Dry run returns non-zero creation counts without writing edges."""
 
     def test_dry_run_counts_entity_edges(self, tmp_db):
@@ -229,7 +229,7 @@ class TestRelinkDryRunCreationCounts:
         insert_insight(tmp_db, ins1)
         insert_insight(tmp_db, ins2)
 
-        stats = relink_auto_edges(tmp_db, dry_run=True)
+        stats = reindex_auto_edges(tmp_db, dry_run=True)
 
         assert stats['entity_created'] > 0
         edges = get_all_edges(tmp_db)
@@ -237,7 +237,7 @@ class TestRelinkDryRunCreationCounts:
         assert len(entity_edges) == 0
 
 
-class TestGraphRelinkCliDryRun:
+class TestGraphReindexCliDryRun:
     """CLI dry run shows stats without modifying DB."""
 
     def test_dry_run(self, tmp_path, monkeypatch):
@@ -262,7 +262,7 @@ class TestGraphRelinkCliDryRun:
         runner = CliRunner()
         result = runner.invoke(cli, [
             '--data-dir', data_dir,
-            'graph', 'relink', '--dry-run',
+            'graph', 'reindex', '--dry-run',
             ])
 
         assert 'entity_created' in result.output
@@ -275,11 +275,11 @@ class TestGraphRelinkCliDryRun:
         db.close()
 
 
-class TestGraphRelinkCliLive:
-    """CLI live relink modifies DB and logs to oplog."""
+class TestGraphReindexCliLive:
+    """CLI live reindex modifies DB and logs to oplog."""
 
-    def test_live_relink(self, tmp_path, monkeypatch):
-        """Verify relink creates oplog entry with accurate edge counts."""
+    def test_live_reindex(self, tmp_path, monkeypatch):
+        """Verify reindex creates oplog entry with accurate edge counts."""
         monkeypatch.delenv('MNEMON_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
@@ -295,17 +295,17 @@ class TestGraphRelinkCliLive:
         runner = CliRunner()
         result = runner.invoke(cli, [
             '--data-dir', data_dir,
-            'graph', 'relink',
+            'graph', 'reindex',
             ])
 
         db = open_db(str(store_path))
         row = db._conn.execute(
             "SELECT COUNT(*) FROM oplog"
-            " WHERE operation = 'relink'").fetchone()
+            " WHERE operation = 'reindex'").fetchone()
         assert row[0] >= 1
 
         oplog_row = db._conn.execute(
-            "SELECT detail FROM oplog WHERE operation = 'relink'"
+            "SELECT detail FROM oplog WHERE operation = 'reindex'"
             " ORDER BY id DESC LIMIT 1").fetchone()
         logged_stats = json.loads(oplog_row[0])
 

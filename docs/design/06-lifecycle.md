@@ -107,13 +107,13 @@ Vectors are serialized as little-endian float64 BLOBs stored in the `insights.em
 - **Initial (remember — sequential)**: Each fact is embedded immediately after extraction
 - **Merged (remember — sequential)**: If reconciliation merges facts, the merged text is re-embedded
 - **Enriched (remember — parallel)**: After LLM enrichment extracts keywords, the insight is re-embedded with enriched text (content + keywords)
-- **Recovery (`graph link`)**: Processes insights that lack enrichment (e.g., if `remember` crashed mid-pipeline) and updates embeddings
+- **Recovery (`graph rebuild`)**: Re-enriches all insights through the full LLM pipeline and updates embeddings
 - **Recall**: Expanded query is embedded for vector search anchors and reranking
 
 ### Management Commands
 
 ```bash
-mnemon embed --status           # View coverage
-mnemon embed --all              # Batch-generate embeddings for all insights
-mnemon embed <id>               # Generate for a single insight
+mnemon embed status              # View coverage
+mnemon embed backfill            # Batch-generate embeddings for all insights
+mnemon embed run <id>            # Generate for a single insight
 ```

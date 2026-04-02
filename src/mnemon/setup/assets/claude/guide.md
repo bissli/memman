@@ -116,9 +116,13 @@ All edge creation (temporal, entity, semantic, causal) and LLM enrichment
 run inline during `remember`, before it returns. Enrichment and causal
 inference run in parallel via ThreadPoolExecutor for speed.
 
-`graph link` exists as a recovery command — if `remember` crashes after
-inserting but before enrichment completes, `graph link` will process
-orphaned insights. Under normal operation it reports 0 pending.
+`graph rebuild` re-enriches all insights through the full LLM pipeline
+(enrichment, re-embedding, causal inference, edge recreation). Use it
+when stores have stale or missing enrichment data.
+
+`graph reindex` recalculates auto-created edges (semantic, entity,
+temporal) without LLM calls. It runs automatically on DB open when
+edge constants change.
 
 ### Pre-compaction note
 

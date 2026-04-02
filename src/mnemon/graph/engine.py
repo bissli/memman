@@ -34,6 +34,22 @@ def fast_edges(db: 'DB', insight: Insight) -> dict[str, int]:
 MAX_LINK_BATCH = 20
 
 
+def reset_for_rebuild(db: 'DB', insight_ids: list[str]) -> None:
+    """Clear enriched_at and linked_at for given insight IDs.
+
+    Called per-batch before link_pending re-processes them.
+    Edge deletion is not needed — link_pending._write_results
+    deletes and recreates auto edges per-insight.
+    """
+    if not insight_ids:
+        return
+    placeholders = ','.join('?' for _ in insight_ids)
+    db._conn.execute(
+        f'UPDATE insights SET enriched_at = NULL, linked_at = NULL'
+        f' WHERE id IN ({placeholders})',
+        insight_ids)
+
+
 def link_pending(
         db: 'DB',
         embed_cache: dict[str, list[float]] | None = None,
@@ -101,7 +117,8 @@ def link_pending(
             if new_vec is not None:
                 from mnemon.embed.vector import serialize_vector
                 from mnemon.store.node import update_embedding
-                embed_cache[insight.id] = new_vec
+                if embed_cache is not None:
+                    embed_cache[insight.id] = new_vec
                 update_embedding(
                     db, insight.id, serialize_vector(new_vec))
 
@@ -164,7 +181,7 @@ def compute_constants_hash() -> str:
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
-def relink_auto_edges(
+def reindex_auto_edges(
         db: 'DB', dry_run: bool = False) -> dict[str, int]:
     """Delete auto-created edges and re-create semantic/entity edges.
 
@@ -285,7 +302,7 @@ def relink_auto_edges(
             'UPDATE insights SET linked_at = NULL'
             ' WHERE deleted_at IS NULL')
 
-        log_op(db, 'relink', '', json.dumps(stats))
+        log_op(db, 'reindex', '', json.dumps(stats))
 
     db.in_transaction(tx_body)
     return stats

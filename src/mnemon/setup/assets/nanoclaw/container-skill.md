@@ -75,7 +75,8 @@ mnemon forget <id>
 mnemon related <id> --edge causal
 mnemon gc --threshold 0.4
 mnemon gc --keep <id>
-mnemon graph link
+mnemon graph rebuild
+mnemon graph reindex
 mnemon status
 mnemon log [--limit N] [--since 7d]
 ```

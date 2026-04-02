@@ -119,26 +119,26 @@ def open_db(data_dir: str) -> DB:
     db = DB(conn, db_path)
     _migrate(db)
 
-    from mnemon.graph.engine import compute_constants_hash, relink_auto_edges
+    from mnemon.graph.engine import compute_constants_hash, reindex_auto_edges
     current_hash = compute_constants_hash()
     row = db._conn.execute(
         "SELECT value FROM meta WHERE key = 'constants_hash'"
         ).fetchone()
     stored_hash = row[0] if row else None
     if stored_hash != current_hash:
-        stats = relink_auto_edges(db)
+        stats = reindex_auto_edges(db)
         db._conn.execute(
             "INSERT OR REPLACE INTO meta (key, value)"
             " VALUES ('constants_hash', ?)",
             (current_hash,))
         logger.debug(
-            f'auto-relink on constants change: {stats}')
+            f'auto-reindex on constants change: {stats}')
 
     return db
 
 
 def open_db_lightweight(data_dir: str) -> DB:
-    """Open DB without migration or relink — for background threads."""
+    """Open DB without migration or reindex — for background threads."""
     db_path = os.path.join(data_dir, 'mnemon.db')
     conn = sqlite3.connect(db_path, isolation_level=None)
     conn.execute('PRAGMA journal_mode=WAL')

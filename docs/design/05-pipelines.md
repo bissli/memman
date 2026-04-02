@@ -42,7 +42,7 @@
 
 The `--no-reconcile` flag skips LLM reconciliation for direct insert.
 
-`graph link` exists as a recovery command — if `remember` crashes after insertion but before enrichment completes, `graph link` processes orphaned insights (those with `linked_at IS NULL`).
+`graph rebuild` re-enriches all insights through the full LLM pipeline. `graph reindex` recalculates auto-created edges without LLM calls and runs automatically on DB open when edge constants change.
 
 ---
 
