@@ -982,7 +982,7 @@ def store_list(ctx: click.Context) -> None:
             "  (no stores yet — run 'memman store create <name>'"
             " or any command to create default)")
         return
-    active = read_active(data_dir)
+    active = _resolve_store_name(data_dir, ctx.obj['store'])
     for name in stores:
         prefix = '* ' if name == active else '  '
         click.echo(f'{prefix}{name}')
