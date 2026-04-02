@@ -90,7 +90,7 @@ Insight A ──── causal ────→ Insight B
 
 **Purpose**: Connect semantically similar insights based on embedding distance.
 
-**Auto-link**: Cosine similarity ≥ 0.70 (`AUTO_SEMANTIC_THRESHOLD`), top 3 per insight (`MAX_AUTO_SEMANTIC_EDGES`). Bidirectional edges created automatically.
+**Auto-link**: Cosine similarity ≥ 0.62 (`AUTO_SEMANTIC_THRESHOLD`), top 3 per insight (`MAX_AUTO_SEMANTIC_EDGES`). Bidirectional edges created automatically.
 
 Embeddings are Voyage AI 512-dim vectors. Semantic edges are created initially from the raw embedding, then rebuilt after enrichment when keywords are appended and the embedding is recomputed.
 
@@ -98,8 +98,10 @@ Embeddings are Voyage AI 512-dim vectors. Semantic edges are created initially f
 
 **Constants:**
 
-- **`AUTO_SEMANTIC_THRESHOLD = 0.70`**: High-confidence cutoff. With Voyage `voyage-3-lite`, 0.70 cosine represents strong semantic overlap.
+- **`AUTO_SEMANTIC_THRESHOLD = 0.62`**: Calibrated for Voyage `voyage-3-lite` 512-dim embeddings. Empirically verified: all pairs above 0.62 are genuine topical links; noise floor begins around 0.50.
 - **`MAX_AUTO_SEMANTIC_EDGES = 3`**: Limits edges per insert to prevent over-linking on dense topics.
+
+> **If the embedding model changes, this threshold must be recalibrated.** Different models (and different dimensionalities) produce different similarity distributions. Compute all pairwise cosine similarities, inspect quality at each band, and pick the cutoff where noise begins. There is no reliable formula — empirical calibration on actual data is required.
 
 ## 4.5 Intent-Adaptive Weighting
 

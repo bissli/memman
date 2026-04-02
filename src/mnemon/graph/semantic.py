@@ -1,4 +1,9 @@
-"""Semantic edge creation and candidate discovery."""
+"""Semantic edge creation and candidate discovery.
+
+AUTO_SEMANTIC_THRESHOLD is model-specific. If the embedding model changes,
+recalibrate by computing all pairwise cosine similarities and inspecting
+quality at each band. See docs/design/04-graph-model.md.
+"""
 
 from datetime import datetime, timezone
 
@@ -7,7 +12,7 @@ from mnemon.model import Edge, Insight, format_float
 from mnemon.store.edge import insert_edge
 from mnemon.store.node import get_all_embeddings
 
-AUTO_SEMANTIC_THRESHOLD = 0.70
+AUTO_SEMANTIC_THRESHOLD = 0.62
 MAX_AUTO_SEMANTIC_EDGES = 3
 
 
