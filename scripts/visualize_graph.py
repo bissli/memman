@@ -20,11 +20,11 @@ CATEGORY_COLOURS = {
     "decision":   "#f78166",   # orange
     "context":    "#3fb950",   # green
     "preference": "#f9e2af",   # yellow
-    "general":    "#8b949e",   # grey
+    "general":    "#c9d1d9",   # silver
 }
 
 EDGE_COLOURS = {
-    "temporal":  "#3d444d",
+    "temporal":  "#6e7681",
     "entity":    "#58a6ff",
     "semantic":  "#bc8cff",
     "causal":    "#f78166",
@@ -119,11 +119,11 @@ def draw(nodes: dict, edges_by_type: dict, out_path: Path) -> None:
     # ── draw edges by type (layered, temporal at bottom) ────────────
     edge_style = {
         #              alpha  width
-        "temporal":  (0.04,  0.2),
-        "entity":    (0.12,  0.4),
-        "semantic":  (0.25,  0.7),
-        "narrative": (0.30,  0.8),
-        "causal":    (0.45,  1.0),
+        "temporal":  (0.06,  0.2),
+        "entity":    (0.40,  0.6),
+        "semantic":  (0.40,  0.8),
+        "narrative": (0.45,  0.9),
+        "causal":    (0.60,  1.2),
     }
     edge_order = ["temporal", "entity", "semantic", "narrative", "causal"]
 
@@ -148,7 +148,7 @@ def draw(nodes: dict, edges_by_type: dict, out_path: Path) -> None:
 
     # ── node glow (larger translucent circles beneath) ──────────────
     node_list = list(nodes.keys())
-    colours = [CATEGORY_COLOURS.get(nodes[n].get("category", "general"), "#8b949e")
+    colours = [CATEGORY_COLOURS.get(nodes[n].get("category", "general"), "#c9d1d9")
                for n in node_list]
     sizes = [50 + 5 * nodes[n].get("access_count", 0) for n in node_list]
     glow_sizes = [s * 3.5 for s in sizes]
@@ -166,7 +166,7 @@ def draw(nodes: dict, edges_by_type: dict, out_path: Path) -> None:
     cat_patches = [mpatches.Patch(color=c, label=l.capitalize())
                    for l, c in CATEGORY_COLOURS.items()]
     edge_lines = [plt.Line2D([0], [0], color=EDGE_COLOURS[t], lw=2, label=t.capitalize())
-                  for t in ["entity", "semantic", "causal"]]
+                  for t in ["temporal", "entity", "semantic", "narrative", "causal"]]
 
     legend1 = ax.legend(handles=cat_patches, loc="upper left",
                         fontsize=8, title="Node category", title_fontsize=9,
