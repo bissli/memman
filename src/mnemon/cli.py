@@ -419,6 +419,7 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
             log_op(db, 'remember', fi.id, fi.content)
 
         db.in_transaction(insert_tx)
+        all_insights.append(fact_insight)
 
         if embed_vec is not None:
             embed_cache[fact_insight.id] = embed_vec

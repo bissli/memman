@@ -6,6 +6,7 @@ Requires ANTHROPIC_API_KEY and VOYAGE_API_KEY in environment.
 
 import json
 import pathlib
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
@@ -1052,3 +1053,91 @@ class TestGraphRebuild:
             'rebuild deleted manual claude edge — '
             'should preserve created_by=claude')
         db.close()
+
+
+class TestIntraBatchDedup:
+    """Sibling facts from the same remember call must deduplicate."""
+
+    def test_similar_sibling_facts_deduplicated(self, runner):
+        """When extraction produces two paraphrases, only one is stored."""
+        def _two_similar_facts(llm_client, content):
+            return [
+                {
+                    'text': 'Do not rename loop variables to avoid '
+                            'shadowing opts attributes',
+                    'category': 'preference',
+                    'importance': 3,
+                    'entities': ['loop variables', 'opts'],
+                    },
+                {
+                    'text': 'Avoid renaming loop variables to prevent '
+                            'shadowing of opts attributes',
+                    'category': 'preference',
+                    'importance': 3,
+                    'entities': ['loop variables', 'opts'],
+                    },
+                ]
+
+        with patch('mnemon.llm.extract.extract_facts',
+                   _two_similar_facts):
+            result = invoke(runner, [
+                'remember',
+                ('Do not rename loop variables to avoid shadowing '
+                 'opts attributes')])
+        assert result.exit_code == 0, result.output
+        raw = json.loads(result.output)
+        facts = raw['facts']
+        stored = [f for f in facts if f['action'] != 'skipped']
+        assert len(stored) == 1, (
+            f'expected 1 stored fact, got {len(stored)}: '
+            f'{[f["action"] for f in facts]}')
+
+    def test_distinct_facts_both_stored(self, runner):
+        """Genuinely different facts from one input are both stored."""
+        def _two_distinct_facts(llm_client, content):
+            return [
+                {
+                    'text': 'Switched from Flask to FastAPI',
+                    'category': 'decision',
+                    'importance': 4,
+                    'entities': ['Flask', 'FastAPI'],
+                    },
+                {
+                    'text': 'Redis cache configured with 4GB max memory',
+                    'category': 'fact',
+                    'importance': 3,
+                    'entities': ['Redis'],
+                    },
+                ]
+
+        with patch('mnemon.llm.extract.extract_facts',
+                   _two_distinct_facts):
+            result = invoke(runner, [
+                'remember',
+                'Switched to FastAPI and configured Redis cache'])
+        assert result.exit_code == 0, result.output
+        raw = json.loads(result.output)
+        facts = raw['facts']
+        stored = [f for f in facts if f['action'] != 'skipped']
+        assert len(stored) == 2, (
+            f'expected 2 stored facts, got {len(stored)}: '
+            f'{[f["action"] for f in facts]}')
+
+    @pytest.mark.skipif(
+        'not config.getoption("--live")',
+        reason='requires --live for real LLM calls')
+    def test_single_thought_not_duplicated_live(self, runner):
+        """A single coherent preference should produce at most 1 stored fact."""
+        result = invoke(runner, [
+            'remember',
+            ('Loop variable naming: do not rename loop variables '
+             'to avoid shadowing opts attributes. Maintain existing '
+             'variable names to prevent unintended shadowing of '
+             'options object properties.')])
+        assert result.exit_code == 0, result.output
+        raw = json.loads(result.output)
+        facts = raw['facts']
+        stored = [f for f in facts if f['action'] != 'skipped']
+        assert len(stored) == 1, (
+            f'expected 1 stored fact from single thought, got '
+            f'{len(stored)}: {json.dumps(facts, indent=2)}')
