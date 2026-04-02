@@ -216,6 +216,25 @@ def test_store_remove(runner):
     assert 'Removed' in result.output
 
 
+def test_store_auto_create_from_env(runner, monkeypatch):
+    """MEMMAN_STORE env var silently creates a non-existent store."""
+    r, data_dir = runner
+    monkeypatch.setenv('MEMMAN_STORE', 'auto-created')
+
+    result = r.invoke(cli, ['--data-dir', data_dir, 'recall', 'test',
+                             '--limit', '1'])
+    assert result.exit_code == 0, result.output
+
+    store_path = pathlib.Path(data_dir) / 'data' / 'auto-created'
+    assert store_path.is_dir(), 'store directory should be auto-created'
+
+    monkeypatch.delenv('MEMMAN_STORE')
+    list_result = r.invoke(cli, ['--data-dir', data_dir, 'store', 'list'])
+    assert 'auto-created' in list_result.output
+
+    r.invoke(cli, ['--data-dir', data_dir, 'store', 'remove', 'auto-created'])
+
+
 def test_status_basic(runner):
     """Status returns JSON."""
     invoke(runner, [
