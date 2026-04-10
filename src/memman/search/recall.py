@@ -10,7 +10,7 @@ from memman.search.keyword import insight_tokens, keyword_search, tokenize
 from memman.store.edge import get_edges_by_node, get_edges_by_source_and_type
 from memman.store.node import get_all_active_insights, get_insight_by_id
 
-ANCHOR_TOP_K = 20
+ANCHOR_TOP_K = 30
 LAMBDA1 = 1.0
 LAMBDA2 = 0.4
 RRF_K = 60

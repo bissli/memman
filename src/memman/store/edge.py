@@ -77,9 +77,10 @@ def find_insights_with_entity(
     """Return insight IDs that have the given entity."""
     rows = db._query(
         'SELECT DISTINCT i.id FROM insights i, json_each(i.entities) je'
-        ' WHERE i.deleted_at IS NULL AND i.id != ? AND je.value = ?'
+        ' WHERE i.deleted_at IS NULL AND i.id != ?'
+        ' AND LOWER(TRIM(je.value)) = ?'
         ' ORDER BY i.created_at DESC LIMIT ?',
-        (exclude_id, entity, limit)).fetchall()
+        (exclude_id, entity.strip().lower(), limit)).fetchall()
     return [r[0] for r in rows]
 
 
@@ -90,8 +91,8 @@ def count_insights_with_entity(
         'SELECT COUNT(DISTINCT i.id)'
         ' FROM insights i, json_each(i.entities) je'
         ' WHERE i.deleted_at IS NULL AND i.id != ?'
-        ' AND je.value = ?',
-        (exclude_id, entity)).fetchone()
+        ' AND LOWER(TRIM(je.value)) = ?',
+        (exclude_id, entity.strip().lower())).fetchone()
     return row[0] if row else 0
 
 

@@ -8,7 +8,7 @@ from memman.store.node import get_latest_insight_by_source
 from memman.store.node import get_recent_insights_in_window
 
 TEMPORAL_WINDOW_HOURS = 4.0
-MAX_PROXIMITY_EDGES = 10
+MAX_PROXIMITY_EDGES = 5
 MIN_PROXIMITY_WEIGHT = 0.10
 
 

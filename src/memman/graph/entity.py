@@ -11,6 +11,11 @@ MAX_ENTITY_LINKS = 5
 MAX_TOTAL_ENTITY_EDGES = 50
 
 
+def normalize_entity(e: str) -> str:
+    """Normalize entity for matching: lowercase + strip."""
+    return e.strip().lower()
+
+
 def entity_idf_weight(doc_freq: int, total_docs: int) -> float:
     """Compute IDF-based weight for an entity edge."""
     if total_docs <= 1 or doc_freq >= total_docs:

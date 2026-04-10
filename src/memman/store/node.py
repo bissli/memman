@@ -107,10 +107,17 @@ def soft_delete_insight(db: 'DB', id: str) -> None:
 
 def update_entities(db: 'DB', id: str, entities: list[str]) -> None:
     """Update the entities field for an insight."""
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for e in entities:
+        key = e.strip().lower()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(e)
     now = format_timestamp(datetime.now(timezone.utc))
     db._exec(
         'UPDATE insights SET entities = ?, updated_at = ? WHERE id = ?',
-        (json.dumps(entities, sort_keys=True), now, id))
+        (json.dumps(deduped, sort_keys=True), now, id))
 
 
 def update_enrichment(

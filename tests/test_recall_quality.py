@@ -5,9 +5,9 @@ Assertions target the per-result signals dict, not fragile ordering
 that depends on exact weight constants. If a test fails, the code is
 wrong -- do not weaken assertions to match broken behavior.
 
-Design constraint: ANCHOR_TOP_K=20 means all insights become recency
-anchors when <20 exist. Each fixture inserts 6+ recent fillers to push
-test insights below the top-20 recency cutoff, ensuring graph traversal
+Design constraint: ANCHOR_TOP_K=30 means all insights become recency
+anchors when <30 exist. Each fixture inserts 6+ recent fillers to push
+test insights below the top-30 recency cutoff, ensuring graph traversal
 is actually exercised.
 """
 

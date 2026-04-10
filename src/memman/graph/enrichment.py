@@ -46,12 +46,13 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
         llm_entities = []
     llm_entities = [str(e) for e in llm_entities if e]
 
-    existing = set(insight.entities)
+    existing = {e.strip().lower() for e in insight.entities}
     merged = list(insight.entities)
     for e in llm_entities:
-        if e not in existing:
+        key = e.strip().lower()
+        if key not in existing:
             merged.append(e)
-            existing.add(e)
+            existing.add(key)
 
     keywords = parsed.get('keywords', [])
     if not isinstance(keywords, list):
