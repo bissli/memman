@@ -51,7 +51,7 @@ def claude_write_skill(config_dir: str) -> str:
 
 def claude_write_hook(config_dir: str, filename: str, content: bytes) -> str:
     """Write a hook script to the hooks dir."""
-    hooks_dir = os.path.join(config_dir, 'hooks', 'memman')
+    hooks_dir = os.path.join(config_dir, 'hooks', 'mm')
     Path(hooks_dir).mkdir(mode=0o755, exist_ok=True, parents=True)
     hook_path = os.path.join(hooks_dir, filename)
     Path(hook_path).write_bytes(content)
@@ -65,7 +65,7 @@ def claude_register_hooks(config_dir: str,
                           task_recall: bool = False,
                           exit_plan: bool = False) -> str:
     """Register selected hooks in settings.json."""
-    hooks_dir = os.path.join(config_dir, 'hooks', 'memman')
+    hooks_dir = os.path.join(config_dir, 'hooks', 'mm')
     settings_path = os.path.join(config_dir, 'settings.json')
     data = read_json_file(settings_path)
     add_claude_hooks_selective(
@@ -83,13 +83,9 @@ def claude_eject(config_dir: str) -> list[Exception]:
 
     print(f'\nRemoving Claude Code integration ({config_dir})...')
 
-    hooks_dir = os.path.join(config_dir, 'hooks', 'memman')
-    try:
-        shutil.rmtree(hooks_dir, ignore_errors=True)
-        status_ok(1, 3, 'Hooks', hooks_dir + ' removed')
-    except Exception as e:
-        status_error(1, 3, 'Hooks', e)
-        errs.append(e)
+    hooks_dir = os.path.join(config_dir, 'hooks', 'mm')
+    shutil.rmtree(hooks_dir, ignore_errors=True)
+    status_ok(1, 3, 'Hooks', hooks_dir + ' removed')
     remove_if_empty(os.path.join(config_dir, 'hooks'))
 
     settings_path = os.path.join(config_dir, 'settings.json')

@@ -50,7 +50,7 @@ Three layers work together:
 
 | Layer     | What                                                                        | Where                    | Role                                                                                                                                                |
 | --------- | --------------------------------------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Hooks** | Shell scripts triggered by Claude Code lifecycle events                     | `.claude/hooks/memman/`  | Prime (guide), Remind (recall & remember), Nudge (remember), Compact (pre-compact bridge), Recall (pre-delegation), ExitPlan (plan-mode transition) |
+| **Hooks** | Shell scripts triggered by Claude Code lifecycle events                     | `.claude/hooks/mm/`      | Prime (guide), Remind (recall & remember), Nudge (remember), Compact (pre-compact bridge), Recall (pre-delegation), ExitPlan (plan-mode transition) |
 | **Skill** | `SKILL.md` — command reference in Claude Code skill format                  | `.claude/skills/memman/` | Teaches the LLM *how* to use memman commands                                                                                                        |
 | **Guide** | `guide.md` — detailed execution manual for recall, remember, and delegation | `~/.memman/prompt/`      | Teaches the LLM *when* to recall, *what* to remember, and *how* to delegate                                                                         |
 

@@ -89,9 +89,9 @@ def write_or_remove_json_file(path: str, data: dict) -> None:
 
 
 def _contains_memman(v: object) -> bool:
-    """Recursively check if any string value contains 'memman'."""
+    """Recursively check if any string value contains memman hook paths."""
     if isinstance(v, str):
-        return 'memman' in v
+        return 'memman' in v or 'hooks/mm/' in v
     if isinstance(v, dict):
         return any(_contains_memman(val) for val in v.values())
     if isinstance(v, list):
