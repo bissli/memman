@@ -5,6 +5,8 @@ description: Persistent memory CLI for LLM agents. Store facts, recall past know
 
 # memman
 
+`memman` is a CLI on PATH — run commands directly via Bash (e.g., `memman recall ...`).
+
 ## Workflow
 
 1. **Remember**: `memman remember "<fact>" --cat <cat> --imp <1-5> --entities "e1,e2" --source agent`
