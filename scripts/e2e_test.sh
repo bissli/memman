@@ -109,12 +109,13 @@ extract_id() {
 # ── Setup ─────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-TESTDATA="$PROJECT_DIR/.testdata"
+TESTDATA="/tmp/memman-e2e-$$"
+TESTDATA_PERSIST="$PROJECT_DIR/.testdata"
 TESTDIR="$TESTDATA/m1"
 M=memman
 
-# Clean previous test data
-rm -rf "$TESTDATA"
+# Clean previous test data (run in /tmp to avoid Dropbox WAL sync issues)
+rm -rf "$TESTDATA" "$TESTDATA_PERSIST"
 mkdir -p "$TESTDIR"
 echo -e "  ${DIM}  Test data: $TESTDATA/${RESET}"
 
@@ -167,8 +168,10 @@ OUT=$($M --data-dir "$STORE_DIR" store remove temp)
 assert_contains "removed temp" "$OUT" 'Removed store "temp"'
 
 step "data isolation — memories in different stores are isolated"
-MEMMAN_STORE=default $M --data-dir "$STORE_DIR" remember --no-reconcile "Configuration for the default store uses PostgreSQL database" --cat fact --imp 3 > /dev/null
-MEMMAN_STORE=work $M --data-dir "$STORE_DIR" remember --no-reconcile "Work store configuration uses Redis for caching layer" --cat fact --imp 3 > /dev/null
+OUT=$(MEMMAN_STORE=default $M --data-dir "$STORE_DIR" remember --no-reconcile "Configuration for the default store uses PostgreSQL database" --cat fact --imp 3)
+assert_jq "default stored" "$OUT" '.facts[0].action' 'add'
+OUT=$(MEMMAN_STORE=work $M --data-dir "$STORE_DIR" remember --no-reconcile "Work store configuration uses Redis for caching layer" --cat fact --imp 3)
+assert_jq "work stored" "$OUT" '.facts[0].action' 'add'
 
 OUT=$(MEMMAN_STORE=default $M --data-dir "$STORE_DIR" search "PostgreSQL database")
 assert_contains "default finds own data" "$OUT" "PostgreSQL"
@@ -449,12 +452,17 @@ TESTDIR6="$TESTDATA/m6"
 mkdir -p "$TESTDIR6"
 
 step "setup — create insights with varying importance"
-$M --data-dir "$TESTDIR6" remember --no-reconcile "Critical architecture decision to use SQLite for embedded storage" --cat decision --imp 5 > /dev/null
+OUT=$($M --data-dir "$TESTDIR6" remember --no-reconcile "Critical architecture decision to use SQLite for embedded storage" --cat decision --imp 5)
+assert_jq "imp5 stored" "$OUT" '.facts[0].action' 'add'
 sleep 1
-$M --data-dir "$TESTDIR6" remember --no-reconcile "Code formatting follows the PEP8 standard for Python projects" --cat general --imp 1 > /dev/null
-ID_LOW=$(extract_id "$($M --data-dir "$TESTDIR6" remember --no-reconcile "Temporary deployment context for staging environment setup" --cat context --imp 1)")
+OUT=$($M --data-dir "$TESTDIR6" remember --no-reconcile "Code formatting follows the PEP8 standard for Python projects" --cat general --imp 1)
+assert_jq "imp1 stored" "$OUT" '.facts[0].action' 'add'
+OUT=$($M --data-dir "$TESTDIR6" remember --no-reconcile "Temporary deployment context for staging environment setup" --cat context --imp 1)
+assert_jq "context stored" "$OUT" '.facts[0].action' 'add'
+ID_LOW=$(extract_id "$OUT")
 sleep 1
-$M --data-dir "$TESTDIR6" remember --no-reconcile "User prefers dark mode theme in all development environments" --cat preference --imp 4 > /dev/null
+OUT=$($M --data-dir "$TESTDIR6" remember --no-reconcile "User prefers dark mode theme in all development environments" --cat preference --imp 4)
+assert_jq "pref stored" "$OUT" '.facts[0].action' 'add'
 
 step "remember — output includes effective_importance and auto_pruned"
 OUT=$($M --data-dir "$TESTDIR6" remember --no-reconcile "Testing is an important part of the software lifecycle process" --cat fact --imp 3)
@@ -552,8 +560,10 @@ banner "Milestone 7: Embedding Support (Ollama)"
 step "embed status — always works (even without Ollama)"
 TESTDIR7="$TESTDATA/m7"
 mkdir -p "$TESTDIR7"
-$M --data-dir "$TESTDIR7" remember --no-reconcile "Embedding test insight one" --cat fact --imp 3 > /dev/null
-$M --data-dir "$TESTDIR7" remember --no-reconcile "Embedding test insight two" --cat fact --imp 3 > /dev/null
+OUT=$($M --data-dir "$TESTDIR7" remember --no-reconcile "Embedding test insight one" --cat fact --imp 3)
+assert_jq "embed1 stored" "$OUT" '.facts[0].action' 'add'
+OUT=$($M --data-dir "$TESTDIR7" remember --no-reconcile "Embedding test insight two" --cat fact --imp 3)
+assert_jq "embed2 stored" "$OUT" '.facts[0].action' 'add'
 OUT=$($M --data-dir "$TESTDIR7" embed status)
 show_json "$OUT"
 assert_jq "total_insights is 2" "$OUT" '.total_insights' '2'
@@ -570,7 +580,8 @@ if [ "$OLLAMA_OK" = "true" ]; then
 
   step "embed backfill — backfill un-embedded insights"
   # Create an insight without auto-embedding by pointing Ollama to a dead endpoint
-  MEMMAN_EMBED_ENDPOINT="http://127.0.0.1:1" $M --data-dir "$TESTDIR7" remember --no-reconcile "Un-embedded test insight" --cat fact --imp 2 > /dev/null
+  OUT=$(MEMMAN_EMBED_ENDPOINT="http://127.0.0.1:1" $M --data-dir "$TESTDIR7" remember --no-reconcile "Un-embedded test insight" --cat fact --imp 2)
+  assert_jq "un-embedded stored" "$OUT" '.facts[0].action' 'add'
 
   # Backfill all — should find the un-embedded one
   OUT=$($M --data-dir "$TESTDIR7" embed backfill)
@@ -711,7 +722,8 @@ step "auto-prune — insert 5 low-imp + 2 high-imp insights (cap=4 for test)"
 # We'll use a small cap to test pruning. The cap is hardcoded at 1000 in production,
 # so here we test that the mechanism WORKS by checking auto_pruned=0 under cap.
 for i in 1 2 3; do
-  $M --data-dir "$TESTDIR10" remember --no-reconcile "Low importance observation about system behavior number $i in testing" --cat general --imp 1 > /dev/null
+  OUT=$($M --data-dir "$TESTDIR10" remember --no-reconcile "Low importance observation about system behavior number $i in testing" --cat general --imp 1)
+  assert_jq "low-imp $i stored" "$OUT" '.facts[0].action' 'add'
 done
 OUT=$($M --data-dir "$TESTDIR10" remember --no-reconcile "Critical architecture decision to use event-driven design" --cat decision --imp 5)
 assert_jq "auto_pruned is 0 under cap" "$OUT" '.facts[0].auto_pruned' '0'
@@ -790,7 +802,9 @@ if [ "$FAIL" -gt 0 ]; then
 fi
 echo ""
 
-echo -e "  ${DIM}Test DBs preserved at: $TESTDATA/${RESET}"
+# Copy test data to project dir for debugging
+cp -r "$TESTDATA" "$TESTDATA_PERSIST" 2>/dev/null || true
+echo -e "  ${DIM}Test DBs copied to: $TESTDATA_PERSIST/${RESET}"
 echo -e "  ${DIM}Run 'rm -rf .testdata' to clean up${RESET}"
 
 if [ "$FAIL" -gt 0 ]; then

@@ -1,6 +1,9 @@
 """Intent-aware recall with beam search, RRF, Kahn's topological sort."""
 
 import heapq
+import logging
+
+logger = logging.getLogger('memman')
 
 from memman.embed.vector import cosine_similarity
 from memman.graph.semantic import build_embed_cache
@@ -258,6 +261,10 @@ def intent_aware_recall(
             }
 
     anchor_count = len(anchor_map)
+    if anchor_count == 0:
+        logger.warning(
+            f'Zero anchors: all_insights={len(all_insights)}, '
+            f'query={query[:80]}')
 
     score_map: dict[str, float] = {}
     via_map: dict[str, str] = {}

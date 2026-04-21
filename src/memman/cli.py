@@ -249,19 +249,24 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
     ec = get_client()
     llm_calls = 0
 
-    facts = extract_facts(llm_client, content)
-    llm_calls += 1
+    if no_reconcile:
+        facts = [{'text': content, 'category': insight.category,
+                  'importance': insight.importance,
+                  'entities': []}]
+    else:
+        facts = extract_facts(llm_client, content)
+        llm_calls += 1
 
-    if not facts:
-        _json_out({
-            'id': insight.id,
-            'content': content,
-            'action': 'skipped',
-            'skip_reason': 'trivial content',
-            'quality_warnings': quality_warnings,
-            'llm_calls': llm_calls,
-            })
-        return
+        if not facts:
+            _json_out({
+                'id': insight.id,
+                'content': content,
+                'action': 'skipped',
+                'skip_reason': 'trivial content',
+                'quality_warnings': quality_warnings,
+                'llm_calls': llm_calls,
+                })
+            return
 
     embed_cache: dict[str, list[float]] = {}
     db_embeds = get_all_embeddings(db)
@@ -505,6 +510,7 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
         def enrichment_tx(
                 fi: Insight = fact_insight,
                 evec: list[float] | None = enriched_vec) -> None:
+            nonlocal edge_stats
             now = format_timestamp(datetime.now(timezone.utc))
 
             if enrichment:
@@ -522,10 +528,11 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
                     db, fi.id, serialize_vector(evec))
 
             delete_auto_edges_for_node(db, fi.id, 'entity')
-            create_entity_edges(db, fi)
+            edge_stats['entity'] = create_entity_edges(db, fi)
 
             delete_auto_edges_for_node(db, fi.id, 'semantic')
-            create_semantic_edges(db, fi, embed_cache)
+            edge_stats['semantic'] = create_semantic_edges(
+                db, fi, embed_cache)
 
             delete_auto_edges_for_node(db, fi.id, 'causal')
             for edge in causal_edges:

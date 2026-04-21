@@ -1087,6 +1087,58 @@ class TestGraphRebuild:
         db.close()
 
 
+class TestNoReconcilePassthrough:
+    """--no-reconcile bypasses extract_facts entirely."""
+
+    def test_no_reconcile_never_skips(self, runner):
+        """Even when extract_facts returns [], --no-reconcile stores."""
+        def _skip_everything(llm_client, content):
+            return []
+
+        with patch('memman.llm.extract.extract_facts',
+                   _skip_everything):
+            result = invoke(runner, [
+                'remember',
+                'Important architecture decision about caching',
+                '--no-reconcile', '--cat', 'decision', '--imp', '4'])
+        assert result.exit_code == 0, result.output
+        raw = json.loads(result.output)
+        assert 'facts' in raw, f'expected facts key, got: {raw.keys()}'
+        assert raw['facts'][0]['action'] == 'add'
+
+    def test_no_reconcile_preserves_content(self, runner):
+        """--no-reconcile stores exact input, no LLM rewriting."""
+        content = 'Exact content that must not be rewritten by LLM'
+        result = invoke(runner, [
+            'remember', content,
+            '--no-reconcile', '--cat', 'fact', '--imp', '3'])
+        assert result.exit_code == 0
+        raw = json.loads(result.output)
+        assert raw['facts'][0]['content'] == content
+
+    def test_no_reconcile_passthrough_shape(self, runner):
+        """Passthrough fact has correct category and importance."""
+        result = invoke(runner, [
+            'remember',
+            'User prefers dark mode in all environments',
+            '--no-reconcile', '--cat', 'preference', '--imp', '4'])
+        assert result.exit_code == 0
+        fact = json.loads(result.output)['facts'][0]
+        assert fact['category'] == 'preference'
+        assert fact['importance'] == 4
+
+    def test_no_reconcile_enrichment_runs(self, runner):
+        """Enrichment still runs after passthrough storage."""
+        result = invoke(runner, [
+            'remember',
+            'Redis cache configured with LRU eviction policy',
+            '--no-reconcile', '--cat', 'fact', '--imp', '3'])
+        assert result.exit_code == 0
+        fact = json.loads(result.output)['facts'][0]
+        assert 'enrichment' in fact
+        assert 'edges_created' in fact
+
+
 class TestIntraBatchDedup:
     """Sibling facts from the same remember call must deduplicate."""
 
