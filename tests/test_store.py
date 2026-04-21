@@ -271,6 +271,24 @@ class TestEdgeUpsert:
         assert len(edges) == 1
         assert edges[0].weight == 0.9
 
+    def test_protected_edge_weight_still_ratchets(self, tmp_db):
+        """Protected edge's weight increases but metadata stays protected."""
+        insert_insight(tmp_db, make_insight(id='pr-1', content='a'))
+        insert_insight(tmp_db, make_insight(id='pr-2', content='b'))
+        insert_edge(tmp_db, make_edge(
+            source_id='pr-1', target_id='pr-2',
+            edge_type='entity', weight=0.5,
+            metadata={'created_by': 'claude', 'entity': 'Go'}))
+        insert_edge(tmp_db, make_edge(
+            source_id='pr-1', target_id='pr-2',
+            edge_type='entity', weight=0.9,
+            metadata={'created_by': 'auto', 'entity': 'Python'}))
+        edges = get_edges_by_node(tmp_db, 'pr-1')
+        assert len(edges) == 1
+        assert edges[0].weight == 0.9
+        assert edges[0].metadata['created_by'] == 'claude'
+        assert edges[0].metadata['entity'] == 'Go'
+
 
 class TestGetEdgesBySourceAndType:
     """Filter edges by source and type."""

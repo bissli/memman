@@ -224,11 +224,12 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
     from memman.llm.extract import extract_facts, reconcile_memories
     from memman.search.keyword import keyword_search
     from memman.search.quality import check_content_quality
-    from memman.store.edge import insert_edge
+    from memman.store.edge import delete_auto_edges_for_node, insert_edge
     from memman.store.node import MAX_INSIGHTS, auto_prune
     from memman.store.node import get_all_active_insights, get_all_embeddings
     from memman.store.node import insert_insight, refresh_effective_importance
-    from memman.store.node import soft_delete_insight, update_embedding
+    from memman.store.node import soft_delete_insight, stamp_enriched
+    from memman.store.node import stamp_linked, update_embedding
     from memman.store.node import update_enrichment, update_entities
     from memman.store.oplog import log_op
 
@@ -520,47 +521,22 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
                 update_embedding(
                     db, fi.id, serialize_vector(evec))
 
-            db._conn.execute(
-                "DELETE FROM edges"
-                " WHERE (source_id = ? OR target_id = ?)"
-                " AND edge_type = 'entity'"
-                " AND (json_extract(metadata, '$.created_by') IS NULL"
-                "      OR json_extract(metadata, '$.created_by')"
-                "         NOT IN ('claude', 'manual'))",
-                (fi.id, fi.id))
+            delete_auto_edges_for_node(db, fi.id, 'entity')
             create_entity_edges(db, fi)
 
-            db._conn.execute(
-                "DELETE FROM edges"
-                " WHERE (source_id = ? OR target_id = ?)"
-                " AND edge_type = 'semantic'"
-                " AND (json_extract(metadata, '$.created_by') IS NULL"
-                "      OR json_extract(metadata,"
-                "          '$.created_by') = 'auto')",
-                (fi.id, fi.id))
+            delete_auto_edges_for_node(db, fi.id, 'semantic')
             create_semantic_edges(db, fi, embed_cache)
 
-            db._conn.execute(
-                "DELETE FROM edges"
-                " WHERE (source_id = ? OR target_id = ?)"
-                " AND edge_type = 'causal'"
-                " AND json_extract(metadata,"
-                "     '$.created_by') = 'llm'",
-                (fi.id, fi.id))
+            delete_auto_edges_for_node(db, fi.id, 'causal')
             for edge in causal_edges:
                 try:
                     insert_edge(db, edge)
                 except Exception:
                     pass
 
-            db._conn.execute(
-                'UPDATE insights SET linked_at = ? WHERE id = ?',
-                (now, fi.id))
+            stamp_linked(db, fi.id, now)
             if enrichment:
-                db._conn.execute(
-                    'UPDATE insights SET enriched_at = ?'
-                    ' WHERE id = ?',
-                    (now, fi.id))
+                stamp_enriched(db, fi.id, now)
 
         db.in_transaction(enrichment_tx)
 
@@ -1401,9 +1377,10 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
     """Re-enrich all insights through the full LLM pipeline."""
     from memman.embed import get_client
     from memman.graph.engine import MAX_LINK_BATCH, link_pending
-    from memman.graph.engine import reset_for_rebuild
     from memman.graph.semantic import build_embed_cache
     from memman.llm.client import get_llm_client
+    from memman.store.node import count_pending_links, get_active_insight_ids
+    from memman.store.node import reset_for_rebuild
     from memman.store.oplog import log_op
 
     db = _open_db(ctx)
@@ -1411,9 +1388,7 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
         llm_client = get_llm_client()
         ec = get_client()
 
-        all_ids = [r[0] for r in db._conn.execute(
-            'SELECT id FROM insights WHERE deleted_at IS NULL'
-            ' ORDER BY created_at ASC').fetchall()]
+        all_ids = get_active_insight_ids(db)
         total_count = len(all_ids)
 
         if dry_run:
@@ -1455,10 +1430,7 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
         bar.set_description('Done')
         bar.close()
 
-        remaining = db._conn.execute(
-            'SELECT COUNT(*) FROM insights'
-            ' WHERE linked_at IS NULL AND deleted_at IS NULL'
-            ).fetchone()[0]
+        remaining = count_pending_links(db)
 
         stats = {'processed': processed, 'remaining': remaining}
         log_op(db, 'rebuild', '', json.dumps(stats))

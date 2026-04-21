@@ -14,9 +14,15 @@ from memman.graph.semantic import create_semantic_edges
 from memman.graph.temporal import MAX_PROXIMITY_EDGES, MIN_PROXIMITY_WEIGHT
 from memman.graph.temporal import TEMPORAL_WINDOW_HOURS, create_temporal_edge
 from memman.model import Insight, format_timestamp
+from memman.store.edge import count_auto_edges_by_type
+from memman.store.edge import count_low_weight_temporal_proximity
+from memman.store.edge import delete_auto_edges_by_type
+from memman.store.edge import delete_auto_edges_for_node
+from memman.store.edge import delete_low_weight_temporal_proximity
 from memman.store.edge import insert_edge
-from memman.store.node import get_all_active_insights, get_insight_by_id
-from memman.store.node import update_entities
+from memman.store.node import clear_linked_at, get_all_active_insights
+from memman.store.node import get_insight_by_id, get_pending_link_ids
+from memman.store.node import stamp_enriched, stamp_linked, update_entities
 
 logger = logging.getLogger('memman')
 
@@ -36,22 +42,6 @@ def fast_edges(db: 'DB', insight: Insight) -> dict[str, int]:
 MAX_LINK_BATCH = 20
 
 
-def reset_for_rebuild(db: 'DB', insight_ids: list[str]) -> None:
-    """Clear enriched_at and linked_at for given insight IDs.
-
-    Called per-batch before link_pending re-processes them.
-    Edge deletion is not needed — link_pending._write_results
-    deletes and recreates auto edges per-insight.
-    """
-    if not insight_ids:
-        return
-    placeholders = ','.join('?' for _ in insight_ids)
-    db._conn.execute(
-        f'UPDATE insights SET enriched_at = NULL, linked_at = NULL'
-        f' WHERE id IN ({placeholders})',
-        insight_ids)
-
-
 def link_pending(
         db: 'DB',
         embed_cache: dict[str, list[float]] | None = None,
@@ -65,13 +55,8 @@ def link_pending(
     Creates semantic edges (and optionally LLM causal/enrichment edges)
     for pending insights. Returns the number of insights processed.
     """
-    rows = db._conn.execute(
-        'SELECT id FROM insights'
-        ' WHERE linked_at IS NULL AND deleted_at IS NULL'
-        ' ORDER BY created_at ASC'
-        f' LIMIT {max_batch}'
-        ).fetchall()
-    if not rows:
+    pending_ids = get_pending_link_ids(db, max_batch)
+    if not pending_ids:
         return 0
 
     if embed_cache is None:
@@ -85,7 +70,7 @@ def link_pending(
     processed = 0
     data_dir = str(pathlib.Path(db.path).parent)
 
-    for (insight_id,) in rows:
+    for insight_id in pending_ids:
         insight = get_insight_by_id(db, insight_id)
         if insight is None:
             continue
@@ -149,42 +134,23 @@ def link_pending(
                 update_embedding(
                     db, insight.id, serialize_vector(new_vec))
 
-            db._conn.execute(
-                "DELETE FROM edges WHERE (source_id = ? OR target_id = ?)"
-                " AND edge_type = 'entity'"
-                " AND (json_extract(metadata, '$.created_by') IS NULL"
-                "      OR json_extract(metadata, '$.created_by')"
-                "         NOT IN ('claude', 'manual'))",
-                (insight.id, insight.id))
+            delete_auto_edges_for_node(db, insight.id, 'entity')
             create_entity_edges(db, insight)
 
-            db._conn.execute(
-                "DELETE FROM edges WHERE (source_id = ? OR target_id = ?)"
-                " AND edge_type = 'semantic'"
-                " AND (json_extract(metadata, '$.created_by') IS NULL"
-                "      OR json_extract(metadata, '$.created_by') = 'auto')",
-                (insight.id, insight.id))
+            delete_auto_edges_for_node(db, insight.id, 'semantic')
             sem_count = create_semantic_edges(
                 db, insight, embed_cache)
 
-            db._conn.execute(
-                "DELETE FROM edges WHERE (source_id = ? OR target_id = ?)"
-                " AND edge_type = 'causal'"
-                " AND json_extract(metadata, '$.created_by') = 'llm'",
-                (insight.id, insight.id))
+            delete_auto_edges_for_node(db, insight.id, 'causal')
             for edge in causal_edges:
                 try:
                     insert_edge(db, edge)
                 except Exception:
                     pass
 
-            db._conn.execute(
-                'UPDATE insights SET linked_at = ? WHERE id = ?',
-                (now, insight_id))
+            stamp_linked(db, insight_id, now)
             if enrichment:
-                db._conn.execute(
-                    'UPDATE insights SET enriched_at = ? WHERE id = ?',
-                    (now, insight_id))
+                stamp_enriched(db, insight_id, now)
             return sem_count
 
         semantic_count = db.in_transaction(_write_results)
@@ -219,30 +185,11 @@ def reindex_auto_edges(
     """
     from memman.store.oplog import log_op
 
-    semantic_del = db._conn.execute(
-        "SELECT COUNT(*) FROM edges"
-        " WHERE edge_type = 'semantic'"
-        " AND json_extract(metadata, '$.created_by') = 'auto'"
-        ).fetchone()[0]
-    entity_del = db._conn.execute(
-        "SELECT COUNT(*) FROM edges"
-        " WHERE edge_type = 'entity'"
-        " AND (json_extract(metadata, '$.created_by') IS NULL"
-        "      OR json_extract(metadata, '$.created_by') <> 'claude')"
-        ).fetchone()[0]
-    temporal_del = db._conn.execute(
-        "SELECT COUNT(*) FROM edges"
-        " WHERE edge_type = 'temporal'"
-        " AND json_extract(metadata, '$.sub_type') = 'proximity'"
-        " AND weight < ?",
-        (MIN_PROXIMITY_WEIGHT,)).fetchone()[0]
-    causal_del = db._conn.execute(
-        "SELECT COUNT(*) FROM edges"
-        " WHERE edge_type = 'causal'"
-        " AND (json_extract(metadata, '$.created_by') IS NULL"
-        "      OR json_extract(metadata, '$.created_by')"
-        "         NOT IN ('llm', 'claude', 'manual'))"
-        ).fetchone()[0]
+    semantic_del = count_auto_edges_by_type(db, 'semantic')
+    entity_del = count_auto_edges_by_type(db, 'entity')
+    temporal_del = count_low_weight_temporal_proximity(
+        db, MIN_PROXIMITY_WEIGHT)
+    causal_del = count_auto_edges_by_type(db, 'causal')
 
     if dry_run:
         stats = {
@@ -274,34 +221,16 @@ def reindex_auto_edges(
         }
 
     def tx_body() -> None:
-        db._conn.execute(
-            "DELETE FROM edges"
-            " WHERE edge_type = 'semantic'"
-            " AND json_extract(metadata, '$.created_by') = 'auto'")
+        delete_auto_edges_by_type(db, 'semantic')
         stats['semantic_deleted'] = semantic_del
 
-        db._conn.execute(
-            "DELETE FROM edges"
-            " WHERE edge_type = 'entity'"
-            " AND (json_extract(metadata, '$.created_by') IS NULL"
-            "      OR json_extract(metadata, '$.created_by')"
-            "         NOT IN ('claude', 'manual'))")
+        delete_auto_edges_by_type(db, 'entity')
         stats['entity_deleted'] = entity_del
 
-        db._conn.execute(
-            "DELETE FROM edges"
-            " WHERE edge_type = 'temporal'"
-            " AND json_extract(metadata, '$.sub_type') = 'proximity'"
-            " AND weight < ?",
-            (MIN_PROXIMITY_WEIGHT,))
+        delete_low_weight_temporal_proximity(db, MIN_PROXIMITY_WEIGHT)
         stats['temporal_pruned'] = temporal_del
 
-        db._conn.execute(
-            "DELETE FROM edges"
-            " WHERE edge_type = 'causal'"
-            " AND (json_extract(metadata, '$.created_by') IS NULL"
-            "      OR json_extract(metadata, '$.created_by')"
-            "         NOT IN ('llm', 'claude', 'manual'))")
+        delete_auto_edges_by_type(db, 'causal')
         stats['causal_deleted'] = causal_del
 
         insights = get_all_active_insights(db)
@@ -316,20 +245,11 @@ def reindex_auto_edges(
             stats['semantic_created'] += create_semantic_edges(
                 db, insight, embed_cache)
 
-        stats['entity_created'] = db._conn.execute(
-            "SELECT COUNT(*) FROM edges WHERE edge_type = 'entity'"
-            " AND (json_extract(metadata, '$.created_by') IS NULL"
-            "      OR json_extract(metadata, '$.created_by') <> 'claude')"
-            ).fetchone()[0]
-        stats['semantic_created'] = db._conn.execute(
-            "SELECT COUNT(*) FROM edges"
-            " WHERE edge_type = 'semantic'"
-            " AND json_extract(metadata, '$.created_by') = 'auto'"
-            ).fetchone()[0]
+        stats['entity_created'] = count_auto_edges_by_type(db, 'entity')
+        stats['semantic_created'] = count_auto_edges_by_type(
+            db, 'semantic')
 
-        db._conn.execute(
-            'UPDATE insights SET linked_at = NULL'
-            ' WHERE deleted_at IS NULL')
+        clear_linked_at(db)
 
         log_op(db, 'reindex', '', json.dumps(stats))
 

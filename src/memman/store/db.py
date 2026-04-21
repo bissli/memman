@@ -108,6 +108,20 @@ class DB:
             self._in_tx = False
 
 
+def get_meta(db: 'DB', key: str) -> str | None:
+    """Read a value from the meta key-value table."""
+    row = db._query(
+        'SELECT value FROM meta WHERE key = ?', (key,)).fetchone()
+    return row[0] if row else None
+
+
+def set_meta(db: 'DB', key: str, value: str) -> None:
+    """Write a value to the meta key-value table."""
+    db._exec(
+        'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)',
+        (key, value))
+
+
 def open_db(data_dir: str) -> DB:
     """Open (or create) the SQLite database at the given directory."""
     Path(data_dir).mkdir(mode=0o755, exist_ok=True, parents=True)
@@ -121,16 +135,10 @@ def open_db(data_dir: str) -> DB:
 
     from memman.graph.engine import compute_constants_hash, reindex_auto_edges
     current_hash = compute_constants_hash()
-    row = db._conn.execute(
-        "SELECT value FROM meta WHERE key = 'constants_hash'"
-        ).fetchone()
-    stored_hash = row[0] if row else None
+    stored_hash = get_meta(db, 'constants_hash')
     if stored_hash != current_hash:
         stats = reindex_auto_edges(db)
-        db._conn.execute(
-            "INSERT OR REPLACE INTO meta (key, value)"
-            " VALUES ('constants_hash', ?)",
-            (current_hash,))
+        set_meta(db, 'constants_hash', current_hash)
         logger.debug(
             f'auto-reindex on constants change: {stats}')
 

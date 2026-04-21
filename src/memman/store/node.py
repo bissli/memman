@@ -242,7 +242,7 @@ def get_retention_candidates(
     if updates:
         def apply_ei_updates() -> None:
             for ei_val, uid in updates:
-                db._conn.execute(
+                db._exec(
                     'UPDATE insights SET effective_importance = ?'
                     ' WHERE id = ?', (ei_val, uid))
         try:
@@ -502,6 +502,66 @@ def get_insights_without_embedding(
         ' ORDER BY importance DESC, created_at DESC LIMIT ?',
         (limit,)).fetchall()
     return [_scan_insight(r) for r in rows]
+
+
+def stamp_linked(db: 'DB', insight_id: str, ts: str) -> None:
+    """Set linked_at timestamp for an insight."""
+    db._exec(
+        'UPDATE insights SET linked_at = ? WHERE id = ?',
+        (ts, insight_id))
+
+
+def stamp_enriched(db: 'DB', insight_id: str, ts: str) -> None:
+    """Set enriched_at timestamp for an insight."""
+    db._exec(
+        'UPDATE insights SET enriched_at = ? WHERE id = ?',
+        (ts, insight_id))
+
+
+def get_pending_link_ids(db: 'DB', limit: int) -> list[str]:
+    """Return IDs of insights with NULL linked_at, ordered by created_at."""
+    rows = db._query(
+        'SELECT id FROM insights'
+        ' WHERE linked_at IS NULL AND deleted_at IS NULL'
+        ' ORDER BY created_at ASC'
+        ' LIMIT ?',
+        (limit,)).fetchall()
+    return [r[0] for r in rows]
+
+
+def get_active_insight_ids(db: 'DB') -> list[str]:
+    """Return all active insight IDs in creation order."""
+    rows = db._query(
+        'SELECT id FROM insights WHERE deleted_at IS NULL'
+        ' ORDER BY created_at ASC').fetchall()
+    return [r[0] for r in rows]
+
+
+def count_pending_links(db: 'DB') -> int:
+    """Count insights with NULL linked_at that are not deleted."""
+    row = db._query(
+        'SELECT COUNT(*) FROM insights'
+        ' WHERE linked_at IS NULL AND deleted_at IS NULL').fetchone()
+    return row[0] if row else 0
+
+
+def reset_for_rebuild(
+        db: 'DB', insight_ids: list[str]) -> None:
+    """Clear enriched_at and linked_at for given insight IDs."""
+    if not insight_ids:
+        return
+    placeholders = ','.join('?' for _ in insight_ids)
+    db._exec(
+        f'UPDATE insights SET enriched_at = NULL, linked_at = NULL'
+        f' WHERE id IN ({placeholders})',
+        insight_ids)
+
+
+def clear_linked_at(db: 'DB') -> None:
+    """Set linked_at to NULL for all active insights."""
+    db._exec(
+        'UPDATE insights SET linked_at = NULL'
+        ' WHERE deleted_at IS NULL')
 
 
 def _scan_insight(row: tuple) -> Insight:
