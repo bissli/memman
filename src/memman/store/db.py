@@ -199,6 +199,9 @@ CREATE INDEX IF NOT EXISTS idx_insights_deleted ON insights(deleted_at);
 CREATE INDEX IF NOT EXISTS idx_insights_source ON insights(source);
 CREATE INDEX IF NOT EXISTS idx_insights_effective_imp ON insights(effective_importance);
 CREATE INDEX IF NOT EXISTS idx_prune_candidates ON insights(deleted_at, importance, access_count, effective_importance);
+CREATE INDEX IF NOT EXISTS idx_insights_pending_link
+    ON insights(linked_at)
+    WHERE linked_at IS NULL AND deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
 CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(edge_type);
