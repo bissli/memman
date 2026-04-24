@@ -29,6 +29,28 @@ def invoke(runner_tuple, args):
     return r.invoke(cli, ['--data-dir', data_dir] + args)
 
 
+def last_json(text: str) -> dict:
+    """Return the last JSON object from text containing one or more.
+
+    `memman enrich --pending` emits per-row pipeline output followed by
+    a final drain-summary object; callers that need the summary pick
+    the last object.
+    """
+    decoder = json.JSONDecoder()
+    idx = 0
+    last = None
+    while idx < len(text):
+        while idx < len(text) and text[idx].isspace():
+            idx += 1
+        if idx >= len(text):
+            break
+        obj, end = decoder.raw_decode(text, idx)
+        last = obj
+        idx = end
+    assert last is not None, f'no JSON object in output: {text!r}'
+    return last
+
+
 def test_defer_enqueues_and_drain_commits(runner):
     """Remember --defer + enrich --pending lands one insight in the store.
     """
@@ -45,7 +67,7 @@ def test_defer_enqueues_and_drain_commits(runner):
     r = invoke(runner, ['enrich', '--pending',
                         '--limit', '5', '--timeout', '30'])
     assert r.exit_code == 0, r.output
-    drain = json.loads(r.output)
+    drain = last_json(r.output)
     assert drain['processed'] == 1
     assert drain['failed'] == 0
 
@@ -69,7 +91,7 @@ def test_idempotency_requeue_does_not_duplicate(runner):
     r = invoke(runner, ['enrich', '--pending',
                         '--limit', '5', '--timeout', '30'])
     assert r.exit_code == 0, r.output
-    first = json.loads(r.output)
+    first = last_json(r.output)
     assert first['processed'] == 1
 
     r = invoke(runner, ['status'])
@@ -104,6 +126,6 @@ def test_multiple_defers_single_drain(runner):
     r = invoke(runner, ['enrich', '--pending',
                         '--limit', '10', '--timeout', '60'])
     assert r.exit_code == 0, r.output
-    drain = json.loads(r.output)
+    drain = last_json(r.output)
     assert drain['processed'] == 3
     assert drain['failed'] == 0

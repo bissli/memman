@@ -759,12 +759,8 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 hint_entities=row.hint_entities)
 
             try:
-                import contextlib
-                import io as _io
-                buf = _io.StringIO()
                 row_t0 = _time.monotonic()
-                with contextlib.redirect_stdout(buf):
-                    _process_queue_row(row, sdir, data_dir_val)
+                _process_queue_row(row, sdir, data_dir_val)
                 row_elapsed_ms = int((_time.monotonic() - row_t0) * 1000)
                 mark_done(conn, row.id)
                 processed += 1
@@ -777,7 +773,6 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                     click.echo(
                         f'[enrich] done id={row.id} store={row.store}',
                         err=True)
-                    click.echo(buf.getvalue(), err=True)
             except Exception as exc:
                 mark_failed(conn, row.id, f'{type(exc).__name__}: {exc}')
                 failed += 1
