@@ -5,15 +5,50 @@ import shutil
 from importlib.resources import files as pkg_files
 from pathlib import Path
 
+import click
 from memman.setup.detect import detect_environments, home_dir
 from memman.setup.markdown import eject_memory_block
 from memman.setup.prompt import detection_line, status_error, status_ok
 from memman.setup.prompt import status_updated
+from memman.setup.scheduler import detect_scheduler
+from memman.setup.scheduler import install as install_scheduler
+from memman.setup.scheduler import memman_binary_path
+from memman.setup.scheduler import uninstall as uninstall_scheduler
 from memman.setup.settings import add_claude_hooks_selective
 from memman.setup.settings import add_memman_permission, read_json_file
 from memman.setup.settings import remove_claude_hooks, remove_if_empty
 from memman.setup.settings import remove_memman_permission, write_json_file
 from memman.setup.settings import write_or_remove_json_file
+
+
+def _check_prereqs() -> tuple[str, str]:
+    """Validate install prerequisites; raise ClickException on failure.
+
+    Returns (openrouter_api_key, voyage_api_key) once all checks pass.
+    """
+    if not detect_scheduler():
+        import platform as _platform
+        raise click.ClickException(
+            f'unsupported platform {_platform.system()!r}: expected'
+            ' Linux+systemd or macOS+launchd')
+    try:
+        memman_binary_path()
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    openrouter_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
+    if not openrouter_key:
+        raise click.ClickException(
+            'OPENROUTER_API_KEY is required for the background enrichment'
+            ' worker; export it and re-run')
+
+    voyage_key = os.environ.get('VOYAGE_API_KEY', '').strip()
+    if not voyage_key:
+        raise click.ClickException(
+            'VOYAGE_API_KEY is required for memory embeddings;'
+            ' export it and re-run')
+
+    return openrouter_key, voyage_key
 
 
 def _asset_bytes(rel_path: str) -> bytes:
@@ -198,7 +233,7 @@ def run_setup(data_dir: str, target: str = '',
               eject: bool = False) -> None:
     """Main setup orchestrator called by cli.py."""
     if target and target not in {'claude-code', 'openclaw'}:
-        raise SystemExit(
+        raise click.ClickException(
             f'invalid target {target!r}'
             ' (must be claude-code or openclaw)')
 
@@ -207,45 +242,58 @@ def run_setup(data_dir: str, target: str = '',
     if eject:
         _run_eject_flow(envs, target=target)
         return
-    _run_install_flow(envs, target=target, data_dir=data_dir)
+
+    openrouter_key, voyage_key = _check_prereqs()
+    _run_install_flow(envs, target=target, data_dir=data_dir,
+                      openrouter_key=openrouter_key,
+                      voyage_key=voyage_key)
 
 
 def _run_install_flow(envs: list[dict], target: str,
-                      data_dir: str) -> None:
-    """Install to --target or every detected environment."""
+                      data_dir: str,
+                      openrouter_key: str,
+                      voyage_key: str) -> None:
+    """Install CLI integrations and the scheduler unit."""
     if target:
+        matched = next((e for e in envs if e['name'] == target), None)
+        if matched is None:
+            raise click.ClickException(f'unknown target {target!r}')
+        _install_env(matched, data_dir=data_dir)
+    else:
+        print('Detecting LLM CLI environments...')
+        print()
+
+        detected = []
         for env in envs:
-            if env['name'] == target:
-                _install_env(env, data_dir=data_dir)
-                return
-        raise SystemExit(f'unknown target {target!r}')
+            detection_line(
+                env['detected'], env['display'],
+                env['version'], env['config_dir'])
+            if env['detected']:
+                detected.append(env)
 
-    print('Detecting LLM CLI environments...')
-    print()
+        if not detected:
+            print('\nNo CLI integration installed'
+                  ' (no Claude Code or OpenClaw detected).')
+            print('Installing scheduler only; manual'
+                  ' `memman remember` calls will still work.')
+        else:
+            err_count = 0
+            for env in detected:
+                try:
+                    _install_env(env, data_dir=data_dir)
+                except Exception:
+                    err_count += 1
+            if err_count > 0:
+                raise click.ClickException(
+                    f'{err_count} error(s) during CLI integration install')
 
-    detected = []
-    for env in envs:
-        detection_line(
-            env['detected'], env['display'],
-            env['version'], env['config_dir'])
-        if env['detected']:
-            detected.append(env)
-
-    if not detected:
-        print('\nNo supported LLM CLI environments detected.')
-        print("Install Claude Code or OpenClaw,"
-              " then run 'memman setup' again.")
-        return
-
-    err_count = 0
-    for env in detected:
-        try:
-            _install_env(env, data_dir=data_dir)
-        except Exception:
-            err_count += 1
-
-    if err_count > 0:
-        raise SystemExit(f'{err_count} error(s) during setup')
+    print('\n[scheduler]')
+    result = install_scheduler(
+        data_dir,
+        openrouter_api_key=openrouter_key,
+        voyage_api_key=voyage_key)
+    for action in result.get('env_actions', []) + result.get('actions', []):
+        status_ok(0, 0, result['platform'], action)
 
 
 def _install_env(env: dict, data_dir: str) -> None:
@@ -258,36 +306,39 @@ def _install_env(env: dict, data_dir: str) -> None:
 
 
 def _run_eject_flow(envs: list[dict], target: str) -> None:
-    """Eject from --target or every detected environment."""
+    """Eject CLI integrations and uninstall the scheduler unit."""
     if target:
+        matched = next((e for e in envs if e['name'] == target), None)
+        if matched is None:
+            raise click.ClickException(f'unknown target {target!r}')
+        _eject_env(matched)
+    else:
+        print('Detecting LLM CLI environments...')
+        print()
+
+        installed = []
         for env in envs:
-            if env['name'] == target:
-                _eject_env(env)
-                return
-        raise SystemExit(f'unknown target {target!r}')
+            detection_line(
+                env['detected'], env['display'],
+                env['version'], env['config_dir'])
+            if env['detected']:
+                installed.append(env)
 
-    print('Detecting LLM CLI environments...')
-    print()
+        if not installed:
+            print('\nNo CLI integration detected.')
+        else:
+            err_count = 0
+            for env in installed:
+                if _eject_env(env):
+                    err_count += 1
+            if err_count > 0:
+                raise click.ClickException(
+                    f'{err_count} error(s) during CLI integration eject')
 
-    installed = []
-    for env in envs:
-        detection_line(
-            env['detected'], env['display'],
-            env['version'], env['config_dir'])
-        if env['detected']:
-            installed.append(env)
-
-    if not installed:
-        print('\nNo environments detected.')
-        return
-
-    err_count = 0
-    for env in installed:
-        if _eject_env(env):
-            err_count += 1
+    print('\n[scheduler]')
+    result = uninstall_scheduler()
+    for action in result.get('actions', []):
+        status_ok(0, 0, result['platform'], action)
 
     print()
     print('Done! All detected integrations removed.')
-
-    if err_count > 0:
-        raise SystemExit(f'{err_count} error(s) during eject')

@@ -1594,39 +1594,11 @@ def graph_reindex(ctx: click.Context, dry_run: bool) -> None:
 @cli.command()
 @click.option('--target', default='', help='Target environment (claude-code | openclaw)')
 @click.option('--eject', is_flag=True, default=False, help='Remove integration')
-@click.option('--scheduler', is_flag=True, default=False,
-              help='Install background enrichment scheduler (systemd/launchd)')
-@click.option('--interval', default=900, type=int,
-              help='Scheduler interval in seconds (default 900 = 15 min)')
-@click.option('--dry-run', is_flag=True, default=False,
-              help='Preview scheduler changes without writing files')
 @click.pass_context
-def setup(ctx: click.Context, target: str, eject: bool,
-          scheduler: bool, interval: int, dry_run: bool) -> None:
-    """Set up LLM CLI integration or background scheduler."""
-    data_dir = ctx.obj['data_dir']
-
-    if scheduler:
-        from memman.setup.scheduler import install, uninstall
-        if eject:
-            result = uninstall(dry_run=dry_run)
-        else:
-            api_key = (os.environ.get('OPENROUTER_API_KEY')
-                       or os.environ.get('MEMMAN_LLM_API_KEY'))
-            if not api_key and not dry_run:
-                click.echo(
-                    'warning: OPENROUTER_API_KEY not set; scheduler unit'
-                    ' will install but the worker will fail until you'
-                    ' write OPENROUTER_API_KEY=... into ~/.memman/env'
-                    ' (mode 600)', err=True)
-            result = install(data_dir, interval_seconds=interval,
-                             openrouter_api_key=api_key,
-                             dry_run=dry_run)
-        _json_out(result)
-        return
-
+def setup(ctx: click.Context, target: str, eject: bool) -> None:
+    """Set up or remove memman: CLI integration + background scheduler."""
     from memman.setup.claude import run_setup
-    run_setup(data_dir, target=target, eject=eject)
+    run_setup(ctx.obj['data_dir'], target=target, eject=eject)
 
 
 @graph.command('rebuild')

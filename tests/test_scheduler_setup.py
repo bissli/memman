@@ -36,8 +36,11 @@ def test_install_systemd_writes_timer_and_service(
     monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
     _no_subprocess(monkeypatch)
 
-    result = sch.install(data_dir=str(fake_home / '.memman'),
-                         interval_seconds=600, dry_run=False)
+    result = sch.install(
+        data_dir=str(fake_home / '.memman'),
+        openrouter_api_key='sk-or-x',
+        voyage_api_key='vk-y',
+        interval_seconds=600)
 
     assert result['platform'] == 'systemd'
     assert result['interval_seconds'] == 600
@@ -47,7 +50,7 @@ def test_install_systemd_writes_timer_and_service(
     assert 'Persistent=true' in timer
     assert '/fake/bin/memman enrich --pending' in service
     assert 'MEMMAN_DATA_DIR=' in service
-    assert 'EnvironmentFile=-' in service
+    assert 'EnvironmentFile=' in service
 
 
 def test_install_launchd_writes_plist_and_wrapper(
@@ -57,8 +60,11 @@ def test_install_launchd_writes_plist_and_wrapper(
     monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
     _no_subprocess(monkeypatch)
 
-    result = sch.install(data_dir=str(fake_home / '.memman'),
-                         interval_seconds=1800, dry_run=False)
+    result = sch.install(
+        data_dir=str(fake_home / '.memman'),
+        openrouter_api_key='sk-or-x',
+        voyage_api_key='vk-y',
+        interval_seconds=1800)
 
     assert result['platform'] == 'launchd'
     plist = Path(result['plist_path']).read_text()
@@ -74,39 +80,27 @@ def test_install_unknown_platform_raises(monkeypatch):
     """
     monkeypatch.setattr(sch, 'detect_scheduler', lambda: '')
     with pytest.raises(RuntimeError, match='no supported scheduler'):
-        sch.install(data_dir='/tmp', interval_seconds=900, dry_run=False)
+        sch.install(data_dir='/tmp',
+                    openrouter_api_key='x',
+                    voyage_api_key='y')
 
 
-def test_dry_run_does_not_write_files(
+def test_install_writes_both_keys_to_env_file(
         fake_home, fake_binary, monkeypatch):
-    """dry_run=True returns the target paths but writes nothing.
+    """Both OPENROUTER_API_KEY and VOYAGE_API_KEY are written at mode 600.
     """
-    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
-    _no_subprocess(monkeypatch)
-
-    result = sch.install(data_dir=str(fake_home), interval_seconds=900,
-                         dry_run=True)
-    assert result['dry_run'] is True
-    assert not Path(result['timer_path']).exists()
-    assert not Path(result['service_path']).exists()
-
-
-def test_install_writes_openrouter_env_file(
-        fake_home, fake_binary, monkeypatch):
-    """When an API key is passed, an env file is written at mode 600.
-    """
-    import os
     import stat
     monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
     _no_subprocess(monkeypatch)
 
     sch.install(data_dir=str(fake_home),
-                interval_seconds=900,
-                openrouter_api_key='sk-or-fake')
+                openrouter_api_key='sk-or-fake',
+                voyage_api_key='vk-fake')
     env_path = fake_home / '.memman' / 'env'
     assert env_path.exists()
     contents = env_path.read_text()
     assert 'OPENROUTER_API_KEY=sk-or-fake' in contents
+    assert 'VOYAGE_API_KEY=vk-fake' in contents
     assert 'MEMMAN_LLM_PROVIDER=openrouter' in contents
     mode = stat.S_IMODE(os.stat(env_path).st_mode)
     assert mode == 0o600
@@ -124,9 +118,10 @@ def test_install_merges_existing_env_file(
         'SOMETHING_ELSE=keep\nMEMMAN_LLM_PROVIDER=anthropic\n')
 
     sch.install(data_dir=str(fake_home),
-                interval_seconds=900,
-                openrouter_api_key='sk-or-new')
+                openrouter_api_key='sk-or-new',
+                voyage_api_key='vk-new')
     contents = env_path.read_text()
     assert 'SOMETHING_ELSE=keep' in contents
     assert 'MEMMAN_LLM_PROVIDER=openrouter' in contents
     assert 'OPENROUTER_API_KEY=sk-or-new' in contents
+    assert 'VOYAGE_API_KEY=vk-new' in contents

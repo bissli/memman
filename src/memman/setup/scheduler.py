@@ -2,12 +2,12 @@
 
 Detects platform (systemd on Linux, launchd on macOS) and writes the
 appropriate user-scope unit / plist that runs `memman enrich --pending`
-on a recurring interval. Units handle sleep/power-off catch-up natively.
+every 15 min. Units handle sleep/power-off catch-up natively.
 
 The scheduler path always routes through OpenRouter with ZDR enforced.
-The OpenRouter API key is written to `~/.memman/env` at mode 600 and
-referenced by EnvironmentFile (systemd) or sourced via a wrapper
-(launchd).
+Both OPENROUTER_API_KEY and VOYAGE_API_KEY are written to `~/.memman/env`
+at mode 600 and referenced by EnvironmentFile (systemd) or sourced via
+a wrapper script (launchd).
 """
 
 import platform
@@ -19,6 +19,7 @@ SYSTEMD_TIMER_NAME = 'memman-enrich.timer'
 SYSTEMD_SERVICE_NAME = 'memman-enrich.service'
 LAUNCHD_LABEL = 'com.memman.enrich'
 ENV_FILENAME = 'env'
+DEFAULT_INTERVAL_SECONDS = 900
 
 
 def detect_scheduler() -> str:
@@ -41,14 +42,15 @@ def memman_binary_path() -> str:
     return path
 
 
-def install(data_dir: str, interval_seconds: int = 900,
-            openrouter_api_key: str | None = None,
-            dry_run: bool = False) -> dict:
+def install(data_dir: str,
+            openrouter_api_key: str,
+            voyage_api_key: str,
+            interval_seconds: int = DEFAULT_INTERVAL_SECONDS) -> dict:
     """Install the scheduler unit for the current platform.
 
-    If openrouter_api_key is given, it is written to ~/.memman/env at
-    mode 600. If None, the existing env file (if any) is left unchanged
-    and the scheduler relies on whatever env the user has configured.
+    Writes both API keys to ~/.memman/env at mode 600 (merging with any
+    existing keys) and installs the timer/plist that runs
+    `memman enrich --pending` at the given interval.
     """
     kind = detect_scheduler()
     if not kind:
@@ -57,14 +59,12 @@ def install(data_dir: str, interval_seconds: int = 900,
             ' expected systemd (Linux) or launchd (macOS)')
     binary = memman_binary_path()
 
-    env_actions = []
-    if openrouter_api_key and not dry_run:
-        env_actions = _write_env_file(openrouter_api_key)
+    env_actions = _write_env_file(openrouter_api_key, voyage_api_key)
 
     if kind == 'systemd':
-        result = _install_systemd(binary, data_dir, interval_seconds, dry_run)
+        result = _install_systemd(binary, data_dir, interval_seconds)
     else:
-        result = _install_launchd(binary, data_dir, interval_seconds, dry_run)
+        result = _install_launchd(binary, data_dir, interval_seconds)
 
     result['env_actions'] = env_actions
     return result
@@ -74,8 +74,9 @@ def _env_file_path() -> Path:
     return Path.home() / '.memman' / ENV_FILENAME
 
 
-def _write_env_file(openrouter_api_key: str) -> list[str]:
-    """Write ~/.memman/env at mode 600 with OpenRouter provider vars."""
+def _write_env_file(openrouter_api_key: str,
+                    voyage_api_key: str) -> list[str]:
+    """Write ~/.memman/env at mode 600 with provider + embedding keys."""
     path = _env_file_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = {}
@@ -89,6 +90,7 @@ def _write_env_file(openrouter_api_key: str) -> list[str]:
 
     existing['MEMMAN_LLM_PROVIDER'] = 'openrouter'
     existing['OPENROUTER_API_KEY'] = openrouter_api_key
+    existing['VOYAGE_API_KEY'] = voyage_api_key
 
     contents = '\n'.join(f'{k}={v}' for k, v in existing.items()) + '\n'
     path.write_text(contents)
@@ -96,14 +98,14 @@ def _write_env_file(openrouter_api_key: str) -> list[str]:
     return [f'wrote {path} (mode 600)']
 
 
-def uninstall(dry_run: bool = False) -> dict:
+def uninstall() -> dict:
     """Remove the scheduler unit for the current platform."""
     kind = detect_scheduler()
     if not kind:
-        return {'platform': 'unknown', 'action': 'noop'}
+        return {'platform': 'unknown', 'actions': []}
     if kind == 'systemd':
-        return _uninstall_systemd(dry_run)
-    return _uninstall_launchd(dry_run)
+        return _uninstall_systemd()
+    return _uninstall_launchd()
 
 
 def _systemd_unit_dir() -> Path:
@@ -115,8 +117,7 @@ def _launchd_agent_dir() -> Path:
 
 
 def _install_systemd(binary: str, data_dir: str,
-                     interval_seconds: int,
-                     dry_run: bool) -> dict:
+                     interval_seconds: int) -> dict:
     """Write systemd timer+service units and enable the timer."""
     unit_dir = _systemd_unit_dir()
     timer_path = unit_dir / SYSTEMD_TIMER_NAME
@@ -133,64 +134,59 @@ def _install_systemd(binary: str, data_dir: str,
         '[Install]\n'
         'WantedBy=timers.target\n')
 
-    env_file = Path.home() / '.memman' / 'env'
+    env_file = _env_file_path()
     service_contents = (
         '[Unit]\n'
         'Description=MemMan enrichment worker\n\n'
         '[Service]\n'
         'Type=oneshot\n'
         f'Environment=MEMMAN_DATA_DIR={data_dir}\n'
-        f'EnvironmentFile=-{env_file}\n'
+        f'EnvironmentFile={env_file}\n'
         f'ExecStart={binary} enrich --pending --timeout {exec_timeout}\n'
         'StandardOutput=journal\n'
         'StandardError=journal\n')
 
-    actions = []
-    if not dry_run:
-        unit_dir.mkdir(parents=True, exist_ok=True)
-        timer_path.write_text(timer_contents)
-        service_path.write_text(service_contents)
-        actions.extend((f'wrote {timer_path}', f'wrote {service_path}'))
-        subprocess.run(
-            ['systemctl', '--user', 'daemon-reload'], check=False)
-        subprocess.run(
-            ['systemctl', '--user', 'enable', '--now',
-             SYSTEMD_TIMER_NAME], check=False)
-        actions.append('systemctl --user enable --now memman-enrich.timer')
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    timer_path.write_text(timer_contents)
+    service_path.write_text(service_contents)
+    actions = [f'wrote {timer_path}', f'wrote {service_path}']
+    subprocess.run(
+        ['systemctl', '--user', 'daemon-reload'], check=False)
+    subprocess.run(
+        ['systemctl', '--user', 'enable', '--now',
+         SYSTEMD_TIMER_NAME], check=False)
+    actions.append('systemctl --user enable --now memman-enrich.timer')
 
     return {
         'platform': 'systemd',
         'timer_path': str(timer_path),
         'service_path': str(service_path),
         'interval_seconds': interval_seconds,
-        'dry_run': dry_run,
         'actions': actions,
         }
 
 
-def _uninstall_systemd(dry_run: bool) -> dict:
+def _uninstall_systemd() -> dict:
     """Disable the timer and remove unit files."""
     unit_dir = _systemd_unit_dir()
     timer_path = unit_dir / SYSTEMD_TIMER_NAME
     service_path = unit_dir / SYSTEMD_SERVICE_NAME
     actions = []
-    if not dry_run:
-        subprocess.run(
-            ['systemctl', '--user', 'disable', '--now',
-             SYSTEMD_TIMER_NAME], check=False)
-        actions.append('systemctl --user disable --now memman-enrich.timer')
-        for p in (timer_path, service_path):
-            if p.exists():
-                p.unlink()
-                actions.append(f'removed {p}')
-        subprocess.run(
-            ['systemctl', '--user', 'daemon-reload'], check=False)
-    return {'platform': 'systemd', 'dry_run': dry_run, 'actions': actions}
+    subprocess.run(
+        ['systemctl', '--user', 'disable', '--now',
+         SYSTEMD_TIMER_NAME], check=False)
+    actions.append('systemctl --user disable --now memman-enrich.timer')
+    for p in (timer_path, service_path):
+        if p.exists():
+            p.unlink()
+            actions.append(f'removed {p}')
+    subprocess.run(
+        ['systemctl', '--user', 'daemon-reload'], check=False)
+    return {'platform': 'systemd', 'actions': actions}
 
 
 def _install_launchd(binary: str, data_dir: str,
-                     interval_seconds: int,
-                     dry_run: bool) -> dict:
+                     interval_seconds: int) -> dict:
     """Write launchd plist and load it."""
     agent_dir = _launchd_agent_dir()
     plist_path = agent_dir / f'{LAUNCHD_LABEL}.plist'
@@ -199,8 +195,7 @@ def _install_launchd(binary: str, data_dir: str,
 
     wrapper_contents = (
         '#!/bin/sh\n'
-        '# Source env file (if present) so OPENROUTER_API_KEY etc. flow in\n'
-        f'[ -f "{Path.home()}/.memman/env" ] && . "{Path.home()}/.memman/env"\n'
+        f'[ -f "{_env_file_path()}" ] && . "{_env_file_path()}"\n'
         f'export MEMMAN_DATA_DIR="{data_dir}"\n'
         f'exec "{binary}" enrich --pending --timeout {exec_timeout}\n')
 
@@ -222,43 +217,40 @@ def _install_launchd(binary: str, data_dir: str,
         '<string>/tmp/memman-enrich.err</string>\n'
         '</dict></plist>\n')
 
-    actions = []
-    if not dry_run:
-        agent_dir.mkdir(parents=True, exist_ok=True)
-        wrapper_path.parent.mkdir(parents=True, exist_ok=True)
-        wrapper_path.write_text(wrapper_contents)
-        Path(wrapper_path).chmod(0o755)
-        plist_path.write_text(plist_contents)
-        actions.extend((f'wrote {wrapper_path} (mode 755)', f'wrote {plist_path}'))
-        subprocess.run(
-            ['launchctl', 'unload', str(plist_path)], check=False)
-        subprocess.run(
-            ['launchctl', 'load', '-w', str(plist_path)], check=False)
-        actions.append(f'launchctl load -w {plist_path}')
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    wrapper_path.parent.mkdir(parents=True, exist_ok=True)
+    wrapper_path.write_text(wrapper_contents)
+    Path(wrapper_path).chmod(0o755)
+    plist_path.write_text(plist_contents)
+    actions = [
+        f'wrote {wrapper_path} (mode 755)', f'wrote {plist_path}']
+    subprocess.run(
+        ['launchctl', 'unload', str(plist_path)], check=False)
+    subprocess.run(
+        ['launchctl', 'load', '-w', str(plist_path)], check=False)
+    actions.append(f'launchctl load -w {plist_path}')
 
     return {
         'platform': 'launchd',
         'plist_path': str(plist_path),
         'wrapper_path': str(wrapper_path),
         'interval_seconds': interval_seconds,
-        'dry_run': dry_run,
         'actions': actions,
         }
 
 
-def _uninstall_launchd(dry_run: bool) -> dict:
+def _uninstall_launchd() -> dict:
     """Unload plist and remove files."""
     agent_dir = _launchd_agent_dir()
     plist_path = agent_dir / f'{LAUNCHD_LABEL}.plist'
     wrapper_path = Path.home() / '.memman' / 'bin' / 'memman-enrich-wrapper.sh'
     actions = []
-    if not dry_run:
-        if plist_path.exists():
-            subprocess.run(
-                ['launchctl', 'unload', str(plist_path)], check=False)
-            plist_path.unlink()
-            actions.append(f'removed {plist_path}')
-        if wrapper_path.exists():
-            wrapper_path.unlink()
-            actions.append(f'removed {wrapper_path}')
-    return {'platform': 'launchd', 'dry_run': dry_run, 'actions': actions}
+    if plist_path.exists():
+        subprocess.run(
+            ['launchctl', 'unload', str(plist_path)], check=False)
+        plist_path.unlink()
+        actions.append(f'removed {plist_path}')
+    if wrapper_path.exists():
+        wrapper_path.unlink()
+        actions.append(f'removed {wrapper_path}')
+    return {'platform': 'launchd', 'actions': actions}
