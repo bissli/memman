@@ -40,6 +40,43 @@ def test_strip_json5_trailing_comma_array():
     assert json.loads(strip_json5(s)) == [1, 2, 3]
 
 
+def test_strip_json5_block_comment():
+    """/* ... */ block comments are removed."""
+    s = '{"a": 1 /* this is a block\n comment */, "b": 2}'
+    assert json.loads(strip_json5(s)) == {'a': 1, 'b': 2}
+
+
+def test_strip_json5_block_comment_inline():
+    """Block comments on a single line are removed."""
+    s = '{/* inline */"x": 42}'
+    assert json.loads(strip_json5(s)) == {'x': 42}
+
+
+def test_strip_json5_single_quoted_passthrough():
+    """Single-quoted strings are preserved verbatim so callers can
+    normalize them downstream; the stripper must not mistake `//`
+    inside a single-quoted string for a comment.
+    """
+    s = "{\"url\": 'https://example.com'}"
+    stripped = strip_json5(s)
+    assert "'https://example.com'" in stripped
+
+
+def test_strip_json5_block_comment_inside_string():
+    """`/* */` inside a double-quoted string is NOT stripped."""
+    s = '{"note": "not /* a */ comment"}'
+    assert json.loads(strip_json5(s)) == {'note': 'not /* a */ comment'}
+
+
+def test_strip_json5_escape_in_single_quoted():
+    """An escaped single-quote inside a single-quoted string does
+    not terminate the string.
+    """
+    s = "{\"msg\": 'it\\'s fine'}"
+    stripped = strip_json5(s)
+    assert "'it\\'s fine'" in stripped
+
+
 def test_read_json_missing_file(tmp_path):
     """Missing file returns empty dict."""
     result = read_json_file(str(tmp_path / 'nope.json'))

@@ -15,9 +15,15 @@ def _unexpand_home(path: str) -> str:
 
 
 def strip_json5(s: str) -> str:
-    """Remove // line comments and trailing commas from JSON5 input."""
+    """Strip JSON5 affordances down to plain JSON.
+
+    Handles: `//` line comments, `/* */` block comments, double-quoted
+    and single-quoted strings (both pass through unchanged, with escape
+    handling so `\\'` or `\\"` inside a string does not end it), and
+    trailing commas before `]`, `}`, `)`.
+    """
     result = []
-    in_string = False
+    in_string: str | None = None
     escaped = False
     i = 0
     while i < len(s):
@@ -27,22 +33,28 @@ def strip_json5(s: str) -> str:
             escaped = False
             i += 1
             continue
-        if in_string:
+        if in_string is not None:
             if ch == '\\':
                 escaped = True
-            elif ch == '"':
-                in_string = False
+            elif ch == in_string:
+                in_string = None
             result.append(ch)
             i += 1
             continue
-        if ch == '"':
-            in_string = True
+        if ch in ('"', "'"):
+            in_string = ch
             result.append(ch)
             i += 1
             continue
         if ch == '/' and i + 1 < len(s) and s[i + 1] == '/':
             while i < len(s) and s[i] != '\n':
                 i += 1
+            continue
+        if ch == '/' and i + 1 < len(s) and s[i + 1] == '*':
+            i += 2
+            while i + 1 < len(s) and not (s[i] == '*' and s[i + 1] == '/'):
+                i += 1
+            i += 2
             continue
         if ch == ',':
             j = i + 1
