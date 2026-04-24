@@ -74,7 +74,8 @@ CREATE TABLE IF NOT EXISTS queue (
     claimed_at    INTEGER,
     worker_pid    INTEGER,
     attempts      INTEGER NOT NULL DEFAULT 0,
-    status        TEXT NOT NULL DEFAULT 'pending',
+    status        TEXT NOT NULL DEFAULT 'pending'
+                  CHECK(status IN ('pending','done','failed')),
     last_error    TEXT,
     processed_at  INTEGER
 );
@@ -163,12 +164,15 @@ def claim(
 def mark_done(conn: sqlite3.Connection, row_id: int) -> None:
     """Mark a claimed row as successfully processed."""
     now = int(time.time())
-    conn.execute(
+    cur = conn.execute(
         'UPDATE queue SET status = ?, processed_at = ?,'
         ' claimed_at = NULL, worker_pid = NULL'
         ' WHERE id = ?',
         (STATUS_DONE, now, row_id))
-    logger.debug(f'queue row {row_id} marked done')
+    if cur.rowcount == 0:
+        logger.warning(f'mark_done: queue row {row_id} not found')
+    else:
+        logger.debug(f'queue row {row_id} marked done')
 
 
 def mark_failed(
@@ -186,6 +190,7 @@ def mark_failed(
         'SELECT attempts FROM queue WHERE id = ?',
         (row_id,)).fetchone()
     if row is None:
+        logger.warning(f'mark_failed: queue row {row_id} not found')
         return
     attempts = row[0]
     if attempts >= max_attempts:

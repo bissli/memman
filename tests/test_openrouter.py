@@ -1,6 +1,7 @@
 """Unit tests for the OpenRouter client, cache, and model picker."""
 
 import json
+import os
 import time
 
 import httpx
@@ -70,7 +71,6 @@ def test_cache_stale_disk_triggers_fetch(tmp_path, monkeypatch):
     cache_file = tmp_path / 'openrouter-zdr.json'
     cache_file.write_text(json.dumps(SAMPLE_ZDR))
     old = time.time() - 90000
-    import os
     os.utime(cache_file, (old, old))
 
     data = get_zdr_endpoints()
@@ -87,7 +87,6 @@ def test_cache_stale_disk_fallback_on_network_failure(
     monkeypatch.setattr(cache_mod, '_fetch', _boom)
     cache_file = tmp_path / 'openrouter-zdr.json'
     cache_file.write_text(json.dumps(SAMPLE_ZDR))
-    import os
     old = time.time() - 90000
     os.utime(cache_file, (old, old))
 

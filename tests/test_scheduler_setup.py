@@ -23,7 +23,7 @@ def fake_binary(monkeypatch):
 
 
 def _no_subprocess(monkeypatch, active: bool = True):
-    """Patch subprocess.run to suppress systemctl/launchctl side effects."""
+    """Suppress real subprocess calls for systemctl/launchctl tests."""
     class _FakeResult:
         returncode = 0 if active else 3
         stdout = 'active' if active else 'inactive'

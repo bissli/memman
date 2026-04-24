@@ -68,11 +68,23 @@ def _read_disk(path: Path, ttl: int) -> tuple[list[dict] | None, bool]:
 
 
 def _write_disk(path: Path, data: list[dict]) -> None:
-    """Write the ZDR list to disk atomically."""
+    """Write the ZDR list to disk atomically.
+
+    Uses a per-pid tmp suffix so two workers writing concurrently do not
+    clobber each other's `.tmp` file before the final rename.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix('.tmp')
-    tmp.write_text(json.dumps(data))
-    tmp.replace(path)
+    tmp = path.with_suffix(f'.tmp.{os.getpid()}')
+    try:
+        tmp.write_text(json.dumps(data))
+        tmp.replace(path)
+    except Exception:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        raise
 
 
 def get_zdr_endpoints(
