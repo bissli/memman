@@ -590,6 +590,32 @@ def test_prime_command_emits_status_and_guide(tmp_path, monkeypatch):
     assert shipped.strip() in result.output
 
 
+def test_prime_honors_memman_store_env(tmp_path, monkeypatch):
+    """`memman prime` targets MEMMAN_STORE when set, not just the
+    active-store file.
+    """
+    from memman.store.db import default_data_dir, open_db, store_dir
+
+    monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
+    data_dir = default_data_dir()
+    pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
+    pathlib.Path(store_dir(data_dir, 'default')).mkdir(
+        parents=True, exist_ok=True)
+    db = open_db(store_dir(data_dir, 'default'))
+    db.close()
+    # Create a different store that will be targeted via MEMMAN_STORE.
+    other = store_dir(data_dir, 'work')
+    pathlib.Path(other).mkdir(parents=True, exist_ok=True)
+    db = open_db(other)
+    db.close()
+
+    monkeypatch.setenv('MEMMAN_STORE', 'work')
+    runner = CliRunner()
+    result = runner.invoke(cli, ['prime'], input='{}')
+    assert result.exit_code == 0
+    assert '[memman] Memory active' in result.output
+
+
 def test_prime_command_emits_compact_hint(tmp_path, monkeypatch):
     """`memman prime` emits the compact-recall hint when source=compact."""
     monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)

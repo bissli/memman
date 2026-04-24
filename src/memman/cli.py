@@ -1867,8 +1867,9 @@ def prime() -> None:
     status_line = '[memman] Memory active.'
     try:
         from memman.store.node import get_stats
-        data_dir = default_data_dir()
-        name = read_active(data_dir)
+        data_dir = os.environ.get(config.DATA_DIR, default_data_dir())
+        env_store = os.environ.get(config.STORE, '').strip()
+        name = env_store or read_active(data_dir)
         if store_exists(data_dir, name):
             db = open_read_only(store_dir(data_dir, name))
             try:
