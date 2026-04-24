@@ -129,3 +129,78 @@ def test_multiple_defers_single_drain(runner):
     drain = last_json(r.output)
     assert drain['processed'] == 3
     assert drain['failed'] == 0
+
+
+class TestRememberDefaultSelector:
+    """`remember` default mode follows scheduler state and the env override.
+    """
+
+    def test_defer_is_default_when_state_active(self, runner, monkeypatch):
+        """Scheduler state = active -> remember defaults to --defer."""
+        monkeypatch.delenv('MEMMAN_REMEMBER_DEFAULT', raising=False)
+        from memman.setup import scheduler as sch
+        monkeypatch.setattr(sch, 'read_state',
+                            lambda: sch.STATE_ACTIVE)
+        r = invoke(runner, ['remember', 'hello from active'])
+        assert r.exit_code == 0, r.output
+        data = last_json(r.output)
+        assert data['action'] == 'queued'
+
+    def test_sync_is_default_when_state_off(self, runner, monkeypatch):
+        """Scheduler state = off -> remember defaults to --sync."""
+        monkeypatch.delenv('MEMMAN_REMEMBER_DEFAULT', raising=False)
+        from memman.setup import scheduler as sch
+        monkeypatch.setattr(sch, 'read_state',
+                            lambda: sch.STATE_OFF)
+        from memman.embed import voyage
+        monkeypatch.setattr(voyage.Client, 'available',
+                            lambda self: False)
+        monkeypatch.setattr(voyage.Client, 'embed',
+                            lambda self, text: (_ for _ in ()).throw(
+                                RuntimeError('no embed in test')))
+
+        def _one_fact(client, content):
+            return [{'text': content, 'category': 'fact',
+                     'importance': 3, 'entities': []}]
+        from unittest.mock import patch
+        with patch('memman.llm.extract.extract_facts', _one_fact):
+            r = invoke(runner, [
+                'remember', '--no-reconcile', 'hello from off'])
+        assert r.exit_code == 0, r.output
+        data = last_json(r.output)
+        assert 'facts' in data, f'expected sync result, got: {data!r}'
+
+    def test_env_override_sync(self, runner, monkeypatch):
+        """MEMMAN_REMEMBER_DEFAULT=sync wins over active scheduler state."""
+        monkeypatch.setenv('MEMMAN_REMEMBER_DEFAULT', 'sync')
+        from memman.setup import scheduler as sch
+        monkeypatch.setattr(sch, 'read_state',
+                            lambda: sch.STATE_ACTIVE)
+        from memman.embed import voyage
+        monkeypatch.setattr(voyage.Client, 'available',
+                            lambda self: False)
+        monkeypatch.setattr(voyage.Client, 'embed',
+                            lambda self, text: (_ for _ in ()).throw(
+                                RuntimeError('no embed in test')))
+
+        def _one_fact(client, content):
+            return [{'text': content, 'category': 'fact',
+                     'importance': 3, 'entities': []}]
+        from unittest.mock import patch
+        with patch('memman.llm.extract.extract_facts', _one_fact):
+            r = invoke(runner, [
+                'remember', '--no-reconcile', 'env-forced sync'])
+        assert r.exit_code == 0, r.output
+        data = last_json(r.output)
+        assert 'facts' in data
+
+    def test_env_override_defer(self, runner, monkeypatch):
+        """MEMMAN_REMEMBER_DEFAULT=defer wins over off scheduler state."""
+        monkeypatch.setenv('MEMMAN_REMEMBER_DEFAULT', 'defer')
+        from memman.setup import scheduler as sch
+        monkeypatch.setattr(sch, 'read_state',
+                            lambda: sch.STATE_OFF)
+        r = invoke(runner, ['remember', 'env-forced defer'])
+        assert r.exit_code == 0, r.output
+        data = last_json(r.output)
+        assert data['action'] == 'queued'

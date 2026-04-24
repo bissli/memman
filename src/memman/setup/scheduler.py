@@ -22,7 +22,47 @@ SYSTEMD_TIMER_NAME = 'memman-enrich.timer'
 SYSTEMD_SERVICE_NAME = 'memman-enrich.service'
 LAUNCHD_LABEL = 'com.memman.enrich'
 ENV_FILENAME = 'env'
+STATE_FILENAME = 'scheduler.state'
 DEFAULT_INTERVAL_SECONDS = 900
+
+STATE_ACTIVE = 'active'
+STATE_PAUSED = 'paused'
+STATE_OFF = 'off'
+VALID_STATES = (STATE_ACTIVE, STATE_PAUSED, STATE_OFF)
+
+
+def _state_file_path() -> Path:
+    """Return ~/.memman/scheduler.state. Per-host; never synced."""
+    return Path.home() / '.memman' / STATE_FILENAME
+
+
+def read_state() -> str:
+    """Read the scheduler intent state. Missing file -> 'active'."""
+    path = _state_file_path()
+    try:
+        value = path.read_text().strip()
+    except (OSError, FileNotFoundError):
+        return STATE_ACTIVE
+    return value if value in VALID_STATES else STATE_ACTIVE
+
+
+def write_state(state: str) -> None:
+    """Atomically persist the scheduler intent state."""
+    if state not in VALID_STATES:
+        raise ValueError(f'invalid scheduler state {state!r}')
+    path = _state_file_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp.write_text(state + '\n')
+    Path(tmp).chmod(0o600)
+    Path(tmp).replace(path)
+
+
+def clear_state() -> None:
+    """Remove the state file if present (used on uninstall)."""
+    path = _state_file_path()
+    if path.exists():
+        path.unlink()
 
 
 def detect_scheduler() -> str:
@@ -69,6 +109,8 @@ def install(data_dir: str,
     else:
         result = _install_launchd(binary, data_dir, interval_seconds)
 
+    write_state(STATE_ACTIVE)
+    result['state'] = STATE_ACTIVE
     result['env_actions'] = env_actions
     return result
 
@@ -138,7 +180,13 @@ def get_debug() -> bool:
 
 
 def uninstall() -> dict:
-    """Remove the scheduler unit for the current platform."""
+    """Remove the scheduler unit for the current platform.
+
+    Also clears the state file. This is the full teardown path used by
+    `memman uninstall`; for a scheduler-only teardown that keeps the
+    rest of memman intact, see `off()`.
+    """
+    clear_state()
     kind = detect_scheduler()
     if not kind:
         return {'platform': 'unknown', 'actions': []}
@@ -147,15 +195,13 @@ def uninstall() -> dict:
     return _uninstall_launchd()
 
 
-def start() -> dict:
-    """Resume the installed scheduler unit (no filesystem changes).
+def resume() -> dict:
+    """Transition to `active`: enable the installed scheduler unit.
 
-    Runs `systemctl --user enable --now` or `launchctl load -w` on the
-    already-installed unit. Raises FileNotFoundError if the unit isn't
-    installed yet (user should run `memman install` first). Raises
-    RuntimeError if the scheduler fails to become active within a short
-    poll window — catches silent-no-op environments (WSL2 without
-    linger, containers, CI).
+    Raises FileNotFoundError if the unit isn't installed (user should
+    run `memman install` first). Raises RuntimeError if the scheduler
+    fails to become active within a short poll window — catches
+    silent-no-op environments (WSL2 without linger, containers, CI).
     """
     kind = detect_scheduler()
     if not kind:
@@ -171,8 +217,10 @@ def start() -> dict:
             ['systemctl', '--user', 'enable', '--now',
              SYSTEMD_TIMER_NAME], check=False)
         _verify_systemd_active()
+        write_state(STATE_ACTIVE)
         return {
             'platform': 'systemd',
+            'state': STATE_ACTIVE,
             'actions': [
                 'systemctl --user enable --now memman-enrich.timer'],
             }
@@ -184,39 +232,89 @@ def start() -> dict:
     subprocess.run(
         ['launchctl', 'load', '-w', str(plist_path)], check=False)
     _verify_launchd_loaded()
+    write_state(STATE_ACTIVE)
     return {
         'platform': 'launchd',
+        'state': STATE_ACTIVE,
         'actions': [f'launchctl load -w {plist_path}'],
         }
 
 
-def stop() -> dict:
-    """Pause the scheduler unit without removing its files."""
+def pause() -> dict:
+    """Transition to `paused`: stop timer firing, keep unit files.
+
+    Raises FileNotFoundError if the unit isn't installed — `pause` is
+    meaningless without units. Use `off` to represent the no-units
+    state explicitly.
+    """
     kind = detect_scheduler()
     if not kind:
-        return {'platform': 'unknown', 'actions': []}
+        raise RuntimeError('no supported scheduler on this platform')
     if kind == 'systemd':
         timer_path = _systemd_unit_dir() / SYSTEMD_TIMER_NAME
         if not timer_path.exists():
-            return {'platform': 'systemd', 'actions': [],
-                    'note': 'not installed'}
+            raise FileNotFoundError(
+                f'scheduler unit not installed at {timer_path};'
+                " run 'memman install' first")
         subprocess.run(
             ['systemctl', '--user', 'disable', '--now',
              SYSTEMD_TIMER_NAME], check=False)
+        write_state(STATE_PAUSED)
         return {
             'platform': 'systemd',
+            'state': STATE_PAUSED,
             'actions': [
                 'systemctl --user disable --now memman-enrich.timer'],
             }
     plist_path = _launchd_agent_dir() / f'{LAUNCHD_LABEL}.plist'
     if not plist_path.exists():
-        return {'platform': 'launchd', 'actions': [],
-                'note': 'not installed'}
+        raise FileNotFoundError(
+            f'scheduler unit not installed at {plist_path};'
+            " run 'memman install' first")
     subprocess.run(
         ['launchctl', 'unload', '-w', str(plist_path)], check=False)
+    write_state(STATE_PAUSED)
     return {
         'platform': 'launchd',
+        'state': STATE_PAUSED,
         'actions': [f'launchctl unload -w {plist_path}'],
+        }
+
+
+def off() -> dict:
+    """Transition to `off`: remove scheduler unit files; keep integrations.
+
+    Queue protection (pending rows refused unless force/drain) is
+    enforced by the caller — CLI handles the `--force` / `--drain-first`
+    flags and calls this after the guard.
+    """
+    kind = detect_scheduler()
+    if not kind:
+        write_state(STATE_OFF)
+        return {'platform': 'unknown', 'state': STATE_OFF, 'actions': []}
+    if kind == 'systemd':
+        result = _uninstall_systemd()
+    else:
+        result = _uninstall_launchd()
+    result['state'] = STATE_OFF
+    write_state(STATE_OFF)
+    return result
+
+
+def reconcile() -> dict:
+    """Detect actual OS scheduler state and rewrite the state file."""
+    s = status()
+    if not s.get('installed'):
+        detected = STATE_OFF
+    elif s.get('enabled') or s.get('active'):
+        detected = STATE_ACTIVE
+    else:
+        detected = STATE_PAUSED
+    write_state(detected)
+    return {
+        'platform': s.get('platform'),
+        'state': detected,
+        'actions': [f'wrote {_state_file_path()} = {detected}'],
         }
 
 
@@ -659,17 +757,40 @@ def _launchd_status() -> dict:
 
 
 def status() -> dict:
-    """Return the scheduler's current status."""
+    """Return the scheduler's current status, including tri-state.
+
+    Fields:
+      - platform / installed / enabled / active / next_run /
+        interval_seconds — OS truth.
+      - state — persisted user intent (active | paused | off).
+      - drift — True when state disagrees with OS truth.
+    """
     kind = detect_scheduler()
     if kind == 'systemd':
-        return _systemd_status()
-    if kind == 'launchd':
-        return _launchd_status()
-    return {
-        'platform': 'unknown',
-        'installed': False,
-        'enabled': False,
-        'active': False,
-        'next_run': None,
-        'interval_seconds': None,
-        }
+        result = _systemd_status()
+    elif kind == 'launchd':
+        result = _launchd_status()
+    else:
+        result = {
+            'platform': 'unknown',
+            'installed': False,
+            'enabled': False,
+            'active': False,
+            'next_run': None,
+            'interval_seconds': None,
+            }
+    intent = read_state()
+    result['state'] = intent
+    if intent == STATE_OFF:
+        expected_installed = False
+        expected_enabled = False
+    elif intent == STATE_PAUSED:
+        expected_installed = True
+        expected_enabled = False
+    else:
+        expected_installed = True
+        expected_enabled = True
+    result['drift'] = (
+        bool(result.get('installed')) != expected_installed
+        or bool(result.get('enabled')) != expected_enabled)
+    return result

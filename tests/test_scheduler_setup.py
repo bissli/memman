@@ -315,22 +315,25 @@ def test_uninstall_systemd_removes_unit_files(
     assert not service_path.exists()
 
 
-def test_start_raises_when_not_installed(fake_home, monkeypatch):
-    """start() raises FileNotFoundError when unit files are absent.
+def test_resume_raises_when_not_installed(fake_home, monkeypatch):
+    """resume() raises FileNotFoundError when unit files are absent.
     """
     monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
     _no_subprocess(monkeypatch)
     with pytest.raises(FileNotFoundError, match='not installed'):
-        sch.start()
+        sch.resume()
 
 
-def test_stop_when_not_installed_is_noop(fake_home, monkeypatch):
-    """stop() returns cleanly when unit files are absent.
+def test_pause_raises_when_not_installed(fake_home, monkeypatch):
+    """pause() raises FileNotFoundError when unit files are absent.
+
+    Paused only makes sense with units present; the no-units state is
+    represented by `off`.
     """
     monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
     _no_subprocess(monkeypatch)
-    result = sch.stop()
-    assert result.get('note') == 'not installed'
+    with pytest.raises(FileNotFoundError, match='not installed'):
+        sch.pause()
 
 
 def _record_subprocess(monkeypatch, *, returncode: int = 0,
@@ -527,3 +530,62 @@ def test_systemd_status_next_run_when_malformed(
         })
     result = sch.status()
     assert result['next_run'] is None
+
+
+def test_state_file_round_trip(fake_home):
+    """write_state persists; read_state returns the value."""
+    sch.write_state(sch.STATE_PAUSED)
+    assert sch.read_state() == sch.STATE_PAUSED
+
+
+def test_state_file_missing_defaults_to_active(fake_home):
+    """No state file -> default is `active`."""
+    assert sch.read_state() == sch.STATE_ACTIVE
+
+
+def test_state_file_invalid_value_defaults_to_active(fake_home):
+    """Arbitrary garbage in the state file is ignored; fall back to active."""
+    sch._state_file_path().parent.mkdir(parents=True, exist_ok=True)
+    sch._state_file_path().write_text('garbage\n')
+    assert sch.read_state() == sch.STATE_ACTIVE
+
+
+def test_write_state_rejects_bad_value(fake_home):
+    with pytest.raises(ValueError):
+        sch.write_state('banana')
+
+
+def test_clear_state_removes_file(fake_home):
+    sch.write_state(sch.STATE_PAUSED)
+    assert sch._state_file_path().exists()
+    sch.clear_state()
+    assert not sch._state_file_path().exists()
+
+
+def test_off_writes_state_without_units(fake_home, monkeypatch):
+    """off() on a platform without a scheduler still records intent."""
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: '')
+    result = sch.off()
+    assert result['state'] == sch.STATE_OFF
+    assert sch.read_state() == sch.STATE_OFF
+
+
+def test_reconcile_infers_off_when_not_installed(fake_home, monkeypatch):
+    """reconcile() with no units writes state=off."""
+    _no_subprocess(monkeypatch)
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    sch.write_state(sch.STATE_ACTIVE)
+    result = sch.reconcile()
+    assert result['state'] == sch.STATE_OFF
+    assert sch.read_state() == sch.STATE_OFF
+
+
+def test_status_reports_state_and_drift(fake_home, monkeypatch):
+    """status() surfaces the persisted state and flags drift."""
+    _no_subprocess(monkeypatch)
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    sch.write_state(sch.STATE_ACTIVE)
+    s = sch.status()
+    assert s['state'] == sch.STATE_ACTIVE
+    # Not installed but state says active -> drift.
+    assert s['drift'] is True

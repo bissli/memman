@@ -199,6 +199,22 @@ def cli(ctx: click.Context, data_dir: str | None, store_name: str,
     ctx.obj['readonly'] = readonly
 
 
+def _resolve_remember_default() -> bool:
+    """Pick the default for --defer/--sync based on env + scheduler state.
+
+    MEMMAN_REMEMBER_DEFAULT=sync|defer wins outright. Otherwise the
+    scheduler's persisted state picks: active/paused -> defer,
+    off -> sync. Missing state file defaults to active -> defer.
+    """
+    override = os.environ.get('MEMMAN_REMEMBER_DEFAULT', '').strip().lower()
+    if override == 'sync':
+        return False
+    if override == 'defer':
+        return True
+    from memman.setup.scheduler import STATE_OFF, read_state
+    return read_state() != STATE_OFF
+
+
 @cli.command()
 @click.argument('content', nargs=-1, required=True)
 @click.option('--cat', default='general', help='Category')
@@ -207,20 +223,26 @@ def cli(ctx: click.Context, data_dir: str | None, store_name: str,
 @click.option('--source', default='user', help='Source')
 @click.option('--entities', default='', help='Comma-separated entities')
 @click.option('--no-reconcile', is_flag=True, default=False, help='Skip LLM reconciliation')
-@click.option('--defer/--sync', 'defer', default=True,
-              help='Defer to background worker (default) or run synchronously')
+@click.option('--defer/--sync', 'defer', default=None,
+              help=('Defer to background worker or run synchronously.'
+                    ' Default follows the scheduler state (active/paused'
+                    ' -> defer, off -> sync) unless MEMMAN_REMEMBER_DEFAULT'
+                    ' env is set.'))
 @click.option('--priority', default=0, type=int,
               help='Queue priority when --defer (higher drains first)')
 @click.pass_context
 def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
              imp: int, tags: str, source: str, entities: str,
-             no_reconcile: bool, defer: bool, priority: int) -> None:
+             no_reconcile: bool, defer: bool | None, priority: int) -> None:
     """Store a new insight.
 
-    Default is --defer (queue-append, ~50 ms). The background scheduler
-    drains the queue every 15 min. Use --sync for the old blocking path
-    that runs extraction/reconciliation/enrichment inline.
+    Default mode (defer vs sync) follows the scheduler state; when the
+    scheduler is `off` the default is --sync because no worker will
+    drain queued rows. Override per-call with --sync or --defer, or set
+    `MEMMAN_REMEMBER_DEFAULT=sync|defer` for CI/headless contexts.
     """
+    if defer is None:
+        defer = _resolve_remember_default()
     content_str = ' '.join(content)
     content_bytes = len(content_str.encode('utf-8'))
     if content_bytes > 8000:
@@ -999,26 +1021,100 @@ def scheduler_logs(ctx: click.Context, errors: bool, lines: int) -> None:
         click.echo(line)
 
 
-@scheduler.command('enable')
+@scheduler.command('pause')
 @click.pass_context
-def scheduler_enable(ctx: click.Context) -> None:
-    """Resume the scheduler (must already be installed via `memman install`)."""
-    from memman.setup.scheduler import start
+def scheduler_pause(ctx: click.Context) -> None:
+    """Stop the scheduler without removing unit files.
+
+    Queue accumulates; `scheduler resume` or `scheduler trigger` drains.
+    `remember` default stays `--defer`.
+    """
+    from memman.setup.scheduler import pause
     try:
-        result = start()
-    except FileNotFoundError as exc:
-        raise click.ClickException(str(exc)) from exc
-    except RuntimeError as exc:
+        result = pause()
+    except (FileNotFoundError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
     _json_out(result)
 
 
-@scheduler.command('disable')
+@scheduler.command('resume')
 @click.pass_context
-def scheduler_disable(ctx: click.Context) -> None:
-    """Pause the scheduler (unit files kept; re-enable with `scheduler enable`)."""
-    from memman.setup.scheduler import stop
-    _json_out(stop())
+def scheduler_resume(ctx: click.Context) -> None:
+    """Resume a paused scheduler and sweep long-stalled rows to `stale`.
+    """
+    from memman.queue import mark_stale_on_resume, open_queue_db
+    from memman.setup.scheduler import resume
+    try:
+        result = resume()
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    data_dir_val = ctx.obj['data_dir']
+    conn = open_queue_db(data_dir_val)
+    try:
+        n_stale = mark_stale_on_resume(conn)
+    finally:
+        conn.close()
+    if n_stale:
+        result['marked_stale'] = n_stale
+        result.setdefault('actions', []).append(
+            f"moved {n_stale} long-pending rows to status='stale'"
+            ' (retry with `memman queue retry --stale`)')
+    _json_out(result)
+
+
+@scheduler.command('off')
+@click.option('--force', is_flag=True, default=False,
+              help='Remove units even when queue has pending rows.')
+@click.option('--drain-first', is_flag=True, default=False,
+              help='Run the worker synchronously before removing units.')
+@click.pass_context
+def scheduler_off(ctx: click.Context, force: bool,
+                  drain_first: bool) -> None:
+    """Remove scheduler unit files. `remember` default becomes `--sync`.
+    """
+    from memman.queue import open_queue_db
+    from memman.queue import stats as queue_stats
+    from memman.setup.scheduler import off
+
+    data_dir_val = ctx.obj['data_dir']
+    conn = open_queue_db(data_dir_val)
+    try:
+        qs = queue_stats(conn)
+    finally:
+        conn.close()
+    pending = qs.get('pending', 0) if isinstance(qs, dict) else 0
+
+    if pending and not (force or drain_first):
+        raise click.ClickException(
+            f'{pending} pending queue rows; re-run with --drain-first'
+            ' to process them before removing the scheduler, or'
+            ' --force to remove anyway (rows will sit until the'
+            ' scheduler is reinstalled)')
+
+    actions: list[str] = []
+    if pending and drain_first:
+        from memman.setup.scheduler import trigger
+        try:
+            t = trigger()
+            actions.append(
+                f"drained via `memman scheduler trigger`: {t.get('note','')}")
+        except (FileNotFoundError, RuntimeError) as exc:
+            raise click.ClickException(
+                f'drain-first failed: {exc}') from exc
+
+    result = off()
+    result.setdefault('actions', [])
+    result['actions'][:0] = actions
+    _json_out(result)
+
+
+@scheduler.command('reconcile')
+@click.pass_context
+def scheduler_reconcile(ctx: click.Context) -> None:
+    """Rewrite the state file from the OS's actual scheduler state."""
+    from memman.setup.scheduler import reconcile
+    _json_out(reconcile())
 
 
 @scheduler.command('interval')

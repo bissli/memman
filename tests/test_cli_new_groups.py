@@ -139,29 +139,30 @@ def test_scheduler_status_reports_not_installed(runner, monkeypatch):
     assert data['installed'] is False
 
 
-def test_scheduler_enable_fails_when_not_installed(runner, monkeypatch):
-    """`memman scheduler enable` errors when unit files are missing.
+def test_scheduler_resume_fails_when_not_installed(runner, monkeypatch):
+    """`memman scheduler resume` errors when unit files are missing.
     """
     _patch_no_subprocess(monkeypatch)
     monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
     monkeypatch.setattr(Path, 'home',
                         lambda: Path(runner[1]))
-    result = invoke(runner, ['scheduler', 'enable'])
+    result = invoke(runner, ['scheduler', 'resume'])
     assert result.exit_code != 0
     assert 'not installed' in result.output.lower()
 
 
-def test_scheduler_disable_is_noop_when_not_installed(runner, monkeypatch):
-    """`memman scheduler disable` returns cleanly when unit files are absent.
+def test_scheduler_pause_fails_when_not_installed(runner, monkeypatch):
+    """`memman scheduler pause` errors when unit files are absent.
+
+    No-units is represented by `off`, not `paused`, so pause refuses.
     """
     _patch_no_subprocess(monkeypatch)
     monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
     monkeypatch.setattr(Path, 'home',
                         lambda: Path(runner[1]))
-    result = invoke(runner, ['scheduler', 'disable'])
-    assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
-    assert data.get('note') == 'not installed'
+    result = invoke(runner, ['scheduler', 'pause'])
+    assert result.exit_code != 0
+    assert 'not installed' in result.output.lower()
 
 
 def test_scheduler_interval_show_when_not_installed(runner, monkeypatch):

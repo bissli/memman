@@ -18,10 +18,12 @@ logger = logging.getLogger('memman')
 QUEUE_FILENAME = 'queue.db'
 STALE_CLAIM_SECONDS = 600
 MAX_ATTEMPTS = 5
+STALE_RESUME_AGE_SECONDS = 7 * 24 * 3600
 
 STATUS_PENDING = 'pending'
 STATUS_DONE = 'done'
 STATUS_FAILED = 'failed'
+STATUS_STALE = 'stale'
 
 
 @dataclass(slots=True)
@@ -73,7 +75,7 @@ CREATE TABLE IF NOT EXISTS queue (
     worker_pid    INTEGER,
     attempts      INTEGER NOT NULL DEFAULT 0,
     status        TEXT NOT NULL DEFAULT 'pending'
-                  CHECK(status IN ('pending','done','failed')),
+                  CHECK(status IN ('pending','done','failed','stale')),
     last_error    TEXT,
     processed_at  INTEGER
 );
@@ -86,13 +88,42 @@ CREATE INDEX IF NOT EXISTS idx_queue_store
     ON queue(store);
 """
 
-_MIGRATIONS: list[tuple[int, list[str]]] = [
-    # Future schema changes are appended here as
-    # (version, ['SQL statement', ...]). Each migration runs in its own
-    # BEGIN IMMEDIATE transaction and bumps PRAGMA user_version on success.
+_MIGRATION_V2_ADD_STALE_STATUS = [
+    'ALTER TABLE queue RENAME TO queue_legacy_v1',
+    """
+    CREATE TABLE queue (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        store         TEXT NOT NULL,
+        content       TEXT NOT NULL,
+        hint_cat      TEXT,
+        hint_imp      INTEGER,
+        hint_tags     TEXT,
+        hint_source   TEXT,
+        hint_entities TEXT,
+        priority      INTEGER NOT NULL DEFAULT 0,
+        queued_at     INTEGER NOT NULL,
+        claimed_at    INTEGER,
+        worker_pid    INTEGER,
+        attempts      INTEGER NOT NULL DEFAULT 0,
+        status        TEXT NOT NULL DEFAULT 'pending'
+                      CHECK(status IN ('pending','done','failed','stale')),
+        last_error    TEXT,
+        processed_at  INTEGER
+    )
+    """,
+    'INSERT INTO queue SELECT * FROM queue_legacy_v1',
+    'DROP TABLE queue_legacy_v1',
+    ("CREATE INDEX IF NOT EXISTS idx_queue_ready"
+     " ON queue(status, priority DESC, queued_at ASC)"
+     " WHERE status = 'pending'"),
+    'CREATE INDEX IF NOT EXISTS idx_queue_store ON queue(store)',
     ]
 
-CURRENT_USER_VERSION = 1
+_MIGRATIONS: list[tuple[int, list[str]]] = [
+    (2, _MIGRATION_V2_ADD_STALE_STATUS),
+    ]
+
+CURRENT_USER_VERSION = 2
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -344,4 +375,40 @@ def retry_row(conn: sqlite3.Connection, row_id: int) -> bool:
 def purge_done(conn: sqlite3.Connection) -> int:
     """Delete all rows with status='done'. Returns deleted count."""
     cur = conn.execute("DELETE FROM queue WHERE status = 'done'")
+    return cur.rowcount
+
+
+def mark_stale_on_resume(
+        conn: sqlite3.Connection,
+        age_seconds: int = STALE_RESUME_AGE_SECONDS) -> int:
+    """Move pending never-attempted rows older than age_seconds to stale.
+
+    Called when a paused scheduler is resumed — content queued many days
+    ago is unlikely to reconcile cleanly against the current store state,
+    so surface it explicitly rather than silently re-enriching.
+    """
+    cutoff = int(time.time()) - age_seconds
+    cur = conn.execute(
+        "UPDATE queue SET status = 'stale'"
+        " WHERE status = 'pending'"
+        ' AND attempts = 0'
+        ' AND queued_at < ?',
+        (cutoff,))
+    return cur.rowcount
+
+
+def retry_stale(conn: sqlite3.Connection) -> int:
+    """Re-queue all stale rows. Returns number of rows updated."""
+    cur = conn.execute(
+        "UPDATE queue SET status = 'pending', attempts = 0,"
+        ' last_error = NULL, claimed_at = NULL, worker_pid = NULL,'
+        ' processed_at = NULL'
+        ' WHERE status = ?',
+        (STATUS_STALE,))
+    return cur.rowcount
+
+
+def purge_stale(conn: sqlite3.Connection) -> int:
+    """Delete all stale rows. Returns deleted count."""
+    cur = conn.execute("DELETE FROM queue WHERE status = 'stale'")
     return cur.rowcount
