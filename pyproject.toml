@@ -16,6 +16,7 @@ python = "^3.11"
 cachetools = "^5.3"
 click = "^8.1"
 httpx = "^0.27"
+numpy = "^1.26"
 tqdm = "^4.66"
 
 [tool.poetry.group.dev.dependencies]
