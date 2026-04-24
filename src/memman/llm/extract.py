@@ -2,6 +2,7 @@
 
 import logging
 
+from memman import trace
 from memman.llm.client import LLMClient, parse_json_response
 
 logger = logging.getLogger('memman')
@@ -104,20 +105,33 @@ def extract_facts(
     On LLM failure: returns single passthrough fact.
     On LLM skip (skip_reason): returns empty list.
     """
+    trace.event('extract_facts_start', content_len=len(content))
     try:
         raw = llm_client.complete(FACT_EXTRACTION_SYSTEM, content)
-    except Exception:
+    except Exception as exc:
         logger.debug('LLM fact extraction failed, using passthrough')
+        trace.event(
+            'extract_facts_result',
+            outcome='passthrough',
+            error=f'{type(exc).__name__}: {exc}')
         return _passthrough_fact(content, 'fact', 3)
 
     parsed = parse_json_response(raw)
     if parsed is None:
         logger.debug('LLM fact extraction parse error, using passthrough')
+        trace.event(
+            'extract_facts_result',
+            outcome='parse_error',
+            raw=raw)
         return _passthrough_fact(content, 'fact', 3)
 
     skip_reason = parsed.get('skip_reason')
     if skip_reason:
         logger.debug(f'LLM skipped: {skip_reason}')
+        trace.event(
+            'extract_facts_result',
+            outcome='skipped',
+            skip_reason=skip_reason)
         return []
 
     raw_facts = parsed.get('facts', [])
@@ -151,7 +165,14 @@ def extract_facts(
             'entities': entities,
             })
 
-    return facts or _passthrough_fact(content, 'fact', 3)
+    result = facts or _passthrough_fact(content, 'fact', 3)
+    trace.event(
+        'extract_facts_result',
+        outcome='ok',
+        fact_count=len(result),
+        skip_reason=skip_reason,
+        facts=result)
+    return result
 
 
 def _passthrough_fact(
@@ -200,10 +221,18 @@ def reconcile_memories(
         + '\n\nNEW FACTS:\n'
         + '\n'.join(fact_lines))
 
+    trace.event(
+        'reconcile_start',
+        fact_count=len(facts),
+        existing_count=len(existing_memories))
     try:
         raw = llm_client.complete(RECONCILIATION_SYSTEM, prompt)
-    except Exception:
+    except Exception as exc:
         logger.debug('LLM reconciliation failed, defaulting to ADD')
+        trace.event(
+            'reconcile_result',
+            outcome='error',
+            error=f'{type(exc).__name__}: {exc}')
         return [{'fact': f['text'], 'action': 'ADD',
                  'target_id': None, 'merged_text': None}
                 for f in facts]
@@ -242,10 +271,16 @@ def reconcile_memories(
             })
 
     if not results:
+        trace.event('reconcile_result', outcome='empty',
+                    fallback='ADD')
         return [{'fact': f['text'], 'action': 'ADD',
                  'target_id': None, 'merged_text': None}
                 for f in facts]
 
+    trace.event(
+        'reconcile_result',
+        outcome='ok',
+        actions=results)
     return results
 
 
@@ -257,10 +292,15 @@ def expand_query(
     Returns dict with: expanded_query, keywords, entities, intent.
     On failure: passthrough with original query.
     """
+    trace.event('query_expand_start', query=query)
     try:
         raw = llm_client.complete(QUERY_EXPANSION_SYSTEM, query)
-    except Exception:
+    except Exception as exc:
         logger.debug('LLM query expansion failed, using passthrough')
+        trace.event(
+            'query_expand_result',
+            outcome='error',
+            error=f'{type(exc).__name__}: {exc}')
         return {'expanded_query': query, 'keywords': [],
                 'entities': [], 'intent': None}
 
@@ -287,9 +327,11 @@ def expand_query(
     if intent not in {'WHY', 'WHEN', 'ENTITY', 'GENERAL'}:
         intent = None
 
-    return {
+    result = {
         'expanded_query': expanded,
         'keywords': keywords,
         'entities': entities,
         'intent': intent,
         }
+    trace.event('query_expand_result', outcome='ok', **result)
+    return result

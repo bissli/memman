@@ -14,6 +14,7 @@ from pathlib import Path
 
 import cachetools
 import httpx
+from memman import trace
 
 logger = logging.getLogger('memman')
 
@@ -42,13 +43,27 @@ def cache_file_path(cache_dir: str | None = None) -> Path:
 
 def _fetch() -> list[dict]:
     """GET the ZDR endpoints list from OpenRouter."""
+    trace.event('zdr_fetch_request', url=ZDR_ENDPOINT_URL)
+    t0 = time.monotonic()
     resp = httpx.get(ZDR_ENDPOINT_URL, timeout=FETCH_TIMEOUT_SECONDS)
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
     resp.raise_for_status()
     payload = resp.json()
     data = payload.get('data')
     if not isinstance(data, list):
+        trace.event(
+            'zdr_fetch_response',
+            status=resp.status_code,
+            elapsed_ms=elapsed_ms,
+            error='unexpected_shape',
+            body=payload)
         raise RuntimeError(
             f'unexpected OpenRouter response shape: {type(payload).__name__}')
+    trace.event(
+        'zdr_fetch_response',
+        status=resp.status_code,
+        elapsed_ms=elapsed_ms,
+        endpoint_count=len(data))
     return data
 
 

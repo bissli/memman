@@ -117,6 +117,66 @@ def test_install_writes_both_keys_to_env_file(
     assert mode == 0o600
 
 
+def test_set_debug_on_adds_key_atomically_mode_600(
+        fake_home, monkeypatch):
+    """set_debug(True) writes MEMMAN_DEBUG=1 to ~/.memman/env at mode 600.
+    """
+    import stat
+    sch.set_debug(True)
+    env_path = fake_home / '.memman' / 'env'
+    assert env_path.exists()
+    contents = env_path.read_text()
+    assert 'MEMMAN_DEBUG=1' in contents
+    mode = stat.S_IMODE(os.stat(env_path).st_mode)
+    assert mode == 0o600
+
+
+def test_set_debug_off_removes_key_preserves_others(
+        fake_home, monkeypatch):
+    """set_debug(False) removes MEMMAN_DEBUG, keeps other keys intact.
+    """
+    env_path = fake_home / '.memman' / 'env'
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text(
+        'OPENROUTER_API_KEY=sk-keep\n'
+        'VOYAGE_API_KEY=vk-keep\n'
+        'MEMMAN_DEBUG=1\n')
+    sch.set_debug(False)
+    contents = env_path.read_text()
+    assert 'MEMMAN_DEBUG' not in contents
+    assert 'OPENROUTER_API_KEY=sk-keep' in contents
+    assert 'VOYAGE_API_KEY=vk-keep' in contents
+
+
+def test_get_debug_reads_current_state(fake_home, monkeypatch):
+    """get_debug() returns True when MEMMAN_DEBUG=1 is in the env file.
+    """
+    env_path = fake_home / '.memman' / 'env'
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    assert sch.get_debug() is False
+    env_path.write_text('MEMMAN_DEBUG=1\n')
+    assert sch.get_debug() is True
+    env_path.write_text('MEMMAN_DEBUG=0\n')
+    assert sch.get_debug() is False
+
+
+def test_set_debug_preserves_comments_and_blanks(fake_home, monkeypatch):
+    """set_debug() keeps the API keys intact when toggling MEMMAN_DEBUG.
+    """
+    env_path = fake_home / '.memman' / 'env'
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text(
+        'MEMMAN_LLM_PROVIDER=openrouter\n'
+        'OPENROUTER_API_KEY=sk-x\n'
+        'VOYAGE_API_KEY=vk-y\n')
+    sch.set_debug(True)
+    contents = env_path.read_text()
+    assert 'MEMMAN_LLM_PROVIDER=openrouter' in contents
+    assert 'OPENROUTER_API_KEY=sk-x' in contents
+    assert 'VOYAGE_API_KEY=vk-y' in contents
+    assert 'MEMMAN_DEBUG=1' in contents
+
+
 def test_install_merges_existing_env_file(
         fake_home, fake_binary, monkeypatch):
     """Existing env keys are preserved across installs.

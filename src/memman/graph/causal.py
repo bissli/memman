@@ -4,6 +4,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
+from memman import trace
 from memman.llm.client import parse_json_list_response
 from memman.model import Edge, Insight
 from memman.search.keyword import tokenize
@@ -148,18 +149,37 @@ def infer_llm_causal_edges(
                 candidates.append({'insight': r, 'hop': 0, 'via_edge': ''})
 
     if not candidates:
+        trace.event(
+            'causal_infer_skipped',
+            insight_id=insight.id,
+            reason='no_candidates')
         return []
 
     prompt = _build_llm_prompt(insight, candidates, recent)
+    trace.event(
+        'causal_infer_start',
+        insight_id=insight.id,
+        candidate_count=len(candidates),
+        recent_count=len(recent))
 
     try:
         raw = llm_client.complete(LLM_SYSTEM_PROMPT, prompt)
-    except Exception:
+    except Exception as exc:
         logger.debug(f'LLM causal inference unavailable for {insight.id}')
+        trace.event(
+            'causal_infer_result',
+            insight_id=insight.id,
+            outcome='error',
+            error=f'{type(exc).__name__}: {exc}')
         return []
 
     edges = parse_json_list_response(raw)
     if edges is None:
+        trace.event(
+            'causal_infer_result',
+            insight_id=insight.id,
+            outcome='parse_error',
+            raw=raw)
         return []
 
     now = datetime.now(timezone.utc)
@@ -203,4 +223,16 @@ def infer_llm_causal_edges(
 
     logger.debug(
         f'LLM causal inference for {insight.id}: {len(result)} edges')
+    trace.event(
+        'causal_infer_result',
+        insight_id=insight.id,
+        outcome='ok',
+        edge_count=len(result),
+        edges=[{
+            'source_id': e.source_id,
+            'target_id': e.target_id,
+            'sub_type': e.metadata.get('sub_type'),
+            'confidence': e.metadata.get('confidence'),
+            'rationale': e.metadata.get('rationale'),
+            } for e in result])
     return result

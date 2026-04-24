@@ -2,6 +2,7 @@
 
 import logging
 
+from memman import trace
 from memman.llm.client import parse_json_response
 from memman.model import Insight
 
@@ -29,16 +30,31 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
     Pure function -- caller handles all DB writes.
     """
     prompt = f'INSIGHT (id={insight.id[:8]}):\n{insight.content}'
+    trace.event(
+        'enrich_start',
+        insight_id=insight.id,
+        content_len=len(insight.content),
+        existing_entity_count=len(insight.entities))
 
     try:
         raw = llm_client.complete(ENRICHMENT_SYSTEM_PROMPT, prompt)
-    except Exception:
+    except Exception as exc:
         logger.debug(f'LLM enrichment unavailable for {insight.id}')
+        trace.event(
+            'enrich_result',
+            insight_id=insight.id,
+            outcome='error',
+            error=f'{type(exc).__name__}: {exc}')
         return {}
 
     parsed = parse_json_response(raw)
     if parsed is None:
         logger.debug(f'LLM enrichment parse error for {insight.id}')
+        trace.event(
+            'enrich_result',
+            insight_id=insight.id,
+            outcome='parse_error',
+            raw=raw)
         return {}
 
     llm_entities = parsed.get('entities', [])
@@ -72,12 +88,21 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
         f'Enriched {insight.id}: {len(llm_entities)} new entities, '
         f'{len(keywords)} keywords, {len(facts)} facts')
 
-    return {
+    result = {
         'entities': merged,
         'keywords': keywords,
         'summary': summary,
         'semantic_facts': facts,
         }
+    trace.event(
+        'enrich_result',
+        insight_id=insight.id,
+        outcome='ok',
+        new_entity_count=len(llm_entities),
+        keyword_count=len(keywords),
+        fact_count=len(facts),
+        summary=summary)
+    return result
 
 
 def build_enriched_text(content: str, keywords: list[str]) -> str:

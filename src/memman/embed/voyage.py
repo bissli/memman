@@ -2,8 +2,10 @@
 
 import logging
 import os
+import time
 
 import httpx
+from memman import trace
 
 logger = logging.getLogger('memman')
 
@@ -43,19 +45,47 @@ class Client:
 
     def embed(self, text: str) -> list[float]:
         """Generate embedding for text via Voyage API."""
-        resp = httpx.post(
-            f'{self.endpoint}/v1/embeddings',
-            headers=self._headers(),
-            json={'model': self.model, 'input': [text]},
-            timeout=30.0)
+        url = f'{self.endpoint}/v1/embeddings'
+        headers = self._headers()
+        body = {'model': self.model, 'input': [text]}
+        trace.event(
+            'embed_request',
+            provider='voyage',
+            url=url,
+            model=self.model,
+            input_len=len(text),
+            headers=trace.redact_headers(headers))
+        t0 = time.monotonic()
+        resp = httpx.post(url, headers=headers, json=body, timeout=30.0)
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
         if resp.status_code != 200:
+            trace.event(
+                'embed_response',
+                provider='voyage',
+                status=resp.status_code,
+                elapsed_ms=elapsed_ms,
+                error='http_status')
             raise RuntimeError(
                 f'Voyage returned status {resp.status_code}')
         data = resp.json()
         items = data.get('data', [])
         if not items or 'embedding' not in items[0]:
+            trace.event(
+                'embed_response',
+                provider='voyage',
+                status=resp.status_code,
+                elapsed_ms=elapsed_ms,
+                error='empty')
             raise RuntimeError('empty embedding returned')
-        return items[0]['embedding']
+        vec = items[0]['embedding']
+        trace.event(
+            'embed_response',
+            provider='voyage',
+            status=resp.status_code,
+            elapsed_ms=elapsed_ms,
+            dim=len(vec),
+            usage=data.get('usage'))
+        return vec
 
     def unavailable_message(self) -> str:
         """Return error message when Voyage is not available."""

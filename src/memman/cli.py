@@ -625,28 +625,57 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
               help='Comma-separated store names; default all')
 @click.option('--verbose', is_flag=True, default=False,
               help='Echo per-blob progress')
+@click.option('--debug', is_flag=True, default=False,
+              help='Write structured trace to ~/.memman/logs/debug.log')
 @click.pass_context
 def enrich(ctx: click.Context, pending: bool, limit: int,
-           timeout: int, stores: str, verbose: bool) -> None:
+           timeout: int, stores: str, verbose: bool, debug: bool) -> None:
     """Background enrichment worker (drains the queue)."""
     if not pending:
         raise click.ClickException(
             'only --pending mode is supported; pass --pending explicitly')
+    if debug:
+        os.environ['MEMMAN_DEBUG'] = '1'
     _drain_queue(ctx, limit, timeout, stores, verbose)
 
 
 def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                  stores_filter: str, verbose: bool) -> None:
     """Claim and process queue rows until limit, timeout, or empty."""
+    import socket
+    import sys as _sys
     import time as _time
 
+    from memman import __version__ as _memman_version
+    from memman import trace
     from memman.queue import claim, mark_done, mark_failed, open_queue_db
-    from memman.queue import stats
+    from memman.queue import queue_db_path, stats
 
     data_dir_val = ctx.obj['data_dir']
     worker_pid = os.getpid()
     deadline = _time.monotonic() + timeout
     store_list = [s.strip() for s in stores_filter.split(',') if s.strip()]
+
+    trace.setup()
+    trace.event(
+        'scheduler_fired',
+        pid=worker_pid,
+        hostname=socket.gethostname(),
+        python=_sys.version.split()[0],
+        memman_version=_memman_version,
+        env={
+            'MEMMAN_LLM_PROVIDER': os.environ.get('MEMMAN_LLM_PROVIDER', ''),
+            'MEMMAN_LLM_MODEL': os.environ.get('MEMMAN_LLM_MODEL', ''),
+            'MEMMAN_DATA_DIR': os.environ.get('MEMMAN_DATA_DIR', ''),
+            'MEMMAN_STORE': os.environ.get('MEMMAN_STORE', ''),
+            })
+    trace.event(
+        'drain_start',
+        data_dir=data_dir_val,
+        queue_db_path=queue_db_path(data_dir_val),
+        limit=limit,
+        timeout=timeout,
+        stores=store_list)
 
     conn = open_queue_db(data_dir_val)
     processed = 0
@@ -656,6 +685,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         while processed + failed < limit:
             if _time.monotonic() >= deadline:
                 logger.info(f'enrich: timeout after {timeout}s')
+                trace.event('drain_timeout', timeout=timeout)
                 break
             row = claim(conn, worker_pid=worker_pid,
                         stores=store_list or None)
@@ -663,15 +693,34 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 break
 
             sdir = store_dir(data_dir_val, row.store)
+            trace.event(
+                'queue_claim',
+                row_id=row.id,
+                store=row.store,
+                priority=row.priority,
+                attempts=row.attempts,
+                content_len=len(row.content),
+                hint_cat=row.hint_cat,
+                hint_imp=row.hint_imp,
+                hint_tags=row.hint_tags,
+                hint_source=row.hint_source,
+                hint_entities=row.hint_entities)
 
             try:
                 import contextlib
                 import io as _io
                 buf = _io.StringIO()
+                row_t0 = _time.monotonic()
                 with contextlib.redirect_stdout(buf):
                     _process_queue_row(row, sdir, data_dir_val)
+                row_elapsed_ms = int((_time.monotonic() - row_t0) * 1000)
                 mark_done(conn, row.id)
                 processed += 1
+                trace.event(
+                    'queue_done',
+                    row_id=row.id,
+                    store=row.store,
+                    elapsed_ms=row_elapsed_ms)
                 if verbose:
                     click.echo(
                         f'[enrich] done id={row.id} store={row.store}',
@@ -680,6 +729,12 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
             except Exception as exc:
                 mark_failed(conn, row.id, f'{type(exc).__name__}: {exc}')
                 failed += 1
+                trace.event(
+                    'queue_failed',
+                    row_id=row.id,
+                    store=row.store,
+                    error_class=type(exc).__name__,
+                    error_message=str(exc)[:500])
                 if verbose:
                     click.echo(
                         f'[enrich] fail id={row.id} store={row.store}'
@@ -689,6 +744,11 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         s = stats(conn)
         conn.close()
 
+    trace.event(
+        'drain_end',
+        processed=processed,
+        failed=failed,
+        remaining=s)
     _json_out({
         'processed': processed,
         'failed': failed,
@@ -718,7 +778,18 @@ def _process_queue_row(row: 'memman.queue.QueueRow', store_data_dir: str,
     if importance < 1 or importance > 5:
         importance = 3
 
+    from memman import trace as _trace
+
     db = _open_store_db(store_data_dir)
+    _trace.event(
+        'process_row',
+        row_id=row.id,
+        store=row.store,
+        store_dir=store_data_dir,
+        db_path=db.path,
+        source=source,
+        category=category,
+        importance=importance)
     try:
         already = db._query(
             'SELECT 1 FROM insights WHERE source = ? AND deleted_at IS NULL'
@@ -727,6 +798,10 @@ def _process_queue_row(row: 'memman.queue.QueueRow', store_data_dir: str,
             logger.info(
                 f'queue row {row.id} already committed to store'
                 f' {row.store!r}; skipping re-processing')
+            _trace.event(
+                'process_row_skipped',
+                row_id=row.id,
+                reason='already_committed')
             return
 
         now = datetime.now(timezone.utc)
@@ -1312,6 +1387,69 @@ def scheduler_trigger(ctx: click.Context) -> None:
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
     _json_out(result)
+
+
+@scheduler.group('debug', no_args_is_help=True)
+def scheduler_debug() -> None:
+    """Toggle MEMMAN_DEBUG in ~/.memman/env for scheduler-driven runs."""
+
+
+@scheduler_debug.command('on')
+@click.pass_context
+def scheduler_debug_on(ctx: click.Context) -> None:
+    """Enable debug traces for future scheduler firings."""
+    from memman.setup.scheduler import set_debug
+    actions = set_debug(True)
+    logs_dir = pathlib.Path.home() / '.memman' / 'logs'
+    click.echo(
+        '[memman] debug traces ENABLED -- raw LLM request/response bodies'
+        f' (including memory content) will be written to {logs_dir}/debug.log'
+        ' (mode 600). Turn off with: memman scheduler debug off',
+        err=True)
+    _json_out({'debug': True, 'actions': actions})
+
+
+@scheduler_debug.command('off')
+@click.pass_context
+def scheduler_debug_off(ctx: click.Context) -> None:
+    """Disable debug traces; existing debug.log files are kept."""
+    from memman.setup.scheduler import set_debug
+    actions = set_debug(False)
+    _json_out({'debug': False, 'actions': actions})
+
+
+@scheduler_debug.command('status')
+@click.pass_context
+def scheduler_debug_status(ctx: click.Context) -> None:
+    """Show whether MEMMAN_DEBUG is set in ~/.memman/env."""
+    from memman.setup.scheduler import get_debug
+    logs_dir = pathlib.Path.home() / '.memman' / 'logs'
+    debug_log = logs_dir / 'debug.log'
+    _json_out({
+        'debug': get_debug(),
+        'debug_log': str(debug_log),
+        'debug_log_exists': debug_log.is_file(),
+        })
+
+
+@scheduler_debug.command('tail')
+@click.option('--lines', type=int, default=50,
+              help='Number of tail lines to print (default 50).')
+@click.pass_context
+def scheduler_debug_tail(ctx: click.Context, lines: int) -> None:
+    """Print the tail of ~/.memman/logs/debug.log."""
+    path = pathlib.Path.home() / '.memman' / 'logs' / 'debug.log'
+    if not path.is_file():
+        click.echo(f'[memman] no debug log yet at {path}', err=True)
+        return
+    try:
+        content = path.read_text(errors='replace').splitlines()
+    except OSError as exc:
+        raise click.ClickException(
+            f'failed to read {path}: {exc}') from exc
+    tail = content[-lines:] if lines > 0 else content
+    for line in tail:
+        click.echo(line)
 
 
 @cli.group(invoke_without_command=True)

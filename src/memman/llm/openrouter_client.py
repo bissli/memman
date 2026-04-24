@@ -18,6 +18,7 @@ import time
 
 import click
 import httpx
+from memman import trace
 from memman.llm.client import ENRICHMENT_TIMEOUT, MAX_RETRIES, RETRY_BACKOFF
 from memman.llm.client import RETRYABLE_STATUS_CODES
 from memman.llm.openrouter_cache import get_zdr_endpoints, pick_latest_haiku
@@ -68,9 +69,19 @@ class OpenRouterClient:
                     ' route via non-ZDR endpoints')
             logger.debug(
                 f'openrouter model override: {self._model_override}')
+            trace.event(
+                'llm_model_resolved',
+                source='override',
+                model=self._model_override,
+                endpoint_count=len(endpoints))
             return self._model_override
         picked = pick_latest_haiku(endpoints)
         logger.debug(f'openrouter auto-picked model: {picked}')
+        trace.event(
+            'llm_model_resolved',
+            source='auto',
+            model=picked,
+            endpoint_count=len(endpoints))
         return picked
 
     def complete(self, system: str, user: str) -> str:
@@ -95,15 +106,29 @@ class OpenRouterClient:
                 },
             }
 
+        url = f'{self.endpoint}/chat/completions'
         for attempt in range(MAX_RETRIES):
+            trace.event(
+                'llm_request',
+                provider='openrouter',
+                url=url,
+                attempt=attempt + 1,
+                headers=trace.redact_headers(headers),
+                body=body)
+            t0 = time.monotonic()
             resp = httpx.post(
-                f'{self.endpoint}/chat/completions',
-                headers=headers,
-                json=body,
-                timeout=self.timeout)
+                url, headers=headers, json=body, timeout=self.timeout)
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
             try:
                 resp.raise_for_status()
             except httpx.HTTPStatusError:
+                trace.event(
+                    'llm_response',
+                    provider='openrouter',
+                    status=resp.status_code,
+                    elapsed_ms=elapsed_ms,
+                    body=_safe_json(resp),
+                    error='http_status')
                 if (resp.status_code in RETRYABLE_STATUS_CODES
                         and attempt < MAX_RETRIES - 1):
                     delay = RETRY_BACKOFF[min(
@@ -115,6 +140,12 @@ class OpenRouterClient:
                     continue
                 raise
             data = resp.json()
+            trace.event(
+                'llm_response',
+                provider='openrouter',
+                status=resp.status_code,
+                elapsed_ms=elapsed_ms,
+                body=data)
             choices = data.get('choices') or []
             if not choices:
                 raise RuntimeError(
@@ -125,6 +156,14 @@ class OpenRouterClient:
                 raise RuntimeError(
                     f'openrouter response missing message.content'
                     f' ({exc}): {data!r}') from exc
+
+
+def _safe_json(resp: httpx.Response) -> object:
+    """Return parsed JSON or the raw text if decoding fails."""
+    try:
+        return resp.json()
+    except Exception:
+        return resp.text
 
 
 def get_openrouter_client() -> OpenRouterClient:

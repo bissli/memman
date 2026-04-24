@@ -7,6 +7,7 @@ import time
 
 import click
 import httpx
+from memman import trace
 
 logger = logging.getLogger('memman')
 
@@ -52,15 +53,29 @@ class LLMClient:
             'system': system,
             'messages': [{'role': 'user', 'content': user}],
             }
+        url = f'{self.endpoint}/v1/messages'
         for attempt in range(MAX_RETRIES):
+            trace.event(
+                'llm_request',
+                provider='anthropic',
+                url=url,
+                attempt=attempt + 1,
+                headers=trace.redact_headers(headers),
+                body=body)
+            t0 = time.monotonic()
             resp = httpx.post(
-                f'{self.endpoint}/v1/messages',
-                headers=headers,
-                json=body,
-                timeout=self.timeout)
+                url, headers=headers, json=body, timeout=self.timeout)
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
             try:
                 resp.raise_for_status()
             except httpx.HTTPStatusError:
+                trace.event(
+                    'llm_response',
+                    provider='anthropic',
+                    status=resp.status_code,
+                    elapsed_ms=elapsed_ms,
+                    body=_safe_json(resp),
+                    error='http_status')
                 if (resp.status_code in RETRYABLE_STATUS_CODES
                         and attempt < MAX_RETRIES - 1):
                     delay = RETRY_BACKOFF[min(
@@ -73,7 +88,21 @@ class LLMClient:
                     continue
                 raise
             data = resp.json()
+            trace.event(
+                'llm_response',
+                provider='anthropic',
+                status=resp.status_code,
+                elapsed_ms=elapsed_ms,
+                body=data)
             return data['content'][0]['text']
+
+
+def _safe_json(resp: httpx.Response) -> object:
+    """Return parsed JSON or the raw text if decoding fails."""
+    try:
+        return resp.json()
+    except Exception:
+        return resp.text
 
 
 def strip_code_fences(raw: str) -> str:

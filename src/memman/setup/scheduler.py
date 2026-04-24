@@ -77,34 +77,64 @@ def _env_file_path() -> Path:
     return Path.home() / '.memman' / ENV_FILENAME
 
 
-def _write_env_file(openrouter_api_key: str,
-                    voyage_api_key: str) -> list[str]:
-    """Write ~/.memman/env at mode 600 with provider + embedding keys.
+def _read_env_file() -> dict[str, str]:
+    """Parse ~/.memman/env into a dict. Missing file -> empty dict."""
+    path = _env_file_path()
+    existing: dict[str, str] = {}
+    if not path.exists():
+        return existing
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        k, v = line.split('=', 1)
+        existing[k] = v
+    return existing
 
-    Atomic: writes to a .tmp sibling at mode 600 then os.replace() to the
-    final path so a concurrent reader never sees a mode-644 or partial file.
+
+def _write_env_keys(updates: dict[str, str],
+                    removes: set[str] | None = None) -> list[str]:
+    """Merge updates into ~/.memman/env, atomically, at mode 600.
+
+    Preserves any keys already in the file that are not in updates or
+    removes. Atomic: writes to a .tmp sibling at mode 600 then
+    os.replace() so a concurrent reader never sees a partial file.
     """
     path = _env_file_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    existing = {}
-    if path.exists():
-        for line in path.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith('#') or '=' not in line:
-                continue
-            k, v = line.split('=', 1)
-            existing[k] = v
-
-    existing['MEMMAN_LLM_PROVIDER'] = 'openrouter'
-    existing['OPENROUTER_API_KEY'] = openrouter_api_key
-    existing['VOYAGE_API_KEY'] = voyage_api_key
-
+    existing = _read_env_file()
+    for k in (removes or ()):
+        existing.pop(k, None)
+    existing.update(updates)
     contents = '\n'.join(f'{k}={v}' for k, v in existing.items()) + '\n'
     tmp = path.with_suffix(path.suffix + '.tmp')
     tmp.write_text(contents)
     Path(tmp).chmod(0o600)
     Path(tmp).replace(path)
     return [f'wrote {path} (mode 600, atomic)']
+
+
+def _write_env_file(openrouter_api_key: str,
+                    voyage_api_key: str) -> list[str]:
+    """Write ~/.memman/env at mode 600 with provider + embedding keys."""
+    return _write_env_keys({
+        'MEMMAN_LLM_PROVIDER': 'openrouter',
+        'OPENROUTER_API_KEY': openrouter_api_key,
+        'VOYAGE_API_KEY': voyage_api_key,
+        })
+
+
+def set_debug(on: bool) -> list[str]:
+    """Add or remove MEMMAN_DEBUG=1 from ~/.memman/env atomically."""
+    if on:
+        return _write_env_keys({'MEMMAN_DEBUG': '1'})
+    return _write_env_keys({}, removes={'MEMMAN_DEBUG'})
+
+
+def get_debug() -> bool:
+    """Return True if ~/.memman/env contains a truthy MEMMAN_DEBUG value."""
+    raw = _read_env_file().get('MEMMAN_DEBUG', '').strip().lower()
+    return raw in {'1', 'true', 'yes', 'on'}
 
 
 def uninstall() -> dict:
