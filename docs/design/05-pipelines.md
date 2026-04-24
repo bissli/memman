@@ -4,45 +4,57 @@
 
 ---
 
-## 5.1 Write Pipeline: Remember
+## 5.1 Write Pipeline: Remember (deferred, two-tier)
 
-`memman remember` decomposes input into atomic facts, classifies each against existing memories, and builds graph edges — all synchronously in a single tier.
+`memman remember` is a fast queue-append (~50 ms). A user-scope scheduler (systemd timer on Linux, launchd agent on macOS) invokes `memman enrich --pending` every 15 min to drain the queue through the full extraction + reconciliation + enrichment pipeline out of band.
 
 ![Remember Pipeline](../diagrams/02-remember-pipeline.drawio.png)
 
-### Single-Tier Synchronous Pipeline
+### Tier 1: Synchronous queue-append (host session)
 
-**Sequential phase:**
+1. `memman remember [--cat X --imp Y --entities a,b] "<text>"` validates input.
+2. Inserts one row into `~/.memman/queue.db` (SQLite WAL) with `status='pending'`, priority, queued_at, and the raw text + hints.
+3. Returns `{action: queued, queue_id: N, store: ...}` to the caller.
 
-1. **Quality gate** — `check_content_quality()` scans for transient patterns (AWS IDs, deployment receipts, state observations). 2+ matches → reject.
-2. **LLM fact extraction** — `extract_facts(llm_client, content)` decomposes input into 1-5 atomic facts with category, importance, and entities. Trivial content (greetings, filler) returns `[]` → skip.
-3. **Per-fact processing**:
-   a. Embed fact text via Voyage AI (512-dim).
-   b. Find similar existing insights: keyword search (top 5) + cosine scan (threshold 0.5).
-   c. `reconcile_memories(llm_client, [fact], similar)` → action:
-      - **ADD**: new content, insert as new insight
-      - **UPDATE**: refines existing, insert and link to original
-      - **DELETE**: contradicts existing, soft-delete target
-      - **NONE**: already captured, skip
-   d. Create edges: `fast_edges()` (temporal + entity) + `create_semantic_edges()`.
-   e. `refresh_effective_importance()`, `auto_prune()`.
+No LLM calls. No embeddings. No similarity scan. No edges. The host session never blocks.
 
-**Parallel phase (ThreadPoolExecutor, 2 workers):**
+`--sync` forces the old in-process synchronous path (used by tests and low-level tooling).
 
-4. **LLM enrichment** — `enrich_with_llm()` extracts keywords, summary, semantic facts, and additional entities.
-5. **LLM causal inference** — `infer_llm_causal_edges()` uses 2-hop BFS neighbors + recent insights as candidates (token overlap ≥ 15%, LLM confidence ≥ 0.75).
+### Tier 2: Background worker (scheduler-driven)
 
-**Sequential finalization:**
+`memman enrich --pending` is invoked on a platform-native timer:
 
-6. **Write enrichment results** — updates entities, keywords, summary in DB.
-7. **Re-embedding** — rebuilds embedding from enriched text (content + keywords).
-8. **Edge rebuild** — deletes old auto entity/semantic edges, re-creates from enriched data. Writes causal edges from LLM inference.
-9. **Stamps** — `linked_at` and `enriched_at`.
-10. **JSON output** — `{facts: [...], quality_warnings, llm_calls}`.
+- **Linux**: `systemctl --user` timer at `~/.config/systemd/user/memman-enrich.timer`, `Persistent=true` so sleep/off catch-up is automatic.
+- **macOS**: launchd agent at `~/Library/LaunchAgents/com.memman.enrich.plist` with `StartInterval=900`.
 
-The `--no-reconcile` flag skips LLM reconciliation for direct insert.
+Per-blob processing inside `_process_queue_row`:
 
-`graph rebuild` re-enriches all insights through the full LLM pipeline. `graph reindex` recalculates auto-created edges without LLM calls and runs automatically on DB open when edge constants change.
+1. **Atomic claim** — `UPDATE queue SET claimed_at=..., attempts=attempts+1 WHERE id = (SELECT ... WHERE status='pending' ORDER BY priority DESC, queued_at ASC LIMIT 1) RETURNING ...`. Race-free under SQLite WAL. Stale claims (>10 min) are reclaimable.
+2. **Idempotency check** — if the target store already has any insight with `source='queue:<id>'`, skip and mark done (crash-recovery after partial commit).
+3. **Quality gate** — regex-based `check_content_quality()` rejects transient patterns.
+4. **LLM fact extraction** — decomposes into 1–5 atomic facts with category/importance/entities.
+5. **Per-fact**: embed (Voyage), keyword + cosine similarity scan, `reconcile_memories` → ADD/UPDATE/DELETE/NONE, insert/update, fast edges.
+6. **Parallel enrichment + causal inference** (ThreadPoolExecutor, 2 workers).
+7. **Re-embed** with enriched keywords; rebuild auto edges.
+8. `mark_done(queue_id)` on success, or `mark_failed` (retry up to 5 times across stale-claim windows before status='failed').
+
+### LLM routing
+
+Session-path (`memman recall` query expansion) uses direct Anthropic API with hard-coded Haiku. The scheduler path routes through OpenRouter with `provider.zdr=true, data_collection="deny"`. The model is auto-picked from a cached `/api/v1/endpoints/zdr` inventory (24 h TTL, cachetools in-process + disk JSON) — the latest Anthropic Haiku is selected via version parsing.
+
+### Operational controls
+
+| Command                                 | Effect                                 |
+| --------------------------------------- | -------------------------------------- |
+| `memman queue list [--limit N]`         | inspect pending/done/failed rows       |
+| `memman queue retry <id>`               | re-queue a failed row                  |
+| `memman queue purge --done`             | delete completed rows                  |
+| `memman scheduler status`               | show install state, interval, next run |
+| `memman scheduler enable`               | resume after pause                     |
+| `memman scheduler disable`              | pause without uninstalling             |
+| `memman scheduler interval --seconds N` | change cadence (min 60 s)              |
+
+`graph rebuild` re-enriches all already-stored insights through the full LLM pipeline (useful after model/prompt changes). `graph reindex` recalculates auto-created edges without LLM calls and runs automatically on DB open when edge constants change.
 
 ---
 

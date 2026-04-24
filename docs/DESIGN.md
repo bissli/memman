@@ -1,6 +1,6 @@
 # MemMan — Design & Architecture
 
-MemMan is a persistent memory system designed for LLM agents. It adopts the **LLM-Supervised** pattern: the host LLM acts as external orchestrator of a standalone memory binary through symbolic CLI interfaces, while Haiku handles pipeline intelligence (fact extraction, reconciliation, query expansion). Memory is organized as a four-graph knowledge structure with temporal, entity, causal, and semantic edges. Implemented as a Python package + SQLite, requiring Anthropic and Voyage AI API keys.
+MemMan is a persistent memory system designed for LLM agents. It adopts the **LLM-Supervised** pattern: the host LLM acts as external orchestrator of a standalone memory binary through symbolic CLI interfaces, while Haiku handles pipeline intelligence (fact extraction, reconciliation, query expansion). Memory is organized as a four-graph knowledge structure with temporal, entity, causal, and semantic edges. Writes are deferred to a scheduler-driven background worker so the host session never blocks on LLM calls. Implemented as a Python package + SQLite, requiring OpenRouter and Voyage AI API keys for the background worker (Anthropic API key optional for session-path query expansion).
 
 ---
 
@@ -24,7 +24,7 @@ MAGMA four-graph model (temporal, entity, causal, semantic) with creation logic,
 
 ### [5. Read & Write Pipelines](design/05-pipelines.md)
 
-The single-tier synchronous write pipeline (`remember` with LLM fact extraction, reconciliation, and parallel enrichment/causal inference via ThreadPoolExecutor), read pipeline (LLM query expansion, RRF anchor fusion, beam search traversal, multi-factor re-ranking).
+The two-tier deferred write pipeline (`remember` is a queue-append; a scheduler-driven `enrich --pending` worker runs fact extraction, reconciliation, parallel enrichment/causal inference out of band). Scheduler installs per platform (systemd on Linux, launchd on macOS) and routes LLM calls through OpenRouter with ZDR enforced. Read pipeline (LLM query expansion, RRF anchor fusion, beam search traversal, multi-factor re-ranking).
 
 ### [6. Lifecycle & Embedding](design/06-lifecycle.md)
 
@@ -32,7 +32,7 @@ Effective Importance (EI) decay formula, immunity rules, auto-pruning, GC comman
 
 ### [7. LLM CLI Integration](design/07-integration.md)
 
-Lifecycle hooks (Prime, Remind, Nudge, Compact, Recall), skill file, behavioral guide, automated setup via `memman setup`, sub-agent delegation pattern, and adaptation to other LLM CLIs.
+Lifecycle hooks (Prime, Remind, Nudge, Compact, Recall), skill file, behavioral guide, automated setup via `memman setup`. The host agent calls `memman remember` directly via Bash — no sub-agent delegation — because the binary is a fast queue-append. Supported targets: claude-code, openclaw, nanoclaw.
 
 ### [8. Design Decisions & Future Direction](design/08-decisions.md)
 

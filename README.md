@@ -134,14 +134,17 @@ MEMMAN_STORE=work memman recall "query"  # or use env var per-process
 
 Different agents/processes can use different stores via the `MEMMAN_STORE` environment variable.
 
-**Local or global mode?**
-`memman setup` defaults to **global** (user-wide `~/.claude/`), activating memman across all projects. **Local** (project-scoped `.claude/`) can be selected interactively.
+**Install scope?**
+`memman setup` always installs globally at `~/.claude/` (or `~/.openclaw/`). There is no local/project mode.
 
 **How do I customize the behavior?**
 Edit `~/.memman/prompt/guide.md`. This file controls when the agent recalls memories and what it considers worth remembering. The skill file (`SKILL.md`) is auto-deployed and should not need manual editing.
 
-**What is sub-agent delegation?**
-The host model decides *what* to remember, then delegates the actual `memman remember` execution to a lightweight sub-agent. This saves tokens and keeps memory operations out of the main context.
+**How does `memman remember` work?**
+It is a fast queue-append (~50 ms). A user-scope scheduler (systemd timer on Linux, launchd agent on macOS) drains the queue every 15 min and runs the full pipeline — fact extraction, reconciliation, enrichment, causal inference, embedding — out of band. The host agent calls `memman remember` directly via Bash, no sub-agent delegation. **Newly stored memories are NOT recallable in the current session**; they become available in later sessions.
+
+**How do I pause the scheduler?**
+`memman scheduler disable` stops the timer/agent without removing unit files. `memman scheduler enable` resumes. `memman scheduler interval --seconds N` changes the cadence (min 60 s).
 
 ## Configuration
 
@@ -158,7 +161,7 @@ memman setup     # interactive setup
 memman setup --eject  # remove all integrations
 ```
 
-**Dependencies**: Python 3.11+, Click, httpx, tqdm. **Required**: `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`.
+**Dependencies**: Python 3.11+, Click, httpx, cachetools, tqdm. **Required**: `OPENROUTER_API_KEY` and `VOYAGE_API_KEY` for the background worker; `ANTHROPIC_API_KEY` is optional (session-path query expansion degrades gracefully when unset).
 
 ## Documentation
 
