@@ -1700,20 +1700,16 @@ def uninstall(ctx: click.Context, target: str) -> None:
 
 
 def _emit_guide() -> None:
-    """Write shipped guide.md plus ~/.memman/prompt/guide.local.md to stdout."""
+    """Write shipped guide.md to stdout."""
     from importlib.resources import files as pkg_files
     shipped = (pkg_files('memman.setup.assets')
                .joinpath('claude/guide.md').read_text())
     click.echo(shipped, nl=False)
-    local = pathlib.Path.home() / '.memman' / 'prompt' / 'guide.local.md'
-    if local.is_file():
-        click.echo('\n<!-- user overrides -->')
-        click.echo(local.read_text(), nl=False)
 
 
 @cli.command()
 def guide() -> None:
-    """Print the memman behavioral guide (shipped + local overrides)."""
+    """Print the memman behavioral guide."""
     _emit_guide()
 
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import click
 from memman.setup.deploy import symlink_asset
-from memman.setup.detect import detect_environments, home_dir
+from memman.setup.detect import detect_environments
 from memman.setup.markdown import remove_memory_block
 from memman.setup.prompt import detection_line, status_error, status_ok
 from memman.setup.prompt import status_updated
@@ -20,11 +20,6 @@ from memman.setup.settings import add_memman_permission, read_json_file
 from memman.setup.settings import remove_claude_hooks, remove_if_empty
 from memman.setup.settings import remove_memman_permission, write_json_file
 from memman.setup.settings import write_or_remove_json_file
-
-GUIDE_LOCAL_STUB = (
-    '<!-- memman local overrides — survive install re-runs and upgrades -->\n'
-    '<!-- Content below is appended to the shipped guide. -->\n'
-    )
 
 
 def check_prereqs() -> tuple[str, str]:
@@ -54,16 +49,6 @@ def check_prereqs() -> tuple[str, str]:
             ' export it and re-run')
 
     return openrouter_key, voyage_key
-
-
-def write_guide_local_stub() -> Path:
-    """Create ~/.memman/prompt/guide.local.md if absent; return path."""
-    path = Path(home_dir()) / '.memman' / 'prompt' / 'guide.local.md'
-    if not path.is_file():
-        path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
-        path.write_text(GUIDE_LOCAL_STUB)
-        path.chmod(0o644)
-    return path
 
 
 def claude_write_skill(config_dir: str) -> str:
@@ -177,15 +162,11 @@ def _install_claude_code(env: dict, data_dir: str) -> None:
     status_ok('Permission',
               'Bash(memman:*) added to settings.json')
 
-    stub_path = write_guide_local_stub()
-    status_ok('Local overrides', str(stub_path))
-
     print()
     print('Setup complete!')
     print('  Hooks   prime, remind, nudge, compact, recall, exit_plan')
     print()
     print('Start a new Claude Code session to activate.')
-    print(f'Edit {stub_path} to customize the agent guide.')
 
     _init_default_store(data_dir)
 

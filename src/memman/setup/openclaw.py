@@ -127,7 +127,7 @@ def openclaw_uninstall(config_dir: str) -> list[Exception]:
 
 def install_openclaw(env: dict, data_dir: str) -> None:
     """Install memman into OpenClaw (~/.openclaw/)."""
-    from memman.setup.claude import _init_default_store, write_guide_local_stub
+    from memman.setup.claude import _init_default_store
 
     config_dir = env['config_dir']
 
@@ -148,9 +148,6 @@ def install_openclaw(env: dict, data_dir: str) -> None:
     path = openclaw_register_plugin(config_dir)
     status_updated('Config', path)
 
-    stub_path = write_guide_local_stub()
-    status_ok('Local overrides', str(stub_path))
-
     print()
     print('Setup complete!')
     print(f'  Skill   {config_dir}/skills/memman/SKILL.md')
@@ -160,6 +157,5 @@ def install_openclaw(env: dict, data_dir: str) -> None:
           ' (hooks: remind, nudge)')
     print()
     print('Restart the OpenClaw gateway to activate.')
-    print(f'Edit {stub_path} to customize the agent guide.')
 
     _init_default_store(data_dir)

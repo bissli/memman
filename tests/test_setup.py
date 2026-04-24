@@ -548,18 +548,22 @@ def test_guide_command_prints_shipped_content():
     assert shipped.strip() in result.output
 
 
-def test_guide_command_concatenates_local_override(tmp_path, monkeypatch):
-    """`memman guide` appends ~/.memman/prompt/guide.local.md when present."""
+def test_guide_command_ignores_any_local_override_file(tmp_path, monkeypatch):
+    """`memman guide` must NOT read ~/.memman/prompt/guide.local.md.
+
+    Confirms the override mechanism is gone; any leftover file at the
+    old path has zero effect on output.
+    """
     monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
     prompt_dir = tmp_path / '.memman' / 'prompt'
     prompt_dir.mkdir(parents=True)
     override = prompt_dir / 'guide.local.md'
-    override.write_text('USER-OVERRIDE-MARKER\n')
+    override.write_text('USER-OVERRIDE-MARKER-SHOULD-NOT-APPEAR\n')
     runner = CliRunner()
     result = runner.invoke(cli, ['guide'])
     assert result.exit_code == 0
-    assert 'USER-OVERRIDE-MARKER' in result.output
-    assert '<!-- user overrides -->' in result.output
+    assert 'USER-OVERRIDE-MARKER-SHOULD-NOT-APPEAR' not in result.output
+    assert '<!-- user overrides -->' not in result.output
 
 
 def test_skill_command_prints_shipped_content():
@@ -613,6 +617,7 @@ def test_prime_command_reads_compact_flag_trigger(tmp_path, monkeypatch):
 def test_claude_write_skill_creates_symlink(tmp_path):
     """claude_write_skill creates a symlink to the shipped SKILL.md."""
     from importlib.resources import files as pkg_files
+
     from memman.setup.claude import claude_write_skill
     config = tmp_path / 'claude'
     link_path = claude_write_skill(str(config))
@@ -626,6 +631,7 @@ def test_claude_write_skill_creates_symlink(tmp_path):
 def test_claude_write_hook_creates_symlink(tmp_path):
     """claude_write_hook creates a symlink to the shipped hook script."""
     from importlib.resources import files as pkg_files
+
     from memman.setup.claude import claude_write_hook
     config = tmp_path / 'claude'
     link_path = claude_write_hook(str(config), 'prime.sh')
@@ -662,32 +668,10 @@ def test_symlink_replaces_regular_file(tmp_path):
     assert link.is_symlink()
 
 
-def test_write_guide_local_stub_creates_when_absent(tmp_path, monkeypatch):
-    """write_guide_local_stub creates the file with skeleton content."""
-    monkeypatch.setattr(
-        'memman.setup.claude.home_dir', lambda: str(tmp_path))
-    from memman.setup.claude import GUIDE_LOCAL_STUB, write_guide_local_stub
-    path = write_guide_local_stub()
-    assert path.is_file()
-    assert path.read_text() == GUIDE_LOCAL_STUB
-
-
-def test_write_guide_local_stub_preserves_existing(tmp_path, monkeypatch):
-    """write_guide_local_stub never overwrites an existing file."""
-    monkeypatch.setattr(
-        'memman.setup.claude.home_dir', lambda: str(tmp_path))
-    prompt_dir = tmp_path / '.memman' / 'prompt'
-    prompt_dir.mkdir(parents=True)
-    existing = prompt_dir / 'guide.local.md'
-    existing.write_text('USER-CUSTOMIZED-CONTENT\n')
-    from memman.setup.claude import write_guide_local_stub
-    write_guide_local_stub()
-    assert existing.read_text() == 'USER-CUSTOMIZED-CONTENT\n'
-
-
 def test_uninstall_removes_symlink_not_target(tmp_path):
     """claude_uninstall removes the symlink without touching the target."""
     from importlib.resources import files as pkg_files
+
     from memman.setup.claude import claude_uninstall, claude_write_skill
     config = tmp_path / 'claude'
     claude_write_skill(str(config))
