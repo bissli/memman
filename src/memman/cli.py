@@ -1365,9 +1365,11 @@ def store_set(ctx: click.Context, name: str) -> None:
 
 @store.command('remove')
 @click.argument('name')
+@click.option('--yes', is_flag=True, default=False,
+              help='Skip confirmation prompt (for scripted use).')
 @click.pass_context
-def store_remove(ctx: click.Context, name: str) -> None:
-    """Remove a store."""
+def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
+    """Remove a store (prompts unless --yes)."""
     import shutil
     data_dir = ctx.obj['data_dir']
     if not store_exists(data_dir, name):
@@ -1380,6 +1382,10 @@ def store_remove(ctx: click.Context, name: str) -> None:
             f"cannot remove the active store \"{name}\""
             f" (switch first with 'memman store set <other>')")
     sdir = store_dir(data_dir, name)
+    if not yes:
+        click.confirm(
+            f'Delete store "{name}" and all data at {sdir}?',
+            abort=True)
     shutil.rmtree(sdir)
     _json_out({'action': 'removed', 'store': name})
 

@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 from memman.cli import cli
+from memman.store.db import store_exists
 
 
 @pytest.fixture
@@ -219,15 +220,41 @@ def test_store_set(runner):
     assert payload['store'] == 'work'
 
 
-def test_store_remove(runner):
-    """Remove a non-active store; JSON reports action='removed'."""
+def test_store_remove_yes(runner):
+    """Remove a non-active store with --yes skips prompt."""
     import json as _json
     invoke(runner, ['store', 'create', 'temp'])
-    result = invoke(runner, ['store', 'remove', 'temp'])
+    result = invoke(runner, ['store', 'remove', '--yes', 'temp'])
     assert result.exit_code == 0
     payload = _json.loads(result.output)
     assert payload['action'] == 'removed'
     assert payload['store'] == 'temp'
+
+
+def test_store_remove_prompts_without_yes(runner):
+    """Without --yes, remove prompts; typing 'n' aborts."""
+    r, data_dir = runner
+    invoke(runner, ['store', 'create', 'temp2'])
+    result = r.invoke(
+        cli, ['--data-dir', data_dir, 'store', 'remove', 'temp2'],
+        input='n\n')
+    assert result.exit_code != 0
+    assert store_exists(data_dir, 'temp2')
+
+
+def test_store_remove_prompts_accept(runner):
+    """Without --yes, typing 'y' at the prompt completes the delete."""
+    import json as _json
+    r, data_dir = runner
+    invoke(runner, ['store', 'create', 'temp3'])
+    result = r.invoke(
+        cli, ['--data-dir', data_dir, 'store', 'remove', 'temp3'],
+        input='y\n')
+    assert result.exit_code == 0, result.output
+    # The confirm prompt echoes before the JSON payload; find the payload.
+    payload_start = result.output.find('{')
+    payload = _json.loads(result.output[payload_start:])
+    assert payload['action'] == 'removed'
 
 
 def test_store_auto_create_from_env(runner, monkeypatch):
