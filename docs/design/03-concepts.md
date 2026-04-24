@@ -183,6 +183,4 @@ This layered design serves different scenarios:
 | `active` file      | Persistent user preference — `memman store set work`          |
 | `"default"`        | Zero-config — works out of the box                            |
 
-**Automatic migration**: When the new `data/` directory doesn't exist but a legacy `~/.memman/memman.db` does, memman automatically moves it to `data/default/memman.db`. Users upgrading from older versions experience a seamless transition.
-
 **Design principle — lightweight and bounded**: Store isolation addresses a necessary data separation concern without growing into a multi-tenant system. There are no access controls, no cross-store queries, no store metadata beyond the name. This keeps the feature bounded — MemMan is a memory daemon, not a knowledge base platform.
