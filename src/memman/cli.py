@@ -665,13 +665,18 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
             sdir = store_dir(data_dir_val, row.store)
 
             try:
-                _process_queue_row(row, sdir, data_dir_val)
+                import contextlib
+                import io as _io
+                buf = _io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    _process_queue_row(row, sdir, data_dir_val)
                 mark_done(conn, row.id)
                 processed += 1
                 if verbose:
                     click.echo(
                         f'[enrich] done id={row.id} store={row.store}',
                         err=True)
+                    click.echo(buf.getvalue(), err=True)
             except Exception as exc:
                 mark_failed(conn, row.id, f'{type(exc).__name__}: {exc}')
                 failed += 1
