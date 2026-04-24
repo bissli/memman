@@ -351,8 +351,9 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
 
     from memman import __version__ as _memman_version
     from memman import trace
-    from memman.queue import claim, mark_done, mark_failed, open_queue_db
-    from memman.queue import queue_db_path, stats
+    from memman.queue import claim, finish_worker_run, mark_done, mark_failed
+    from memman.queue import open_queue_db, queue_db_path, start_worker_run
+    from memman.queue import stats
 
     data_dir_val = ctx.obj['data_dir']
     worker_pid = os.getpid()
@@ -378,6 +379,9 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
     conn = open_queue_db(data_dir_val)
     processed = 0
     failed = 0
+    claimed = 0
+    run_id = start_worker_run(conn, worker_pid)
+    run_error: str | None = None
 
     try:
         while processed + failed < limit:
@@ -389,6 +393,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                         stores=store_list or None)
             if row is None:
                 break
+            claimed += 1
 
             sdir = store_dir(data_dir_val, row.store)
             trace.event(
@@ -433,7 +438,16 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                         f'[enrich] fail id={row.id} store={row.store}'
                         f' err={exc}', err=True)
                 logger.exception(f'enrich row {row.id} failed')
+    except Exception as exc:
+        run_error = f'{type(exc).__name__}: {exc}'
+        raise
     finally:
+        try:
+            finish_worker_run(
+                conn, run_id, claimed, processed, failed,
+                error=run_error)
+        except Exception:
+            logger.exception('failed to stamp worker_runs finish row')
         s = stats(conn)
         conn.close()
 
@@ -980,7 +994,10 @@ def scheduler() -> None:
 @scheduler.command('status')
 @click.pass_context
 def scheduler_status(ctx: click.Context) -> None:
-    """Show scheduler install state, interval, next run, and log paths."""
+    """Show scheduler install state, interval, next run, log paths,
+    and the most recent worker-drain summary from worker_runs.
+    """
+    from memman.queue import last_worker_run, open_queue_db
     from memman.setup.scheduler import status
     result = status()
     logs_dir = pathlib.Path.home() / '.memman' / 'logs'
@@ -995,6 +1012,17 @@ def scheduler_status(ctx: click.Context) -> None:
                 ).isoformat()
         except OSError:
             result[key] = None
+
+    result['last_run'] = None
+    try:
+        conn = open_queue_db(ctx.obj['data_dir'])
+        try:
+            result['last_run'] = last_worker_run(conn)
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.debug(f'worker_runs lookup failed: {exc}')
+
     _json_out(result)
 
 

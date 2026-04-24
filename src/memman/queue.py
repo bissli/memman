@@ -86,7 +86,23 @@ CREATE INDEX IF NOT EXISTS idx_queue_ready
 
 CREATE INDEX IF NOT EXISTS idx_queue_store
     ON queue(store);
+
+CREATE TABLE IF NOT EXISTS worker_runs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at    INTEGER NOT NULL,
+    finished_at   INTEGER,
+    worker_pid    INTEGER,
+    rows_claimed  INTEGER NOT NULL DEFAULT 0,
+    rows_done     INTEGER NOT NULL DEFAULT 0,
+    rows_failed   INTEGER NOT NULL DEFAULT 0,
+    duration_ms   INTEGER,
+    error         TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_worker_runs_started
+    ON worker_runs(started_at DESC);
 """
+
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Apply the canonical queue schema.
@@ -352,3 +368,65 @@ def purge_stale(conn: sqlite3.Connection) -> int:
     """Delete all stale rows. Returns deleted count."""
     cur = conn.execute("DELETE FROM queue WHERE status = 'stale'")
     return cur.rowcount
+
+
+def start_worker_run(
+        conn: sqlite3.Connection, worker_pid: int) -> int:
+    """Record the start of a drain. Returns the worker_runs.id.
+    """
+    now = int(time.time())
+    cur = conn.execute(
+        'INSERT INTO worker_runs (started_at, worker_pid)'
+        ' VALUES (?, ?)',
+        (now, worker_pid))
+    return cur.lastrowid
+
+
+def finish_worker_run(
+        conn: sqlite3.Connection,
+        run_id: int,
+        rows_claimed: int,
+        rows_done: int,
+        rows_failed: int,
+        error: str | None = None) -> None:
+    """Stamp finish time, row counts, and duration onto a worker_runs row.
+    """
+    cur = conn.execute(
+        'SELECT started_at FROM worker_runs WHERE id = ?',
+        (run_id,)).fetchone()
+    now = int(time.time())
+    duration_ms: int | None = None
+    if cur is not None:
+        duration_ms = int((now - cur[0]) * 1000)
+    conn.execute(
+        'UPDATE worker_runs SET finished_at = ?, duration_ms = ?,'
+        ' rows_claimed = ?, rows_done = ?, rows_failed = ?, error = ?'
+        ' WHERE id = ?',
+        (now, duration_ms, rows_claimed, rows_done, rows_failed,
+         error, run_id))
+
+
+def last_worker_run(conn: sqlite3.Connection) -> dict | None:
+    """Return the most recent worker_runs row as a dict, or None.
+
+    Consumed by `memman scheduler status` and (future) `memman doctor`
+    to surface scheduler liveness without log parsing.
+    """
+    row = conn.execute(
+        'SELECT id, started_at, finished_at, worker_pid, rows_claimed,'
+        ' rows_done, rows_failed, duration_ms, error'
+        ' FROM worker_runs ORDER BY started_at DESC LIMIT 1'
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        'id': row[0],
+        'started_at': row[1],
+        'finished_at': row[2],
+        'worker_pid': row[3],
+        'rows_claimed': row[4],
+        'rows_done': row[5],
+        'rows_failed': row[6],
+        'duration_ms': row[7],
+        'error': row[8],
+        }
