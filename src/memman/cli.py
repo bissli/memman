@@ -1675,7 +1675,8 @@ def graph_reindex(ctx: click.Context, dry_run: bool) -> None:
 
 
 @cli.command()
-@click.option('--target', default='', help='Target environment (claude-code | openclaw)')
+@click.option('--target', default='',
+              help='Target environment (claude-code | openclaw | nanoclaw)')
 @click.option('--eject', is_flag=True, default=False, help='Remove integration')
 @click.pass_context
 def setup(ctx: click.Context, target: str, eject: bool) -> None:

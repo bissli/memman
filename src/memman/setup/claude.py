@@ -226,16 +226,21 @@ def _eject_env(env: dict) -> bool:
         _eject_markdown('AGENTS.md')
         return len(errs) > 0
 
+    if env['name'] == 'nanoclaw':
+        from memman.setup.nanoclaw import uninstall_nanoclaw
+        errs = uninstall_nanoclaw()
+        return len(errs) > 0
+
     return False
 
 
 def run_setup(data_dir: str, target: str = '',
               eject: bool = False) -> None:
     """Main setup orchestrator called by cli.py."""
-    if target and target not in {'claude-code', 'openclaw'}:
+    if target and target not in {'claude-code', 'openclaw', 'nanoclaw'}:
         raise click.ClickException(
             f'invalid target {target!r}'
-            ' (must be claude-code or openclaw)')
+            ' (must be claude-code, openclaw, or nanoclaw)')
 
     envs = detect_environments()
 
@@ -303,6 +308,9 @@ def _install_env(env: dict, data_dir: str) -> None:
     elif env['name'] == 'openclaw':
         from memman.setup.openclaw import install_openclaw
         install_openclaw(env, data_dir=data_dir)
+    elif env['name'] == 'nanoclaw':
+        from memman.setup.nanoclaw import install_nanoclaw
+        install_nanoclaw(env, data_dir=data_dir)
 
 
 def _run_eject_flow(envs: list[dict], target: str) -> None:

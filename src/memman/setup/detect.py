@@ -95,9 +95,42 @@ def _detect_openclaw() -> dict:
     return env
 
 
+def _detect_nanoclaw() -> dict:
+    """Detect NanoClaw integration opportunity.
+
+    NanoClaw is a containerised agent platform. "Detection" here means
+    both (a) Docker is available on the host and (b) the current working
+    directory looks like a NanoClaw project (has a `.claude/` or a
+    `nanoclaw/` marker). If either signal is missing, we still expose
+    the target — users can install the skill ahead of time.
+    """
+    env = {
+        'name': 'nanoclaw',
+        'display': 'NanoClaw',
+        'detected': False,
+        'bin_path': '',
+        'installed': False,
+        'version': '',
+        'config_dir': str(Path.home() / '.claude' / 'skills' / 'add-memman'),
+        }
+
+    docker_path = shutil.which('docker')
+    has_project_marker = (
+        Path('.claude').exists() or Path('nanoclaw').exists())
+    if docker_path and has_project_marker:
+        env['detected'] = True
+        env['bin_path'] = docker_path
+
+    skill_path = Path(env['config_dir']) / 'SKILL.md'
+    if skill_path.exists():
+        env['installed'] = True
+    return env
+
+
 def detect_environments() -> list[dict]:
     """Probe for all supported LLM CLI environments."""
     return [
         _detect_claude(),
         _detect_openclaw(),
+        _detect_nanoclaw(),
         ]
