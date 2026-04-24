@@ -89,6 +89,20 @@ def _resolve_store_name(data_dir: str, store_flag: str) -> str:
     return read_active(data_dir)
 
 
+def _get_llm_client_or_fail():
+    """Return an LLM client, re-wrapping ConfigError as ClickException.
+
+    Keeps `memman.llm` free of `click` — the CLI boundary is the only
+    place that should know how to surface a user-facing config error.
+    """
+    from memman.exceptions import ConfigError
+    from memman.llm.client import get_llm_client
+    try:
+        return get_llm_client()
+    except ConfigError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
 def _open_db(ctx: click.Context) -> 'DB':
     """Open the database using context options."""
     data_dir = ctx.obj['data_dir']
@@ -101,7 +115,10 @@ def _open_db(ctx: click.Context) -> 'DB':
     if read_only:
         return open_read_only(sdir)
 
-    return open_db(sdir)
+    db = open_db(sdir)
+    from memman.graph.engine import reindex_if_constants_changed
+    reindex_if_constants_changed(db)
+    return db
 
 
 def _trunc_id(id: str) -> str:
@@ -285,6 +302,7 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     imp_explicit = (ctx.get_parameter_source('imp')
                     == click.core.ParameterSource.COMMANDLINE)
 
+    from memman.exceptions import ConfigError
     from memman.pipeline.remember import run_remember
 
     db = _open_db(ctx)
@@ -292,6 +310,8 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
         result = run_remember(
             db, insight, content_str, no_reconcile=no_reconcile,
             cat_explicit=cat_explicit, imp_explicit=imp_explicit)
+    except ConfigError as exc:
+        raise click.ClickException(str(exc)) from exc
     finally:
         db.close()
     _json_out(result)
@@ -510,7 +530,6 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
            intent: str) -> None:
     """Retrieve insights by keyword."""
     from memman.embed import get_client
-    from memman.llm.client import get_llm_client
     from memman.llm.extract import expand_query
     from memman.search.intent import intent_from_string
     from memman.search.recall import intent_aware_recall
@@ -532,7 +551,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
             _json_out([_insight_to_dict(r) for r in results])
             return
 
-        llm_client = get_llm_client()
+        llm_client = _get_llm_client_or_fail()
         expansion = expand_query(llm_client, keyword_str)
         keyword_str = expansion['expanded_query']
 
@@ -1714,14 +1733,13 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
     from memman.embed import get_client
     from memman.graph.engine import MAX_LINK_BATCH, link_pending
     from memman.graph.semantic import build_embed_cache
-    from memman.llm.client import get_llm_client
     from memman.store.node import count_pending_links, get_active_insight_ids
     from memman.store.node import reset_for_rebuild
     from memman.store.oplog import log_op
 
     db = _open_db(ctx)
     try:
-        llm_client = get_llm_client()
+        llm_client = _get_llm_client_or_fail()
         ec = get_client()
 
         all_ids = get_active_insight_ids(db)

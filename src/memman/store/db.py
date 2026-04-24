@@ -123,7 +123,14 @@ def set_meta(db: 'DB', key: str, value: str) -> None:
 
 
 def open_db(data_dir: str) -> DB:
-    """Open (or create) the SQLite database at the given directory."""
+    """Open (or create) the SQLite database at the given directory.
+
+    Runs idempotent baseline schema + versioned migrations. Does NOT
+    trigger the edge-constants reindex — callers that want that (the
+    CLI `_open_db`) invoke `reindex_if_constants_changed(db)` after
+    open. Keeping the graph-reindex out of this module avoids a
+    backward import edge from `memman.store` to `memman.graph`.
+    """
     Path(data_dir).mkdir(mode=0o755, exist_ok=True, parents=True)
     db_path = os.path.join(data_dir, 'memman.db')
     conn = sqlite3.connect(db_path, isolation_level=None)
@@ -132,34 +139,7 @@ def open_db(data_dir: str) -> DB:
     conn.execute('PRAGMA busy_timeout=5000')
     db = DB(conn, db_path)
     _migrate(db)
-
-    from memman.graph.engine import compute_constants_hash, reindex_auto_edges
-    current_hash = compute_constants_hash()
-    stored_hash = get_meta(db, 'constants_hash')
-    if stored_hash != current_hash:
-        stats = reindex_auto_edges(db)
-        set_meta(db, 'constants_hash', current_hash)
-        if stored_hash is not None:
-            logger.warning(
-                f'edge constants changed (hash {stored_hash} ->'
-                f' {current_hash}); reindexed edges and cleared'
-                ' linked_at. Run `memman graph rebuild` to re-embed'
-                ' and re-enrich.')
-        else:
-            logger.debug(
-                f'initial constants hash set: {current_hash}')
-
     return db
-
-
-def open_db_lightweight(data_dir: str) -> DB:
-    """Open DB without migration or reindex — for background threads."""
-    db_path = os.path.join(data_dir, 'memman.db')
-    conn = sqlite3.connect(db_path, isolation_level=None)
-    conn.execute('PRAGMA journal_mode=WAL')
-    conn.execute('PRAGMA foreign_keys=ON')
-    conn.execute('PRAGMA busy_timeout=5000')
-    return DB(conn, db_path)
 
 
 def open_read_only(data_dir: str) -> DB:

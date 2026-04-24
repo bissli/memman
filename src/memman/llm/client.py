@@ -5,9 +5,9 @@ import logging
 import os
 import time
 
-import click
 import httpx
 from memman import config, trace
+from memman.exceptions import ConfigError
 
 logger = logging.getLogger('memman')
 
@@ -145,8 +145,8 @@ def get_llm_client():
 
     Routes by MEMMAN_LLM_PROVIDER: 'anthropic' (default) for direct
     Anthropic API, 'openrouter' for ZDR-enforced OpenRouter routing.
-    Raises click.ClickException if the provider is unknown or the
-    required API key is missing.
+    Raises ConfigError if the provider is unknown or the required
+    API key is missing; the CLI layer re-wraps as ClickException.
     """
     provider = os.environ.get(
         config.LLM_PROVIDER, PROVIDER_ANTHROPIC).lower()
@@ -156,15 +156,13 @@ def get_llm_client():
         return get_openrouter_client()
 
     if provider != PROVIDER_ANTHROPIC:
-        raise click.ClickException(
+        raise ConfigError(
             f'unknown {config.LLM_PROVIDER}={provider!r};'
             ' expected "anthropic" or "openrouter"')
 
     endpoint = os.environ.get(config.ANTHROPIC_ENDPOINT, DEFAULT_ENDPOINT)
-    api_key = (os.environ.get(config.LLM_API_KEY)
-               or os.environ.get(config.ANTHROPIC_API_KEY))
+    api_key = os.environ.get(config.ANTHROPIC_API_KEY)
     if not api_key:
-        raise click.ClickException(
-            f'{config.ANTHROPIC_API_KEY} or {config.LLM_API_KEY} must be set')
+        raise ConfigError(f'{config.ANTHROPIC_API_KEY} must be set')
     model = os.environ.get(config.LLM_MODEL, DEFAULT_MODEL)
     return LLMClient(endpoint, api_key, model)

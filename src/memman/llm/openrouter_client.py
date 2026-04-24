@@ -16,9 +16,9 @@ import logging
 import os
 import time
 
-import click
 import httpx
 from memman import config, trace
+from memman.exceptions import ConfigError
 from memman.llm.client import ENRICHMENT_TIMEOUT, MAX_RETRIES, RETRY_BACKOFF
 from memman.llm.client import RETRYABLE_STATUS_CODES
 from memman.llm.openrouter_cache import get_zdr_endpoints, pick_latest_haiku
@@ -60,8 +60,8 @@ class OpenRouterClient:
         if self._model_override:
             available = {e.get('model_id') for e in endpoints}
             if self._model_override not in available:
-                raise click.ClickException(
-                    f'MEMMAN_LLM_MODEL={self._model_override!r} is not in'
+                raise ConfigError(
+                    f'{config.LLM_MODEL}={self._model_override!r} is not in'
                     ' the current OpenRouter ZDR inventory; refusing to'
                     ' route via non-ZDR endpoints')
             logger.debug(
@@ -167,11 +167,10 @@ def get_openrouter_client() -> OpenRouterClient:
     """Build an OpenRouter client from environment variables."""
     endpoint = os.environ.get(
         config.OPENROUTER_ENDPOINT, DEFAULT_OPENROUTER_ENDPOINT)
-    api_key = (os.environ.get(config.OPENROUTER_API_KEY)
-               or os.environ.get(config.LLM_API_KEY))
+    api_key = os.environ.get(config.OPENROUTER_API_KEY)
     if not api_key:
-        raise click.ClickException(
-            f'{config.OPENROUTER_API_KEY} or {config.LLM_API_KEY} must be set'
+        raise ConfigError(
+            f'{config.OPENROUTER_API_KEY} must be set'
             f' when {config.LLM_PROVIDER}=openrouter')
     model_override = os.environ.get(config.LLM_MODEL)
     return OpenRouterClient(endpoint, api_key, model=model_override)

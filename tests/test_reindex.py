@@ -6,24 +6,24 @@ from datetime import datetime, timedelta, timezone
 from click.testing import CliRunner
 from memman.cli import cli
 from memman.graph.engine import compute_constants_hash, reindex_auto_edges
+from memman.graph.engine import reindex_if_constants_changed
 from memman.store.db import open_db
 from memman.store.edge import get_all_edges, insert_edge
 from memman.store.node import insert_insight
 from tests.conftest import make_edge, make_insight
 
 
-class TestOpenDbTriggersReindex:
-    """open_db triggers reindex when stored hash differs from current."""
+class TestReindexIfConstantsChanged:
+    """reindex_if_constants_changed runs only when the stored hash drifts."""
 
     def test_triggers_reindex_on_hash_mismatch(self, tmp_path):
-        """Seed meta with wrong hash, open DB, verify hash updated."""
+        """Seed meta with wrong hash; helper updates it and returns stats."""
         db = open_db(str(tmp_path))
         db._conn.execute(
             "INSERT OR REPLACE INTO meta (key, value)"
             " VALUES ('constants_hash', 'wrong_hash')")
-        db.close()
-
-        db = open_db(str(tmp_path))
+        stats = reindex_if_constants_changed(db)
+        assert stats is not None
         row = db._conn.execute(
             "SELECT value FROM meta WHERE key = 'constants_hash'"
             ).fetchone()
@@ -31,12 +31,8 @@ class TestOpenDbTriggersReindex:
         assert row[0] == compute_constants_hash()
         db.close()
 
-
-class TestOpenDbSkipsReindex:
-    """open_db skips reindex when stored hash matches current."""
-
     def test_skips_reindex_when_hash_matches(self, tmp_path):
-        """Seed meta with correct hash; open DB does not modify edges."""
+        """Matching hash yields None and leaves edges untouched."""
         db = open_db(str(tmp_path))
         current_hash = compute_constants_hash()
         db._conn.execute(
@@ -51,9 +47,10 @@ class TestOpenDbSkipsReindex:
             edge_type='semantic',
             metadata={'created_by': 'auto', 'cosine': '0.9'})
         insert_edge(db, auto_edge)
-        db.close()
 
-        db = open_db(str(tmp_path))
+        stats = reindex_if_constants_changed(db)
+        assert stats is None
+
         edges = get_all_edges(db)
         semantic = [e for e in edges if e.edge_type == 'semantic']
         assert len(semantic) == 1
@@ -246,6 +243,7 @@ class TestGraphReindexCliDryRun:
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
         db = open_db(str(store_path))
+        reindex_if_constants_changed(db)
         ins1 = make_insight(id='dr-1', content='Python web app',
                             entities=['Python'])
         ins2 = make_insight(id='dr-2', content='Python data tool',

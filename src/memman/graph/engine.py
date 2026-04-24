@@ -264,3 +264,32 @@ def reindex_auto_edges(
 
     db.in_transaction(tx_body)
     return stats
+
+
+def reindex_if_constants_changed(db: 'DB') -> dict[str, int] | None:
+    """Reindex auto-edges when the stored constants hash is stale.
+
+    Returns the reindex stats dict on reindex, or None when the stored
+    hash already matched (common case). Emits a WARNING when constants
+    drifted (operator hint to run `memman graph rebuild`) and a DEBUG
+    line on first-time initialization.
+    """
+    from memman.store.db import get_meta, set_meta
+
+    current_hash = compute_constants_hash()
+    stored_hash = get_meta(db, 'constants_hash')
+    if stored_hash == current_hash:
+        return None
+
+    stats = reindex_auto_edges(db)
+    set_meta(db, 'constants_hash', current_hash)
+    if stored_hash is not None:
+        logger.warning(
+            f'edge constants changed (hash {stored_hash} ->'
+            f' {current_hash}); reindexed edges and cleared'
+            ' linked_at. Run `memman graph rebuild` to re-embed'
+            ' and re-enrich.')
+    else:
+        logger.debug(
+            f'initial constants hash set: {current_hash}')
+    return stats

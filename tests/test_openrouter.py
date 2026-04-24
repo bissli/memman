@@ -128,13 +128,13 @@ def test_client_honors_valid_model_override(monkeypatch):
 def test_client_rejects_non_zdr_override(monkeypatch):
     """An override that is not in the ZDR list fails loudly.
     """
-    import click
+    from memman.exceptions import ConfigError
     monkeypatch.setattr(cache_mod, '_fetch', lambda: SAMPLE_ZDR)
     client = OpenRouterClient(
         endpoint='https://openrouter.ai/api/v1',
         api_key='fake-key',
         model='deepseek/deepseek-chat')
-    with pytest.raises(click.ClickException, match='not in the current'):
+    with pytest.raises(ConfigError, match='not in the current'):
         _ = client.model
 
 
@@ -187,13 +187,13 @@ def test_get_llm_client_default_is_anthropic(monkeypatch):
 
 
 def test_get_llm_client_rejects_unknown_provider(monkeypatch):
-    """Unknown MEMMAN_LLM_PROVIDER raises a clear ClickException.
+    """Unknown MEMMAN_LLM_PROVIDER raises a clear ConfigError.
     """
-    import click
+    from memman.exceptions import ConfigError
     monkeypatch.setenv('MEMMAN_LLM_PROVIDER', 'wat')
     monkeypatch.setenv('ANTHROPIC_API_KEY', 'fake-key')
     from memman.llm.client import get_llm_client
-    with pytest.raises(click.ClickException, match='unknown'):
+    with pytest.raises(ConfigError, match='unknown'):
         get_llm_client()
 
 
