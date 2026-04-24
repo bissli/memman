@@ -26,7 +26,7 @@ from memman.llm.openrouter_cache import get_zdr_endpoints, pick_latest_haiku
 logger = logging.getLogger('memman')
 
 OPENROUTER_API_KEY_VAR = 'OPENROUTER_API_KEY'
-OPENROUTER_ENDPOINT_VAR = 'MEMMAN_LLM_ENDPOINT'
+OPENROUTER_ENDPOINT_VAR = 'MEMMAN_OPENROUTER_ENDPOINT'
 OPENROUTER_MODEL_VAR = 'MEMMAN_LLM_MODEL'
 DEFAULT_OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1'
 

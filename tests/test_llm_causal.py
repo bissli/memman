@@ -176,7 +176,7 @@ class TestLLMCausalInference:
     def test_env_var_opt_in(self, monkeypatch):
         """Without any API key set, get_llm_client raises."""
         import click
-        monkeypatch.delenv('MEMMAN_LLM_ENDPOINT', raising=False)
+        monkeypatch.delenv('MEMMAN_ANTHROPIC_ENDPOINT', raising=False)
         monkeypatch.delenv('MEMMAN_LLM_API_KEY', raising=False)
         monkeypatch.delenv('ANTHROPIC_API_KEY', raising=False)
         with pytest.raises(click.ClickException):
@@ -184,7 +184,7 @@ class TestLLMCausalInference:
 
     def test_anthropic_api_key_fallback(self, monkeypatch):
         """ANTHROPIC_API_KEY used when MEMMAN_LLM_API_KEY absent."""
-        monkeypatch.delenv('MEMMAN_LLM_ENDPOINT', raising=False)
+        monkeypatch.delenv('MEMMAN_ANTHROPIC_ENDPOINT', raising=False)
         monkeypatch.delenv('MEMMAN_LLM_API_KEY', raising=False)
         monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-ant-test')
         client = get_llm_client()

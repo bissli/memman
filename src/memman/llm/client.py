@@ -11,7 +11,7 @@ from memman import trace
 
 logger = logging.getLogger('memman')
 
-LLM_ENDPOINT_VAR = 'MEMMAN_LLM_ENDPOINT'
+ANTHROPIC_ENDPOINT_VAR = 'MEMMAN_ANTHROPIC_ENDPOINT'
 LLM_API_KEY_VAR = 'MEMMAN_LLM_API_KEY'
 LLM_MODEL_VAR = 'MEMMAN_LLM_MODEL'
 DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
@@ -164,7 +164,7 @@ def get_llm_client():
             f'unknown {LLM_PROVIDER_VAR}={provider!r};'
             ' expected "anthropic" or "openrouter"')
 
-    endpoint = os.environ.get(LLM_ENDPOINT_VAR, DEFAULT_ENDPOINT)
+    endpoint = os.environ.get(ANTHROPIC_ENDPOINT_VAR, DEFAULT_ENDPOINT)
     api_key = (os.environ.get(LLM_API_KEY_VAR)
                or os.environ.get('ANTHROPIC_API_KEY'))
     if not api_key:
