@@ -142,16 +142,4 @@ launchd agent (macOS). Operational controls (no filesystem changes):
 - `memman scheduler disable` — pause the timer/agent (keeps unit files).
 - `memman scheduler enable` — resume after pause.
 - `memman scheduler interval --seconds N` — change cadence (min 60s).
-
-### Pre-compaction note
-
-Compaction only writes a flag file, NOT memories. Ensure conclusions are written
-during the session via phase-aware timing above. After compaction, you will be
-prompted to recall critical context.
-
-### Plan-mode transition
-
-ExitPlanMode triggers an advisory reminder to store memories.
-Store any conclusions, decisions, or preferences from the planning
-session directly via Bash (`memman remember ...`). Same pattern as
-normal mode — no sub-agent delegation.
+- `memman scheduler logs [--errors]` — tail the enrichment worker logs.

@@ -47,7 +47,7 @@ Each group gets its own isolated memman store. An optional global store provides
 
 **File**: `container/Dockerfile`
 
-Add the following block **after** the `apt-get install` section and **before** the `npm install -g` line. Replace `0.1.1` with the version from Phase 1 step 3:
+Add the following block **after** the `apt-get install` section and **before** the `npm install -g` line. Replace `<version>` with the version from Phase 1 step 3:
 
 ```dockerfile
 # Install memman for persistent agent memory
