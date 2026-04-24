@@ -1260,18 +1260,11 @@ def store(ctx: click.Context) -> None:
 @store.command('list')
 @click.pass_context
 def store_list(ctx: click.Context) -> None:
-    """List all stores."""
+    """List all stores as JSON (stores[], active)."""
     data_dir = ctx.obj['data_dir']
     stores = list_stores(data_dir)
-    if not stores:
-        click.echo(
-            "  (no stores yet — run 'memman store create <name>'"
-            " or any command to create default)")
-        return
-    active = _resolve_store_name(data_dir, ctx.obj['store'])
-    for name in stores:
-        prefix = '* ' if name == active else '  '
-        click.echo(f'{prefix}{name}')
+    active = _resolve_store_name(data_dir, ctx.obj['store']) if stores else None
+    _json_out({'stores': stores, 'active': active})
 
 
 @store.command('create')
@@ -1289,7 +1282,7 @@ def store_create(ctx: click.Context, name: str) -> None:
     sdir = store_dir(data_dir, name)
     db = open_db(sdir)
     db.close()
-    click.echo(f'Created store "{name}"')
+    _json_out({'action': 'created', 'store': name, 'path': sdir})
 
 
 @store.command('set')
@@ -1303,7 +1296,7 @@ def store_set(ctx: click.Context, name: str) -> None:
             f"store \"{name}\" does not exist"
             f" (use 'memman store create {name}' first)")
     write_active(data_dir, name)
-    click.echo(f'Active store set to "{name}"')
+    _json_out({'action': 'set', 'store': name})
 
 
 @store.command('remove')
@@ -1324,7 +1317,7 @@ def store_remove(ctx: click.Context, name: str) -> None:
             f" (switch first with 'memman store set <other>')")
     sdir = store_dir(data_dir, name)
     shutil.rmtree(sdir)
-    click.echo(f'Removed store "{name}"')
+    _json_out({'action': 'removed', 'store': name})
 
 
 @cli.command()

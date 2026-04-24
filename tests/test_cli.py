@@ -181,16 +181,23 @@ def test_forget_nonexistent_fails(runner):
 
 
 def test_store_list(runner):
-    """Store list shows stores."""
+    """Store list emits a JSON envelope with stores[] and active."""
+    import json as _json
     result = invoke(runner, ['store', 'list'])
     assert result.exit_code == 0
+    payload = _json.loads(result.output)
+    assert 'stores' in payload
+    assert 'active' in payload
 
 
 def test_store_create(runner):
-    """Create a new store."""
+    """Create a new store; JSON reports action='created'."""
+    import json as _json
     result = invoke(runner, ['store', 'create', 'test-store'])
     assert result.exit_code == 0
-    assert 'Created' in result.output
+    payload = _json.loads(result.output)
+    assert payload['action'] == 'created'
+    assert payload['store'] == 'test-store'
 
 
 def test_store_create_duplicate(runner):
@@ -201,19 +208,25 @@ def test_store_create_duplicate(runner):
 
 
 def test_store_set(runner):
-    """Set active store."""
+    """Set active store; JSON reports action='set'."""
+    import json as _json
     invoke(runner, ['store', 'create', 'work'])
     result = invoke(runner, ['store', 'set', 'work'])
     assert result.exit_code == 0
-    assert 'Active store' in result.output
+    payload = _json.loads(result.output)
+    assert payload['action'] == 'set'
+    assert payload['store'] == 'work'
 
 
 def test_store_remove(runner):
-    """Remove a non-active store."""
+    """Remove a non-active store; JSON reports action='removed'."""
+    import json as _json
     invoke(runner, ['store', 'create', 'temp'])
     result = invoke(runner, ['store', 'remove', 'temp'])
     assert result.exit_code == 0
-    assert 'Removed' in result.output
+    payload = _json.loads(result.output)
+    assert payload['action'] == 'removed'
+    assert payload['store'] == 'temp'
 
 
 def test_store_auto_create_from_env(runner, monkeypatch):
