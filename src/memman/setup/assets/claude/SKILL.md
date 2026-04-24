@@ -45,7 +45,14 @@ memman store remove <name>
 
 ## Guardrails
 
-- Never run `remember` or `link` in the main conversation — always delegate to a sub-agent.
+- Call `memman remember "<self-contained text>"` directly via Bash in the
+  main conversation. No sub-agent delegation. The binary is a fast
+  (~50 ms) queue-append; a background scheduler (systemd/launchd) drains
+  the queue every 15 min and runs the enrichment pipeline out-of-band.
+- Newly stored memories are NOT recallable in the current session. They
+  become available in later sessions.
+- Text passed to `remember` must be self-contained — dereference anaphora
+  ("that", "this", "it") to the actual subject before calling.
 - Do not store secrets, passwords, or tokens.
 - Categories (`--cat`):
   - `preference` — user-stated likes, dislikes, style choices ("I prefer X over Y")
@@ -58,10 +65,12 @@ memman store remove <name>
 
 ## Execution
 
-- **Batching**: at decision boundaries, accumulate multiple memories in a single
-  sub-agent invocation. Provide a bulleted list of what to store (content, category,
-  importance, entities, create/update intent). Do not write CLI commands — the
-  sub-agent reads this skill doc and executes the correct commands.
-- **Quality warnings**: after `remember` runs, check `quality_warnings` in the output.
-  If warnings are present, evaluate whether to revise (trim transient content and
-  re-run) or accept if the warning is a false positive.
+- **Batching**: at decision boundaries, emit one `memman remember` call
+  per distinct memory. Pass `--cat`, `--imp`, `--entities` hints directly.
+  The worker's `extract_facts` pass will split multi-fact blobs into
+  atomic insights — you can therefore group related claims into a single
+  self-contained paragraph if that reads better.
+- **Response shape**: `memman remember` returns `{"action": "queued",
+  "queue_id": N, "store": ...}` immediately. Full fact extraction happens
+  in the background — use `memman queue cat <id>` to inspect raw text
+  and `memman queue list` to see processing status.

@@ -60,7 +60,7 @@ Plugin hooks are configured in `~/.openclaw/openclaw.json`:
 | Hook     | Default | Description                                             |
 | -------- | ------- | ------------------------------------------------------- |
 | `remind` | on      | Recall relevant memories + remind agent on each message |
-| `nudge`  | on      | Suggest remember sub-agent after each reply             |
+| `nudge`  | on      | Suggest `memman remember` call after each reply         |
 
 ### 4. Uninstall
 

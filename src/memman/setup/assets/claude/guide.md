@@ -96,10 +96,16 @@ Use the full 2-5 scale intentionally:
 Importance 2 is the floor — if imp=2 feels weak, reconsider storing at all.
 
 **What to store**: conclusions AND sufficient context to understand them.
-**How to store**: in plan mode, run `memman remember` directly via Bash.
-In normal mode, delegate to an Agent sub-agent (`model="sonnet"`) whose
-prompt runs the `memman remember` command via Bash. See skill doc for
-execution details.
+The text you pass must be **self-contained** — dereference anaphora
+("that", "this", "it") into the actual subject before invoking the CLI.
+
+**How to store**: run `memman remember "<self-contained text>"` directly
+via Bash in your current turn. No sub-agent delegation. The binary is a
+fast blob-append (~50 ms) that queues the text; a background scheduler
+(systemd timer on Linux, launchd on macOS, every 15 min) drains the queue
+and runs the extraction/reconciliation/enrichment pipeline out-of-band.
+This means **newly-stored memories are not recallable in the current
+session** — they become available in later sessions.
 
 ### Behavioral rules — route to CLAUDE.md
 
@@ -134,5 +140,5 @@ prompted to recall critical context.
 
 ExitPlanMode triggers an advisory reminder to store memories.
 Store any conclusions, decisions, or preferences from the planning
-session directly via Bash (`memman remember ...`) -- do NOT delegate
-to a Task sub-agent (plan mode restricts tool use).
+session directly via Bash (`memman remember ...`). Same pattern as
+normal mode — no sub-agent delegation.

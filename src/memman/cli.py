@@ -1,6 +1,7 @@
 """Click CLI for memman — all 16 commands."""
 
 import json
+import logging
 import os
 import pathlib
 import re
@@ -16,6 +17,8 @@ from memman.store.db import default_data_dir, list_stores, open_db
 from memman.store.db import open_read_only, read_active, store_dir
 from memman.store.db import store_exists, valid_store_name, write_active
 from tqdm import tqdm
+
+logger = logging.getLogger('memman')
 
 
 def _json_out(obj: object) -> None:
@@ -147,10 +150,14 @@ def cli(ctx: click.Context, data_dir: str | None, store_name: str, readonly: boo
 @click.option('--source', default='user', help='Source')
 @click.option('--entities', default='', help='Comma-separated entities')
 @click.option('--no-reconcile', is_flag=True, default=False, help='Skip LLM reconciliation')
+@click.option('--defer/--sync', 'defer', default=True,
+              help='Defer to background worker (default) or run synchronously')
+@click.option('--priority', default=0, type=int,
+              help='Queue priority when --defer (higher drains first)')
 @click.pass_context
 def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
              imp: int, tags: str, source: str, entities: str,
-             no_reconcile: bool) -> None:
+             no_reconcile: bool, defer: bool, priority: int) -> None:
     """Store a new insight."""
     content_str = ' '.join(content)
     content_bytes = len(content_str.encode('utf-8'))
@@ -170,16 +177,38 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     tag_list = _parse_tags(tags)
     entity_list = _parse_entities(entities)
 
+    data_dir_val = ctx.obj['data_dir']
+    store_flag = ctx.obj['store']
+    name = _resolve_store_name(data_dir_val, store_flag)
+
+    if defer:
+        from memman.queue import enqueue, open_queue_db
+        conn = open_queue_db(data_dir_val)
+        try:
+            cat_hint = cat if cat != 'general' else None
+            imp_hint = imp if imp != 3 else None
+            row_id = enqueue(
+                conn, store=name, content=content_str,
+                hint_cat=cat_hint, hint_imp=imp_hint,
+                hint_tags=tags or None,
+                hint_source=source if source != 'user' else None,
+                hint_entities=entities or None,
+                priority=priority)
+        finally:
+            conn.close()
+        _json_out({
+            'action': 'queued',
+            'queue_id': row_id,
+            'store': name,
+            })
+        return
+
     now = datetime.now(timezone.utc)
     insight = Insight(
         id=str(uuid.uuid4()), content=content_str,
         category=cat, importance=imp, tags=tag_list,
         entities=entity_list, source=source,
         created_at=now, updated_at=now)
-
-    data_dir_val = ctx.obj['data_dir']
-    store_flag = ctx.obj['store']
-    name = _resolve_store_name(data_dir_val, store_flag)
 
     cat_explicit = (ctx.get_parameter_source('cat')
                     == click.core.ParameterSource.COMMANDLINE)
@@ -581,6 +610,119 @@ def _remember_impl(db: 'DB', insight: Insight, content: str,
 
 
 @cli.command()
+@click.option('--pending', is_flag=True, default=False,
+              help='Drain the deferred-write queue')
+@click.option('--limit', default=100, type=int,
+              help='Max blobs processed per invocation')
+@click.option('--timeout', default=300, type=int,
+              help='Max wall-clock seconds per invocation')
+@click.option('--stores', default='',
+              help='Comma-separated store names; default all')
+@click.option('--verbose', is_flag=True, default=False,
+              help='Echo per-blob progress')
+@click.pass_context
+def enrich(ctx: click.Context, pending: bool, limit: int,
+           timeout: int, stores: str, verbose: bool) -> None:
+    """Background enrichment worker (drains the queue)."""
+    if not pending:
+        raise click.ClickException(
+            'only --pending mode is supported; pass --pending explicitly')
+    _drain_queue(ctx, limit, timeout, stores, verbose)
+
+
+def _drain_queue(ctx: click.Context, limit: int, timeout: int,
+                 stores_filter: str, verbose: bool) -> None:
+    """Claim and process queue rows until limit, timeout, or empty."""
+    import time as _time
+
+    from memman.queue import claim, mark_done, mark_failed, open_queue_db
+    from memman.queue import stats
+
+    data_dir_val = ctx.obj['data_dir']
+    worker_pid = os.getpid()
+    deadline = _time.monotonic() + timeout
+    store_list = [s.strip() for s in stores_filter.split(',') if s.strip()]
+
+    conn = open_queue_db(data_dir_val)
+    processed = 0
+    failed = 0
+
+    try:
+        while processed + failed < limit:
+            if _time.monotonic() >= deadline:
+                logger.info(f'enrich: timeout after {timeout}s')
+                break
+            row = claim(conn, worker_pid=worker_pid,
+                        stores=store_list or None)
+            if row is None:
+                break
+
+            sdir = store_dir(data_dir_val, row.store)
+
+            try:
+                _process_queue_row(row, sdir, data_dir_val)
+                mark_done(conn, row.id)
+                processed += 1
+                if verbose:
+                    click.echo(
+                        f'[enrich] done id={row.id} store={row.store}',
+                        err=True)
+            except Exception as exc:
+                mark_failed(conn, row.id, f'{type(exc).__name__}: {exc}')
+                failed += 1
+                if verbose:
+                    click.echo(
+                        f'[enrich] fail id={row.id} store={row.store}'
+                        f' err={exc}', err=True)
+                logger.exception(f'enrich row {row.id} failed')
+    finally:
+        s = stats(conn)
+        conn.close()
+
+    _json_out({
+        'processed': processed,
+        'failed': failed,
+        'remaining': s,
+        })
+
+
+def _process_queue_row(row, store_data_dir: str,
+                       base_data_dir: str) -> None:
+    """Run the full remember pipeline on a claimed queue row."""
+    from memman.store.db import open_db as _open_store_db
+
+    tag_list = _parse_tags(row.hint_tags or '')
+    entity_list = _parse_entities(row.hint_entities or '')
+    category = row.hint_cat or 'general'
+    importance = row.hint_imp if row.hint_imp is not None else 3
+    source = row.hint_source or 'queue'
+
+    if category not in VALID_CATEGORIES:
+        category = 'general'
+    if importance < 1 or importance > 5:
+        importance = 3
+
+    now = datetime.now(timezone.utc)
+    insight = Insight(
+        id=str(uuid.uuid4()), content=row.content,
+        category=category, importance=importance,
+        tags=tag_list, entities=entity_list, source=source,
+        created_at=now, updated_at=now)
+
+    db = _open_store_db(store_data_dir)
+    try:
+        _remember_impl(
+            db, insight, row.content,
+            no_reconcile=False,
+            data_dir=base_data_dir,
+            store_name=row.store,
+            cat_explicit=row.hint_cat is not None,
+            imp_explicit=row.hint_imp is not None)
+    finally:
+        db.close()
+
+
+@cli.command()
 @click.argument('keyword', nargs=-1, required=True)
 @click.option('--cat', default='', help='Filter by category')
 @click.option('--limit', default=10, type=int, help='Max results')
@@ -952,6 +1094,93 @@ def related(ctx: click.Context, id: str, edge: str,
 
 @cli.group(invoke_without_command=True)
 @click.pass_context
+def queue(ctx: click.Context) -> None:
+    """Inspect and manage the deferred-write queue."""
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(queue_list)
+
+
+@queue.command('list')
+@click.option('--limit', default=50, type=int)
+@click.pass_context
+def queue_list(ctx: click.Context, limit: int) -> None:
+    """List recent queue rows."""
+    from memman.queue import list_rows, open_queue_db, stats
+    conn = open_queue_db(ctx.obj['data_dir'])
+    try:
+        _json_out({
+            'stats': stats(conn),
+            'rows': list_rows(conn, limit=limit),
+            })
+    finally:
+        conn.close()
+
+
+@queue.command('list-failed')
+@click.option('--limit', default=50, type=int)
+@click.pass_context
+def queue_list_failed(ctx: click.Context, limit: int) -> None:
+    """List failed queue rows."""
+    from memman.queue import STATUS_FAILED, list_rows, open_queue_db
+    conn = open_queue_db(ctx.obj['data_dir'])
+    try:
+        _json_out(list_rows(conn, status=STATUS_FAILED, limit=limit))
+    finally:
+        conn.close()
+
+
+@queue.command('cat')
+@click.argument('row_id', type=int)
+@click.pass_context
+def queue_cat(ctx: click.Context, row_id: int) -> None:
+    """Print the full content of a queue row."""
+    from memman.queue import get_row, open_queue_db
+    conn = open_queue_db(ctx.obj['data_dir'])
+    try:
+        row = get_row(conn, row_id)
+        if row is None:
+            raise click.ClickException(f'queue row {row_id} not found')
+        _json_out(row)
+    finally:
+        conn.close()
+
+
+@queue.command('retry')
+@click.argument('row_id', type=int)
+@click.pass_context
+def queue_retry(ctx: click.Context, row_id: int) -> None:
+    """Re-queue a failed row."""
+    from memman.queue import open_queue_db, retry_row
+    conn = open_queue_db(ctx.obj['data_dir'])
+    try:
+        if not retry_row(conn, row_id):
+            raise click.ClickException(
+                f'queue row {row_id} not found or not in failed state')
+        _json_out({'action': 'requeued', 'queue_id': row_id})
+    finally:
+        conn.close()
+
+
+@queue.command('purge')
+@click.option('--done', is_flag=True, default=False,
+              help='Delete all rows with status=done')
+@click.pass_context
+def queue_purge(ctx: click.Context, done: bool) -> None:
+    """Remove completed queue rows."""
+    if not done:
+        raise click.ClickException(
+            'pass --done to confirm deletion of completed rows')
+    from memman.queue import open_queue_db, purge_done
+    conn = open_queue_db(ctx.obj['data_dir'])
+    try:
+        deleted = purge_done(conn)
+        _json_out({'deleted': deleted})
+    finally:
+        conn.close()
+
+
+@cli.group(invoke_without_command=True)
+@click.pass_context
 def store(ctx: click.Context) -> None:
     """Manage named memory stores."""
     if ctx.invoked_subcommand is None:
@@ -1055,7 +1284,7 @@ def doctor(ctx: click.Context) -> None:
 
     db = _open_db(ctx)
     try:
-        result = run_all_checks(db)
+        result = run_all_checks(db, data_dir=ctx.obj['data_dir'])
         result['store'] = _resolve_store_name(
             ctx.obj['data_dir'], ctx.obj['store'])
         result['db_path'] = db.path
@@ -1367,11 +1596,39 @@ def graph_reindex(ctx: click.Context, dry_run: bool) -> None:
 @click.option('--eject', is_flag=True, default=False, help='Remove integration')
 @click.option('--yes', 'auto_yes', is_flag=True, default=False, help='Skip confirmation')
 @click.option('--global', 'use_global', is_flag=True, default=False, help='Use global scope')
+@click.option('--scheduler', is_flag=True, default=False,
+              help='Install background enrichment scheduler (systemd/launchd)')
+@click.option('--interval', default=900, type=int,
+              help='Scheduler interval in seconds (default 900 = 15 min)')
+@click.option('--dry-run', is_flag=True, default=False,
+              help='Preview scheduler changes without writing files')
 @click.pass_context
-def setup(ctx: click.Context, target: str, eject: bool, auto_yes: bool, use_global: bool) -> None:
-    """Set up LLM CLI integration."""
-    from memman.setup.claude import run_setup
+def setup(ctx: click.Context, target: str, eject: bool, auto_yes: bool,
+          use_global: bool, scheduler: bool, interval: int,
+          dry_run: bool) -> None:
+    """Set up LLM CLI integration or background scheduler."""
     data_dir = ctx.obj['data_dir']
+
+    if scheduler:
+        from memman.setup.scheduler import install, uninstall
+        if eject:
+            result = uninstall(dry_run=dry_run)
+        else:
+            api_key = (os.environ.get('OPENROUTER_API_KEY')
+                       or os.environ.get('MEMMAN_LLM_API_KEY'))
+            if not api_key and not dry_run and not auto_yes:
+                api_key = click.prompt(
+                    'OPENROUTER_API_KEY (sk-or-...) — stored at'
+                    ' ~/.memman/env mode 600. Leave blank to skip',
+                    default='', hide_input=True, show_default=False)
+                api_key = api_key.strip() or None
+            result = install(data_dir, interval_seconds=interval,
+                             openrouter_api_key=api_key,
+                             dry_run=dry_run)
+        _json_out(result)
+        return
+
+    from memman.setup.claude import run_setup
     run_setup(data_dir, target=target, eject=eject,
               auto_yes=auto_yes, use_global=use_global)
 

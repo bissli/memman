@@ -110,11 +110,31 @@ def parse_json_list_response(raw: str) -> list | None:
     return None
 
 
-def get_llm_client() -> LLMClient:
-    """Return an LLMClient from env vars.
+LLM_PROVIDER_VAR = 'MEMMAN_LLM_PROVIDER'
+PROVIDER_ANTHROPIC = 'anthropic'
+PROVIDER_OPENROUTER = 'openrouter'
 
-    Raises click.ClickException if no API key is configured.
+
+def get_llm_client():
+    """Return an LLM client for the configured provider.
+
+    Routes by MEMMAN_LLM_PROVIDER: 'anthropic' (default) for direct
+    Anthropic API, 'openrouter' for ZDR-enforced OpenRouter routing.
+    Raises click.ClickException if the provider is unknown or the
+    required API key is missing.
     """
+    provider = os.environ.get(
+        LLM_PROVIDER_VAR, PROVIDER_ANTHROPIC).lower()
+
+    if provider == PROVIDER_OPENROUTER:
+        from memman.llm.openrouter_client import get_openrouter_client
+        return get_openrouter_client()
+
+    if provider != PROVIDER_ANTHROPIC:
+        raise click.ClickException(
+            f'unknown {LLM_PROVIDER_VAR}={provider!r};'
+            ' expected "anthropic" or "openrouter"')
+
     endpoint = os.environ.get(LLM_ENDPOINT_VAR, DEFAULT_ENDPOINT)
     api_key = (os.environ.get(LLM_API_KEY_VAR)
                or os.environ.get('ANTHROPIC_API_KEY'))

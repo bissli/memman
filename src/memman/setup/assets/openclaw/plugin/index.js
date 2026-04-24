@@ -17,7 +17,7 @@ export default function register(api) {
 
     if (nudge) {
       parts.push(
-        "[memman] Consider: does this exchange warrant a remember sub-agent?"
+        "[memman] Consider: does this exchange warrant a `memman remember` call?"
       );
     }
 

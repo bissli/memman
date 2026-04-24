@@ -163,13 +163,63 @@ def check_edge_degree(db: 'DB') -> dict:
         }
 
 
-def run_all_checks(db: 'DB') -> dict:
+QUEUE_DEPTH_WARN = 50
+QUEUE_DEPTH_FAIL = 100
+QUEUE_AGE_WARN_SECONDS = 3600
+QUEUE_AGE_FAIL_SECONDS = 86400
+
+
+def check_queue_backlog(data_dir: str) -> dict:
+    """Report pending/failed counts and oldest-pending age."""
+    from memman.queue import open_queue_db
+    from memman.queue import stats as queue_stats
+
+    conn = open_queue_db(data_dir)
+    try:
+        s = queue_stats(conn)
+    finally:
+        conn.close()
+
+    pending = s['pending']
+    failed = s['failed']
+    oldest_age = s['oldest_pending_age_seconds']
+
+    status = 'pass'
+    if pending >= QUEUE_DEPTH_FAIL:
+        status = 'fail'
+    elif pending >= QUEUE_DEPTH_WARN:
+        status = 'warn'
+    if oldest_age is not None:
+        if oldest_age >= QUEUE_AGE_FAIL_SECONDS:
+            status = 'fail'
+        elif oldest_age >= QUEUE_AGE_WARN_SECONDS and status == 'pass':
+            status = 'warn'
+    if failed > 0 and status == 'pass':
+        status = 'warn'
+
+    return {
+        'name': 'queue_backlog',
+        'status': status,
+        'detail': {
+            'pending': pending,
+            'failed': failed,
+            'done': s['done'],
+            'oldest_pending_age_seconds': oldest_age,
+            'thresholds': {
+                'depth_warn': QUEUE_DEPTH_WARN,
+                'depth_fail': QUEUE_DEPTH_FAIL,
+                'age_warn_seconds': QUEUE_AGE_WARN_SECONDS,
+                'age_fail_seconds': QUEUE_AGE_FAIL_SECONDS,
+                },
+            },
+        }
+
+
+def run_all_checks(db: 'DB', data_dir: str | None = None) -> dict:
     """Run all health checks and return results with overall status."""
     total = db._query(
         'SELECT COUNT(*) FROM insights WHERE deleted_at IS NULL'
         ).fetchone()[0]
-    if total == 0:
-        return {'status': 'empty', 'total_active': 0, 'checks': []}
     checks = [
         check_sqlite_integrity(db),
         check_enrichment_coverage(db),
@@ -177,7 +227,11 @@ def run_all_checks(db: 'DB') -> dict:
         check_dangling_edges(db),
         check_embedding_consistency(db),
         check_edge_degree(db),
-        ]
+        ] if total > 0 else []
+    if data_dir:
+        checks.append(check_queue_backlog(data_dir))
+    if total == 0 and not checks:
+        return {'status': 'empty', 'total_active': 0, 'checks': []}
     statuses = [c['status'] for c in checks]
     if 'fail' in statuses:
         overall = 'fail'
