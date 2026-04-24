@@ -136,16 +136,12 @@ edge constants change.
 ### Scheduler controls
 
 The enrichment worker runs via a user-scope systemd timer (Linux) or
-launchd agent (macOS) installed by `memman install`. Operational
-controls (no filesystem changes):
+launchd agent (macOS). Operational controls (no filesystem changes):
 
 - `memman scheduler status` — show install state, interval, next run.
 - `memman scheduler disable` — pause the timer/agent (keeps unit files).
 - `memman scheduler enable` — resume after pause.
 - `memman scheduler interval --seconds N` — change cadence (min 60s).
-
-Install/uninstall belong to `memman install` and `memman uninstall`
-respectively.
 
 ### Pre-compaction note
 

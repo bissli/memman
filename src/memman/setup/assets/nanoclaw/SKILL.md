@@ -25,8 +25,9 @@ Each group gets its own isolated memman store. An optional global store provides
    ```bash
    memman --version
    ```
-   If not installed:
-   - **From source**: `git clone https://github.com/bissli/memman.git && cd memman && make install`
+   If not installed, follow the README at
+   https://github.com/bissli/memman and stop. Do not attempt to
+   install memman from this skill.
 
 2. Verify the container image exists:
    ```bash

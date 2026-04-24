@@ -10,64 +10,6 @@ metadata:
 
 # memman
 
-## Install & Configure
-
-### 1. Install memman
-
-**From source (Poetry)**:
-
-```bash
-git clone https://github.com/bissli/memman.git && cd memman
-make install
-```
-
-### 2. Set up OpenClaw integration
-
-```bash
-memman install --target openclaw --yes
-```
-
-This single command deploys all components:
-- **Skill** → `~/.openclaw/skills/memman/SKILL.md`
-- **Hook** → `~/.openclaw/hooks/memman-prime/` (agent:bootstrap — injects behavioral guide)
-- **Plugin** → `~/.openclaw/extensions/memman/` (remind, nudge hooks)
-- **Prompts** → `~/.memman/prompt/` (guide.md, skill.md)
-
-Restart the OpenClaw gateway to activate.
-
-### 3. Customize (optional)
-
-Edit `~/.memman/prompt/guide.md` to tune recall/remember behavior.
-
-Plugin hooks are configured in `~/.openclaw/openclaw.json`:
-
-```json
-{
-  "plugins": {
-    "entries": {
-      "memman": {
-        "enabled": true,
-        "config": {
-          "remind": true,
-          "nudge": true
-        }
-      }
-    }
-  }
-}
-```
-
-| Hook     | Default | Description                                             |
-| -------- | ------- | ------------------------------------------------------- |
-| `remind` | on      | Recall relevant memories + remind agent on each message |
-| `nudge`  | on      | Suggest `memman remember` call after each reply         |
-
-### 4. Uninstall
-
-```bash
-memman uninstall --target openclaw --yes
-```
-
 ## Workflow
 
 1. **Remember**: `memman remember "<fact>" --cat <cat> --imp <1-5> --entities "e1,e2" --source agent`
