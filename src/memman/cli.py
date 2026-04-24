@@ -1303,6 +1303,20 @@ def scheduler_interval(ctx: click.Context, seconds: int | None) -> None:
     _json_out(result)
 
 
+@scheduler.command('trigger')
+@click.pass_context
+def scheduler_trigger(ctx: click.Context) -> None:
+    """Run the scheduler's drain job now, outside the normal interval."""
+    from memman.setup.scheduler import trigger
+    try:
+        result = trigger()
+    except FileNotFoundError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _json_out(result)
+
+
 @cli.group(invoke_without_command=True)
 @click.pass_context
 def store(ctx: click.Context) -> None:

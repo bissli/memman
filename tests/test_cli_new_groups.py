@@ -179,3 +179,29 @@ def test_scheduler_interval_rejects_too_short(runner, monkeypatch):
     result = invoke(runner, ['scheduler', 'interval', '--seconds', '30'])
     assert result.exit_code != 0
     assert 'too short' in result.output.lower()
+
+
+def test_scheduler_trigger_cli_happy_path(runner, monkeypatch):
+    """`memman scheduler trigger` returns the dict from sch.trigger().
+    """
+    monkeypatch.setattr(
+        sch, 'trigger',
+        lambda: {'platform': 'systemd', 'actions': ['x'], 'note': 'n'})
+    result = invoke(runner, ['scheduler', 'trigger'])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data['platform'] == 'systemd'
+    assert data['note'] == 'n'
+
+
+def test_scheduler_trigger_cli_fails_when_not_installed(
+        runner, monkeypatch):
+    """`memman scheduler trigger` surfaces FileNotFoundError cleanly.
+    """
+    def _raise():
+        raise FileNotFoundError(
+            "scheduler unit not installed at /x; run 'memman setup' first")
+    monkeypatch.setattr(sch, 'trigger', _raise)
+    result = invoke(runner, ['scheduler', 'trigger'])
+    assert result.exit_code != 0
+    assert 'not installed' in result.output.lower()
