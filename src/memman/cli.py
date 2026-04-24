@@ -1592,10 +1592,8 @@ def graph_reindex(ctx: click.Context, dry_run: bool) -> None:
 
 
 @cli.command()
-@click.option('--target', default='', help='Target environment')
+@click.option('--target', default='', help='Target environment (claude-code | openclaw)')
 @click.option('--eject', is_flag=True, default=False, help='Remove integration')
-@click.option('--yes', 'auto_yes', is_flag=True, default=False, help='Skip confirmation')
-@click.option('--global', 'use_global', is_flag=True, default=False, help='Use global scope')
 @click.option('--scheduler', is_flag=True, default=False,
               help='Install background enrichment scheduler (systemd/launchd)')
 @click.option('--interval', default=900, type=int,
@@ -1603,9 +1601,8 @@ def graph_reindex(ctx: click.Context, dry_run: bool) -> None:
 @click.option('--dry-run', is_flag=True, default=False,
               help='Preview scheduler changes without writing files')
 @click.pass_context
-def setup(ctx: click.Context, target: str, eject: bool, auto_yes: bool,
-          use_global: bool, scheduler: bool, interval: int,
-          dry_run: bool) -> None:
+def setup(ctx: click.Context, target: str, eject: bool,
+          scheduler: bool, interval: int, dry_run: bool) -> None:
     """Set up LLM CLI integration or background scheduler."""
     data_dir = ctx.obj['data_dir']
 
@@ -1616,12 +1613,12 @@ def setup(ctx: click.Context, target: str, eject: bool, auto_yes: bool,
         else:
             api_key = (os.environ.get('OPENROUTER_API_KEY')
                        or os.environ.get('MEMMAN_LLM_API_KEY'))
-            if not api_key and not dry_run and not auto_yes:
-                api_key = click.prompt(
-                    'OPENROUTER_API_KEY (sk-or-...) — stored at'
-                    ' ~/.memman/env mode 600. Leave blank to skip',
-                    default='', hide_input=True, show_default=False)
-                api_key = api_key.strip() or None
+            if not api_key and not dry_run:
+                click.echo(
+                    'warning: OPENROUTER_API_KEY not set; scheduler unit'
+                    ' will install but the worker will fail until you'
+                    ' write OPENROUTER_API_KEY=... into ~/.memman/env'
+                    ' (mode 600)', err=True)
             result = install(data_dir, interval_seconds=interval,
                              openrouter_api_key=api_key,
                              dry_run=dry_run)
@@ -1629,8 +1626,7 @@ def setup(ctx: click.Context, target: str, eject: bool, auto_yes: bool,
         return
 
     from memman.setup.claude import run_setup
-    run_setup(data_dir, target=target, eject=eject,
-              auto_yes=auto_yes, use_global=use_global)
+    run_setup(data_dir, target=target, eject=eject)
 
 
 @graph.command('rebuild')

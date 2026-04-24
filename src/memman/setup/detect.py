@@ -19,13 +19,10 @@ def clean_version(v: str) -> str:
     return v
 
 
-def _detect_claude(use_global: bool) -> dict:
+def _detect_claude() -> dict:
     """Detect Claude Code CLI environment."""
     home = home_dir()
-    global_dir = os.path.join(home, '.claude')
-    local_dir = '.claude'
-
-    config_dir = global_dir if use_global else local_dir
+    config_dir = os.path.join(home, '.claude')
 
     env = {
         'name': 'claude-code',
@@ -41,7 +38,7 @@ def _detect_claude(use_global: bool) -> dict:
     if bin_path:
         env['detected'] = True
         env['bin_path'] = bin_path
-    if Path(global_dir).exists():
+    if Path(config_dir).exists():
         env['detected'] = True
 
     skill_path = os.path.join(config_dir, 'skills', 'memman', 'SKILL.md')
@@ -60,13 +57,10 @@ def _detect_claude(use_global: bool) -> dict:
     return env
 
 
-def _detect_openclaw(use_global: bool) -> dict:
+def _detect_openclaw() -> dict:
     """Detect OpenClaw CLI environment."""
     home = home_dir()
-    global_dir = os.path.join(home, '.openclaw')
-    local_dir = '.openclaw'
-
-    config_dir = global_dir if use_global else local_dir
+    config_dir = os.path.join(home, '.openclaw')
 
     env = {
         'name': 'openclaw',
@@ -82,7 +76,7 @@ def _detect_openclaw(use_global: bool) -> dict:
     if bin_path:
         env['detected'] = True
         env['bin_path'] = bin_path
-    if Path(global_dir).exists():
+    if Path(config_dir).exists():
         env['detected'] = True
 
     skill_path = os.path.join(config_dir, 'skills', 'memman', 'SKILL.md')
@@ -101,9 +95,9 @@ def _detect_openclaw(use_global: bool) -> dict:
     return env
 
 
-def detect_environments(use_global: bool) -> list[dict]:
+def detect_environments() -> list[dict]:
     """Probe for all supported LLM CLI environments."""
     return [
-        _detect_claude(use_global),
-        _detect_openclaw(use_global),
+        _detect_claude(),
+        _detect_openclaw(),
         ]

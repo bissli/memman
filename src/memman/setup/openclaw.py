@@ -7,8 +7,6 @@ from importlib.resources import files as pkg_files
 from pathlib import Path
 
 import memman
-from memman.setup.detect import home_dir
-from memman.setup.prompt import is_interactive, select_multi, select_one
 from memman.setup.prompt import status_error, status_ok, status_updated
 from memman.setup.settings import remove_if_empty
 
@@ -82,7 +80,8 @@ def openclaw_write_plugin(config_dir: str, ver: str) -> str:
 
 
 def openclaw_register_plugin(config_dir: str,
-                             remind: bool, nudge: bool) -> str:
+                             remind: bool = True,
+                             nudge: bool = True) -> str:
     """Add the memman plugin entry to openclaw.json."""
     cfg_path = os.path.join(config_dir, 'openclaw.json')
 
@@ -164,43 +163,11 @@ def openclaw_eject(config_dir: str) -> list[Exception]:
     return errs
 
 
-def _select_openclaw_hooks(
-        auto_yes: bool) -> tuple[bool, bool]:
-    """Prompt user for which plugin hooks to enable."""
-    remind, nudge = True, True
-    if auto_yes or not is_interactive():
-        return remind, nudge
-
-    opts = [
-        ('Remind  \u2014 recall relevant memories + remind'
-         ' agent on each message (recommended)'),
-        ('Nudge   \u2014 suggest remember sub-agent'
-         ' after each reply'),
-        ]
-    defs = [True, True]
-    choices = select_multi(
-        'Select plugin hooks to enable', opts, defs)
-    return choices[0], choices[1]
-
-
-def install_openclaw(env: dict, auto_yes: bool,
-                     use_global: bool,
-                     data_dir: str) -> None:
-    """Install memman into OpenClaw."""
+def install_openclaw(env: dict, data_dir: str) -> None:
+    """Install memman into OpenClaw (~/.openclaw/)."""
     from memman.setup.claude import _init_default_store, write_prompt_files
 
     config_dir = env['config_dir']
-
-    if not use_global and not auto_yes and is_interactive():
-        home = home_dir()
-        local_dir = '.openclaw'
-        global_dir = home + '/.openclaw'
-        idx = select_one(
-            'Install scope',
-            [f'Global \u2014 all projects ({global_dir}/)',
-             f'Local  \u2014 this project only ({local_dir}/)'],
-            0)
-        config_dir = local_dir if idx == 1 else global_dir
 
     print(f'\nSetting up OpenClaw ({config_dir})...')
 
@@ -217,21 +184,12 @@ def install_openclaw(env: dict, auto_yes: bool,
     status_ok(0, 0, 'Hook: prime', path)
 
     print('\n[4/4] Plugin')
-    remind, nudge = _select_openclaw_hooks(auto_yes)
-
     ver = memman.__version__
     path = openclaw_write_plugin(config_dir, ver)
     status_ok(0, 0, 'Plugin', path)
 
-    path = openclaw_register_plugin(
-        config_dir, remind=remind, nudge=nudge)
+    path = openclaw_register_plugin(config_dir)
     status_updated(0, 0, 'Config', path)
-
-    hook_names = ['prime']
-    if remind:
-        hook_names.append('remind')
-    if nudge:
-        hook_names.append('nudge')
 
     print()
     print('Setup complete!')
@@ -239,7 +197,7 @@ def install_openclaw(env: dict, auto_yes: bool,
     print(f'  Hook    {config_dir}/hooks/memman-prime/'
           ' (agent:bootstrap)')
     print(f'  Plugin  {config_dir}/extensions/memman/'
-          f' (hooks: {", ".join(hook_names)})')
+          ' (hooks: remind, nudge)')
     print('  Prompts ~/.memman/prompt/ (guide.md, skill.md)')
     print()
     print('Restart the OpenClaw gateway to activate.')
