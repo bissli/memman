@@ -273,8 +273,14 @@ def test_stop_when_not_installed_is_noop(fake_home, monkeypatch):
 
 
 def _record_subprocess(monkeypatch, *, returncode: int = 0,
-                       stderr: str = '', stdout: str = 'active'):
-    """Stub subprocess.run and record every call's argv."""
+                       stderr: str = '', stdout: str = 'active',
+                       responses: dict | None = None):
+    """Stub subprocess.run, record argvs, and (optionally) route by argv.
+
+    `responses` maps an argv-tuple prefix to a stdout string. When a
+    call's argv starts with a key, that response is returned; otherwise
+    the default `stdout` is used.
+    """
     calls: list = []
 
     class _FakeResult:
@@ -284,8 +290,18 @@ def _record_subprocess(monkeypatch, *, returncode: int = 0,
             self.stderr = err
 
     def _fake_run(cmd, *args, **kwargs):
+        argv = tuple(cmd)
         calls.append(list(cmd))
-        return _FakeResult(returncode, stdout, stderr)
+        out = stdout
+        if responses:
+            if argv in responses:
+                out = responses[argv]
+            else:
+                for key, value in responses.items():
+                    if argv[:len(key)] == key:
+                        out = value
+                        break
+        return _FakeResult(returncode, out, stderr)
 
     fake = type('S', (), {
         'run': staticmethod(_fake_run),
@@ -352,3 +368,60 @@ def test_trigger_raises_when_not_installed(fake_home, monkeypatch):
     _no_subprocess(monkeypatch)
     with pytest.raises(FileNotFoundError, match='not installed'):
         sch.trigger()
+
+
+def test_systemd_status_computes_next_run(
+        fake_home, fake_binary, monkeypatch):
+    """status() reports next_run = LastTriggerUSec + interval.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    _record_subprocess(monkeypatch)
+    sch.install(data_dir=str(fake_home),
+                openrouter_api_key='x', voyage_api_key='y',
+                interval_seconds=900)
+
+    _record_subprocess(monkeypatch, responses={
+        ('systemctl', '--user', 'is-enabled'): 'enabled',
+        ('systemctl', '--user', 'is-active'): 'active',
+        ('systemctl', '--user', 'show',
+         '--property=LastTriggerUSec', '--value'):
+            'Fri 2026-04-24 14:18:58 EDT',
+        })
+    result = sch.status()
+    assert result['next_run'] is not None
+    assert result['next_run'].startswith('2026-04-24T18:33:58')
+
+
+def test_systemd_status_next_run_when_never_fired(
+        fake_home, fake_binary, monkeypatch):
+    """status() returns next_run=None when the timer has never fired.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    _record_subprocess(monkeypatch)
+    sch.install(data_dir=str(fake_home),
+                openrouter_api_key='x', voyage_api_key='y')
+
+    _record_subprocess(monkeypatch, responses={
+        ('systemctl', '--user', 'show',
+         '--property=LastTriggerUSec', '--value'): 'n/a',
+        })
+    result = sch.status()
+    assert result['next_run'] is None
+
+
+def test_systemd_status_next_run_when_malformed(
+        fake_home, fake_binary, monkeypatch):
+    """status() returns next_run=None on an unparseable timestamp.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    _record_subprocess(monkeypatch)
+    sch.install(data_dir=str(fake_home),
+                openrouter_api_key='x', voyage_api_key='y')
+
+    _record_subprocess(monkeypatch, responses={
+        ('systemctl', '--user', 'show',
+         '--property=LastTriggerUSec', '--value'):
+            'not a real timestamp',
+        })
+    result = sch.status()
+    assert result['next_run'] is None

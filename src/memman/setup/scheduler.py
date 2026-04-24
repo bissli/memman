@@ -15,6 +15,7 @@ import re
 import shlex
 import shutil
 import subprocess
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SYSTEMD_TIMER_NAME = 'memman-enrich.timer'
@@ -509,13 +510,36 @@ def _systemd_status() -> dict:
     active = _run(
         ['systemctl', '--user', 'is-active', SYSTEMD_TIMER_NAME])
     result['active'] = (active == 'active')
-    next_run = _run([
+    last = _run([
         'systemctl', '--user', 'show',
-        '--property=NextElapseUSecRealtime', '--value',
+        '--property=LastTriggerUSec', '--value',
         SYSTEMD_TIMER_NAME])
-    if next_run and next_run != '0':
-        result['next_run'] = next_run
+    if last and last != 'n/a' and result['interval_seconds']:
+        last_dt = _parse_systemd_timestamp(last)
+        if last_dt is not None:
+            next_dt = last_dt + timedelta(
+                seconds=result['interval_seconds'])
+            result['next_run'] = next_dt.astimezone(
+                timezone.utc).isoformat()
     return result
+
+
+def _parse_systemd_timestamp(raw: str) -> datetime | None:
+    """Parse a systemd wall-clock string like `Fri 2026-04-24 14:18:58 EDT`.
+
+    Returns a timezone-aware datetime (system local tz) or None.
+    """
+    match = re.match(
+        r'\S+\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s+\S+',
+        raw.strip())
+    if not match:
+        return None
+    date_str, time_str = match.groups()
+    try:
+        naive = datetime.fromisoformat(f'{date_str}T{time_str}')
+    except ValueError:
+        return None
+    return naive.astimezone()
 
 
 def _launchd_status() -> dict:
