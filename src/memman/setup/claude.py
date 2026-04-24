@@ -282,7 +282,7 @@ def _install_env(env: dict, data_dir: str) -> None:
         install_openclaw(env, data_dir=data_dir)
     elif env['name'] == 'nanoclaw':
         from memman.setup.nanoclaw import install_nanoclaw
-        install_nanoclaw(env, data_dir=data_dir)
+        install_nanoclaw()
 
 
 def _run_uninstall_flow(envs: list[dict], target: str) -> None:

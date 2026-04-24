@@ -40,7 +40,7 @@ def memman_binary_path() -> str:
     path = shutil.which('memman')
     if not path:
         raise RuntimeError(
-            'memman binary not on PATH; install with pipx or make install')
+            'memman binary not on PATH; install with pipx')
     return path
 
 

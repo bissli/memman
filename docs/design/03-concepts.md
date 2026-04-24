@@ -146,19 +146,23 @@ memman/
 ```
 ~/.memman/
 ├── active                        # Current default store name (plain text)
-├── prompt/                       # Shared across all stores
-│   ├── guide.md                  # Behavioral guide (recall/remember rules)
-│   └── skill.md                  # Skill definition (command reference)
+├── env                           # Mode-600 API-key exports for the scheduler
+├── queue.db                      # Deferred-write queue (SQLite)
+├── cache/                        # LLM response cache
+├── compact/                      # Session-compact flag files
+├── logs/                         # Scheduler stdout/stderr
+│   ├── enrich.log
+│   └── enrich.err
 └── data/                         # Each store has its own isolated directory
     ├── default/
-    │   └── memman.db                # SQLite database (WAL mode)
+    │   └── memman.db             # SQLite database (WAL mode)
     ├── work/
     │   └── memman.db
     └── <name>/
         └── memman.db
 ```
 
-**Isolation boundary**: Each store contains an independent `memman.db` — insights, edges, and oplog are fully isolated. Prompt files (`guide.md`, `skill.md`) are shared — behavioral rules are universal, memory data is private.
+**Isolation boundary**: Each store contains an independent `memman.db` — insights, edges, and oplog are fully isolated. Shipped assets (`guide.md`, `SKILL.md`) live inside the installed package and are read via `importlib.resources`; nothing memman deploys lives under `~/.memman/`. `~/.memman/` is strictly user state: memory data, API keys, caches, logs, queued work.
 
 ## 3.6 Store Isolation
 

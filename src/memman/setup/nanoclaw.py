@@ -24,7 +24,7 @@ def _claude_skill_dir() -> Path:
     return Path.home() / '.claude' / 'skills' / SKILL_NAME
 
 
-def install_nanoclaw(env: dict, data_dir: str) -> None:
+def install_nanoclaw() -> None:
     """Install the /add-memman agentic skill into Claude Code's skills dir."""
     skill_dir = _claude_skill_dir()
     skill_path = skill_dir / 'SKILL.md'
@@ -46,7 +46,7 @@ def install_nanoclaw(env: dict, data_dir: str) -> None:
           ' into the container.')
 
 
-def uninstall_nanoclaw(config_dir: str | None = None) -> list[Exception]:
+def uninstall_nanoclaw() -> list[Exception]:
     """Remove the /add-memman skill from Claude Code's skills dir."""
     errs: list[Exception] = []
     skill_dir = _claude_skill_dir()

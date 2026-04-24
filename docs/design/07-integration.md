@@ -48,11 +48,11 @@ Session starts
 
 Three layers work together:
 
-| Layer     | What                                                                        | Where                    | Role                                                                                                                                                |
-| --------- | --------------------------------------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Hooks** | Shell scripts triggered by Claude Code lifecycle events                     | `.claude/hooks/mm/`      | Prime (guide), Remind (recall & remember), Nudge (remember), Compact (pre-compact bridge), Recall (pre-delegation), ExitPlan (plan-mode transition) |
-| **Skill** | `SKILL.md` — command reference in Claude Code skill format                  | `.claude/skills/memman/` | Teaches the LLM *how* to use memman commands                                                                                                        |
-| **Guide** | `guide.md` — detailed execution manual for recall, remember, and delegation | `~/.memman/prompt/`      | Teaches the LLM *when* to recall, *what* to remember, and *how* to delegate                                                                         |
+| Layer     | What                                                                        | Where                                       | Role                                                                                                                                                |
+| --------- | --------------------------------------------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Hooks** | Shell scripts triggered by Claude Code lifecycle events                     | `.claude/hooks/mm/`                         | Prime (guide), Remind (recall & remember), Nudge (remember), Compact (pre-compact bridge), Recall (pre-delegation), ExitPlan (plan-mode transition) |
+| **Skill** | `SKILL.md` — command reference in Claude Code skill format                  | `.claude/skills/memman/`                    | Teaches the LLM *how* to use memman commands                                                                                                        |
+| **Guide** | `guide.md` — detailed execution manual for recall, remember, and delegation | Installed package (read via `memman guide`) | Teaches the LLM *when* to recall, *what* to remember, and *how* to delegate                                                                         |
 
 ## 7.2 Hook Details
 
@@ -60,20 +60,17 @@ Claude Code fires hooks at specific lifecycle events. MemMan registers up to six
 
 **Prime (SessionStart) — `prime.sh`**
 
-Runs once when a session starts. Loads the behavioral guide — a detailed execution manual that teaches the agent when to recall, what to remember, and how to delegate memory writes:
+Runs once when a session starts. Delegates to `memman prime`, which emits the status line, a compact-recall hint when `SessionStart.source == 'compact'`, and the shipped behavioral guide via `importlib.resources`:
 
 ```bash
-STATS=$(memman status 2>/dev/null)
-if [ -n "$STATS" ]; then
-  # extract counts from JSON and show in status line
-  echo "[memman] Memory active (<insights> insights, <edges> edges)."
-else
-  echo "[memman] Memory active."
+if ! command -v memman >/dev/null 2>&1; then
+  echo "[memman] Warning: memman not on PATH; hooks inactive."
+  exit 0
 fi
-[ -f ~/.memman/prompt/guide.md ] && cat ~/.memman/prompt/guide.md
+echo "$INPUT" | memman prime
 ```
 
-The guide content appears in the LLM's system context, establishing recall/remember/delegation behavior for the entire session.
+The hook's stdout is injected into the agent's context before the first user turn. The guide content (recall/remember policy, phase awareness, Tier A/B rules) sets behavior for the entire session.
 
 **Remind (UserPromptSubmit) — `user_prompt.sh`**
 
@@ -165,22 +162,20 @@ Setting up Claude Code (~/.claude/)...
   ✓ Hook: exit_plan ~/.claude/hooks/mm/exit_plan.sh
   ✓ Settings         ~/.claude/settings.json (updated)
   ✓ Permission       Bash(memman:*) added to settings.json
-  ✓ Local overrides  ~/.memman/prompt/guide.local.md
 
 Setup complete!
   Hooks   prime, remind, nudge, compact, recall, exit_plan
 
 Start a new Claude Code session to activate.
-Edit ~/.memman/prompt/guide.local.md to customize the agent guide.
 ```
 
 Deployment model:
 
 - `~/.claude/skills/memman/SKILL.md` → symlink into the installed package's `memman/setup/assets/claude/SKILL.md`.
 - `~/.claude/hooks/mm/*.sh` → symlinks into the same package path. `prime.sh` is a thin shim that delegates to `memman prime` (status + compact hint + guide in one Python call).
-- `~/.memman/prompt/guide.local.md` → a user-owned override file. Created with a stub on first `memman install`, never overwritten by install or uninstall.
+- Shipped `guide.md` is never deployed to disk — `memman guide` reads it from the package via `importlib.resources` every time `prime.sh` fires.
 
-`memman guide` reads the shipped `guide.md` from the package (via `importlib.resources`) and appends `guide.local.md` when present. The hook script calls this command at session start, so edits to either file propagate on the next session without any re-install step.
+`pipx upgrade memman` refreshes hook scripts and `SKILL.md` automatically through the symlinks; `guide.md` is read live from the new package version. Asset-only changes propagate without any re-install step.
 
 Key install options:
 
@@ -192,7 +187,7 @@ Key install options:
 | `memman uninstall`                    | Remove all memman integrations   |
 | `memman uninstall --target <name>`    | Remove from a single environment |
 
-`memman uninstall` never deletes anything under `~/.memman/` — the memory store, API-key env file, and `guide.local.md` all survive. To fully remove the binary: `pipx uninstall memman`.
+`memman uninstall` never deletes anything under `~/.memman/` — memory store, API-key env file, caches, queue, and scheduler logs all survive. To fully remove the binary: `pipx uninstall memman`.
 
 The Prime hook is always installed. Remind, Nudge, Compact, Recall, and ExitPlan hooks are optional (all enabled by default).
 

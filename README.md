@@ -34,7 +34,7 @@ memman install
 - lifecycle hook scripts symlinked into `~/.claude/hooks/mm/`
 - `~/.claude/settings.json` hook registrations and `Bash(memman:*)` permission
 - scheduler unit (systemd timer on Linux, launchd agent on macOS)
-- `~/.memman/prompt/guide.local.md` stub (for user customization of the behavioral guide)
+- `~/.memman/logs/` directory (scheduler enrichment worker stdout/stderr)
 
 Target a specific environment:
 
@@ -46,10 +46,6 @@ memman install --target claude-code
 For NanoClaw (agents running inside Linux containers), install memman on the host as above, then run the `/add-memman` skill in your NanoClaw project — it modifies the Dockerfile, adds a container skill, and wires volume mounts. Each WhatsApp group gets its own isolated store, with optional global shared memory (read-only).
 
 Start a new Claude Code session (or restart the OpenClaw gateway) to activate.
-
-### Customizing the behavioral guide
-
-Edit `~/.memman/prompt/guide.local.md`. Its content is appended to the shipped guide on every hook fire. The file is created with a stub on first `memman install` and is never overwritten — your edits survive re-installs and upgrades.
 
 ### Development
 
@@ -71,7 +67,7 @@ make dev && make test
 pipx upgrade memman
 ```
 
-That's it. Hook scripts, `SKILL.md`, and `guide.md` are symlinks into the installed package — they refresh automatically. The behavioral guide is read live via `memman guide` on each session start, so even asset-only changes propagate without re-running `memman install`.
+That's it. Hook scripts and `SKILL.md` are symlinks into the installed package, so they refresh automatically. `guide.md` is read live from the package via `importlib.resources` — `memman guide` prints it on demand, `prime.sh` invokes it at each SessionStart. Asset-only changes propagate without re-running `memman install`.
 
 ## Uninstall
 
@@ -80,7 +76,7 @@ memman uninstall            # remove hooks, skill, settings entries, scheduler u
 pipx uninstall memman       # remove the memman binary
 ```
 
-Either can run alone. `memman uninstall` never deletes anything under `~/.memman/` — your memory store, API keys, and `guide.local.md` all survive.
+Either can run alone. `memman uninstall` never deletes anything under `~/.memman/` — your memory store, API keys, and scheduler logs all survive.
 
 ## How It Works
 
@@ -90,7 +86,7 @@ Once set up, memory operates transparently via Claude Code's [hook system](https
 Session starts
     │
     ▼
-  Prime (SessionStart) ─── prime.sh ──→ load guide.md (memory execution manual)
+  Prime (SessionStart) ─── prime.sh ──→ memman prime (status + guide + compact hint)
     │
     ▼
   User sends message
@@ -151,7 +147,7 @@ Different agents/processes can use different stores via the `MEMMAN_STORE` envir
 `memman install` always installs globally at `~/.claude/` (or `~/.openclaw/`). There is no local/project mode.
 
 **How do I customize the behavior?**
-Edit `~/.memman/prompt/guide.local.md`. Its content is appended to the shipped guide on every session. The file is created with a stub on first `memman install` and is never overwritten. The shipped `guide.md` and `SKILL.md` live inside the installed package and update on `pipx upgrade memman`.
+The shipped `guide.md` (behavioral policy) and `SKILL.md` (command reference) live inside the installed package and update on `pipx upgrade memman`. memman does not deploy any user-override file under `~/.memman/`. To change behavior, edit the package source (editable installs pick up changes live) or propose a change upstream.
 
 **How does `memman remember` work?**
 It is a fast queue-append (~50 ms). A user-scope scheduler (systemd timer on Linux, launchd agent on macOS) drains the queue every 15 min and runs the full pipeline — fact extraction, reconciliation, enrichment, causal inference, embedding — out of band. The host agent calls `memman remember` directly via Bash, no sub-agent delegation. **Newly stored memories are NOT recallable in the current session**; they become available in later sessions.

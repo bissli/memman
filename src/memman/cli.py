@@ -1720,7 +1720,7 @@ def graph_reindex(ctx: click.Context, dry_run: bool) -> None:
               help='Target environment (claude-code | openclaw | nanoclaw)')
 @click.pass_context
 def install(ctx: click.Context, target: str) -> None:
-    """Install memman integration: hooks, skill, prompts, scheduler."""
+    """Install memman integration: skill, hooks, scheduler."""
     from memman.setup.claude import run_install
     run_install(ctx.obj['data_dir'], target=target)
 

@@ -34,24 +34,24 @@ memman uninstall
 memman uninstall --target claude-code
 ```
 
-| Command            | `--target <name>` | Effect                                                                                                                              |
-| ------------------ | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `memman install`   | (auto-detect)     | Deploy hook and skill symlinks, register in settings.json, install the scheduler unit, write `~/.memman/prompt/guide.local.md` stub |
-| `memman install`   | `claude-code`     | Install into `~/.claude/` only                                                                                                      |
-| `memman install`   | `openclaw`        | Install into `~/.openclaw/` only                                                                                                    |
-| `memman install`   | `nanoclaw`        | Install into `~/.nanoclaw/` only                                                                                                    |
-| `memman uninstall` | (auto-detect)     | Remove hooks, skill, settings.json entries, and scheduler unit. Never touches `~/.memman/`                                          |
-| `memman uninstall` | `<name>`          | Remove memman from that environment only                                                                                            |
+| Command            | `--target <name>` | Effect                                                                                                                               |
+| ------------------ | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `memman install`   | (auto-detect)     | Deploy hook and skill symlinks, register in settings.json, install the scheduler unit, create `~/.memman/logs/` for scheduler output |
+| `memman install`   | `claude-code`     | Install into `~/.claude/` only                                                                                                       |
+| `memman install`   | `openclaw`        | Install into `~/.openclaw/` only                                                                                                     |
+| `memman install`   | `nanoclaw`        | Install into `~/.nanoclaw/` only                                                                                                     |
+| `memman uninstall` | (auto-detect)     | Remove hooks, skill, settings.json entries, and scheduler unit. Never touches `~/.memman/`                                           |
+| `memman uninstall` | `<name>`          | Remove memman from that environment only                                                                                             |
 
 ### Live-read commands
 
 | Command        | What it prints                                                                                    |
 | -------------- | ------------------------------------------------------------------------------------------------- |
-| `memman guide` | Shipped `guide.md` plus `~/.memman/prompt/guide.local.md` (appended)                              |
+| `memman guide` | Shipped `guide.md` (read from the installed package via `importlib.resources`)                    |
 | `memman skill` | Shipped `SKILL.md`                                                                                |
 | `memman prime` | Reads SessionStart JSON on stdin; emits status + compact-recall hint + guide (called by prime.sh) |
 
-`guide.local.md` is the supported customization point. Created with a stub on first `memman install` and never overwritten.
+`memman scheduler logs [--errors] [--lines N]` tails `~/.memman/logs/enrich.{log,err}` — the enrichment worker's output. Use `--errors` for stderr / Python tracebacks.
 
 ---
 
