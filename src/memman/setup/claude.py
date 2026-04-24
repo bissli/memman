@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 import click
+from memman import config
 from memman.setup.deploy import symlink_asset
 from memman.setup.detect import detect_environments
 from memman.setup.markdown import remove_memory_block
@@ -36,16 +37,16 @@ def check_prereqs() -> tuple[str, str]:
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
 
-    openrouter_key = os.environ.get('OPENROUTER_API_KEY', '').strip()
+    openrouter_key = os.environ.get(config.OPENROUTER_API_KEY, '').strip()
     if not openrouter_key:
         raise click.ClickException(
-            'OPENROUTER_API_KEY is required for the background enrichment'
-            ' worker; export it and re-run')
+            f'{config.OPENROUTER_API_KEY} is required for the background'
+            ' enrichment worker; export it and re-run')
 
-    voyage_key = os.environ.get('VOYAGE_API_KEY', '').strip()
+    voyage_key = os.environ.get(config.VOYAGE_API_KEY, '').strip()
     if not voyage_key:
         raise click.ClickException(
-            'VOYAGE_API_KEY is required for memory embeddings;'
+            f'{config.VOYAGE_API_KEY} is required for memory embeddings;'
             ' export it and re-run')
 
     return openrouter_key, voyage_key

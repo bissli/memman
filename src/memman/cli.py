@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 import click
 import memman
+from memman import config
 from memman.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge, Insight
 from memman.model import format_timestamp, is_immune
 from memman.store.db import default_data_dir, list_stores, open_db
@@ -39,7 +40,8 @@ def _configure_logging(data_dir: str, verbose: bool, debug: bool) -> None:
     elif verbose:
         level = logging.INFO
     else:
-        name = os.environ.get('MEMMAN_LOG_LEVEL', 'WARNING').upper()
+        name = os.environ.get(
+            config.LOG_LEVEL, config.DEFAULT_LOG_LEVEL).upper()
         level = getattr(logging, name, logging.WARNING)
 
     logger.setLevel(level)
@@ -55,7 +57,7 @@ def _configure_logging(data_dir: str, verbose: bool, debug: bool) -> None:
         sh._memman = True
         logger.addHandler(sh)
 
-    if os.environ.get('MEMMAN_WORKER') == '1':
+    if config.is_worker():
         has_file = any(
             isinstance(h, logging.handlers.RotatingFileHandler)
             and getattr(h, '_memman', False)
@@ -81,7 +83,7 @@ def _resolve_store_name(data_dir: str, store_flag: str) -> str:
     """Resolve effective store name."""
     if store_flag:
         return store_flag
-    env = os.environ.get('MEMMAN_STORE', '')
+    env = os.environ.get(config.STORE, '')
     if env:
         return env
     return read_active(data_dir)
@@ -191,28 +193,12 @@ def cli(ctx: click.Context, data_dir: str | None, store_name: str,
         readonly: bool, verbose: bool, debug: bool) -> None:
     """Memory daemon for LLM agents."""
     if data_dir is None:
-        data_dir = os.environ.get('MEMMAN_DATA_DIR', default_data_dir())
+        data_dir = os.environ.get(config.DATA_DIR, default_data_dir())
     _configure_logging(data_dir, verbose, debug)
     ctx.ensure_object(dict)
     ctx.obj['data_dir'] = data_dir
     ctx.obj['store'] = store_name
     ctx.obj['readonly'] = readonly
-
-
-def _resolve_remember_default() -> bool:
-    """Pick the default for --defer/--sync based on env + scheduler state.
-
-    MEMMAN_REMEMBER_DEFAULT=sync|defer wins outright. Otherwise the
-    scheduler's persisted state picks: active/paused -> defer,
-    off -> sync. Missing state file defaults to active -> defer.
-    """
-    override = os.environ.get('MEMMAN_REMEMBER_DEFAULT', '').strip().lower()
-    if override == 'sync':
-        return False
-    if override == 'defer':
-        return True
-    from memman.setup.scheduler import STATE_OFF, read_state
-    return read_state() != STATE_OFF
 
 
 @cli.command()
@@ -242,7 +228,7 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     `MEMMAN_REMEMBER_DEFAULT=sync|defer` for CI/headless contexts.
     """
     if defer is None:
-        defer = _resolve_remember_default()
+        defer = config.resolve_remember_default()
     content_str = ' '.join(content)
     content_bytes = len(content_str.encode('utf-8'))
     if content_bytes > 8000:
@@ -332,7 +318,7 @@ def enrich(ctx: click.Context, pending: bool, limit: int,
         raise click.ClickException(
             'only --pending mode is supported; pass --pending explicitly')
     if debug:
-        os.environ['MEMMAN_DEBUG'] = '1'
+        os.environ[config.DEBUG] = '1'
     _drain_queue(ctx, limit, timeout, stores, verbose)
 
 
@@ -360,12 +346,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         hostname=socket.gethostname(),
         python=_sys.version.split()[0],
         memman_version=_memman_version,
-        env={
-            'MEMMAN_LLM_PROVIDER': os.environ.get('MEMMAN_LLM_PROVIDER', ''),
-            'MEMMAN_LLM_MODEL': os.environ.get('MEMMAN_LLM_MODEL', ''),
-            'MEMMAN_DATA_DIR': os.environ.get('MEMMAN_DATA_DIR', ''),
-            'MEMMAN_STORE': os.environ.get('MEMMAN_STORE', ''),
-            })
+        env=config.enumerate_effective_config())
     trace.event(
         'drain_start',
         data_dir=data_dir_val,

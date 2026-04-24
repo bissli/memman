@@ -18,16 +18,13 @@ import time
 
 import click
 import httpx
-from memman import trace
+from memman import config, trace
 from memman.llm.client import ENRICHMENT_TIMEOUT, MAX_RETRIES, RETRY_BACKOFF
 from memman.llm.client import RETRYABLE_STATUS_CODES
 from memman.llm.openrouter_cache import get_zdr_endpoints, pick_latest_haiku
 
 logger = logging.getLogger('memman')
 
-OPENROUTER_API_KEY_VAR = 'OPENROUTER_API_KEY'
-OPENROUTER_ENDPOINT_VAR = 'MEMMAN_OPENROUTER_ENDPOINT'
-OPENROUTER_MODEL_VAR = 'MEMMAN_LLM_MODEL'
 DEFAULT_OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1'
 
 
@@ -169,12 +166,12 @@ def _safe_json(resp: httpx.Response) -> object:
 def get_openrouter_client() -> OpenRouterClient:
     """Build an OpenRouter client from environment variables."""
     endpoint = os.environ.get(
-        OPENROUTER_ENDPOINT_VAR, DEFAULT_OPENROUTER_ENDPOINT)
-    api_key = (os.environ.get(OPENROUTER_API_KEY_VAR)
-               or os.environ.get('MEMMAN_LLM_API_KEY'))
+        config.OPENROUTER_ENDPOINT, DEFAULT_OPENROUTER_ENDPOINT)
+    api_key = (os.environ.get(config.OPENROUTER_API_KEY)
+               or os.environ.get(config.LLM_API_KEY))
     if not api_key:
         raise click.ClickException(
-            'OPENROUTER_API_KEY or MEMMAN_LLM_API_KEY must be set'
-            ' when MEMMAN_LLM_PROVIDER=openrouter')
-    model_override = os.environ.get(OPENROUTER_MODEL_VAR)
+            f'{config.OPENROUTER_API_KEY} or {config.LLM_API_KEY} must be set'
+            f' when {config.LLM_PROVIDER}=openrouter')
+    model_override = os.environ.get(config.LLM_MODEL)
     return OpenRouterClient(endpoint, api_key, model=model_override)

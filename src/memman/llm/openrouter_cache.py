@@ -14,7 +14,7 @@ from pathlib import Path
 
 import cachetools
 import httpx
-from memman import trace
+from memman import config, trace
 
 logger = logging.getLogger('memman')
 
@@ -29,7 +29,7 @@ _memory_cache: cachetools.TTLCache = cachetools.TTLCache(
 
 def default_cache_dir() -> str:
     """Return ~/.memman/cache (via MEMMAN_CACHE_DIR override)."""
-    env = os.environ.get('MEMMAN_CACHE_DIR')
+    env = os.environ.get(config.CACHE_DIR)
     if env:
         return env
     return str(Path.home() / '.memman' / 'cache')

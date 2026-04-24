@@ -5,7 +5,7 @@ import os
 import time
 
 import httpx
-from memman import trace
+from memman import config, trace
 
 logger = logging.getLogger('memman')
 
@@ -20,7 +20,7 @@ class Client:
     def __init__(self) -> None:
         self.endpoint = DEFAULT_ENDPOINT
         self.model = DEFAULT_MODEL
-        self._api_key = os.environ.get('VOYAGE_API_KEY') or ''
+        self._api_key = os.environ.get(config.VOYAGE_API_KEY) or ''
 
     def _headers(self) -> dict[str, str]:
         """Build request headers with auth."""

@@ -24,7 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-DEBUG_ENV_VAR = 'MEMMAN_DEBUG'
+from memman import config
+
 TRACE_FILENAME = 'debug.log'
 LOG_DIR_NAME = 'logs'
 DEBUG_STATE_FILENAME = 'debug.state'
@@ -32,19 +33,18 @@ MAX_BYTES = 5 * 1024 * 1024
 BACKUP_COUNT = 3
 REDACT_HEADER_NAMES = {'authorization', 'x-api-key', 'api-key'}
 REDACT_VALUE = '***REDACTED***'
-TRUTHY = {'1', 'true', 'yes', 'on'}
 
 
 def is_enabled() -> bool:
     """Return True when trace mode is on.
 
-    Env var wins when set (truthy values in TRUTHY, anything else is
-    treated as an explicit opt-out). When the env var is unset, fall
-    back to ~/.memman/debug.state.
+    Env var wins when set (truthy values in config.TRUTHY, anything
+    else is treated as an explicit opt-out). When the env var is
+    unset, fall back to ~/.memman/debug.state.
     """
-    raw = os.environ.get(DEBUG_ENV_VAR)
+    raw = os.environ.get(config.DEBUG)
     if raw is not None:
-        return raw.strip().lower() in TRUTHY
+        return raw.strip().lower() in config.TRUTHY
     try:
         value = (Path.home() / '.memman' / DEBUG_STATE_FILENAME
                  ).read_text().strip()
@@ -95,7 +95,7 @@ def _json_default(obj: Any) -> str:
 def setup() -> None:
     """Attach a rotating JSONL file handler to the 'memman' logger.
 
-    No-op when MEMMAN_DEBUG is unset. Idempotent: repeated calls do not
+    No-op when config.DEBUG is unset. Idempotent: repeated calls do not
     attach duplicate handlers. The log file is chmod 600 immediately
     after creation so raw memory content never lands at world-readable
     permissions.

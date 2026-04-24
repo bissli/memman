@@ -7,13 +7,10 @@ import time
 
 import click
 import httpx
-from memman import trace
+from memman import config, trace
 
 logger = logging.getLogger('memman')
 
-ANTHROPIC_ENDPOINT_VAR = 'MEMMAN_ANTHROPIC_ENDPOINT'
-LLM_API_KEY_VAR = 'MEMMAN_LLM_API_KEY'
-LLM_MODEL_VAR = 'MEMMAN_LLM_MODEL'
 DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
 DEFAULT_ENDPOINT = 'https://api.anthropic.com'
 ENRICHMENT_TIMEOUT = 10.0
@@ -139,7 +136,6 @@ def parse_json_list_response(raw: str) -> list | None:
     return None
 
 
-LLM_PROVIDER_VAR = 'MEMMAN_LLM_PROVIDER'
 PROVIDER_ANTHROPIC = 'anthropic'
 PROVIDER_OPENROUTER = 'openrouter'
 
@@ -153,7 +149,7 @@ def get_llm_client():
     required API key is missing.
     """
     provider = os.environ.get(
-        LLM_PROVIDER_VAR, PROVIDER_ANTHROPIC).lower()
+        config.LLM_PROVIDER, PROVIDER_ANTHROPIC).lower()
 
     if provider == PROVIDER_OPENROUTER:
         from memman.llm.openrouter_client import get_openrouter_client
@@ -161,14 +157,14 @@ def get_llm_client():
 
     if provider != PROVIDER_ANTHROPIC:
         raise click.ClickException(
-            f'unknown {LLM_PROVIDER_VAR}={provider!r};'
+            f'unknown {config.LLM_PROVIDER}={provider!r};'
             ' expected "anthropic" or "openrouter"')
 
-    endpoint = os.environ.get(ANTHROPIC_ENDPOINT_VAR, DEFAULT_ENDPOINT)
-    api_key = (os.environ.get(LLM_API_KEY_VAR)
-               or os.environ.get('ANTHROPIC_API_KEY'))
+    endpoint = os.environ.get(config.ANTHROPIC_ENDPOINT, DEFAULT_ENDPOINT)
+    api_key = (os.environ.get(config.LLM_API_KEY)
+               or os.environ.get(config.ANTHROPIC_API_KEY))
     if not api_key:
         raise click.ClickException(
-            'ANTHROPIC_API_KEY or MEMMAN_LLM_API_KEY must be set')
-    model = os.environ.get(LLM_MODEL_VAR, DEFAULT_MODEL)
+            f'{config.ANTHROPIC_API_KEY} or {config.LLM_API_KEY} must be set')
+    model = os.environ.get(config.LLM_MODEL, DEFAULT_MODEL)
     return LLMClient(endpoint, api_key, model)
