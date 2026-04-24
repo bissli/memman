@@ -17,8 +17,8 @@ implements `.complete(...)` using helpers from `llm.shared`, plus one
 """
 
 import os
-from typing import Protocol
 from collections.abc import Callable
+from typing import Protocol
 
 from memman import config
 from memman.exceptions import ConfigError

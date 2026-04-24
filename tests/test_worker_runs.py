@@ -28,7 +28,8 @@ def test_start_finish_round_trip(queue_conn):
     """start/finish writes and updates exactly one row with counts.
     """
     run_id = start_worker_run(queue_conn, worker_pid=4242)
-    assert isinstance(run_id, int) and run_id > 0
+    assert isinstance(run_id, int)
+    assert run_id > 0
     finish_worker_run(
         queue_conn, run_id,
         rows_claimed=5, rows_done=3, rows_failed=2, error=None)
@@ -41,7 +42,8 @@ def test_start_finish_round_trip(queue_conn):
     assert row[1:4] == (5, 3, 2)
     assert row[4] is not None
     assert row[5] is not None
-    assert row[6] is not None and row[6] >= 0
+    assert row[6] is not None
+    assert row[6] >= 0
     assert row[7] is None
 
 

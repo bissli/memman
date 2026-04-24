@@ -6,9 +6,7 @@ the `resolve_remember_default()` selector that feeds
 `remember --defer/--sync`.
 """
 
-import pytest
 from memman import config
-
 
 ALL_EXPECTED_NAMES = {
     'MEMMAN_DATA_DIR',

@@ -6,16 +6,14 @@ import pathlib
 import subprocess
 
 import pytest
-
 from click.testing import CliRunner
 from memman.cli import cli
 from memman.setup.claude import claude_register_hooks
 from memman.setup.markdown import remove_memory_block
 from memman.setup.settings import add_claude_hooks_selective
 from memman.setup.settings import add_memman_permission, read_json_file
-from memman.setup.settings import remove_claude_hooks
-from memman.setup.settings import remove_if_empty, remove_memman_permission
-from memman.setup.settings import strip_json5
+from memman.setup.settings import remove_claude_hooks, remove_if_empty
+from memman.setup.settings import remove_memman_permission, strip_json5
 from memman.setup.settings import write_json_file
 
 

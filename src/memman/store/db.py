@@ -223,6 +223,7 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 """
 
+
 def _migrate(db: DB) -> None:
     """Apply the canonical schema to the database.
 

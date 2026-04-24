@@ -606,7 +606,7 @@ def test_link_respects_user_created_by(runner):
         '--no-reconcile'])
     id1 = parse_remember(r1)['id']
     r2 = invoke(runner, [
-        'remember', '--sync', 'Let\'s Encrypt auto-renews TLS certificates',
+        'remember', '--sync', "Let's Encrypt auto-renews TLS certificates",
         '--no-reconcile'])
     id2 = parse_remember(r2)['id']
 

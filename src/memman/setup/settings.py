@@ -15,7 +15,7 @@ def _unexpand_home(path: str) -> str:
 
 
 def strip_json5(s: str) -> str:
-    """Strip JSON5 affordances down to plain JSON.
+    r"""Strip JSON5 affordances down to plain JSON.
 
     Handles: `//` line comments, `/* */` block comments, double-quoted
     and single-quoted strings (both pass through unchanged, with escape
@@ -41,7 +41,7 @@ def strip_json5(s: str) -> str:
             result.append(ch)
             i += 1
             continue
-        if ch in ('"', "'"):
+        if ch in {'"', "'"}:
             in_string = ch
             result.append(ch)
             i += 1
