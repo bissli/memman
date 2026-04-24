@@ -60,6 +60,30 @@ class TestAvailable:
         client = Client()
         assert client.available() is False
 
+    def test_available_is_memoized(self, monkeypatch):
+        """available() calls the HTTP probe at most once per instance.
+        """
+        monkeypatch.setattr(Client, 'available', _original_available)
+        monkeypatch.setenv('VOYAGE_API_KEY', 'probe-key')
+        calls = {'n': 0}
+
+        def _mock_post(url, headers=None, json=None, timeout=None):
+            calls['n'] += 1
+
+            class Resp:
+                status_code = 200
+            return Resp()
+
+        monkeypatch.setattr(
+            voyage, '_CLIENT',
+            type('FakeClient', (), {
+                'post': staticmethod(_mock_post)})())
+        client = Client()
+        assert client.available() is True
+        assert client.available() is True
+        assert client.available() is True
+        assert calls['n'] == 1
+
 
 class TestEmbed:
     """Embedding generation via httpx."""
@@ -77,8 +101,10 @@ class TestEmbed:
                     return {'data': [{'embedding': expected_vec}]}
             return Resp()
 
-        monkeypatch.setattr(voyage, 'httpx',
-                            type('M', (), {'post': staticmethod(mock_post)}))
+        monkeypatch.setattr(
+            voyage, '_CLIENT',
+            type('FakeClient', (), {
+                'post': staticmethod(mock_post)})())
         vec = real_client.embed('test text')
         assert len(vec) == EMBEDDING_DIM
         assert vec == expected_vec
@@ -91,8 +117,10 @@ class TestEmbed:
                 status_code = 401
             return Resp()
 
-        monkeypatch.setattr(voyage, 'httpx',
-                            type('M', (), {'post': staticmethod(mock_post)}))
+        monkeypatch.setattr(
+            voyage, '_CLIENT',
+            type('FakeClient', (), {
+                'post': staticmethod(mock_post)})())
         with pytest.raises(RuntimeError, match='401'):
             real_client.embed('test')
 
@@ -107,8 +135,10 @@ class TestEmbed:
                     return {'data': []}
             return Resp()
 
-        monkeypatch.setattr(voyage, 'httpx',
-                            type('M', (), {'post': staticmethod(mock_post)}))
+        monkeypatch.setattr(
+            voyage, '_CLIENT',
+            type('FakeClient', (), {
+                'post': staticmethod(mock_post)})())
         with pytest.raises(RuntimeError, match='empty'):
             real_client.embed('test')
 

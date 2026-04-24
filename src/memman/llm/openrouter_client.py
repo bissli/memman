@@ -27,6 +27,16 @@ logger = logging.getLogger('memman')
 
 DEFAULT_OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1'
 
+_CLIENT: httpx.Client | None = None
+
+
+def _session() -> httpx.Client:
+    """Return the module-level httpx.Client, creating it lazily."""
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = httpx.Client()
+    return _CLIENT
+
 
 class OpenRouterClient:
     """OpenAI-schema LLM client that enforces ZDR routing."""
@@ -113,7 +123,7 @@ class OpenRouterClient:
                 headers=trace.redact_headers(headers),
                 body=body)
             t0 = time.monotonic()
-            resp = httpx.post(
+            resp = _session().post(
                 url, headers=headers, json=body, timeout=self.timeout)
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             try:

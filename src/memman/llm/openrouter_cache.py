@@ -26,6 +26,16 @@ CACHE_FILENAME = 'openrouter-zdr.json'
 _memory_cache: cachetools.TTLCache = cachetools.TTLCache(
     maxsize=1, ttl=DEFAULT_TTL_SECONDS)
 
+_CLIENT: httpx.Client | None = None
+
+
+def _session() -> httpx.Client:
+    """Return the module-level httpx.Client, creating it lazily."""
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = httpx.Client()
+    return _CLIENT
+
 
 def default_cache_dir() -> str:
     """Return ~/.memman/cache (via MEMMAN_CACHE_DIR override)."""
@@ -45,7 +55,8 @@ def _fetch() -> list[dict]:
     """GET the ZDR endpoints list from OpenRouter."""
     trace.event('zdr_fetch_request', url=ZDR_ENDPOINT_URL)
     t0 = time.monotonic()
-    resp = httpx.get(ZDR_ENDPOINT_URL, timeout=FETCH_TIMEOUT_SECONDS)
+    resp = _session().get(
+        ZDR_ENDPOINT_URL, timeout=FETCH_TIMEOUT_SECONDS)
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     resp.raise_for_status()
     payload = resp.json()

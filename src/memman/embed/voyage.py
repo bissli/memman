@@ -1,4 +1,10 @@
-"""Voyage AI HTTP client for embedding generation."""
+"""Voyage AI HTTP client for embedding generation.
+
+Uses a module-level `httpx.Client` so repeated embed calls in one
+worker drain reuse the TLS connection. Tests that need to intercept
+the HTTP layer monkeypatch `_CLIENT` directly with a stand-in that
+implements `.post(url, headers=..., json=..., timeout=...)`.
+"""
 
 import logging
 import os
@@ -13,6 +19,16 @@ DEFAULT_MODEL = 'voyage-3-lite'
 DEFAULT_ENDPOINT = 'https://api.voyageai.com'
 EMBEDDING_DIM = 512
 
+_CLIENT: httpx.Client | None = None
+
+
+def _session() -> httpx.Client:
+    """Return the module-level httpx.Client, creating it lazily."""
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = httpx.Client()
+    return _CLIENT
+
 
 class Client:
     """HTTP client for Voyage AI embedding API."""
@@ -21,6 +37,7 @@ class Client:
         self.endpoint = DEFAULT_ENDPOINT
         self.model = DEFAULT_MODEL
         self._api_key = os.environ.get(config.VOYAGE_API_KEY) or ''
+        self._availability_cache: bool | None = None
 
     def _headers(self) -> dict[str, str]:
         """Build request headers with auth."""
@@ -30,18 +47,29 @@ class Client:
             }
 
     def available(self) -> bool:
-        """Check if the embedding endpoint is reachable."""
+        """Check if the embedding endpoint is reachable.
+
+        Memoized per instance: the probe sends a billable 1-token
+        embed, so repeat calls in the same process short-circuit to
+        the cached result. A False result is cached too (keyless
+        clients don't suddenly acquire a key mid-process).
+        """
+        if self._availability_cache is not None:
+            return self._availability_cache
         if not self._api_key:
+            self._availability_cache = False
             return False
         try:
-            resp = httpx.post(
+            resp = _session().post(
                 f'{self.endpoint}/v1/embeddings',
                 headers=self._headers(),
                 json={'model': self.model, 'input': ['test']},
                 timeout=5.0)
-            return resp.status_code == 200
+            result = resp.status_code == 200
         except Exception:
-            return False
+            result = False
+        self._availability_cache = result
+        return result
 
     def embed(self, text: str) -> list[float]:
         """Generate embedding for text via Voyage API."""
@@ -56,7 +84,7 @@ class Client:
             input_len=len(text),
             headers=trace.redact_headers(headers))
         t0 = time.monotonic()
-        resp = httpx.post(url, headers=headers, json=body, timeout=30.0)
+        resp = _session().post(url, headers=headers, json=body, timeout=30.0)
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         if resp.status_code != 200:
             trace.event(

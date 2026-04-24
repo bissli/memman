@@ -7,6 +7,7 @@ import time
 import httpx
 import pytest
 from memman.llm import openrouter_cache as cache_mod
+from memman.llm import openrouter_client as or_mod
 from memman.llm.openrouter_cache import clear_cache, get_zdr_endpoints
 from memman.llm.openrouter_cache import pick_latest_haiku
 from memman.llm.openrouter_client import OpenRouterClient
@@ -153,7 +154,9 @@ def test_client_complete_injects_zdr_provider_block(monkeypatch):
             request=httpx.Request('POST', url),
             json={'choices': [{'message': {'content': 'ok'}}]})
 
-    monkeypatch.setattr(httpx, 'post', _fake_post)
+    monkeypatch.setattr(
+        or_mod, '_CLIENT',
+        type('FakeClient', (), {'post': staticmethod(_fake_post)})())
     client = OpenRouterClient(
         endpoint='https://openrouter.ai/api/v1',
         api_key='fake-key')
@@ -210,7 +213,9 @@ def test_complete_raises_on_empty_choices(monkeypatch):
             request=httpx.Request('POST', url),
             json={'choices': []})
 
-    monkeypatch.setattr(httpx, 'post', _empty_choices)
+    monkeypatch.setattr(
+        or_mod, '_CLIENT',
+        type('FakeClient', (), {'post': staticmethod(_empty_choices)})())
     client = OpenRouterClient(
         endpoint='https://openrouter.ai/api/v1',
         api_key='fake-key')
@@ -230,7 +235,9 @@ def test_complete_raises_on_missing_content(monkeypatch):
             request=httpx.Request('POST', url),
             json={'choices': [{'message': {}}]})
 
-    monkeypatch.setattr(httpx, 'post', _no_content)
+    monkeypatch.setattr(
+        or_mod, '_CLIENT',
+        type('FakeClient', (), {'post': staticmethod(_no_content)})())
     client = OpenRouterClient(
         endpoint='https://openrouter.ai/api/v1',
         api_key='fake-key')
