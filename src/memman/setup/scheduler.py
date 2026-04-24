@@ -337,6 +337,7 @@ def _install_systemd(binary: str, data_dir: str,
         '[Service]\n'
         'Type=oneshot\n'
         f'Environment=MEMMAN_DATA_DIR={data_dir}\n'
+        'Environment=MEMMAN_WORKER=1\n'
         f'EnvironmentFile={env_file}\n'
         f'ExecStartPre=/bin/mkdir -p {Path.home()}/.memman/logs\n'
         f'ExecStart={binary} enrich --pending --timeout {exec_timeout}\n'
@@ -401,6 +402,7 @@ def _install_launchd(binary: str, data_dir: str,
         f'mkdir -p {logs_dir_q}\n'
         f'[ -f {env_file_q} ] && . {env_file_q}\n'
         f'export MEMMAN_DATA_DIR={data_dir_q}\n'
+        'export MEMMAN_WORKER=1\n'
         f'exec {binary_q} enrich --pending --timeout {exec_timeout}\n')
 
     log_path = logs_dir / 'enrich.log'

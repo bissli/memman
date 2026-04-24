@@ -2,6 +2,7 @@
 
 import json
 import logging
+import logging.handlers
 import os
 import pathlib
 import re
@@ -19,6 +20,51 @@ from memman.store.db import store_exists, valid_store_name, write_active
 from tqdm import tqdm
 
 logger = logging.getLogger('memman')
+
+_LOG_FORMAT = '%(asctime)s %(levelname)s %(name)s: %(message)s'
+_WORKER_LOG_MAX_BYTES = 5 * 1024 * 1024
+_WORKER_LOG_BACKUPS = 3
+
+
+def _configure_logging(data_dir: str, verbose: bool, debug: bool) -> None:
+    """Configure the memman logger once per process.
+    """
+    if debug:
+        level = logging.DEBUG
+    elif verbose:
+        level = logging.INFO
+    else:
+        name = os.environ.get('MEMMAN_LOG_LEVEL', 'WARNING').upper()
+        level = getattr(logging, name, logging.WARNING)
+
+    logger.setLevel(level)
+
+    has_stream = any(
+        isinstance(h, logging.StreamHandler)
+        and not isinstance(h, logging.FileHandler)
+        and getattr(h, '_memman', False)
+        for h in logger.handlers)
+    if not has_stream:
+        sh = logging.StreamHandler(sys.stderr)
+        sh.setFormatter(logging.Formatter(_LOG_FORMAT))
+        sh._memman = True
+        logger.addHandler(sh)
+
+    if os.environ.get('MEMMAN_WORKER') == '1':
+        has_file = any(
+            isinstance(h, logging.handlers.RotatingFileHandler)
+            and getattr(h, '_memman', False)
+            for h in logger.handlers)
+        if not has_file:
+            log_dir = pathlib.Path(data_dir) / 'logs'
+            log_dir.mkdir(parents=True, exist_ok=True)
+            fh = logging.handlers.RotatingFileHandler(
+                log_dir / 'memman.log',
+                maxBytes=_WORKER_LOG_MAX_BYTES,
+                backupCount=_WORKER_LOG_BACKUPS)
+            fh.setFormatter(logging.Formatter(_LOG_FORMAT))
+            fh._memman = True
+            logger.addHandler(fh)
 
 
 def _json_out(obj: object) -> None:
@@ -131,11 +177,17 @@ def _parse_entities(entities: str) -> list[str]:
 @click.option('--data-dir', default=None, help='Base data directory (env: MEMMAN_DATA_DIR)')
 @click.option('--store', 'store_name', default='', help='Named memory store')
 @click.option('--readonly', is_flag=True, default=False, help='Open database in read-only mode')
+@click.option('--verbose', '-v', is_flag=True, default=False,
+              help='INFO-level logging to stderr')
+@click.option('--debug', is_flag=True, default=False,
+              help='DEBUG-level logging to stderr (overrides --verbose)')
 @click.pass_context
-def cli(ctx: click.Context, data_dir: str | None, store_name: str, readonly: bool) -> None:
+def cli(ctx: click.Context, data_dir: str | None, store_name: str,
+        readonly: bool, verbose: bool, debug: bool) -> None:
     """Memory daemon for LLM agents."""
     if data_dir is None:
         data_dir = os.environ.get('MEMMAN_DATA_DIR', default_data_dir())
+    _configure_logging(data_dir, verbose, debug)
     ctx.ensure_object(dict)
     ctx.obj['data_dir'] = data_dir
     ctx.obj['store'] = store_name
