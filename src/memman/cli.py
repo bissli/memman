@@ -1,4 +1,9 @@
-"""Click CLI for memman — all 16 commands."""
+"""Click CLI for memman.
+
+This module is the entry point and argument-parsing surface only. Core
+write-path orchestration lives in `memman.pipeline.remember`. Storage,
+graph, search, embed, and LLM primitives live under their own packages.
+"""
 
 import json
 import logging
@@ -272,398 +277,16 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     imp_explicit = (ctx.get_parameter_source('imp')
                     == click.core.ParameterSource.COMMANDLINE)
 
+    from memman.pipeline.remember import run_remember
+
     db = _open_db(ctx)
     try:
-        _remember_impl(db, insight, content_str, no_reconcile,
-                       data_dir=data_dir_val,
-                       store_name=name,
-                       cat_explicit=cat_explicit,
-                       imp_explicit=imp_explicit)
+        result = run_remember(
+            db, insight, content_str, no_reconcile=no_reconcile,
+            cat_explicit=cat_explicit, imp_explicit=imp_explicit)
     finally:
         db.close()
-
-
-def _remember_impl(db: 'DB', insight: Insight, content: str,
-                   no_reconcile: bool, replaced_id: str = '',
-                   data_dir: str = '',
-                   store_name: str = '',
-                   cat_explicit: bool = False,
-                   imp_explicit: bool = False) -> None:
-    """Core remember implementation — single-tier synchronous write path.
-
-    Sequential: quality check, embed, LLM fact extraction,
-    LLM reconciliation, insert, fast edges, EI, prune.
-    Parallel: LLM enrichment + LLM causal inference (ThreadPoolExecutor).
-    Sequential: write enrichment results, stamp linked_at.
-    """
-    from concurrent.futures import ThreadPoolExecutor
-
-    from memman.embed import get_client
-    from memman.embed.vector import cosine_similarity, deserialize_vector
-    from memman.embed.vector import serialize_vector
-    from memman.graph.causal import infer_llm_causal_edges
-    from memman.graph.engine import fast_edges
-    from memman.graph.enrichment import build_enriched_text, enrich_with_llm
-    from memman.graph.entity import create_entity_edges
-    from memman.graph.semantic import create_semantic_edges
-    from memman.llm.client import get_llm_client
-    from memman.llm.extract import extract_facts, reconcile_memories
-    from memman.search.keyword import keyword_search
-    from memman.search.quality import check_content_quality
-    from memman.store.edge import delete_auto_edges_for_node, insert_edge
-    from memman.store.node import MAX_INSIGHTS, auto_prune
-    from memman.store.node import get_all_active_insights, get_all_embeddings
-    from memman.store.node import insert_insight, refresh_effective_importance
-    from memman.store.node import soft_delete_insight, stamp_enriched
-    from memman.store.node import stamp_linked, update_embedding
-    from memman.store.node import update_enrichment, update_entities
-    from memman.store.oplog import log_op
-
-    quality_warnings = check_content_quality(content)
-    if len(quality_warnings) >= 2:
-        log_op(db, 'quality-reject', insight.id,
-               f'{content[:200]}|warnings={quality_warnings}')
-        _json_out({
-            'id': insight.id,
-            'content': content,
-            'action': 'rejected',
-            'quality_warnings': quality_warnings,
-            })
-        return
-
-    llm_client = get_llm_client()
-    ec = get_client()
-    llm_calls = 0
-
-    if no_reconcile:
-        facts = [{'text': content, 'category': insight.category,
-                  'importance': insight.importance,
-                  'entities': []}]
-    else:
-        facts = extract_facts(llm_client, content)
-        llm_calls += 1
-
-        if not facts:
-            _json_out({
-                'id': insight.id,
-                'content': content,
-                'action': 'skipped',
-                'skip_reason': 'trivial content',
-                'quality_warnings': quality_warnings,
-                'llm_calls': llm_calls,
-                })
-            return
-
-    embed_cache: dict[str, list[float]] = {}
-    db_embeds = get_all_embeddings(db)
-    if db_embeds:
-        for eid, _content, blob in db_embeds:
-            v = deserialize_vector(blob)
-            if v is not None:
-                embed_cache[eid] = v
-
-    fact_results = []
-    deleted_ids: set[str] = set()
-
-    for fact in facts:
-        all_insights = get_all_active_insights(db)
-        fact_text = fact['text']
-        fact_category = (insight.category if cat_explicit
-                         else fact.get('category', insight.category))
-        fact_importance = (insight.importance if imp_explicit
-                           else fact.get('importance', insight.importance))
-        fact_entities = fact.get('entities', [])
-
-        fact_vec = None
-        fact_blob = None
-        try:
-            fact_vec = ec.embed(fact_text)
-            fact_blob = serialize_vector(fact_vec)
-        except Exception:
-            pass
-
-        action = 'ADD'
-        target_id = None
-        merged_text = None
-
-        if replaced_id:
-            action = 'REPLACE'
-            target_id = replaced_id
-            replaced_id = None
-        elif not no_reconcile:
-            keyword_hits = keyword_search(
-                all_insights, fact_text, limit=5)
-            similar: list[tuple[str, str]] = []
-            seen_ids: set[str] = set()
-
-            for hit_ins, _score in keyword_hits:
-                if hit_ins.id not in seen_ids:
-                    similar.append((hit_ins.id, hit_ins.content))
-                    seen_ids.add(hit_ins.id)
-
-            if fact_vec is not None:
-                for eid, evec in embed_cache.items():
-                    if eid in seen_ids or eid in deleted_ids:
-                        continue
-                    sim = cosine_similarity(fact_vec, evec)
-                    if sim >= 0.5:
-                        ins = next(
-                            (i for i in all_insights if i.id == eid),
-                            None)
-                        if ins is not None:
-                            similar.append((ins.id, ins.content))
-                            seen_ids.add(eid)
-                    if len(similar) >= 10:
-                        break
-
-            if similar:
-                recon = reconcile_memories(
-                    llm_client, [fact], similar)
-                llm_calls += 1
-                if recon:
-                    r = recon[0]
-                    action = r['action']
-                    target_id = r.get('target_id')
-                    merged_text = r.get('merged_text')
-
-        if (action in {'UPDATE', 'REPLACE'}
-                and target_id
-                and target_id in deleted_ids):
-            fact_results.append({
-                'id': str(uuid.uuid4()),
-                'content': merged_text or fact_text,
-                'action': 'skipped',
-                'reason': 'target already deleted',
-                })
-            continue
-
-        fact_id = str(uuid.uuid4())
-        effective_text = merged_text or fact_text
-
-        fact_insight = Insight(
-            id=fact_id,
-            content=effective_text,
-            category=fact_category,
-            importance=fact_importance,
-            tags=list(insight.tags),
-            entities=fact_entities + list(insight.entities),
-            source=insight.source,
-            access_count=insight.access_count,
-            created_at=insight.created_at,
-            updated_at=insight.updated_at)
-
-        embedded = False
-        embed_vec = fact_vec
-        embed_blob = fact_blob
-        if merged_text:
-            try:
-                embed_vec = ec.embed(effective_text)
-                embed_blob = serialize_vector(embed_vec)
-            except Exception:
-                pass
-
-        if action == 'NONE':
-            fact_results.append({
-                'id': fact_id,
-                'content': effective_text,
-                'action': 'skipped',
-                'reason': 'already captured',
-                })
-            continue
-
-        if action == 'DELETE' and target_id:
-            if target_id in deleted_ids:
-                fact_results.append({
-                    'id': fact_id,
-                    'content': effective_text,
-                    'action': 'skipped',
-                    'reason': 'target already deleted',
-                    })
-                continue
-            deleted_ids.add(target_id)
-
-            def delete_tx(tid: str = target_id) -> None:
-                soft_delete_insight(db, tid)
-                log_op(db, 'reconcile-delete', tid,
-                       f'contradicted by: {fact_text[:200]}')
-            db.in_transaction(delete_tx)
-            embed_cache.pop(target_id, None)
-            fact_results.append({
-                'id': fact_id,
-                'content': effective_text,
-                'action': 'deleted',
-                'target_id': target_id,
-                })
-            continue
-
-        edge_stats = {'temporal': 0, 'entity': 0, 'semantic': 0}
-        ei = 0.0
-        pruned = 0
-
-        def insert_tx(
-                fi: Insight = fact_insight,
-                eb: bytes | None = embed_blob,
-                act: str = action,
-                tid: str | None = target_id) -> None:
-            nonlocal embedded
-
-            if act in {'UPDATE', 'REPLACE'} and tid:
-                if tid not in deleted_ids:
-                    deleted_ids.add(tid)
-                    op_name = ('replace' if act == 'REPLACE'
-                               else 'reconcile-update')
-                    soft_delete_insight(db, tid)
-                    log_op(db, op_name, tid,
-                           f'replaced by {fi.id}')
-
-            insert_insight(db, fi)
-
-            if eb is not None:
-                update_embedding(db, fi.id, eb)
-                embedded = True
-
-            if fi.entities:
-                update_entities(db, fi.id, fi.entities)
-
-            log_op(db, 'remember', fi.id, fi.content)
-
-        db.in_transaction(insert_tx)
-
-        if action in {'UPDATE', 'REPLACE'} and target_id:
-            embed_cache.pop(target_id, None)
-
-        if embed_vec is not None:
-            embed_cache[fact_insight.id] = embed_vec
-
-        def edge_tx(
-                fi: Insight = fact_insight) -> None:
-            nonlocal edge_stats, ei, pruned
-            edge_stats = fast_edges(db, fi)
-            edge_stats['semantic'] = create_semantic_edges(
-                db, fi, embed_cache)
-            try:
-                ei = refresh_effective_importance(db, fi.id)
-            except Exception:
-                ei = 0.0
-            try:
-                pruned = auto_prune(db, MAX_INSIGHTS, [fi.id])
-            except Exception:
-                pruned = 0
-
-        db.in_transaction(edge_tx)
-
-        enrichment: dict = {}
-        causal_edges: list = []
-        data_dir_for_ro = pathlib.Path(db.path).parent
-
-        def _do_enrich() -> dict:
-            return enrich_with_llm(fact_insight, llm_client)
-
-        def _do_causal() -> list:
-            ro_db = open_read_only(data_dir_for_ro)
-            try:
-                return infer_llm_causal_edges(
-                    ro_db, fact_insight, llm_client)
-            finally:
-                ro_db.close()
-
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            fut_e = pool.submit(_do_enrich)
-            fut_c = pool.submit(_do_causal)
-            try:
-                enrichment = fut_e.result()
-                llm_calls += 1
-            except Exception:
-                enrichment = {}
-            try:
-                causal_edges = fut_c.result()
-                llm_calls += 1
-            except Exception:
-                causal_edges = []
-
-        enriched_vec = None
-        keywords = enrichment.get('keywords', [])
-        if keywords and ec is not None and ec.available():
-            enriched_text = build_enriched_text(
-                fact_insight.content, keywords)
-            try:
-                enriched_vec = ec.embed(enriched_text)
-                embed_cache[fact_insight.id] = enriched_vec
-                embedded = True
-            except Exception:
-                pass
-
-        def enrichment_tx(
-                fi: Insight = fact_insight,
-                evec: list[float] | None = enriched_vec) -> None:
-            nonlocal edge_stats
-            now = format_timestamp(datetime.now(timezone.utc))
-
-            if enrichment:
-                update_enrichment(
-                    db, fi.id,
-                    enrichment.get('keywords', []),
-                    enrichment.get('summary', ''),
-                    enrichment.get('semantic_facts', []))
-                update_entities(
-                    db, fi.id, enrichment.get('entities', []))
-                fi.entities = enrichment.get('entities', [])
-
-            if evec is not None:
-                update_embedding(
-                    db, fi.id, serialize_vector(evec))
-
-            delete_auto_edges_for_node(db, fi.id, 'entity')
-            edge_stats['entity'] = create_entity_edges(db, fi)
-
-            delete_auto_edges_for_node(db, fi.id, 'semantic')
-            edge_stats['semantic'] = create_semantic_edges(
-                db, fi, embed_cache)
-
-            delete_auto_edges_for_node(db, fi.id, 'causal')
-            for edge in causal_edges:
-                try:
-                    insert_edge(db, edge)
-                except Exception:
-                    pass
-
-            stamp_linked(db, fi.id, now)
-            if enrichment:
-                stamp_enriched(db, fi.id, now)
-
-        db.in_transaction(enrichment_tx)
-
-        fact_results.append({
-            'id': fact_insight.id,
-            'content': fact_insight.content,
-            'category': fact_insight.category,
-            'importance': fact_insight.importance,
-            'tags': fact_insight.tags,
-            'entities': fact_insight.entities,
-            'action': action.lower(),
-            'created_at': format_timestamp(fact_insight.created_at),
-            'edges_created': {
-                **edge_stats,
-                'causal': len(causal_edges),
-                },
-            'enrichment': {
-                'keywords': enrichment.get('keywords', []),
-                'summary': enrichment.get('summary', ''),
-                'entities': enrichment.get('entities', []),
-                'semantic_facts': enrichment.get(
-                    'semantic_facts', []),
-                },
-            'embedded': embedded,
-            'effective_importance': ei,
-            'auto_pruned': pruned,
-            **({'replaced_id': target_id} if target_id else {}),
-            })
-
-    _json_out({
-        'facts': fact_results,
-        'quality_warnings': quality_warnings,
-        'llm_calls': llm_calls,
-        })
+    _json_out(result)
 
 
 @cli.command()
@@ -809,9 +432,8 @@ def _process_queue_row(row: 'memman.queue.QueueRow', store_data_dir: str,
 
     The insight's `source` is set to `row.hint_source` when provided
     (so the user's `--source` flag survives the queue), falling back
-    to `queue:<row.id>`. Crash-recovery idempotency is currently
-    enforced only when `hint_source` is absent; a dedicated marker
-    covering the hint_source path is scheduled for A3.
+    to `queue:<row.id>`. Crash-recovery idempotency is enforced only
+    when `hint_source` is absent, via a `source=queue:<id>` lookup.
     """
     from memman.store.db import open_db as _open_store_db
 
@@ -861,13 +483,13 @@ def _process_queue_row(row: 'memman.queue.QueueRow', store_data_dir: str,
             tags=tag_list, entities=entity_list, source=source,
             created_at=now, updated_at=now)
 
-        _remember_impl(
+        from memman.pipeline.remember import run_remember
+        result = run_remember(
             db, insight, row.content,
             no_reconcile=False,
-            data_dir=base_data_dir,
-            store_name=row.store,
             cat_explicit=row.hint_cat is not None,
             imp_explicit=row.hint_imp is not None)
+        _json_out(result)
     finally:
         db.close()
 
@@ -1107,16 +729,12 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             access_count=old.access_count,
             created_at=now, updated_at=now)
 
-        data_dir_val = ctx.obj['data_dir']
-        store_flag = ctx.obj['store']
-        name = _resolve_store_name(data_dir_val, store_flag)
-
-        _remember_impl(db, new_insight, content_str,
-                       no_reconcile=True, replaced_id=id,
-                       data_dir=data_dir_val,
-                       store_name=name,
-                       cat_explicit=True,
-                       imp_explicit=True)
+        from memman.pipeline.remember import run_remember
+        result = run_remember(
+            db, new_insight, content_str,
+            no_reconcile=True, replaced_id=id,
+            cat_explicit=True, imp_explicit=True)
+        _json_out(result)
     finally:
         db.close()
 
