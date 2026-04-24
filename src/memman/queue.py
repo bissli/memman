@@ -57,9 +57,7 @@ def open_queue_db(base_dir: str) -> sqlite3.Connection:
     return conn
 
 
-def _migrate(conn: sqlite3.Connection) -> None:
-    """Create schema on first open."""
-    conn.executescript("""
+_BASELINE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS queue (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     store         TEXT NOT NULL,
@@ -86,7 +84,47 @@ CREATE INDEX IF NOT EXISTS idx_queue_ready
 
 CREATE INDEX IF NOT EXISTS idx_queue_store
     ON queue(store);
-""")
+"""
+
+_MIGRATIONS: list[tuple[int, list[str]]] = [
+    # Future schema changes are appended here as
+    # (version, ['SQL statement', ...]). Each migration runs in its own
+    # BEGIN IMMEDIATE transaction and bumps PRAGMA user_version on success.
+    ]
+
+CURRENT_USER_VERSION = 1
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Run idempotent baseline schema and any pending versioned migrations.
+    """
+    current = conn.execute('PRAGMA user_version').fetchone()[0]
+
+    if current > CURRENT_USER_VERSION:
+        raise RuntimeError(
+            f'queue.db has user_version={current} but this build'
+            f' expects <= {CURRENT_USER_VERSION}; refusing to open a'
+            ' queue written by a newer memman')
+
+    conn.executescript(_BASELINE_SCHEMA)
+    if current < 1:
+        conn.execute('PRAGMA user_version = 1')
+        current = 1
+
+    for version, statements in _MIGRATIONS:
+        if current >= version:
+            continue
+        try:
+            conn.execute('BEGIN IMMEDIATE')
+            for stmt in statements:
+                conn.execute(stmt)
+            conn.execute(f'PRAGMA user_version = {version}')
+            conn.execute('COMMIT')
+        except Exception:
+            conn.execute('ROLLBACK')
+            raise
+        current = version
+        logger.info(f'queue.db migrated to version {version}')
 
 
 def enqueue(

@@ -167,9 +167,7 @@ def open_read_only(data_dir: str) -> DB:
     return DB(conn, db_path)
 
 
-def _migrate(db: DB) -> None:
-    """Create schema tables and indexes."""
-    schema = """
+_BASELINE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS insights (
     id          TEXT PRIMARY KEY,
     content     TEXT NOT NULL,
@@ -231,4 +229,43 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 """
-    db._conn.executescript(schema)
+
+_MIGRATIONS: list[tuple[int, list[str]]] = [
+    # Future schema changes are appended here as
+    # (version, ['SQL statement', ...]). Each migration runs in its own
+    # BEGIN IMMEDIATE transaction and bumps PRAGMA user_version on success.
+    ]
+
+CURRENT_USER_VERSION = 1
+
+
+def _migrate(db: DB) -> None:
+    """Run idempotent baseline schema and any pending versioned migrations.
+    """
+    current = db._conn.execute('PRAGMA user_version').fetchone()[0]
+
+    if current > CURRENT_USER_VERSION:
+        raise RuntimeError(
+            f'memman.db has user_version={current} but this build'
+            f' expects <= {CURRENT_USER_VERSION}; refusing to open a'
+            ' database written by a newer memman')
+
+    db._conn.executescript(_BASELINE_SCHEMA)
+    if current < 1:
+        db._conn.execute('PRAGMA user_version = 1')
+        current = 1
+
+    for version, statements in _MIGRATIONS:
+        if current >= version:
+            continue
+        try:
+            db._conn.execute('BEGIN IMMEDIATE')
+            for stmt in statements:
+                db._conn.execute(stmt)
+            db._conn.execute(f'PRAGMA user_version = {version}')
+            db._conn.execute('COMMIT')
+        except Exception:
+            db._conn.execute('ROLLBACK')
+            raise
+        current = version
+        logger.info(f'memman.db migrated to version {version}')
