@@ -157,7 +157,7 @@ Edit `~/.memman/prompt/guide.local.md`. Its content is appended to the shipped g
 It is a fast queue-append (~50 ms). A user-scope scheduler (systemd timer on Linux, launchd agent on macOS) drains the queue every 15 min and runs the full pipeline — fact extraction, reconciliation, enrichment, causal inference, embedding — out of band. The host agent calls `memman remember` directly via Bash, no sub-agent delegation. **Newly stored memories are NOT recallable in the current session**; they become available in later sessions.
 
 **How do I pause the scheduler?**
-`memman scheduler disable` stops the timer/agent without removing unit files. `memman scheduler enable` resumes. `memman scheduler interval --seconds N` changes the cadence (min 60 s).
+`memman scheduler disable` stops the timer/agent without removing unit files. `memman scheduler enable` resumes. `memman scheduler interval --seconds N` changes the cadence (min 60 s). `memman scheduler logs` prints the tail of the enrichment worker's output; add `--errors` to see stderr and tracebacks. Logs live at `~/.memman/logs/enrich.{log,err}`.
 
 ## Configuration
 

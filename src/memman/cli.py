@@ -1218,9 +1218,45 @@ def scheduler(ctx: click.Context) -> None:
 @scheduler.command('status')
 @click.pass_context
 def scheduler_status(ctx: click.Context) -> None:
-    """Show scheduler install state, interval, and next run time."""
+    """Show scheduler install state, interval, next run, and log paths."""
     from memman.setup.scheduler import status
-    _json_out(status())
+    result = status()
+    logs_dir = pathlib.Path.home() / '.memman' / 'logs'
+    log_path = logs_dir / 'enrich.log'
+    err_path = logs_dir / 'enrich.err'
+    result['log_path'] = str(log_path)
+    result['err_path'] = str(err_path)
+    for key, path in (('log_mtime', log_path), ('err_mtime', err_path)):
+        try:
+            result[key] = datetime.fromtimestamp(
+                path.stat().st_mtime, tz=timezone.utc
+                ).isoformat()
+        except OSError:
+            result[key] = None
+    _json_out(result)
+
+
+@scheduler.command('logs')
+@click.option('--errors', is_flag=True, default=False,
+              help='Read enrich.err instead of enrich.log.')
+@click.option('--lines', type=int, default=50,
+              help='Number of tail lines to print (default 50).')
+@click.pass_context
+def scheduler_logs(ctx: click.Context, errors: bool, lines: int) -> None:
+    """Print the tail of ~/.memman/logs/enrich.{log,err}."""
+    logs_dir = pathlib.Path.home() / '.memman' / 'logs'
+    path = logs_dir / ('enrich.err' if errors else 'enrich.log')
+    if not path.is_file():
+        click.echo(f'[memman] no log file yet at {path}', err=True)
+        return
+    try:
+        content = path.read_text(errors='replace').splitlines()
+    except OSError as exc:
+        raise click.ClickException(
+            f'failed to read {path}: {exc}') from exc
+    tail = content[-lines:] if lines > 0 else content
+    for line in tail:
+        click.echo(line)
 
 
 @scheduler.command('enable')

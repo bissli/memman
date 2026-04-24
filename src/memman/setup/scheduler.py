@@ -218,7 +218,7 @@ def _verify_launchd_loaded() -> None:
     if out.returncode != 0:
         raise RuntimeError(
             f'launchd job {LAUNCHD_LABEL} is not loaded after'
-            ' launchctl load; check /tmp/memman-enrich.err')
+            ' launchctl load; check ~/.memman/logs/enrich.err')
 
 
 def _systemd_unit_dir() -> Path:
@@ -255,9 +255,10 @@ def _install_systemd(binary: str, data_dir: str,
         'Type=oneshot\n'
         f'Environment=MEMMAN_DATA_DIR={data_dir}\n'
         f'EnvironmentFile={env_file}\n'
+        f'ExecStartPre=/bin/mkdir -p {Path.home()}/.memman/logs\n'
         f'ExecStart={binary} enrich --pending --timeout {exec_timeout}\n'
-        'StandardOutput=journal\n'
-        'StandardError=journal\n')
+        'StandardOutput=append:%h/.memman/logs/enrich.log\n'
+        'StandardError=append:%h/.memman/logs/enrich.err\n')
 
     unit_dir.mkdir(parents=True, exist_ok=True)
     timer_path.write_text(timer_contents)
@@ -310,12 +311,17 @@ def _install_launchd(binary: str, data_dir: str,
     env_file_q = shlex.quote(str(_env_file_path()))
     data_dir_q = shlex.quote(data_dir)
     binary_q = shlex.quote(binary)
+    logs_dir = Path.home() / '.memman' / 'logs'
+    logs_dir_q = shlex.quote(str(logs_dir))
     wrapper_contents = (
         '#!/bin/sh\n'
+        f'mkdir -p {logs_dir_q}\n'
         f'[ -f {env_file_q} ] && . {env_file_q}\n'
         f'export MEMMAN_DATA_DIR={data_dir_q}\n'
         f'exec {binary_q} enrich --pending --timeout {exec_timeout}\n')
 
+    log_path = logs_dir / 'enrich.log'
+    err_path = logs_dir / 'enrich.err'
     plist_contents = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"'
@@ -328,10 +334,8 @@ def _install_launchd(binary: str, data_dir: str,
         '  </array>\n'
         f'  <key>StartInterval</key><integer>{interval_seconds}</integer>\n'
         '  <key>RunAtLoad</key><true/>\n'
-        '  <key>StandardOutPath</key>'
-        '<string>/tmp/memman-enrich.log</string>\n'
-        '  <key>StandardErrorPath</key>'
-        '<string>/tmp/memman-enrich.err</string>\n'
+        f'  <key>StandardOutPath</key><string>{log_path}</string>\n'
+        f'  <key>StandardErrorPath</key><string>{err_path}</string>\n'
         '</dict></plist>\n')
 
     agent_dir.mkdir(parents=True, exist_ok=True)

@@ -732,3 +732,57 @@ def test_prime_hook_warns_when_memman_missing(tmp_path):
         env=env)
     assert result.returncode == 0
     assert 'not on PATH' in result.stdout
+
+
+def test_install_creates_logs_directory(tmp_path, monkeypatch):
+    """_install_claude_code creates ~/.memman/logs/ with mode 755."""
+    monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
+    monkeypatch.setattr(
+        'memman.setup.claude.claude_register_hooks',
+        lambda cd, **kw: '/dev/null')
+    monkeypatch.setattr(
+        'memman.setup.claude._init_default_store', lambda dd: None)
+    from memman.setup.claude import _install_claude_code
+    env = {'name': 'claude-code', 'config_dir': str(tmp_path / 'claude')}
+    _install_claude_code(env, data_dir=str(tmp_path / 'data'))
+    logs_dir = tmp_path / '.memman' / 'logs'
+    assert logs_dir.is_dir()
+    assert (logs_dir.stat().st_mode & 0o777) == 0o755
+
+
+def test_scheduler_logs_reads_log_file(tmp_path, monkeypatch):
+    """`memman scheduler logs` prints the tail of enrich.log."""
+    monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
+    logs_dir = tmp_path / '.memman' / 'logs'
+    logs_dir.mkdir(parents=True)
+    (logs_dir / 'enrich.log').write_text(
+        'line1\nline2\nline3\nLOG-MARKER\n')
+    runner = CliRunner()
+    result = runner.invoke(cli, ['scheduler', 'logs', '--lines', '2'])
+    assert result.exit_code == 0
+    assert 'LOG-MARKER' in result.output
+    assert 'line1' not in result.output
+
+
+def test_scheduler_logs_errors_flag(tmp_path, monkeypatch):
+    """`memman scheduler logs --errors` reads enrich.err."""
+    monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
+    logs_dir = tmp_path / '.memman' / 'logs'
+    logs_dir.mkdir(parents=True)
+    (logs_dir / 'enrich.err').write_text('ERR-MARKER\n')
+    (logs_dir / 'enrich.log').write_text('LOG-NOT-THIS\n')
+    runner = CliRunner()
+    result = runner.invoke(cli, ['scheduler', 'logs', '--errors'])
+    assert result.exit_code == 0
+    assert 'ERR-MARKER' in result.output
+    assert 'LOG-NOT-THIS' not in result.output
+
+
+def test_scheduler_logs_missing_file(tmp_path, monkeypatch):
+    """Missing log file emits a friendly message, not an error."""
+    monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(cli, ['scheduler', 'logs'])
+    assert result.exit_code == 0
+    assert 'no log file yet' in result.output.lower() \
+        or 'no log file yet' in (result.stderr or '').lower()
