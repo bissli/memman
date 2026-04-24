@@ -265,11 +265,34 @@ def remove_memman_permission(data: dict) -> None:
         pass
 
 
+_REMOVE_IF_EMPTY_ROOTS = frozenset({
+    '.claude', '.openclaw', '.nanoclaw',
+    'claude', 'openclaw', 'nanoclaw',
+    })
+_REMOVE_IF_EMPTY_LEAVES = frozenset({
+    'hooks', 'skills', 'extensions', 'mm',
+    })
+
+
 def remove_if_empty(dir_path: str) -> None:
-    """Remove a directory only if it exists and contains no entries."""
+    """Remove a directory only if it exists, is empty, AND either is a
+    known agent-config root (`.claude`, `.openclaw`, `.nanoclaw`) or a
+    known leaf inside one (`hooks`, `skills`, `extensions`, `mm`).
+
+    Raises ValueError on a path outside the allowlist; defensive
+    against a future caller passing a surprising path like `/tmp/x`
+    or `/`.
+    """
+    p = Path(dir_path)
+    basename = p.name
+    if basename not in _REMOVE_IF_EMPTY_ROOTS \
+            and basename not in _REMOVE_IF_EMPTY_LEAVES:
+        raise ValueError(
+            f'remove_if_empty refused path {dir_path!r}: basename'
+            f' must be one of {sorted(_REMOVE_IF_EMPTY_ROOTS | _REMOVE_IF_EMPTY_LEAVES)}')
     try:
         entries = os.listdir(dir_path)
         if not entries:
-            Path(dir_path).rmdir()
+            p.rmdir()
     except OSError:
         pass

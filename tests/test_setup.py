@@ -5,6 +5,8 @@ import os
 import pathlib
 import subprocess
 
+import pytest
+
 from click.testing import CliRunner
 from memman.cli import cli
 from memman.setup.claude import claude_register_hooks
@@ -12,7 +14,8 @@ from memman.setup.markdown import remove_memory_block
 from memman.setup.settings import add_claude_hooks_selective
 from memman.setup.settings import add_memman_permission, read_json_file
 from memman.setup.settings import remove_claude_hooks
-from memman.setup.settings import remove_memman_permission, strip_json5
+from memman.setup.settings import remove_if_empty, remove_memman_permission
+from memman.setup.settings import strip_json5
 from memman.setup.settings import write_json_file
 
 
@@ -66,6 +69,47 @@ def test_strip_json5_block_comment_inside_string():
     """`/* */` inside a double-quoted string is NOT stripped."""
     s = '{"note": "not /* a */ comment"}'
     assert json.loads(strip_json5(s)) == {'note': 'not /* a */ comment'}
+
+
+def test_remove_if_empty_allows_known_leaf(tmp_path):
+    """remove_if_empty deletes an empty 'hooks' dir (known leaf name)."""
+    target = tmp_path / 'hooks'
+    target.mkdir()
+    remove_if_empty(str(target))
+    assert not target.exists()
+
+
+def test_remove_if_empty_allows_config_root(tmp_path):
+    """remove_if_empty accepts a directory named '.claude'."""
+    target = tmp_path / '.claude'
+    target.mkdir()
+    remove_if_empty(str(target))
+    assert not target.exists()
+
+
+def test_remove_if_empty_rejects_outside_allowlist(tmp_path):
+    """remove_if_empty raises when basename is not in the allowlist."""
+    target = tmp_path / 'arbitrary'
+    target.mkdir()
+    with pytest.raises(ValueError, match='refused'):
+        remove_if_empty(str(target))
+    assert target.exists()
+
+
+def test_remove_if_empty_rejects_root():
+    """remove_if_empty refuses to operate on '/' (basename is empty)."""
+    with pytest.raises(ValueError, match='refused'):
+        remove_if_empty('/')
+
+
+def test_remove_if_empty_noop_on_non_empty_dir(tmp_path):
+    """remove_if_empty leaves a non-empty allowed dir intact."""
+    target = tmp_path / 'hooks'
+    target.mkdir()
+    (target / 'keep.json').write_text('{}')
+    remove_if_empty(str(target))
+    assert target.exists()
+    assert (target / 'keep.json').exists()
 
 
 def test_strip_json5_escape_in_single_quoted():
