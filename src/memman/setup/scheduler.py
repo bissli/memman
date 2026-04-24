@@ -254,3 +254,134 @@ def _uninstall_launchd() -> dict:
         wrapper_path.unlink()
         actions.append(f'removed {wrapper_path}')
     return {'platform': 'launchd', 'actions': actions}
+
+
+def change_interval(data_dir: str, new_seconds: int) -> dict:
+    """Rewrite the scheduler unit with a new interval.
+
+    Does not touch ~/.memman/env. Requires the scheduler to already be
+    installed (an env file with the API keys should exist).
+    """
+    if new_seconds < 60:
+        raise RuntimeError(
+            f'interval {new_seconds}s is too short; minimum is 60s')
+    kind = detect_scheduler()
+    if not kind:
+        raise RuntimeError(
+            'no supported scheduler on this platform')
+    binary = memman_binary_path()
+    if kind == 'systemd':
+        return _install_systemd(binary, data_dir, new_seconds)
+    return _install_launchd(binary, data_dir, new_seconds)
+
+
+def _parse_interval_from_systemd_timer(path: Path) -> int | None:
+    """Extract OnUnitActiveSec from the systemd timer file."""
+    if not path.exists():
+        return None
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if line.startswith('OnUnitActiveSec='):
+            value = line.split('=', 1)[1].strip()
+            value = value.removesuffix('s')
+            try:
+                return int(value)
+            except ValueError:
+                return None
+    return None
+
+
+def _parse_interval_from_launchd_plist(path: Path) -> int | None:
+    """Extract StartInterval from the launchd plist file."""
+    if not path.exists():
+        return None
+    import re
+    text = path.read_text()
+    m = re.search(
+        r'<key>StartInterval</key>\s*<integer>(\d+)</integer>', text)
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def _systemd_status() -> dict:
+    """Collect systemd timer status."""
+    unit_dir = _systemd_unit_dir()
+    timer_path = unit_dir / SYSTEMD_TIMER_NAME
+    service_path = unit_dir / SYSTEMD_SERVICE_NAME
+    result = {
+        'platform': 'systemd',
+        'timer_path': str(timer_path),
+        'service_path': str(service_path),
+        'installed': timer_path.exists() and service_path.exists(),
+        'enabled': False,
+        'active': False,
+        'next_run': None,
+        'interval_seconds': _parse_interval_from_systemd_timer(timer_path),
+        }
+    if not result['installed']:
+        return result
+
+    def _run(args: list[str]) -> str:
+        try:
+            out = subprocess.run(
+                args, capture_output=True, text=True, check=False, timeout=5)
+            return out.stdout.strip()
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return ''
+
+    enabled = _run(
+        ['systemctl', '--user', 'is-enabled', SYSTEMD_TIMER_NAME])
+    result['enabled'] = (enabled == 'enabled')
+    active = _run(
+        ['systemctl', '--user', 'is-active', SYSTEMD_TIMER_NAME])
+    result['active'] = (active == 'active')
+    next_run = _run([
+        'systemctl', '--user', 'show',
+        '--property=NextElapseUSecRealtime', '--value',
+        SYSTEMD_TIMER_NAME])
+    if next_run and next_run != '0':
+        result['next_run'] = next_run
+    return result
+
+
+def _launchd_status() -> dict:
+    """Collect launchd agent status."""
+    plist_path = _launchd_agent_dir() / f'{LAUNCHD_LABEL}.plist'
+    result = {
+        'platform': 'launchd',
+        'plist_path': str(plist_path),
+        'installed': plist_path.exists(),
+        'enabled': False,
+        'active': False,
+        'next_run': None,
+        'interval_seconds': _parse_interval_from_launchd_plist(plist_path),
+        }
+    if not result['installed']:
+        return result
+    try:
+        out = subprocess.run(
+            ['launchctl', 'list', LAUNCHD_LABEL],
+            capture_output=True, text=True, check=False, timeout=5)
+        result['enabled'] = (out.returncode == 0)
+        result['active'] = (out.returncode == 0)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return result
+
+
+def status() -> dict:
+    """Return the scheduler's current status."""
+    kind = detect_scheduler()
+    if kind == 'systemd':
+        return _systemd_status()
+    if kind == 'launchd':
+        return _launchd_status()
+    return {
+        'platform': 'unknown',
+        'installed': False,
+        'enabled': False,
+        'active': False,
+        'next_run': None,
+        'interval_seconds': None,
+        }

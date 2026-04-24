@@ -23,10 +23,25 @@ def fake_binary(monkeypatch):
 
 
 def _no_subprocess(monkeypatch):
-    """Stop scheduler functions from invoking systemctl/launchctl."""
-    monkeypatch.setattr(sch, 'subprocess',
-                        type('S', (), {'run': staticmethod(
-                            lambda *a, **kw: None)})())
+    """Stop scheduler functions from invoking systemctl/launchctl.
+
+    Returns a fake subprocess.run that records no side effects and
+    yields a dummy result object with returncode=1, stdout='' — enough
+    for both install() side-effect suppression and status() polling.
+    """
+    class _FakeResult:
+        returncode = 1
+        stdout = ''
+        stderr = ''
+
+    def _fake_run(*args, **kwargs):
+        return _FakeResult()
+
+    fake = type('S', (), {
+        'run': staticmethod(_fake_run),
+        'TimeoutExpired': TimeoutError,
+        })()
+    monkeypatch.setattr(sch, 'subprocess', fake)
 
 
 def test_install_systemd_writes_timer_and_service(
@@ -125,3 +140,76 @@ def test_install_merges_existing_env_file(
     assert 'MEMMAN_LLM_PROVIDER=openrouter' in contents
     assert 'OPENROUTER_API_KEY=sk-or-new' in contents
     assert 'VOYAGE_API_KEY=vk-new' in contents
+
+
+def test_change_interval_rewrites_unit_without_touching_env(
+        fake_home, fake_binary, monkeypatch):
+    """change_interval updates the unit file but leaves ~/.memman/env alone.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    _no_subprocess(monkeypatch)
+
+    sch.install(data_dir=str(fake_home),
+                openrouter_api_key='sk-or-1',
+                voyage_api_key='vk-1',
+                interval_seconds=900)
+    env_before = (fake_home / '.memman' / 'env').read_text()
+
+    sch.change_interval(str(fake_home), 300)
+    timer = (fake_home / '.config' / 'systemd' / 'user'
+             / 'memman-enrich.timer').read_text()
+    assert 'OnUnitActiveSec=300s' in timer
+    env_after = (fake_home / '.memman' / 'env').read_text()
+    assert env_before == env_after
+
+
+def test_change_interval_rejects_too_short(
+        fake_home, fake_binary, monkeypatch):
+    """change_interval refuses values below the 60s floor.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    _no_subprocess(monkeypatch)
+    with pytest.raises(RuntimeError, match='too short'):
+        sch.change_interval(str(fake_home), 30)
+
+
+def test_status_not_installed(fake_home, monkeypatch):
+    """status() reports installed=False when no unit file exists.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    _no_subprocess(monkeypatch)
+    result = sch.status()
+    assert result['platform'] == 'systemd'
+    assert result['installed'] is False
+    assert result['interval_seconds'] is None
+
+
+def test_status_installed_parses_interval(
+        fake_home, fake_binary, monkeypatch):
+    """status() parses OnUnitActiveSec from the installed timer.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    _no_subprocess(monkeypatch)
+    sch.install(data_dir=str(fake_home),
+                openrouter_api_key='x',
+                voyage_api_key='y',
+                interval_seconds=1800)
+    result = sch.status()
+    assert result['installed'] is True
+    assert result['interval_seconds'] == 1800
+
+
+def test_status_launchd_parses_interval(
+        fake_home, fake_binary, monkeypatch):
+    """Launchd status parses StartInterval from the plist.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
+    _no_subprocess(monkeypatch)
+    sch.install(data_dir=str(fake_home),
+                openrouter_api_key='x',
+                voyage_api_key='y',
+                interval_seconds=1200)
+    result = sch.status()
+    assert result['platform'] == 'launchd'
+    assert result['installed'] is True
+    assert result['interval_seconds'] == 1200

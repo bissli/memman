@@ -1181,6 +1181,65 @@ def queue_purge(ctx: click.Context, done: bool) -> None:
 
 @cli.group(invoke_without_command=True)
 @click.pass_context
+def scheduler(ctx: click.Context) -> None:
+    """Manage the background enrichment scheduler."""
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(scheduler_status)
+
+
+@scheduler.command('status')
+@click.pass_context
+def scheduler_status(ctx: click.Context) -> None:
+    """Show scheduler install state, interval, and next run time."""
+    from memman.setup.scheduler import status
+    _json_out(status())
+
+
+@scheduler.command('enable')
+@click.pass_context
+def scheduler_enable(ctx: click.Context) -> None:
+    """Install or re-enable the scheduler (requires API keys)."""
+    from memman.setup.claude import _check_prereqs
+    from memman.setup.scheduler import install
+    openrouter_key, voyage_key = _check_prereqs()
+    result = install(
+        ctx.obj['data_dir'],
+        openrouter_api_key=openrouter_key,
+        voyage_api_key=voyage_key)
+    _json_out(result)
+
+
+@scheduler.command('disable')
+@click.pass_context
+def scheduler_disable(ctx: click.Context) -> None:
+    """Stop and remove the scheduler unit (leaves env file + data intact)."""
+    from memman.setup.scheduler import uninstall
+    _json_out(uninstall())
+
+
+@scheduler.command('interval')
+@click.argument('seconds', required=False, type=int)
+@click.pass_context
+def scheduler_interval(ctx: click.Context, seconds: int | None) -> None:
+    """Show or set the scheduler interval in seconds."""
+    from memman.setup.scheduler import change_interval, status
+    if seconds is None:
+        s = status()
+        _json_out({
+            'platform': s['platform'],
+            'interval_seconds': s['interval_seconds'],
+            'installed': s['installed'],
+            })
+        return
+    try:
+        result = change_interval(ctx.obj['data_dir'], seconds)
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _json_out(result)
+
+
+@cli.group(invoke_without_command=True)
+@click.pass_context
 def store(ctx: click.Context) -> None:
     """Manage named memory stores."""
     if ctx.invoked_subcommand is None:
