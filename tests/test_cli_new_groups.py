@@ -117,6 +117,15 @@ def test_queue_retry_noop_on_unknown(runner):
     assert result.exit_code != 0
 
 
+def test_scheduler_bare_shows_help(runner):
+    """`memman scheduler` with no subcommand prints the help listing.
+    """
+    result = invoke(runner, ['scheduler'])
+    assert 'Commands:' in result.output
+    assert 'trigger' in result.output
+    assert 'status' in result.output
+
+
 def test_scheduler_status_reports_not_installed(runner, monkeypatch):
     """`memman scheduler status` returns installed=false on a clean system.
     """

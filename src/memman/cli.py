@@ -1207,12 +1207,9 @@ def queue_purge(ctx: click.Context, done: bool) -> None:
         conn.close()
 
 
-@cli.group(invoke_without_command=True)
-@click.pass_context
-def scheduler(ctx: click.Context) -> None:
+@cli.group(no_args_is_help=True)
+def scheduler() -> None:
     """Manage the background enrichment scheduler."""
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(scheduler_status)
 
 
 @scheduler.command('status')
