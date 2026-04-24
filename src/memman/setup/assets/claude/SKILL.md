@@ -45,7 +45,7 @@ memman store create <name>
 memman store set <name>
 memman store remove <name>
 memman queue list | list-failed | cat <id> | retry <id> | purge --done
-memman scheduler status | enable | disable | interval [--seconds N] | logs [--errors]
+memman scheduler status | enable | disable | interval [--seconds N] | logs [--errors] | trigger
 ```
 
 The `memman queue` group inspects and manages the deferred-write queue

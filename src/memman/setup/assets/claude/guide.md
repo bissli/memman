@@ -143,3 +143,4 @@ launchd agent (macOS). Operational controls (no filesystem changes):
 - `memman scheduler enable` — resume after pause.
 - `memman scheduler interval --seconds N` — change cadence (min 60s).
 - `memman scheduler logs [--errors]` — tail the enrichment worker logs.
+- `memman scheduler trigger` — run the drain now, outside the normal interval.

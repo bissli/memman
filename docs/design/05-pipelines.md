@@ -53,6 +53,7 @@ Session-path (`memman recall` query expansion) uses direct Anthropic API with ha
 | `memman scheduler enable`               | resume after pause                     |
 | `memman scheduler disable`              | pause without uninstalling             |
 | `memman scheduler interval --seconds N` | change cadence (min 60 s)              |
+| `memman scheduler trigger`              | run the drain now (outside interval)   |
 
 `graph rebuild` re-enriches all already-stored insights through the full LLM pipeline (useful after model/prompt changes). `graph reindex` recalculates auto-created edges without LLM calls and runs automatically on DB open when edge constants change.
 
