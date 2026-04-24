@@ -133,10 +133,10 @@ def openclaw_eject(config_dir: str) -> list[Exception]:
     for i, (label, path) in enumerate(targets):
         try:
             shutil.rmtree(path, ignore_errors=True)
-            status_ok(i + 1, len(targets), label,
+            status_ok(label,
                       path + ' removed')
         except Exception as e:
-            status_error(i + 1, len(targets), label, e)
+            status_error(label, e)
             errs.append(e)
 
     remove_if_empty(os.path.join(config_dir, 'skills'))
@@ -173,23 +173,23 @@ def install_openclaw(env: dict, data_dir: str) -> None:
 
     print('\n[1/4] Skill')
     path = openclaw_write_skill(config_dir)
-    status_ok(0, 0, 'Skill', path)
+    status_ok('Skill', path)
 
     print('\n[2/4] Prompts')
     path = write_prompt_files()
-    status_ok(0, 0, 'Prompts', path)
+    status_ok('Prompts', path)
 
     print('\n[3/4] Hook')
     path = openclaw_write_hook(config_dir)
-    status_ok(0, 0, 'Hook: prime', path)
+    status_ok('Hook: prime', path)
 
     print('\n[4/4] Plugin')
     ver = memman.__version__
     path = openclaw_write_plugin(config_dir, ver)
-    status_ok(0, 0, 'Plugin', path)
+    status_ok('Plugin', path)
 
     path = openclaw_register_plugin(config_dir)
-    status_updated(0, 0, 'Config', path)
+    status_updated('Config', path)
 
     print()
     print('Setup complete!')

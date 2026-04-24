@@ -11,6 +11,8 @@ a wrapper script (launchd).
 """
 
 import platform
+import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -76,7 +78,11 @@ def _env_file_path() -> Path:
 
 def _write_env_file(openrouter_api_key: str,
                     voyage_api_key: str) -> list[str]:
-    """Write ~/.memman/env at mode 600 with provider + embedding keys."""
+    """Write ~/.memman/env at mode 600 with provider + embedding keys.
+
+    Atomic: writes to a .tmp sibling at mode 600 then os.replace() to the
+    final path so a concurrent reader never sees a mode-644 or partial file.
+    """
     path = _env_file_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = {}
@@ -93,9 +99,11 @@ def _write_env_file(openrouter_api_key: str,
     existing['VOYAGE_API_KEY'] = voyage_api_key
 
     contents = '\n'.join(f'{k}={v}' for k, v in existing.items()) + '\n'
-    path.write_text(contents)
-    Path(path).chmod(0o600)
-    return [f'wrote {path} (mode 600)']
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp.write_text(contents)
+    Path(tmp).chmod(0o600)
+    Path(tmp).replace(path)
+    return [f'wrote {path} (mode 600, atomic)']
 
 
 def uninstall() -> dict:
@@ -106,6 +114,111 @@ def uninstall() -> dict:
     if kind == 'systemd':
         return _uninstall_systemd()
     return _uninstall_launchd()
+
+
+def start() -> dict:
+    """Resume the installed scheduler unit (no filesystem changes).
+
+    Runs `systemctl --user enable --now` or `launchctl load -w` on the
+    already-installed unit. Raises FileNotFoundError if the unit isn't
+    installed yet (user should run `memman setup` first). Raises
+    RuntimeError if the scheduler fails to become active within a short
+    poll window — catches silent-no-op environments (WSL2 without
+    linger, containers, CI).
+    """
+    kind = detect_scheduler()
+    if not kind:
+        raise RuntimeError(
+            'no supported scheduler on this platform')
+    if kind == 'systemd':
+        timer_path = _systemd_unit_dir() / SYSTEMD_TIMER_NAME
+        if not timer_path.exists():
+            raise FileNotFoundError(
+                f'scheduler unit not installed at {timer_path};'
+                " run 'memman setup' first")
+        subprocess.run(
+            ['systemctl', '--user', 'enable', '--now',
+             SYSTEMD_TIMER_NAME], check=False)
+        _verify_systemd_active()
+        return {
+            'platform': 'systemd',
+            'actions': [
+                'systemctl --user enable --now memman-enrich.timer'],
+            }
+    plist_path = _launchd_agent_dir() / f'{LAUNCHD_LABEL}.plist'
+    if not plist_path.exists():
+        raise FileNotFoundError(
+            f'scheduler unit not installed at {plist_path};'
+            " run 'memman setup' first")
+    subprocess.run(
+        ['launchctl', 'load', '-w', str(plist_path)], check=False)
+    _verify_launchd_loaded()
+    return {
+        'platform': 'launchd',
+        'actions': [f'launchctl load -w {plist_path}'],
+        }
+
+
+def stop() -> dict:
+    """Pause the scheduler unit without removing its files."""
+    kind = detect_scheduler()
+    if not kind:
+        return {'platform': 'unknown', 'actions': []}
+    if kind == 'systemd':
+        timer_path = _systemd_unit_dir() / SYSTEMD_TIMER_NAME
+        if not timer_path.exists():
+            return {'platform': 'systemd', 'actions': [],
+                    'note': 'not installed'}
+        subprocess.run(
+            ['systemctl', '--user', 'disable', '--now',
+             SYSTEMD_TIMER_NAME], check=False)
+        return {
+            'platform': 'systemd',
+            'actions': [
+                'systemctl --user disable --now memman-enrich.timer'],
+            }
+    plist_path = _launchd_agent_dir() / f'{LAUNCHD_LABEL}.plist'
+    if not plist_path.exists():
+        return {'platform': 'launchd', 'actions': [],
+                'note': 'not installed'}
+    subprocess.run(
+        ['launchctl', 'unload', str(plist_path)], check=False)
+    return {
+        'platform': 'launchd',
+        'actions': [f'launchctl unload {plist_path}'],
+        }
+
+
+def _verify_systemd_active() -> None:
+    """Poll systemctl is-active; raise if the timer isn't active."""
+    try:
+        out = subprocess.run(
+            ['systemctl', '--user', 'is-active', SYSTEMD_TIMER_NAME],
+            capture_output=True, text=True, check=False, timeout=5)
+        state = out.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        raise RuntimeError(
+            f'could not verify systemd timer state: {exc}') from exc
+    if state != 'active':
+        raise RuntimeError(
+            f'systemd timer is {state!r} after enable;'
+            ' check `journalctl --user -u memman-enrich` and confirm'
+            ' `loginctl enable-linger` if this is a headless session')
+
+
+def _verify_launchd_loaded() -> None:
+    """Check launchctl list; raise if the job isn't loaded."""
+    try:
+        out = subprocess.run(
+            ['launchctl', 'list', LAUNCHD_LABEL],
+            capture_output=True, text=True, check=False, timeout=5)
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        raise RuntimeError(
+            f'could not verify launchd state: {exc}') from exc
+    if out.returncode != 0:
+        raise RuntimeError(
+            f'launchd job {LAUNCHD_LABEL} is not loaded after'
+            ' launchctl load; check /tmp/memman-enrich.err')
 
 
 def _systemd_unit_dir() -> Path:
@@ -156,6 +269,7 @@ def _install_systemd(binary: str, data_dir: str,
         ['systemctl', '--user', 'enable', '--now',
          SYSTEMD_TIMER_NAME], check=False)
     actions.append('systemctl --user enable --now memman-enrich.timer')
+    _verify_systemd_active()
 
     return {
         'platform': 'systemd',
@@ -193,11 +307,14 @@ def _install_launchd(binary: str, data_dir: str,
     wrapper_path = Path.home() / '.memman' / 'bin' / 'memman-enrich-wrapper.sh'
     exec_timeout = max(60, interval_seconds - 20)
 
+    env_file_q = shlex.quote(str(_env_file_path()))
+    data_dir_q = shlex.quote(data_dir)
+    binary_q = shlex.quote(binary)
     wrapper_contents = (
         '#!/bin/sh\n'
-        f'[ -f "{_env_file_path()}" ] && . "{_env_file_path()}"\n'
-        f'export MEMMAN_DATA_DIR="{data_dir}"\n'
-        f'exec "{binary}" enrich --pending --timeout {exec_timeout}\n')
+        f'[ -f {env_file_q} ] && . {env_file_q}\n'
+        f'export MEMMAN_DATA_DIR={data_dir_q}\n'
+        f'exec {binary_q} enrich --pending --timeout {exec_timeout}\n')
 
     plist_contents = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -229,6 +346,7 @@ def _install_launchd(binary: str, data_dir: str,
     subprocess.run(
         ['launchctl', 'load', '-w', str(plist_path)], check=False)
     actions.append(f'launchctl load -w {plist_path}')
+    _verify_launchd_loaded()
 
     return {
         'platform': 'launchd',
@@ -295,7 +413,6 @@ def _parse_interval_from_launchd_plist(path: Path) -> int | None:
     """Extract StartInterval from the launchd plist file."""
     if not path.exists():
         return None
-    import re
     text = path.read_text()
     m = re.search(
         r'<key>StartInterval</key>\s*<integer>(\d+)</integer>', text)

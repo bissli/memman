@@ -12,7 +12,6 @@ def _no_api_keys(monkeypatch):
     """Start each test with no API keys exported."""
     monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
     monkeypatch.delenv('VOYAGE_API_KEY', raising=False)
-    monkeypatch.delenv('MEMMAN_LLM_API_KEY', raising=False)
 
 
 @pytest.fixture

@@ -119,12 +119,28 @@ def clear_cache() -> None:
     _memory_cache.clear()
 
 
+def _haiku_sort_key(model_id: str) -> tuple:
+    """Extract a sortable version tuple from an Anthropic Haiku model id.
+
+    Handles `claude-haiku-4.5`, `claude-haiku-10.0`, `claude-haiku-4.5-v2`,
+    and the legacy `claude-3.5-haiku` / `claude-3-haiku` forms. Returns a
+    tuple that sorts such that newer versions come first under descending
+    sort. Non-numeric suffixes sort before numeric-only (so `-v2` beats
+    the base when both parse).
+    """
+    import re as _re
+    tail = model_id.split('/', 1)[-1].lower()
+    nums = tuple(int(n) for n in _re.findall(r'\d+', tail))
+    has_suffix = bool(_re.search(r'-[a-z]+\d*$', tail))
+    return (nums, 1 if has_suffix else 0, model_id)
+
+
 def pick_latest_haiku(endpoints: list[dict]) -> str:
     """Pick the latest Anthropic Haiku model ID from the ZDR list.
 
-    Sorts Anthropic Haiku model IDs descending by string — works for
-    the current ID scheme (claude-haiku-4.5 sorts above claude-3.5-haiku
-    lexicographically because '4' > '3').
+    Parses version numbers out of the model id and sorts numerically, so
+    `claude-haiku-10.0` beats `claude-haiku-4.5`. Falls back to plain
+    string sort if parsing fails, with a warning log.
     """
     haikus = []
     seen = set()
@@ -141,5 +157,11 @@ def pick_latest_haiku(endpoints: list[dict]) -> str:
     if not haikus:
         raise RuntimeError(
             'no Anthropic Haiku model in ZDR inventory; refusing to proceed')
-    haikus.sort(reverse=True)
+    try:
+        haikus.sort(key=_haiku_sort_key, reverse=True)
+    except Exception as exc:
+        logger.warning(
+            f'version sort failed for Haiku IDs ({exc});'
+            ' falling back to string sort')
+        haikus.sort(reverse=True)
     return haikus[0]

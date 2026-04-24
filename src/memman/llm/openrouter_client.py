@@ -119,7 +119,12 @@ class OpenRouterClient:
             if not choices:
                 raise RuntimeError(
                     f'openrouter returned no choices: {data!r}')
-            return choices[0]['message']['content']
+            try:
+                return choices[0]['message']['content']
+            except (KeyError, TypeError) as exc:
+                raise RuntimeError(
+                    f'openrouter response missing message.content'
+                    f' ({exc}): {data!r}') from exc
 
 
 def get_openrouter_client() -> OpenRouterClient:

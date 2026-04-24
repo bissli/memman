@@ -41,7 +41,16 @@ memman store list
 memman store create <name>
 memman store set <name>
 memman store remove <name>
+memman queue list | list-failed | cat <id> | retry <id> | purge --done
+memman scheduler status | enable | disable | interval [--seconds N]
 ```
+
+The `memman queue` group inspects and manages the deferred-write queue
+(`~/.memman/queue.db`). The `memman scheduler` group controls the
+already-installed background enrichment unit: `enable`/`disable`
+pause/resume without touching unit files; `interval --seconds N`
+updates the cadence; `status` shows install state, next run, and
+current interval.
 
 ## Guardrails
 

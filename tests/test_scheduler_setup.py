@@ -22,16 +22,11 @@ def fake_binary(monkeypatch):
                         lambda: '/fake/bin/memman')
 
 
-def _no_subprocess(monkeypatch):
-    """Stop scheduler functions from invoking systemctl/launchctl.
-
-    Returns a fake subprocess.run that records no side effects and
-    yields a dummy result object with returncode=1, stdout='' — enough
-    for both install() side-effect suppression and status() polling.
-    """
+def _no_subprocess(monkeypatch, active: bool = True):
+    """Patch subprocess.run to suppress systemctl/launchctl side effects."""
     class _FakeResult:
-        returncode = 1
-        stdout = ''
+        returncode = 0 if active else 3
+        stdout = 'active' if active else 'inactive'
         stderr = ''
 
     def _fake_run(*args, **kwargs):

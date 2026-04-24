@@ -1,6 +1,7 @@
 """Claude Code integration: install, eject, and setup orchestration."""
 
 import os
+import platform
 import shutil
 from importlib.resources import files as pkg_files
 from pathlib import Path
@@ -21,15 +22,14 @@ from memman.setup.settings import remove_memman_permission, write_json_file
 from memman.setup.settings import write_or_remove_json_file
 
 
-def _check_prereqs() -> tuple[str, str]:
+def check_prereqs() -> tuple[str, str]:
     """Validate install prerequisites; raise ClickException on failure.
 
     Returns (openrouter_api_key, voyage_api_key) once all checks pass.
     """
     if not detect_scheduler():
-        import platform as _platform
         raise click.ClickException(
-            f'unsupported platform {_platform.system()!r}: expected'
+            f'unsupported platform {platform.system()!r}: expected'
             ' Linux+systemd or macOS+launchd')
     try:
         memman_binary_path()
@@ -119,7 +119,7 @@ def claude_eject(config_dir: str) -> list[Exception]:
 
     hooks_dir = os.path.join(config_dir, 'hooks', 'mm')
     shutil.rmtree(hooks_dir, ignore_errors=True)
-    status_ok(1, 3, 'Hooks', hooks_dir + ' removed')
+    status_ok('Hooks', hooks_dir + ' removed')
     remove_if_empty(os.path.join(config_dir, 'hooks'))
 
     settings_path = os.path.join(config_dir, 'settings.json')
@@ -128,17 +128,17 @@ def claude_eject(config_dir: str) -> list[Exception]:
         remove_claude_hooks(data)
         remove_memman_permission(data)
         write_or_remove_json_file(settings_path, data)
-        status_ok(2, 3, 'Settings', settings_path + ' cleaned')
+        status_ok('Settings', settings_path + ' cleaned')
     except Exception as e:
-        status_error(2, 3, 'Settings', e)
+        status_error('Settings', e)
         errs.append(e)
 
     skill_dir = os.path.join(config_dir, 'skills', 'memman')
     try:
         shutil.rmtree(skill_dir, ignore_errors=True)
-        status_ok(3, 3, 'Skill', skill_dir + ' removed')
+        status_ok('Skill', skill_dir + ' removed')
     except Exception as e:
-        status_error(3, 3, 'Skill', e)
+        status_error('Skill', e)
         errs.append(e)
     remove_if_empty(os.path.join(config_dir, 'skills'))
 
@@ -165,11 +165,11 @@ def _install_claude_code(env: dict, data_dir: str) -> None:
 
     print('\n[1/3] Skill')
     path = claude_write_skill(config_dir)
-    status_ok(0, 0, 'Skill', path)
+    status_ok('Skill', path)
 
     print('\n[2/3] Prompts')
     path = write_prompt_files()
-    status_ok(0, 0, 'Prompts', path)
+    status_ok('Prompts', path)
 
     print('\n[3/3] Hooks')
     hook_assets = [
@@ -183,16 +183,16 @@ def _install_claude_code(env: dict, data_dir: str) -> None:
     for filename, label in hook_assets:
         path = claude_write_hook(
             config_dir, filename, _asset_bytes(f'claude/{filename}'))
-        status_ok(0, 0, f'Hook: {label}', path)
+        status_ok(f'Hook: {label}', path)
 
     path = claude_register_hooks(config_dir)
-    status_updated(0, 0, 'Settings', path)
+    status_updated('Settings', path)
 
     settings_path = os.path.join(config_dir, 'settings.json')
     data = read_json_file(settings_path)
     add_memman_permission(data)
     write_json_file(settings_path, data)
-    status_ok(0, 0, 'Permission',
+    status_ok('Permission',
               'Bash(memman:*) added to settings.json')
 
     print()
@@ -243,7 +243,7 @@ def run_setup(data_dir: str, target: str = '',
         _run_eject_flow(envs, target=target)
         return
 
-    openrouter_key, voyage_key = _check_prereqs()
+    openrouter_key, voyage_key = check_prereqs()
     _run_install_flow(envs, target=target, data_dir=data_dir,
                       openrouter_key=openrouter_key,
                       voyage_key=voyage_key)
@@ -293,7 +293,7 @@ def _run_install_flow(envs: list[dict], target: str,
         openrouter_api_key=openrouter_key,
         voyage_api_key=voyage_key)
     for action in result.get('env_actions', []) + result.get('actions', []):
-        status_ok(0, 0, result['platform'], action)
+        status_ok(result['platform'], action)
 
 
 def _install_env(env: dict, data_dir: str) -> None:
@@ -338,7 +338,7 @@ def _run_eject_flow(envs: list[dict], target: str) -> None:
     print('\n[scheduler]')
     result = uninstall_scheduler()
     for action in result.get('actions', []):
-        status_ok(0, 0, result['platform'], action)
+        status_ok(result['platform'], action)
 
     print()
     print('Done! All detected integrations removed.')

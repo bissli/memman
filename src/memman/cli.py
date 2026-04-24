@@ -158,7 +158,12 @@ def cli(ctx: click.Context, data_dir: str | None, store_name: str, readonly: boo
 def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
              imp: int, tags: str, source: str, entities: str,
              no_reconcile: bool, defer: bool, priority: int) -> None:
-    """Store a new insight."""
+    """Store a new insight.
+
+    Default is --defer (queue-append, ~50 ms). The background scheduler
+    drains the queue every 15 min. Use --sync for the old blocking path
+    that runs extraction/reconciliation/enrichment inline.
+    """
     content_str = ' '.join(content)
     content_bytes = len(content_str.encode('utf-8'))
     if content_bytes > 8000:
@@ -686,31 +691,46 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         })
 
 
-def _process_queue_row(row, store_data_dir: str,
+def _process_queue_row(row: 'memman.queue.QueueRow', store_data_dir: str,
                        base_data_dir: str) -> None:
-    """Run the full remember pipeline on a claimed queue row."""
+    """Run the full remember pipeline on a claimed queue row.
+
+    Idempotent via a `queue:<id>` tag on the insight's `source` field:
+    if the target store already has any insight carrying that tag, the
+    row is treated as already processed (crash-recovery from a worker
+    that committed insights but didn't reach mark_done).
+    """
     from memman.store.db import open_db as _open_store_db
 
     tag_list = _parse_tags(row.hint_tags or '')
     entity_list = _parse_entities(row.hint_entities or '')
     category = row.hint_cat or 'general'
     importance = row.hint_imp if row.hint_imp is not None else 3
-    source = row.hint_source or 'queue'
+    source = f'queue:{row.id}'
 
     if category not in VALID_CATEGORIES:
         category = 'general'
     if importance < 1 or importance > 5:
         importance = 3
 
-    now = datetime.now(timezone.utc)
-    insight = Insight(
-        id=str(uuid.uuid4()), content=row.content,
-        category=category, importance=importance,
-        tags=tag_list, entities=entity_list, source=source,
-        created_at=now, updated_at=now)
-
     db = _open_store_db(store_data_dir)
     try:
+        already = db._query(
+            'SELECT 1 FROM insights WHERE source = ? AND deleted_at IS NULL'
+            ' LIMIT 1', (source,)).fetchone()
+        if already is not None:
+            logger.info(
+                f'queue row {row.id} already committed to store'
+                f' {row.store!r}; skipping re-processing')
+            return
+
+        now = datetime.now(timezone.utc)
+        insight = Insight(
+            id=str(uuid.uuid4()), content=row.content,
+            category=category, importance=importance,
+            tags=tag_list, entities=entity_list, source=source,
+            created_at=now, updated_at=now)
+
         _remember_impl(
             db, insight, row.content,
             no_reconcile=False,
@@ -1101,7 +1121,7 @@ def queue(ctx: click.Context) -> None:
 
 
 @queue.command('list')
-@click.option('--limit', default=50, type=int)
+@click.option('--limit', default=50, type=int, help='Max results')
 @click.pass_context
 def queue_list(ctx: click.Context, limit: int) -> None:
     """List recent queue rows."""
@@ -1117,14 +1137,17 @@ def queue_list(ctx: click.Context, limit: int) -> None:
 
 
 @queue.command('list-failed')
-@click.option('--limit', default=50, type=int)
+@click.option('--limit', default=50, type=int, help='Max results')
 @click.pass_context
 def queue_list_failed(ctx: click.Context, limit: int) -> None:
     """List failed queue rows."""
-    from memman.queue import STATUS_FAILED, list_rows, open_queue_db
+    from memman.queue import STATUS_FAILED, list_rows, open_queue_db, stats
     conn = open_queue_db(ctx.obj['data_dir'])
     try:
-        _json_out(list_rows(conn, status=STATUS_FAILED, limit=limit))
+        _json_out({
+            'stats': stats(conn),
+            'rows': list_rows(conn, status=STATUS_FAILED, limit=limit),
+            })
     finally:
         conn.close()
 
@@ -1198,30 +1221,31 @@ def scheduler_status(ctx: click.Context) -> None:
 @scheduler.command('enable')
 @click.pass_context
 def scheduler_enable(ctx: click.Context) -> None:
-    """Install or re-enable the scheduler (requires API keys)."""
-    from memman.setup.claude import _check_prereqs
-    from memman.setup.scheduler import install
-    openrouter_key, voyage_key = _check_prereqs()
-    result = install(
-        ctx.obj['data_dir'],
-        openrouter_api_key=openrouter_key,
-        voyage_api_key=voyage_key)
+    """Resume the scheduler (must already be installed via `memman setup`)."""
+    from memman.setup.scheduler import start
+    try:
+        result = start()
+    except FileNotFoundError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
     _json_out(result)
 
 
 @scheduler.command('disable')
 @click.pass_context
 def scheduler_disable(ctx: click.Context) -> None:
-    """Stop and remove the scheduler unit (leaves env file + data intact)."""
-    from memman.setup.scheduler import uninstall
-    _json_out(uninstall())
+    """Pause the scheduler (unit files kept; re-enable with `scheduler enable`)."""
+    from memman.setup.scheduler import stop
+    _json_out(stop())
 
 
 @scheduler.command('interval')
-@click.argument('seconds', required=False, type=int)
+@click.option('--seconds', type=int, default=None,
+              help='New interval in seconds (min 60). Omit to show current.')
 @click.pass_context
 def scheduler_interval(ctx: click.Context, seconds: int | None) -> None:
-    """Show or set the scheduler interval in seconds."""
+    """Show or set the scheduler interval."""
     from memman.setup.scheduler import change_interval, status
     if seconds is None:
         s = status()

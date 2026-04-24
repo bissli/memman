@@ -2,6 +2,8 @@
 
 import sys
 
+from memman.setup.detect import home_dir
+
 COLOR_GREEN = '\033[32m'
 COLOR_DIM = '\033[2m'
 COLOR_RED = '\033[31m'
@@ -28,16 +30,14 @@ def _init_colors() -> None:
         COLOR_RESET = ''
 
 
-def status_ok(step: int, total: int,
-              label: str, detail: str) -> None:
+def status_ok(label: str, detail: str) -> None:
     """Print a green checkmark status line."""
     _init_colors()
     print(f'  {COLOR_GREEN}{SYM_OK}{COLOR_RESET}'
           f' {label:<12s} {COLOR_DIM}{detail}{COLOR_RESET}')
 
 
-def status_updated(step: int, total: int,
-                   label: str, detail: str) -> None:
+def status_updated(label: str, detail: str) -> None:
     """Print a green checkmark with 'updated' note."""
     _init_colors()
     print(f'  {COLOR_GREEN}{SYM_OK}{COLOR_RESET}'
@@ -45,16 +45,7 @@ def status_updated(step: int, total: int,
           f'  {COLOR_GREEN}updated{COLOR_RESET}')
 
 
-def status_skipped(step: int, total: int,
-                   label: str, detail: str) -> None:
-    """Print a dimmed dot status line."""
-    _init_colors()
-    print(f'  {COLOR_DIM}{SYM_DOT} {label:<12s}'
-          f' {detail}{COLOR_RESET}')
-
-
-def status_error(step: int, total: int,
-                 label: str, err: object) -> None:
+def status_error(label: str, err: object) -> None:
     """Print a red cross status line."""
     _init_colors()
     print(f'  {COLOR_RED}{SYM_FAIL}{COLOR_RESET}'
@@ -65,7 +56,6 @@ def detection_line(detected: bool, display: str,
                    version: str, path: str) -> None:
     """Print a detection result line."""
     _init_colors()
-    from memman.setup.detect import home_dir
     display_path = path.replace(home_dir(), '~', 1)
     if detected:
         print(f'  {COLOR_GREEN}{SYM_OK}{COLOR_RESET}'
