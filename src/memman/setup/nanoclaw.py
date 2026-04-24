@@ -9,7 +9,6 @@ the skill file into the Claude Code skills directory so `/add-memman`
 is invokable.
 """
 
-import os
 import shutil
 from importlib.resources import files as pkg_files
 from pathlib import Path
@@ -51,9 +50,9 @@ def install_nanoclaw(env: dict, data_dir: str) -> None:
     print('Setup complete!')
     print(f'  Skill: {skill_path}')
     print()
-    print("Next: open a Claude Code session inside your NanoClaw project"
-          " and run /add-memman to patch the Dockerfile + mount memman"
-          " into the container.")
+    print('Next: open a Claude Code session inside your NanoClaw project'
+          ' and run /add-memman to patch the Dockerfile + mount memman'
+          ' into the container.')
 
 
 def uninstall_nanoclaw(config_dir: str | None = None) -> list[Exception]:
@@ -67,5 +66,5 @@ def uninstall_nanoclaw(config_dir: str | None = None) -> list[Exception]:
             status_ok('Skill', f'{skill_dir} removed')
     except Exception as e:
         errs.append(e)
-    remove_if_empty(os.path.dirname(str(skill_dir)))
+    remove_if_empty(Path(str(skill_dir)).parent)
     return errs

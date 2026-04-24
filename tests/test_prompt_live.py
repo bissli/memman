@@ -9,7 +9,6 @@ These tests require ANTHROPIC_API_KEY and make real API calls.
 """
 
 import pytest
-
 from memman.llm.client import get_llm_client
 from memman.llm.extract import extract_facts
 
@@ -110,7 +109,7 @@ class TestImportanceCalibration:
             llm_client,
             'The default timeout is 30 seconds')
         assert len(facts) >= 1
-        assert facts[0]['importance'] in (2, 3)
+        assert facts[0]['importance'] in {2, 3}
 
     def test_architectural_invariant_importance_5(self, llm_client):
         """Core architectural invariant gets importance 5."""

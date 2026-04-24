@@ -130,7 +130,7 @@ def openclaw_eject(config_dir: str) -> list[Exception]:
          os.path.join(config_dir, 'extensions', 'memman')),
         ]
 
-    for i, (label, path) in enumerate(targets):
+    for (label, path) in targets:
         try:
             shutil.rmtree(path, ignore_errors=True)
             status_ok(label,

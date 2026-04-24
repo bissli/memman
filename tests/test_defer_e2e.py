@@ -30,7 +30,7 @@ def invoke(runner_tuple, args):
 
 
 def test_defer_enqueues_and_drain_commits(runner):
-    """remember --defer + enrich --pending lands one insight in the store.
+    """Remember --defer + enrich --pending lands one insight in the store.
     """
     r = invoke(runner, ['remember', '--defer',
                         'Paris is the capital of France'])

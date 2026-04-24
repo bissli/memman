@@ -3,35 +3,34 @@
 
 import argparse
 import math
-import os
 import sqlite3
 from collections import defaultdict
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
 
 # ── colour palette ──────────────────────────────────────────────────
 CATEGORY_COLOURS = {
-    "fact":       "#58a6ff",   # blue
-    "insight":    "#bc8cff",   # purple
-    "decision":   "#f78166",   # orange
-    "context":    "#3fb950",   # green
-    "preference": "#f9e2af",   # yellow
-    "general":    "#c9d1d9",   # silver
+    'fact':       '#58a6ff',   # blue
+    'insight':    '#bc8cff',   # purple
+    'decision':   '#f78166',   # orange
+    'context':    '#3fb950',   # green
+    'preference': '#f9e2af',   # yellow
+    'general':    '#c9d1d9',   # silver
 }
 
 EDGE_COLOURS = {
-    "temporal":  "#6e7681",
-    "entity":    "#58a6ff",
-    "semantic":  "#bc8cff",
-    "causal":    "#f78166",
-    "narrative": "#3fb950",
+    'temporal':  '#6e7681',
+    'entity':    '#58a6ff',
+    'semantic':  '#bc8cff',
+    'causal':    '#f78166',
+    'narrative': '#3fb950',
 }
 
-BG_COLOUR = "#0d1117"
+BG_COLOUR = '#0d1117'
 
 
 def load_data(db_path: Path) -> tuple:
@@ -42,16 +41,16 @@ def load_data(db_path: Path) -> tuple:
 
     nodes = {}
     for r in conn.execute(
-        "SELECT id, category, importance, access_count "
-        "FROM insights WHERE deleted_at IS NULL"
+        'SELECT id, category, importance, access_count '
+        'FROM insights WHERE deleted_at IS NULL'
     ):
-        nodes[r["id"]] = dict(r)
+        nodes[r['id']] = dict(r)
 
     edges_by_type = defaultdict(list)  # type -> [(src, tgt, weight)]
-    for r in conn.execute("SELECT source_id, target_id, edge_type, weight FROM edges"):
-        src, tgt = r["source_id"], r["target_id"]
+    for r in conn.execute('SELECT source_id, target_id, edge_type, weight FROM edges'):
+        src, tgt = r['source_id'], r['target_id']
         if src in nodes and tgt in nodes:
-            edges_by_type[r["edge_type"]].append((src, tgt, r["weight"]))
+            edges_by_type[r['edge_type']].append((src, tgt, r['weight']))
 
     conn.close()
     return nodes, edges_by_type
@@ -64,8 +63,8 @@ def build_layout_graph(nodes, edges_by_type):
         G.add_node(nid)
 
     # Accumulate weights: entity and semantic edges matter more for layout
-    type_weight = {"temporal": 0.3, "entity": 1.0, "semantic": 1.5,
-                   "causal": 2.0, "narrative": 1.0}
+    type_weight = {'temporal': 0.3, 'entity': 1.0, 'semantic': 1.5,
+                   'causal': 2.0, 'narrative': 1.0}
     pair_weights = defaultdict(float)
     for etype, elist in edges_by_type.items():
         w = type_weight.get(etype, 1.0)
@@ -88,7 +87,7 @@ def draw(nodes: dict, edges_by_type: dict, out_path: Path) -> None:
     # ── layout ──────────────────────────────────────────────────────
     # Use spring layout then pull isolated nodes closer to the centre
     pos = nx.spring_layout(G, k=1.4 / math.sqrt(max(len(G), 1)),
-                           iterations=300, seed=42, weight="weight")
+                           iterations=300, seed=42, weight='weight')
 
     # pull low-degree nodes toward centre of mass
     cx = np.mean([p[0] for p in pos.values()])
@@ -119,13 +118,13 @@ def draw(nodes: dict, edges_by_type: dict, out_path: Path) -> None:
     # ── draw edges by type (layered, temporal at bottom) ────────────
     edge_style = {
         #              alpha  width
-        "temporal":  (0.06,  0.2),
-        "entity":    (0.40,  0.6),
-        "semantic":  (0.40,  0.8),
-        "narrative": (0.45,  0.9),
-        "causal":    (0.60,  1.2),
+        'temporal':  (0.06,  0.2),
+        'entity':    (0.40,  0.6),
+        'semantic':  (0.40,  0.8),
+        'narrative': (0.45,  0.9),
+        'causal':    (0.60,  1.2),
     }
-    edge_order = ["temporal", "entity", "semantic", "narrative", "causal"]
+    edge_order = ['temporal', 'entity', 'semantic', 'narrative', 'causal']
 
     total_edge_count = 0
     for etype in edge_order:
@@ -148,9 +147,9 @@ def draw(nodes: dict, edges_by_type: dict, out_path: Path) -> None:
 
     # ── node glow (larger translucent circles beneath) ──────────────
     node_list = list(nodes.keys())
-    colours = [CATEGORY_COLOURS.get(nodes[n].get("category", "general"), "#c9d1d9")
+    colours = [CATEGORY_COLOURS.get(nodes[n].get('category', 'general'), '#c9d1d9')
                for n in node_list]
-    sizes = [50 + 5 * nodes[n].get("access_count", 0) for n in node_list]
+    sizes = [50 + 5 * nodes[n].get('access_count', 0) for n in node_list]
     glow_sizes = [s * 3.5 for s in sizes]
 
     nx.draw_networkx_nodes(G, pos, nodelist=node_list, ax=ax,
@@ -160,45 +159,45 @@ def draw(nodes: dict, edges_by_type: dict, out_path: Path) -> None:
     # ── actual nodes ────────────────────────────────────────────────
     nx.draw_networkx_nodes(G, pos, nodelist=node_list, ax=ax,
                            node_color=colours, node_size=sizes,
-                           edgecolors="#30363d", linewidths=0.4, alpha=0.92)
+                           edgecolors='#30363d', linewidths=0.4, alpha=0.92)
 
     # ── legend ──────────────────────────────────────────────────────
     cat_patches = [mpatches.Patch(color=c, label=l.capitalize())
                    for l, c in CATEGORY_COLOURS.items()]
     edge_lines = [plt.Line2D([0], [0], color=EDGE_COLOURS[t], lw=2, label=t.capitalize())
-                  for t in ["temporal", "entity", "semantic", "narrative", "causal"]]
+                  for t in ['temporal', 'entity', 'semantic', 'narrative', 'causal']]
 
-    legend1 = ax.legend(handles=cat_patches, loc="upper left",
-                        fontsize=8, title="Node category", title_fontsize=9,
-                        facecolor="#161b22", edgecolor="#30363d",
-                        labelcolor="#c9d1d9", framealpha=0.92)
-    legend1.get_title().set_color("#c9d1d9")
+    legend1 = ax.legend(handles=cat_patches, loc='upper left',
+                        fontsize=8, title='Node category', title_fontsize=9,
+                        facecolor='#161b22', edgecolor='#30363d',
+                        labelcolor='#c9d1d9', framealpha=0.92)
+    legend1.get_title().set_color('#c9d1d9')
     ax.add_artist(legend1)
 
-    legend2 = ax.legend(handles=edge_lines, loc="lower left",
-                        fontsize=8, title="Edge type", title_fontsize=9,
-                        facecolor="#161b22", edgecolor="#30363d",
-                        labelcolor="#c9d1d9", framealpha=0.92)
-    legend2.get_title().set_color("#c9d1d9")
+    legend2 = ax.legend(handles=edge_lines, loc='lower left',
+                        fontsize=8, title='Edge type', title_fontsize=9,
+                        facecolor='#161b22', edgecolor='#30363d',
+                        labelcolor='#c9d1d9', framealpha=0.92)
+    legend2.get_title().set_color('#c9d1d9')
 
     # ── stats annotation ────────────────────────────────────────────
     n_nodes = len(nodes)
-    stats_text = f"{n_nodes} insights  ·  {total_edge_count} edges"
+    stats_text = f'{n_nodes} insights  ·  {total_edge_count} edges'
     ax.text(0.99, 0.02, stats_text, transform=ax.transAxes,
-            fontsize=9, color="#8b949e", ha="right", va="bottom",
-            fontfamily="monospace")
+            fontsize=9, color='#8b949e', ha='right', va='bottom',
+            fontfamily='monospace')
 
-    ax.axis("off")
+    ax.axis('off')
     plt.tight_layout(pad=0.5)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(out_path), dpi=200, facecolor=BG_COLOUR,
-                bbox_inches="tight", pad_inches=0.3)
+                bbox_inches='tight', pad_inches=0.3)
     plt.close(fig)
-    print(f"Saved {out_path}  ({os.path.getsize(out_path) / 1024:.0f} KB)")
+    print(f'Saved {out_path}  ({Path(out_path).stat().st_size / 1024:.0f} KB)')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Generate a knowledge-graph visualization from a memman database.')
     parser.add_argument(
@@ -215,7 +214,7 @@ if __name__ == "__main__":
 
     nodes, edges_by_type = load_data(db_path)
     total = sum(len(v) for v in edges_by_type.values())
-    print(f"Loaded {len(nodes)} nodes, {total} edges")
+    print(f'Loaded {len(nodes)} nodes, {total} edges')
     for t, e in sorted(edges_by_type.items()):
-        print(f"  {t}: {len(e)}")
+        print(f'  {t}: {len(e)}')
     draw(nodes, edges_by_type, out_path)
