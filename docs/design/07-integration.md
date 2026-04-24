@@ -177,7 +177,7 @@ Edit ~/.memman/prompt/guide.md to customize behavior.
 Run 'memman uninstall' to remove.
 ```
 
-Key setup options:
+Key install options:
 
 | Command / Flag                        | Effect                           |
 | ------------------------------------- | -------------------------------- |

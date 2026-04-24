@@ -196,15 +196,16 @@ Nodes are colored by category (decision, fact, insight, preference, context); ed
 
 ## Configuration
 
-| Variable              | Default                         | Description                                           |
-| --------------------- | ------------------------------- | ----------------------------------------------------- |
-| `MEMMAN_DATA_DIR`     | `~/.memman`                     | Base data directory                                   |
-| `MEMMAN_STORE`        | `default`                       | Active named store                                    |
-| `ANTHROPIC_API_KEY`   | —                               | Required: LLM fact extraction, reconciliation, recall |
-| `VOYAGE_API_KEY`      | —                               | Required: Voyage AI embeddings (512-dim)              |
-| `MEMMAN_LLM_ENDPOINT` | `https://api.anthropic.com`     | Override LLM endpoint                                 |
-| `MEMMAN_LLM_API_KEY`  | falls back to ANTHROPIC_API_KEY | Override API key for LLM endpoint                     |
-| `MEMMAN_LLM_MODEL`    | `claude-haiku-4-5-20251001`     | Model for LLM inference                               |
+| Variable              | Default                           | Description                                                                     |
+| --------------------- | --------------------------------- | ------------------------------------------------------------------------------- |
+| `MEMMAN_DATA_DIR`     | `~/.memman`                       | Base data directory                                                             |
+| `MEMMAN_STORE`        | `default`                         | Active named store                                                              |
+| `OPENROUTER_API_KEY`  | —                                 | Required: enrichment worker (fact extraction, reconciliation, causal inference) |
+| `VOYAGE_API_KEY`      | —                                 | Required: Voyage AI embeddings (512-dim)                                        |
+| `ANTHROPIC_API_KEY`   | —                                 | Optional: session-path query expansion; degrades gracefully when unset          |
+| `MEMMAN_LLM_ENDPOINT` | `https://api.anthropic.com`       | Override LLM endpoint for the optional session-path client                      |
+| `MEMMAN_LLM_API_KEY`  | falls back to `ANTHROPIC_API_KEY` | Override API key for the session-path LLM endpoint                              |
+| `MEMMAN_LLM_MODEL`    | `claude-haiku-4-5-20251001`       | Model for LLM inference                                                         |
 
 ---
 

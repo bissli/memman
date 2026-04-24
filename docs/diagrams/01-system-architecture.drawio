@@ -64,7 +64,7 @@
         <mxCell id="a_cmd_graph" value="&lt;b&gt;graph&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="975" y="235" width="50" height="55" as="geometry" />
         </mxCell>
-        <mxCell id="a_cmd_setup" value="&lt;b&gt;setup&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="a_cmd_install" value="&lt;b&gt;install&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="1040" y="235" width="50" height="55" as="geometry" />
         </mxCell>
         <mxCell id="a_cmd_viz" value="&lt;b&gt;viz&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
