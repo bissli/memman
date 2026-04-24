@@ -15,7 +15,6 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_STORE',
     'MEMMAN_LLM_PROVIDER',
     'MEMMAN_LLM_MODEL',
-    'MEMMAN_LLM_API_KEY',
     'MEMMAN_ANTHROPIC_ENDPOINT',
     'MEMMAN_OPENROUTER_ENDPOINT',
     'MEMMAN_CACHE_DIR',
@@ -34,7 +33,7 @@ def test_constants_match_expected_names():
     """
     actual = {
         config.DATA_DIR, config.STORE, config.LLM_PROVIDER,
-        config.LLM_MODEL, config.LLM_API_KEY, config.ANTHROPIC_ENDPOINT,
+        config.LLM_MODEL, config.ANTHROPIC_ENDPOINT,
         config.OPENROUTER_ENDPOINT, config.CACHE_DIR, config.DEBUG,
         config.WORKER, config.LOG_LEVEL, config.REMEMBER_DEFAULT,
         config.OPENROUTER_API_KEY, config.VOYAGE_API_KEY,
@@ -100,12 +99,10 @@ def test_enumerate_redacts_secrets_by_default(monkeypatch):
     monkeypatch.setenv(config.OPENROUTER_API_KEY, 'sk-or-secret-value')
     monkeypatch.setenv(config.VOYAGE_API_KEY, 'pa-secret')
     monkeypatch.setenv(config.ANTHROPIC_API_KEY, 'sk-ant-secret')
-    monkeypatch.setenv(config.LLM_API_KEY, 'sk-generic-secret')
     out = config.enumerate_effective_config()
     assert out[config.OPENROUTER_API_KEY] == '***REDACTED***'
     assert out[config.VOYAGE_API_KEY] == '***REDACTED***'
     assert out[config.ANTHROPIC_API_KEY] == '***REDACTED***'
-    assert out[config.LLM_API_KEY] == '***REDACTED***'
 
 
 def test_enumerate_redact_false_exposes_secrets(monkeypatch):

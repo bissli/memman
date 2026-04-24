@@ -206,17 +206,16 @@ Nodes are colored by category (decision, fact, insight, preference, context); ed
 
 ## Configuration
 
-| Variable                     | Default                           | Description                                                                     |
-| ---------------------------- | --------------------------------- | ------------------------------------------------------------------------------- |
-| `MEMMAN_DATA_DIR`            | `~/.memman`                       | Base data directory                                                             |
-| `MEMMAN_STORE`               | `default`                         | Active named store                                                              |
-| `OPENROUTER_API_KEY`         | —                                 | Required: enrichment worker (fact extraction, reconciliation, causal inference) |
-| `VOYAGE_API_KEY`             | —                                 | Required: Voyage AI embeddings (512-dim)                                        |
-| `ANTHROPIC_API_KEY`          | —                                 | Optional: session-path query expansion; degrades gracefully when unset          |
-| `MEMMAN_ANTHROPIC_ENDPOINT`  | `https://api.anthropic.com`       | Override endpoint for the Anthropic direct client                               |
-| `MEMMAN_OPENROUTER_ENDPOINT` | `https://openrouter.ai/api/v1`    | Override endpoint for the OpenRouter client                                     |
-| `MEMMAN_LLM_API_KEY`         | falls back to `ANTHROPIC_API_KEY` | Override API key for the session-path LLM endpoint                              |
-| `MEMMAN_LLM_MODEL`           | `claude-haiku-4-5-20251001`       | Model for LLM inference                                                         |
+| Variable                     | Default                        | Description                                                                     |
+| ---------------------------- | ------------------------------ | ------------------------------------------------------------------------------- |
+| `MEMMAN_DATA_DIR`            | `~/.memman`                    | Base data directory                                                             |
+| `MEMMAN_STORE`               | `default`                      | Active named store                                                              |
+| `OPENROUTER_API_KEY`         | —                              | Required: enrichment worker (fact extraction, reconciliation, causal inference) |
+| `VOYAGE_API_KEY`             | —                              | Required: Voyage AI embeddings (512-dim)                                        |
+| `ANTHROPIC_API_KEY`          | —                              | Optional: session-path query expansion; degrades gracefully when unset          |
+| `MEMMAN_ANTHROPIC_ENDPOINT`  | `https://api.anthropic.com`    | Override endpoint for the Anthropic direct client                               |
+| `MEMMAN_OPENROUTER_ENDPOINT` | `https://openrouter.ai/api/v1` | Override endpoint for the OpenRouter client                                     |
+| `MEMMAN_LLM_MODEL`           | `claude-haiku-4-5-20251001`    | Model for LLM inference                                                         |
 
 ---
 
