@@ -1,23 +1,9 @@
-VENV_DIR   := $(HOME)/.local/share/memman/venv
-BIN_DIR    := $(HOME)/.local/bin
 DRAWIO     := /snap/bin/drawio
 DIAGRAMS   := docs/diagrams
 DRAWIO_SRC := $(wildcard $(DIAGRAMS)/*.drawio)
 DRAWIO_PNG := $(DRAWIO_SRC:.drawio=.drawio.png)
 
-.PHONY: install uninstall test e2e clean dev diagrams
-
-install:
-	python3 -m venv $(VENV_DIR)
-	$(VENV_DIR)/bin/pip install --quiet .
-	@mkdir -p $(BIN_DIR)
-	ln -sf $(VENV_DIR)/bin/memman $(BIN_DIR)/memman
-	@echo "Installed: $(BIN_DIR)/memman"
-
-uninstall:
-	rm -f $(BIN_DIR)/memman
-	rm -rf $(VENV_DIR)
-	@echo "Uninstalled memman"
+.PHONY: test e2e clean dev diagrams
 
 dev:
 	poetry install

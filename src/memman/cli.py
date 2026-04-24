@@ -1699,6 +1699,86 @@ def uninstall(ctx: click.Context, target: str) -> None:
     run_uninstall(ctx.obj['data_dir'], target=target)
 
 
+def _emit_guide() -> None:
+    """Write shipped guide.md plus ~/.memman/prompt/guide.local.md to stdout."""
+    from importlib.resources import files as pkg_files
+    shipped = (pkg_files('memman.setup.assets')
+               .joinpath('claude/guide.md').read_text())
+    click.echo(shipped, nl=False)
+    local = pathlib.Path.home() / '.memman' / 'prompt' / 'guide.local.md'
+    if local.is_file():
+        click.echo('\n<!-- user overrides -->')
+        click.echo(local.read_text(), nl=False)
+
+
+@cli.command()
+def guide() -> None:
+    """Print the memman behavioral guide (shipped + local overrides)."""
+    _emit_guide()
+
+
+@cli.command()
+def skill() -> None:
+    """Print the memman SKILL.md command reference."""
+    from importlib.resources import files as pkg_files
+    content = (pkg_files('memman.setup.assets')
+               .joinpath('claude/SKILL.md').read_text())
+    click.echo(content, nl=False)
+
+
+@cli.command()
+def prime() -> None:
+    """SessionStart emitter: status + compact hint + guide in one call.
+    """
+    input_raw = '{}'
+    if not sys.stdin.isatty():
+        try:
+            input_raw = sys.stdin.read()
+        except OSError:
+            input_raw = '{}'
+    try:
+        session = json.loads(input_raw) if input_raw.strip() else {}
+    except json.JSONDecodeError:
+        session = {}
+
+    source = session.get('source', '')
+    session_id = session.get('session_id', '')
+
+    status_line = '[memman] Memory active.'
+    try:
+        from memman.store.node import get_stats
+        data_dir = default_data_dir()
+        name = read_active(data_dir)
+        if store_exists(data_dir, name):
+            db = open_read_only(store_dir(data_dir, name))
+            try:
+                stats = get_stats(db)
+            finally:
+                db.close()
+            status_line = (f"[memman] Memory active "
+                           f"({stats['total_insights']} insights, "
+                           f"{stats['edge_count']} edges).")
+    except Exception:
+        pass
+    click.echo(status_line)
+
+    if source == 'compact':
+        flag = (pathlib.Path.home() / '.memman' / 'compact'
+                / f'{session_id}.json')
+        trigger = 'auto'
+        if flag.is_file():
+            try:
+                flag_data = json.loads(flag.read_text())
+                trigger = flag_data.get('trigger', 'auto') or 'auto'
+            except (json.JSONDecodeError, OSError):
+                pass
+        click.echo(f'[memman] Context was just compacted ({trigger}). '
+                   f'Recall critical context now: '
+                   f'memman recall "<topic>" --limit 5')
+
+    _emit_guide()
+
+
 @graph.command('rebuild')
 @click.option('--dry-run', is_flag=True, default=False,
               help='Show counts without modifying DB')

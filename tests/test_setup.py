@@ -5,6 +5,8 @@ import os
 import pathlib
 import subprocess
 
+from click.testing import CliRunner
+from memman.cli import cli
 from memman.setup.claude import claude_register_hooks
 from memman.setup.markdown import remove_memory_block
 from memman.setup.settings import add_claude_hooks_selective
@@ -533,3 +535,76 @@ def test_user_prompt_no_session_id(tmp_path):
         tmp_path)
     assert result.returncode == 0
     assert 'recall' in result.stdout.lower()
+
+
+def test_guide_command_prints_shipped_content():
+    """`memman guide` prints the shipped guide.md from the package."""
+    from importlib.resources import files as pkg_files
+    shipped = (pkg_files('memman.setup.assets')
+               .joinpath('claude/guide.md').read_text())
+    runner = CliRunner()
+    result = runner.invoke(cli, ['guide'])
+    assert result.exit_code == 0
+    assert shipped.strip() in result.output
+
+
+def test_guide_command_concatenates_local_override(tmp_path, monkeypatch):
+    """`memman guide` appends ~/.memman/prompt/guide.local.md when present."""
+    monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
+    prompt_dir = tmp_path / '.memman' / 'prompt'
+    prompt_dir.mkdir(parents=True)
+    override = prompt_dir / 'guide.local.md'
+    override.write_text('USER-OVERRIDE-MARKER\n')
+    runner = CliRunner()
+    result = runner.invoke(cli, ['guide'])
+    assert result.exit_code == 0
+    assert 'USER-OVERRIDE-MARKER' in result.output
+    assert '<!-- user overrides -->' in result.output
+
+
+def test_skill_command_prints_shipped_content():
+    """`memman skill` prints the shipped SKILL.md from the package."""
+    from importlib.resources import files as pkg_files
+    shipped = (pkg_files('memman.setup.assets')
+               .joinpath('claude/SKILL.md').read_text())
+    runner = CliRunner()
+    result = runner.invoke(cli, ['skill'])
+    assert result.exit_code == 0
+    assert shipped.strip() in result.output
+
+
+def test_prime_command_emits_status_and_guide(tmp_path, monkeypatch):
+    """`memman prime` emits a status line and the guide content."""
+    monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(cli, ['prime'], input='{}')
+    assert result.exit_code == 0
+    assert '[memman] Memory active' in result.output
+    from importlib.resources import files as pkg_files
+    shipped = (pkg_files('memman.setup.assets')
+               .joinpath('claude/guide.md').read_text())
+    assert shipped.strip() in result.output
+
+
+def test_prime_command_emits_compact_hint(tmp_path, monkeypatch):
+    """`memman prime` emits the compact-recall hint when source=compact."""
+    monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
+    runner = CliRunner()
+    payload = json.dumps({'source': 'compact', 'session_id': 'sess-x'})
+    result = runner.invoke(cli, ['prime'], input=payload)
+    assert result.exit_code == 0
+    assert 'Context was just compacted' in result.output
+
+
+def test_prime_command_reads_compact_flag_trigger(tmp_path, monkeypatch):
+    """`memman prime` picks up trigger from compact flag file."""
+    monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
+    compact_dir = tmp_path / '.memman' / 'compact'
+    compact_dir.mkdir(parents=True)
+    (compact_dir / 'sess-y.json').write_text(
+        json.dumps({'trigger': 'manual'}))
+    runner = CliRunner()
+    payload = json.dumps({'source': 'compact', 'session_id': 'sess-y'})
+    result = runner.invoke(cli, ['prime'], input=payload)
+    assert result.exit_code == 0
+    assert 'compacted (manual)' in result.output
