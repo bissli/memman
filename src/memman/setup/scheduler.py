@@ -564,6 +564,18 @@ def _launchd_status() -> dict:
         result['active'] = (out.returncode == 0)
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
+
+    log_path = Path.home() / '.memman' / 'logs' / 'enrich.log'
+    if (result['active']
+            and result['interval_seconds']
+            and log_path.exists()):
+        try:
+            log_mtime = log_path.stat().st_mtime
+            next_dt = datetime.fromtimestamp(
+                log_mtime + result['interval_seconds'], tz=timezone.utc)
+            result['next_run'] = next_dt.isoformat()
+        except OSError:
+            pass
     return result
 
 

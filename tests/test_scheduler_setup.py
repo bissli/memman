@@ -1,6 +1,7 @@
 """Unit tests for memman.setup.scheduler."""
 
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -385,7 +386,7 @@ def test_systemd_status_computes_next_run(
         ('systemctl', '--user', 'is-active'): 'active',
         ('systemctl', '--user', 'show',
          '--property=LastTriggerUSec', '--value'):
-            'Fri 2026-04-24 14:18:58 EDT',
+        'Fri 2026-04-24 14:18:58 EDT',
         })
     result = sch.status()
     assert result['next_run'] is not None
@@ -409,6 +410,47 @@ def test_systemd_status_next_run_when_never_fired(
     assert result['next_run'] is None
 
 
+def test_launchd_status_computes_next_run(
+        fake_home, fake_binary, monkeypatch):
+    """status() reports next_run = log_mtime + interval on launchd.
+    """
+    import os
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
+    _record_subprocess(monkeypatch)
+    sch.install(data_dir=str(fake_home),
+                openrouter_api_key='x', voyage_api_key='y',
+                interval_seconds=900)
+
+    log_path = fake_home / '.memman' / 'logs' / 'enrich.log'
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.touch()
+    fixed_mtime = 1_800_000_000.0
+    os.utime(log_path, (fixed_mtime, fixed_mtime))
+
+    _record_subprocess(monkeypatch)
+    result = sch.status()
+    assert result['platform'] == 'launchd'
+    assert result['active'] is True
+    expected = datetime.fromtimestamp(
+        fixed_mtime + 900, tz=timezone.utc).isoformat()
+    assert result['next_run'] == expected
+
+
+def test_launchd_status_next_run_without_log(
+        fake_home, fake_binary, monkeypatch):
+    """status() returns next_run=None on launchd with no enrich.log yet.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
+    _record_subprocess(monkeypatch)
+    sch.install(data_dir=str(fake_home),
+                openrouter_api_key='x', voyage_api_key='y')
+
+    _record_subprocess(monkeypatch)
+    result = sch.status()
+    assert result['platform'] == 'launchd'
+    assert result['next_run'] is None
+
+
 def test_systemd_status_next_run_when_malformed(
         fake_home, fake_binary, monkeypatch):
     """status() returns next_run=None on an unparseable timestamp.
@@ -421,7 +463,7 @@ def test_systemd_status_next_run_when_malformed(
     _record_subprocess(monkeypatch, responses={
         ('systemctl', '--user', 'show',
          '--property=LastTriggerUSec', '--value'):
-            'not a real timestamp',
+        'not a real timestamp',
         })
     result = sch.status()
     assert result['next_run'] is None
