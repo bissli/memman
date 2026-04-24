@@ -87,7 +87,7 @@ edges (
   weight, metadata, created_at
 )
 
--- Operation log (audit trail, queryable with --since/--group-by/--stats)
+-- Operation log (audit trail, queryable with --since/--stats)
 oplog (
   id, operation, insight_id, detail, created_at
 )

@@ -1446,12 +1446,10 @@ def _doctor_text_report(result: dict) -> None:
 @cli.command()
 @click.option('--limit', default=20, type=int, help='Max entries')
 @click.option('--since', default='', help='Time window (e.g. 7d, 24h)')
-@click.option('--group-by', 'group_by', default='',
-              help='Group by field (operation)')
 @click.option('--stats', is_flag=True, default=False,
-              help='Show summary statistics')
+              help='Show summary statistics (grouped by operation)')
 @click.pass_context
-def log(ctx: click.Context, limit: int, since: str, group_by: str,
+def log(ctx: click.Context, limit: int, since: str,
         stats: bool) -> None:
     """Show operation log."""
     from memman.store.oplog import get_oplog, get_oplog_stats
@@ -1462,7 +1460,7 @@ def log(ctx: click.Context, limit: int, since: str, group_by: str,
 
     db = _open_db(ctx)
     try:
-        if stats or group_by:
+        if stats:
             stats_data = get_oplog_stats(db, since_ts)
             _json_out(stats_data)
             return

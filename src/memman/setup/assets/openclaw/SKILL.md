@@ -38,7 +38,7 @@ memman graph rebuild
 memman graph reindex
 memman status
 memman doctor
-memman log [--since 7d] [--group-by operation] [--stats]
+memman log [--since 7d] [--stats]
 memman store list
 memman store create <name>
 memman store set <name>

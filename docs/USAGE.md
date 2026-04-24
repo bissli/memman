@@ -183,7 +183,7 @@ memman log                                          # operation log (default: la
 memman log --limit 50                               # show more entries
 memman log --since 7d                               # entries from last 7 days
 memman log --since 24h                              # entries from last 24 hours
-memman log --since 7d --group-by operation --stats  # grouped counts + never-accessed
+memman log --since 7d --stats                       # grouped counts + never-accessed
 ```
 
 ### Visualization
