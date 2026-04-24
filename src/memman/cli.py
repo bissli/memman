@@ -816,7 +816,7 @@ def link(ctx: click.Context, source_id: str, target_id: str,
             raise click.ClickException(
                 'metadata must be a JSON object, not '
                 + type(metadata).__name__)
-    metadata['created_by'] = 'claude'
+    metadata.setdefault('created_by', 'claude')
 
     if source_id == target_id:
         raise click.ClickException(

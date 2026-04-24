@@ -570,6 +570,40 @@ def test_link_creates_both_directions(runner):
     assert any(e['id'] == id1 for e in rev_data)
 
 
+def test_link_respects_user_created_by(runner):
+    """User-provided --meta['created_by'] is preserved, not clobbered to 'claude'.
+    """
+    import sqlite3
+    r1 = invoke(runner, [
+        'remember', '--sync', 'Nginx is configured as the reverse proxy',
+        '--no-reconcile'])
+    id1 = parse_remember(r1)['id']
+    r2 = invoke(runner, [
+        'remember', '--sync', 'Let\'s Encrypt auto-renews TLS certificates',
+        '--no-reconcile'])
+    id2 = parse_remember(r2)['id']
+
+    result = invoke(runner, [
+        'link', id1, id2, '--type', 'semantic',
+        '--meta', '{"created_by": "research-agent"}'])
+    assert result.exit_code == 0
+
+    _, data_dir = runner
+    store_db = pathlib.Path(data_dir) / 'data' / 'default' / 'memman.db'
+    conn = sqlite3.connect(str(store_db))
+    try:
+        rows = conn.execute(
+            'SELECT metadata FROM edges'
+            ' WHERE source_id = ? AND target_id = ?'
+            ' AND edge_type = ?',
+            (id1, id2, 'semantic')).fetchall()
+    finally:
+        conn.close()
+    assert rows, 'expected one semantic edge source->target'
+    meta = json.loads(rows[0][0])
+    assert meta['created_by'] == 'research-agent'
+
+
 def test_link_meta_non_dict_fails(runner):
     """Non-dict JSON metadata is rejected."""
     r1 = invoke(runner, [
