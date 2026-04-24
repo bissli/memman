@@ -5,9 +5,10 @@ Dual-mode API mocking: mocked by default, real APIs with --live flag.
     pytest                    # fast, mocked LLM + embeddings
     pytest --live             # real Haiku + Voyage APIs (slow, needs keys)
 
-Mock mode patches `LLMClient.complete` and `voyage.Client.embed` at the
-HTTP layer, so all extraction/reconciliation/expansion logic still runs
-with realistic canned responses. This exercises the real code paths.
+Mock mode patches `OpenRouterClient.complete` and `voyage.Client.embed`
+at the HTTP layer, so all extraction/reconciliation/expansion logic
+still runs with realistic canned responses. This exercises the real
+code paths.
 """
 
 import hashlib
@@ -33,20 +34,32 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def _mock_apis(request, monkeypatch):
     """Mock LLM and embedding HTTP calls unless --live is set.
 
-    Patches at the HTTP layer: LLMClient.complete returns realistic
-    JSON that the real extract/reconcile/expand code parses. Voyage
-    embed returns a deterministic content-hash vector.
+    Patches at the method layer: OpenRouterClient.complete returns
+    realistic JSON that the real extract/reconcile/expand code parses.
+    Voyage embed returns a deterministic content-hash vector. The ZDR
+    cache fetcher is stubbed to a minimal Haiku endpoint so model
+    resolution never hits the network.
+
+    Tests that exercise the real OpenRouterClient.complete method
+    (e.g. ZDR-injection verification) should mark themselves with
+    `@pytest.mark.no_mock_llm` to skip the method-level patch while
+    keeping the ZDR and embedding stubs in place.
     """
     if request.config.getoption('--live'):
         return
 
+    if 'no_mock_llm' not in request.keywords:
+        monkeypatch.setattr(
+            'memman.llm.openrouter_client.OpenRouterClient.complete',
+            _mock_llm_complete)
     monkeypatch.setattr(
-        'memman.llm.client.LLMClient.complete', _mock_llm_complete)
+        'memman.llm.openrouter_cache._fetch',
+        lambda: [{'model_id': 'anthropic/claude-haiku-4.5'}])
     monkeypatch.setattr(
         'memman.embed.voyage.Client.embed', _mock_embed)
     monkeypatch.setattr(
         'memman.embed.voyage.Client.available', lambda self: True)
-    monkeypatch.setenv('ANTHROPIC_API_KEY', 'mock-key-for-testing')
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'mock-key-for-testing')
 
 
 def _mock_llm_complete(self: object, system: str, user: str) -> str:

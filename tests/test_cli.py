@@ -1,7 +1,7 @@
 """Tests for memman.cli — Click CLI commands via CliRunner.
 
 All tests use real Haiku LLM and Voyage embedding APIs.
-Requires ANTHROPIC_API_KEY and VOYAGE_API_KEY in environment.
+Requires OPENROUTER_API_KEY and VOYAGE_API_KEY in environment.
 """
 
 import json

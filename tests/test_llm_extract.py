@@ -7,7 +7,7 @@ with real/mocked LLM is covered by test_cli.py and test_memory_system.py.
 
 import json
 
-from memman.llm.client import parse_json_response
+from memman.llm.shared import parse_json_response
 from memman.llm.extract import expand_query, extract_facts, reconcile_memories
 
 

@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timezone
 
 from memman import trace
-from memman.llm.client import parse_json_list_response
+from memman.llm.shared import parse_json_list_response
 from memman.model import Edge, Insight
 from memman.search.keyword import tokenize
 from memman.store.node import get_recent_active_insights

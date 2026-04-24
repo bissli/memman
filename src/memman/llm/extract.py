@@ -3,7 +3,8 @@
 import logging
 
 from memman import trace
-from memman.llm.client import LLMClient, parse_json_response
+from memman.llm.client import LLMProvider
+from memman.llm.shared import parse_json_response
 
 logger = logging.getLogger('memman')
 
@@ -97,7 +98,7 @@ QUERY_EXPANSION_SYSTEM = (
 
 
 def extract_facts(
-        llm_client: LLMClient,
+        llm_client: LLMProvider,
         content: str) -> list[dict]:
     """Extract atomic facts via LLM.
 
@@ -188,7 +189,7 @@ def _passthrough_fact(
 
 
 def reconcile_memories(
-        llm_client: LLMClient,
+        llm_client: LLMProvider,
         facts: list[dict],
         existing_memories: list[tuple[str, str]]) -> list[dict]:
     """Compare facts against existing memories via LLM.
@@ -285,7 +286,7 @@ def reconcile_memories(
 
 
 def expand_query(
-        llm_client: LLMClient,
+        llm_client: LLMProvider,
         query: str) -> dict:
     """Expand recall query with synonyms and related terms.
 

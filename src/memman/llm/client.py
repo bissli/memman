@@ -1,168 +1,71 @@
-"""LLM HTTP client and JSON response parsing."""
+"""LLM provider protocol, registry, and selector.
 
-import json
-import logging
+`LLMProvider` is the structural contract every provider class must
+satisfy: a `.complete(system, user) -> str` method. Concrete clients
+(currently only OpenRouter) register themselves in the `PROVIDERS`
+dict via a zero-arg factory that reads provider-specific env vars.
+
+`get_llm_client()` resolves the active provider by looking up
+`MEMMAN_LLM_PROVIDER` in the registry and invoking its factory.
+Unknown providers and missing API keys both surface as `ConfigError`
+— the CLI layer (`cli._get_llm_client_or_fail`) re-wraps as
+`click.ClickException`.
+
+Adding a new provider = write a class in `llm/<name>_client.py` that
+implements `.complete(...)` using helpers from `llm.shared`, plus one
+`PROVIDERS[<name>] = factory` line here.
+"""
+
 import os
-import time
+from typing import Protocol
+from collections.abc import Callable
 
-import httpx
-from memman import config, trace
+from memman import config
 from memman.exceptions import ConfigError
 
-logger = logging.getLogger('memman')
 
-DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
-DEFAULT_ENDPOINT = 'https://api.anthropic.com'
-ENRICHMENT_TIMEOUT = 10.0
-MAX_RETRIES = 3
-RETRY_BACKOFF = (1.0, 2.0)
-RETRYABLE_STATUS_CODES = (429, 500, 502, 503, 529)
+class LLMProvider(Protocol):
+    """Structural contract for any LLM client used by memman.
 
-
-class LLMClient:
-    """Thin HTTP client for LLM inference."""
-
-    def __init__(
-            self,
-            endpoint: str,
-            api_key: str,
-            model: str = DEFAULT_MODEL,
-            max_tokens: int = 1024,
-            timeout: float = ENRICHMENT_TIMEOUT,
-            ) -> None:
-        """Initialize with endpoint, API key, and model name."""
-        self.endpoint = endpoint.rstrip('/')
-        self.api_key = api_key
-        self.model = model
-        self.max_tokens = max_tokens
-        self.timeout = timeout
+    The single `complete` method takes the system + user prompts and
+    returns the assistant's response text. Streaming is deliberately
+    out of scope — memman's pipeline reads each response as a whole.
+    """
 
     def complete(self, system: str, user: str) -> str:
-        """Send a completion request and return the text response."""
-        headers = {
-            'x-api-key': self.api_key,
-            'anthropic-version': '2023-06-01',
-            'content-type': 'application/json',
-            }
-        body = {
-            'model': self.model,
-            'max_tokens': self.max_tokens,
-            'system': system,
-            'messages': [{'role': 'user', 'content': user}],
-            }
-        url = f'{self.endpoint}/v1/messages'
-        for attempt in range(MAX_RETRIES):
-            trace.event(
-                'llm_request',
-                provider='anthropic',
-                url=url,
-                attempt=attempt + 1,
-                headers=trace.redact_headers(headers),
-                body=body)
-            t0 = time.monotonic()
-            resp = httpx.post(
-                url, headers=headers, json=body, timeout=self.timeout)
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-            try:
-                resp.raise_for_status()
-            except httpx.HTTPStatusError:
-                trace.event(
-                    'llm_response',
-                    provider='anthropic',
-                    status=resp.status_code,
-                    elapsed_ms=elapsed_ms,
-                    body=_safe_json(resp),
-                    error='http_status')
-                if (resp.status_code in RETRYABLE_STATUS_CODES
-                        and attempt < MAX_RETRIES - 1):
-                    delay = RETRY_BACKOFF[min(
-                        attempt, len(RETRY_BACKOFF) - 1)]
-                    logger.debug(
-                        f'LLM {resp.status_code}, retry '
-                        f'{attempt + 1}/{MAX_RETRIES - 1} '
-                        f'in {delay}s')
-                    time.sleep(delay)
-                    continue
-                raise
-            data = resp.json()
-            trace.event(
-                'llm_response',
-                provider='anthropic',
-                status=resp.status_code,
-                elapsed_ms=elapsed_ms,
-                body=data)
-            return data['content'][0]['text']
+        """Run a completion and return the assistant response text."""
+        ...
 
 
-def _safe_json(resp: httpx.Response) -> object:
-    """Return parsed JSON or the raw text if decoding fails."""
-    try:
-        return resp.json()
-    except Exception:
-        return resp.text
+def _openrouter_factory() -> LLMProvider:
+    """Build the registered OpenRouter client (factory indirection).
 
-
-def strip_code_fences(raw: str) -> str:
-    """Strip markdown code fences from LLM output."""
-    text = raw.strip()
-    if text.startswith('```'):
-        lines = text.split('\n')
-        text = '\n'.join(lines[1:])
-        text = text.removesuffix('```').strip()
-    return text
-
-
-def parse_json_response(raw: str) -> dict | None:
-    """Parse JSON dict from LLM response, handling code blocks."""
-    for text in (raw, strip_code_fences(raw)):
-        try:
-            parsed = json.loads(text)
-            if isinstance(parsed, dict):
-                return parsed
-        except (json.JSONDecodeError, ValueError):
-            pass
-    return None
-
-
-def parse_json_list_response(raw: str) -> list | None:
-    """Parse JSON list from LLM response, handling code blocks."""
-    for text in (raw, strip_code_fences(raw)):
-        try:
-            parsed = json.loads(text)
-            if isinstance(parsed, list):
-                return parsed
-        except (json.JSONDecodeError, ValueError):
-            pass
-    return None
-
-
-PROVIDER_ANTHROPIC = 'anthropic'
-PROVIDER_OPENROUTER = 'openrouter'
-
-
-def get_llm_client():
-    """Return an LLM client for the configured provider.
-
-    Routes by MEMMAN_LLM_PROVIDER: 'anthropic' (default) for direct
-    Anthropic API, 'openrouter' for ZDR-enforced OpenRouter routing.
-    Raises ConfigError if the provider is unknown or the required
-    API key is missing; the CLI layer re-wraps as ClickException.
+    Imported lazily so starting up memman does not fetch the ZDR cache
+    or touch provider-specific env vars unless that provider is
+    actually selected.
     """
-    provider = os.environ.get(
-        config.LLM_PROVIDER, PROVIDER_ANTHROPIC).lower()
+    from memman.llm.openrouter_client import get_openrouter_client
+    return get_openrouter_client()
 
-    if provider == PROVIDER_OPENROUTER:
-        from memman.llm.openrouter_client import get_openrouter_client
-        return get_openrouter_client()
 
-    if provider != PROVIDER_ANTHROPIC:
+PROVIDERS: dict[str, Callable[[], LLMProvider]] = {
+    'openrouter': _openrouter_factory,
+    }
+
+
+def get_llm_client() -> LLMProvider:
+    """Return the LLM client for the configured provider.
+
+    Routes by `MEMMAN_LLM_PROVIDER` (default: 'openrouter'). Raises
+    `ConfigError` when the provider name is unknown or the selected
+    provider's required env vars are missing.
+    """
+    name = os.environ.get(
+        config.LLM_PROVIDER, config.DEFAULT_LLM_PROVIDER).lower()
+    factory = PROVIDERS.get(name)
+    if factory is None:
+        known = ', '.join(sorted(PROVIDERS)) or '(none)'
         raise ConfigError(
-            f'unknown {config.LLM_PROVIDER}={provider!r};'
-            ' expected "anthropic" or "openrouter"')
-
-    endpoint = os.environ.get(config.ANTHROPIC_ENDPOINT, DEFAULT_ENDPOINT)
-    api_key = os.environ.get(config.ANTHROPIC_API_KEY)
-    if not api_key:
-        raise ConfigError(f'{config.ANTHROPIC_API_KEY} must be set')
-    model = os.environ.get(config.LLM_MODEL, DEFAULT_MODEL)
-    return LLMClient(endpoint, api_key, model)
+            f'unknown {config.LLM_PROVIDER}={name!r};'
+            f' registered providers: {known}')
+    return factory()

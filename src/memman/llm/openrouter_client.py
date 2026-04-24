@@ -19,9 +19,9 @@ import time
 import httpx
 from memman import config, trace
 from memman.exceptions import ConfigError
-from memman.llm.client import ENRICHMENT_TIMEOUT, MAX_RETRIES, RETRY_BACKOFF
-from memman.llm.client import RETRYABLE_STATUS_CODES
 from memman.llm.openrouter_cache import get_zdr_endpoints, pick_latest_haiku
+from memman.llm.shared import ENRICHMENT_TIMEOUT, MAX_RETRIES, RETRY_BACKOFF
+from memman.llm.shared import RETRYABLE_STATUS_CODES, safe_json
 
 logger = logging.getLogger('memman')
 
@@ -124,7 +124,7 @@ class OpenRouterClient:
                     provider='openrouter',
                     status=resp.status_code,
                     elapsed_ms=elapsed_ms,
-                    body=_safe_json(resp),
+                    body=safe_json(resp),
                     error='http_status')
                 if (resp.status_code in RETRYABLE_STATUS_CODES
                         and attempt < MAX_RETRIES - 1):
@@ -153,14 +153,6 @@ class OpenRouterClient:
                 raise RuntimeError(
                     f'openrouter response missing message.content'
                     f' ({exc}): {data!r}') from exc
-
-
-def _safe_json(resp: httpx.Response) -> object:
-    """Return parsed JSON or the raw text if decoding fails."""
-    try:
-        return resp.json()
-    except Exception:
-        return resp.text
 
 
 def get_openrouter_client() -> OpenRouterClient:

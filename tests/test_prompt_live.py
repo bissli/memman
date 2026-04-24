@@ -5,7 +5,7 @@ assignments after the prompt quality fixes. Run in isolation:
 
     pytest tests/test_prompt_live.py --live
 
-These tests require ANTHROPIC_API_KEY and make real API calls.
+These tests require OPENROUTER_API_KEY and make real API calls.
 """
 
 import pytest

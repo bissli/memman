@@ -21,7 +21,7 @@ A clear description of what you expected to happen.
 - OS: [e.g. macOS 15.3, Ubuntu 24.04]
 - memman version: [e.g. 0.1.0 — run `memman --version`]
 - LLM CLI: [e.g. Claude Code 1.x, OpenClaw 0.x]
-- API keys configured: [ANTHROPIC_API_KEY, VOYAGE_API_KEY]
+- API keys configured: [OPENROUTER_API_KEY, VOYAGE_API_KEY]
 
 **Additional context**
 Paste any relevant output from `memman status` or `memman log`.

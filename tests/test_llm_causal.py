@@ -173,19 +173,10 @@ class TestLLMCausalInference:
         assert result == []
         mock_client.complete.assert_called_once()
 
-    def test_env_var_opt_in(self, monkeypatch):
-        """Without ANTHROPIC_API_KEY set, get_llm_client raises ConfigError."""
+    def test_missing_provider_key_raises(self, monkeypatch):
+        """Without OPENROUTER_API_KEY set, get_llm_client raises ConfigError."""
         from memman.exceptions import ConfigError
-        monkeypatch.delenv('MEMMAN_ANTHROPIC_ENDPOINT', raising=False)
-        monkeypatch.delenv('ANTHROPIC_API_KEY', raising=False)
+        monkeypatch.delenv('MEMMAN_LLM_PROVIDER', raising=False)
+        monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
         with pytest.raises(ConfigError):
             get_llm_client()
-
-    def test_anthropic_api_key_used(self, monkeypatch):
-        """ANTHROPIC_API_KEY is the sole key source for the Anthropic client."""
-        monkeypatch.delenv('MEMMAN_ANTHROPIC_ENDPOINT', raising=False)
-        monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-ant-test')
-        client = get_llm_client()
-        assert client is not None
-        assert client.endpoint == 'https://api.anthropic.com'
-        assert client.api_key == 'sk-ant-test'

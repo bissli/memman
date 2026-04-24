@@ -29,3 +29,6 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "no_mock_llm: skip the autouse OpenRouterClient.complete mock; keep ZDR + embedding stubs",
+]

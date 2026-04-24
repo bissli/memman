@@ -138,6 +138,7 @@ def test_client_rejects_non_zdr_override(monkeypatch):
         _ = client.model
 
 
+@pytest.mark.no_mock_llm
 def test_client_complete_injects_zdr_provider_block(monkeypatch):
     """complete() sends provider={zdr:true, data_collection:'deny'}.
     """
@@ -176,14 +177,14 @@ def test_get_llm_client_routes_to_openrouter(monkeypatch):
     assert type(c).__name__ == 'OpenRouterClient'
 
 
-def test_get_llm_client_default_is_anthropic(monkeypatch):
-    """Unset MEMMAN_LLM_PROVIDER routes to AnthropicClient.
+def test_get_llm_client_default_is_openrouter(monkeypatch):
+    """Unset MEMMAN_LLM_PROVIDER routes to OpenRouter (the sole provider).
     """
     monkeypatch.delenv('MEMMAN_LLM_PROVIDER', raising=False)
-    monkeypatch.setenv('ANTHROPIC_API_KEY', 'fake-key')
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'fake-key')
     from memman.llm.client import get_llm_client
     c = get_llm_client()
-    assert type(c).__name__ == 'LLMClient'
+    assert type(c).__name__ == 'OpenRouterClient'
 
 
 def test_get_llm_client_rejects_unknown_provider(monkeypatch):
@@ -191,12 +192,13 @@ def test_get_llm_client_rejects_unknown_provider(monkeypatch):
     """
     from memman.exceptions import ConfigError
     monkeypatch.setenv('MEMMAN_LLM_PROVIDER', 'wat')
-    monkeypatch.setenv('ANTHROPIC_API_KEY', 'fake-key')
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'fake-key')
     from memman.llm.client import get_llm_client
     with pytest.raises(ConfigError, match='unknown'):
         get_llm_client()
 
 
+@pytest.mark.no_mock_llm
 def test_complete_raises_on_empty_choices(monkeypatch):
     """complete() raises RuntimeError when choices=[].
     """
@@ -216,6 +218,7 @@ def test_complete_raises_on_empty_choices(monkeypatch):
         client.complete('sys', 'user')
 
 
+@pytest.mark.no_mock_llm
 def test_complete_raises_on_missing_content(monkeypatch):
     """complete() raises RuntimeError when message.content is missing.
     """

@@ -3,7 +3,7 @@
 import logging
 
 from memman import trace
-from memman.llm.client import parse_json_response
+from memman.llm.shared import parse_json_response
 from memman.model import Insight
 
 logger = logging.getLogger('memman')

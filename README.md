@@ -170,7 +170,7 @@ memman install      # deploy integration
 memman uninstall    # remove integration
 ```
 
-**Dependencies**: Python 3.11+, Click, httpx, cachetools, tqdm. **Required**: `OPENROUTER_API_KEY` and `VOYAGE_API_KEY` for the background worker; `ANTHROPIC_API_KEY` is optional (session-path query expansion degrades gracefully when unset).
+**Dependencies**: Python 3.11+, Click, httpx, cachetools, tqdm. **Required**: `OPENROUTER_API_KEY` (LLM inference via OpenRouter's ZDR-enforced routing) and `VOYAGE_API_KEY` (embeddings).
 
 ## Documentation
 

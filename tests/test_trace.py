@@ -199,6 +199,7 @@ def test_redact_headers_does_not_mutate_input():
     assert out is not original
 
 
+@pytest.mark.no_mock_llm
 def test_openrouter_complete_emits_request_and_response(
         fake_home, debug_on, monkeypatch):
     """OpenRouterClient.complete emits llm_request and llm_response in order.
