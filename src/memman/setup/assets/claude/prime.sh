@@ -2,7 +2,7 @@
 # memman SessionStart hook — thin shim that delegates to `memman prime`.
 # The `memman prime` command reads SessionStart JSON on stdin, emits
 # the status line, compact-recall hint (when applicable), and the
-# behavioral guide (shipped + ~/.memman/prompt/guide.local.md overrides).
+# shipped behavioral guide.
 
 if [ -t 0 ]; then
   INPUT='{}'
