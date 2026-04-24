@@ -4,7 +4,10 @@ Runs read-only diagnostics and reports per-check pass/warn/fail
 with an overall worst-status summary.
 """
 
+import os
+import stat
 import statistics
+from pathlib import Path
 
 
 def check_sqlite_integrity(db: 'DB') -> dict:
@@ -215,22 +218,205 @@ def check_queue_backlog(data_dir: str) -> dict:
         }
 
 
+EXPECTED_INSIGHT_COLUMNS = {
+    'prompt_version', 'model_id', 'embedding_model',
+    'linked_at', 'enriched_at',
+    }
+EXPECTED_QUEUE_TABLES = {'queue', 'worker_runs'}
+
+
+def check_schema_columns(db: 'DB') -> dict:
+    """Verify the insights table has the canonical provenance columns.
+
+    Single-user canonical-schema policy: missing columns mean the DB
+    predates a schema change; the fix is a one-off ALTER TABLE.
+    """
+    rows = db._query('PRAGMA table_info(insights)').fetchall()
+    present = {row[1] for row in rows}
+    missing = sorted(EXPECTED_INSIGHT_COLUMNS - present)
+    status = 'pass' if not missing else 'fail'
+    return {
+        'name': 'schema_columns',
+        'status': status,
+        'detail': {'missing': missing},
+        }
+
+
+def check_queue_schema(data_dir: str) -> dict:
+    """Verify queue.db has the canonical tables (queue + worker_runs).
+    """
+    from memman.queue import open_queue_db
+
+    conn = open_queue_db(data_dir)
+    try:
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+    finally:
+        conn.close()
+    present = {row[0] for row in rows}
+    missing = sorted(EXPECTED_QUEUE_TABLES - present)
+    status = 'pass' if not missing else 'fail'
+    return {
+        'name': 'queue_schema',
+        'status': status,
+        'detail': {'missing': missing},
+        }
+
+
+def check_env_permissions() -> dict:
+    """Verify ~/.memman/env is 0600 and ~/.memman is 0700.
+
+    Relaxed to a PASS when the files don't exist (fresh install, no
+    keys yet — that's a separate problem surfaced by other tools).
+    """
+    home = Path.home()
+    mm_dir = home / '.memman'
+    env_file = mm_dir / 'env'
+    detail: dict = {'mm_dir': str(mm_dir), 'env_file': str(env_file)}
+
+    if not mm_dir.is_dir():
+        return {'name': 'env_permissions', 'status': 'pass',
+                'detail': {**detail, 'reason': 'no ~/.memman directory'}}
+
+    dir_mode = stat.S_IMODE(os.stat(mm_dir).st_mode)
+    detail['dir_mode'] = oct(dir_mode)
+
+    if not env_file.is_file():
+        status = 'pass' if dir_mode & 0o077 == 0 else 'warn'
+        return {'name': 'env_permissions', 'status': status,
+                'detail': {**detail, 'reason': 'no env file yet'}}
+
+    env_mode = stat.S_IMODE(os.stat(env_file).st_mode)
+    detail['env_mode'] = oct(env_mode)
+
+    issues = []
+    if env_mode & 0o077:
+        issues.append('env file not 0600')
+    if dir_mode & 0o077:
+        issues.append('~/.memman not 0700')
+
+    detail['issues'] = issues
+    status = 'pass' if not issues else 'fail'
+    return {'name': 'env_permissions', 'status': status, 'detail': detail}
+
+
+def check_scheduler_state() -> dict:
+    """Compare persisted scheduler state against OS install/active truth.
+    """
+    from memman.setup.scheduler import status as sch_status
+
+    try:
+        s = sch_status()
+    except Exception as exc:
+        return {
+            'name': 'scheduler_state',
+            'status': 'warn',
+            'detail': {'error': f'{type(exc).__name__}: {exc}'},
+            }
+
+    installed = bool(s.get('installed'))
+    state = s.get('state')
+    drift = bool(s.get('drift'))
+
+    if drift:
+        status = 'fail'
+    elif not installed:
+        status = 'warn'
+    elif state == 'off':
+        status = 'warn'
+    else:
+        status = 'pass'
+
+    return {
+        'name': 'scheduler_state',
+        'status': status,
+        'detail': {
+            'installed': installed,
+            'state': state,
+            'active': bool(s.get('active')),
+            'drift': drift,
+            'interval_seconds': s.get('interval_seconds'),
+            },
+        }
+
+
+def check_last_worker_run(data_dir: str) -> dict:
+    """Verify the worker fired within 2 x the scheduler interval.
+
+    Surfaces "scheduler is installed but the worker is silently
+    stuck" — worker_runs is the ground truth for liveness.
+    """
+    from memman.queue import last_worker_run, open_queue_db
+    from memman.setup.scheduler import status as sch_status
+
+    try:
+        interval = sch_status().get('interval_seconds')
+    except Exception:
+        interval = None
+
+    conn = open_queue_db(data_dir)
+    try:
+        last = last_worker_run(conn)
+    finally:
+        conn.close()
+
+    if last is None:
+        return {
+            'name': 'last_worker_run',
+            'status': 'warn',
+            'detail': {'reason': 'no drains recorded yet'},
+            }
+
+    import time as _time
+    age = int(_time.time()) - int(last['started_at'])
+    detail = {
+        'started_at': last['started_at'],
+        'age_seconds': age,
+        'rows_done': last['rows_done'],
+        'rows_failed': last['rows_failed'],
+        'error': last['error'],
+        'interval_seconds': interval,
+        }
+
+    if last['error']:
+        status = 'fail'
+    elif interval and age > 2 * interval:
+        status = 'fail'
+    elif interval and age > interval + 60:
+        status = 'warn'
+    else:
+        status = 'pass'
+
+    return {'name': 'last_worker_run', 'status': status, 'detail': detail}
+
+
 def run_all_checks(db: 'DB', data_dir: str | None = None) -> dict:
     """Run all health checks and return results with overall status."""
     total = db._query(
         'SELECT COUNT(*) FROM insights WHERE deleted_at IS NULL'
         ).fetchone()[0]
-    checks = [
-        check_sqlite_integrity(db),
-        check_enrichment_coverage(db),
-        check_orphan_insights(db),
-        check_dangling_edges(db),
-        check_embedding_consistency(db),
-        check_edge_degree(db),
-        ] if total > 0 else []
+    checks = []
+    if total > 0:
+        checks.extend([
+            check_sqlite_integrity(db),
+            check_schema_columns(db),
+            check_enrichment_coverage(db),
+            check_orphan_insights(db),
+            check_dangling_edges(db),
+            check_embedding_consistency(db),
+            check_edge_degree(db),
+            ])
+    else:
+        checks.append(check_schema_columns(db))
     if data_dir:
-        checks.append(check_queue_backlog(data_dir))
-    if total == 0 and not checks:
+        checks.extend((
+            check_queue_schema(data_dir),
+            check_queue_backlog(data_dir),
+            check_last_worker_run(data_dir),
+            check_env_permissions(),
+            check_scheduler_state()))
+    if total == 0 and data_dir is None:
         return {'status': 'empty', 'total_active': 0, 'checks': []}
     statuses = [c['status'] for c in checks]
     if 'fail' in statuses:

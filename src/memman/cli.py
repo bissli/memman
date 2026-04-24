@@ -498,6 +498,11 @@ def _process_queue_row(row: 'memman.queue.QueueRow', store_data_dir: str,
         category=category,
         importance=importance)
     try:
+        from memman.store.oplog import trim_oplog_by_age
+        pruned = trim_oplog_by_age(db)
+        if pruned:
+            _trace.event('oplog_trimmed', store=row.store, rows=pruned)
+
         if row.hint_source is None:
             already = db._query(
                 'SELECT 1 FROM insights WHERE source = ?'
@@ -1342,8 +1347,10 @@ def status(ctx: click.Context) -> None:
 
 
 @cli.command()
+@click.option('--text', 'text_output', is_flag=True, default=False,
+              help='Human-readable colored output (default: JSON)')
 @click.pass_context
-def doctor(ctx: click.Context) -> None:
+def doctor(ctx: click.Context, text_output: bool) -> None:
     """Run health checks on the database."""
     from memman.doctor import run_all_checks
 
@@ -1353,9 +1360,94 @@ def doctor(ctx: click.Context) -> None:
         result['store'] = _resolve_store_name(
             ctx.obj['data_dir'], ctx.obj['store'])
         result['db_path'] = db.path
-        _json_out(result)
+        if text_output:
+            _doctor_text_report(result)
+        else:
+            _json_out(result)
     finally:
         db.close()
+
+
+@cli.group()
+def keys() -> None:
+    """Probe provider API keys."""
+
+
+@keys.command('test')
+@click.pass_context
+def keys_test(ctx: click.Context) -> None:
+    """Exercise LLM + embed endpoints with the cheapest possible call.
+
+    JSON output per provider: ok (bool), model (or None),
+    elapsed_ms, error (on failure). Intended as a "is anything
+    actually wrong with my keys?" targeted probe.
+    """
+    import time as _time
+
+    result: dict = {'providers': {}}
+
+    llm: dict = {'ok': False, 'elapsed_ms': None,
+                 'model': None, 'error': None}
+    t0 = _time.monotonic()
+    try:
+        client = _get_llm_client_or_fail()
+        out = client.complete('Reply with exactly: ok', 'probe')
+        llm['ok'] = bool(out)
+        llm['model'] = getattr(client, 'model', None)
+        llm['sample'] = (out or '')[:60]
+    except click.ClickException as exc:
+        llm['error'] = exc.message
+    except Exception as exc:
+        llm['error'] = f'{type(exc).__name__}: {exc}'
+    llm['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
+    result['providers']['llm'] = llm
+
+    embed: dict = {'ok': False, 'elapsed_ms': None,
+                   'model': None, 'error': None}
+    t0 = _time.monotonic()
+    try:
+        from memman.embed import get_client as _get_embed
+        ec = _get_embed()
+        embed['model'] = getattr(ec, 'model', None)
+        if not ec.available():
+            embed['error'] = ec.unavailable_message()
+        else:
+            vec = ec.embed('probe')
+            embed['ok'] = bool(vec)
+            embed['dim'] = len(vec) if vec else 0
+    except Exception as exc:
+        embed['error'] = f'{type(exc).__name__}: {exc}'
+    embed['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
+    result['providers']['embed'] = embed
+
+    result['ok'] = (llm['ok'] and embed['ok'])
+    _json_out(result)
+    if not result['ok']:
+        ctx.exit(1)
+
+
+def _doctor_text_report(result: dict) -> None:
+    """Render a doctor result dict as colored PASS/WARN/FAIL lines.
+    """
+    colors = {'pass': 'green', 'warn': 'yellow',
+              'fail': 'red', 'empty': 'cyan'}
+    overall = result.get('status', 'unknown')
+    click.secho(
+        f'memman doctor: {overall.upper()}',
+        fg=colors.get(overall, 'white'), bold=True)
+    click.echo(f"store: {result.get('store', '?')}")
+    click.echo(f"db:    {result.get('db_path', '?')}")
+    click.echo(f"active insights: {result.get('total_active', 0)}")
+    click.echo('')
+    for check in result.get('checks', []):
+        st = check.get('status', 'unknown')
+        click.secho(
+            f"  [{st.upper():>4}] {check.get('name', '?')}",
+            fg=colors.get(st, 'white'))
+        detail = check.get('detail') or {}
+        if detail and st != 'pass':
+            for key, value in detail.items():
+                click.echo(f'         {key}: {value}')
 
 
 @cli.command()
