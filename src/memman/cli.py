@@ -1155,7 +1155,7 @@ def scheduler_trigger(ctx: click.Context) -> None:
 
 @scheduler.group('debug', no_args_is_help=True)
 def scheduler_debug() -> None:
-    """Toggle MEMMAN_DEBUG in ~/.memman/env for scheduler-driven runs."""
+    """Toggle debug traces for scheduler-driven runs."""
 
 
 @scheduler_debug.command('on')
@@ -1185,7 +1185,7 @@ def scheduler_debug_off(ctx: click.Context) -> None:
 @scheduler_debug.command('status')
 @click.pass_context
 def scheduler_debug_status(ctx: click.Context) -> None:
-    """Show whether MEMMAN_DEBUG is set in ~/.memman/env."""
+    """Show whether debug traces are enabled."""
     from memman.setup.scheduler import get_debug
     logs_dir = pathlib.Path.home() / '.memman' / 'logs'
     debug_log = logs_dir / 'debug.log'

@@ -48,7 +48,7 @@ def _reset_trace_state():
                 pass
 
 
-def test_is_enabled_reads_env_var(monkeypatch):
+def test_is_enabled_reads_env_var(fake_home, monkeypatch):
     """is_enabled() is True when MEMMAN_DEBUG is truthy, False otherwise.
     """
     monkeypatch.delenv('MEMMAN_DEBUG', raising=False)
@@ -59,6 +59,30 @@ def test_is_enabled_reads_env_var(monkeypatch):
     assert trace.is_enabled() is True
     monkeypatch.setenv('MEMMAN_DEBUG', '0')
     assert trace.is_enabled() is False
+
+
+def test_is_enabled_reads_state_file_when_env_unset(fake_home, monkeypatch):
+    """With MEMMAN_DEBUG unset, is_enabled() falls back to ~/.memman/debug.state.
+    """
+    monkeypatch.delenv('MEMMAN_DEBUG', raising=False)
+    state_path = fake_home / '.memman' / 'debug.state'
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+
+    assert trace.is_enabled() is False
+    state_path.write_text('on\n')
+    assert trace.is_enabled() is True
+    state_path.write_text('off\n')
+    assert trace.is_enabled() is False
+
+
+def test_env_var_overrides_state_file(fake_home, monkeypatch):
+    """Truthy MEMMAN_DEBUG wins over an 'off' state file.
+    """
+    state_path = fake_home / '.memman' / 'debug.state'
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text('off\n')
+    monkeypatch.setenv('MEMMAN_DEBUG', '1')
+    assert trace.is_enabled() is True
 
 
 def test_setup_is_noop_when_disabled(fake_home, monkeypatch):

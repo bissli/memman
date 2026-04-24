@@ -1,7 +1,8 @@
 """Structured JSONL trace mode for memman debug sessions.
 
 Default off. Enabled by the `MEMMAN_DEBUG` environment variable (truthy
-values: '1', 'true', 'yes', 'on'). When enabled and `setup()` has been
+values: '1', 'true', 'yes', 'on') or, when the env var is unset, by
+'on' in `~/.memman/debug.state`. When enabled and `setup()` has been
 called, every `event(name, **fields)` call writes one JSON line to
 `~/.memman/logs/debug.log`, which is size-rotated by
 `RotatingFileHandler` to cap total disk use.
@@ -26,6 +27,7 @@ from typing import Any
 DEBUG_ENV_VAR = 'MEMMAN_DEBUG'
 TRACE_FILENAME = 'debug.log'
 LOG_DIR_NAME = 'logs'
+DEBUG_STATE_FILENAME = 'debug.state'
 MAX_BYTES = 5 * 1024 * 1024
 BACKUP_COUNT = 3
 REDACT_HEADER_NAMES = {'authorization', 'x-api-key', 'api-key'}
@@ -34,9 +36,21 @@ TRUTHY = {'1', 'true', 'yes', 'on'}
 
 
 def is_enabled() -> bool:
-    """Return True when MEMMAN_DEBUG is set to a truthy value."""
-    raw = os.environ.get(DEBUG_ENV_VAR, '').strip().lower()
-    return raw in TRUTHY
+    """Return True when trace mode is on.
+
+    Env var wins when set (truthy values in TRUTHY, anything else is
+    treated as an explicit opt-out). When the env var is unset, fall
+    back to ~/.memman/debug.state.
+    """
+    raw = os.environ.get(DEBUG_ENV_VAR)
+    if raw is not None:
+        return raw.strip().lower() in TRUTHY
+    try:
+        value = (Path.home() / '.memman' / DEBUG_STATE_FILENAME
+                 ).read_text().strip()
+    except OSError:
+        return False
+    return value == 'on'
 
 
 def _trace_path() -> Path:

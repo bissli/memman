@@ -30,6 +30,11 @@ STATE_PAUSED = 'paused'
 STATE_OFF = 'off'
 VALID_STATES = (STATE_ACTIVE, STATE_PAUSED, STATE_OFF)
 
+DEBUG_STATE_FILENAME = 'debug.state'
+DEBUG_ON = 'on'
+DEBUG_OFF = 'off'
+VALID_DEBUG_STATES = (DEBUG_ON, DEBUG_OFF)
+
 
 def _state_file_path() -> Path:
     """Return ~/.memman/scheduler.state. Per-host; never synced."""
@@ -61,6 +66,40 @@ def write_state(state: str) -> None:
 def clear_state() -> None:
     """Remove the state file if present (used on uninstall)."""
     path = _state_file_path()
+    if path.exists():
+        path.unlink()
+
+
+def _debug_state_file_path() -> Path:
+    """Return ~/.memman/debug.state. Per-host; never synced."""
+    return Path.home() / '.memman' / DEBUG_STATE_FILENAME
+
+
+def read_debug_state() -> str:
+    """Read the debug trace intent state. Missing file -> 'off'."""
+    path = _debug_state_file_path()
+    try:
+        value = path.read_text().strip()
+    except (OSError, FileNotFoundError):
+        return DEBUG_OFF
+    return value if value in VALID_DEBUG_STATES else DEBUG_OFF
+
+
+def write_debug_state(state: str) -> None:
+    """Atomically persist the debug trace intent state."""
+    if state not in VALID_DEBUG_STATES:
+        raise ValueError(f'invalid debug state {state!r}')
+    path = _debug_state_file_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp.write_text(state + '\n')
+    Path(tmp).chmod(0o600)
+    Path(tmp).replace(path)
+
+
+def clear_debug_state() -> None:
+    """Remove the debug state file if present (used on uninstall)."""
+    path = _debug_state_file_path()
     if path.exists():
         path.unlink()
 
@@ -167,26 +206,26 @@ def _write_env_file(openrouter_api_key: str,
 
 
 def set_debug(on: bool) -> list[str]:
-    """Add or remove MEMMAN_DEBUG=1 from ~/.memman/env atomically."""
-    if on:
-        return _write_env_keys({'MEMMAN_DEBUG': '1'})
-    return _write_env_keys({}, removes={'MEMMAN_DEBUG'})
+    """Toggle debug trace state in ~/.memman/debug.state atomically."""
+    value = DEBUG_ON if on else DEBUG_OFF
+    write_debug_state(value)
+    return [f'wrote {_debug_state_file_path()} = {value} (mode 600, atomic)']
 
 
 def get_debug() -> bool:
-    """Return True if ~/.memman/env contains a truthy MEMMAN_DEBUG value."""
-    raw = _read_env_file().get('MEMMAN_DEBUG', '').strip().lower()
-    return raw in {'1', 'true', 'yes', 'on'}
+    """Return True if ~/.memman/debug.state says 'on'."""
+    return read_debug_state() == DEBUG_ON
 
 
 def uninstall() -> dict:
     """Remove the scheduler unit for the current platform.
 
-    Also clears the state file. This is the full teardown path used by
-    `memman uninstall`; for a scheduler-only teardown that keeps the
+    Also clears both state files. This is the full teardown path used
+    by `memman uninstall`; for a scheduler-only teardown that keeps the
     rest of memman intact, see `off()`.
     """
     clear_state()
+    clear_debug_state()
     kind = detect_scheduler()
     if not kind:
         return {'platform': 'unknown', 'actions': []}
