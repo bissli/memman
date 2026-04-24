@@ -270,3 +270,85 @@ def test_stop_when_not_installed_is_noop(fake_home, monkeypatch):
     _no_subprocess(monkeypatch)
     result = sch.stop()
     assert result.get('note') == 'not installed'
+
+
+def _record_subprocess(monkeypatch, *, returncode: int = 0,
+                       stderr: str = '', stdout: str = 'active'):
+    """Stub subprocess.run and record every call's argv."""
+    calls: list = []
+
+    class _FakeResult:
+        def __init__(self, rc: int, out: str, err: str) -> None:
+            self.returncode = rc
+            self.stdout = out
+            self.stderr = err
+
+    def _fake_run(cmd, *args, **kwargs):
+        calls.append(list(cmd))
+        return _FakeResult(returncode, stdout, stderr)
+
+    fake = type('S', (), {
+        'run': staticmethod(_fake_run),
+        'TimeoutExpired': TimeoutError,
+        })()
+    monkeypatch.setattr(sch, 'subprocess', fake)
+    return calls
+
+
+def test_trigger_systemd_uses_no_block(
+        fake_home, fake_binary, monkeypatch):
+    """trigger() on systemd runs `systemctl --user start --no-block`.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    calls = _record_subprocess(monkeypatch)
+    sch.install(data_dir=str(fake_home),
+                openrouter_api_key='x', voyage_api_key='y')
+    calls.clear()
+
+    result = sch.trigger()
+    assert result['platform'] == 'systemd'
+    assert calls == [[
+        'systemctl', '--user', 'start', '--no-block',
+        'memman-enrich.service',
+        ]]
+
+
+def test_trigger_systemd_handles_already_running(
+        fake_home, fake_binary, monkeypatch):
+    """trigger() returns informational note when a run is already active.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    _record_subprocess(monkeypatch)
+    sch.install(data_dir=str(fake_home),
+                openrouter_api_key='x', voyage_api_key='y')
+
+    _record_subprocess(
+        monkeypatch, returncode=1,
+        stderr='Job for memman-enrich.service already running')
+    result = sch.trigger()
+    assert result['platform'] == 'systemd'
+    assert 'already' in result.get('note', '').lower()
+
+
+def test_trigger_launchd_runs_job(
+        fake_home, fake_binary, monkeypatch):
+    """trigger() on launchd runs `launchctl start com.memman.enrich`.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
+    calls = _record_subprocess(monkeypatch)
+    sch.install(data_dir=str(fake_home),
+                openrouter_api_key='x', voyage_api_key='y')
+    calls.clear()
+
+    result = sch.trigger()
+    assert result['platform'] == 'launchd'
+    assert calls == [['launchctl', 'start', 'com.memman.enrich']]
+
+
+def test_trigger_raises_when_not_installed(fake_home, monkeypatch):
+    """trigger() raises FileNotFoundError when the unit file is absent.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    _no_subprocess(monkeypatch)
+    with pytest.raises(FileNotFoundError, match='not installed'):
+        sch.trigger()

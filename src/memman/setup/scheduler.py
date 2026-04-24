@@ -189,6 +189,58 @@ def stop() -> dict:
         }
 
 
+def trigger() -> dict:
+    """Run the installed scheduler unit once, immediately.
+
+    Kicks the installed service so the drain runs under the scheduler's
+    environment and logs land where scheduled runs land. Does not
+    disturb the timer's next-fire schedule. Raises FileNotFoundError if
+    the unit file is absent (run `memman setup` first).
+    """
+    kind = detect_scheduler()
+    if not kind:
+        raise RuntimeError('no supported scheduler on this platform')
+    if kind == 'systemd':
+        service_path = _systemd_unit_dir() / SYSTEMD_SERVICE_NAME
+        if not service_path.exists():
+            raise FileNotFoundError(
+                f'scheduler unit not installed at {service_path};'
+                " run 'memman setup' first")
+        cmd = ['systemctl', '--user', 'start', '--no-block',
+               SYSTEMD_SERVICE_NAME]
+        out = subprocess.run(
+            cmd, capture_output=True, text=True, check=False)
+        if out.returncode != 0:
+            stderr = (out.stderr or '').lower()
+            if 'already' in stderr:
+                return {
+                    'platform': 'systemd',
+                    'actions': [' '.join(cmd)],
+                    'note': 'a scheduled run is already in progress;'
+                            ' see `journalctl --user -u memman-enrich`',
+                    }
+            raise RuntimeError(
+                f'systemctl start failed (rc={out.returncode}):'
+                f' {out.stderr.strip() or out.stdout.strip()}')
+        return {
+            'platform': 'systemd',
+            'actions': [' '.join(cmd)],
+            'note': 'dispatched; see `journalctl --user -u memman-enrich`',
+            }
+    plist_path = _launchd_agent_dir() / f'{LAUNCHD_LABEL}.plist'
+    if not plist_path.exists():
+        raise FileNotFoundError(
+            f'scheduler unit not installed at {plist_path};'
+            " run 'memman setup' first")
+    cmd = ['launchctl', 'start', LAUNCHD_LABEL]
+    subprocess.run(cmd, capture_output=True, text=True, check=False)
+    return {
+        'platform': 'launchd',
+        'actions': [' '.join(cmd)],
+        'note': 'dispatched; see ~/.memman/logs/enrich.log',
+        }
+
+
 def _verify_systemd_active() -> None:
     """Poll systemctl is-active; raise if the timer isn't active."""
     try:
