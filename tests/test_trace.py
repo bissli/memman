@@ -1,7 +1,7 @@
 """Tests for memman.trace -- structured debug trace mode.
 
 Trace mode is default-off. When MEMMAN_DEBUG=1 (or equivalent truthy
-value) and `trace.setup(data_dir)` is called, a TimedRotatingFileHandler
+value) and `trace.setup(data_dir)` is called, a RotatingFileHandler
 is attached to the 'memman' logger at DEBUG level and one JSON line
 per call to `trace.event(...)` is written to
 <data_dir>/logs/debug.log. The file is chmod 600. Header redaction

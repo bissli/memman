@@ -3,11 +3,11 @@
 Default off. Enabled by the `MEMMAN_DEBUG` environment variable (truthy
 values: '1', 'true', 'yes', 'on'). When enabled and `setup()` has been
 called, every `event(name, **fields)` call writes one JSON line to
-`~/.memman/logs/debug.log`, which is rotated at midnight and kept for
-14 days by `TimedRotatingFileHandler`.
+`~/.memman/logs/debug.log`, which is size-rotated by
+`RotatingFileHandler` to cap total disk use.
 
 The handler attaches to `logging.getLogger('memman')` at DEBUG level, so
-the 14 pre-existing `logger.debug()` calls across the codebase are
+the pre-existing `logger.debug()` calls across the codebase are
 captured for free in the same file.
 
 Header redaction replaces values for `Authorization`, `x-api-key`, and
@@ -26,7 +26,8 @@ from typing import Any
 DEBUG_ENV_VAR = 'MEMMAN_DEBUG'
 TRACE_FILENAME = 'debug.log'
 LOG_DIR_NAME = 'logs'
-BACKUP_COUNT = 14
+MAX_BYTES = 5 * 1024 * 1024
+BACKUP_COUNT = 3
 REDACT_HEADER_NAMES = {'authorization', 'x-api-key', 'api-key'}
 REDACT_VALUE = '***REDACTED***'
 TRUTHY = {'1', 'true', 'yes', 'on'}
@@ -96,9 +97,9 @@ def setup() -> None:
     log_path = _trace_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    handler = logging.handlers.TimedRotatingFileHandler(
+    handler = logging.handlers.RotatingFileHandler(
         filename=str(log_path),
-        when='midnight',
+        maxBytes=MAX_BYTES,
         backupCount=BACKUP_COUNT,
         encoding='utf-8',
         delay=False,
