@@ -38,6 +38,7 @@ class QueueRow:
     hint_tags: str | None
     hint_source: str | None
     hint_entities: str | None
+    hint_replaced_id: str | None
     priority: int
     queued_at: int
     attempts: int
@@ -69,6 +70,7 @@ CREATE TABLE IF NOT EXISTS queue (
     hint_tags     TEXT,
     hint_source   TEXT,
     hint_entities TEXT,
+    hint_replaced_id TEXT,
     priority      INTEGER NOT NULL DEFAULT 0,
     queued_at     INTEGER NOT NULL,
     claimed_at    INTEGER,
@@ -123,16 +125,23 @@ def enqueue(
         hint_tags: str | None = None,
         hint_source: str | None = None,
         hint_entities: str | None = None,
+        hint_replaced_id: str | None = None,
         priority: int = 0,
         ) -> int:
-    """Append a blob to the queue. Returns the new row's id."""
+    """Append a blob to the queue. Returns the new row's id.
+
+    `hint_replaced_id` carries the id of the insight to soft-delete
+    when the worker commits this row — used by `remember --defer`
+    from the `replace` subcommand.
+    """
     now = int(time.time())
     cur = conn.execute(
         'INSERT INTO queue (store, content, hint_cat, hint_imp,'
-        ' hint_tags, hint_source, hint_entities, priority, queued_at)'
-        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ' hint_tags, hint_source, hint_entities, hint_replaced_id,'
+        ' priority, queued_at)'
+        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (store, content, hint_cat, hint_imp, hint_tags, hint_source,
-         hint_entities, priority, now))
+         hint_entities, hint_replaced_id, priority, now))
     row_id = cur.lastrowid
     logger.debug(f'queued blob {row_id} for store {store}')
     return row_id
@@ -172,8 +181,8 @@ def claim(
         '    LIMIT 1'
         ' )'
         ' RETURNING id, store, content, hint_cat, hint_imp, hint_tags,'
-        '           hint_source, hint_entities, priority, queued_at,'
-        '           attempts')
+        '           hint_source, hint_entities, hint_replaced_id,'
+        '           priority, queued_at, attempts')
 
     params = [now, worker_pid, now, stale_after_seconds, *store_params]
     row = conn.execute(sql, params).fetchone()
@@ -183,7 +192,8 @@ def claim(
         id=row[0], store=row[1], content=row[2],
         hint_cat=row[3], hint_imp=row[4], hint_tags=row[5],
         hint_source=row[6], hint_entities=row[7],
-        priority=row[8], queued_at=row[9], attempts=row[10])
+        hint_replaced_id=row[8],
+        priority=row[9], queued_at=row[10], attempts=row[11])
 
 
 def mark_done(conn: sqlite3.Connection, row_id: int) -> None:

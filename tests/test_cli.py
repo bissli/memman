@@ -389,7 +389,7 @@ def test_replace_quality_rejection(runner):
     old_id = parse_remember(result)['id']
 
     result = invoke(runner, [
-        'replace', old_id,
+        'replace', '--sync', old_id,
         'Stack deployed via Terraform. 32 resources total.'])
     data = json.loads(result.output)
     assert data['action'] == 'rejected'
@@ -417,7 +417,7 @@ def test_replace_basic(runner):
     old_id = parse_remember(result)['id']
 
     result = invoke(runner, [
-        'replace', old_id,
+        'replace', '--sync', old_id,
         'Redis cache configured with 1GB memory limit for production'])
     assert result.exit_code == 0
     data = parse_remember(result)
@@ -437,7 +437,7 @@ def test_replace_inherits_metadata(runner):
     old_id = parse_remember(result)['id']
 
     result = invoke(runner, [
-        'replace', old_id,
+        'replace', '--sync', old_id,
         'Chose PostgreSQL over MySQL for JSONB and CTE support'])
     assert result.exit_code == 0
     data = parse_remember(result)
@@ -461,7 +461,7 @@ def test_replace_overrides_metadata(runner):
     old_id = parse_remember(result)['id']
 
     result = invoke(runner, [
-        'replace', old_id,
+        'replace', '--sync', old_id,
         'Switched from Nginx to Envoy for service mesh integration',
         '--cat', 'decision', '--imp', '5'])
     assert result.exit_code == 0
@@ -486,7 +486,7 @@ def test_replace_preserves_access_count(runner):
     invoke(runner, ['recall', 'Terraform modules', '--basic'])
 
     result = invoke(runner, [
-        'replace', old_id,
+        'replace', '--sync', old_id,
         'Terraform modules organized by service and environment'])
     assert result.exit_code == 0
     new_id = parse_remember(result)['id']
@@ -501,7 +501,7 @@ def test_replace_preserves_access_count(runner):
 def test_replace_nonexistent_id(runner):
     """Replace a nonexistent ID produces error."""
     result = invoke(runner, [
-        'replace', 'nonexistent-id',
+        'replace', '--sync', 'nonexistent-id',
         'Redis configured for cluster mode replication'])
     assert result.exit_code != 0
     assert 'not found' in result.output
@@ -517,7 +517,7 @@ def test_replace_already_deleted(runner):
     invoke(runner, ['forget', old_id])
 
     result = invoke(runner, [
-        'replace', old_id,
+        'replace', '--sync', old_id,
         'Kafka consumer group rebalance uses eager strategy'])
     assert result.exit_code != 0
     assert 'not found' in result.output
@@ -532,7 +532,7 @@ def test_replace_oplog_entries(runner):
     old_id = parse_remember(result)['id']
 
     result = invoke(runner, [
-        'replace', old_id,
+        'replace', '--sync', old_id,
         'Prometheus alerting rules with Grafana dashboards for SLO'])
     parse_remember(result)
 
@@ -661,7 +661,7 @@ def test_replace_creates_background_edges(runner):
     orig_id = parse_remember(r1)['id']
 
     r2 = invoke(runner, [
-        'replace', orig_id,
+        'replace', '--sync', orig_id,
         'Celery with Redis broker for distributed task processing'])
     assert r2.exit_code == 0
     new_id = parse_remember(r2)['id']

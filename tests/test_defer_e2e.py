@@ -131,6 +131,34 @@ def test_multiple_defers_single_drain(runner):
     assert drain['failed'] == 0
 
 
+def test_replace_defer_queues_with_replaced_id(runner):
+    """`replace --defer` enqueues with the replaced_id hint; drain
+    soft-deletes the old row and commits the new one.
+    """
+    r = invoke(runner, ['remember', '--sync', '--no-reconcile',
+                        'Nginx tuned with worker_connections=1024'])
+    assert r.exit_code == 0, r.output
+    old_id = last_json(r.output)['facts'][0]['id']
+
+    r = invoke(runner, ['replace', '--defer', old_id,
+                        'Nginx tuned with worker_connections=4096'])
+    assert r.exit_code == 0, r.output
+    q = last_json(r.output)
+    assert q['action'] == 'queued'
+    assert q['replaced_id'] == old_id
+
+    r = invoke(runner, ['enrich', '--pending',
+                        '--limit', '5', '--timeout', '30'])
+    assert r.exit_code == 0, r.output
+    drain = last_json(r.output)
+    assert drain['processed'] == 1
+
+    r = invoke(runner, ['recall', 'Nginx worker_connections', '--basic'])
+    hits = json.loads(r.output)['results']
+    assert not any(h['id'] == old_id for h in hits)
+    assert any('4096' in h['content'] for h in hits)
+
+
 class TestRememberDefaultSelector:
     """`remember` default mode follows scheduler state and the env override.
     """

@@ -528,7 +528,8 @@ def _process_queue_row(row: 'memman.queue.QueueRow', store_data_dir: str,
         from memman.pipeline.remember import run_remember
         result = run_remember(
             db, insight, row.content,
-            no_reconcile=False,
+            no_reconcile=bool(row.hint_replaced_id),
+            replaced_id=row.hint_replaced_id or '',
             cat_explicit=row.hint_cat is not None,
             imp_explicit=row.hint_imp is not None)
         _json_out(result)
@@ -715,12 +716,25 @@ def forget(ctx: click.Context, id: str) -> None:
 @click.option('--tags', default='', help='Comma-separated tags')
 @click.option('--source', default='user', help='Source')
 @click.option('--entities', default='', help='Comma-separated entities')
+@click.option('--reconcile/--no-reconcile', 'reconcile', default=False,
+              help=('Run LLM reconciliation against existing insights.'
+                    ' Default: skip — replace targets a specific id.'))
+@click.option('--defer/--sync', 'defer', default=None,
+              help=('Defer to background worker or run synchronously.'
+                    ' Default follows the scheduler state (same as'
+                    ' `remember`).'))
+@click.option('--priority', default=0, type=int,
+              help='Queue priority when --defer (higher drains first)')
 @click.pass_context
 def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             cat: str, imp: int, tags: str, source: str,
-            entities: str) -> None:
+            entities: str, reconcile: bool,
+            defer: bool | None, priority: int) -> None:
     """Replace an insight by ID with new content."""
     from memman.store.node import get_insight_by_id
+
+    if defer is None:
+        defer = config.resolve_remember_default()
 
     content_str = ' '.join(content)
     content_bytes = len(content_str.encode('utf-8'))
@@ -736,6 +750,49 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
     if imp < 1 or imp > 5:
         raise click.ClickException(
             f'importance must be 1-5, got {imp}')
+
+    data_dir_val = ctx.obj['data_dir']
+    store_flag = ctx.obj['store']
+    name = _resolve_store_name(data_dir_val, store_flag)
+
+    if defer:
+        from memman.queue import enqueue, open_queue_db
+        from memman.store.db import open_read_only
+
+        try:
+            ro = open_read_only(store_dir(data_dir_val, name))
+        except FileNotFoundError:
+            raise click.ClickException(
+                f'store "{name}" has no database yet; nothing to replace')
+        try:
+            old = get_insight_by_id(ro, id)
+        finally:
+            ro.close()
+        if old is None:
+            raise click.ClickException(
+                f'insight {id} not found or already deleted')
+
+        conn = open_queue_db(data_dir_val)
+        try:
+            cat_hint = cat if cat != 'general' else None
+            imp_hint = imp if imp != 3 else None
+            row_id = enqueue(
+                conn, store=name, content=content_str,
+                hint_cat=cat_hint, hint_imp=imp_hint,
+                hint_tags=tags or None,
+                hint_source=source if source != 'user' else None,
+                hint_entities=entities or None,
+                hint_replaced_id=id,
+                priority=priority)
+        finally:
+            conn.close()
+        _json_out({
+            'action': 'queued',
+            'queue_id': row_id,
+            'store': name,
+            'replaced_id': id,
+            })
+        return
 
     db = _open_db(ctx)
     try:
@@ -773,11 +830,15 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             access_count=old.access_count,
             created_at=now, updated_at=now)
 
+        from memman.exceptions import ConfigError
         from memman.pipeline.remember import run_remember
-        result = run_remember(
-            db, new_insight, content_str,
-            no_reconcile=True, replaced_id=id,
-            cat_explicit=True, imp_explicit=True)
+        try:
+            result = run_remember(
+                db, new_insight, content_str,
+                no_reconcile=not reconcile, replaced_id=id,
+                cat_explicit=True, imp_explicit=True)
+        except ConfigError as exc:
+            raise click.ClickException(str(exc)) from exc
         _json_out(result)
     finally:
         db.close()

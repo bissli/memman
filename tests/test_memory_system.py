@@ -219,7 +219,7 @@ class TestReplaceAtomicity:
         """Old content absent, new content present after replace."""
         data = remember(runner, 'team uses Flask for API layer',
                         no_reconcile=True)
-        invoke(runner, ['replace', data['id'],
+        invoke(runner, ['replace', '--sync', data['id'],
                         'team migrated to FastAPI for API layer'])
 
         hits_old = recall_basic(runner, 'Flask')
@@ -232,7 +232,7 @@ class TestReplaceAtomicity:
         data = remember(runner, 'chose event sourcing for audit trail',
                         no_reconcile=True, cat='decision', imp='5',
                         tags='arch,design')
-        result = invoke(runner, ['replace', data['id'],
+        result = invoke(runner, ['replace', '--sync', data['id'],
                                  'chose CQRS with event sourcing for audit'])
         new = parse_remember(result)
         assert 'id' in new
@@ -248,7 +248,7 @@ class TestReplaceAtomicity:
         """Replace with explicit flags overrides original metadata."""
         data = remember(runner, 'Varnish HTTP cache configured with 2GB memory for static assets',
                         no_reconcile=True, cat='fact', imp='2')
-        result = invoke(runner, ['replace', data['id'],
+        result = invoke(runner, ['replace', '--sync', data['id'],
                                  'Switched from Varnish to CloudFront CDN for global edge caching',
                                  '--cat', 'decision', '--imp', '5'])
         new = parse_remember(result)
@@ -267,7 +267,7 @@ class TestReplaceAtomicity:
                         no_reconcile=True)
         recall_basic(runner, 'PostgreSQL')
         recall_basic(runner, 'PostgreSQL')
-        result = invoke(runner, ['replace', data['id'],
+        result = invoke(runner, ['replace', '--sync', data['id'],
                                  'PostgreSQL migration from 14 to 16 required reindex of all GIN indexes'])
         new = parse_remember(result)
         hits = recall_basic(runner, 'PostgreSQL')
@@ -277,7 +277,7 @@ class TestReplaceAtomicity:
 
     def test_replace_nonexistent_id_errors(self, runner):
         """Replace with fake ID fails."""
-        result = invoke(runner, ['replace', 'nonexistent-fake-id', 'nope'])
+        result = invoke(runner, ['replace', '--sync', 'nonexistent-fake-id', 'nope'])
         assert result.exit_code != 0
 
     def test_replace_deleted_id_errors(self, runner):
@@ -286,7 +286,7 @@ class TestReplaceAtomicity:
                         'RabbitMQ queue mirroring configured for high availability',
                         no_reconcile=True)
         invoke(runner, ['forget', data['id']])
-        result = invoke(runner, ['replace', data['id'], 'too late'])
+        result = invoke(runner, ['replace', '--sync', data['id'], 'too late'])
         assert result.exit_code != 0
 
 
@@ -422,7 +422,7 @@ class TestComposition:
         hits = recall_basic(runner, 'Flask')
         assert any('Flask' in c for c in contents(hits))
 
-        invoke(runner, ['replace', x['id'],
+        invoke(runner, ['replace', '--sync', x['id'],
                         'FastAPI migration for internal tooling'])
         hits_old = recall_basic(runner, 'Flask')
         assert not any('Flask' in c for c in contents(hits_old))
@@ -582,7 +582,7 @@ class TestStatusAfterMutations:
                 f'{tech} service mesh component configured for production monitoring',
                 no_reconcile=True) for tech in techs]
         invoke(runner, ['forget', stored[0]['id']])
-        invoke(runner, ['replace', stored[1]['id'],
+        invoke(runner, ['replace', '--sync', stored[1]['id'],
                         'Jaeger distributed tracing upgraded to OpenTelemetry collector'])
         result = invoke(runner, ['status'])
         data = json.loads(result.output)
@@ -831,7 +831,7 @@ class TestOperationLog:
         data2 = remember(runner,
                          'Kibana dashboard configured for APM monitoring',
                          no_reconcile=True)
-        invoke(runner, ['replace', data2['id'],
+        invoke(runner, ['replace', '--sync', data2['id'],
                         'Kibana dashboard upgraded to Lens visualization for APM'])
 
         result = invoke(runner, ['log', '--limit', '10'])
