@@ -208,3 +208,65 @@ def test_status_launchd_parses_interval(
     assert result['platform'] == 'launchd'
     assert result['installed'] is True
     assert result['interval_seconds'] == 1200
+
+
+def test_parse_interval_non_s_unit(fake_home):
+    """Parser returns None on OnUnitActiveSec values without an 's' suffix.
+    """
+    timer_path = fake_home / 'memman-enrich.timer'
+    timer_path.write_text(
+        '[Timer]\nOnUnitActiveSec=15min\nPersistent=true\n')
+    assert sch._parse_interval_from_systemd_timer(timer_path) is None
+
+
+def test_change_interval_launchd(fake_home, fake_binary, monkeypatch):
+    """change_interval rewrites the launchd plist with a new StartInterval.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
+    _no_subprocess(monkeypatch)
+    sch.install(data_dir=str(fake_home),
+                openrouter_api_key='x',
+                voyage_api_key='y',
+                interval_seconds=900)
+    sch.change_interval(str(fake_home), 3600)
+    plist = (fake_home / 'Library' / 'LaunchAgents'
+             / 'com.memman.enrich.plist').read_text()
+    assert '<key>StartInterval</key><integer>3600</integer>' in plist
+
+
+def test_uninstall_systemd_removes_unit_files(
+        fake_home, fake_binary, monkeypatch):
+    """uninstall() removes systemd timer and service files.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    _no_subprocess(monkeypatch)
+    sch.install(data_dir=str(fake_home),
+                openrouter_api_key='x',
+                voyage_api_key='y')
+    timer_path = (fake_home / '.config' / 'systemd' / 'user'
+                  / sch.SYSTEMD_TIMER_NAME)
+    service_path = (fake_home / '.config' / 'systemd' / 'user'
+                    / sch.SYSTEMD_SERVICE_NAME)
+    assert timer_path.exists()
+    assert service_path.exists()
+    sch.uninstall()
+    assert not timer_path.exists()
+    assert not service_path.exists()
+
+
+def test_start_raises_when_not_installed(fake_home, monkeypatch):
+    """start() raises FileNotFoundError when unit files are absent.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    _no_subprocess(monkeypatch)
+    with pytest.raises(FileNotFoundError, match='not installed'):
+        sch.start()
+
+
+def test_stop_when_not_installed_is_noop(fake_home, monkeypatch):
+    """stop() returns cleanly when unit files are absent.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    _no_subprocess(monkeypatch)
+    result = sch.stop()
+    assert result.get('note') == 'not installed'

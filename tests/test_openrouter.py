@@ -196,3 +196,51 @@ def test_get_llm_client_rejects_unknown_provider(monkeypatch):
     from memman.llm.client import get_llm_client
     with pytest.raises(click.ClickException, match='unknown'):
         get_llm_client()
+
+
+def test_complete_raises_on_empty_choices(monkeypatch):
+    """complete() raises RuntimeError when choices=[].
+    """
+    monkeypatch.setattr(cache_mod, '_fetch', lambda: SAMPLE_ZDR)
+
+    def _empty_choices(url, headers=None, json=None, timeout=None):
+        return httpx.Response(
+            200,
+            request=httpx.Request('POST', url),
+            json={'choices': []})
+
+    monkeypatch.setattr(httpx, 'post', _empty_choices)
+    client = OpenRouterClient(
+        endpoint='https://openrouter.ai/api/v1',
+        api_key='fake-key')
+    with pytest.raises(RuntimeError, match='no choices'):
+        client.complete('sys', 'user')
+
+
+def test_complete_raises_on_missing_content(monkeypatch):
+    """complete() raises RuntimeError when message.content is missing.
+    """
+    monkeypatch.setattr(cache_mod, '_fetch', lambda: SAMPLE_ZDR)
+
+    def _no_content(url, headers=None, json=None, timeout=None):
+        return httpx.Response(
+            200,
+            request=httpx.Request('POST', url),
+            json={'choices': [{'message': {}}]})
+
+    monkeypatch.setattr(httpx, 'post', _no_content)
+    client = OpenRouterClient(
+        endpoint='https://openrouter.ai/api/v1',
+        api_key='fake-key')
+    with pytest.raises(RuntimeError, match='missing message.content'):
+        client.complete('sys', 'user')
+
+
+def test_read_disk_corrupt_json_returns_none(tmp_path, monkeypatch):
+    """_read_disk handles non-JSON content without raising.
+    """
+    cache_file = tmp_path / 'openrouter-zdr.json'
+    cache_file.write_text('not valid json {{{')
+    data, fresh = cache_mod._read_disk(cache_file, ttl=86400)
+    assert data is None
+    assert fresh is False

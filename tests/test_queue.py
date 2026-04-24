@@ -181,3 +181,43 @@ def test_list_rows_returns_preview(queue_conn):
     rows = list_rows(queue_conn)
     assert len(rows) == 1
     assert len(rows[0]['content_preview']) <= 80
+
+
+def test_list_rows_status_filter(queue_conn):
+    """list_rows(status=...) filters rows by status.
+    """
+    enqueue(queue_conn, 'main', 'x')
+    enqueue(queue_conn, 'main', 'y')
+    r = claim(queue_conn, worker_pid=1)
+    mark_done(queue_conn, r.id)
+    done_rows = list_rows(queue_conn, status='done')
+    pend_rows = list_rows(queue_conn, status='pending')
+    assert len(done_rows) == 1
+    assert len(pend_rows) == 1
+    assert done_rows[0]['status'] == 'done'
+    assert pend_rows[0]['status'] == 'pending'
+
+
+def test_concurrent_claim_across_two_connections(tmp_path):
+    """Atomic claim: two connections racing never claim the same row twice.
+    """
+    conn_a = open_queue_db(str(tmp_path))
+    conn_b = open_queue_db(str(tmp_path))
+    try:
+        for _ in range(10):
+            enqueue(conn_a, 'main', 'row')
+
+        claimed_ids = []
+        for _ in range(5):
+            r = claim(conn_a, worker_pid=111)
+            if r is not None:
+                claimed_ids.append(r.id)
+            r = claim(conn_b, worker_pid=222)
+            if r is not None:
+                claimed_ids.append(r.id)
+        assert len(set(claimed_ids)) == len(claimed_ids), (
+            'same row claimed by both connections')
+        assert len(claimed_ids) == 10
+    finally:
+        conn_a.close()
+        conn_b.close()
