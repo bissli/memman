@@ -118,17 +118,34 @@ periodically — no confirmation needed.
 
 ### Edge creation and enrichment
 
-All edge creation (temporal, entity, semantic, causal) and LLM enrichment
-run inline during `remember`, before it returns. Enrichment and causal
-inference run in parallel via ThreadPoolExecutor for speed.
+`memman remember` is a fast queue-append by default. The full pipeline
+— fact extraction, reconciliation, enrichment, causal inference, edge
+creation, re-embedding — runs out-of-band in a scheduler-driven
+worker (`memman enrich --pending`, fired every 15 min by systemd or
+launchd). Newly stored memories are NOT visible to `memman recall` in
+the current session; they land for future sessions.
 
-`graph rebuild` re-enriches all insights through the full LLM pipeline
-(enrichment, re-embedding, causal inference, edge recreation). Use it
-when stores have stale or missing enrichment data.
+`graph rebuild` re-enriches all already-stored insights through the
+full LLM pipeline. Use it after model or prompt changes, or to repair
+partial enrichment.
 
 `graph reindex` recalculates auto-created edges (semantic, entity,
 temporal) without LLM calls. It runs automatically on DB open when
 edge constants change.
+
+### Scheduler controls
+
+The enrichment worker runs via a user-scope systemd timer (Linux) or
+launchd agent (macOS) installed by `memman setup`. Operational
+controls (no filesystem changes):
+
+- `memman scheduler status` — show install state, interval, next run.
+- `memman scheduler disable` — pause the timer/agent (keeps unit files).
+- `memman scheduler enable` — resume after pause.
+- `memman scheduler interval --seconds N` — change cadence (min 60s).
+
+Install/uninstall belong to `memman setup` and `memman setup --eject`
+respectively.
 
 ### Pre-compaction note
 
