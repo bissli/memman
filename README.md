@@ -21,44 +21,20 @@ See [Design & Architecture](docs/DESIGN.md) for details.
 
 ## Install
 
-memman has two layers. Both are required for a working setup, and each can be removed independently.
-
-| Layer       | Installs         | Removes            |
-| ----------- | ---------------- | ------------------ |
-| Packaging   | `make install`   | `make uninstall`   |
-| Integration | `memman install` | `memman uninstall` |
-
-### 1. Install the binary
-
-Prod (isolated venv at `~/.local/share/memman/venv`, symlink at `~/.local/bin/memman`):
-
 ```bash
-git clone https://github.com/bissli/memman.git && cd memman
-make install
-```
-
-Dev (editable Poetry install — Python changes picked up automatically):
-
-```bash
-git clone https://github.com/bissli/memman.git && cd memman
-make dev
-```
-
-### 2. Install the integration
-
-Requires `OPENROUTER_API_KEY` and `VOYAGE_API_KEY` in env.
-
-```bash
+pipx install git+https://github.com/bissli/memman.git
+export OPENROUTER_API_KEY=...   # required for the background enrichment worker
+export VOYAGE_API_KEY=...       # required for embeddings
 memman install
 ```
 
-Auto-detects Claude Code / [OpenClaw](https://github.com/openclaw/openclaw) / [NanoClaw](https://github.com/qwibitai/nanoclaw) and deploys:
+`pipx install` puts the `memman` binary on your PATH. `memman install` wires integration into Claude Code, [OpenClaw](https://github.com/openclaw/openclaw), and/or [NanoClaw](https://github.com/qwibitai/nanoclaw):
 
-- skill (`~/.claude/skills/memman/SKILL.md` or equivalent)
-- lifecycle hooks (`~/.claude/hooks/mm/`)
-- behavioral guide & skill prompt (`~/.memman/prompt/`)
-- settings.json hook registrations and `Bash(memman:*)` permission
+- skill file symlinked into `~/.claude/skills/memman/SKILL.md` (or equivalent)
+- lifecycle hook scripts symlinked into `~/.claude/hooks/mm/`
+- `~/.claude/settings.json` hook registrations and `Bash(memman:*)` permission
 - scheduler unit (systemd timer on Linux, launchd agent on macOS)
+- `~/.memman/prompt/guide.local.md` stub (for user customization of the behavioral guide)
 
 Target a specific environment:
 
@@ -71,22 +47,40 @@ For NanoClaw (agents running inside Linux containers), install memman on the hos
 
 Start a new Claude Code session (or restart the OpenClaw gateway) to activate.
 
+### Customizing the behavioral guide
+
+Edit `~/.memman/prompt/guide.local.md`. Its content is appended to the shipped guide on every hook fire. The file is created with a stub on first `memman install` and is never overwritten — your edits survive re-installs and upgrades.
+
+### Development
+
+```bash
+git clone https://github.com/bissli/memman.git && cd memman
+pipx install -e . --force      # editable install — Python and asset edits go live
+memman install
+```
+
+Or for running the tests without wiring an integration:
+
+```bash
+make dev && make test
+```
+
 ## Updating
 
-| Changed                                                                          | What to run                                                                  |
-| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| Python source (dev)                                                              | Nothing — editable install picks it up                                       |
-| Python source (prod)                                                             | `make install`                                                               |
-| Hook script, `guide.md`, `SKILL.md` (any asset under `src/memman/setup/assets/`) | `memman install` — assets are copied at install time, not read from the repo |
+```bash
+pipx upgrade memman
+```
+
+That's it. Hook scripts, `SKILL.md`, and `guide.md` are symlinks into the installed package — they refresh automatically. The behavioral guide is read live via `memman guide` on each session start, so even asset-only changes propagate without re-running `memman install`.
 
 ## Uninstall
 
 ```bash
-memman uninstall   # remove hooks, skill, settings entries, scheduler unit
-make uninstall     # remove the venv and the ~/.local/bin/memman symlink
+memman uninstall            # remove hooks, skill, settings entries, scheduler unit
+pipx uninstall memman       # remove the memman binary
 ```
 
-Either can run alone. `memman uninstall` leaves `~/.memman/prompt/` (so manual customization of `guide.md` survives) and `~/.memman/env` (API keys) in place — delete them by hand for a full wipe.
+Either can run alone. `memman uninstall` never deletes anything under `~/.memman/` — your memory store, API keys, and `guide.local.md` all survive.
 
 ## How It Works
 
@@ -157,7 +151,7 @@ Different agents/processes can use different stores via the `MEMMAN_STORE` envir
 `memman install` always installs globally at `~/.claude/` (or `~/.openclaw/`). There is no local/project mode.
 
 **How do I customize the behavior?**
-Edit `~/.memman/prompt/guide.md`. This file controls when the agent recalls memories and what it considers worth remembering. The skill file (`SKILL.md`) is auto-deployed and should not need manual editing.
+Edit `~/.memman/prompt/guide.local.md`. Its content is appended to the shipped guide on every session. The file is created with a stub on first `memman install` and is never overwritten. The shipped `guide.md` and `SKILL.md` live inside the installed package and update on `pipx upgrade memman`.
 
 **How does `memman remember` work?**
 It is a fast queue-append (~50 ms). A user-scope scheduler (systemd timer on Linux, launchd agent on macOS) drains the queue every 15 min and runs the full pipeline — fact extraction, reconciliation, enrichment, causal inference, embedding — out of band. The host agent calls `memman remember` directly via Bash, no sub-agent delegation. **Newly stored memories are NOT recallable in the current session**; they become available in later sessions.
@@ -172,10 +166,10 @@ See [Usage & Reference](docs/USAGE.md#configuration) for all environment variabl
 ## Development
 
 ```bash
-make dev            # editable install with dev deps
+make dev            # editable Poetry install with dev deps (for running tests)
 make test           # unit tests (pytest)
 make e2e            # end-to-end test suite
-make install        # production install (~/.local/share/memman/venv)
+pipx install -e .   # editable pipx install (for wiring Claude Code integration)
 memman install      # deploy integration
 memman uninstall    # remove integration
 ```

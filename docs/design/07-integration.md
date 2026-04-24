@@ -143,39 +143,44 @@ Stale `stop_fired/` directories (older than 2 hours) are cleaned up by `prime.sh
 
 ## 7.3 Automated Setup
 
-`memman install` handles all deployment automatically:
+`memman install` deploys everything via symlinks to the installed package, so `pipx upgrade memman` refreshes hook scripts and SKILL.md automatically — no re-run needed:
 
 ```
 $ memman install
 
 Detecting LLM CLI environments...
-  ✓ Claude Code (v1.x)    .claude/
+  ✓ Claude Code (v1.x)    ~/.claude/
 
-Select environment: Claude Code
-Install scope: Local — this project only (.claude/)
+Setting up Claude Code (~/.claude/)...
 
-[1/3] Skill
-  ✓ Skill     .claude/skills/memman/SKILL.md
+[1/2] Skill
+  ✓ Skill     ~/.claude/skills/memman/SKILL.md
 
-[2/3] Prompts
-  ✓ Prompts   ~/.memman/prompt/ (guide.md, skill.md)
-
-[3/3] Optional hooks
-  Select hooks to enable:
-    [x] Remind  — remind agent to recall & remember (recommended)
-    [x] Nudge   — remind about memory on session end
-    [x] Compact — save context before compaction (recommended)
-    [x] Recall  — remind agent to recall before delegating (recommended)
-    [x] ExitPlan — store memories before leaving plan mode (recommended)
+[2/2] Hooks
+  ✓ Hook: prime     ~/.claude/hooks/mm/prime.sh
+  ✓ Hook: remind    ~/.claude/hooks/mm/user_prompt.sh
+  ✓ Hook: nudge     ~/.claude/hooks/mm/stop.sh
+  ✓ Hook: compact   ~/.claude/hooks/mm/compact.sh
+  ✓ Hook: recall    ~/.claude/hooks/mm/task_recall.sh
+  ✓ Hook: exit_plan ~/.claude/hooks/mm/exit_plan.sh
+  ✓ Settings         ~/.claude/settings.json (updated)
+  ✓ Permission       Bash(memman:*) added to settings.json
+  ✓ Local overrides  ~/.memman/prompt/guide.local.md
 
 Setup complete!
   Hooks   prime, remind, nudge, compact, recall, exit_plan
-  Prompts ~/.memman/prompt/ (guide.md, skill.md)
 
 Start a new Claude Code session to activate.
-Edit ~/.memman/prompt/guide.md to customize behavior.
-Run 'memman uninstall' to remove.
+Edit ~/.memman/prompt/guide.local.md to customize the agent guide.
 ```
+
+Deployment model:
+
+- `~/.claude/skills/memman/SKILL.md` → symlink into the installed package's `memman/setup/assets/claude/SKILL.md`.
+- `~/.claude/hooks/mm/*.sh` → symlinks into the same package path. `prime.sh` is a thin shim that delegates to `memman prime` (status + compact hint + guide in one Python call).
+- `~/.memman/prompt/guide.local.md` → a user-owned override file. Created with a stub on first `memman install`, never overwritten by install or uninstall.
+
+`memman guide` reads the shipped `guide.md` from the package (via `importlib.resources`) and appends `guide.local.md` when present. The hook script calls this command at session start, so edits to either file propagate on the next session without any re-install step.
 
 Key install options:
 
@@ -186,6 +191,8 @@ Key install options:
 | `memman install --target nanoclaw`    | Install into `~/.nanoclaw/` only |
 | `memman uninstall`                    | Remove all memman integrations   |
 | `memman uninstall --target <name>`    | Remove from a single environment |
+
+`memman uninstall` never deletes anything under `~/.memman/` — the memory store, API-key env file, and `guide.local.md` all survive. To fully remove the binary: `pipx uninstall memman`.
 
 The Prime hook is always installed. Remind, Nudge, Compact, Recall, and ExitPlan hooks are optional (all enabled by default).
 
