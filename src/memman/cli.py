@@ -812,10 +812,11 @@ def _process_queue_row(row: 'memman.queue.QueueRow', store_data_dir: str,
                        base_data_dir: str) -> None:
     """Run the full remember pipeline on a claimed queue row.
 
-    Idempotent via a `queue:<id>` tag on the insight's `source` field:
-    if the target store already has any insight carrying that tag, the
-    row is treated as already processed (crash-recovery from a worker
-    that committed insights but didn't reach mark_done).
+    The insight's `source` is set to `row.hint_source` when provided
+    (so the user's `--source` flag survives the queue), falling back
+    to `queue:<row.id>`. Crash-recovery idempotency is currently
+    enforced only when `hint_source` is absent; a dedicated marker
+    covering the hint_source path is scheduled for A3.
     """
     from memman.store.db import open_db as _open_store_db
 
@@ -823,7 +824,7 @@ def _process_queue_row(row: 'memman.queue.QueueRow', store_data_dir: str,
     entity_list = _parse_entities(row.hint_entities or '')
     category = row.hint_cat or 'general'
     importance = row.hint_imp if row.hint_imp is not None else 3
-    source = f'queue:{row.id}'
+    source = row.hint_source or f'queue:{row.id}'
 
     if category not in VALID_CATEGORIES:
         category = 'general'
@@ -843,18 +844,20 @@ def _process_queue_row(row: 'memman.queue.QueueRow', store_data_dir: str,
         category=category,
         importance=importance)
     try:
-        already = db._query(
-            'SELECT 1 FROM insights WHERE source = ? AND deleted_at IS NULL'
-            ' LIMIT 1', (source,)).fetchone()
-        if already is not None:
-            logger.info(
-                f'queue row {row.id} already committed to store'
-                f' {row.store!r}; skipping re-processing')
-            _trace.event(
-                'process_row_skipped',
-                row_id=row.id,
-                reason='already_committed')
-            return
+        if row.hint_source is None:
+            already = db._query(
+                'SELECT 1 FROM insights WHERE source = ?'
+                ' AND deleted_at IS NULL LIMIT 1',
+                (source,)).fetchone()
+            if already is not None:
+                logger.info(
+                    f'queue row {row.id} already committed to store'
+                    f' {row.store!r}; skipping re-processing')
+                _trace.event(
+                    'process_row_skipped',
+                    row_id=row.id,
+                    reason='already_committed')
+                return
 
         now = datetime.now(timezone.utc)
         insight = Insight(
