@@ -1,4 +1,4 @@
-"""Claude Code integration: install, eject, and setup orchestration."""
+"""Claude Code integration: install and uninstall orchestration."""
 
 import os
 import platform
@@ -8,7 +8,7 @@ from pathlib import Path
 
 import click
 from memman.setup.detect import detect_environments, home_dir
-from memman.setup.markdown import eject_memory_block
+from memman.setup.markdown import remove_memory_block
 from memman.setup.prompt import detection_line, status_error, status_ok
 from memman.setup.prompt import status_updated
 from memman.setup.scheduler import detect_scheduler
@@ -111,7 +111,7 @@ def claude_register_hooks(config_dir: str,
     return settings_path
 
 
-def claude_eject(config_dir: str) -> list[Exception]:
+def claude_uninstall(config_dir: str) -> list[Exception]:
     """Remove memman integration from the given Claude Code config dir."""
     errs: list[Exception] = []
 
@@ -202,28 +202,28 @@ def _install_claude_code(env: dict, data_dir: str) -> None:
     print()
     print('Start a new Claude Code session to activate.')
     print('Edit ~/.memman/prompt/guide.md to customize behavior.')
-    print("Run 'memman setup --eject' to remove.")
+    print("Run 'memman uninstall' to remove.")
 
     _init_default_store(data_dir)
 
 
-def _eject_markdown(file_path: str) -> None:
+def _uninstall_markdown(file_path: str) -> None:
     """Remove memory guidance block from a markdown file if present."""
-    if eject_memory_block(file_path):
+    if remove_memory_block(file_path):
         print(f'  Memory guidance removed from {file_path}')
 
 
-def _eject_env(env: dict) -> bool:
-    """Eject memman from a single environment."""
+def _uninstall_env(env: dict) -> bool:
+    """Uninstall memman from a single environment."""
     if env['name'] == 'claude-code':
-        errs = claude_eject(env['config_dir'])
-        _eject_markdown('CLAUDE.md')
+        errs = claude_uninstall(env['config_dir'])
+        _uninstall_markdown('CLAUDE.md')
         return len(errs) > 0
 
     if env['name'] == 'openclaw':
-        from memman.setup.openclaw import openclaw_eject
-        errs = openclaw_eject(env['config_dir'])
-        _eject_markdown('AGENTS.md')
+        from memman.setup.openclaw import openclaw_uninstall
+        errs = openclaw_uninstall(env['config_dir'])
+        _uninstall_markdown('AGENTS.md')
         return len(errs) > 0
 
     if env['name'] == 'nanoclaw':
@@ -234,24 +234,29 @@ def _eject_env(env: dict) -> bool:
     return False
 
 
-def run_setup(data_dir: str, target: str = '',
-              eject: bool = False) -> None:
-    """Main setup orchestrator called by cli.py."""
+def _validate_target(target: str) -> None:
+    """Raise if target is set and not one of the known environments."""
     if target and target not in {'claude-code', 'openclaw', 'nanoclaw'}:
         raise click.ClickException(
             f'invalid target {target!r}'
             ' (must be claude-code, openclaw, or nanoclaw)')
 
+
+def run_install(data_dir: str, target: str = '') -> None:
+    """Install memman integration. Called by the `memman install` command."""
+    _validate_target(target)
     envs = detect_environments()
-
-    if eject:
-        _run_eject_flow(envs, target=target)
-        return
-
     openrouter_key, voyage_key = check_prereqs()
     _run_install_flow(envs, target=target, data_dir=data_dir,
                       openrouter_key=openrouter_key,
                       voyage_key=voyage_key)
+
+
+def run_uninstall(data_dir: str, target: str = '') -> None:
+    """Remove memman integration. Called by the `memman uninstall` command."""
+    _validate_target(target)
+    envs = detect_environments()
+    _run_uninstall_flow(envs, target=target)
 
 
 def _run_install_flow(envs: list[dict], target: str,
@@ -313,13 +318,13 @@ def _install_env(env: dict, data_dir: str) -> None:
         install_nanoclaw(env, data_dir=data_dir)
 
 
-def _run_eject_flow(envs: list[dict], target: str) -> None:
-    """Eject CLI integrations and uninstall the scheduler unit."""
+def _run_uninstall_flow(envs: list[dict], target: str) -> None:
+    """Uninstall CLI integrations and remove the scheduler unit."""
     if target:
         matched = next((e for e in envs if e['name'] == target), None)
         if matched is None:
             raise click.ClickException(f'unknown target {target!r}')
-        _eject_env(matched)
+        _uninstall_env(matched)
     else:
         print('Detecting LLM CLI environments...')
         print()
@@ -337,11 +342,11 @@ def _run_eject_flow(envs: list[dict], target: str) -> None:
         else:
             err_count = 0
             for env in installed:
-                if _eject_env(env):
+                if _uninstall_env(env):
                     err_count += 1
             if err_count > 0:
                 raise click.ClickException(
-                    f'{err_count} error(s) during CLI integration eject')
+                    f'{err_count} error(s) during CLI integration uninstall')
 
     print('\n[scheduler]')
     result = uninstall_scheduler()

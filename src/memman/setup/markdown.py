@@ -1,4 +1,4 @@
-"""Markdown memory block ejection."""
+"""Markdown memory block removal."""
 
 from pathlib import Path
 
@@ -6,7 +6,7 @@ MARKER_START = '<!-- memman:start -->'
 MARKER_END = '<!-- memman:end -->'
 
 
-def eject_memory_block(file_path: str) -> bool:
+def remove_memory_block(file_path: str) -> bool:
     """Remove everything between memman markers inclusive."""
     try:
         content = Path(file_path).read_text()

@@ -17,35 +17,31 @@ These flags are available on every command:
 
 ---
 
-## Setup
+## Install / Uninstall
 
-Deploy memman into LLM CLI environments. This is the first command to run after installation.
+Deploy memman into LLM CLI environments. Run after `make install` / `make dev`.
 
 ```bash
-# Interactive: detect environments and install (project-local)
-memman setup
-
-# User-wide install (all projects)
-memman setup --global
+# Interactive: detect environments and install
+memman install
 
 # Non-interactive: specific target only
-memman setup --target claude-code
-memman setup --target openclaw
-
-# Auto-confirm all prompts (CI-friendly)
-memman setup --yes
+memman install --target claude-code
+memman install --target openclaw
 
 # Remove memman integrations
-memman setup --eject
-memman setup --eject --target claude-code
+memman uninstall
+memman uninstall --target claude-code
 ```
 
-| Flag              | Default       | Description                                                                      |
-| ----------------- | ------------- | -------------------------------------------------------------------------------- |
-| `--global`        | `false`       | Install to user-wide config (`~/.claude/`) instead of project-local (`.claude/`) |
-| `--target <name>` | (auto-detect) | Target environment: `claude-code` or `openclaw`                                  |
-| `--eject`         | `false`       | Remove memman integrations                                                       |
-| `--yes`           | `false`       | Auto-confirm all prompts                                                         |
+| Command            | `--target <name>` | Effect                                                                 |
+| ------------------ | ----------------- | ---------------------------------------------------------------------- |
+| `memman install`   | (auto-detect)     | Deploy hooks, skill, prompts, and scheduler unit                       |
+| `memman install`   | `claude-code`     | Install into `~/.claude/` only                                         |
+| `memman install`   | `openclaw`        | Install into `~/.openclaw/` only                                       |
+| `memman install`   | `nanoclaw`        | Install into `~/.nanoclaw/` only                                       |
+| `memman uninstall` | (auto-detect)     | Remove memman from every detected environment and remove the scheduler |
+| `memman uninstall` | `<name>`          | Remove memman from that environment only                               |
 
 ---
 

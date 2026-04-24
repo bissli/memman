@@ -136,7 +136,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="i_setup" value="&lt;b&gt;memman setup&lt;/b&gt; deploys all components automatically. &lt;b&gt;memman setup --eject&lt;/b&gt; removes them." style="text;html=1;align=center;fontSize=10;fillColor=none;strokeColor=none;fontColor=#666;fontStyle=2;" vertex="1" parent="1">
+        <mxCell id="i_setup" value="&lt;b&gt;memman install&lt;/b&gt; deploys all components automatically. &lt;b&gt;memman uninstall&lt;/b&gt; removes them." style="text;html=1;align=center;fontSize=10;fillColor=none;strokeColor=none;fontColor=#666;fontStyle=2;" vertex="1" parent="1">
           <mxGeometry x="200" y="1000" width="600" height="20" as="geometry" />
         </mxCell>
         <mxCell id="i_adapt" value="&lt;b&gt;Other LLM CLIs:&lt;/b&gt; Replicate hook pattern, or merge guide + skill into .cursorrules / RULES.md / system prompt" style="text;html=1;align=center;fontSize=10;fillColor=none;strokeColor=none;fontColor=#666;fontStyle=2;" vertex="1" parent="1">

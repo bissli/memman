@@ -121,7 +121,7 @@ def start() -> dict:
 
     Runs `systemctl --user enable --now` or `launchctl load -w` on the
     already-installed unit. Raises FileNotFoundError if the unit isn't
-    installed yet (user should run `memman setup` first). Raises
+    installed yet (user should run `memman install` first). Raises
     RuntimeError if the scheduler fails to become active within a short
     poll window — catches silent-no-op environments (WSL2 without
     linger, containers, CI).
@@ -135,7 +135,7 @@ def start() -> dict:
         if not timer_path.exists():
             raise FileNotFoundError(
                 f'scheduler unit not installed at {timer_path};'
-                " run 'memman setup' first")
+                " run 'memman install' first")
         subprocess.run(
             ['systemctl', '--user', 'enable', '--now',
              SYSTEMD_TIMER_NAME], check=False)
@@ -149,7 +149,7 @@ def start() -> dict:
     if not plist_path.exists():
         raise FileNotFoundError(
             f'scheduler unit not installed at {plist_path};'
-            " run 'memman setup' first")
+            " run 'memman install' first")
     subprocess.run(
         ['launchctl', 'load', '-w', str(plist_path)], check=False)
     _verify_launchd_loaded()

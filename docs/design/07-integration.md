@@ -6,7 +6,7 @@
 
 ![Integration Architecture](../diagrams/08-three-layer-integration.drawio.png)
 
-MemMan integrates with LLM CLIs through lifecycle hooks, a skill file, and a behavioral guide. Claude Code's [hook system](https://docs.anthropic.com/en/docs/claude-code/hooks) is the reference implementation — all components are deployed automatically via `memman setup`.
+MemMan integrates with LLM CLIs through lifecycle hooks, a skill file, and a behavioral guide. Claude Code's [hook system](https://docs.anthropic.com/en/docs/claude-code/hooks) is the reference implementation — all components are deployed automatically via `memman install`.
 
 ## 7.1 Integration Architecture
 
@@ -143,10 +143,10 @@ Stale `stop_fired/` directories (older than 2 hours) are cleaned up by `prime.sh
 
 ## 7.3 Automated Setup
 
-`memman setup` handles all deployment automatically:
+`memman install` handles all deployment automatically:
 
 ```
-$ memman setup
+$ memman install
 
 Detecting LLM CLI environments...
   ✓ Claude Code (v1.x)    .claude/
@@ -174,17 +174,18 @@ Setup complete!
 
 Start a new Claude Code session to activate.
 Edit ~/.memman/prompt/guide.md to customize behavior.
-Run 'memman setup --eject' to remove.
+Run 'memman uninstall' to remove.
 ```
 
 Key setup options:
 
-| Flag                   | Effect                                                                       |
-| ---------------------- | ---------------------------------------------------------------------------- |
-| `--global`             | Install to `~/.claude/` (all projects) instead of `.claude/` (project-local) |
-| `--target claude-code` | Non-interactive, Claude Code only                                            |
-| `--eject`              | Remove all memman integrations                                               |
-| `--yes`                | Auto-confirm all prompts (CI-friendly)                                       |
+| Command / Flag                        | Effect                           |
+| ------------------------------------- | -------------------------------- |
+| `memman install --target claude-code` | Install into `~/.claude/` only   |
+| `memman install --target openclaw`    | Install into `~/.openclaw/` only |
+| `memman install --target nanoclaw`    | Install into `~/.nanoclaw/` only |
+| `memman uninstall`                    | Remove all memman integrations   |
+| `memman uninstall --target <name>`    | Remove from a single environment |
 
 The Prime hook is always installed. Remind, Nudge, Compact, Recall, and ExitPlan hooks are optional (all enabled by default).
 
@@ -226,5 +227,5 @@ For CLIs with hook support, replicate the Claude Code pattern: register lifecycl
 
 For CLIs without hook support, merge the recall/remember guidance into the corresponding system prompt or rules file:
 
-- OpenClaw -> `memman setup --target openclaw` deploys skill + guide, but hooks require manual plugin configuration
+- OpenClaw -> `memman install --target openclaw` deploys skill + guide, but hooks require manual plugin configuration
 - Others -> System prompt / rules file

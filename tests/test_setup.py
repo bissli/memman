@@ -6,7 +6,7 @@ import pathlib
 import subprocess
 
 from memman.setup.claude import claude_register_hooks
-from memman.setup.markdown import eject_memory_block
+from memman.setup.markdown import remove_memory_block
 from memman.setup.settings import add_claude_hooks_selective
 from memman.setup.settings import add_memman_permission, read_json_file
 from memman.setup.settings import remove_claude_hooks
@@ -87,30 +87,30 @@ def test_add_claude_hooks_selective():
     assert 'Stop' not in hooks
 
 
-def test_eject_memory_block(tmp_path):
+def test_remove_memory_block(tmp_path):
     """Remove markers and content between them."""
     p = tmp_path / 'test.md'
     p.write_text('before\n<!-- memman:start -->\nstuff\n<!-- memman:end -->\nafter\n')
-    assert eject_memory_block(str(p)) is True
+    assert remove_memory_block(str(p)) is True
     content = p.read_text()
     assert 'memman' not in content
     assert 'before' in content
     assert 'after' in content
 
 
-def test_eject_memory_block_empty_file(tmp_path):
+def test_remove_memory_block_empty_file(tmp_path):
     """File deleted if empty after marker removal."""
     p = tmp_path / 'test.md'
     p.write_text('<!-- memman:start -->\nstuff\n<!-- memman:end -->\n')
-    assert eject_memory_block(str(p)) is True
+    assert remove_memory_block(str(p)) is True
     assert not p.exists()
 
 
-def test_eject_memory_block_no_markers(tmp_path):
+def test_remove_memory_block_no_markers(tmp_path):
     """No markers returns False."""
     p = tmp_path / 'test.md'
     p.write_text('no markers here')
-    assert eject_memory_block(str(p)) is False
+    assert remove_memory_block(str(p)) is False
 
 
 def test_add_claude_hooks_with_task_recall():

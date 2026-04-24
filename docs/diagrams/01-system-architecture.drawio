@@ -22,7 +22,7 @@
         <mxCell id="a_skill" value="&lt;b&gt;Skill&lt;/b&gt;&lt;br&gt;SKILL.md&lt;br&gt;command reference" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="560" y="90" width="140" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="a_inject" value="&lt;b&gt;memman setup&lt;/b&gt;&lt;br&gt;auto deploy / eject" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="a_inject" value="&lt;b&gt;memman install&lt;/b&gt;&lt;br&gt;auto deploy / uninstall" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="730" y="90" width="150" height="60" as="geometry" />
         </mxCell>
         <mxCell id="a_l2" value="&lt;b&gt;CLI Layer&lt;/b&gt;  cli.py (Click commands)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">

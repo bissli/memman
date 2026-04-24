@@ -32,7 +32,7 @@ Effective Importance (EI) decay formula, immunity rules, auto-pruning, GC comman
 
 ### [7. LLM CLI Integration](design/07-integration.md)
 
-Lifecycle hooks (Prime, Remind, Nudge, Compact, Recall), skill file, behavioral guide, automated setup via `memman setup`. The host agent calls `memman remember` directly via Bash — no sub-agent delegation — because the binary is a fast queue-append. Supported targets: claude-code, openclaw, nanoclaw.
+Lifecycle hooks (Prime, Remind, Nudge, Compact, Recall), skill file, behavioral guide, automated setup via `memman install`. The host agent calls `memman remember` directly via Bash — no sub-agent delegation — because the binary is a fast queue-append. Supported targets: claude-code, openclaw, nanoclaw.
 
 ### [8. Design Decisions & Future Direction](design/08-decisions.md)
 

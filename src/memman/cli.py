@@ -1226,7 +1226,7 @@ def scheduler_status(ctx: click.Context) -> None:
 @scheduler.command('enable')
 @click.pass_context
 def scheduler_enable(ctx: click.Context) -> None:
-    """Resume the scheduler (must already be installed via `memman setup`)."""
+    """Resume the scheduler (must already be installed via `memman install`)."""
     from memman.setup.scheduler import start
     try:
         result = start()
@@ -1682,12 +1682,21 @@ def graph_reindex(ctx: click.Context, dry_run: bool) -> None:
 @cli.command()
 @click.option('--target', default='',
               help='Target environment (claude-code | openclaw | nanoclaw)')
-@click.option('--eject', is_flag=True, default=False, help='Remove integration')
 @click.pass_context
-def setup(ctx: click.Context, target: str, eject: bool) -> None:
-    """Set up or remove memman: CLI integration + background scheduler."""
-    from memman.setup.claude import run_setup
-    run_setup(ctx.obj['data_dir'], target=target, eject=eject)
+def install(ctx: click.Context, target: str) -> None:
+    """Install memman integration: hooks, skill, prompts, scheduler."""
+    from memman.setup.claude import run_install
+    run_install(ctx.obj['data_dir'], target=target)
+
+
+@cli.command()
+@click.option('--target', default='',
+              help='Target environment (claude-code | openclaw | nanoclaw)')
+@click.pass_context
+def uninstall(ctx: click.Context, target: str) -> None:
+    """Remove memman integration (reverse of `memman install`)."""
+    from memman.setup.claude import run_uninstall
+    run_uninstall(ctx.obj['data_dir'], target=target)
 
 
 @graph.command('rebuild')

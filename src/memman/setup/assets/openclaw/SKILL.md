@@ -24,7 +24,7 @@ make install
 ### 2. Set up OpenClaw integration
 
 ```bash
-memman setup --target openclaw --yes
+memman install --target openclaw --yes
 ```
 
 This single command deploys all components:
@@ -65,7 +65,7 @@ Plugin hooks are configured in `~/.openclaw/openclaw.json`:
 ### 4. Uninstall
 
 ```bash
-memman setup --eject --target openclaw --yes
+memman uninstall --target openclaw --yes
 ```
 
 ## Workflow

@@ -19,55 +19,74 @@
 
 See [Design & Architecture](docs/DESIGN.md) for details.
 
-## Quick Start
+## Install
 
-### Install
+memman has two layers. Both are required for a working setup, and each can be removed independently.
 
-**From source (Poetry)**:
+| Layer       | Installs         | Removes            |
+| ----------- | ---------------- | ------------------ |
+| Packaging   | `make install`   | `make uninstall`   |
+| Integration | `memman install` | `memman uninstall` |
+
+### 1. Install the binary
+
+Prod (isolated venv at `~/.local/share/memman/venv`, symlink at `~/.local/bin/memman`):
 
 ```bash
 git clone https://github.com/bissli/memman.git && cd memman
 make install
 ```
 
-**Development**:
+Dev (editable Poetry install — Python changes picked up automatically):
 
 ```bash
 git clone https://github.com/bissli/memman.git && cd memman
 make dev
 ```
 
-### Claude Code
+### 2. Install the integration
+
+Requires `OPENROUTER_API_KEY` and `VOYAGE_API_KEY` in env.
 
 ```bash
-memman setup
+memman install
 ```
 
-`memman setup` auto-detects Claude Code, then interactively deploys skill, hooks, and behavioral guide. Start a new session — memory is active.
+Auto-detects Claude Code / [OpenClaw](https://github.com/openclaw/openclaw) / [NanoClaw](https://github.com/qwibitai/nanoclaw) and deploys:
 
-### [OpenClaw](https://github.com/openclaw/openclaw)
+- skill (`~/.claude/skills/memman/SKILL.md` or equivalent)
+- lifecycle hooks (`~/.claude/hooks/mm/`)
+- behavioral guide & skill prompt (`~/.memman/prompt/`)
+- settings.json hook registrations and `Bash(memman:*)` permission
+- scheduler unit (systemd timer on Linux, launchd agent on macOS)
+
+Target a specific environment:
 
 ```bash
-memman setup --target openclaw --yes
+memman install --target openclaw
+memman install --target claude-code
 ```
 
-Deploys skill, hook, plugin, and behavioral guide to `~/.openclaw/`. Restart the gateway to activate.
+For NanoClaw (agents running inside Linux containers), install memman on the host as above, then run the `/add-memman` skill in your NanoClaw project — it modifies the Dockerfile, adds a container skill, and wires volume mounts. Each WhatsApp group gets its own isolated store, with optional global shared memory (read-only).
 
-### [NanoClaw](https://github.com/qwibitai/nanoclaw)
+Start a new Claude Code session (or restart the OpenClaw gateway) to activate.
 
-NanoClaw runs agents inside Linux containers. Use the `/add-memman` skill to integrate:
+## Updating
 
-1. Install memman on the host (see above)
-2. In your NanoClaw project, run `/add-memman` — Claude Code will modify the Dockerfile, add a container skill, and set up volume mounts
-3. Each WhatsApp group gets its own isolated memory store, with optional global shared memory (read-only)
+| Changed                                                                          | What to run                                                                  |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Python source (dev)                                                              | Nothing — editable install picks it up                                       |
+| Python source (prod)                                                             | `make install`                                                               |
+| Hook script, `guide.md`, `SKILL.md` (any asset under `src/memman/setup/assets/`) | `memman install` — assets are copied at install time, not read from the repo |
 
-The skill is available at `.claude/skills/add-memman/` in the NanoClaw repo.
-
-### Uninstall
+## Uninstall
 
 ```bash
-memman setup --eject
+memman uninstall   # remove hooks, skill, settings entries, scheduler unit
+make uninstall     # remove the venv and the ~/.local/bin/memman symlink
 ```
+
+Either can run alone. `memman uninstall` leaves `~/.memman/prompt/` (so manual customization of `guide.md` survives) and `~/.memman/env` (API keys) in place — delete them by hand for a full wipe.
 
 ## How It Works
 
@@ -135,7 +154,7 @@ MEMMAN_STORE=work memman recall "query"  # or use env var per-process
 Different agents/processes can use different stores via the `MEMMAN_STORE` environment variable.
 
 **Install scope?**
-`memman setup` always installs globally at `~/.claude/` (or `~/.openclaw/`). There is no local/project mode.
+`memman install` always installs globally at `~/.claude/` (or `~/.openclaw/`). There is no local/project mode.
 
 **How do I customize the behavior?**
 Edit `~/.memman/prompt/guide.md`. This file controls when the agent recalls memories and what it considers worth remembering. The skill file (`SKILL.md`) is auto-deployed and should not need manual editing.
@@ -157,8 +176,8 @@ make dev            # editable install with dev deps
 make test           # unit tests (pytest)
 make e2e            # end-to-end test suite
 make install        # production install (~/.local/share/memman/venv)
-memman setup     # interactive setup
-memman setup --eject  # remove all integrations
+memman install      # deploy integration
+memman uninstall    # remove integration
 ```
 
 **Dependencies**: Python 3.11+, Click, httpx, cachetools, tqdm. **Required**: `OPENROUTER_API_KEY` and `VOYAGE_API_KEY` for the background worker; `ANTHROPIC_API_KEY` is optional (session-path query expansion degrades gracefully when unset).

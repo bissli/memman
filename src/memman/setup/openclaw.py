@@ -1,4 +1,4 @@
-"""OpenClaw integration: install, eject."""
+"""OpenClaw integration: install, uninstall."""
 
 import json
 import os
@@ -115,7 +115,7 @@ def openclaw_register_plugin(config_dir: str,
     return cfg_path
 
 
-def openclaw_eject(config_dir: str) -> list[Exception]:
+def openclaw_uninstall(config_dir: str) -> list[Exception]:
     """Remove memman skill, hook, and plugin from OpenClaw."""
     errs: list[Exception] = []
 
@@ -202,6 +202,6 @@ def install_openclaw(env: dict, data_dir: str) -> None:
     print()
     print('Restart the OpenClaw gateway to activate.')
     print('Edit ~/.memman/prompt/guide.md to customize behavior.')
-    print("Run 'memman setup --eject' to remove.")
+    print("Run 'memman uninstall' to remove.")
 
     _init_default_store(data_dir)
