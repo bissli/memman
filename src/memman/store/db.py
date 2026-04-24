@@ -139,8 +139,15 @@ def open_db(data_dir: str) -> DB:
     if stored_hash != current_hash:
         stats = reindex_auto_edges(db)
         set_meta(db, 'constants_hash', current_hash)
-        logger.debug(
-            f'auto-reindex on constants change: {stats}')
+        if stored_hash is not None:
+            logger.warning(
+                f'edge constants changed (hash {stored_hash} ->'
+                f' {current_hash}); reindexed edges and cleared'
+                ' linked_at. Run `memman graph rebuild` to re-embed'
+                ' and re-enrich.')
+        else:
+            logger.debug(
+                f'initial constants hash set: {current_hash}')
 
     return db
 

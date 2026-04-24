@@ -164,7 +164,15 @@ def link_pending(
 
 
 def compute_constants_hash() -> str:
-    """Return a short SHA-256 hash of all edge-relevant constants."""
+    """Return a short SHA-256 hash of all edge-relevant constants.
+
+    The embedding model name is included so that a provider or model
+    swap (e.g. voyage-3-lite -> voyage-3, 512-dim -> 1024-dim) trips
+    the reindex path. Without this, new-dim vectors would cosine
+    against old-dim vectors to 0.0 silently.
+    """
+    from memman.embed.voyage import DEFAULT_MODEL as EMBED_MODEL
+
     blob = json.dumps({
         'auto_semantic_threshold': AUTO_SEMANTIC_THRESHOLD,
         'min_proximity_weight': MIN_PROXIMITY_WEIGHT,
@@ -172,6 +180,7 @@ def compute_constants_hash() -> str:
         'max_entity_links': MAX_ENTITY_LINKS,
         'max_total_entity_edges': MAX_TOTAL_ENTITY_EDGES,
         'max_proximity_edges': MAX_PROXIMITY_EDGES,
+        'embed_model': EMBED_MODEL,
         }, sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
