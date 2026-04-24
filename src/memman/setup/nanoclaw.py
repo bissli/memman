@@ -10,19 +10,13 @@ is invokable.
 """
 
 import shutil
-from importlib.resources import files as pkg_files
 from pathlib import Path
 
+from memman.setup.deploy import symlink_asset
 from memman.setup.prompt import status_ok
 from memman.setup.settings import remove_if_empty
 
 SKILL_NAME = 'add-memman'
-
-
-def _asset_bytes(rel_path: str) -> bytes:
-    """Read an embedded asset file."""
-    return (pkg_files('memman.setup.assets')
-            .joinpath(rel_path).read_bytes())
 
 
 def _claude_skill_dir() -> Path:
@@ -33,14 +27,11 @@ def _claude_skill_dir() -> Path:
 def install_nanoclaw(env: dict, data_dir: str) -> None:
     """Install the /add-memman agentic skill into Claude Code's skills dir."""
     skill_dir = _claude_skill_dir()
-    skill_dir.mkdir(parents=True, exist_ok=True)
     skill_path = skill_dir / 'SKILL.md'
-    skill_path.write_bytes(_asset_bytes('nanoclaw/SKILL.md'))
-    skill_path.chmod(0o644)
-
     container_path = skill_dir / 'container-skill.md'
-    container_path.write_bytes(_asset_bytes('nanoclaw/container-skill.md'))
-    container_path.chmod(0o644)
+
+    symlink_asset('nanoclaw/SKILL.md', skill_path)
+    symlink_asset('nanoclaw/container-skill.md', container_path)
 
     print(f'\nSetting up NanoClaw integration ({skill_dir})...')
     status_ok('Skill', str(skill_path))

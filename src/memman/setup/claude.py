@@ -3,10 +3,10 @@
 import os
 import platform
 import shutil
-from importlib.resources import files as pkg_files
 from pathlib import Path
 
 import click
+from memman.setup.deploy import symlink_asset
 from memman.setup.detect import detect_environments, home_dir
 from memman.setup.markdown import remove_memory_block
 from memman.setup.prompt import detection_line, status_error, status_ok
@@ -20,6 +20,11 @@ from memman.setup.settings import add_memman_permission, read_json_file
 from memman.setup.settings import remove_claude_hooks, remove_if_empty
 from memman.setup.settings import remove_memman_permission, write_json_file
 from memman.setup.settings import write_or_remove_json_file
+
+GUIDE_LOCAL_STUB = (
+    '<!-- memman local overrides — survive install re-runs and upgrades -->\n'
+    '<!-- Content below is appended to the shipped guide. -->\n'
+    )
 
 
 def check_prereqs() -> tuple[str, str]:
@@ -51,46 +56,28 @@ def check_prereqs() -> tuple[str, str]:
     return openrouter_key, voyage_key
 
 
-def _asset_bytes(rel_path: str) -> bytes:
-    """Read an embedded asset file."""
-    return (pkg_files('memman.setup.assets')
-            .joinpath(rel_path).read_bytes())
-
-
-def write_prompt_files() -> str:
-    """Write guide.md and skill.md to ~/.memman/prompt/."""
-    prompt_dir = os.path.join(home_dir(), '.memman', 'prompt')
-    Path(prompt_dir).mkdir(mode=0o755, exist_ok=True, parents=True)
-
-    guide_path = os.path.join(prompt_dir, 'guide.md')
-    Path(guide_path).write_bytes(_asset_bytes('claude/guide.md'))
-    Path(guide_path).chmod(0o644)
-
-    skill_path = os.path.join(prompt_dir, 'skill.md')
-    Path(skill_path).write_bytes(_asset_bytes('claude/SKILL.md'))
-    Path(skill_path).chmod(0o644)
-
-    return prompt_dir
+def write_guide_local_stub() -> Path:
+    """Create ~/.memman/prompt/guide.local.md if absent; return path."""
+    path = Path(home_dir()) / '.memman' / 'prompt' / 'guide.local.md'
+    if not path.is_file():
+        path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        path.write_text(GUIDE_LOCAL_STUB)
+        path.chmod(0o644)
+    return path
 
 
 def claude_write_skill(config_dir: str) -> str:
-    """Write the memman skill to the config dir."""
-    skill_dir = os.path.join(config_dir, 'skills', 'memman')
-    Path(skill_dir).mkdir(mode=0o755, exist_ok=True, parents=True)
-    skill_path = os.path.join(skill_dir, 'SKILL.md')
-    Path(skill_path).write_bytes(_asset_bytes('claude/SKILL.md'))
-    Path(skill_path).chmod(0o644)
-    return skill_path
+    """Symlink the memman skill into the config dir."""
+    link = Path(config_dir) / 'skills' / 'memman' / 'SKILL.md'
+    symlink_asset('claude/SKILL.md', link)
+    return str(link)
 
 
-def claude_write_hook(config_dir: str, filename: str, content: bytes) -> str:
-    """Write a hook script to the hooks dir."""
-    hooks_dir = os.path.join(config_dir, 'hooks', 'mm')
-    Path(hooks_dir).mkdir(mode=0o755, exist_ok=True, parents=True)
-    hook_path = os.path.join(hooks_dir, filename)
-    Path(hook_path).write_bytes(content)
-    Path(hook_path).chmod(0o755)
-    return hook_path
+def claude_write_hook(config_dir: str, filename: str) -> str:
+    """Symlink a hook script into the config dir."""
+    link = Path(config_dir) / 'hooks' / 'mm' / filename
+    symlink_asset(f'claude/{filename}', link)
+    return str(link)
 
 
 def claude_register_hooks(config_dir: str,
@@ -163,16 +150,12 @@ def _install_claude_code(env: dict, data_dir: str) -> None:
 
     print(f'\nSetting up Claude Code ({config_dir})...')
 
-    print('\n[1/3] Skill')
+    print('\n[1/2] Skill')
     path = claude_write_skill(config_dir)
     status_ok('Skill', path)
 
-    print('\n[2/3] Prompts')
-    path = write_prompt_files()
-    status_ok('Prompts', path)
-
-    print('\n[3/3] Hooks')
-    hook_assets = [
+    print('\n[2/2] Hooks')
+    hook_filenames = [
         ('prime.sh', 'prime'),
         ('user_prompt.sh', 'remind'),
         ('stop.sh', 'nudge'),
@@ -180,9 +163,8 @@ def _install_claude_code(env: dict, data_dir: str) -> None:
         ('task_recall.sh', 'recall'),
         ('exit_plan.sh', 'exit_plan'),
         ]
-    for filename, label in hook_assets:
-        path = claude_write_hook(
-            config_dir, filename, _asset_bytes(f'claude/{filename}'))
+    for filename, label in hook_filenames:
+        path = claude_write_hook(config_dir, filename)
         status_ok(f'Hook: {label}', path)
 
     path = claude_register_hooks(config_dir)
@@ -195,14 +177,15 @@ def _install_claude_code(env: dict, data_dir: str) -> None:
     status_ok('Permission',
               'Bash(memman:*) added to settings.json')
 
+    stub_path = write_guide_local_stub()
+    status_ok('Local overrides', str(stub_path))
+
     print()
     print('Setup complete!')
     print('  Hooks   prime, remind, nudge, compact, recall, exit_plan')
-    print('  Prompts ~/.memman/prompt/ (guide.md, skill.md)')
     print()
     print('Start a new Claude Code session to activate.')
-    print('Edit ~/.memman/prompt/guide.md to customize behavior.')
-    print("Run 'memman uninstall' to remove.")
+    print(f'Edit {stub_path} to customize the agent guide.')
 
     _init_default_store(data_dir)
 

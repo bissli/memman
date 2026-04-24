@@ -608,3 +608,93 @@ def test_prime_command_reads_compact_flag_trigger(tmp_path, monkeypatch):
     result = runner.invoke(cli, ['prime'], input=payload)
     assert result.exit_code == 0
     assert 'compacted (manual)' in result.output
+
+
+def test_claude_write_skill_creates_symlink(tmp_path):
+    """claude_write_skill creates a symlink to the shipped SKILL.md."""
+    from importlib.resources import files as pkg_files
+    from memman.setup.claude import claude_write_skill
+    config = tmp_path / 'claude'
+    link_path = claude_write_skill(str(config))
+    link = pathlib.Path(link_path)
+    assert link.is_symlink()
+    target = pathlib.Path(str(pkg_files('memman.setup.assets')
+                              .joinpath('claude/SKILL.md'))).resolve()
+    assert link.resolve() == target
+
+
+def test_claude_write_hook_creates_symlink(tmp_path):
+    """claude_write_hook creates a symlink to the shipped hook script."""
+    from importlib.resources import files as pkg_files
+    from memman.setup.claude import claude_write_hook
+    config = tmp_path / 'claude'
+    link_path = claude_write_hook(str(config), 'prime.sh')
+    link = pathlib.Path(link_path)
+    assert link.is_symlink()
+    target = pathlib.Path(str(pkg_files('memman.setup.assets')
+                              .joinpath('claude/prime.sh'))).resolve()
+    assert link.resolve() == target
+
+
+def test_symlink_replaces_stale_symlink(tmp_path):
+    """Re-install replaces a dangling symlink with a live one."""
+    from memman.setup.claude import claude_write_skill
+    config = tmp_path / 'claude'
+    link = config / 'skills' / 'memman' / 'SKILL.md'
+    link.parent.mkdir(parents=True)
+    link.symlink_to('/nonexistent/path')
+    assert link.is_symlink()
+    assert not link.exists()
+    claude_write_skill(str(config))
+    assert link.is_symlink()
+    assert link.exists()
+
+
+def test_symlink_replaces_regular_file(tmp_path):
+    """Re-install replaces a pre-existing regular file with a symlink."""
+    from memman.setup.claude import claude_write_skill
+    config = tmp_path / 'claude'
+    link = config / 'skills' / 'memman' / 'SKILL.md'
+    link.parent.mkdir(parents=True)
+    link.write_text('stale pre-symlink content')
+    assert not link.is_symlink()
+    claude_write_skill(str(config))
+    assert link.is_symlink()
+
+
+def test_write_guide_local_stub_creates_when_absent(tmp_path, monkeypatch):
+    """write_guide_local_stub creates the file with skeleton content."""
+    monkeypatch.setattr(
+        'memman.setup.claude.home_dir', lambda: str(tmp_path))
+    from memman.setup.claude import GUIDE_LOCAL_STUB, write_guide_local_stub
+    path = write_guide_local_stub()
+    assert path.is_file()
+    assert path.read_text() == GUIDE_LOCAL_STUB
+
+
+def test_write_guide_local_stub_preserves_existing(tmp_path, monkeypatch):
+    """write_guide_local_stub never overwrites an existing file."""
+    monkeypatch.setattr(
+        'memman.setup.claude.home_dir', lambda: str(tmp_path))
+    prompt_dir = tmp_path / '.memman' / 'prompt'
+    prompt_dir.mkdir(parents=True)
+    existing = prompt_dir / 'guide.local.md'
+    existing.write_text('USER-CUSTOMIZED-CONTENT\n')
+    from memman.setup.claude import write_guide_local_stub
+    write_guide_local_stub()
+    assert existing.read_text() == 'USER-CUSTOMIZED-CONTENT\n'
+
+
+def test_uninstall_removes_symlink_not_target(tmp_path):
+    """claude_uninstall removes the symlink without touching the target."""
+    from importlib.resources import files as pkg_files
+    from memman.setup.claude import claude_uninstall, claude_write_skill
+    config = tmp_path / 'claude'
+    claude_write_skill(str(config))
+    target = pathlib.Path(str(pkg_files('memman.setup.assets')
+                              .joinpath('claude/SKILL.md'))).resolve()
+    target_bytes = target.read_bytes()
+    claude_uninstall(str(config))
+    assert not (config / 'skills' / 'memman' / 'SKILL.md').exists()
+    assert target.exists()
+    assert target.read_bytes() == target_bytes
