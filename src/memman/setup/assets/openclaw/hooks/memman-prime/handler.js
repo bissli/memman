@@ -1,16 +1,10 @@
-import { readFileSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
 import { execSync } from "child_process";
-
-const GUIDE_PATH = join(homedir(), ".memman", "prompt", "guide.md");
 
 const handler = async (event) => {
   if (event.type !== "agent" || event.action !== "bootstrap") return;
 
   const parts = [];
 
-  // Inject memman status summary
   try {
     const status = execSync("memman status 2>/dev/null", {
       timeout: 3000,
@@ -28,12 +22,14 @@ const handler = async (event) => {
     parts.push("[memman] Memory active.");
   }
 
-  // Inject behavioral guide
   try {
-    const guide = readFileSync(GUIDE_PATH, "utf-8");
+    const guide = execSync("memman guide 2>/dev/null", {
+      timeout: 3000,
+      encoding: "utf-8",
+    });
     if (guide) parts.push(guide);
   } catch {
-    // guide.md not found — skill-only mode, no guide injection
+    // memman not on PATH — skill-only mode, no guide injection
   }
 
   if (parts.length === 0) return;

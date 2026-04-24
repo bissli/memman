@@ -698,3 +698,53 @@ def test_uninstall_removes_symlink_not_target(tmp_path):
     assert not (config / 'skills' / 'memman' / 'SKILL.md').exists()
     assert target.exists()
     assert target.read_bytes() == target_bytes
+
+
+def test_prime_hook_emits_guide_content(tmp_path):
+    """prime.sh with memman on PATH emits guide content via `memman prime`.
+    """
+    from importlib.resources import files as pkg_files
+    script = str(pkg_files('memman.setup.assets')
+                 .joinpath('claude/prime.sh'))
+
+    shim_dir = tmp_path / 'shim-bin'
+    shim_dir.mkdir()
+    shim = shim_dir / 'memman'
+    shim.write_text(
+        '#!/bin/bash\n'
+        'cat <<EOF\n'
+        '[memman] Memory active.\n'
+        'SHIM-GUIDE-MARKER\n'
+        'EOF\n'
+        )
+    shim.chmod(0o755)
+
+    env = {
+        **os.environ,
+        'HOME': str(tmp_path),
+        'PATH': f'{shim_dir}:{os.environ.get("PATH", "")}',
+        }
+    result = subprocess.run(
+        ['bash', script],
+        check=False, input='{}',
+        capture_output=True, text=True,
+        env=env)
+    assert result.returncode == 0
+    assert 'SHIM-GUIDE-MARKER' in result.stdout
+
+
+def test_prime_hook_warns_when_memman_missing(tmp_path):
+    """prime.sh emits a warning and exits cleanly when memman is not on PATH.
+    """
+    from importlib.resources import files as pkg_files
+    script = str(pkg_files('memman.setup.assets')
+                 .joinpath('claude/prime.sh'))
+
+    env = {'HOME': str(tmp_path), 'PATH': '/usr/bin:/bin'}
+    result = subprocess.run(
+        ['/bin/bash', script],
+        check=False, input='{}',
+        capture_output=True, text=True,
+        env=env)
+    assert result.returncode == 0
+    assert 'not on PATH' in result.stdout
