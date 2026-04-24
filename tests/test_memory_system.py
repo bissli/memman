@@ -63,7 +63,7 @@ def recall_basic(runner_tuple, keyword):
     """Recall via --basic (SQL LIKE on single keyword), return list."""
     result = invoke(runner_tuple, ['recall', keyword, '--basic'])
     assert result.exit_code == 0, result.output
-    return json.loads(result.output)
+    return json.loads(result.output)['results']
 
 
 def recall_smart(runner_tuple, query, **flags):
@@ -745,7 +745,7 @@ class TestStoreIsolation:
 
         result = invoke(runner, ['--store', 'work', 'recall',
                                  'secret', '--basic'])
-        work_hits = json.loads(result.output)
+        work_hits = json.loads(result.output)['results']
         assert any('secret' in c for c in contents(work_hits))
 
     def test_forget_in_one_store_does_not_affect_another(self, runner):
@@ -763,7 +763,7 @@ class TestStoreIsolation:
 
         result_b = invoke(runner, ['--store', 'beta', 'recall',
                                    'Terraform', '--basic'])
-        beta_hits = json.loads(result_b.output)
+        beta_hits = json.loads(result_b.output)['results']
         assert any('terraform' in c.lower() for c in contents(beta_hits))
 
 

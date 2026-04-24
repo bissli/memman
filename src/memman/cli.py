@@ -567,7 +567,10 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                 r.access_count += 1
             log_op(db, 'recall:basic', '',
                    f'q={keyword_str} hits={len(results)}')
-            _json_out([_insight_to_dict(r) for r in results])
+            _json_out({
+                'results': [_insight_to_dict(r) for r in results],
+                'meta': {'basic': True},
+                })
             return
 
         llm_client = _get_llm_client_or_fail()

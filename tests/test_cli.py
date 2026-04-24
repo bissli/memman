@@ -124,14 +124,15 @@ def test_remember_does_not_link_old_pending_insights(runner, monkeypatch):
 
 
 def test_recall_basic_mode(runner):
-    """Basic recall returns array."""
+    """Basic recall returns {results: [...], meta: {basic: True}}."""
     invoke(runner, [
         'remember', '--sync', 'Go uses SQLite for persistent storage',
         '--no-reconcile'])
     result = invoke(runner, ['recall', 'Go SQLite', '--basic'])
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert isinstance(data, list)
+    assert data['meta']['basic'] is True
+    assert isinstance(data['results'], list)
 
 
 def test_search_basic(runner):
@@ -491,7 +492,7 @@ def test_replace_preserves_access_count(runner):
     new_id = parse_remember(result)['id']
 
     result = invoke(runner, ['recall', 'Terraform modules', '--basic'])
-    hits = json.loads(result.output)
+    hits = json.loads(result.output)['results']
     match = [h for h in hits if h['id'] == new_id]
     assert match
     assert match[0]['access_count'] >= 2
