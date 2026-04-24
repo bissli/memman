@@ -174,7 +174,10 @@ CREATE TABLE IF NOT EXISTS insights (
     enriched_at TEXT,
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
-    deleted_at  TEXT
+    deleted_at  TEXT,
+    prompt_version TEXT,
+    model_id    TEXT,
+    embedding_model TEXT
 );
 
 CREATE TABLE IF NOT EXISTS edges (
@@ -217,42 +220,16 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 """
 
-_MIGRATIONS: list[tuple[int, list[str]]] = [
-    # Future schema changes are appended here as
-    # (version, ['SQL statement', ...]). Each migration runs in its own
-    # BEGIN IMMEDIATE transaction and bumps PRAGMA user_version on success.
-    ]
-
-CURRENT_USER_VERSION = 1
-
-
 def _migrate(db: DB) -> None:
-    """Run idempotent baseline schema and any pending versioned migrations.
+    """Apply the canonical schema to the database.
+
+    Single-user tool: one authoritative schema (`_BASELINE_SCHEMA`),
+    always the latest. `CREATE TABLE IF NOT EXISTS` creates fresh
+    databases; existing databases are expected to already match.
+
+    When a column is added to the schema here, the author also ALTERs
+    their own `~/.memman/data/*/memman.db` files once (a one-off
+    maintenance step); after that, every open through this function
+    is a no-op.
     """
-    current = db._conn.execute('PRAGMA user_version').fetchone()[0]
-
-    if current > CURRENT_USER_VERSION:
-        raise RuntimeError(
-            f'memman.db has user_version={current} but this build'
-            f' expects <= {CURRENT_USER_VERSION}; refusing to open a'
-            ' database written by a newer memman')
-
     db._conn.executescript(_BASELINE_SCHEMA)
-    if current < 1:
-        db._conn.execute('PRAGMA user_version = 1')
-        current = 1
-
-    for version, statements in _MIGRATIONS:
-        if current >= version:
-            continue
-        try:
-            db._conn.execute('BEGIN IMMEDIATE')
-            for stmt in statements:
-                db._conn.execute(stmt)
-            db._conn.execute(f'PRAGMA user_version = {version}')
-            db._conn.execute('COMMIT')
-        except Exception:
-            db._conn.execute('ROLLBACK')
-            raise
-        current = version
-        logger.info(f'memman.db migrated to version {version}')

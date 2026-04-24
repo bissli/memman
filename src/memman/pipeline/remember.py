@@ -17,6 +17,8 @@ re-runs the whole pipeline cleanly. This closes the partial-write
 fact-loss gap for a single queue row.
 """
 
+import functools
+import hashlib
 import logging
 import pathlib
 import uuid
@@ -48,6 +50,26 @@ from memman.store.node import update_enrichment, update_entities
 from memman.store.oplog import log_op
 
 logger = logging.getLogger('memman')
+
+
+@functools.lru_cache(maxsize=1)
+def compute_prompt_version() -> str:
+    """Return a 16-char SHA-256 hash of the write-path system prompts.
+
+    Covers every system prompt that can mutate what lands in the store
+    (fact extraction, reconciliation, LLM enrichment, LLM causal
+    inference). Query-time prompts (QUERY_EXPANSION) are excluded
+    because they don't affect stored content. The hash is cached for
+    the life of the process — the prompts are module-level constants.
+    """
+    from memman.graph.causal import LLM_SYSTEM_PROMPT as CAUSAL_PROMPT
+    from memman.graph.enrichment import ENRICHMENT_SYSTEM_PROMPT
+    from memman.llm.extract import FACT_EXTRACTION_SYSTEM
+    from memman.llm.extract import RECONCILIATION_SYSTEM
+
+    blob = f'{FACT_EXTRACTION_SYSTEM}\x00{RECONCILIATION_SYSTEM}\x00{ENRICHMENT_SYSTEM_PROMPT}\x00{CAUSAL_PROMPT}'
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
 
 SIMILARITY_RECONCILE_THRESHOLD = 0.5
 MAX_SIMILAR_FOR_RECONCILE = 10
@@ -133,6 +155,9 @@ def run_remember(
 
     plans: list[FactPlan] = []
     pending_replaced_id = replaced_id
+    prompt_version = compute_prompt_version()
+    llm_model_id = getattr(llm_client, 'model', None)
+    embed_model = getattr(ec, 'model', None)
     for fact in facts:
         plan, calls = _plan_fact(
             fact, insight, pending_replaced_id, no_reconcile,
@@ -141,6 +166,11 @@ def run_remember(
             data_dir_for_ro)
         llm_calls += calls
         pending_replaced_id = ''
+
+        if plan.fact_insight is not None:
+            plan.fact_insight.prompt_version = prompt_version
+            plan.fact_insight.model_id = llm_model_id
+            plan.fact_insight.embedding_model = embed_model
 
         if plan.target_id and plan.action in {
                 'delete', 'update', 'replace'}:

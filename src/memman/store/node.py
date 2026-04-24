@@ -16,15 +16,24 @@ PRUNE_BATCH_SIZE = 10
 
 
 def insert_insight(db: 'DB', i: Insight) -> None:
-    """Insert a new insight into the database."""
+    """Insert a new insight into the database.
+
+    Persists provenance columns (prompt_version, model_id,
+    embedding_model) as NULL when the Insight has not been stamped by
+    the pipeline — e.g. tests and manual fixtures that build Insights
+    directly. Production writes through `pipeline.remember` always
+    stamp these.
+    """
     db._exec(
         'INSERT INTO insights'
         ' (id, content, category, importance, tags, entities,'
-        '  source, access_count, created_at, updated_at)'
-        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        '  source, access_count, created_at, updated_at,'
+        '  prompt_version, model_id, embedding_model)'
+        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (i.id, i.content, i.category, i.importance,
          i.tags_json(), i.entities_json(), i.source, i.access_count,
-         format_timestamp(i.created_at), format_timestamp(i.updated_at)))
+         format_timestamp(i.created_at), format_timestamp(i.updated_at),
+         i.prompt_version, i.model_id, i.embedding_model))
 
 
 def get_insight_by_id(db: 'DB', id: str) -> Insight | None:

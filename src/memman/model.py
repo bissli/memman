@@ -33,6 +33,9 @@ class Insight:
     deleted_at: datetime | None = None
     last_accessed_at: datetime | None = None
     effective_importance: float = 0.0
+    prompt_version: str | None = None
+    model_id: str | None = None
+    embedding_model: str | None = None
 
     def tags_json(self) -> str:
         """Return tags as a JSON string for storage."""

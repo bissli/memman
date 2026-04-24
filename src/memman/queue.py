@@ -88,74 +88,14 @@ CREATE INDEX IF NOT EXISTS idx_queue_store
     ON queue(store);
 """
 
-_MIGRATION_V2_ADD_STALE_STATUS = [
-    'ALTER TABLE queue RENAME TO queue_legacy_v1',
-    """
-    CREATE TABLE queue (
-        id            INTEGER PRIMARY KEY AUTOINCREMENT,
-        store         TEXT NOT NULL,
-        content       TEXT NOT NULL,
-        hint_cat      TEXT,
-        hint_imp      INTEGER,
-        hint_tags     TEXT,
-        hint_source   TEXT,
-        hint_entities TEXT,
-        priority      INTEGER NOT NULL DEFAULT 0,
-        queued_at     INTEGER NOT NULL,
-        claimed_at    INTEGER,
-        worker_pid    INTEGER,
-        attempts      INTEGER NOT NULL DEFAULT 0,
-        status        TEXT NOT NULL DEFAULT 'pending'
-                      CHECK(status IN ('pending','done','failed','stale')),
-        last_error    TEXT,
-        processed_at  INTEGER
-    )
-    """,
-    'INSERT INTO queue SELECT * FROM queue_legacy_v1',
-    'DROP TABLE queue_legacy_v1',
-    ("CREATE INDEX IF NOT EXISTS idx_queue_ready"
-     " ON queue(status, priority DESC, queued_at ASC)"
-     " WHERE status = 'pending'"),
-    'CREATE INDEX IF NOT EXISTS idx_queue_store ON queue(store)',
-    ]
-
-_MIGRATIONS: list[tuple[int, list[str]]] = [
-    (2, _MIGRATION_V2_ADD_STALE_STATUS),
-    ]
-
-CURRENT_USER_VERSION = 2
-
-
 def _migrate(conn: sqlite3.Connection) -> None:
-    """Run idempotent baseline schema and any pending versioned migrations.
+    """Apply the canonical queue schema.
+
+    Single-user tool: one authoritative schema (`_BASELINE_SCHEMA`),
+    always the latest. `CREATE TABLE IF NOT EXISTS` creates fresh
+    queue databases; existing databases are expected to already match.
     """
-    current = conn.execute('PRAGMA user_version').fetchone()[0]
-
-    if current > CURRENT_USER_VERSION:
-        raise RuntimeError(
-            f'queue.db has user_version={current} but this build'
-            f' expects <= {CURRENT_USER_VERSION}; refusing to open a'
-            ' queue written by a newer memman')
-
     conn.executescript(_BASELINE_SCHEMA)
-    if current < 1:
-        conn.execute('PRAGMA user_version = 1')
-        current = 1
-
-    for version, statements in _MIGRATIONS:
-        if current >= version:
-            continue
-        try:
-            conn.execute('BEGIN IMMEDIATE')
-            for stmt in statements:
-                conn.execute(stmt)
-            conn.execute(f'PRAGMA user_version = {version}')
-            conn.execute('COMMIT')
-        except Exception:
-            conn.execute('ROLLBACK')
-            raise
-        current = version
-        logger.info(f'queue.db migrated to version {version}')
 
 
 def enqueue(
