@@ -2001,9 +2001,23 @@ def embed_status(ctx: click.Context) -> None:
 _REEMBED_BATCH = 50
 
 
+def _count_active_rows(sdir: str) -> int:
+    """Return the count of non-deleted insights in the given store.
+    """
+    from memman.store.db import open_read_only
+
+    db = open_read_only(sdir)
+    try:
+        return db._query(
+            'SELECT COUNT(*) FROM insights WHERE deleted_at IS NULL'
+            ).fetchone()[0]
+    finally:
+        db.close()
+
+
 def _reembed_one_store(
         sdir: str, ec: 'EmbeddingProvider', target: 'Fingerprint',
-        dry_run: bool) -> dict:
+        dry_run: bool, bar: 'tqdm | None' = None) -> dict:
     """Re-embed a single store with the active client.
 
     Walk all active insights, comparing each to `target`. Skip rows
@@ -2018,6 +2032,7 @@ def _reembed_one_store(
     from memman.store.node import update_embedding
     from memman.store.oplog import log_op
 
+    store_name = pathlib.Path(sdir).name
     db = open_db(sdir)
     try:
         cur_state = get_meta(db, 'embed_reembed_state')
@@ -2032,6 +2047,9 @@ def _reembed_one_store(
                 set_meta(db, 'embed_reembed_cursor', '')
             db.in_transaction(_start_sweep)
             cursor = ''
+
+        if bar is not None:
+            bar.set_description(f'reembed {store_name}')
 
         while True:
             rows = db._query(
@@ -2056,7 +2074,8 @@ def _reembed_one_store(
                     blob = serialize_vector(new_vec)
 
                     def _write_row() -> None:
-                        update_embedding(db, row_id, blob, target.model)
+                        update_embedding(
+                            db, row_id, blob, target.model)
                         set_meta(db, 'embed_reembed_cursor', row_id)
                     db.in_transaction(_write_row)
                     reembedded += 1
@@ -2064,8 +2083,9 @@ def _reembed_one_store(
                     if not dry_run:
                         set_meta(db, 'embed_reembed_cursor', row_id)
                 cursor = row_id
+                if bar is not None:
+                    bar.update(1)
 
-        store_name = pathlib.Path(sdir).name
         if dry_run:
             return {
                 'store': store_name,
@@ -2131,16 +2151,29 @@ def embed_reembed(ctx: click.Context, dry_run: bool) -> None:
     data_dir = ctx.obj['data_dir']
     names = list_stores(data_dir)
 
+    grand_total = sum(
+        _count_active_rows(store_dir(data_dir, name)) for name in names)
+    bar = tqdm(
+        total=grand_total, desc='reembed', unit='row',
+        file=sys.stderr, dynamic_ncols=True,
+        disable=not sys.stderr.isatty())
+
     per_store = []
     total_scanned = 0
     total_reembedded = 0
-    for name in names:
-        sdir = store_dir(data_dir, name)
-        result = _reembed_one_store(sdir, ec, target, dry_run)
-        per_store.append(result)
-        total_scanned += result.get('scanned', 0)
-        total_reembedded += result.get(
-            'reembedded' if not dry_run else 'would_reembed', 0)
+    try:
+        for name in names:
+            sdir = store_dir(data_dir, name)
+            result = _reembed_one_store(
+                sdir, ec, target, dry_run, bar=bar)
+            per_store.append(result)
+            total_scanned += result.get('scanned', 0)
+            total_reembedded += result.get(
+                'reembedded' if not dry_run else 'would_reembed', 0)
+            bar.set_postfix(
+                reembedded=total_reembedded, refresh=False)
+    finally:
+        bar.close()
 
     out: dict = {
         'fingerprint': {
