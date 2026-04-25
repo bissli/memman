@@ -133,7 +133,7 @@
         <mxCell id="r_e7b" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_cau_cand" target="r_out">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="r_llm" value="&lt;b&gt;LLM evaluates candidates&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;decides which to link via:&lt;br&gt;memman link &amp;lt;src&amp;gt; &amp;lt;tgt&amp;gt; --type semantic|causal&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;dashed=1;" vertex="1" parent="1">
+        <mxCell id="r_llm" value="&lt;b&gt;LLM evaluates candidates&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;decides which to link via:&lt;br&gt;memman graph link &amp;lt;src&amp;gt; &amp;lt;tgt&amp;gt; --type semantic|causal&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="280" y="1300" width="340" height="55" as="geometry" />
         </mxCell>
         <mxCell id="r_e8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;dashed=1;strokeColor=#82b366;" edge="1" parent="1" source="r_out" target="r_llm">
