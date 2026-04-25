@@ -1,0 +1,30 @@
+name: Live Claude
+
+# Manual-only workflow for the in-container live Claude Code session
+# test. Runs on demand (workflow_dispatch). Burns real Anthropic budget,
+# so it never runs on push or PR.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  live-claude:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install poetry && poetry install
+
+      - name: Run live Claude e2e
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+        run: make e2e-claude
