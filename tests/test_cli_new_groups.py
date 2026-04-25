@@ -54,15 +54,15 @@ def _patch_no_subprocess(monkeypatch, *, active: bool = True):
 def test_enrich_requires_pending(runner):
     """`memman enrich` without --pending errors out.
     """
-    result = invoke(runner, ['enrich'])
+    result = invoke(runner, ['scheduler', 'drain'])
     assert result.exit_code != 0
     assert 'pending' in result.output.lower()
 
 
 def test_enrich_pending_empty_queue(runner):
-    """`memman enrich --pending` on an empty queue returns processed=0.
+    """`memman scheduler drain --pending` on an empty queue returns processed=0.
     """
-    result = invoke(runner, ['enrich', '--pending', '--limit', '5',
+    result = invoke(runner, ['scheduler', 'drain', '--pending', '--limit', '5',
                              '--timeout', '5'])
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
@@ -72,10 +72,10 @@ def test_enrich_pending_empty_queue(runner):
 
 
 def test_queue_list_returns_stats_and_rows(runner):
-    """`memman queue list` wraps rows in a {stats, rows} envelope.
+    """`memman scheduler queue list` wraps rows in a {stats, rows} envelope.
     """
     invoke(runner, ['remember', '--defer', 'hello queue'])
-    result = invoke(runner, ['queue', 'list'])
+    result = invoke(runner, ['scheduler', 'queue', 'list'])
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
     assert 'stats' in data
@@ -85,9 +85,9 @@ def test_queue_list_returns_stats_and_rows(runner):
 
 
 def test_queue_list_failed_same_shape(runner):
-    """`memman queue list-failed` returns the same envelope as `queue list`.
+    """`memman scheduler queue failed` returns the same envelope as `queue list`.
     """
-    result = invoke(runner, ['queue', 'list-failed'])
+    result = invoke(runner, ['scheduler', 'queue', 'failed'])
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
     assert 'stats' in data
@@ -95,25 +95,25 @@ def test_queue_list_failed_same_shape(runner):
 
 
 def test_queue_cat_missing_errors(runner):
-    """`memman queue cat <missing-id>` surfaces a clean error.
+    """`memman scheduler queue show <missing-id>` surfaces a clean error.
     """
-    result = invoke(runner, ['queue', 'cat', '999'])
+    result = invoke(runner, ['scheduler', 'queue', 'show', '999'])
     assert result.exit_code != 0
     assert 'not found' in result.output.lower()
 
 
 def test_queue_purge_requires_done(runner):
-    """`memman queue purge` without --done errors out.
+    """`memman scheduler queue purge` without --done errors out.
     """
-    result = invoke(runner, ['queue', 'purge'])
+    result = invoke(runner, ['scheduler', 'queue', 'purge'])
     assert result.exit_code != 0
     assert '--done' in result.output
 
 
 def test_queue_retry_noop_on_unknown(runner):
-    """`memman queue retry <missing-id>` surfaces a clean error.
+    """`memman scheduler queue retry <missing-id>` surfaces a clean error.
     """
-    result = invoke(runner, ['queue', 'retry', '999'])
+    result = invoke(runner, ['scheduler', 'queue', 'retry', '999'])
     assert result.exit_code != 0
 
 
@@ -140,13 +140,13 @@ def test_scheduler_status_reports_not_installed(runner, monkeypatch):
 
 
 def test_scheduler_resume_fails_when_not_installed(runner, monkeypatch):
-    """`memman scheduler resume` errors when unit files are missing.
+    """`memman scheduler enable` errors when unit files are missing.
     """
     _patch_no_subprocess(monkeypatch)
     monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
     monkeypatch.setattr(Path, 'home',
                         lambda: Path(runner[1]))
-    result = invoke(runner, ['scheduler', 'resume'])
+    result = invoke(runner, ['scheduler', 'enable'])
     assert result.exit_code != 0
     assert 'not installed' in result.output.lower()
 

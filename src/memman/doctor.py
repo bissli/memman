@@ -344,16 +344,38 @@ def check_scheduler_state() -> dict:
 def check_last_worker_run(data_dir: str) -> dict:
     """Verify the worker fired within 2 x the scheduler interval.
 
-    Surfaces "scheduler is installed but the worker is silently
-    stuck" — worker_runs is the ground truth for liveness.
+    Cross-references scheduler state: only fails when the scheduler is
+    installed AND active but no recent worker_runs row exists. In paused
+    or disabled states a stale `last_worker_run` is expected.
+
+    This is the rename-agnostic catch-all that detects ExecStart drift,
+    PATH changes, chmod regressions, and other silent-failure modes
+    without ever inspecting the unit file's text.
     """
     from memman.queue import last_worker_run, open_queue_db
+    from memman.setup.scheduler import STATE_ACTIVE
     from memman.setup.scheduler import status as sch_status
 
     try:
-        interval = sch_status().get('interval_seconds')
+        s = sch_status()
+        interval = s.get('interval_seconds')
+        state = s.get('state')
+        installed = s.get('installed', False)
     except Exception:
         interval = None
+        state = None
+        installed = False
+
+    if not installed or state != STATE_ACTIVE:
+        return {
+            'name': 'last_worker_run',
+            'status': 'pass',
+            'detail': {
+                'reason': f'scheduler state is {state!r}; no drain expected',
+                'installed': installed,
+                'state': state,
+                },
+            }
 
     conn = open_queue_db(data_dir)
     try:
@@ -364,8 +386,14 @@ def check_last_worker_run(data_dir: str) -> dict:
     if last is None:
         return {
             'name': 'last_worker_run',
-            'status': 'warn',
-            'detail': {'reason': 'no drains recorded yet'},
+            'status': 'fail',
+            'detail': {
+                'reason': 'scheduler is active but no drains recorded yet;'
+                ' check ~/.memman/logs/enrich.err and re-run `memman install`'
+                ' if the unit was upgraded',
+                'state': state,
+                'interval_seconds': interval,
+                },
             }
 
     import time as _time
@@ -377,18 +405,96 @@ def check_last_worker_run(data_dir: str) -> dict:
         'rows_failed': last['rows_failed'],
         'error': last['error'],
         'interval_seconds': interval,
+        'state': state,
         }
 
     if last['error']:
         status = 'fail'
     elif interval and age > 2 * interval:
         status = 'fail'
+        detail['reason'] = (
+            'scheduler is active but worker has not fired in '
+            f'{age}s (interval={interval}s); check '
+            '~/.memman/logs/enrich.err')
     elif interval and age > interval + 60:
         status = 'warn'
     else:
         status = 'pass'
 
     return {'name': 'last_worker_run', 'status': status, 'detail': detail}
+
+
+def check_llm_probe() -> dict:
+    """Probe the LLM endpoint with the cheapest possible call.
+
+    Verifies API key validity + endpoint reachability. Subsumes what
+    used to be `memman keys test`'s LLM check.
+    """
+    import time as _time
+
+    detail: dict = {
+        'model': None,
+        'elapsed_ms': None,
+        'sample': None,
+        'error': None,
+        }
+    t0 = _time.monotonic()
+    try:
+        from memman.exceptions import ConfigError
+        from memman.llm.client import get_llm_client
+        try:
+            client = get_llm_client()
+        except ConfigError as exc:
+            detail['error'] = str(exc)
+            detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
+            return {'name': 'llm_probe', 'status': 'fail', 'detail': detail}
+        out = client.complete('Reply with exactly: ok', 'probe')
+        detail['model'] = getattr(client, 'model', None)
+        detail['sample'] = (out or '')[:60]
+        detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
+        if out:
+            return {'name': 'llm_probe', 'status': 'pass', 'detail': detail}
+        detail['error'] = 'empty response'
+        return {'name': 'llm_probe', 'status': 'fail', 'detail': detail}
+    except Exception as exc:
+        detail['error'] = f'{type(exc).__name__}: {exc}'
+        detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
+        return {'name': 'llm_probe', 'status': 'fail', 'detail': detail}
+
+
+def check_embed_probe() -> dict:
+    """Probe the embedding endpoint with the cheapest possible call.
+
+    Subsumes what used to be `memman keys test`'s embed check.
+    """
+    import time as _time
+
+    detail: dict = {
+        'model': None,
+        'elapsed_ms': None,
+        'dim': None,
+        'error': None,
+        }
+    t0 = _time.monotonic()
+    try:
+        from memman.embed import get_client
+        ec = get_client()
+        detail['model'] = getattr(ec, 'model', None)
+        if not ec.available():
+            detail['error'] = ec.unavailable_message()
+            detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
+            return {'name': 'embed_probe', 'status': 'fail', 'detail': detail}
+        vec = ec.embed('probe')
+        detail['dim'] = len(vec) if vec else 0
+        detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
+        if vec:
+            return {'name': 'embed_probe', 'status': 'pass', 'detail': detail}
+        detail['error'] = 'empty embedding'
+        return {'name': 'embed_probe', 'status': 'fail', 'detail': detail}
+    except Exception as exc:
+        detail['error'] = f'{type(exc).__name__}: {exc}'
+        detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
+        return {'name': 'embed_probe', 'status': 'fail', 'detail': detail}
 
 
 def run_all_checks(db: 'DB', data_dir: str | None = None) -> dict:
@@ -415,7 +521,9 @@ def run_all_checks(db: 'DB', data_dir: str | None = None) -> dict:
             check_queue_backlog(data_dir),
             check_last_worker_run(data_dir),
             check_env_permissions(),
-            check_scheduler_state()))
+            check_scheduler_state(),
+            check_llm_probe(),
+            check_embed_probe()))
     if total == 0 and data_dir is None:
         return {'status': 'empty', 'total_active': 0, 'checks': []}
     statuses = [c['status'] for c in checks]

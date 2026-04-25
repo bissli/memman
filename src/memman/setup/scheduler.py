@@ -1,8 +1,8 @@
-"""Background-scheduler setup for memman enrich worker.
+"""Background-scheduler setup for the memman drain worker.
 
 Detects platform (systemd on Linux, launchd on macOS) and writes the
-appropriate user-scope unit / plist that runs `memman enrich --pending`
-every 15 min. Units handle sleep/power-off catch-up natively.
+appropriate user-scope unit / plist that runs `memman scheduler drain
+--pending` every 15 min. Units handle sleep/power-off catch-up natively.
 
 The scheduler path always routes through OpenRouter with ZDR enforced.
 Both OPENROUTER_API_KEY and VOYAGE_API_KEY are written to `~/.memman/env`
@@ -132,7 +132,7 @@ def install(data_dir: str,
 
     Writes both API keys to ~/.memman/env at mode 600 (merging with any
     existing keys) and installs the timer/plist that runs
-    `memman enrich --pending` at the given interval.
+    `memman scheduler drain --pending` at the given interval.
     """
     kind = detect_scheduler()
     if not kind:
@@ -482,7 +482,7 @@ def _install_systemd(binary: str, data_dir: str,
         'Environment=MEMMAN_WORKER=1\n'
         f'EnvironmentFile={env_file}\n'
         f'ExecStartPre=/bin/mkdir -p {Path.home()}/.memman/logs\n'
-        f'ExecStart={binary} enrich --pending --timeout {exec_timeout}\n'
+        f'ExecStart={binary} scheduler drain --pending --timeout {exec_timeout}\n'
         'StandardOutput=append:%h/.memman/logs/enrich.log\n'
         'StandardError=append:%h/.memman/logs/enrich.err\n')
 
@@ -545,7 +545,7 @@ def _install_launchd(binary: str, data_dir: str,
         f'[ -f {env_file_q} ] && . {env_file_q}\n'
         f'export MEMMAN_DATA_DIR={data_dir_q}\n'
         'export MEMMAN_WORKER=1\n'
-        f'exec {binary_q} enrich --pending --timeout {exec_timeout}\n')
+        f'exec {binary_q} scheduler drain --pending --timeout {exec_timeout}\n')
 
     log_path = logs_dir / 'enrich.log'
     err_path = logs_dir / 'enrich.err'

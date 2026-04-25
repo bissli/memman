@@ -121,11 +121,6 @@ def _open_db(ctx: click.Context) -> 'DB':
     return db
 
 
-def _trunc_id(id: str) -> str:
-    """Truncate an ID to 8 characters for display."""
-    return id[:8] if len(id) > 8 else id
-
-
 def _parse_since(since: str) -> str:
     """Parse a relative time string (e.g. '7d', '24h') to ISO timestamp."""
     m = re.match(r'^(\d+)([dhm])$', since)
@@ -208,7 +203,7 @@ def _parse_entities(entities: str) -> list[str]:
 @click.pass_context
 def cli(ctx: click.Context, data_dir: str | None, store_name: str,
         readonly: bool, verbose: bool, debug: bool) -> None:
-    """Memory daemon for LLM agents."""
+    """Persistent memory store for LLM agents."""
     if data_dir is None:
         data_dir = os.environ.get(config.DATA_DIR, default_data_dir())
     _configure_logging(data_dir, verbose, debug)
@@ -216,6 +211,135 @@ def cli(ctx: click.Context, data_dir: str | None, store_name: str,
     ctx.obj['data_dir'] = data_dir
     ctx.obj['store'] = store_name
     ctx.obj['readonly'] = readonly
+
+
+@cli.group()
+def graph() -> None:
+    """Graph operations on insights and edges."""
+
+
+@cli.group(no_args_is_help=True)
+def scheduler() -> None:
+    """Async write pipeline: scheduler state, queue, worker logs."""
+
+
+@scheduler.group('queue', invoke_without_command=True)
+@click.pass_context
+def queue(ctx: click.Context) -> None:
+    """Inspect and manage the deferred-write queue."""
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(queue_list)
+
+
+@cli.group()
+def insights() -> None:
+    """Operations on stored insights (read, prune, protect)."""
+
+
+@cli.group()
+def log() -> None:
+    """View memman logs (operation audit, worker, debug trace)."""
+
+
+@cli.group(name='config')
+def config_cmd() -> None:
+    """Read-only inspection of effective settings.
+
+    To CHANGE settings, use the co-located setter for each subsystem:
+    `scheduler interval --seconds N`, `scheduler debug on/off`,
+    `store use <name>`, or env vars (MEMMAN_REMEMBER_DEFAULT,
+    MEMMAN_LLM_MODEL, etc).
+    """
+
+
+@config_cmd.command('show')
+@click.pass_context
+def config_show(ctx: click.Context) -> None:
+    """Dump effective config: env vars + on-disk files + defaults.
+
+    Each value is reported with its source (env / file / default) so
+    the operator can trace where a setting comes from.
+    """
+    effective = config.enumerate_effective_config()
+    data_dir = ctx.obj['data_dir']
+    out: dict = {
+        'data_dir': data_dir,
+        'env': effective,
+        'files': {},
+        'active_store': _resolve_store_name(data_dir, ctx.obj['store']),
+        }
+    try:
+        from memman.setup.scheduler import (
+            DEBUG_STATE_FILENAME, STATE_FILENAME, _debug_state_file_path,
+            _state_file_path, read_debug_state, read_state)
+        out['files']['scheduler.state'] = {
+            'path': str(_state_file_path()),
+            'value': read_state(),
+            }
+        out['files']['debug.state'] = {
+            'path': str(_debug_state_file_path()),
+            'value': read_debug_state(),
+            }
+    except ImportError:
+        pass
+    try:
+        from memman.setup.scheduler import status as scheduler_status_fn
+        s = scheduler_status_fn()
+        out['scheduler'] = {
+            'state': s.get('state'),
+            'installed': s.get('installed'),
+            'platform': s.get('platform'),
+            'interval_seconds': s.get('interval_seconds'),
+            }
+    except Exception:
+        pass
+    _json_out(out)
+
+
+@config_cmd.command('get')
+@click.argument('key')
+@click.pass_context
+def config_get(ctx: click.Context, key: str) -> None:
+    """Print the value of one effective config key (env or file)."""
+    effective = config.enumerate_effective_config()
+    if key in effective:
+        _json_out({key: effective[key]})
+        return
+    if key == 'scheduler.state':
+        from memman.setup.scheduler import read_state
+        _json_out({key: read_state()})
+        return
+    if key == 'debug':
+        from memman.setup.scheduler import read_debug_state
+        _json_out({key: read_debug_state()})
+        return
+    if key == 'store.active':
+        active = _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store'])
+        _json_out({key: active})
+        return
+    if key == 'data_dir':
+        _json_out({key: ctx.obj['data_dir']})
+        return
+    raise click.ClickException(
+        f'unknown config key: {key} (try `memman config show`)')
+
+
+@config_cmd.command('path')
+@click.pass_context
+def config_path(ctx: click.Context) -> None:
+    """Print the locations of memman's on-disk config files."""
+    from memman.setup.scheduler import (
+        _debug_state_file_path, _env_file_path, _state_file_path)
+    from memman.store.db import active_file
+
+    out = {
+        'data_dir': ctx.obj['data_dir'],
+        'active_store_pointer': active_file(ctx.obj['data_dir']),
+        'scheduler_state': str(_state_file_path()),
+        'debug_state': str(_debug_state_file_path()),
+        'env_file': str(_env_file_path()),
+        }
+    _json_out(out)
 
 
 @cli.command()
@@ -317,7 +441,7 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     _json_out(result)
 
 
-@cli.command()
+@scheduler.command('drain', hidden=True)
 @click.option('--pending', is_flag=True, default=False,
               help='Drain the deferred-write queue')
 @click.option('--limit', default=100, type=int,
@@ -326,20 +450,24 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
               help='Max wall-clock seconds per invocation')
 @click.option('--stores', default='',
               help='Comma-separated store names; default all')
-@click.option('--verbose', is_flag=True, default=False,
+@click.option('--progress', is_flag=True, default=False,
               help='Echo per-blob progress')
-@click.option('--debug', is_flag=True, default=False,
+@click.option('--trace', is_flag=True, default=False,
               help='Write structured trace to ~/.memman/logs/debug.log')
 @click.pass_context
-def enrich(ctx: click.Context, pending: bool, limit: int,
-           timeout: int, stores: str, verbose: bool, debug: bool) -> None:
-    """Background enrichment worker (drains the queue)."""
+def scheduler_drain(ctx: click.Context, pending: bool, limit: int,
+                    timeout: int, stores: str, progress: bool,
+                    trace: bool) -> None:
+    """Run the worker drain loop. Hidden: invoked by the systemd/launchd
+    unit's ExecStart. Operators should use `scheduler trigger` to kick
+    the unit, or `scheduler queue list` to inspect pending rows.
+    """
     if not pending:
         raise click.ClickException(
             'only --pending mode is supported; pass --pending explicitly')
-    if debug:
+    if trace:
         os.environ[config.DEBUG] = '1'
-    _drain_queue(ctx, limit, timeout, stores, verbose)
+    _drain_queue(ctx, limit, timeout, stores, progress)
 
 
 def _drain_queue(ctx: click.Context, limit: int, timeout: int,
@@ -647,42 +775,6 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
 
 
 @cli.command()
-@click.argument('query', nargs=-1, required=True)
-@click.option('--limit', default=10, type=int, help='Max results')
-@click.pass_context
-def search(ctx: click.Context, query: tuple[str, ...], limit: int) -> None:
-    """Token-based keyword search."""
-    from memman.search.keyword import keyword_search
-    from memman.store.node import get_all_active_insights
-    from memman.store.node import increment_access_count
-    from memman.store.oplog import log_op
-
-    query_str = ' '.join(query)
-    db = _open_db(ctx)
-    try:
-        all_insights = get_all_active_insights(db)
-        results = keyword_search(all_insights, query_str, limit)
-        for ins, _score in results:
-            increment_access_count(db, ins.id)
-        log_op(db, 'search', '',
-               f'q={query_str} hits={len(results)}')
-        out = [
-            {
-                'id': ins.id,
-                'content': ins.content,
-                'category': ins.category,
-                'importance': ins.importance,
-                'tags': ins.tags,
-                'score': score,
-                }
-            for ins, score in results
-            ]
-        _json_out(out)
-    finally:
-        db.close()
-
-
-@cli.command()
 @click.argument('id')
 @click.pass_context
 def forget(ctx: click.Context, id: str) -> None:
@@ -844,15 +936,15 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         db.close()
 
 
-@cli.command()
+@graph.command('link')
 @click.argument('source_id')
 @click.argument('target_id')
 @click.option('--type', 'edge_type', default='semantic', help='Edge type')
 @click.option('--weight', default=0.5, type=float, help='Edge weight')
 @click.option('--meta', default='', help='JSON metadata')
 @click.pass_context
-def link(ctx: click.Context, source_id: str, target_id: str,
-         edge_type: str, weight: float, meta: str) -> None:
+def graph_link(ctx: click.Context, source_id: str, target_id: str,
+               edge_type: str, weight: float, meta: str) -> None:
     """Create a manual edge between two insights."""
     from memman.store.edge import insert_edge
     from memman.store.node import get_insight_by_id
@@ -934,13 +1026,13 @@ def link(ctx: click.Context, source_id: str, target_id: str,
         db.close()
 
 
-@cli.command()
+@graph.command('related')
 @click.argument('id')
 @click.option('--edge', default='', help='Filter by edge type')
 @click.option('--depth', default=2, type=int, help='Max traversal depth')
 @click.pass_context
-def related(ctx: click.Context, id: str, edge: str,
-            depth: int) -> None:
+def graph_related(ctx: click.Context, id: str, edge: str,
+                  depth: int) -> None:
     """Find connected insights via graph traversal."""
     from memman.graph.bfs import BFSOptions, bfs
 
@@ -965,14 +1057,6 @@ def related(ctx: click.Context, id: str, edge: str,
         db.close()
 
 
-@cli.group(invoke_without_command=True)
-@click.pass_context
-def queue(ctx: click.Context) -> None:
-    """Inspect and manage the deferred-write queue."""
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(queue_list)
-
-
 @queue.command('list')
 @click.option('--limit', default=50, type=int, help='Max results')
 @click.pass_context
@@ -989,10 +1073,10 @@ def queue_list(ctx: click.Context, limit: int) -> None:
         conn.close()
 
 
-@queue.command('list-failed')
+@queue.command('failed')
 @click.option('--limit', default=50, type=int, help='Max results')
 @click.pass_context
-def queue_list_failed(ctx: click.Context, limit: int) -> None:
+def queue_failed(ctx: click.Context, limit: int) -> None:
     """List failed queue rows."""
     from memman.queue import STATUS_FAILED, list_rows, open_queue_db, stats
     conn = open_queue_db(ctx.obj['data_dir'])
@@ -1005,10 +1089,10 @@ def queue_list_failed(ctx: click.Context, limit: int) -> None:
         conn.close()
 
 
-@queue.command('cat')
+@queue.command('show')
 @click.argument('row_id', type=int)
 @click.pass_context
-def queue_cat(ctx: click.Context, row_id: int) -> None:
+def queue_show(ctx: click.Context, row_id: int) -> None:
     """Print the full content of a queue row."""
     from memman.queue import get_row, open_queue_db
     conn = open_queue_db(ctx.obj['data_dir'])
@@ -1055,11 +1139,6 @@ def queue_purge(ctx: click.Context, done: bool) -> None:
         conn.close()
 
 
-@cli.group(no_args_is_help=True)
-def scheduler() -> None:
-    """Manage the background enrichment scheduler."""
-
-
 @scheduler.command('status')
 @click.pass_context
 def scheduler_status(ctx: click.Context) -> None:
@@ -1095,35 +1174,12 @@ def scheduler_status(ctx: click.Context) -> None:
     _json_out(result)
 
 
-@scheduler.command('logs')
-@click.option('--errors', is_flag=True, default=False,
-              help='Read enrich.err instead of enrich.log.')
-@click.option('--lines', type=int, default=50,
-              help='Number of tail lines to print (default 50).')
-@click.pass_context
-def scheduler_logs(ctx: click.Context, errors: bool, lines: int) -> None:
-    """Print the tail of ~/.memman/logs/enrich.{log,err}."""
-    logs_dir = pathlib.Path.home() / '.memman' / 'logs'
-    path = logs_dir / ('enrich.err' if errors else 'enrich.log')
-    if not path.is_file():
-        click.echo(f'[memman] no log file yet at {path}', err=True)
-        return
-    try:
-        content = path.read_text(errors='replace').splitlines()
-    except OSError as exc:
-        raise click.ClickException(
-            f'failed to read {path}: {exc}') from exc
-    tail = content[-lines:] if lines > 0 else content
-    for line in tail:
-        click.echo(line)
-
-
 @scheduler.command('pause')
 @click.pass_context
 def scheduler_pause(ctx: click.Context) -> None:
-    """Stop the scheduler without removing unit files.
+    """Pause the scheduler without removing unit files.
 
-    Queue accumulates; `scheduler resume` or `scheduler trigger` drains.
+    Queue accumulates; `scheduler enable` or `scheduler trigger` drains.
     `remember` default stays `--defer`.
     """
     from memman.setup.scheduler import pause
@@ -1134,10 +1190,12 @@ def scheduler_pause(ctx: click.Context) -> None:
     _json_out(result)
 
 
-@scheduler.command('resume')
+@scheduler.command('enable')
 @click.pass_context
-def scheduler_resume(ctx: click.Context) -> None:
-    """Resume a paused scheduler and sweep long-stalled rows to `stale`.
+def scheduler_enable(ctx: click.Context) -> None:
+    """Activate the scheduler. Worker drains; `remember` defaults to --defer.
+
+    From `paused`, sweeps long-stalled queue rows to `stale`.
     """
     from memman.queue import mark_stale_on_resume, open_queue_db
     from memman.setup.scheduler import resume
@@ -1156,18 +1214,18 @@ def scheduler_resume(ctx: click.Context) -> None:
         result['marked_stale'] = n_stale
         result.setdefault('actions', []).append(
             f"moved {n_stale} long-pending rows to status='stale'"
-            ' (retry with `memman queue retry --stale`)')
+            ' (retry with `memman scheduler queue retry`)')
     _json_out(result)
 
 
-@scheduler.command('off')
+@scheduler.command('disable')
 @click.option('--force', is_flag=True, default=False,
               help='Remove units even when queue has pending rows.')
 @click.option('--drain-first', is_flag=True, default=False,
               help='Run the worker synchronously before removing units.')
 @click.pass_context
-def scheduler_off(ctx: click.Context, force: bool,
-                  drain_first: bool) -> None:
+def scheduler_disable(ctx: click.Context, force: bool,
+                      drain_first: bool) -> None:
     """Remove scheduler unit files. `remember` default becomes `--sync`.
     """
     from memman.queue import open_queue_db
@@ -1212,6 +1270,52 @@ def scheduler_reconcile(ctx: click.Context) -> None:
     """Rewrite the state file from the OS's actual scheduler state."""
     from memman.setup.scheduler import reconcile
     _json_out(reconcile())
+
+
+@scheduler.command('install')
+@click.option('--interval', type=int, default=None,
+              help='Polling interval in seconds (min 60). Default: 900.')
+@click.pass_context
+def scheduler_install(ctx: click.Context, interval: int | None) -> None:
+    """Install the scheduler unit only (no agent integration).
+
+    Reads OPENROUTER_API_KEY and VOYAGE_API_KEY from env and writes them
+    to ~/.memman/env (mode 600), then installs the systemd timer or
+    launchd plist that runs the worker every interval. For full agent-
+    integration setup (hooks, skill, scheduler), use `memman install`.
+    """
+    from memman.setup.scheduler import DEFAULT_INTERVAL_SECONDS, install
+
+    openrouter = os.environ.get('OPENROUTER_API_KEY', '').strip()
+    voyage = os.environ.get('VOYAGE_API_KEY', '').strip()
+    if not openrouter:
+        raise click.ClickException(
+            'OPENROUTER_API_KEY env var is required to install the scheduler')
+    if not voyage:
+        raise click.ClickException(
+            'VOYAGE_API_KEY env var is required to install the scheduler')
+    seconds = interval if interval is not None else DEFAULT_INTERVAL_SECONDS
+    if seconds < 60:
+        raise click.ClickException('--interval must be at least 60 seconds')
+    try:
+        result = install(
+            ctx.obj['data_dir'], openrouter, voyage, seconds)
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _json_out(result)
+
+
+@scheduler.command('uninstall')
+@click.pass_context
+def scheduler_uninstall(ctx: click.Context) -> None:
+    """Remove the scheduler unit only (leaves agent integration intact).
+
+    Clears scheduler state files and removes the systemd timer/service or
+    launchd plist. `memman uninstall` does this AND removes hooks/skill
+    integration.
+    """
+    from memman.setup.scheduler import uninstall
+    _json_out(uninstall())
 
 
 @scheduler.command('interval')
@@ -1293,26 +1397,6 @@ def scheduler_debug_status(ctx: click.Context) -> None:
         })
 
 
-@scheduler_debug.command('tail')
-@click.option('--lines', type=int, default=50,
-              help='Number of tail lines to print (default 50).')
-@click.pass_context
-def scheduler_debug_tail(ctx: click.Context, lines: int) -> None:
-    """Print the tail of ~/.memman/logs/debug.log."""
-    path = pathlib.Path.home() / '.memman' / 'logs' / 'debug.log'
-    if not path.is_file():
-        click.echo(f'[memman] no debug log yet at {path}', err=True)
-        return
-    try:
-        content = path.read_text(errors='replace').splitlines()
-    except OSError as exc:
-        raise click.ClickException(
-            f'failed to read {path}: {exc}') from exc
-    tail = content[-lines:] if lines > 0 else content
-    for line in tail:
-        click.echo(line)
-
-
 @cli.group(invoke_without_command=True)
 @click.pass_context
 def store(ctx: click.Context) -> None:
@@ -1349,11 +1433,11 @@ def store_create(ctx: click.Context, name: str) -> None:
     _json_out({'action': 'created', 'store': name, 'path': sdir})
 
 
-@store.command('set')
+@store.command('use')
 @click.argument('name')
 @click.pass_context
-def store_set(ctx: click.Context, name: str) -> None:
-    """Set the active store."""
+def store_use(ctx: click.Context, name: str) -> None:
+    """Switch the active store."""
     data_dir = ctx.obj['data_dir']
     if not store_exists(data_dir, name):
         raise click.ClickException(
@@ -1380,7 +1464,7 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
     if name == active:
         raise click.ClickException(
             f"cannot remove the active store \"{name}\""
-            f" (switch first with 'memman store set <other>')")
+            f" (switch first with 'memman store use <other>')")
     sdir = store_dir(data_dir, name)
     if not yes:
         click.confirm(
@@ -1414,7 +1498,10 @@ def status(ctx: click.Context) -> None:
               help='Human-readable colored output (default: JSON)')
 @click.pass_context
 def doctor(ctx: click.Context, text_output: bool) -> None:
-    """Run health checks on the database."""
+    """Run health checks on the database, scheduler, and providers.
+
+    Exits 0 on pass/warn, 1 on fail — usable as a CI/scripted gate.
+    """
     from memman.doctor import run_all_checks
 
     db = _open_db(ctx)
@@ -1429,63 +1516,7 @@ def doctor(ctx: click.Context, text_output: bool) -> None:
             _json_out(result)
     finally:
         db.close()
-
-
-@cli.group()
-def keys() -> None:
-    """Probe provider API keys."""
-
-
-@keys.command('test')
-@click.pass_context
-def keys_test(ctx: click.Context) -> None:
-    """Exercise LLM + embed endpoints with the cheapest possible call.
-
-    JSON output per provider: ok (bool), model (or None),
-    elapsed_ms, error (on failure). Intended as a "is anything
-    actually wrong with my keys?" targeted probe.
-    """
-    import time as _time
-
-    result: dict = {'providers': {}}
-
-    llm: dict = {'ok': False, 'elapsed_ms': None,
-                 'model': None, 'error': None}
-    t0 = _time.monotonic()
-    try:
-        client = _get_llm_client_or_fail()
-        out = client.complete('Reply with exactly: ok', 'probe')
-        llm['ok'] = bool(out)
-        llm['model'] = getattr(client, 'model', None)
-        llm['sample'] = (out or '')[:60]
-    except click.ClickException as exc:
-        llm['error'] = exc.message
-    except Exception as exc:
-        llm['error'] = f'{type(exc).__name__}: {exc}'
-    llm['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
-    result['providers']['llm'] = llm
-
-    embed: dict = {'ok': False, 'elapsed_ms': None,
-                   'model': None, 'error': None}
-    t0 = _time.monotonic()
-    try:
-        from memman.embed import get_client as _get_embed
-        ec = _get_embed()
-        embed['model'] = getattr(ec, 'model', None)
-        if not ec.available():
-            embed['error'] = ec.unavailable_message()
-        else:
-            vec = ec.embed('probe')
-            embed['ok'] = bool(vec)
-            embed['dim'] = len(vec) if vec else 0
-    except Exception as exc:
-        embed['error'] = f'{type(exc).__name__}: {exc}'
-    embed['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
-    result['providers']['embed'] = embed
-
-    result['ok'] = (llm['ok'] and embed['ok'])
-    _json_out(result)
-    if not result['ok']:
+    if result.get('status') == 'fail':
         ctx.exit(1)
 
 
@@ -1513,15 +1544,17 @@ def _doctor_text_report(result: dict) -> None:
                 click.echo(f'         {key}: {value}')
 
 
-@cli.command()
+@log.command('list')
 @click.option('--limit', default=20, type=int, help='Max entries')
 @click.option('--since', default='', help='Time window (e.g. 7d, 24h)')
 @click.option('--stats', is_flag=True, default=False,
               help='Show summary statistics (grouped by operation)')
+@click.option('--text', 'text_output', is_flag=True, default=False,
+              help='Human-readable text table (default: JSON)')
 @click.pass_context
-def log(ctx: click.Context, limit: int, since: str,
-        stats: bool) -> None:
-    """Show operation log."""
+def log_list(ctx: click.Context, limit: int, since: str,
+             stats: bool, text_output: bool) -> None:
+    """Show the operation audit log (default JSON; --text for human view)."""
     from memman.store.oplog import get_oplog, get_oplog_stats
 
     since_ts = ''
@@ -1536,6 +1569,11 @@ def log(ctx: click.Context, limit: int, since: str,
             return
 
         entries = get_oplog(db, limit, since_ts)
+
+        if not text_output:
+            _json_out({'entries': entries, 'meta': {'count': len(entries)}})
+            return
+
         if not entries:
             click.echo('No operations recorded yet.')
             return
@@ -1568,63 +1606,71 @@ def log(ctx: click.Context, limit: int, since: str,
         db.close()
 
 
-@cli.command()
-@click.option('--threshold', default=0.5, type=float, help='EI threshold')
-@click.option('--limit', default=20, type=int, help='Max candidates')
-@click.option('--keep', default='', help='Insight ID to keep')
-@click.option('--review', is_flag=True, default=False,
-              help='Review stored insights for content quality issues')
+@log.command('worker')
+@click.option('--errors', is_flag=True, default=False,
+              help='Read enrich.err instead of enrich.log.')
+@click.option('--lines', type=int, default=50,
+              help='Number of tail lines to print (default 50).')
 @click.pass_context
-def gc(ctx: click.Context, threshold: float, limit: int, keep: str,
-       review: bool) -> None:
-    """Garbage collection / retention lifecycle."""
-    from memman.store.node import MAX_INSIGHTS, boost_retention
-    from memman.store.node import get_insight_by_id, get_retention_candidates
-    from memman.store.node import refresh_effective_importance
-    from memman.store.node import review_content_quality
-    from memman.store.oplog import log_op
+def log_worker(ctx: click.Context, errors: bool, lines: int) -> None:
+    """Print the tail of ~/.memman/logs/enrich.{log,err} (worker output)."""
+    logs_dir = pathlib.Path.home() / '.memman' / 'logs'
+    path = logs_dir / ('enrich.err' if errors else 'enrich.log')
+    if not path.is_file():
+        click.echo(f'[memman] no log file yet at {path}', err=True)
+        return
+    try:
+        content = path.read_text(errors='replace').splitlines()
+    except OSError as exc:
+        raise click.ClickException(
+            f'failed to read {path}: {exc}') from exc
+    tail = content[-lines:] if lines > 0 else content
+    for line_str in tail:
+        click.echo(line_str)
+
+
+@log.command('trace')
+@click.option('--lines', type=int, default=50,
+              help='Number of tail lines to print (default 50).')
+@click.pass_context
+def log_trace(ctx: click.Context, lines: int) -> None:
+    """Print the tail of ~/.memman/logs/debug.log (JSONL trace events).
+
+    Trace logging toggles via `scheduler debug on|off`.
+    """
+    path = pathlib.Path.home() / '.memman' / 'logs' / 'debug.log'
+    if not path.is_file():
+        click.echo(f'[memman] no debug log yet at {path}', err=True)
+        return
+    try:
+        content = path.read_text(errors='replace').splitlines()
+    except OSError as exc:
+        raise click.ClickException(
+            f'failed to read {path}: {exc}') from exc
+    tail = content[-lines:] if lines > 0 else content
+    for line_str in tail:
+        click.echo(line_str)
+
+
+@insights.command('candidates')
+@click.option('--threshold', default=0.5, type=float,
+              help='Effective-importance cutoff; insights below are surfaced (default 0.5).')
+@click.option('--limit', default=20, type=int, help='Max candidates returned')
+@click.pass_context
+def insights_candidates(ctx: click.Context, threshold: float,
+                        limit: int) -> None:
+    """List insights with low effective importance.
+
+    Surfaces candidates only — does NOT delete. Use `memman forget <id>`
+    to actually remove an insight, or `memman insights protect <id>` to
+    boost its retention.
+    """
+    from memman.store.node import MAX_INSIGHTS
+    from memman.store.node import get_retention_candidates
 
     db = _open_db(ctx)
     try:
-        if review:
-            flagged = review_content_quality(db, limit)
-            _json_out({
-                'review_results': [{
-                    'id': f['insight'].id,
-                    'content': f['insight'].content,
-                    'importance': f['insight'].importance,
-                    'quality_warnings': f['quality_warnings'],
-                    } for f in flagged],
-                'total_flagged': len(flagged),
-                'actions': {
-                    'forget': 'memman forget <id>',
-                    'keep': 'memman gc --keep <id>',
-                    },
-                })
-            return
-
-        if keep:
-            ins = get_insight_by_id(db, keep)
-            if ins is None:
-                raise click.ClickException(
-                    f'insight {keep} not found or already deleted')
-            boost_retention(db, keep)
-            ei = refresh_effective_importance(db, keep)
-            new_access = ins.access_count + 3
-            log_op(db, 'gc-keep', keep, f'access+3, ei={ei:.4f}')
-            _json_out({
-                'status': 'retained',
-                'id': keep,
-                'content': ins.content,
-                'new_access': new_access,
-                'effective_importance': ei,
-                'immune': is_immune(ins.importance, new_access),
-                })
-            return
-
-        candidates, total = get_retention_candidates(
-            db, threshold, limit)
-
+        candidates, total = get_retention_candidates(db, threshold, limit)
         out_candidates = []
         for c in candidates:
             ins = c['insight']
@@ -1639,7 +1685,6 @@ def gc(ctx: click.Context, threshold: float, limit: int, keep: str,
                 'edge_count': c['edge_count'],
                 'immune': c['immune'],
                 })
-
         _json_out({
             'total_insights': total,
             'threshold': threshold,
@@ -1648,40 +1693,93 @@ def gc(ctx: click.Context, threshold: float, limit: int, keep: str,
             'max_insights': MAX_INSIGHTS,
             'actions': {
                 'purge': 'memman forget <id>',
-                'keep': 'memman gc --keep <id>',
+                'protect': 'memman insights protect <id>',
                 },
             })
     finally:
         db.close()
 
 
-@cli.command()
-@click.option('--format', 'fmt', default='dot', help='Output format: dot or html')
-@click.option('-o', '--output', 'output_path', default='-', help='Output file (- for stdout)')
+@insights.command('review')
+@click.option('--limit', default=20, type=int, help='Max flagged results')
 @click.pass_context
-def viz(ctx: click.Context, fmt: str, output_path: str) -> None:
-    """Export memman graph for visualization."""
-    from memman.store.edge import get_all_edges
-    from memman.store.node import get_all_active_insights
+def insights_review(ctx: click.Context, limit: int) -> None:
+    """Scan stored insights for content quality issues.
+
+    Different criteria than `candidates`: this checks content quality
+    (transient phrasing, low signal) rather than retention score.
+    """
+    from memman.store.node import review_content_quality
 
     db = _open_db(ctx)
     try:
-        insights = get_all_active_insights(db)
-        edges = get_all_edges(db)
+        flagged = review_content_quality(db, limit)
+        _json_out({
+            'review_results': [{
+                'id': f['insight'].id,
+                'content': f['insight'].content,
+                'importance': f['insight'].importance,
+                'quality_warnings': f['quality_warnings'],
+                } for f in flagged],
+            'total_flagged': len(flagged),
+            'actions': {
+                'forget': 'memman forget <id>',
+                'protect': 'memman insights protect <id>',
+                },
+            })
+    finally:
+        db.close()
 
-        if fmt == 'dot':
-            out = _render_dot(insights, edges)
-        elif fmt == 'html':
-            out = _render_html(insights, edges)
-        else:
+
+@insights.command('protect')
+@click.argument('id')
+@click.pass_context
+def insights_protect(ctx: click.Context, id: str) -> None:
+    """Boost retention of an insight.
+
+    Increments access count by 3 and refreshes effective importance,
+    keeping the insight off retention-candidate lists.
+    """
+    from memman.store.node import boost_retention, get_insight_by_id
+    from memman.store.node import refresh_effective_importance
+    from memman.store.oplog import log_op
+
+    db = _open_db(ctx)
+    try:
+        ins = get_insight_by_id(db, id)
+        if ins is None:
             raise click.ClickException(
-                f'unsupported format: {fmt} (use dot or html)')
+                f'insight {id} not found or already deleted')
+        boost_retention(db, id)
+        ei = refresh_effective_importance(db, id)
+        new_access = ins.access_count + 3
+        log_op(db, 'gc-keep', id, f'access+3, ei={ei:.4f}')
+        _json_out({
+            'status': 'retained',
+            'id': id,
+            'content': ins.content,
+            'new_access': new_access,
+            'effective_importance': ei,
+            'immune': is_immune(ins.importance, new_access),
+            })
+    finally:
+        db.close()
 
-        if output_path in {'', '-'}:
-            click.echo(out, nl=False)
-        else:
-            pathlib.Path(output_path).write_text(out)
-            click.echo(f'written to {output_path}', err=True)
+
+@insights.command('show')
+@click.argument('id')
+@click.pass_context
+def insights_show(ctx: click.Context, id: str) -> None:
+    """Read a single insight by ID with full content and metadata."""
+    from memman.store.node import get_insight_by_id
+
+    db = _open_db(ctx)
+    try:
+        ins = get_insight_by_id(db, id)
+        if ins is None:
+            raise click.ClickException(
+                f'insight {id} not found or already deleted')
+        _json_out(_insight_to_dict(ins))
     finally:
         db.close()
 
@@ -1784,11 +1882,6 @@ def embed_run(ctx: click.Context, id: str) -> None:
         db.close()
 
 
-@cli.group()
-def graph() -> None:
-    """Graph management commands."""
-
-
 @graph.command('reindex')
 @click.option('--dry-run', is_flag=True, default=False,
               help='Show stats without modifying DB')
@@ -1852,9 +1945,10 @@ def skill() -> None:
     click.echo(content, nl=False)
 
 
-@cli.command()
+@cli.command(hidden=True)
 def prime() -> None:
-    """SessionStart emitter: status + compact hint + guide in one call.
+    """Hook shim: emit status + optional compact hint + guide. Invoked by
+    the SessionStart hook (claude/prime.sh). Not meant for direct use.
     """
     input_raw = '{}'
     if not sys.stdin.isatty():
@@ -1973,156 +2067,3 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
         _json_out(stats)
     finally:
         db.close()
-
-
-def _node_label(i: Insight) -> str:
-    """Return a short display label for a node."""
-    content = i.content.replace('\n', ' ')
-    if len(content) > 60:
-        content = content[:60] + '...'
-    return f'[{i.category}] {content}'
-
-
-def _category_color(c: str) -> str:
-    """Return a color for a category."""
-    colors = {
-        'decision': '#e74c3c', 'fact': '#3498db',
-        'insight': '#9b59b6', 'preference': '#2ecc71',
-        'context': '#f39c12',
-        }
-    return colors.get(c, '#95a5a6')
-
-
-def _edge_color(t: str) -> str:
-    """Return a color for an edge type."""
-    colors = {
-        'temporal': '#aaaaaa', 'semantic': '#3498db',
-        'causal': '#e74c3c', 'entity': '#2ecc71',
-        }
-    return colors.get(t, '#cccccc')
-
-
-def _render_dot(insights: list[Insight],
-                edges: list[Edge]) -> str:
-    """Render a DOT graph."""
-    lines = [
-        'digraph memman {',
-        '  rankdir=LR;',
-        ('  node [shape=box, style="filled,rounded",'
-         ' fontsize=10, fontname="Helvetica"];'),
-        '  edge [fontsize=8, fontname="Helvetica"];',
-        '',
-        ]
-
-    active = {i.id for i in insights}
-
-    for i in insights:
-        label = _node_label(i).replace('"', '\\"')
-        short_id = _trunc_id(i.id)
-        color = _category_color(i.category)
-        lines.append(
-            f'  "{i.id}" [label="{short_id}: {label}",'
-            f' fillcolor="{color}", fontcolor="white"];')
-
-    lines.append('')
-    for e in edges:
-        if e.source_id not in active or e.target_id not in active:
-            continue
-        color = _edge_color(e.edge_type)
-        sub_type = e.metadata.get('sub_type', '')
-        edge_label = sub_type or e.edge_type
-        lines.append(
-            f'  "{e.source_id}" -> "{e.target_id}"'
-            f' [label="{edge_label}", color="{color}",'
-            f' fontcolor="{color}"];')
-
-    lines.extend(('}', ''))
-    return '\n'.join(lines)
-
-
-def _js_str(s: str) -> str:
-    """Return a JSON-encoded string safe for script embedding."""
-    return json.dumps(s).replace('</', '<\\/')
-
-
-def _render_html(insights: list[Insight], edges: list[Edge]) -> str:
-    """Render an HTML vis.js interactive page."""
-    active = {i.id for i in insights}
-
-    node_parts = []
-    for i in insights:
-        short_id = _trunc_id(i.id)
-        label = _node_label(i).replace('\n', ' ')
-        title = i.content.replace('\n', '\\n')
-        color = _category_color(i.category)
-        node_parts.append(
-            f'{{id:{_js_str(i.id)},label:{_js_str(short_id + ": " + label)},'
-            f'title:{_js_str(title)},color:{_js_str(color)},'
-            f'font:{{color:"white"}}}}')
-    nodes_js = ',\n'.join(node_parts)
-
-    edge_parts = []
-    for e in edges:
-        if e.source_id not in active or e.target_id not in active:
-            continue
-        color = _edge_color(e.edge_type)
-        sub_type = e.metadata.get('sub_type', '')
-        edge_label = sub_type or e.edge_type
-        edge_parts.append(
-            f'{{from:{_js_str(e.source_id)},to:{_js_str(e.target_id)},'
-            f'label:{_js_str(edge_label)},'
-            f'color:{{color:{_js_str(color)}}},'
-            f'arrows:"to",font:{{color:{_js_str(color)},size:10}}}}')
-    edges_js = ',\n'.join(edge_parts)
-
-    return _HTML_TEMPLATE.replace('%NODES%', nodes_js).replace(
-        '%EDGES%', edges_js)
-
-
-_HTML_TEMPLATE = """<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>MemMan Knowledge Graph</title>
-<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
-<style>
-  body { margin: 0; padding: 0; background: #1a1a2e; font-family: sans-serif; }
-  #graph { width: 100vw; height: 100vh; }
-  #legend { position: fixed; top: 10px; right: 10px; background: rgba(0,0,0,0.7);
-    color: white; padding: 12px; border-radius: 8px; font-size: 12px; }
-  .leg-item { display: flex; align-items: center; margin: 4px 0; }
-  .leg-dot { width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; }
-  .leg-line { width: 20px; height: 3px; margin-right: 8px; }
-</style>
-</head>
-<body>
-<div id="graph"></div>
-<div id="legend">
-  <b>Nodes</b>
-  <div class="leg-item"><div class="leg-dot" style="background:#e74c3c"></div>decision</div>
-  <div class="leg-item"><div class="leg-dot" style="background:#3498db"></div>fact</div>
-  <div class="leg-item"><div class="leg-dot" style="background:#9b59b6"></div>insight</div>
-  <div class="leg-item"><div class="leg-dot" style="background:#2ecc71"></div>preference</div>
-  <div class="leg-item"><div class="leg-dot" style="background:#f39c12"></div>context</div>
-  <div class="leg-item"><div class="leg-dot" style="background:#95a5a6"></div>general</div>
-  <br><b>Edges</b>
-  <div class="leg-item"><div class="leg-line" style="background:#aaaaaa"></div>temporal</div>
-  <div class="leg-item"><div class="leg-line" style="background:#3498db"></div>semantic</div>
-  <div class="leg-item"><div class="leg-line" style="background:#e74c3c"></div>causal</div>
-  <div class="leg-item"><div class="leg-line" style="background:#2ecc71"></div>entity</div>
-</div>
-<script>
-var nodes = new vis.DataSet([%NODES%]);
-var edges = new vis.DataSet([%EDGES%]);
-var container = document.getElementById("graph");
-var data = { nodes: nodes, edges: edges };
-var options = {
-  physics: { solver: "forceAtlas2Based", forceAtlas2Based: { gravitationalConstant: -30 } },
-  interaction: { hover: true, tooltipDelay: 100 },
-  nodes: { shape: "box", margin: 8, borderWidth: 0, font: { size: 11 } },
-  edges: { smooth: { type: "continuous" }, font: { size: 9 } }
-};
-new vis.Network(container, data, options);
-</script>
-</body>
-</html>"""

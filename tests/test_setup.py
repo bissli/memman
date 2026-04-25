@@ -856,28 +856,28 @@ def test_install_creates_logs_directory(tmp_path, monkeypatch):
 
 
 def test_scheduler_logs_reads_log_file(tmp_path, monkeypatch):
-    """`memman scheduler logs` prints the tail of enrich.log."""
+    """`memman log worker` prints the tail of enrich.log."""
     monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
     logs_dir = tmp_path / '.memman' / 'logs'
     logs_dir.mkdir(parents=True)
     (logs_dir / 'enrich.log').write_text(
         'line1\nline2\nline3\nLOG-MARKER\n')
     runner = CliRunner()
-    result = runner.invoke(cli, ['scheduler', 'logs', '--lines', '2'])
+    result = runner.invoke(cli, ['log', 'worker', '--lines', '2'])
     assert result.exit_code == 0
     assert 'LOG-MARKER' in result.output
     assert 'line1' not in result.output
 
 
 def test_scheduler_logs_errors_flag(tmp_path, monkeypatch):
-    """`memman scheduler logs --errors` reads enrich.err."""
+    """`memman log worker --errors` reads enrich.err."""
     monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
     logs_dir = tmp_path / '.memman' / 'logs'
     logs_dir.mkdir(parents=True)
     (logs_dir / 'enrich.err').write_text('ERR-MARKER\n')
     (logs_dir / 'enrich.log').write_text('LOG-NOT-THIS\n')
     runner = CliRunner()
-    result = runner.invoke(cli, ['scheduler', 'logs', '--errors'])
+    result = runner.invoke(cli, ['log', 'worker', '--errors'])
     assert result.exit_code == 0
     assert 'ERR-MARKER' in result.output
     assert 'LOG-NOT-THIS' not in result.output
@@ -887,7 +887,7 @@ def test_scheduler_logs_missing_file(tmp_path, monkeypatch):
     """Missing log file emits a friendly message, not an error."""
     monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
     runner = CliRunner()
-    result = runner.invoke(cli, ['scheduler', 'logs'])
+    result = runner.invoke(cli, ['log', 'worker'])
     assert result.exit_code == 0
     assert 'no log file yet' in result.output.lower() \
         or 'no log file yet' in (result.stderr or '').lower()

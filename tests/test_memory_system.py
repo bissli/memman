@@ -78,10 +78,10 @@ def recall_smart(runner_tuple, query, **flags):
 
 
 def search_cmd(runner_tuple, query):
-    """Token-based keyword search, return list."""
-    result = invoke(runner_tuple, ['search', query])
+    """Keyword-only retrieval via recall --basic, return insight list."""
+    result = invoke(runner_tuple, ['recall', '--basic', query])
     assert result.exit_code == 0, result.output
-    return json.loads(result.output)
+    return json.loads(result.output).get('results', [])
 
 
 def contents(results):
@@ -237,8 +237,8 @@ class TestReplaceAtomicity:
         new = parse_remember(result)
         assert 'id' in new
 
-        result = invoke(runner, ['search', 'CQRS'])
-        hits = json.loads(result.output)
+        result = invoke(runner, ['recall', '--basic', 'CQRS'])
+        hits = json.loads(result.output)['results']
         match = [h for h in hits if h['id'] == new['id']][0]
         assert match['category'] == 'decision'
         assert match['importance'] == 5
@@ -254,8 +254,8 @@ class TestReplaceAtomicity:
         new = parse_remember(result)
         assert 'id' in new
 
-        result = invoke(runner, ['search', 'CloudFront CDN'])
-        hits = json.loads(result.output)
+        result = invoke(runner, ['recall', '--basic', 'CloudFront CDN'])
+        hits = json.loads(result.output)['results']
         match = [h for h in hits if h['id'] == new['id']][0]
         assert match['category'] == 'decision'
         assert match['importance'] == 5
@@ -330,9 +330,9 @@ class TestGraphTraversal:
                      no_reconcile=True)
         b = remember(runner, 'token rotation schedule every 24 hours',
                      no_reconcile=True)
-        invoke(runner, ['link', a['id'], b['id'], '--type', 'semantic'])
+        invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'semantic'])
 
-        result = invoke(runner, ['related', a['id']])
+        result = invoke(runner, ['graph', 'related', a['id']])
         assert b['id'] in result.output
 
     def test_related_respects_edge_type_filter(self, runner):
@@ -341,12 +341,12 @@ class TestGraphTraversal:
                      no_reconcile=True)
         b = remember(runner, 'SQLite enables single-file deployment',
                      no_reconcile=True)
-        invoke(runner, ['link', a['id'], b['id'], '--type', 'causal'])
+        invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'causal'])
 
-        result_causal = invoke(runner, ['related', a['id'],
+        result_causal = invoke(runner, ['graph', 'related', a['id'],
                                         '--edge', 'causal'])
         assert b['id'] in result_causal.output
-        result_semantic = invoke(runner, ['related', a['id'],
+        result_semantic = invoke(runner, ['graph', 'related', a['id'],
                                           '--edge', 'semantic'])
         assert b['id'] not in result_semantic.output
 
@@ -356,11 +356,11 @@ class TestGraphTraversal:
                      no_reconcile=True)
         b = remember(runner, 'protobuf schema evolution rules',
                      no_reconcile=True)
-        invoke(runner, ['link', a['id'], b['id'], '--type', 'semantic'])
+        invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'semantic'])
 
         remember(runner, 'Kafka topic partitioning strategy uses key-based routing for ordering guarantees', no_reconcile=True)
 
-        result = invoke(runner, ['related', a['id']])
+        result = invoke(runner, ['graph', 'related', a['id']])
         assert b['id'] in result.output
 
     def test_related_respects_depth(self, runner):
@@ -372,17 +372,17 @@ class TestGraphTraversal:
         a = remember(runner, 'API gateway routing rules', no_reconcile=True)
         b = remember(runner, 'rate limiting middleware', no_reconcile=True)
         c = remember(runner, 'circuit breaker pattern', no_reconcile=True)
-        invoke(runner, ['link', a['id'], b['id'], '--type', 'causal'])
-        invoke(runner, ['link', b['id'], c['id'], '--type', 'causal'])
+        invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'causal'])
+        invoke(runner, ['graph', 'link', b['id'], c['id'], '--type', 'causal'])
 
-        result_d1 = invoke(runner, ['related', a['id'],
+        result_d1 = invoke(runner, ['graph', 'related', a['id'],
                                     '--edge', 'causal', '--depth', '1'])
         data_d1 = json.loads(result_d1.output)
         ids_d1 = [r['id'] for r in data_d1]
         assert b['id'] in ids_d1
         assert c['id'] not in ids_d1
 
-        result_d2 = invoke(runner, ['related', a['id'],
+        result_d2 = invoke(runner, ['graph', 'related', a['id'],
                                     '--edge', 'causal', '--depth', '2'])
         data_d2 = json.loads(result_d2.output)
         ids_d2 = [r['id'] for r in data_d2]
@@ -401,15 +401,15 @@ class TestComposition:
                      no_reconcile=True)
         c = remember(runner, 'REST pagination cursor-based approach',
                      no_reconcile=True)
-        link_ab = invoke(runner, ['link', a['id'], b['id'],
+        link_ab = invoke(runner, ['graph', 'link', a['id'], b['id'],
                                   '--type', 'causal'])
         assert link_ab.exit_code == 0
-        link_ac = invoke(runner, ['link', a['id'], c['id'],
+        link_ac = invoke(runner, ['graph', 'link', a['id'], c['id'],
                                   '--type', 'causal'])
         assert link_ac.exit_code == 0
         invoke(runner, ['forget', b['id']])
 
-        result = invoke(runner, ['related', a['id'],
+        result = invoke(runner, ['graph', 'related', a['id'],
                                  '--edge', 'causal'])
         assert result.exit_code == 0
         assert c['id'] in result.output
@@ -542,7 +542,7 @@ class TestGCLifecycle:
         remember(runner,
                  'Logstash pipeline processes 10000 events per second',
                  no_reconcile=True, imp='1')
-        result = invoke(runner, ['gc'])
+        result = invoke(runner, ['insights', 'candidates'])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert 'total_insights' in data
@@ -558,7 +558,7 @@ class TestOplogChronology:
             remember(runner,
                      f'{tech} cluster deployed across three availability zones for resilience',
                      no_reconcile=True)
-        result = invoke(runner, ['log', '--limit', '5'])
+        result = invoke(runner, ['log', 'list', '--limit', '5'])
         assert result.exit_code == 0
         lines = [l for l in result.output.strip().split('\n')
                  if l.strip() and not l.startswith('TIME')]
@@ -799,7 +799,7 @@ class TestGarbageCollection:
         remember(runner,
                  'Chose SQLite for single-node simplicity and embedded operation',
                  no_reconcile=True, imp='5')
-        result = invoke(runner, ['gc', '--review'])
+        result = invoke(runner, ['insights', 'review'])
         data = json.loads(result.output)
         assert data['total_flagged'] >= 1
         flagged = [r['content'] for r in data['review_results']]
@@ -813,7 +813,7 @@ class TestGarbageCollection:
         remember(runner,
                  'Ansible playbook deploys nginx to staging environment',
                  no_reconcile=True, imp='1')
-        result = invoke(runner, ['gc', '--keep', kept['id']])
+        result = invoke(runner, ['insights', 'protect', kept['id']])
         data = json.loads(result.output)
         candidate_ids = [c['id'] for c in data.get('candidates', [])]
         assert kept['id'] not in candidate_ids
@@ -834,7 +834,7 @@ class TestOperationLog:
         invoke(runner, ['replace', '--sync', data2['id'],
                         'Kibana dashboard upgraded to Lens visualization for APM'])
 
-        result = invoke(runner, ['log', '--limit', '10'])
+        result = invoke(runner, ['log', 'list', '--limit', '10'])
         assert 'remember' in result.output
         assert 'forget' in result.output
         assert 'replace' in result.output

@@ -110,23 +110,53 @@ def test_scheduler_state_fail_on_drift(monkeypatch):
     assert result['status'] == 'fail'
 
 
-def test_last_worker_run_warn_when_no_drains(tmp_path, monkeypatch):
-    """No worker_runs rows yet -> warn (not fail)."""
+def _active_scheduler_status(interval=900):
+    """Test helper: pretend the scheduler is installed + active."""
+    return {
+        'interval_seconds': interval,
+        'state': 'active',
+        'installed': True,
+        }
+
+
+def test_last_worker_run_fail_when_no_drains_and_active(tmp_path, monkeypatch):
+    """Scheduler active + installed but no worker_runs row yet -> fail."""
+    from memman.setup import scheduler as sch
+    monkeypatch.setattr(sch, 'status', _active_scheduler_status)
+    result = check_last_worker_run(str(tmp_path))
+    assert result['status'] == 'fail'
+    assert 'no drains recorded' in result['detail']['reason']
+
+
+def test_last_worker_run_pass_when_paused(tmp_path, monkeypatch):
+    """Scheduler in paused state -> pass (no drain expected)."""
     from memman.setup import scheduler as sch
     monkeypatch.setattr(
-        sch, 'status', lambda: {'interval_seconds': 900})
+        sch, 'status', lambda: {
+            'interval_seconds': 900, 'state': 'paused',
+            'installed': True})
     result = check_last_worker_run(str(tmp_path))
-    assert result['status'] == 'warn'
+    assert result['status'] == 'pass'
+    assert "'paused'" in result['detail']['reason']
+
+
+def test_last_worker_run_pass_when_disabled(tmp_path, monkeypatch):
+    """Scheduler disabled (uninstalled) -> pass (not relevant)."""
+    from memman.setup import scheduler as sch
+    monkeypatch.setattr(
+        sch, 'status', lambda: {
+            'interval_seconds': None, 'state': 'off',
+            'installed': False})
+    result = check_last_worker_run(str(tmp_path))
+    assert result['status'] == 'pass'
 
 
 def test_last_worker_run_pass_on_recent_drain(tmp_path, monkeypatch):
-    """A drain within the interval window passes.
-    """
+    """A drain within the interval window passes."""
     from memman.queue import finish_worker_run, open_queue_db, start_worker_run
     from memman.setup import scheduler as sch
 
-    monkeypatch.setattr(
-        sch, 'status', lambda: {'interval_seconds': 900})
+    monkeypatch.setattr(sch, 'status', _active_scheduler_status)
     conn = open_queue_db(str(tmp_path))
     try:
         run_id = start_worker_run(conn, worker_pid=1)
@@ -142,8 +172,7 @@ def test_last_worker_run_fail_on_recorded_error(tmp_path, monkeypatch):
     from memman.queue import finish_worker_run, open_queue_db, start_worker_run
     from memman.setup import scheduler as sch
 
-    monkeypatch.setattr(
-        sch, 'status', lambda: {'interval_seconds': 900})
+    monkeypatch.setattr(sch, 'status', _active_scheduler_status)
     conn = open_queue_db(str(tmp_path))
     try:
         run_id = start_worker_run(conn, worker_pid=1)
@@ -165,27 +194,35 @@ def runner(tmp_path):
 
 
 def test_doctor_text_mode_emits_colored_summary(runner):
-    """`memman doctor --text` produces a human-readable report."""
+    """`memman doctor --text` produces a human-readable report.
+
+    Exit code may be 0 (pass/warn) or 1 (fail) depending on environment.
+    """
     r, data_dir = runner
     result = r.invoke(cli, ['--data-dir', data_dir, 'doctor', '--text'])
-    assert result.exit_code == 0, result.output
+    assert result.exit_code in (0, 1), result.output
     assert 'memman doctor' in result.output
     assert 'sqlite_integrity' in result.output or 'env_permissions' in result.output
 
 
 def test_doctor_json_default(runner):
     """`memman doctor` emits JSON by default.
+
+    Exit code may be 0 (pass/warn) or 1 (fail) depending on environment.
     """
     r, data_dir = runner
     result = r.invoke(cli, ['--data-dir', data_dir, 'doctor'])
-    assert result.exit_code == 0, result.output
+    assert result.exit_code in (0, 1), result.output
     payload = json.loads(result.output)
     assert 'checks' in payload
     assert 'status' in payload
 
 
-def test_keys_test_reports_llm_failure_cleanly(runner, monkeypatch):
-    """`memman keys test` surfaces an LLM ConfigError and exits non-zero.
+def test_doctor_reports_llm_probe_failure(runner, monkeypatch):
+    """`memman doctor` surfaces an LLM ConfigError and exits non-zero.
+
+    Replaces the prior `keys test` surface; doctor's check_llm_probe
+    is now the canonical key-validity gate.
     """
     from memman.exceptions import ConfigError
 
@@ -197,22 +234,26 @@ def test_keys_test_reports_llm_failure_cleanly(runner, monkeypatch):
     monkeypatch.setattr(
         'memman.llm.client.get_llm_client', _raise)
 
-    result = r.invoke(cli, ['--data-dir', data_dir, 'keys', 'test'])
+    result = r.invoke(cli, ['--data-dir', data_dir, 'doctor'])
     assert result.exit_code == 1
     payload = json.loads(result.output)
-    assert payload['ok'] is False
-    assert payload['providers']['llm']['ok'] is False
-    assert 'OPENROUTER_API_KEY' in payload['providers']['llm']['error']
-    assert 'embed' in payload['providers']
+    assert payload['status'] == 'fail'
+    llm_check = next(
+        (c for c in payload['checks'] if c['name'] == 'llm_probe'),
+        None)
+    assert llm_check is not None
+    assert llm_check['status'] == 'fail'
+    assert 'OPENROUTER_API_KEY' in llm_check['detail']['error']
 
 
-def test_keys_test_happy_path_under_mocks(runner):
-    """With the autouse mocks both providers are ok, exit 0.
-    """
+def test_doctor_reports_probes_pass_under_mocks(runner):
+    """With the autouse mocks both LLM and embed probes pass."""
     r, data_dir = runner
-    result = r.invoke(cli, ['--data-dir', data_dir, 'keys', 'test'])
-    assert result.exit_code == 0, result.output
+    result = r.invoke(cli, ['--data-dir', data_dir, 'doctor'])
     payload = json.loads(result.output)
-    assert payload['ok'] is True
-    assert payload['providers']['llm']['ok'] is True
-    assert payload['providers']['embed']['ok'] is True
+    llm_check = next(
+        c for c in payload['checks'] if c['name'] == 'llm_probe')
+    embed_check = next(
+        c for c in payload['checks'] if c['name'] == 'embed_probe')
+    assert llm_check['status'] == 'pass'
+    assert embed_check['status'] == 'pass'

@@ -59,7 +59,7 @@ def test_install_systemd_writes_timer_and_service(
     service = Path(result['service_path']).read_text()
     assert 'OnUnitActiveSec=600s' in timer
     assert 'Persistent=true' in timer
-    assert '/fake/bin/memman enrich --pending' in service
+    assert '/fake/bin/memman scheduler drain --pending' in service
     assert 'MEMMAN_DATA_DIR=' in service
     assert 'EnvironmentFile=' in service
 
@@ -82,7 +82,7 @@ def test_install_launchd_writes_plist_and_wrapper(
     wrapper = Path(result['wrapper_path']).read_text()
     assert '<key>StartInterval</key><integer>1800</integer>' in plist
     assert '/fake/bin/memman' in wrapper
-    assert 'enrich --pending' in wrapper
+    assert 'scheduler drain --pending' in wrapper
     assert os.access(result['wrapper_path'], os.X_OK)
 
 

@@ -32,7 +32,7 @@ def invoke(runner_tuple, args):
 def last_json(text: str) -> dict:
     """Return the last JSON object from text containing one or more.
 
-    `memman enrich --pending` emits per-row pipeline output followed by
+    `memman scheduler drain --pending` emits per-row pipeline output followed by
     a final drain-summary object; callers that need the summary pick
     the last object.
     """
@@ -64,7 +64,7 @@ def test_defer_enqueues_and_drain_commits(runner):
     before = json.loads(r.output)
     assert before.get('total_insights', 0) == 0
 
-    r = invoke(runner, ['enrich', '--pending',
+    r = invoke(runner, ['scheduler', 'drain', '--pending',
                         '--limit', '5', '--timeout', '30'])
     assert r.exit_code == 0, r.output
     drain = last_json(r.output)
@@ -88,7 +88,7 @@ def test_idempotency_requeue_does_not_duplicate(runner):
     assert r.exit_code == 0, r.output
     data_dir = runner[1]
 
-    r = invoke(runner, ['enrich', '--pending',
+    r = invoke(runner, ['scheduler', 'drain', '--pending',
                         '--limit', '5', '--timeout', '30'])
     assert r.exit_code == 0, r.output
     first = last_json(r.output)
@@ -105,7 +105,7 @@ def test_idempotency_requeue_does_not_duplicate(runner):
             ' worker_pid=NULL, attempts=0')
         conn.commit()
 
-    r = invoke(runner, ['enrich', '--pending',
+    r = invoke(runner, ['scheduler', 'drain', '--pending',
                         '--limit', '5', '--timeout', '30'])
     assert r.exit_code == 0, r.output
 
@@ -123,7 +123,7 @@ def test_multiple_defers_single_drain(runner):
         r = invoke(runner, ['remember', '--defer', text])
         assert r.exit_code == 0, r.output
 
-    r = invoke(runner, ['enrich', '--pending',
+    r = invoke(runner, ['scheduler', 'drain', '--pending',
                         '--limit', '10', '--timeout', '60'])
     assert r.exit_code == 0, r.output
     drain = last_json(r.output)
@@ -147,7 +147,7 @@ def test_replace_defer_queues_with_replaced_id(runner):
     assert q['action'] == 'queued'
     assert q['replaced_id'] == old_id
 
-    r = invoke(runner, ['enrich', '--pending',
+    r = invoke(runner, ['scheduler', 'drain', '--pending',
                         '--limit', '5', '--timeout', '30'])
     assert r.exit_code == 0, r.output
     drain = last_json(r.output)
