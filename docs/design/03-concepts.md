@@ -184,7 +184,7 @@ This layered design serves different scenarios:
 | ------------------ | ------------------------------------------------------------- |
 | `--store` flag     | One-off CLI override, scripting                               |
 | `MEMMAN_STORE` env | Per-process isolation — different agents use different stores |
-| `active` file      | Persistent user preference — `memman store set work`          |
+| `active` file      | Persistent user preference — `memman store use work`          |
 | `"default"`        | Zero-config — works out of the box                            |
 
 **Design principle — lightweight and bounded**: Store isolation addresses a necessary data separation concern without growing into a multi-tenant system. There are no access controls, no cross-store queries, no store metadata beyond the name. This keeps the feature bounded — MemMan is a memory daemon, not a knowledge base platform.

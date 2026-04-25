@@ -137,7 +137,7 @@ def test_recall_basic_mode(runner):
 
 
 def test_recall_basic_returns_envelope(runner):
-    """recall --basic returns insights wrapped in {results: [...]}."""
+    """Recall --basic returns insights wrapped in {results: [...]}."""
     invoke(runner, [
         'remember', '--sync', 'Go uses SQLite for persistent storage',
         '--no-reconcile'])
@@ -297,7 +297,7 @@ def test_doctor_basic(runner):
         'remember', '--sync', 'Go uses SQLite for persistent storage',
         '--no-reconcile'])
     result = invoke(runner, ['doctor'])
-    assert result.exit_code in (0, 1)
+    assert result.exit_code in {0, 1}
     data = json.loads(result.output)
     assert 'status' in data
     assert 'checks' in data
@@ -589,7 +589,7 @@ def test_link_respects_user_created_by(runner):
     id2 = parse_remember(r2)['id']
 
     result = invoke(runner, ['graph', 'link', id1, id2, '--type', 'semantic',
-        '--meta', '{"created_by": "research-agent"}'])
+                             '--meta', '{"created_by": "research-agent"}'])
     assert result.exit_code == 0
 
     _, data_dir = runner
@@ -620,7 +620,7 @@ def test_link_meta_non_dict_fails(runner):
     id2 = parse_remember(r2)['id']
 
     result = invoke(runner, ['graph', 'link', id1, id2, '--type', 'semantic',
-        '--meta', '[1, 2]'])
+                             '--meta', '[1, 2]'])
     assert result.exit_code != 0
     assert 'object' in result.output.lower() or 'dict' in result.output.lower()
 

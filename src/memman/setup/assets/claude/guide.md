@@ -120,27 +120,28 @@ periodically — no confirmation needed.
 
 `memman remember` is a fast queue-append by default. The full pipeline
 — fact extraction, reconciliation, enrichment, causal inference, edge
-creation, re-embedding — runs out-of-band in a scheduler-driven
-worker (`memman enrich --pending`, fired every 15 min by systemd or
-launchd). Newly stored memories are NOT visible to `memman recall` in
-the current session; they land for future sessions.
+creation, re-embedding — runs out-of-band in a scheduler-driven worker
+fired every 15 min by systemd (Linux) or launchd (macOS). Newly stored
+memories are NOT visible to `memman recall` in the current session;
+they land for future sessions.
 
-`graph rebuild` re-enriches all already-stored insights through the
-full LLM pipeline. Use it after model or prompt changes, or to repair
-partial enrichment.
+`memman graph rebuild` re-enriches all already-stored insights through
+the full LLM pipeline. Use it after model or prompt changes, or to
+repair partial enrichment.
 
-`graph reindex` recalculates auto-created edges (semantic, entity,
-temporal) without LLM calls. It runs automatically on DB open when
-edge constants change.
+`memman graph reindex` recalculates auto-created edges (semantic,
+entity, temporal) without LLM calls. It runs automatically on DB open
+when edge constants change.
 
 ### Scheduler controls
 
 The enrichment worker runs via a user-scope systemd timer (Linux) or
-launchd agent (macOS). Operational controls (no filesystem changes):
+launchd agent (macOS). Operational controls:
 
-- `memman scheduler status` — show install state, interval, next run.
-- `memman scheduler disable` — pause the timer/agent (keeps unit files).
-- `memman scheduler enable` — resume after pause.
+- `memman scheduler status` — install state, interval, next run, queue depth.
+- `memman scheduler pause` — stop draining; queue accumulates; units kept on disk.
+- `memman scheduler enable` — resume from pause.
+- `memman scheduler disable` — remove units entirely; `remember` defaults to `--sync`.
 - `memman scheduler interval --seconds N` — change cadence (min 60s).
-- `memman scheduler logs [--errors]` — tail the enrichment worker logs.
 - `memman scheduler trigger` — run the drain now, outside the normal interval.
+- `memman log worker [--errors]` — tail the enrichment worker logs.

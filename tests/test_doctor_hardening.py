@@ -200,7 +200,7 @@ def test_doctor_text_mode_emits_colored_summary(runner):
     """
     r, data_dir = runner
     result = r.invoke(cli, ['--data-dir', data_dir, 'doctor', '--text'])
-    assert result.exit_code in (0, 1), result.output
+    assert result.exit_code in {0, 1}, result.output
     assert 'memman doctor' in result.output
     assert 'sqlite_integrity' in result.output or 'env_permissions' in result.output
 
@@ -212,7 +212,7 @@ def test_doctor_json_default(runner):
     """
     r, data_dir = runner
     result = r.invoke(cli, ['--data-dir', data_dir, 'doctor'])
-    assert result.exit_code in (0, 1), result.output
+    assert result.exit_code in {0, 1}, result.output
     payload = json.loads(result.output)
     assert 'checks' in payload
     assert 'status' in payload

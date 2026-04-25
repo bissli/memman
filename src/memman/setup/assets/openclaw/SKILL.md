@@ -10,50 +10,89 @@ metadata:
 
 # memman
 
-## Workflow
+`memman` is a CLI on PATH — invoke commands directly via the `exec`
+tool. Memory is organized into typed insights and a graph of edges
+between them. In this OpenClaw integration, all enrichment runs inline
+before `remember` returns (no background worker).
 
-1. **Remember**: `memman remember "<fact>" --cat <cat> --imp <1-5> --entities "e1,e2" --source agent`
-   - Diff is built-in: duplicates skipped, conflicts auto-replaced.
-   - Output includes `action` (added/updated/skipped/replaced), `enrichment` (keywords, summary, entities), and `edges_created` (temporal, entity, causal).
-   - All edge creation, LLM enrichment, and causal inference run inline before `remember` returns.
-   - **Replace**: `memman replace <id> "<new content>"` — deterministic replacement by ID. Inherits metadata from original unless overridden. Carries `access_count` forward.
-2. **Link** (manual linking when you identify relationships):
-   - Syntax: `memman link <id> <target> --type <causal|semantic> --weight <0-1> [--meta '<json>']`
-   - For causal links, pass sub_type via `--meta`: `memman link <id> <target> --type causal --meta '{"sub_type": "causes"}'` (values: `causes`, `enables`, `prevents`)
-3. **Recall**: `memman recall "<query>" --limit 10`
+## Storing what you learn
 
-## Commands
+Store one self-contained fact per call. Pick the most accurate `--cat`.
 
 ```bash
-memman remember "<fact>" --cat <cat> --imp <1-5> --entities "e1,e2" --source agent
-memman link <id1> <id2> --type <type> --weight <0-1> [--meta '<json>']
+memman remember "<fact>" --cat <category> --imp <1-5> --tags "t1,t2" --entities "e1,e2" --source agent
+```
+
+Categories: `preference` · `decision` · `fact` · `insight` · `context`.
+Importance is 1 (passing mention) to 5 (architectural / strong preference).
+
+To correct a stored insight by ID without losing its `access_count` and
+edges:
+
+```bash
+memman replace <id> "<new content>"
+```
+
+`replace` inherits the original's category, importance, tags, entities,
+and source unless you override per-flag.
+
+## Recalling what you know
+
+Default recall does LLM query expansion + vector + graph traversal:
+
+```bash
 memman recall "<query>" --limit 10
-memman search "<query>" --limit 10
-memman replace <id> "<new content>" [--cat] [--imp] [--tags] [--entities] [--source]
-memman forget <id>
-memman related <id> --edge causal
-memman gc --threshold 0.4
-memman gc --keep <id>
-memman graph rebuild
-memman graph reindex
-memman status
-memman doctor
-memman log [--since 7d] [--stats]
-memman store list
-memman store create <name>
-memman store set <name>
-memman store remove <name>
+```
+
+Add `--intent WHY|WHEN|ENTITY` to bias the ranking when intent is
+unambiguous. Add `--cat` or `--source` to filter.
+
+Fast token-only lookup that skips LLM expansion:
+
+```bash
+memman recall "<keyword>" --basic
+```
+
+Read a single insight by ID:
+
+```bash
+memman insights show <id>
+```
+
+## Forgetting and protecting
+
+```bash
+memman forget <id>                    # soft-delete
+memman insights protect <id>          # boost retention
+memman insights candidates            # list low-retention candidates
+memman insights review                # scan for content quality issues
+```
+
+`insights candidates` and `insights review` only surface candidates —
+neither deletes anything. Use `forget <id>` to actually remove.
+
+## Working with relationships
+
+```bash
+memman graph link <src> <tgt> --type semantic --weight 0.85
+memman graph link <src> <tgt> --type causal --weight 0.8 \
+    --meta '{"sub_type": "causes"}'
+memman graph related <id> --depth 2
+```
+
+Causal `sub_type` values: `causes` · `enables` · `prevents`.
+
+## Inspecting the system
+
+```bash
+memman status                         # insight count, store
+memman doctor                         # health check
+memman log list [--since 7d --stats]  # operation audit log
 ```
 
 ## Guardrails
 
 - Use the `exec` tool to run memman commands.
-- Do not store secrets, passwords, or tokens.
-- Categories (`--cat`):
-  - `preference` — user-stated likes, dislikes, style choices ("I prefer X over Y")
-  - `decision` — architectural/design choices with rationale ("chose X because Y")
-  - `fact` — discovered truths about systems, tools, domains
-  - `insight` — non-trivial conclusions from multi-source reasoning
-  - `context` — background about user, project, environment
-- Edge types: `temporal` · `semantic` · `causal` · `entity`
-- Max 8,000 chars per insight.
+- Never store secrets, passwords, or tokens.
+- Max 8,000 characters per insight; chunk longer content.
+- One self-contained fact per `remember` call.

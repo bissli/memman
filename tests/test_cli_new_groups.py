@@ -1,6 +1,6 @@
 """CliRunner coverage for the new memman command groups.
 
-Tests exercise `memman enrich`, `memman queue`, and `memman scheduler`
+Tests exercise `memman scheduler drain`, `memman scheduler queue`, and `memman scheduler`
 at the Click layer (not the module layer) so regressions in argument
 wiring and JSON output shape are caught.
 """
@@ -52,7 +52,7 @@ def _patch_no_subprocess(monkeypatch, *, active: bool = True):
 
 
 def test_enrich_requires_pending(runner):
-    """`memman enrich` without --pending errors out.
+    """`memman scheduler drain` without --pending errors out.
     """
     result = invoke(runner, ['scheduler', 'drain'])
     assert result.exit_code != 0

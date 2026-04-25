@@ -63,8 +63,8 @@ Create this file with the memman container skill content. This skill teaches the
 - **Memory stores section**: Explain that the default store is per-group (private, read-write) and the global store is shared (read-only, accessed via `--store global --readonly`).
 - **Recall guide**: Default recall on every new user message. Use `memman recall "<query>" --limit 5`. Also check the global store: `memman recall "<query>" --store global --readonly --limit 5`. Craft focused keyword-rich queries.
 - **Remember guide**: Decision tree — Step 1: Does this exchange contain a user directive, reasoning conclusion, or durable observed state? Step 2: Does a memory already exist (create/update/skip)? Step 3: Is it worth storing?
-- **Workflow**: remember → link (evaluate semantic/causal candidates with judgment) → recall.
-- **Commands**: Full memman command reference (remember, link, recall, search, forget, related, gc, status, log).
+- **Workflow**: remember → graph link (evaluate semantic/causal candidates with judgment) → recall.
+- **Commands**: Full memman command reference (remember, replace, recall, forget, graph link/related, insights candidates/review/protect/show, status, doctor, log list).
 - **Guardrails**: Never store secrets. Never write to the global store. Categories: preference, decision, insight, fact, context. Max 8,000 chars per insight.
 
 ### 2c. Add volume mounts for memman data

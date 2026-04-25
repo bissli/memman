@@ -60,26 +60,29 @@ Triggered when the total number of active insights exceeds **1000**:
 - **`PRUNE_BATCH_SIZE = 10`**: ~1% of MAX_INSIGHTS. Limits write amplification per `remember` call — a single insert never cascades into mass deletion.
 - **`MAX_OPLOG_ENTRIES = 5000`**: 5× MAX_INSIGHTS; retains approximately five operations per insight on average. Sufficient audit trail without unbounded growth.
 
-## 6.4 GC Command
+## 6.4 Insights Group
 
-Manual lifecycle management tool:
+Manual lifecycle management lives under the `memman insights` group:
 
 ```bash
-# View low-retention candidates
-memman gc --threshold 0.5
+# View low-retention candidates (read-only — does NOT delete)
+memman insights candidates --threshold 0.5
 
 # Retain a specific insight (increases access_count by +3)
-memman gc --keep <id>
+memman insights protect <id>
 
 # Review stored insights for content quality issues
-memman gc --review
+memman insights review
+
+# Read a single insight by ID
+memman insights show <id>
 ```
 
-`gc --review` scans all active insights against transient content patterns (AWS instance IDs, resource counts, verification receipts, deployment receipts, state observations, line number references). Returns flagged entries sorted by warning count. Note: since the remember pipeline now **rejects** content with 2+ quality warnings at write time, `gc --review` primarily catches insights stored before the hard gate was introduced, or single-warning content that accumulated additional transient characteristics over time.
+`insights review` scans all active insights against transient content patterns (AWS instance IDs, resource counts, verification receipts, deployment receipts, state observations, line number references). Returns flagged entries sorted by warning count. Note: since the remember pipeline now **rejects** content with 2+ quality warnings at write time, `insights review` primarily catches insights stored before the hard gate was introduced, or single-warning content that accumulated additional transient characteristics over time.
 
 **Rationale:**
 
-- **`boost_retention +3`**: Deliberately matches the immunity threshold (`access_count >= 3`). A single `gc --keep` guarantees immunity regardless of prior access count — the insight crosses the threshold immediately.
+- **`boost_retention +3`**: Deliberately matches the immunity threshold (`access_count >= 3`). A single `insights protect` guarantees immunity regardless of prior access count — the insight crosses the threshold immediately.
 
 ---
 

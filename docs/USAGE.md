@@ -51,7 +51,7 @@ memman uninstall --target claude-code
 | `memman skill` | Shipped `SKILL.md`                                                                                |
 | `memman prime` | Reads SessionStart JSON on stdin; emits status + compact-recall hint + guide (called by prime.sh) |
 
-`memman scheduler logs [--errors] [--lines N]` tails `~/.memman/logs/enrich.{log,err}` — the enrichment worker's output. Use `--errors` for stderr / Python tracebacks.
+`memman log worker [--errors] [--lines N]` tails `~/.memman/logs/enrich.{log,err}` — the enrichment worker's output. Use `--errors` for stderr / Python tracebacks.
 
 ---
 
@@ -76,11 +76,8 @@ memman recall "why did we choose Qdrant" --intent WHY
 # Recall with category/source filter
 memman recall "auth" --cat decision --source agent
 
-# Simple SQL LIKE matching (faster, no graph traversal)
+# Simple SQL LIKE matching (faster, no graph traversal, no LLM expansion)
 memman recall "auth" --basic
-
-# Search — token-scored keyword search
-memman search "authentication" --limit 10
 
 # Replace — deterministic replacement by ID (inherits metadata from original)
 memman replace <id> "Updated content" --cat decision --imp 5
@@ -114,12 +111,12 @@ memman forget <id>
 
 ```bash
 # Link — create a typed edge
-memman link <source_id> <target_id> --type semantic --weight 0.85
-memman link <source_id> <target_id> --type causal --weight 0.8 \
+memman graph link <source_id> <target_id> --type semantic --weight 0.85
+memman graph link <source_id> <target_id> --type causal --weight 0.8 \
   --meta '{"sub_type":"causes","reason":"..."}'
 
 # Related — BFS traversal from an insight
-memman related <id> --edge causal --depth 2
+memman graph related <id> --edge causal --depth 2
 
 # Reindex — regenerate auto-computed edges (triggered automatically on constants change)
 memman graph reindex              # live reindex
@@ -134,18 +131,23 @@ Auto-reindex fires transparently when `open_db()` detects graph constants (thres
 
 Rebuild re-enriches all insights through the full LLM pipeline (enrichment, re-embedding, causal inference, edge recreation). Processes in batches of 20. Returns `{"processed": N, "remaining": 0}`.
 
-### Lifecycle Management
+### Insights Lifecycle
 
 ```bash
-# GC — view low-retention candidates
-memman gc --threshold 0.5 --limit 20
+# Read a single insight by ID (full content + metadata)
+memman insights show <id>
 
-# GC keep — boost an insight's retention
-memman gc --keep <id>
+# List low-retention candidates (read-only — does NOT delete)
+memman insights candidates --threshold 0.5 --limit 20
 
-# GC review — scan stored insights for content quality issues
-memman gc --review
+# Boost retention of a specific insight (immune from candidates list)
+memman insights protect <id>
+
+# Scan stored insights for content quality issues
+memman insights review
 ```
+
+To actually delete an insight, use `memman forget <id>`.
 
 ### Store Management
 
@@ -159,7 +161,7 @@ memman store list
 memman store create work
 
 # Switch the default active store
-memman store set work
+memman store use work
 
 # Remove a store (cannot remove the active store)
 memman store remove old-project
@@ -178,29 +180,18 @@ Different agents or processes can use different stores via the `MEMMAN_STORE` en
 
 ```bash
 memman status                                       # memory statistics
-memman doctor                                       # run health checks on the database
-memman log                                          # operation log (default: last 20)
-memman log --limit 50                               # show more entries
-memman log --since 7d                               # entries from last 7 days
-memman log --since 24h                              # entries from last 24 hours
-memman log --since 7d --stats                       # grouped counts + never-accessed
+memman doctor                                       # health checks (sqlite, queue, keys, scheduler)
+memman config show                                  # effective configuration (env + on-disk)
+
+memman log list                                     # operation audit log (default JSON, last 20)
+memman log list --limit 50                          # show more entries
+memman log list --since 7d                          # entries from last 7 days
+memman log list --since 7d --stats                  # grouped counts + never-accessed
+memman log list --text                              # human-readable text table
+
+memman log worker [--errors] [--lines N]            # tail worker output (~/.memman/logs/enrich.{log,err})
+memman log trace [--lines N]                        # tail JSONL debug trace (~/.memman/logs/debug.log)
 ```
-
-### Visualization
-
-Export the knowledge graph for visual exploration:
-
-```bash
-# DOT format — render with Graphviz (brew install graphviz)
-memman viz --format dot -o graph.dot
-dot -Tpng graph.dot -o graph.png
-
-# Interactive HTML — open directly in the browser (vis.js, no install needed)
-memman viz --format html -o graph.html
-open graph.html
-```
-
-Nodes are colored by category (decision, fact, insight, preference, context); edges are colored by type (temporal, semantic, causal, entity).
 
 ---
 

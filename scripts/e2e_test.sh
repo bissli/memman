@@ -149,13 +149,13 @@ OUT=$($M --data-dir "$STORE_DIR" store list)
 assert_contains "lists default" "$OUT" "default"
 assert_contains "lists work" "$OUT" "work"
 
-step "store set — switch active store"
-$M --data-dir "$STORE_DIR" store set work
+step "store use — switch active store"
+$M --data-dir "$STORE_DIR" store use work
 OUT=$($M --data-dir "$STORE_DIR" store list)
 assert_contains "work is active" "$OUT" "* work"
 
-step "store set — reject nonexistent"
-OUT=$($M --data-dir "$STORE_DIR" store set nonexistent 2>&1 || true)
+step "store use — reject nonexistent"
+OUT=$($M --data-dir "$STORE_DIR" store use nonexistent 2>&1 || true)
 assert_contains "rejects missing" "$OUT" "does not exist"
 
 step "store remove — cannot remove active store"
@@ -173,11 +173,11 @@ assert_jq "default stored" "$OUT" '.facts[0].action' 'add'
 OUT=$(MEMMAN_STORE=work $M --data-dir "$STORE_DIR" remember --no-reconcile "Work store configuration uses Redis for caching layer" --cat fact --imp 3)
 assert_jq "work stored" "$OUT" '.facts[0].action' 'add'
 
-OUT=$(MEMMAN_STORE=default $M --data-dir "$STORE_DIR" search "PostgreSQL database")
+OUT=$(MEMMAN_STORE=default $M --data-dir "$STORE_DIR" recall --basic "PostgreSQL database")
 assert_contains "default finds own data" "$OUT" "PostgreSQL"
 assert_not_contains "default not finds work data" "$OUT" "Redis"
 
-OUT=$(MEMMAN_STORE=work $M --data-dir "$STORE_DIR" search "Redis caching")
+OUT=$(MEMMAN_STORE=work $M --data-dir "$STORE_DIR" recall --basic "Redis caching")
 assert_contains "work finds own data" "$OUT" "Redis"
 assert_not_contains "work not finds default data" "$OUT" "PostgreSQL"
 
@@ -214,7 +214,7 @@ assert_jq "importance is 4"        "$OUT" '.facts[0].importance' '4'
 assert_contains "tags include tool" "$OUT" '"tool"'
 assert_contains "entities has Qdrant" "$OUT" '"Qdrant"'
 
-step "recall — keyword search"
+step "recall — keyword recall --basic"
 OUT=$($M --data-dir "$TESTDIR" recall "Qdrant")
 show_json "$OUT" 10
 assert_contains "found Qdrant insight" "$OUT" "User prefers Qdrant"
@@ -248,7 +248,7 @@ show_json "$OUT" 15
 assert_jq "action is replaced" "$OUT" '.facts[0].action' 'replace'
 assert_jq "replaced_id set"   "$OUT" '.facts[0].replaced_id' "$ID_REPL"
 
-OUT=$($M --data-dir "$TESTDIR" search "Python scripting")
+OUT=$($M --data-dir "$TESTDIR" recall --basic "Python scripting")
 assert_contains "new content present" "$OUT" "Python is excellent"
 assert_not_contains "old content gone" "$OUT" "Python is best"
 
@@ -281,14 +281,14 @@ step "status — verify edge count"
 OUT=$($M --data-dir "$TESTDIR2" status)
 assert_jq_gte "edges >= 5" "$OUT" '.edge_count' '5'
 
-step "related — temporal traversal from B"
-OUT=$($M --data-dir "$TESTDIR2" related "$ID_B" --edge temporal)
+step "graph related — temporal traversal from B"
+OUT=$($M --data-dir "$TESTDIR2" graph related "$ID_B" --edge temporal)
 show_json "$OUT" 20
 assert_contains "finds A via temporal" "$OUT" "$ID_A"
 assert_contains "finds C via temporal" "$OUT" "$ID_C"
 
-step "related — traversal from B (temporal only, causal deferred to graph rebuild)"
-OUT=$($M --data-dir "$TESTDIR2" related "$ID_B" --edge temporal)
+step "graph related — traversal from B (temporal only, causal deferred to graph rebuild)"
+OUT=$($M --data-dir "$TESTDIR2" graph related "$ID_B" --edge temporal)
 show_json "$OUT" 10
 assert_contains "finds A via temporal" "$OUT" "$ID_A"
 
@@ -308,9 +308,9 @@ assert_jq_gte "entity edges created (bidirectional)" "$OUT" '.facts[0].edges_cre
 ID_E=$(extract_id "$OUT")
 
 step "Entity edge — bidirectional traversal"
-OUT=$($M --data-dir "$TESTDIR2" related "$ID_E" --edge entity)
+OUT=$($M --data-dir "$TESTDIR2" graph related "$ID_E" --edge entity)
 assert_contains "E → D via entity" "$OUT" "$ID_D"
-OUT=$($M --data-dir "$TESTDIR2" related "$ID_D" --edge entity)
+OUT=$($M --data-dir "$TESTDIR2" graph related "$ID_D" --edge entity)
 assert_contains "D → E via entity (reverse)" "$OUT" "$ID_E"
 
 step "Entity extraction — file paths"
@@ -322,15 +322,15 @@ assert_contains "file path extracted" "$OUT" './cmd/root.go'
 banner "Milestone 3: Search + Diff"
 # ══════════════════════════════════════════════════════════════════════
 
-step "search — token-scored search"
-OUT=$($M --data-dir "$TESTDIR2" search "Rust performance")
+step "recall --basic — token-only retrieval"
+OUT=$($M --data-dir "$TESTDIR2" recall --basic "Rust performance")
 show_json "$OUT" 15
 assert_contains "finds decision insight" "$OUT" "Chose Qdrant"
-assert_contains "has score field"        "$OUT" '"score"'
+assert_contains "results envelope"       "$OUT" '"results"'
 
-step "search — no match returns []"
-OUT=$($M --data-dir "$TESTDIR2" search "zzz_no_match_zzz")
-assert_jq "empty array" "$OUT" 'length' '0'
+step "recall --basic — no match returns empty results"
+OUT=$($M --data-dir "$TESTDIR2" recall --basic "zzz_no_match_zzz")
+assert_jq "empty results array" "$OUT" '.results | length' '0'
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -411,25 +411,25 @@ OUT=$($M --data-dir "$TESTDIR5" graph rebuild --dry-run)
 show_json "$OUT" 5
 assert_contains "has total" "$OUT" '"total"'
 
-step "link — create semantic edge"
-OUT=$($M --data-dir "$TESTDIR5" link "$ID_S1" "$ID_S2" --type semantic --weight 0.85)
+step "graph link — create semantic edge"
+OUT=$($M --data-dir "$TESTDIR5" graph link "$ID_S1" "$ID_S2" --type semantic --weight 0.85)
 show_json "$OUT" 10
 assert_jq "status is linked" "$OUT" '.status' 'linked'
 assert_jq "edge type is semantic" "$OUT" '.edge_type' 'semantic'
 assert_contains "created_by claude" "$OUT" '"created_by"'
 
-step "link — verify bidirectional edges"
-OUT=$($M --data-dir "$TESTDIR5" related "$ID_S1" --edge semantic)
+step "graph link — verify bidirectional edges"
+OUT=$($M --data-dir "$TESTDIR5" graph related "$ID_S1" --edge semantic)
 assert_contains "S1 → S2 via semantic" "$OUT" "$ID_S2"
-OUT=$($M --data-dir "$TESTDIR5" related "$ID_S2" --edge semantic)
+OUT=$($M --data-dir "$TESTDIR5" graph related "$ID_S2" --edge semantic)
 assert_contains "S2 → S1 via semantic (reverse)" "$OUT" "$ID_S1"
 
-step "link — weight validation"
-OUT=$($M --data-dir "$TESTDIR5" link "$ID_S1" "$ID_S2" --type semantic --weight 1.5 2>&1 || true)
+step "graph link — weight validation"
+OUT=$($M --data-dir "$TESTDIR5" graph link "$ID_S1" "$ID_S2" --type semantic --weight 1.5 2>&1 || true)
 assert_contains "rejects weight > 1.0" "$OUT" "weight must be"
 
-step "link — nonexistent insight"
-OUT=$($M --data-dir "$TESTDIR5" link "$ID_S1" "nonexistent-id-000" --type semantic --weight 0.5 2>&1 || true)
+step "graph link — nonexistent insight"
+OUT=$($M --data-dir "$TESTDIR5" graph link "$ID_S1" "nonexistent-id-000" --type semantic --weight 0.5 2>&1 || true)
 assert_contains "rejects missing insight" "$OUT" "not found"
 
 step "smart recall — semantic edges participate in traversal"
@@ -470,15 +470,15 @@ assert_contains "has effective_importance" "$OUT" '"effective_importance"'
 assert_contains "has auto_pruned" "$OUT" '"auto_pruned"'
 assert_jq "auto_pruned is 0 (under cap)" "$OUT" '.facts[0].auto_pruned' '0'
 
-step "gc — suggest mode returns candidates with effective_importance"
-OUT=$($M --data-dir "$TESTDIR6" gc --threshold 0.7)
+step "insights candidates — suggest mode returns candidates with effective_importance"
+OUT=$($M --data-dir "$TESTDIR6" insights candidates --threshold 0.7)
 show_json "$OUT" 25
 assert_contains "has candidates field" "$OUT" '"candidates"'
 assert_contains "has actions field"    "$OUT" '"actions"'
 assert_contains "has max_insights"     "$OUT" '"max_insights"'
 assert_jq_gte "total_insights >= 5" "$OUT" '.total_insights' '5'
 
-step "gc — low-importance non-immune insights appear as candidates"
+step "insights candidates — low-importance non-immune insights appear as candidates"
 CAND_COUNT=$(echo "$OUT" | jq '.candidates_found')
 TOTAL=$((TOTAL + 1))
 if [ "$CAND_COUNT" -ge 1 ]; then
@@ -489,27 +489,27 @@ else
   echo -e "    ${RED}✘${RESET} Expected >= 1 GC candidates, got $CAND_COUNT"
 fi
 
-step "gc — candidates have effective_importance and immune fields"
+step "insights candidates — candidates have effective_importance and immune fields"
 FIRST=$(echo "$OUT" | jq '.candidates[0]')
 assert_contains "has effective_importance" "$FIRST" '"effective_importance"'
 assert_contains "has days_since"           "$FIRST" '"days_since_access"'
 assert_contains "has immune field"         "$FIRST" '"immune"'
 
-step "gc — immune insights (imp>=4) are excluded from candidates"
+step "insights candidates — immune insights (imp>=4) are excluded from candidates"
 # Check that no candidate has importance >= 4
 HIGH_IMP=$(echo "$OUT" | jq '[.candidates[] | select(.insight.importance >= 4)] | length')
 assert_jq "no high-imp candidates" "$OUT" '[.candidates[] | select(.insight.importance >= 4)] | length' '0'
 
-step "gc --keep — boost retention"
-OUT=$($M --data-dir "$TESTDIR6" gc --keep "$ID_LOW")
+step "insights protect — boost retention"
+OUT=$($M --data-dir "$TESTDIR6" insights protect "$ID_LOW")
 show_json "$OUT" 10
 assert_jq "status is retained" "$OUT" '.status' 'retained'
 assert_jq "access count boosted" "$OUT" '.new_access' '3'
 assert_contains "has effective_importance" "$OUT" '"effective_importance"'
 assert_contains "has immune field"         "$OUT" '"immune"'
 
-step "gc — kept insight becomes immune (access_count >= 3)"
-OUT_AFTER=$($M --data-dir "$TESTDIR6" gc --threshold 0.7)
+step "insights candidates — kept insight becomes immune (access_count >= 3)"
+OUT_AFTER=$($M --data-dir "$TESTDIR6" insights candidates --threshold 0.7)
 KEPT_STILL=$(echo "$OUT_AFTER" | jq --arg id "$ID_LOW" '[.candidates[].insight.id] | index($id)')
 TOTAL=$((TOTAL + 1))
 if [ "$KEPT_STILL" = "null" ]; then
@@ -520,12 +520,12 @@ else
   echo -e "    ${RED}✘${RESET} Boosted insight should be immune but still in candidates"
 fi
 
-step "gc --keep — nonexistent insight"
-OUT=$($M --data-dir "$TESTDIR6" gc --keep "nonexistent-id-000" 2>&1 || true)
+step "insights protect — nonexistent insight"
+OUT=$($M --data-dir "$TESTDIR6" insights protect "nonexistent-id-000" 2>&1 || true)
 assert_contains "rejects missing insight" "$OUT" "not found"
 
-step "gc — high threshold returns more candidates"
-OUT=$($M --data-dir "$TESTDIR6" gc --threshold 2.0)
+step "insights candidates — high threshold returns more candidates"
+OUT=$($M --data-dir "$TESTDIR6" insights candidates --threshold 2.0)
 HIGH_COUNT=$(echo "$OUT" | jq '.candidates_found')
 TOTAL=$((TOTAL + 1))
 if [ "$HIGH_COUNT" -ge "$CAND_COUNT" ]; then
@@ -541,17 +541,17 @@ banner "Observability: Operation Log"
 # ══════════════════════════════════════════════════════════════════════
 
 step "log — shows operations from TESTDIR2"
-OUT=$($M --data-dir "$TESTDIR2" log --limit 30)
+OUT=$($M --data-dir "$TESTDIR2" log list --limit 30)
 echo "$OUT" | head -10 | sed 's/^/    /'
 assert_contains "log has remember ops" "$OUT" "remember"
 assert_contains "log has recall ops"   "$OUT" "recall"
 
-step "log — shows link and gc operations"
-OUT=$($M --data-dir "$TESTDIR5" log --limit 30)
+step "log — shows link and insights candidates operations"
+OUT=$($M --data-dir "$TESTDIR5" log list --limit 30)
 assert_contains "log has link ops" "$OUT" "link"
 
-OUT=$($M --data-dir "$TESTDIR6" log --limit 30)
-assert_contains "log has gc ops" "$OUT" "gc"
+OUT=$($M --data-dir "$TESTDIR6" log list --limit 30)
+assert_contains "log has insights candidates ops" "$OUT" "insights candidates"
 
 # ══════════════════════════════════════════════════════════════════════
 banner "Milestone 7: Embedding Support (Ollama)"
@@ -593,7 +593,7 @@ if [ "$OLLAMA_OK" = "true" ]; then
   OUT=$($M --data-dir "$TESTDIR7" embed status)
   assert_jq "all embedded" "$OUT" '.coverage' '100%'
 
-  step "recall — uses hybrid search with embeddings"
+  step "recall — uses hybrid recall --basic with embeddings"
   OUT=$($M --data-dir "$TESTDIR7" recall "embedding test")
   COUNT=$(echo "$OUT" | jq '.results | length')
   TOTAL=$((TOTAL + 1))
@@ -730,7 +730,7 @@ assert_jq "auto_pruned is 0 under cap" "$OUT" '.facts[0].auto_pruned' '0'
 
 step "auto-prune — effective_importance varies by importance level"
 # imp=5 should have much higher EI than imp=1
-OUT_HIGH=$($M --data-dir "$TESTDIR10" gc --threshold 999)
+OUT_HIGH=$($M --data-dir "$TESTDIR10" insights candidates --threshold 999)
 # All non-immune candidates should be imp=1 or 2
 TOTAL=$((TOTAL + 1))
 IMMUNE_IN_CAND=$(echo "$OUT_HIGH" | jq '[.candidates[] | select(.immune == true)] | length')

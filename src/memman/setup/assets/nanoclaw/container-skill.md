@@ -5,10 +5,16 @@ description: Persistent graph-based memory. Recall context before responding, re
 
 # memman — Persistent Memory
 
-## Memory Stores
+`memman` is a CLI on PATH inside the container. Memory is organized into
+typed insights and a graph of edges between them. In this NanoClaw
+integration, all enrichment runs inline before `remember` returns.
 
-- **Private** (default): Per-group, read-write. All writes go here.
-- **Global**: Shared across all groups, read-only. Use `--store global --readonly` to query.
+## Memory stores
+
+- **Private** (default): per-group, read-write. All writes go here.
+- **Global**: shared across all groups, read-only. Append `--store global --readonly` to read it.
+
+Never write to the global store — the mount is read-only.
 
 ## Recall — before responding
 
@@ -17,10 +23,8 @@ description: Persistent graph-based memory. Recall context before responding, re
 - No reference to past sessions, decisions, or preferences
 - No knowledge dependency beyond the current conversation
 
-To recall:
 ```bash
 memman recall "<query>" --limit 5
-# Also check shared memory:
 memman recall "<query>" --store global --readonly --limit 5
 ```
 
@@ -50,42 +54,63 @@ Run this decision tree after every substantive response:
 
 **What to store**: conclusions and user-specific context, not raw facts.
 
-## Workflow
-
-1. **Remember**: `memman remember "<fact>" --cat <cat> --imp <1-5> --entities "e1,e2" --source agent`
-   - Diff is built-in: duplicates skipped, conflicts auto-replaced.
-   - Output includes `action` (added/updated/skipped/replaced), `enrichment` (keywords, summary, entities), and `edges_created` (temporal, entity, causal).
-   - All edge creation, LLM enrichment, and causal inference run inline before `remember` returns.
-   - **Replace**: `memman replace <id> "<new content>"` — deterministic replacement by ID. Inherits metadata from original unless overridden. Carries `access_count` forward.
-2. **Link** (manual linking when you identify relationships):
-   - Syntax: `memman link <id> <target> --type <causal|semantic> --weight <0-1> [--meta '<json>']`
-   - For causal links, pass sub_type via `--meta`: `memman link <id> <target> --type causal --meta '{"sub_type": "causes"}'` (values: `causes`, `enables`, `prevents`)
-3. **Recall**: `memman recall "<query>" --limit 10`
-
-## Commands
+## Storing what you learn
 
 ```bash
-memman remember "<fact>" --cat <cat> --imp <1-5> --entities "e1,e2" --source agent
-memman link <id1> <id2> --type <type> --weight <0-1> [--meta '<json>']
-memman recall "<query>" --limit 10
-memman recall "<query>" --store global --readonly --limit 10
-memman search "<query>" --limit 10
-memman replace <id> "<new content>" [--cat] [--imp] [--tags] [--entities] [--source]
-memman forget <id>
-memman related <id> --edge causal
-memman gc --threshold 0.4
-memman gc --keep <id>
-memman graph rebuild
-memman graph reindex
-memman status
-memman doctor
-memman log [--limit N] [--since 7d]
+memman remember "<fact>" --cat <category> --imp <1-5> --tags "t1,t2" --entities "e1,e2" --source agent
+```
+
+Categories: `preference` · `decision` · `fact` · `insight` · `context`.
+
+Correct an existing insight by ID:
+
+```bash
+memman replace <id> "<new content>"
+```
+
+`replace` inherits metadata from the original unless overridden.
+
+## Recalling and inspecting
+
+```bash
+memman recall "<query>" --limit 10                    # smart recall
+memman recall "<keyword>" --basic                      # fast token-only
+memman insights show <id>                              # read by ID
+```
+
+Add `--intent WHY|WHEN|ENTITY` to bias ranking when intent is unambiguous.
+
+## Forgetting and protecting
+
+```bash
+memman forget <id>                    # soft-delete
+memman insights protect <id>          # boost retention
+memman insights candidates            # list low-retention candidates
+memman insights review                # scan content quality issues
+```
+
+## Working with relationships
+
+```bash
+memman graph link <src> <tgt> --type semantic --weight 0.85
+memman graph link <src> <tgt> --type causal --weight 0.8 \
+    --meta '{"sub_type": "causes"}'
+memman graph related <id> --depth 2
+```
+
+Causal `sub_type` values: `causes` · `enables` · `prevents`.
+
+## Inspecting the system
+
+```bash
+memman status                         # insight count, store
+memman doctor                         # health check
+memman log list [--since 7d]          # operation audit log
 ```
 
 ## Guardrails
 
-- Do not store secrets, passwords, or tokens.
+- Never store secrets, passwords, or tokens.
 - Never write to the global store — it is mounted read-only.
-- Categories: `preference` · `decision` · `insight` · `fact` · `context`
-- Edge types: `temporal` · `semantic` · `causal` · `entity`
-- Max 8,000 chars per insight.
+- Max 8,000 characters per insight.
+- One self-contained fact per `remember` call.

@@ -36,7 +36,7 @@ Optional:
 | `MEMMAN_LOG_LEVEL`           | Override logger level when neither `--verbose` nor `--debug` is passed.          |
 | `MEMMAN_REMEMBER_DEFAULT`    | `sync` or `defer` to force the `remember` default regardless of scheduler state. |
 
-Run `memman keys test` to probe both providers with cheap calls.
+Run `memman doctor` to probe both providers with cheap calls (the `llm_probe` and `embed_probe` checks).
 
 ## Conventions
 
