@@ -126,7 +126,13 @@ def openclaw_uninstall(config_dir: str) -> list[Exception]:
 
 
 def install_openclaw(env: dict, data_dir: str) -> None:
-    """Install memman into OpenClaw (~/.openclaw/)."""
+    """Install memman into OpenClaw (~/.openclaw/).
+
+    OpenClaw is host-resident; the top-level `memman install` flow
+    invokes `setup.scheduler.install` after every CLI integration, so
+    OpenClaw inherits the host's systemd/launchd-driven worker without
+    any extra wiring here.
+    """
     from memman.setup.claude import _init_default_store
 
     config_dir = env['config_dir']

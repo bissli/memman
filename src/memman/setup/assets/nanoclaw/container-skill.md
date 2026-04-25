@@ -6,8 +6,15 @@ description: Persistent graph-based memory. Recall context before responding, re
 # memman — Persistent Memory
 
 `memman` is a CLI on PATH inside the container. Memory is organized into
-typed insights and a graph of edges between them. In this NanoClaw
-integration, all enrichment runs inline before `remember` returns.
+typed insights and a graph of edges between them. The container has no
+systemd or launchd, so the scheduler trigger lands in inline mode:
+`remember` enqueues then drains in-process before returning. From your
+perspective writes are synchronous — same code path as a host with the
+scheduler started.
+
+If `memman scheduler stop` is run inside the container, memman becomes
+recall-only: `remember` / `replace` / `forget` reject with a clear error
+until `memman scheduler start` re-arms the worker.
 
 ## Memory stores
 

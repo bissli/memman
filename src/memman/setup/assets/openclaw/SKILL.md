@@ -12,8 +12,14 @@ metadata:
 
 `memman` is a CLI on PATH — invoke commands directly via the `exec`
 tool. Memory is organized into typed insights and a graph of edges
-between them. In this OpenClaw integration, all enrichment runs inline
-before `remember` returns (no background worker).
+between them.
+
+OpenClaw is host-resident, so the host's systemd or launchd-driven
+worker drains queued writes. `memman remember` returns as soon as the
+write is queued; recall reads the latest committed state. If
+`memman scheduler stop` is ever run on the host, memman becomes
+recall-only — every write returns a clear error pointing at
+`memman scheduler start`.
 
 ## Storing what you learn
 
