@@ -41,6 +41,24 @@ def _state_file_path() -> Path:
     return Path.home() / '.memman' / STATE_FILENAME
 
 
+def _enforce_data_dir_perms(data_dir: str) -> None:
+    """Tighten ~/.memman, ~/.memman/logs, ~/.memman/data to 0700.
+
+    Idempotent — safe to call from install or any setup path. The env
+    file inside ~/.memman is written separately at 0600 by
+    _write_env_file. SQLite databases under ~/.memman/data/ are owned
+    by the user; the dir mode is what enforces "no other user can see
+    insight content".
+    """
+    base = Path(data_dir)
+    base.mkdir(parents=True, exist_ok=True)
+    base.chmod(0o700)
+    for sub in ('logs', 'data'):
+        d = base / sub
+        d.mkdir(parents=True, exist_ok=True)
+        d.chmod(0o700)
+
+
 def read_state() -> str:
     """Read the scheduler intent state. Missing file -> 'active'."""
     path = _state_file_path()
@@ -133,6 +151,12 @@ def install(data_dir: str,
     Writes both API keys to ~/.memman/env at mode 600 (merging with any
     existing keys) and installs the timer/plist that runs
     `memman scheduler drain --pending` at the given interval.
+
+    Tightens permissions on ~/.memman, ~/.memman/logs, ~/.memman/data
+    to 0700 — the env file holds API keys (mode 0600 by atomic write),
+    the data dir holds insight content, the logs dir holds worker
+    output that may include LLM request payloads. Owner-only is the
+    correct default for all three.
     """
     kind = detect_scheduler()
     if not kind:
@@ -141,6 +165,7 @@ def install(data_dir: str,
             ' expected systemd (Linux) or launchd (macOS)')
     binary = memman_binary_path()
 
+    _enforce_data_dir_perms(data_dir)
     env_actions = _write_env_file(openrouter_api_key, voyage_api_key)
 
     if kind == 'systemd':
