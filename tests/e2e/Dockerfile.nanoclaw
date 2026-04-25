@@ -1,0 +1,49 @@
+# Test image mirroring the deployment shape that
+# `src/memman/setup/assets/nanoclaw/SKILL.md` instructs nanoclaw users
+# to build. Used only by `tests/e2e/test_nanoclaw_container.py`.
+#
+# Build context: repo root.
+# Build command (driven by testcontainers fixture): see
+# tests/e2e/conftest.py::nanoclaw_image.
+
+FROM python:3.11-slim
+
+# nanoclaw containers run as the `node` user; pin uid/gid so bind-mount
+# permissions are predictable.
+RUN groupadd -g 1000 node \
+ && useradd  -m -u 1000 -g 1000 -s /bin/bash node \
+ && apt-get update && apt-get install -y --no-install-recommends \
+        bash ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# Install memman from the bind-mounted source tree.
+WORKDIR /memman
+COPY pyproject.toml poetry.lock README.md ./
+COPY src ./src
+RUN pip install --no-cache-dir .
+
+# Drop the lifecycle hook scripts where the nanoclaw SKILL says.
+# (No --chmod= — testcontainers builds without BuildKit; chmod inline.)
+COPY src/memman/setup/assets/nanoclaw/hooks/ /app/hooks/memman/
+RUN chmod 0755 /app/hooks/memman/*.sh
+
+# Container behavioral guide (pre-baked, exactly what `/add-memman`
+# would COPY into the user's nanoclaw build context).
+COPY src/memman/setup/assets/nanoclaw/container-skill.md \
+     /app/skills/memman/SKILL.md
+
+# Memman state lives under /home/node/.memman in the running container.
+# Pre-write scheduler markers so writes don't reject with "Scheduler is
+# stopped" — containers always run inline (no systemd/launchd).
+RUN install -d -o node -g node -m 755 /home/node/.memman \
+ && install -d -o node -g node -m 755 /home/node/.memman/data \
+ && printf 'inline\n'  > /home/node/.memman/scheduler.inline \
+ && printf 'started\n' > /home/node/.memman/scheduler.state \
+ && chown node:node /home/node/.memman/scheduler.* \
+ && chmod 600       /home/node/.memman/scheduler.*
+
+USER node
+WORKDIR /home/node
+ENV PATH=/usr/local/bin:/usr/bin:/bin
+
+CMD ["sleep", "infinity"]
