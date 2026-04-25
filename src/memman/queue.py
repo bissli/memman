@@ -113,16 +113,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """Apply the canonical queue schema.
 
     Single-user tool: one authoritative schema (`_BASELINE_SCHEMA`),
-    always the latest. Existing databases that pre-date a column add
-    are tolerated by a best-effort ALTER TABLE that ignores duplicate-
-    column errors. No version table — this is the only forward path.
+    always the latest. `CREATE TABLE IF NOT EXISTS` creates a fresh
+    queue database; pre-existing databases must already match the
+    canonical shape — wipe and recreate on schema change rather than
+    carrying ALTER migrations.
     """
     conn.executescript(_BASELINE_SCHEMA)
-    try:
-        conn.execute(
-            'ALTER TABLE queue ADD COLUMN hint_no_reconcile INTEGER NOT NULL DEFAULT 0')
-    except sqlite3.OperationalError:
-        pass
 
 
 def enqueue(

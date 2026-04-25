@@ -149,8 +149,8 @@ def _drain_inline_if_needed(ctx: click.Context) -> list[dict]:
     The drain summary written to stdout is captured and parsed so the
     caller can merge enrichment fields (`edges_created`, `enrichment`,
     etc.) into the queued-action response. nanoclaw and tests rely on
-    this so a single `remember` call returns the same shape as the old
-    sync path.
+    this so a single `remember` call returns the new insight ids and
+    enrichment counts in one shot.
     """
     import contextlib
     import io

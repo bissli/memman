@@ -228,12 +228,9 @@ def _migrate(db: DB) -> None:
     """Apply the canonical schema to the database.
 
     Single-user tool: one authoritative schema (`_BASELINE_SCHEMA`),
-    always the latest. `CREATE TABLE IF NOT EXISTS` creates fresh
-    databases; existing databases are expected to already match.
-
-    When a column is added to the schema here, the author also ALTERs
-    their own `~/.memman/data/*/memman.db` files once (a one-off
-    maintenance step); after that, every open through this function
-    is a no-op.
+    always the latest. `CREATE TABLE IF NOT EXISTS` creates a fresh
+    database; pre-existing databases must already match the canonical
+    shape — wipe and recreate on schema change rather than carrying
+    ALTER migrations.
     """
     db._conn.executescript(_BASELINE_SCHEMA)
