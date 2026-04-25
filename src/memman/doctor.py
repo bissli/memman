@@ -506,8 +506,7 @@ def check_embed_fingerprint(db: 'DB') -> dict:
     runtime, but as a structured doctor check so the operator sees
     the active/stored values explicitly.
     """
-    from memman.embed.fingerprint import (
-        active_fingerprint, stored_fingerprint)
+    from memman.embed.fingerprint import active_fingerprint, stored_fingerprint
 
     detail: dict = {
         'active': None,

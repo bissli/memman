@@ -2001,45 +2001,24 @@ def embed_status(ctx: click.Context) -> None:
 _REEMBED_BATCH = 50
 
 
-@embed_grp.command('reembed')
-@click.option(
-    '--yes', is_flag=True, default=False,
-    help='Proceed without interactive confirmation.')
-@click.option(
-    '--dry-run', is_flag=True, default=False,
-    help='Count rows that would be re-embedded; no DB writes.')
-@click.pass_context
-def embed_reembed(ctx: click.Context, yes: bool, dry_run: bool) -> None:
-    """Sweep all rows with the active client; write the fingerprint.
+def _reembed_one_store(
+        sdir: str, ec: 'EmbeddingProvider', target: 'Fingerprint',
+        dry_run: bool) -> dict:
+    """Re-embed a single store with the active client.
 
-    Three cases through one walk:
-    1. Empty DB - zero rows; only the fingerprint is written.
-    2. Existing DB on the same provider - rows match; skip re-embed.
-    3. Provider swap - rows mismatch; re-embed each.
-
-    The sweep is resumable: progress is tracked in
-    `meta.embed_reembed_state` and `meta.embed_reembed_cursor`. A
-    crash mid-sweep leaves state='in_progress'; re-running picks up
-    from the cursor.
+    Walk all active insights, comparing each to `target`. Skip rows
+    that already match; re-embed rows that differ. Per-row blob +
+    cursor advance is one transaction; the final fingerprint write +
+    cursor reset + state=idle + edge reindex is another.
     """
-    from memman.embed import get_client
-    from memman.embed.fingerprint import Fingerprint, write_fingerprint
+    from memman.embed.fingerprint import write_fingerprint
     from memman.embed.vector import serialize_vector
     from memman.graph.engine import reindex_auto_edges
-    from memman.store.db import get_meta, set_meta
+    from memman.store.db import get_meta, open_db, set_meta
     from memman.store.node import update_embedding
     from memman.store.oplog import log_op
 
-    if not dry_run:
-        _require_stopped('reembed')
-
-    ec = get_client()
-    if not ec.available():
-        raise click.ClickException(ec.unavailable_message())
-
-    target = Fingerprint.from_client(ec)
-
-    db = _open_db_unchecked(ctx)
+    db = open_db(sdir)
     try:
         cur_state = get_meta(db, 'embed_reembed_state')
         cursor = get_meta(db, 'embed_reembed_cursor') or ''
@@ -2048,8 +2027,10 @@ def embed_reembed(ctx: click.Context, yes: bool, dry_run: bool) -> None:
         reembedded = 0
 
         if not dry_run and cur_state != 'in_progress':
-            set_meta(db, 'embed_reembed_state', 'in_progress')
-            set_meta(db, 'embed_reembed_cursor', '')
+            def _start_sweep() -> None:
+                set_meta(db, 'embed_reembed_state', 'in_progress')
+                set_meta(db, 'embed_reembed_cursor', '')
+            db.in_transaction(_start_sweep)
             cursor = ''
 
         while True:
@@ -2070,41 +2051,109 @@ def embed_reembed(ctx: click.Context, yes: bool, dry_run: bool) -> None:
                     row_model == target.model
                     and row_dim == target.dim
                     and blob_len)
-                if not matches:
-                    if not dry_run:
-                        new_vec = ec.embed(content)
-                        update_embedding(
-                            db, row_id, serialize_vector(new_vec))
-                    reembedded += 1
-                cursor = row_id
-                if not dry_run:
-                    set_meta(db, 'embed_reembed_cursor', cursor)
+                if not matches and not dry_run:
+                    new_vec = ec.embed(content)
+                    blob = serialize_vector(new_vec)
 
+                    def _write_row() -> None:
+                        update_embedding(db, row_id, blob, target.model)
+                        set_meta(db, 'embed_reembed_cursor', row_id)
+                    db.in_transaction(_write_row)
+                    reembedded += 1
+                else:
+                    if not dry_run:
+                        set_meta(db, 'embed_reembed_cursor', row_id)
+                cursor = row_id
+
+        store_name = pathlib.Path(sdir).name
         if dry_run:
-            _json_out({
+            return {
+                'store': store_name,
                 'scanned': scanned,
                 'would_reembed': reembedded,
-                'dry_run': 1,
-                })
-            return
+                }
 
-        write_fingerprint(db, target)
-        set_meta(db, 'embed_reembed_cursor', '')
-        set_meta(db, 'embed_reembed_state', 'idle')
+        def _finalize() -> None:
+            write_fingerprint(db, target)
+            set_meta(db, 'embed_reembed_cursor', '')
+            set_meta(db, 'embed_reembed_state', 'idle')
 
+        db.in_transaction(_finalize)
         edge_stats = reindex_auto_edges(db)
 
         stats = {
+            'store': store_name,
             'scanned': scanned,
             'reembedded': reembedded,
-            'fingerprint': {
-                'provider': target.provider,
-                'model': target.model,
-                'dim': target.dim,
-                },
             'edges': edge_stats,
             }
         log_op(db, 'embed_reembed', '', json.dumps(stats))
-        _json_out(stats)
+        return stats
     finally:
         db.close()
+
+
+@embed_grp.command('reembed')
+@click.option(
+    '--dry-run', is_flag=True, default=False,
+    help='Count rows that would be re-embedded; no DB writes.')
+@click.pass_context
+def embed_reembed(ctx: click.Context, dry_run: bool) -> None:
+    """Sweep every store with the active client; write fingerprints.
+
+    Always global: iterates all stores under the configured
+    data_dir. The active embed provider is set by a single global
+    env var, so a swap necessarily applies to every store; per-store
+    scoping is intentionally not supported.
+
+    Three cases through one walk per store:
+    1. Empty DB - zero rows; only the fingerprint is written.
+    2. Existing DB on the same provider - rows match; skip re-embed.
+    3. Provider swap - rows mismatch; re-embed each.
+
+    The sweep is resumable per store: progress is tracked in each
+    store's `meta.embed_reembed_state` and `meta.embed_reembed_cursor`.
+    A crash mid-sweep leaves state='in_progress'; re-running picks
+    up from the cursor.
+    """
+    from memman.embed import get_client
+    from memman.embed.fingerprint import Fingerprint
+    from memman.store.db import list_stores, store_dir
+
+    if not dry_run:
+        _require_stopped('reembed')
+
+    ec = get_client()
+    if not ec.available():
+        raise click.ClickException(ec.unavailable_message())
+
+    target = Fingerprint.from_client(ec)
+    data_dir = ctx.obj['data_dir']
+    names = list_stores(data_dir)
+
+    per_store = []
+    total_scanned = 0
+    total_reembedded = 0
+    for name in names:
+        sdir = store_dir(data_dir, name)
+        result = _reembed_one_store(sdir, ec, target, dry_run)
+        per_store.append(result)
+        total_scanned += result.get('scanned', 0)
+        total_reembedded += result.get(
+            'reembedded' if not dry_run else 'would_reembed', 0)
+
+    out: dict = {
+        'fingerprint': {
+            'provider': target.provider,
+            'model': target.model,
+            'dim': target.dim,
+            },
+        'stores': per_store,
+        'total_scanned': total_scanned,
+        }
+    if dry_run:
+        out['total_would_reembed'] = total_reembedded
+        out['dry_run'] = 1
+    else:
+        out['total_reembedded'] = total_reembedded
+    _json_out(out)

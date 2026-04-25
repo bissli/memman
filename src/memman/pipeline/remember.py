@@ -463,7 +463,7 @@ def _apply_plan(
     final_blob = plan.enriched_blob or plan.embed_blob
     embedded = final_blob is not None
     if final_blob is not None:
-        update_embedding(db, fi.id, final_blob)
+        update_embedding(db, fi.id, final_blob, fi.embedding_model or '')
     if fi.entities:
         update_entities(db, fi.id, fi.entities)
 

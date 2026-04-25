@@ -75,6 +75,35 @@ def force_drain(data_dir: str) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _autoseed_fingerprint(request, monkeypatch):
+    """Auto-seed `meta.embed_fingerprint` whenever assert_consistent runs.
+
+    Production: `setup.claude._init_default_store` seeds the meta row at
+    install time. Tests don't run install; instead, this fixture wraps
+    `assert_consistent` to seed-if-missing then assert. Net effect:
+    every fresh DB used in CLI tests behaves as if `memman install`
+    had pre-seeded it.
+
+    Tests that exercise unseeded behavior (e.g. the assert itself)
+    should mark themselves `@pytest.mark.no_autoseed_fingerprint`.
+    """
+    if 'tests/e2e/' in str(request.node.fspath):
+        return
+    if 'no_autoseed_fingerprint' in request.keywords:
+        return
+
+    from memman.embed import fingerprint as fp_mod
+    real_assert = fp_mod.assert_consistent
+
+    def seed_then_assert(db):
+        if fp_mod.stored_fingerprint(db) is None:
+            fp_mod.write_fingerprint(db, fp_mod.active_fingerprint())
+        real_assert(db)
+
+    monkeypatch.setattr(fp_mod, 'assert_consistent', seed_then_assert)
+
+
+@pytest.fixture(autouse=True)
 def _mock_apis(request, monkeypatch):
     """Mock LLM and embedding HTTP calls unless --live is set.
 
@@ -298,10 +327,20 @@ def _mock_embed(self: object, text: str) -> list[float]:
 
 
 @pytest.fixture
-def tmp_db(tmp_path):
-    """Fresh SQLite database in temp directory."""
+def tmp_db(request, tmp_path):
+    """Fresh SQLite database in temp directory.
+
+    Seeds `meta.embed_fingerprint` to match the active client by
+    default, mirroring `setup.claude._init_default_store`. Tests
+    exercising unseeded behavior should use the
+    `no_autoseed_fingerprint` mark.
+    """
     from memman.store.db import open_db
     db = open_db(str(tmp_path))
+    if 'no_autoseed_fingerprint' not in request.keywords:
+        from memman.embed.fingerprint import (
+            active_fingerprint, write_fingerprint)
+        write_fingerprint(db, active_fingerprint())
     yield db
     db.close()
 

@@ -310,8 +310,8 @@ class TestSemanticEdgesHighCosine:
 
         vec1 = [1.0, 0.0, 0.0, 0.0]
         vec2 = [0.99, 0.01, 0.0, 0.0]
-        update_embedding(tmp_db, 'sv-1', serialize_vector(vec1))
-        update_embedding(tmp_db, 'sv-2', serialize_vector(vec2))
+        update_embedding(tmp_db, 'sv-1', serialize_vector(vec1), 'voyage-3-lite')
+        update_embedding(tmp_db, 'sv-2', serialize_vector(vec2), 'voyage-3-lite')
 
         cache = {'sv-1': vec1, 'sv-2': vec2}
         count = create_semantic_edges(tmp_db, ins1, embed_cache=cache)
@@ -333,8 +333,8 @@ class TestSemanticEdgesLowCosine:
 
         vec1 = [1.0, 0.0, 0.0, 0.0]
         vec2 = [0.0, 1.0, 0.0, 0.0]
-        update_embedding(tmp_db, 'sl-1', serialize_vector(vec1))
-        update_embedding(tmp_db, 'sl-2', serialize_vector(vec2))
+        update_embedding(tmp_db, 'sl-1', serialize_vector(vec1), 'voyage-3-lite')
+        update_embedding(tmp_db, 'sl-2', serialize_vector(vec2), 'voyage-3-lite')
 
         cache = {'sl-1': vec1, 'sl-2': vec2}
         count = create_semantic_edges(tmp_db, ins1, embed_cache=cache)
@@ -394,8 +394,8 @@ class TestBuildEmbedCache:
 
         vec1 = [1.0, 2.0, 3.0]
         vec2 = [4.0, 5.0, 6.0]
-        update_embedding(tmp_db, 'bc-1', serialize_vector(vec1))
-        update_embedding(tmp_db, 'bc-2', serialize_vector(vec2))
+        update_embedding(tmp_db, 'bc-1', serialize_vector(vec1), 'voyage-3-lite')
+        update_embedding(tmp_db, 'bc-2', serialize_vector(vec2), 'voyage-3-lite')
 
         cache = build_embed_cache(tmp_db)
         assert cache is not None

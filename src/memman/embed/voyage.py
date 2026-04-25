@@ -122,4 +122,4 @@ class Client:
         """Return error message when Voyage is not available."""
         return (
             f'Voyage not available at {self.endpoint}'
-            f' -- set VOYAGE_API_KEY to enable embeddings')
+            f' -- set {config.VOYAGE_API_KEY} to enable embeddings')

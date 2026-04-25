@@ -567,7 +567,7 @@ class TestUpdateAndGetEmbedding:
             id='emb-1', content='content'))
 
         blob = bytes([1, 2, 3, 4, 5, 6, 7, 8])
-        update_embedding(tmp_db, 'emb-1', blob)
+        update_embedding(tmp_db, 'emb-1', blob, 'voyage-3-lite')
 
         got = get_embedding(tmp_db, 'emb-1')
         assert got is not None

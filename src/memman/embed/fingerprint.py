@@ -14,9 +14,13 @@ There is no scan-on-open helper and no first-write seeding.
 
 import json
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from memman.exceptions import EmbedFingerprintError
 from memman.store.db import DB, get_meta, set_meta
+
+if TYPE_CHECKING:
+    from memman.embed import EmbeddingProvider
 
 META_KEY = 'embed_fingerprint'
 
@@ -42,15 +46,27 @@ class Fingerprint:
     @classmethod
     def from_json(cls, s: str) -> 'Fingerprint':
         """Parse from the JSON string written by `to_json`.
+
+        Malformed JSON, missing keys, and bad types raise
+        `EmbedFingerprintError` so the caller surfaces a clean
+        operator-facing error rather than a stdlib traceback.
         """
-        d = json.loads(s)
-        return cls(
-            provider=str(d['provider']),
-            model=str(d['model']),
-            dim=int(d['dim']))
+        try:
+            d = json.loads(s)
+            return cls(
+                provider=str(d['provider']),
+                model=str(d['model']),
+                dim=int(d['dim']))
+        except (json.JSONDecodeError, KeyError, TypeError,
+                ValueError) as exc:
+            raise EmbedFingerprintError(
+                f'corrupt embed_fingerprint meta value: {exc}'
+                f" -- run 'memman embed reembed' to reset"
+                ) from exc
 
     @classmethod
-    def from_client(cls, client: object) -> 'Fingerprint':
+    def from_client(
+            cls, client: 'EmbeddingProvider') -> 'Fingerprint':
         """Build from any embed client exposing name/model/dim.
         """
         return cls(

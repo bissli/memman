@@ -18,7 +18,7 @@ def _insert_healthy_insight(db, id: str, content: str = 'Healthy test insight wi
     ins = make_insight(id=id, content=content)
     insert_insight(db, ins)
     update_enrichment(db, id, ['kw1', 'kw2'], 'summary text', ['fact1'])
-    update_embedding(db, id, _fake_embedding())
+    update_embedding(db, id, _fake_embedding(), 'voyage-3-lite')
 
 
 def _insert_edge_pair(db, id_a: str, id_b: str, edge_type: str = 'semantic') -> None:
@@ -125,7 +125,8 @@ class TestEmbeddingConsistency:
         _insert_healthy_insight(tmp_db, 'emb-1')
         ins2 = make_insight(id='emb-2', content='Different dim embedding')
         insert_insight(tmp_db, ins2)
-        update_embedding(tmp_db, 'emb-2', _fake_embedding(dim=256))
+        update_embedding(tmp_db, 'emb-2', _fake_embedding(dim=256),
+                         'voyage-3-lite')
         result = check_embedding_consistency(tmp_db)
         assert result['status'] == 'fail'
         assert len(result['detail']['sizes']) > 1
@@ -187,5 +188,7 @@ class TestRunAllChecks:
             for id_b in ids[i + 1:]:
                 _insert_edge_pair(tmp_db, id_a, id_b)
         result = run_all_checks(tmp_db)
-        assert result['status'] == 'pass'
+        assert result['status'] == 'pass', [
+            (c['name'], c['status'], c.get('detail'))
+            for c in result['checks'] if c['status'] != 'pass']
         assert all(c['status'] == 'pass' for c in result['checks'])

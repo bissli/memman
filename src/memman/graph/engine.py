@@ -132,7 +132,8 @@ def link_pending(
                 if embed_cache is not None:
                     embed_cache[insight.id] = new_vec
                 update_embedding(
-                    db, insight.id, serialize_vector(new_vec))
+                    db, insight.id, serialize_vector(new_vec),
+                    getattr(embed_client, 'model', None) or '')
 
             delete_auto_edges_for_node(db, insight.id, 'entity')
             create_entity_edges(db, insight)

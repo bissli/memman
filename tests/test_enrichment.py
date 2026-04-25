@@ -166,6 +166,7 @@ class TestReEmbed:
         mock_embed = MagicMock()
         mock_embed.available.return_value = True
         mock_embed.embed.return_value = [0.1, 0.2, 0.3]
+        mock_embed.model = 'voyage-3-lite'
 
         embed_cache = build_embed_cache(tmp_db) or {}
         link_pending(

@@ -455,12 +455,20 @@ def get_stats(db: 'DB') -> dict:
     return stats
 
 
-def update_embedding(db: 'DB', id: str, blob: bytes) -> None:
-    """Store an embedding vector for an insight."""
+def update_embedding(db: 'DB', id: str, blob: bytes,
+                     model: str) -> None:
+    """Store an embedding vector and its model name for an insight.
+
+    Both the blob and `embedding_model` are persisted atomically so
+    the row's per-row provenance stays in sync with its vector. The
+    `embed reembed` loop's idempotency check depends on this column
+    being current.
+    """
     now = format_timestamp(datetime.now(timezone.utc))
     db._exec(
-        'UPDATE insights SET embedding = ?, updated_at = ? WHERE id = ?',
-        (blob, now, id))
+        'UPDATE insights SET embedding = ?, embedding_model = ?,'
+        ' updated_at = ? WHERE id = ?',
+        (blob, model, now, id))
 
 
 def get_embedding(db: 'DB', id: str) -> bytes | None:

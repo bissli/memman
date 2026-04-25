@@ -33,6 +33,8 @@ build-backend = "poetry.core.masonry.api"
 testpaths = ["tests"]
 markers = [
     "no_mock_llm: skip the autouse OpenRouterClient.complete mock; keep ZDR + embedding stubs",
+    "no_scheduler_started_mock: skip the autouse scheduler-started mock; tests run with the real read_state",
+    "no_autoseed_fingerprint: skip the autouse meta.embed_fingerprint seed; exercises raw assert_consistent semantics",
     "e2e_cli: end-to-end CLI tests run via subprocess against the installed memman; no Docker required",
     "e2e_container: end-to-end tests that build/run a Docker container via testcontainers",
     "systemd: tests that require systemd-as-PID-1 (privileged container); opt-in only",

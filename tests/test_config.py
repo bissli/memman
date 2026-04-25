@@ -11,6 +11,7 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_STORE',
     'MEMMAN_LLM_PROVIDER',
     'MEMMAN_LLM_MODEL',
+    'MEMMAN_EMBED_PROVIDER',
     'MEMMAN_OPENROUTER_ENDPOINT',
     'MEMMAN_CACHE_DIR',
     'MEMMAN_DEBUG',
@@ -18,6 +19,11 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_LOG_LEVEL',
     'OPENROUTER_API_KEY',
     'VOYAGE_API_KEY',
+    'MEMMAN_OPENAI_EMBED_API_KEY',
+    'MEMMAN_OPENAI_EMBED_ENDPOINT',
+    'MEMMAN_OPENAI_EMBED_MODEL',
+    'MEMMAN_OLLAMA_HOST',
+    'MEMMAN_OLLAMA_EMBED_MODEL',
     }
 
 
@@ -26,10 +32,16 @@ def test_constants_match_expected_names():
     """
     actual = {
         config.DATA_DIR, config.STORE, config.LLM_PROVIDER,
-        config.LLM_MODEL, config.OPENROUTER_ENDPOINT, config.CACHE_DIR,
+        config.LLM_MODEL, config.EMBED_PROVIDER,
+        config.OPENROUTER_ENDPOINT, config.CACHE_DIR,
         config.DEBUG, config.WORKER, config.LOG_LEVEL,
         config.OPENROUTER_API_KEY,
         config.VOYAGE_API_KEY,
+        config.OPENAI_EMBED_API_KEY,
+        config.OPENAI_EMBED_ENDPOINT,
+        config.OPENAI_EMBED_MODEL,
+        config.OLLAMA_HOST,
+        config.OLLAMA_EMBED_MODEL,
         }
     assert actual == ALL_EXPECTED_NAMES
 
