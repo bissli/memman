@@ -128,13 +128,13 @@ mkdir -p "$STORE_DIR"
 
 step "store list — empty on fresh dir"
 OUT=$($M --data-dir "$STORE_DIR" store list)
-assert_contains "no stores message" "$OUT" "no stores yet"
+assert_jq "empty stores array" "$OUT" '.stores | length' '0'
 
 step "store create — create stores"
 OUT=$($M --data-dir "$STORE_DIR" store create default)
-assert_contains "created default" "$OUT" 'Created store "default"'
+assert_jq "created default" "$OUT" '.action' 'created'
 OUT=$($M --data-dir "$STORE_DIR" store create work)
-assert_contains "created work" "$OUT" 'Created store "work"'
+assert_jq "created work" "$OUT" '.store' 'work'
 
 step "store create — reject duplicate"
 OUT=$($M --data-dir "$STORE_DIR" store create work 2>&1 || true)
@@ -146,13 +146,13 @@ assert_contains "rejects invalid" "$OUT" "invalid store name"
 
 step "store list — shows created stores"
 OUT=$($M --data-dir "$STORE_DIR" store list)
-assert_contains "lists default" "$OUT" "default"
-assert_contains "lists work" "$OUT" "work"
+assert_jq "lists default" "$OUT" '.stores | index("default") != null' 'true'
+assert_jq "lists work" "$OUT" '.stores | index("work") != null' 'true'
 
 step "store use — switch active store"
-$M --data-dir "$STORE_DIR" store use work
+$M --data-dir "$STORE_DIR" store use work >/dev/null
 OUT=$($M --data-dir "$STORE_DIR" store list)
-assert_contains "work is active" "$OUT" "* work"
+assert_jq "work is active" "$OUT" '.active' 'work'
 
 step "store use — reject nonexistent"
 OUT=$($M --data-dir "$STORE_DIR" store use nonexistent 2>&1 || true)
@@ -163,9 +163,9 @@ OUT=$($M --data-dir "$STORE_DIR" store remove work 2>&1 || true)
 assert_contains "rejects active removal" "$OUT" "cannot remove the active store"
 
 step "store remove — remove inactive store"
-$M --data-dir "$STORE_DIR" store create temp
-OUT=$($M --data-dir "$STORE_DIR" store remove temp)
-assert_contains "removed temp" "$OUT" 'Removed store "temp"'
+$M --data-dir "$STORE_DIR" store create temp >/dev/null
+OUT=$($M --data-dir "$STORE_DIR" store remove temp --yes)
+assert_jq "removed temp" "$OUT" '.action' 'removed'
 
 step "data isolation — memories in different stores are isolated"
 OUT=$(MEMMAN_STORE=default $M --data-dir "$STORE_DIR" remember --no-reconcile "Configuration for the default store uses PostgreSQL database" --cat fact --imp 3)

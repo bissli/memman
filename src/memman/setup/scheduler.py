@@ -296,14 +296,18 @@ def pause() -> dict:
                 f'scheduler unit not installed at {timer_path};'
                 " run 'memman install' first")
         subprocess.run(
-            ['systemctl', '--user', 'disable', '--now',
-             SYSTEMD_TIMER_NAME], check=False)
+            ['systemctl', '--user', 'stop', SYSTEMD_TIMER_NAME],
+            check=False, capture_output=True)
+        subprocess.run(
+            ['systemctl', '--user', 'disable', SYSTEMD_TIMER_NAME],
+            check=False, capture_output=True)
         write_state(STATE_PAUSED)
         return {
             'platform': 'systemd',
             'state': STATE_PAUSED,
             'actions': [
-                'systemctl --user disable --now memman-enrich.timer'],
+                'systemctl --user stop memman-enrich.timer',
+                'systemctl --user disable memman-enrich.timer'],
             }
     plist_path = _launchd_agent_dir() / f'{LAUNCHD_LABEL}.plist'
     if not plist_path.exists():
@@ -508,21 +512,33 @@ def _install_systemd(binary: str, data_dir: str,
 
 
 def _uninstall_systemd() -> dict:
-    """Disable the timer and remove unit files."""
+    """Stop the timer, disable the unit, and remove unit files.
+
+    Splits stop+disable into separate calls instead of `disable --now`
+    because some systemd versions surface a benign-but-noisy
+    `DisableUnitFilesWithFlagsAndInstallInfo` dbus error from the
+    combined path; the split path is universally compatible. Stderr is
+    captured so transient dbus chatter never reaches the user.
+    """
     unit_dir = _systemd_unit_dir()
     timer_path = unit_dir / SYSTEMD_TIMER_NAME
     service_path = unit_dir / SYSTEMD_SERVICE_NAME
     actions = []
     subprocess.run(
-        ['systemctl', '--user', 'disable', '--now',
-         SYSTEMD_TIMER_NAME], check=False)
-    actions.append('systemctl --user disable --now memman-enrich.timer')
+        ['systemctl', '--user', 'stop', SYSTEMD_TIMER_NAME],
+        check=False, capture_output=True)
+    actions.append('systemctl --user stop memman-enrich.timer')
+    subprocess.run(
+        ['systemctl', '--user', 'disable', SYSTEMD_TIMER_NAME],
+        check=False, capture_output=True)
+    actions.append('systemctl --user disable memman-enrich.timer')
     for p in (timer_path, service_path):
         if p.exists():
             p.unlink()
             actions.append(f'removed {p}')
     subprocess.run(
-        ['systemctl', '--user', 'daemon-reload'], check=False)
+        ['systemctl', '--user', 'daemon-reload'],
+        check=False, capture_output=True)
     return {'platform': 'systemd', 'actions': actions}
 
 
@@ -626,10 +642,13 @@ def change_interval(data_dir: str, new_seconds: int) -> dict:
         result = _install_systemd(binary, data_dir, new_seconds)
         if not was_enabled:
             subprocess.run(
-                ['systemctl', '--user', 'disable', '--now',
-                 SYSTEMD_TIMER_NAME], check=False)
+                ['systemctl', '--user', 'stop', SYSTEMD_TIMER_NAME],
+                check=False, capture_output=True)
+            subprocess.run(
+                ['systemctl', '--user', 'disable', SYSTEMD_TIMER_NAME],
+                check=False, capture_output=True)
             result['actions'].append(
-                'systemctl --user disable --now memman-enrich.timer'
+                'systemctl --user stop+disable memman-enrich.timer'
                 ' (restored prior disabled state)')
         return result
     was_loaded = _launchd_is_loaded()
