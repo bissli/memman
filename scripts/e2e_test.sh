@@ -109,20 +109,26 @@ extract_id() {
 # ── Setup ─────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-# Force synchronous remember regardless of installed scheduler state.
-# The e2e exercises the inline write path and asserts on the {facts: [...]}
-# envelope, which only the sync path returns; the deferred path returns
-# {action: queued, queue_id, store}.
-export MEMMAN_REMEMBER_DEFAULT=sync
 
 TESTDATA="/tmp/memman-e2e-$$"
 TESTDATA_PERSIST="$PROJECT_DIR/.testdata"
 TESTDIR="$TESTDATA/m1"
 M=memman
 
-# Clean previous test data (run in /tmp to avoid Dropbox WAL sync issues)
+# Clean previous test data (run in /tmp to avoid Dropbox WAL sync issues).
 rm -rf "$TESTDATA" "$TESTDATA_PERSIST"
 mkdir -p "$TESTDIR"
+
+# Run with HOME pointing into the test dir so ~/.memman/scheduler.state
+# and ~/.memman/scheduler.inline are isolated per-run. Set the inline
+# trigger so every `remember` enqueues + drains in-process — the same
+# code path nanoclaw containers exercise — and writes are visible to the
+# next CLI call without waiting for a real systemd timer.
+export HOME="$TESTDATA"
+mkdir -p "$HOME/.memman"
+printf 'started\n' >"$HOME/.memman/scheduler.state"
+printf 'inline\n' >"$HOME/.memman/scheduler.inline"
+chmod 600 "$HOME/.memman/scheduler.state" "$HOME/.memman/scheduler.inline"
 echo -e "  ${DIM}  Test data: $TESTDATA/${RESET}"
 
 # ══════════════════════════════════════════════════════════════════════

@@ -45,11 +45,10 @@ memman uninstall --target claude-code
 
 ### Live-read commands
 
-| Command        | What it prints                                                                                    |
-| -------------- | ------------------------------------------------------------------------------------------------- |
-| `memman guide` | Shipped `guide.md` (read from the installed package via `importlib.resources`)                    |
-| `memman skill` | Shipped `SKILL.md`                                                                                |
-| `memman prime` | Reads SessionStart JSON on stdin; emits status + compact-recall hint + guide (called by prime.sh) |
+| Command        | What it prints                                                                                     |
+| -------------- | -------------------------------------------------------------------------------------------------- |
+| `memman guide` | Shipped `guide.md` (hidden, called by openclaw bootstrap; humans read `guide.md` from the package) |
+| `memman prime` | Reads SessionStart JSON on stdin; emits status + compact-recall hint + guide (called by prime.sh)  |
 
 `memman log worker [--errors] [--lines N]` tails `~/.memman/logs/enrich.{log,err}` — the enrichment worker's output. Use `--errors` for stderr / Python tracebacks.
 
@@ -118,18 +117,14 @@ memman graph link <source_id> <target_id> --type causal --weight 0.8 \
 # Related — BFS traversal from an insight
 memman graph related <id> --edge causal --depth 2
 
-# Reindex — regenerate auto-computed edges (triggered automatically on constants change)
-memman graph reindex              # live reindex
-memman graph reindex --dry-run    # preview changes without modifying DB
-
 # Rebuild — full LLM re-enrichment + re-embed + edge rebuild
 memman graph rebuild              # process all insights
 memman graph rebuild --dry-run    # preview count without modifying DB
 ```
 
-Auto-reindex fires transparently when `open_db()` detects graph constants (thresholds, weights) have changed. Manual reindex is available for debugging or forcing edge regeneration. Use `--dry-run` to preview what would change.
+Auto-reindex of computed edges (semantic, entity, temporal) fires transparently when `open_db()` detects graph constants have changed — there is no operator command for it.
 
-Rebuild re-enriches all insights through the full LLM pipeline (enrichment, re-embedding, causal inference, edge recreation). Processes in batches of 20. Returns `{"processed": N, "remaining": 0}`.
+Rebuild re-enriches all insights through the full LLM pipeline (enrichment, re-embedding, causal inference, edge recreation). Processes in batches of 20. Returns `{"processed": N, "remaining": 0}`. Rejected when the scheduler is stopped.
 
 ### Insights Lifecycle
 
@@ -190,7 +185,6 @@ memman log list --since 7d --stats                  # grouped counts + never-acc
 memman log list --text                              # human-readable text table
 
 memman log worker [--errors] [--lines N]            # tail worker output (~/.memman/logs/enrich.{log,err})
-memman log trace [--lines N]                        # tail JSONL debug trace (~/.memman/logs/debug.log)
 ```
 
 ---

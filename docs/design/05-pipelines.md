@@ -18,14 +18,15 @@
 
 No LLM calls. No embeddings. No similarity scan. No edges. The host session never blocks.
 
-`--sync` forces the old in-process synchronous path (used by tests and low-level tooling).
+There is no sync path: every write goes through the queue. When the scheduler is **stopped**, memman is recall-only and writes reject with a fixed error pointing at `memman scheduler start`.
 
 ### Tier 2: Background worker (scheduler-driven)
 
-`memman scheduler drain --pending` (hidden subcommand; only the unit invokes it) is run on a platform-native timer:
+`memman scheduler drain --pending` (hidden subcommand; only the trigger invokes it) is run by an environment-native trigger:
 
-- **Linux**: `systemctl --user` timer at `~/.config/systemd/user/memman-enrich.timer`, `Persistent=true` so sleep/off catch-up is automatic.
-- **macOS**: launchd agent at `~/Library/LaunchAgents/com.memman.enrich.plist` with `StartInterval=60`.
+- **Linux host**: `systemctl --user` timer at `~/.config/systemd/user/memman-enrich.timer`, `Persistent=true` so sleep/off catch-up is automatic.
+- **macOS host**: launchd agent at `~/Library/LaunchAgents/com.memman.enrich.plist` with `StartInterval=60`.
+- **nanoclaw container** (no systemd / launchd): inline trigger marker at `~/.memman/scheduler.inline`. The CLI runs the same `_drain_queue` code in-process after each successful enqueue, so the just-written row is visible to the next CLI call.
 
 Per-blob processing inside `_process_queue_row`:
 
@@ -44,19 +45,18 @@ Session-path (`memman recall` query expansion) uses direct Anthropic API with ha
 
 ### Operational controls
 
-| Command                                   | Effect                                          |
-| ----------------------------------------- | ----------------------------------------------- |
-| `memman scheduler queue list [--limit N]` | inspect pending/done/failed rows                |
-| `memman scheduler queue retry <id>`       | re-queue a failed row                           |
-| `memman scheduler queue purge --done`     | delete completed rows                           |
-| `memman scheduler status`                 | install state, interval, next run, queue depth  |
-| `memman scheduler enable`                 | activate (worker drains, remember --defer)      |
-| `memman scheduler pause`                  | idle without removing units (queue accumulates) |
-| `memman scheduler disable`                | remove units (remember defaults to --sync)      |
-| `memman scheduler interval --seconds N`   | change cadence (min 60 s)                       |
-| `memman scheduler trigger`                | run the drain now (outside interval)            |
+| Command                                   | Effect                                         |
+| ----------------------------------------- | ---------------------------------------------- |
+| `memman scheduler queue list [--limit N]` | inspect pending/done/failed rows               |
+| `memman scheduler queue retry <id>`       | re-queue a failed row                          |
+| `memman scheduler queue purge --done`     | delete completed rows                          |
+| `memman scheduler status`                 | install state, interval, next run, queue depth |
+| `memman scheduler start`                  | activate the trigger (idempotent)              |
+| `memman scheduler stop`                   | deactivate the trigger; trigger files stay     |
+| `memman scheduler interval --seconds N`   | change cadence (min 60 s)                      |
+| `memman scheduler trigger`                | run the drain now (rejects when stopped)       |
 
-`memman graph rebuild` re-enriches all already-stored insights through the full LLM pipeline (useful after model/prompt changes). `memman graph reindex` recalculates auto-created edges without LLM calls and runs automatically on DB open when edge constants change.
+`memman graph rebuild` re-enriches all already-stored insights through the full LLM pipeline (useful after model/prompt changes; rejects when the scheduler is stopped). Auto-created edges (semantic, entity, temporal) are recomputed automatically on DB open when edge constants change — no operator command for that.
 
 ---
 

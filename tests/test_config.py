@@ -1,9 +1,7 @@
 """Tests for memman.config -- central env-var configuration module.
 
 Verifies the canonical env var names, typed helpers (`get_bool`,
-`is_worker`), effective-config enumeration with secret redaction, and
-the `resolve_remember_default()` selector that feeds
-`remember --defer/--sync`.
+`is_worker`), and effective-config enumeration with secret redaction.
 """
 
 from memman import config

@@ -23,18 +23,17 @@ The scheduler-driven enrichment worker needs two API keys. Set them in `~/.memma
 
 Optional:
 
-| Variable                     | Purpose                                                                          |
-| ---------------------------- | -------------------------------------------------------------------------------- |
-| `MEMMAN_DATA_DIR`            | Override `~/.memman` as the data root.                                           |
-| `MEMMAN_STORE`               | Override the active store without editing `~/.memman/active`.                    |
-| `MEMMAN_LLM_PROVIDER`        | Registered provider name (default `openrouter`).                                 |
-| `MEMMAN_LLM_MODEL`           | Override the auto-picked Haiku model id (validated against ZDR inventory).       |
-| `MEMMAN_OPENROUTER_ENDPOINT` | Override the OpenRouter base URL.                                                |
-| `MEMMAN_CACHE_DIR`           | Override the ZDR endpoint-list cache location.                                   |
-| `MEMMAN_DEBUG`               | Truthy value enables JSONL tracing to `~/.memman/logs/debug.log`.                |
-| `MEMMAN_WORKER`              | `1` inside the scheduler-triggered worker; enables the rotating log.             |
-| `MEMMAN_LOG_LEVEL`           | Override logger level when neither `--verbose` nor `--debug` is passed.          |
-| `MEMMAN_REMEMBER_DEFAULT`    | `sync` or `defer` to force the `remember` default regardless of scheduler state. |
+| Variable                     | Purpose                                                                    |
+| ---------------------------- | -------------------------------------------------------------------------- |
+| `MEMMAN_DATA_DIR`            | Override `~/.memman` as the data root.                                     |
+| `MEMMAN_STORE`               | Override the active store without editing `~/.memman/active`.              |
+| `MEMMAN_LLM_PROVIDER`        | Registered provider name (default `openrouter`).                           |
+| `MEMMAN_LLM_MODEL`           | Override the auto-picked Haiku model id (validated against ZDR inventory). |
+| `MEMMAN_OPENROUTER_ENDPOINT` | Override the OpenRouter base URL.                                          |
+| `MEMMAN_CACHE_DIR`           | Override the ZDR endpoint-list cache location.                             |
+| `MEMMAN_DEBUG`               | Truthy value enables JSONL tracing to `~/.memman/logs/debug.log`.          |
+| `MEMMAN_WORKER`              | `1` inside the scheduler-triggered worker; enables the rotating log.       |
+| `MEMMAN_LOG_LEVEL`           | Override logger level when neither `--verbose` nor `--debug` is passed.    |
 
 Run `memman doctor` to probe both providers with cheap calls (the `llm_probe` and `embed_probe` checks).
 

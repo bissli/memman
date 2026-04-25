@@ -127,21 +127,24 @@ they land for future sessions.
 
 `memman graph rebuild` re-enriches all already-stored insights through
 the full LLM pipeline. Use it after model or prompt changes, or to
-repair partial enrichment.
-
-`memman graph reindex` recalculates auto-created edges (semantic,
-entity, temporal) without LLM calls. It runs automatically on DB open
-when edge constants change.
+repair partial enrichment. Auto-created edges (semantic, entity,
+temporal) are reindexed automatically on DB open when edge constants
+change — no operator command for that.
 
 ### Scheduler controls
 
-The enrichment worker runs via a user-scope systemd timer (Linux) or
-launchd agent (macOS). Operational controls:
+Memman has a single write path: every `remember` / `replace` enqueues,
+and a worker drains the queue. The trigger varies by environment —
+systemd timer on Linux, launchd agent on macOS, in-process inline on
+nanoclaw containers — but the contract is the same.
+
+When the scheduler is **stopped**, memman is recall-only: every write
+exits 1 with `Scheduler is stopped; cannot <verb>. Run 'memman
+scheduler start' to enable.`
 
 - `memman scheduler status` — install state, interval, next run, queue depth.
-- `memman scheduler pause` — stop draining; queue accumulates; units kept on disk.
-- `memman scheduler enable` — resume from pause.
-- `memman scheduler disable` — remove units entirely; `remember` defaults to `--sync`.
+- `memman scheduler start` — activate the trigger (idempotent).
+- `memman scheduler stop` — deactivate the trigger; trigger files stay on disk.
 - `memman scheduler interval --seconds N` — change cadence (min 60s).
-- `memman scheduler trigger` — run the drain now, outside the normal interval.
+- `memman scheduler trigger` — run the drain now (rejects when stopped).
 - `memman log worker [--errors]` — tail the enrichment worker logs.

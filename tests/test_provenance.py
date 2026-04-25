@@ -106,9 +106,8 @@ def runner(tmp_path):
     return r, data_dir
 
 
-def test_remember_sync_stamps_provenance(runner):
-    """`remember --sync` stores rows with all three provenance columns set.
-    """
+def test_remember_stamps_provenance(runner):
+    """`remember` stores rows with all three provenance columns set."""
     r, data_dir = runner
 
     def _one_fact(client, content):

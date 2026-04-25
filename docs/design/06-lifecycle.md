@@ -113,10 +113,6 @@ Vectors are serialized as little-endian float64 BLOBs stored in the `insights.em
 - **Recovery (`graph rebuild`)**: Re-enriches all insights through the full LLM pipeline and updates embeddings
 - **Recall**: Expanded query is embedded for vector search anchors and reranking
 
-### Management Commands
+### Recovery
 
-```bash
-memman embed status              # View coverage
-memman embed backfill            # Batch-generate embeddings for all insights
-memman embed run <id>            # Generate for a single insight
-```
+`memman graph rebuild` re-enriches all insights through the full LLM pipeline and updates embeddings. There is no separate operator command for embedding maintenance — the worker owns the embedding lifecycle (initial, merged, enriched, rebuild).
