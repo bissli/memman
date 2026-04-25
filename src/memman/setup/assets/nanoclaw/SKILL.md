@@ -52,6 +52,16 @@ Add the following block **after** the `apt-get install` section and **before** t
 ```dockerfile
 # Install memman for persistent agent memory
 RUN pip install --no-cache-dir git+https://github.com/bissli/memman.git
+
+# Bootstrap memman scheduler markers: containers always run inline (no
+# systemd/launchd inside the image), so we pre-write the inline trigger
+# marker and the started-state file. Without these, every memman write
+# rejects with "Scheduler is stopped".
+RUN install -d -o node -g node -m 755 /home/node/.memman \
+ && printf 'inline\n'  > /home/node/.memman/scheduler.inline \
+ && printf 'started\n' > /home/node/.memman/scheduler.state \
+ && chown node:node /home/node/.memman/scheduler.* \
+ && chmod 600       /home/node/.memman/scheduler.*
 ```
 
 ### 2b. Add the container skill
@@ -100,51 +110,27 @@ Adapt the mount syntax to match the existing pattern in `container-runner.ts` (i
 
 ### 2d. Add lifecycle hook scripts
 
-Create `container/hooks/memman/` with four shell scripts. These run inside the container at Claude Code lifecycle events to actively drive memory operations.
-
-**File**: `container/hooks/memman/prime.sh`
-
-```bash
-#!/bin/bash
-# memman SessionStart hook — report memory stats on session init.
-STATS=$(memman status 2>/dev/null)
-if [ -n "$STATS" ]; then
-  INSIGHTS=$(echo "$STATS" | sed -n 's/.*"total_insights": *\([0-9]*\).*/\1/p' | head -1)
-  EDGES=$(echo "$STATS" | sed -n 's/.*"edge_count": *\([0-9]*\).*/\1/p' | head -1)
-  echo "[memman] Memory active (${INSIGHTS:-0} insights, ${EDGES:-0} edges)."
-else
-  echo "[memman] Memory active."
-fi
-```
-
-**File**: `container/hooks/memman/user_prompt.sh`
+memman ships the three lifecycle hook scripts as files inside the
+installed package. Locate them and copy them into your container build
+context:
 
 ```bash
-#!/bin/bash
-# memman UserPromptSubmit hook — remind agent to evaluate recall/remember.
-echo "[memman] Evaluate: recall needed? After responding, evaluate: remember needed?"
+PKG=$(python -c "from importlib.resources import files; print(files('memman.setup.assets'))")
+mkdir -p container/hooks/memman
+cp "$PKG/nanoclaw/hooks/"*.sh container/hooks/memman/
+chmod +x container/hooks/memman/*.sh
 ```
 
-**File**: `container/hooks/memman/stop.sh`
+The three scripts are:
 
-```bash
-#!/bin/bash
-# memman Stop hook — prompt agent to evaluate remembering.
-# Returns JSON decision:block so the agent sees the reason and gets
-# one more turn. Checks stop_hook_active to prevent infinite loops.
+- `prime.sh` — SessionStart: prints `[memman] Memory active (N insights, M edges).`
+- `user_prompt.sh` — UserPromptSubmit: prints a recall/remember reminder.
+- `stop.sh` — Stop: returns `{"decision":"block", ...}` JSON so the agent
+  gets one more turn to evaluate remembering. Honors `stop_hook_active`
+  to prevent loops.
 
-INPUT=$(cat)
-
-if echo "$INPUT" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
-  exit 0
-fi
-
-cat <<'EOF'
-{"decision": "block", "reason": "[memman] Memory check: does this exchange contain anything worth storing (user preferences, decisions, corrections, insights, architectural facts)? If yes, call `memman remember \"<self-contained text>\"` directly via Bash in your next turn (no sub-agent delegation). If nothing qualifies, stop without comment."}
-EOF
-```
-
-Make all scripts executable: `chmod +x container/hooks/memman/*.sh`
+Read the actual scripts in your installed package to see the exact bytes
+the test suite verifies.
 
 ### 2e. Copy hooks into container and register in settings.json
 
