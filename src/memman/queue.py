@@ -420,9 +420,15 @@ def finish_worker_run(
 def last_worker_run(conn: sqlite3.Connection) -> dict | None:
     """Return the most recent worker_runs row as a dict, or None.
 
-    Consumed by `memman scheduler status` and (future) `memman doctor`
-    to surface scheduler liveness without log parsing.
+    Adds `in_progress` (true when finished_at is null), `elapsed_seconds`
+    (time since started_at, useful for both in-progress and finished
+    runs), and `alive` (true when the worker_pid is still a live process)
+    so callers can distinguish healthy in-progress runs from hung or
+    orphaned ones without log parsing.
     """
+    import os as _os
+    import time as _time
+
     row = conn.execute(
         'SELECT id, started_at, finished_at, worker_pid, rows_claimed,'
         ' rows_done, rows_failed, duration_ms, error'
@@ -430,14 +436,36 @@ def last_worker_run(conn: sqlite3.Connection) -> dict | None:
         ).fetchone()
     if row is None:
         return None
+
+    started_at = row[1]
+    finished_at = row[2]
+    worker_pid = row[3]
+    in_progress = finished_at is None
+
+    elapsed = None
+    if started_at:
+        ref = finished_at if finished_at is not None else int(_time.time())
+        elapsed = max(0, ref - started_at)
+
+    alive: bool | None = None
+    if in_progress and worker_pid:
+        try:
+            _os.kill(worker_pid, 0)
+            alive = True
+        except (OSError, ProcessLookupError):
+            alive = False
+
     return {
         'id': row[0],
-        'started_at': row[1],
-        'finished_at': row[2],
-        'worker_pid': row[3],
+        'started_at': started_at,
+        'finished_at': finished_at,
+        'worker_pid': worker_pid,
         'rows_claimed': row[4],
         'rows_done': row[5],
         'rows_failed': row[6],
         'duration_ms': row[7],
         'error': row[8],
+        'in_progress': in_progress,
+        'elapsed_seconds': elapsed,
+        'alive': alive,
         }
