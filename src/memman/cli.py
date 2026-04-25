@@ -1753,7 +1753,7 @@ def insights_protect(ctx: click.Context, id: str) -> None:
         boost_retention(db, id)
         ei = refresh_effective_importance(db, id)
         new_access = ins.access_count + 3
-        log_op(db, 'gc-keep', id, f'access+3, ei={ei:.4f}')
+        log_op(db, 'protect', id, f'access+3, ei={ei:.4f}')
         _json_out({
             'status': 'retained',
             'id': id,

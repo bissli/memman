@@ -109,6 +109,12 @@ extract_id() {
 # ── Setup ─────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+# Force synchronous remember regardless of installed scheduler state.
+# The e2e exercises the inline write path and asserts on the {facts: [...]}
+# envelope, which only the sync path returns; the deferred path returns
+# {action: queued, queue_id, store}.
+export MEMMAN_REMEMBER_DEFAULT=sync
+
 TESTDATA="/tmp/memman-e2e-$$"
 TESTDATA_PERSIST="$PROJECT_DIR/.testdata"
 TESTDIR="$TESTDATA/m1"
@@ -546,12 +552,12 @@ echo "$OUT" | head -10 | sed 's/^/    /'
 assert_contains "log has remember ops" "$OUT" "remember"
 assert_contains "log has recall ops"   "$OUT" "recall"
 
-step "log — shows link and insights candidates operations"
+step "log — shows link and insights protect operations"
 OUT=$($M --data-dir "$TESTDIR5" log list --limit 30)
 assert_contains "log has link ops" "$OUT" "link"
 
 OUT=$($M --data-dir "$TESTDIR6" log list --limit 30)
-assert_contains "log has insights candidates ops" "$OUT" "insights candidates"
+assert_contains "log has protect ops" "$OUT" "protect"
 
 # ══════════════════════════════════════════════════════════════════════
 banner "Milestone 7: Embedding Support (Ollama)"
