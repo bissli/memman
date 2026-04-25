@@ -102,7 +102,7 @@ The text you pass must be **self-contained** — dereference anaphora
 **How to store**: run `memman remember "<self-contained text>"` directly
 via Bash in your current turn. No sub-agent delegation. The binary is a
 fast blob-append (~50 ms) that queues the text; a background scheduler
-(systemd timer on Linux, launchd on macOS, every 15 min) drains the queue
+(systemd timer on Linux, launchd on macOS, every 60 s) drains the queue
 and runs the extraction/reconciliation/enrichment pipeline out-of-band.
 This means **newly-stored memories are not recallable in the current
 session** — they become available in later sessions.
@@ -121,7 +121,7 @@ periodically — no confirmation needed.
 `memman remember` is a fast queue-append by default. The full pipeline
 — fact extraction, reconciliation, enrichment, causal inference, edge
 creation, re-embedding — runs out-of-band in a scheduler-driven worker
-fired every 15 min by systemd (Linux) or launchd (macOS). Newly stored
+fired every 60 s by systemd (Linux) or launchd (macOS). Newly stored
 memories are NOT visible to `memman recall` in the current session;
 they land for future sessions.
 

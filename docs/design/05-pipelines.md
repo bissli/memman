@@ -6,7 +6,7 @@
 
 ## 5.1 Write Pipeline: Remember (deferred, two-tier)
 
-`memman remember` is a fast queue-append (~50 ms). A user-scope scheduler (systemd timer on Linux, launchd agent on macOS) invokes the hidden worker entrypoint `memman scheduler drain --pending` every 15 min to drain the queue through the full extraction + reconciliation + enrichment pipeline out of band.
+`memman remember` is a fast queue-append (~50 ms). A user-scope scheduler (systemd timer on Linux, launchd agent on macOS) invokes the hidden worker entrypoint `memman scheduler drain --pending` every 60 s to drain the queue through the full extraction + reconciliation + enrichment pipeline out of band.
 
 ![Remember Pipeline](../diagrams/02-remember-pipeline.drawio.png)
 
@@ -25,7 +25,7 @@ No LLM calls. No embeddings. No similarity scan. No edges. The host session neve
 `memman scheduler drain --pending` (hidden subcommand; only the unit invokes it) is run on a platform-native timer:
 
 - **Linux**: `systemctl --user` timer at `~/.config/systemd/user/memman-enrich.timer`, `Persistent=true` so sleep/off catch-up is automatic.
-- **macOS**: launchd agent at `~/Library/LaunchAgents/com.memman.enrich.plist` with `StartInterval=900`.
+- **macOS**: launchd agent at `~/Library/LaunchAgents/com.memman.enrich.plist` with `StartInterval=60`.
 
 Per-blob processing inside `_process_queue_row`:
 

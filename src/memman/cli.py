@@ -1274,7 +1274,7 @@ def scheduler_reconcile(ctx: click.Context) -> None:
 
 @scheduler.command('install')
 @click.option('--interval', type=int, default=None,
-              help='Polling interval in seconds (min 60). Default: 900.')
+              help='Polling interval in seconds (min 60). Default: 60.')
 @click.pass_context
 def scheduler_install(ctx: click.Context, interval: int | None) -> None:
     """Install the scheduler unit only (no agent integration).

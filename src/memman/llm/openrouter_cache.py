@@ -2,7 +2,7 @@
 
 Two-tier: cachetools TTLCache in-process for a single worker run, and a
 JSON file on disk for cross-invocation persistence (cron fires a new
-process every 15 min). 24h TTL on both tiers. Stale-disk fallback when
+process every 60 s). 24h TTL on both tiers. Stale-disk fallback when
 the network is unavailable.
 """
 

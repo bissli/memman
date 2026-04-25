@@ -2,7 +2,7 @@
 
 Detects platform (systemd on Linux, launchd on macOS) and writes the
 appropriate user-scope unit / plist that runs `memman scheduler drain
---pending` every 15 min. Units handle sleep/power-off catch-up natively.
+--pending` every 60 s. Units handle sleep/power-off catch-up natively.
 
 The scheduler path always routes through OpenRouter with ZDR enforced.
 Both OPENROUTER_API_KEY and VOYAGE_API_KEY are written to `~/.memman/env`
@@ -23,7 +23,7 @@ SYSTEMD_SERVICE_NAME = 'memman-enrich.service'
 LAUNCHD_LABEL = 'com.memman.enrich'
 ENV_FILENAME = 'env'
 STATE_FILENAME = 'scheduler.state'
-DEFAULT_INTERVAL_SECONDS = 900
+DEFAULT_INTERVAL_SECONDS = 60
 
 STATE_ACTIVE = 'active'
 STATE_PAUSED = 'paused'

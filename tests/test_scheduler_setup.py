@@ -217,6 +217,26 @@ def test_change_interval_rejects_too_short(
         sch.change_interval(str(fake_home), 30)
 
 
+def test_default_interval_is_60_seconds():
+    """DEFAULT_INTERVAL_SECONDS is 60 so the worker drains promptly.
+    """
+    assert sch.DEFAULT_INTERVAL_SECONDS == 60
+
+
+def test_install_without_interval_uses_60s_default(
+        fake_home, fake_binary, monkeypatch):
+    """install() with no interval_seconds writes a 60s timer.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    _no_subprocess(monkeypatch)
+    result = sch.install(data_dir=str(fake_home),
+                         openrouter_api_key='x',
+                         voyage_api_key='y')
+    assert result['interval_seconds'] == 60
+    timer = Path(result['timer_path']).read_text()
+    assert 'OnUnitActiveSec=60s' in timer
+
+
 def test_status_not_installed(fake_home, monkeypatch):
     """status() reports installed=False when no unit file exists.
     """
