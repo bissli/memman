@@ -24,10 +24,15 @@ LAUNCHD_LABEL = 'com.memman.enrich'
 ENV_FILENAME = 'env'
 STATE_FILENAME = 'scheduler.state'
 INLINE_MARKER_FILENAME = 'scheduler.inline'
+DEBUG_STATE_FILENAME = 'debug.state'
 DEFAULT_INTERVAL_SECONDS = 60
 
 STATE_STARTED = 'started'
 STATE_STOPPED = 'stopped'
+
+DEBUG_ON = 'on'
+DEBUG_OFF = 'off'
+VALID_DEBUG_STATES = (DEBUG_ON, DEBUG_OFF)
 
 
 def _state_file_path() -> Path:
@@ -91,6 +96,52 @@ def is_inline_trigger() -> bool:
     OS-driven timer to fire the worker.
     """
     return _inline_marker_path().exists()
+
+
+def _debug_state_file_path() -> Path:
+    """Return ~/.memman/debug.state. Per-host; never synced."""
+    return Path.home() / '.memman' / DEBUG_STATE_FILENAME
+
+
+def read_debug_state() -> str:
+    """Read the persistent debug-trace state. Missing file -> 'off'."""
+    path = _debug_state_file_path()
+    try:
+        value = path.read_text().strip()
+    except (OSError, FileNotFoundError):
+        return DEBUG_OFF
+    return value if value in VALID_DEBUG_STATES else DEBUG_OFF
+
+
+def write_debug_state(state: str) -> None:
+    """Atomically persist the debug-trace state."""
+    if state not in VALID_DEBUG_STATES:
+        raise ValueError(f'invalid debug state {state!r}')
+    path = _debug_state_file_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp.write_text(state + '\n')
+    Path(tmp).chmod(0o600)
+    Path(tmp).replace(path)
+
+
+def clear_debug_state() -> None:
+    """Remove the debug-state file (used on uninstall)."""
+    path = _debug_state_file_path()
+    if path.exists():
+        path.unlink()
+
+
+def set_debug(on: bool) -> list[str]:
+    """Toggle the persistent debug-trace flag in ~/.memman/debug.state."""
+    value = DEBUG_ON if on else DEBUG_OFF
+    write_debug_state(value)
+    return [f'wrote {_debug_state_file_path()} = {value} (mode 600, atomic)']
+
+
+def get_debug() -> bool:
+    """Return True if ~/.memman/debug.state says 'on'."""
+    return read_debug_state() == DEBUG_ON
 
 
 def detect_scheduler() -> str:
@@ -236,12 +287,13 @@ def _write_env_file(openrouter_api_key: str,
 
 
 def uninstall() -> dict:
-    """Remove the scheduler trigger and clear the state file.
+    """Remove the scheduler trigger and clear the state files.
 
     Removes systemd units, launchd plist, or inline marker — whichever
-    is present. Always clears the state file last.
+    is present. Clears scheduler.state and debug.state last.
     """
     clear_state()
+    clear_debug_state()
     actions: list[str] = []
     kind = detect_scheduler()
     if kind == 'systemd':

@@ -340,7 +340,7 @@ def insights() -> None:
 
 @cli.group()
 def log() -> None:
-    """View memman logs (operation audit, worker, debug trace)."""
+    """View memman logs (operation audit + worker output)."""
 
 
 @cli.group(name='config')
@@ -1339,6 +1339,57 @@ def scheduler_trigger(ctx: click.Context) -> None:
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
     _json_out(result)
+
+
+@scheduler.group('debug', no_args_is_help=True)
+def scheduler_debug() -> None:
+    """Toggle persistent JSONL trace state for scheduler-fired runs.
+
+    Writes ~/.memman/debug.state which `trace.is_enabled()` reads as a
+    fallback when MEMMAN_DEBUG is unset. Affects future scheduler-fired
+    drains and any CLI invocation in a shell that does not export
+    MEMMAN_DEBUG. Trace logs land at ~/.memman/logs/debug.log (mode
+    600) and include raw LLM request/response bodies — including
+    memory content. Turn off when done.
+    """
+
+
+@scheduler_debug.command('on')
+@click.pass_context
+def scheduler_debug_on(ctx: click.Context) -> None:
+    """Enable persistent debug traces."""
+    from memman.setup.scheduler import set_debug
+    actions = set_debug(True)
+    logs_dir = pathlib.Path.home() / '.memman' / 'logs'
+    click.echo(
+        '[memman] debug traces ENABLED -- raw LLM request/response bodies'
+        f' (including memory content) will be written to {logs_dir}/debug.log'
+        ' (mode 600). Turn off with: memman scheduler debug off',
+        err=True)
+    _json_out({'debug': True, 'actions': actions})
+
+
+@scheduler_debug.command('off')
+@click.pass_context
+def scheduler_debug_off(ctx: click.Context) -> None:
+    """Disable persistent debug traces; existing debug.log files are kept."""
+    from memman.setup.scheduler import set_debug
+    actions = set_debug(False)
+    _json_out({'debug': False, 'actions': actions})
+
+
+@scheduler_debug.command('status')
+@click.pass_context
+def scheduler_debug_status(ctx: click.Context) -> None:
+    """Show whether persistent debug traces are enabled."""
+    from memman.setup.scheduler import get_debug
+    logs_dir = pathlib.Path.home() / '.memman' / 'logs'
+    debug_log = logs_dir / 'debug.log'
+    _json_out({
+        'debug': get_debug(),
+        'debug_log': str(debug_log),
+        'debug_log_exists': debug_log.is_file(),
+        })
 
 
 @cli.group(invoke_without_command=True)

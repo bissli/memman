@@ -86,6 +86,47 @@ def test_install_launchd_writes_plist_and_wrapper(
     assert os.access(result['wrapper_path'], os.X_OK)
 
 
+def test_set_debug_on_writes_state_file_mode_600(fake_home):
+    """`set_debug(True)` writes 'on' to ~/.memman/debug.state at mode 600."""
+    import stat
+    sch.set_debug(True)
+    p = fake_home / '.memman' / 'debug.state'
+    assert p.exists()
+    assert p.read_text().strip() == sch.DEBUG_ON
+    assert stat.S_IMODE(os.stat(p).st_mode) == 0o600
+
+
+def test_set_debug_off_writes_off_to_state_file(fake_home):
+    """`set_debug(False)` flips the persistent state to 'off'."""
+    sch.set_debug(True)
+    sch.set_debug(False)
+    p = fake_home / '.memman' / 'debug.state'
+    assert p.read_text().strip() == sch.DEBUG_OFF
+
+
+def test_get_debug_round_trips_state_file(fake_home):
+    """`get_debug()` reflects the last `write_debug_state()` call."""
+    assert sch.get_debug() is False
+    sch.write_debug_state(sch.DEBUG_ON)
+    assert sch.get_debug() is True
+    sch.write_debug_state(sch.DEBUG_OFF)
+    assert sch.get_debug() is False
+
+
+def test_set_debug_does_not_touch_env_file(fake_home):
+    """Toggling debug never reads or writes ~/.memman/env."""
+    env_path = fake_home / '.memman' / 'env'
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    original = (
+        'MEMMAN_LLM_PROVIDER=openrouter\n'
+        'OPENROUTER_API_KEY=sk-x\n'
+        'VOYAGE_API_KEY=vk-y\n')
+    env_path.write_text(original)
+    sch.set_debug(True)
+    sch.set_debug(False)
+    assert env_path.read_text() == original
+
+
 def test_install_writes_both_keys_to_env_file(
         fake_home, fake_binary, monkeypatch):
     """Both OPENROUTER_API_KEY and VOYAGE_API_KEY are written at mode 600.
