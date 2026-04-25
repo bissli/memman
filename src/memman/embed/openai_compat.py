@@ -1,9 +1,17 @@
-"""Voyage AI HTTP client for embedding generation.
+"""OpenAI-compatible embedding client (OpenAI, OpenRouter, vLLM,
+LiteLLM, any other provider exposing `/v1/embeddings`).
 
-Uses a module-level `httpx.Client` so repeated embed calls in one
-worker drain reuse the TLS connection. Tests that need to intercept
-the HTTP layer monkeypatch `_CLIENT` directly with a stand-in that
-implements `.post(url, headers=..., json=..., timeout=...)`.
+Endpoint is configurable via `MEMMAN_OPENAI_EMBED_ENDPOINT`
+(default `https://api.openai.com`). Model is set by
+`MEMMAN_OPENAI_EMBED_MODEL` (default `text-embedding-3-small`).
+API key by `MEMMAN_OPENAI_EMBED_API_KEY`.
+
+`dim` is discovered from the first successful embed call and
+cached on the client; `available()` performs the discovery probe.
+
+Suggested semantic threshold (0.75) is a starting point only —
+empirical recalibration on real data is required before relying on
+edge density assumptions.
 """
 
 import logging
@@ -15,9 +23,8 @@ from memman import config, trace
 
 logger = logging.getLogger('memman')
 
-DEFAULT_MODEL = 'voyage-3-lite'
-DEFAULT_ENDPOINT = 'https://api.voyageai.com'
-EMBEDDING_DIM = 512
+DEFAULT_MODEL = 'text-embedding-3-small'
+DEFAULT_ENDPOINT = 'https://api.openai.com'
 
 _CLIENT: httpx.Client | None = None
 
@@ -31,15 +38,19 @@ def _session() -> httpx.Client:
 
 
 class Client:
-    """HTTP client for Voyage AI embedding API."""
+    """HTTP client for OpenAI-compatible `/v1/embeddings` endpoints."""
 
-    name = 'voyage'
+    name = 'openai'
 
     def __init__(self) -> None:
-        self.endpoint = DEFAULT_ENDPOINT
-        self.model = DEFAULT_MODEL
-        self.dim = EMBEDDING_DIM
-        self._api_key = os.environ.get(config.VOYAGE_API_KEY) or ''
+        self.endpoint = (
+            os.environ.get(config.OPENAI_EMBED_ENDPOINT)
+            or DEFAULT_ENDPOINT)
+        self.model = (
+            os.environ.get(config.OPENAI_EMBED_MODEL) or DEFAULT_MODEL)
+        self.dim = 0
+        self._api_key = (
+            os.environ.get(config.OPENAI_EMBED_API_KEY) or '')
         self._availability_cache: bool | None = None
 
     def _headers(self) -> dict[str, str]:
@@ -50,12 +61,7 @@ class Client:
             }
 
     def available(self) -> bool:
-        """Check if the embedding endpoint is reachable.
-
-        Memoized per instance: the probe sends a billable 1-token
-        embed, so repeat calls in the same process short-circuit to
-        the cached result. A False result is cached too (keyless
-        clients don't suddenly acquire a key mid-process).
+        """Probe the endpoint with a 1-token embed and cache the dim.
         """
         if self._availability_cache is not None:
             return self._availability_cache
@@ -63,25 +69,22 @@ class Client:
             self._availability_cache = False
             return False
         try:
-            resp = _session().post(
-                f'{self.endpoint}/v1/embeddings',
-                headers=self._headers(),
-                json={'model': self.model, 'input': ['test']},
-                timeout=5.0)
-            result = resp.status_code == 200
+            vec = self.embed('test')
+            self.dim = len(vec)
+            result = True
         except Exception:
             result = False
         self._availability_cache = result
         return result
 
     def embed(self, text: str) -> list[float]:
-        """Generate embedding for text via Voyage API."""
+        """Generate embedding for text via OpenAI-compatible API."""
         url = f'{self.endpoint}/v1/embeddings'
         headers = self._headers()
         body = {'model': self.model, 'input': [text]}
         trace.event(
             'embed_request',
-            provider='voyage',
+            provider='openai',
             url=url,
             model=self.model,
             input_len=len(text),
@@ -92,26 +95,29 @@ class Client:
         if resp.status_code != 200:
             trace.event(
                 'embed_response',
-                provider='voyage',
+                provider='openai',
                 status=resp.status_code,
                 elapsed_ms=elapsed_ms,
                 error='http_status')
             raise RuntimeError(
-                f'Voyage returned status {resp.status_code}')
+                f'OpenAI-compatible endpoint returned status'
+                f' {resp.status_code}')
         data = resp.json()
         items = data.get('data', [])
         if not items or 'embedding' not in items[0]:
             trace.event(
                 'embed_response',
-                provider='voyage',
+                provider='openai',
                 status=resp.status_code,
                 elapsed_ms=elapsed_ms,
                 error='empty')
             raise RuntimeError('empty embedding returned')
         vec = items[0]['embedding']
+        if self.dim == 0:
+            self.dim = len(vec)
         trace.event(
             'embed_response',
-            provider='voyage',
+            provider='openai',
             status=resp.status_code,
             elapsed_ms=elapsed_ms,
             dim=len(vec),
@@ -119,7 +125,8 @@ class Client:
         return vec
 
     def unavailable_message(self) -> str:
-        """Return error message when Voyage is not available."""
+        """Return error message when the endpoint is not available."""
         return (
-            f'Voyage not available at {self.endpoint}'
-            f' -- set VOYAGE_API_KEY to enable embeddings')
+            f'OpenAI-compatible endpoint not available at'
+            f' {self.endpoint} -- set'
+            f' {config.OPENAI_EMBED_API_KEY} to enable embeddings')

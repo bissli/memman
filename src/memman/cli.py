@@ -93,6 +93,20 @@ def _require_started(action: str) -> None:
             " Run 'memman scheduler start' to enable.")
 
 
+def _require_stopped(action: str) -> None:
+    """Reject the current CLI invocation when the scheduler is started.
+
+    Inverse of `_require_started`. Used by `memman embed reembed`,
+    which cannot run while the worker may be claiming queued
+    `remember` rows mid-sweep.
+    """
+    from memman.setup.scheduler import STATE_STOPPED, read_state
+    if read_state() != STATE_STOPPED:
+        raise click.ClickException(
+            f"Scheduler is started; cannot {action}."
+            " Run 'memman scheduler stop' first.")
+
+
 def _facts_from_queue_row(ctx: click.Context, row_id: int) -> list[dict] | None:
     """After an inline drain, look up insights produced by this queue row.
 
@@ -218,8 +232,15 @@ def _open_db(ctx: click.Context) -> 'DB':
         return open_read_only(sdir)
 
     db = open_db(sdir)
+    from memman.embed.fingerprint import assert_consistent
+    from memman.exceptions import EmbedFingerprintError
     from memman.graph.engine import reindex_if_constants_changed
     reindex_if_constants_changed(db)
+    try:
+        assert_consistent(db)
+    except EmbedFingerprintError as exc:
+        db.close()
+        raise click.ClickException(str(exc)) from exc
     return db
 
 
@@ -318,6 +339,11 @@ def cli(ctx: click.Context, data_dir: str | None, store_name: str,
 @cli.group()
 def graph() -> None:
     """Graph operations on insights and edges."""
+
+
+@cli.group(name='embed')
+def embed_grp() -> None:
+    """Embed-provider operations: status, re-embed on swap."""
 
 
 @cli.group(no_args_is_help=True)
@@ -659,8 +685,10 @@ def _process_queue_row(row: 'memman.queue.QueueRow', store_data_dir: str,
         importance = 3
 
     from memman import trace as _trace
+    from memman.embed.fingerprint import assert_consistent
 
     db = _open_store_db(store_data_dir)
+    assert_consistent(db)
     _trace.event(
         'process_row',
         row_id=row.id,
@@ -1499,7 +1527,7 @@ def doctor(ctx: click.Context, text_output: bool) -> None:
     """
     from memman.doctor import run_all_checks
 
-    db = _open_db(ctx)
+    db = _open_db_unchecked(ctx)
     try:
         result = run_all_checks(db, data_dir=ctx.obj['data_dir'])
         result['store'] = _resolve_store_name(
@@ -1911,6 +1939,172 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
 
         stats = {'processed': processed, 'remaining': remaining}
         log_op(db, 'rebuild', '', json.dumps(stats))
+        _json_out(stats)
+    finally:
+        db.close()
+
+
+def _open_db_unchecked(ctx: click.Context) -> 'DB':
+    """Open the store DB without `assert_consistent` or reindex.
+
+    Used by `memman embed status` (read-only inspection) and by
+    `memman embed reembed` (the only command that fixes a stale
+    fingerprint). Other commands must use `_open_db`.
+    """
+    data_dir = ctx.obj['data_dir']
+    store_flag = ctx.obj['store']
+    name = _resolve_store_name(data_dir, store_flag)
+    sdir = store_dir(data_dir, name)
+    return open_db(sdir)
+
+
+@embed_grp.command('status')
+@click.pass_context
+def embed_status(ctx: click.Context) -> None:
+    """Show active client, stored fingerprint, consistency state.
+    """
+    from memman.embed.fingerprint import active_fingerprint, stored_fingerprint
+
+    active = active_fingerprint()
+    db = _open_db_unchecked(ctx)
+    try:
+        stored = stored_fingerprint(db)
+    finally:
+        db.close()
+
+    out: dict = {
+        'active': {
+            'provider': active.provider,
+            'model': active.model,
+            'dim': active.dim,
+            },
+        'stored': None if stored is None else {
+            'provider': stored.provider,
+            'model': stored.model,
+            'dim': stored.dim,
+            },
+        }
+    if stored is None:
+        out['consistent'] = False
+        out['hint'] = (
+            "DB not initialized. Run 'memman embed reembed'.")
+    elif stored != active:
+        out['consistent'] = False
+        out['hint'] = (
+            "Fingerprint mismatch. Run"
+            " 'memman scheduler stop && memman embed reembed'.")
+    else:
+        out['consistent'] = True
+    _json_out(out)
+
+
+_REEMBED_BATCH = 50
+
+
+@embed_grp.command('reembed')
+@click.option(
+    '--yes', is_flag=True, default=False,
+    help='Proceed without interactive confirmation.')
+@click.option(
+    '--dry-run', is_flag=True, default=False,
+    help='Count rows that would be re-embedded; no DB writes.')
+@click.pass_context
+def embed_reembed(ctx: click.Context, yes: bool, dry_run: bool) -> None:
+    """Sweep all rows with the active client; write the fingerprint.
+
+    Three cases through one walk:
+    1. Empty DB - zero rows; only the fingerprint is written.
+    2. Existing DB on the same provider - rows match; skip re-embed.
+    3. Provider swap - rows mismatch; re-embed each.
+
+    The sweep is resumable: progress is tracked in
+    `meta.embed_reembed_state` and `meta.embed_reembed_cursor`. A
+    crash mid-sweep leaves state='in_progress'; re-running picks up
+    from the cursor.
+    """
+    from memman.embed import get_client
+    from memman.embed.fingerprint import Fingerprint, write_fingerprint
+    from memman.embed.vector import serialize_vector
+    from memman.graph.engine import reindex_auto_edges
+    from memman.store.db import get_meta, set_meta
+    from memman.store.node import update_embedding
+    from memman.store.oplog import log_op
+
+    if not dry_run:
+        _require_stopped('reembed')
+
+    ec = get_client()
+    if not ec.available():
+        raise click.ClickException(ec.unavailable_message())
+
+    target = Fingerprint.from_client(ec)
+
+    db = _open_db_unchecked(ctx)
+    try:
+        cur_state = get_meta(db, 'embed_reembed_state')
+        cursor = get_meta(db, 'embed_reembed_cursor') or ''
+
+        scanned = 0
+        reembedded = 0
+
+        if not dry_run and cur_state != 'in_progress':
+            set_meta(db, 'embed_reembed_state', 'in_progress')
+            set_meta(db, 'embed_reembed_cursor', '')
+            cursor = ''
+
+        while True:
+            rows = db._query(
+                'SELECT id, content, embedding_model,'
+                ' LENGTH(embedding)'
+                ' FROM insights'
+                ' WHERE deleted_at IS NULL AND id > ?'
+                ' ORDER BY id LIMIT ?',
+                (cursor, _REEMBED_BATCH)).fetchall()
+            if not rows:
+                break
+
+            for row_id, content, row_model, blob_len in rows:
+                scanned += 1
+                row_dim = (blob_len // 8) if blob_len else 0
+                matches = (
+                    row_model == target.model
+                    and row_dim == target.dim
+                    and blob_len)
+                if not matches:
+                    if not dry_run:
+                        new_vec = ec.embed(content)
+                        update_embedding(
+                            db, row_id, serialize_vector(new_vec))
+                    reembedded += 1
+                cursor = row_id
+                if not dry_run:
+                    set_meta(db, 'embed_reembed_cursor', cursor)
+
+        if dry_run:
+            _json_out({
+                'scanned': scanned,
+                'would_reembed': reembedded,
+                'dry_run': 1,
+                })
+            return
+
+        write_fingerprint(db, target)
+        set_meta(db, 'embed_reembed_cursor', '')
+        set_meta(db, 'embed_reembed_state', 'idle')
+
+        edge_stats = reindex_auto_edges(db)
+
+        stats = {
+            'scanned': scanned,
+            'reembedded': reembedded,
+            'fingerprint': {
+                'provider': target.provider,
+                'model': target.model,
+                'dim': target.dim,
+                },
+            'edges': edge_stats,
+            }
+        log_op(db, 'embed_reembed', '', json.dumps(stats))
         _json_out(stats)
     finally:
         db.close()

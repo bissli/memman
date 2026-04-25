@@ -14,3 +14,13 @@ class ConfigError(Exception):
     override that is not in the ZDR inventory. The message is
     user-facing (no tracebacks needed).
     """
+
+
+class EmbedFingerprintError(Exception):
+    """Raised when the active embed provider/model/dim does not match
+    the fingerprint stored in the DB's `meta` table.
+
+    Means the operator changed `MEMMAN_EMBED_PROVIDER` (or related
+    env vars) without re-embedding existing data, or the DB has
+    never been initialized. Caller must run `memman embed reembed`.
+    """

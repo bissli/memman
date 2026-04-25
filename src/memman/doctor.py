@@ -470,6 +470,7 @@ def check_embed_probe() -> dict:
     import time as _time
 
     detail: dict = {
+        'provider': None,
         'model': None,
         'elapsed_ms': None,
         'dim': None,
@@ -479,6 +480,7 @@ def check_embed_probe() -> dict:
     try:
         from memman.embed import get_client
         ec = get_client()
+        detail['provider'] = getattr(ec, 'name', None)
         detail['model'] = getattr(ec, 'model', None)
         if not ec.available():
             detail['error'] = ec.unavailable_message()
@@ -497,6 +499,62 @@ def check_embed_probe() -> dict:
         return {'name': 'embed_probe', 'status': 'fail', 'detail': detail}
 
 
+def check_embed_fingerprint(db: 'DB') -> dict:
+    """Compare active client fingerprint against `meta.embed_fingerprint`.
+
+    Surfaces the same mismatch that `assert_consistent` enforces at
+    runtime, but as a structured doctor check so the operator sees
+    the active/stored values explicitly.
+    """
+    from memman.embed.fingerprint import (
+        active_fingerprint, stored_fingerprint)
+
+    detail: dict = {
+        'active': None,
+        'stored': None,
+        'error': None,
+        }
+    try:
+        active = active_fingerprint()
+        detail['active'] = {
+            'provider': active.provider,
+            'model': active.model,
+            'dim': active.dim,
+            }
+    except Exception as exc:
+        detail['error'] = f'{type(exc).__name__}: {exc}'
+        return {
+            'name': 'embed_fingerprint', 'status': 'fail',
+            'detail': detail}
+
+    stored = stored_fingerprint(db)
+    if stored is not None:
+        detail['stored'] = {
+            'provider': stored.provider,
+            'model': stored.model,
+            'dim': stored.dim,
+            }
+
+    if stored is None:
+        detail['error'] = (
+            "DB not initialized."
+            " Run 'memman embed reembed' to initialize this store.")
+        return {
+            'name': 'embed_fingerprint', 'status': 'fail',
+            'detail': detail}
+    if stored != active:
+        detail['error'] = (
+            "Active does not match stored. Run"
+            " 'memman scheduler stop && memman embed reembed'"
+            " to converge.")
+        return {
+            'name': 'embed_fingerprint', 'status': 'fail',
+            'detail': detail}
+    return {
+        'name': 'embed_fingerprint', 'status': 'pass',
+        'detail': detail}
+
+
 def run_all_checks(db: 'DB', data_dir: str | None = None) -> dict:
     """Run all health checks and return results with overall status."""
     total = db._query(
@@ -511,10 +569,14 @@ def run_all_checks(db: 'DB', data_dir: str | None = None) -> dict:
             check_orphan_insights(db),
             check_dangling_edges(db),
             check_embedding_consistency(db),
+            check_embed_fingerprint(db),
             check_edge_degree(db),
             ])
     else:
-        checks.append(check_schema_columns(db))
+        checks.extend([
+            check_schema_columns(db),
+            check_embed_fingerprint(db),
+            ])
     if data_dir:
         checks.extend((
             check_queue_schema(data_dir),

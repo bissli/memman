@@ -120,13 +120,19 @@ def claude_uninstall(config_dir: str) -> list[Exception]:
 
 
 def _init_default_store(data_dir: str) -> None:
-    """Ensure the default store exists."""
+    """Ensure the default store exists with a seeded embed fingerprint.
+    """
+    from memman.embed.fingerprint import (
+        active_fingerprint, write_fingerprint)
     from memman.store.db import open_db, store_dir, store_exists
 
     if not store_exists(data_dir, 'default'):
         sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
-        db.close()
+        try:
+            write_fingerprint(db, active_fingerprint())
+        finally:
+            db.close()
         print(f'  Initialized default store at {sdir}')
 
 
