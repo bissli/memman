@@ -23,17 +23,11 @@ SYSTEMD_SERVICE_NAME = 'memman-enrich.service'
 LAUNCHD_LABEL = 'com.memman.enrich'
 ENV_FILENAME = 'env'
 STATE_FILENAME = 'scheduler.state'
+INLINE_MARKER_FILENAME = 'scheduler.inline'
 DEFAULT_INTERVAL_SECONDS = 60
 
-STATE_ACTIVE = 'active'
-STATE_PAUSED = 'paused'
-STATE_OFF = 'off'
-VALID_STATES = (STATE_ACTIVE, STATE_PAUSED, STATE_OFF)
-
-DEBUG_STATE_FILENAME = 'debug.state'
-DEBUG_ON = 'on'
-DEBUG_OFF = 'off'
-VALID_DEBUG_STATES = (DEBUG_ON, DEBUG_OFF)
+STATE_STARTED = 'started'
+STATE_STOPPED = 'stopped'
 
 
 def _state_file_path() -> Path:
@@ -41,14 +35,13 @@ def _state_file_path() -> Path:
     return Path.home() / '.memman' / STATE_FILENAME
 
 
+def _inline_marker_path() -> Path:
+    """Return ~/.memman/scheduler.inline. Present iff trigger=inline."""
+    return Path.home() / '.memman' / INLINE_MARKER_FILENAME
+
+
 def _enforce_data_dir_perms(data_dir: str) -> None:
     """Tighten ~/.memman, ~/.memman/logs, ~/.memman/data to 0700.
-
-    Idempotent — safe to call from install or any setup path. The env
-    file inside ~/.memman is written separately at 0600 by
-    _write_env_file. SQLite databases under ~/.memman/data/ are owned
-    by the user; the dir mode is what enforces "no other user can see
-    insight content".
     """
     base = Path(data_dir)
     base.mkdir(parents=True, exist_ok=True)
@@ -60,18 +53,19 @@ def _enforce_data_dir_perms(data_dir: str) -> None:
 
 
 def read_state() -> str:
-    """Read the scheduler intent state. Missing file -> 'active'."""
+    """Return STATE_STARTED iff state file says 'started', else STATE_STOPPED.
+    """
     path = _state_file_path()
     try:
         value = path.read_text().strip()
     except (OSError, FileNotFoundError):
-        return STATE_ACTIVE
-    return value if value in VALID_STATES else STATE_ACTIVE
+        return STATE_STOPPED
+    return STATE_STARTED if value == STATE_STARTED else STATE_STOPPED
 
 
 def write_state(state: str) -> None:
     """Atomically persist the scheduler intent state."""
-    if state not in VALID_STATES:
+    if state not in (STATE_STARTED, STATE_STOPPED):
         raise ValueError(f'invalid scheduler state {state!r}')
     path = _state_file_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -88,49 +82,31 @@ def clear_state() -> None:
         path.unlink()
 
 
-def _debug_state_file_path() -> Path:
-    """Return ~/.memman/debug.state. Per-host; never synced."""
-    return Path.home() / '.memman' / DEBUG_STATE_FILENAME
+def is_inline_trigger() -> bool:
+    """True iff the inline-drain trigger marker is present.
 
-
-def read_debug_state() -> str:
-    """Read the debug trace intent state. Missing file -> 'off'."""
-    path = _debug_state_file_path()
-    try:
-        value = path.read_text().strip()
-    except (OSError, FileNotFoundError):
-        return DEBUG_OFF
-    return value if value in VALID_DEBUG_STATES else DEBUG_OFF
-
-
-def write_debug_state(state: str) -> None:
-    """Atomically persist the debug trace intent state."""
-    if state not in VALID_DEBUG_STATES:
-        raise ValueError(f'invalid debug state {state!r}')
-    path = _debug_state_file_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + '.tmp')
-    tmp.write_text(state + '\n')
-    Path(tmp).chmod(0o600)
-    Path(tmp).replace(path)
-
-
-def clear_debug_state() -> None:
-    """Remove the debug state file if present (used on uninstall)."""
-    path = _debug_state_file_path()
-    if path.exists():
-        path.unlink()
+    Set by install() in environments without systemd/launchd (e.g.,
+    nanoclaw containers). When True, the CLI runs _drain_queue
+    in-process after each successful enqueue, instead of waiting for an
+    OS-driven timer to fire the worker.
+    """
+    return _inline_marker_path().exists()
 
 
 def detect_scheduler() -> str:
-    """Return 'systemd' on Linux with systemd, 'launchd' on macOS, else ''."""
+    """Return 'systemd', 'launchd', or 'inline' for the current environment.
+
+    'inline' covers any environment without systemd/launchd (e.g.,
+    nanoclaw containers): the worker runs in-process after each enqueue
+    rather than under an OS-managed timer.
+    """
     system = platform.system()
     if system == 'Darwin':
         return 'launchd'
     if system == 'Linux':
         if shutil.which('systemctl') and Path('/run/systemd/system').exists():
             return 'systemd'
-    return ''
+    return 'inline'
 
 
 def memman_binary_path() -> str:
@@ -146,37 +122,66 @@ def install(data_dir: str,
             openrouter_api_key: str,
             voyage_api_key: str,
             interval_seconds: int = DEFAULT_INTERVAL_SECONDS) -> dict:
-    """Install the scheduler unit for the current platform.
+    """Install the scheduler trigger for the current environment.
 
     Writes both API keys to ~/.memman/env at mode 600 (merging with any
-    existing keys) and installs the timer/plist that runs
+    existing keys) and installs the trigger that runs
     `memman scheduler drain --pending` at the given interval.
 
-    Tightens permissions on ~/.memman, ~/.memman/logs, ~/.memman/data
-    to 0700 — the env file holds API keys (mode 0600 by atomic write),
-    the data dir holds insight content, the logs dir holds worker
-    output that may include LLM request payloads. Owner-only is the
-    correct default for all three.
+    Trigger by environment:
+      - systemd (Linux host) -> user timer + service
+      - launchd (Mac host) -> launch agent plist
+      - inline (containers, anywhere without systemd/launchd) -> writes
+        ~/.memman/scheduler.inline so the CLI runs _drain_queue
+        in-process after each enqueue.
+
+    Always ends with state file = STATE_STARTED so the install path
+    never leaves the user with installed-but-stopped state.
     """
-    kind = detect_scheduler()
-    if not kind:
-        raise RuntimeError(
-            f'no supported scheduler detected on platform {platform.system()!r};'
-            ' expected systemd (Linux) or launchd (macOS)')
     binary = memman_binary_path()
 
     _enforce_data_dir_perms(data_dir)
     env_actions = _write_env_file(openrouter_api_key, voyage_api_key)
 
+    kind = detect_scheduler()
     if kind == 'systemd':
         result = _install_systemd(binary, data_dir, interval_seconds)
-    else:
+        _clear_inline_marker()
+    elif kind == 'launchd':
         result = _install_launchd(binary, data_dir, interval_seconds)
+        _clear_inline_marker()
+    else:
+        result = _install_inline(interval_seconds)
 
-    write_state(STATE_ACTIVE)
-    result['state'] = STATE_ACTIVE
+    write_state(STATE_STARTED)
+    result['state'] = STATE_STARTED
     result['env_actions'] = env_actions
     return result
+
+
+def _install_inline(interval_seconds: int) -> dict:
+    """Mark the environment as inline-trigger.
+
+    The CLI checks `is_inline_trigger()` after every successful enqueue
+    and, if True, runs `_drain_queue` in-process before returning.
+    """
+    marker = _inline_marker_path()
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text('inline\n')
+    marker.chmod(0o600)
+    return {
+        'platform': 'inline',
+        'inline_marker_path': str(marker),
+        'interval_seconds': interval_seconds,
+        'actions': [f'wrote {marker} (mode 600)'],
+        }
+
+
+def _clear_inline_marker() -> None:
+    """Remove the inline-trigger marker if present."""
+    marker = _inline_marker_path()
+    if marker.exists():
+        marker.unlink()
 
 
 def _env_file_path() -> Path:
@@ -230,47 +235,37 @@ def _write_env_file(openrouter_api_key: str,
         })
 
 
-def set_debug(on: bool) -> list[str]:
-    """Toggle debug trace state in ~/.memman/debug.state atomically."""
-    value = DEBUG_ON if on else DEBUG_OFF
-    write_debug_state(value)
-    return [f'wrote {_debug_state_file_path()} = {value} (mode 600, atomic)']
-
-
-def get_debug() -> bool:
-    """Return True if ~/.memman/debug.state says 'on'."""
-    return read_debug_state() == DEBUG_ON
-
-
 def uninstall() -> dict:
-    """Remove the scheduler unit for the current platform.
+    """Remove the scheduler trigger and clear the state file.
 
-    Also clears both state files. This is the full teardown path used
-    by `memman uninstall`; for a scheduler-only teardown that keeps the
-    rest of memman intact, see `off()`.
+    Removes systemd units, launchd plist, or inline marker — whichever
+    is present. Always clears the state file last.
     """
     clear_state()
-    clear_debug_state()
+    actions: list[str] = []
     kind = detect_scheduler()
-    if not kind:
-        return {'platform': 'unknown', 'actions': []}
     if kind == 'systemd':
-        return _uninstall_systemd()
-    return _uninstall_launchd()
+        result = _uninstall_systemd()
+    elif kind == 'launchd':
+        result = _uninstall_launchd()
+    else:
+        result = {'platform': 'inline', 'actions': actions}
+    if _inline_marker_path().exists():
+        _inline_marker_path().unlink()
+        result.setdefault('actions', []).append(
+            f'removed {_inline_marker_path()}')
+    return result
 
 
-def resume() -> dict:
-    """Transition to `active`: enable the installed scheduler unit.
+def start() -> dict:
+    """Activate the scheduler trigger. Idempotent.
 
-    Raises FileNotFoundError if the unit isn't installed (user should
-    run `memman install` first). Raises RuntimeError if the scheduler
-    fails to become active within a short poll window — catches
-    silent-no-op environments (WSL2 without linger, containers, CI).
+    systemd: `systemctl --user enable --now`. launchd: `launchctl load -w`.
+    inline: no-op beyond writing the state file.
+    Raises FileNotFoundError if the trigger isn't installed (run
+    `memman install` first).
     """
     kind = detect_scheduler()
-    if not kind:
-        raise RuntimeError(
-            'no supported scheduler on this platform')
     if kind == 'systemd':
         timer_path = _systemd_unit_dir() / SYSTEMD_TIMER_NAME
         if not timer_path.exists():
@@ -281,39 +276,48 @@ def resume() -> dict:
             ['systemctl', '--user', 'enable', '--now',
              SYSTEMD_TIMER_NAME], check=False)
         _verify_systemd_active()
-        write_state(STATE_ACTIVE)
+        write_state(STATE_STARTED)
         return {
             'platform': 'systemd',
-            'state': STATE_ACTIVE,
+            'state': STATE_STARTED,
             'actions': [
                 'systemctl --user enable --now memman-enrich.timer'],
             }
-    plist_path = _launchd_agent_dir() / f'{LAUNCHD_LABEL}.plist'
-    if not plist_path.exists():
+    if kind == 'launchd':
+        plist_path = _launchd_agent_dir() / f'{LAUNCHD_LABEL}.plist'
+        if not plist_path.exists():
+            raise FileNotFoundError(
+                f'scheduler unit not installed at {plist_path};'
+                " run 'memman install' first")
+        subprocess.run(
+            ['launchctl', 'load', '-w', str(plist_path)], check=False)
+        _verify_launchd_loaded()
+        write_state(STATE_STARTED)
+        return {
+            'platform': 'launchd',
+            'state': STATE_STARTED,
+            'actions': [f'launchctl load -w {plist_path}'],
+            }
+    if not is_inline_trigger():
         raise FileNotFoundError(
-            f'scheduler unit not installed at {plist_path};'
+            f'scheduler trigger not installed at {_inline_marker_path()};'
             " run 'memman install' first")
-    subprocess.run(
-        ['launchctl', 'load', '-w', str(plist_path)], check=False)
-    _verify_launchd_loaded()
-    write_state(STATE_ACTIVE)
+    write_state(STATE_STARTED)
     return {
-        'platform': 'launchd',
-        'state': STATE_ACTIVE,
-        'actions': [f'launchctl load -w {plist_path}'],
+        'platform': 'inline',
+        'state': STATE_STARTED,
+        'actions': [f'wrote {_state_file_path()} = {STATE_STARTED}'],
         }
 
 
-def pause() -> dict:
-    """Transition to `paused`: stop timer firing, keep unit files.
+def stop() -> dict:
+    """Deactivate the scheduler trigger. Trigger files stay on disk.
 
-    Raises FileNotFoundError if the unit isn't installed — `pause` is
-    meaningless without units. Use `off` to represent the no-units
-    state explicitly.
+    systemd: stop + disable timer (unit file kept). launchd: unload
+    plist (plist kept). inline: no-op beyond writing the state file.
+    Use `uninstall` to remove trigger files.
     """
     kind = detect_scheduler()
-    if not kind:
-        raise RuntimeError('no supported scheduler on this platform')
     if kind == 'systemd':
         timer_path = _systemd_unit_dir() / SYSTEMD_TIMER_NAME
         if not timer_path.exists():
@@ -326,77 +330,53 @@ def pause() -> dict:
         subprocess.run(
             ['systemctl', '--user', 'disable', SYSTEMD_TIMER_NAME],
             check=False, capture_output=True)
-        write_state(STATE_PAUSED)
+        write_state(STATE_STOPPED)
         return {
             'platform': 'systemd',
-            'state': STATE_PAUSED,
+            'state': STATE_STOPPED,
             'actions': [
                 'systemctl --user stop memman-enrich.timer',
                 'systemctl --user disable memman-enrich.timer'],
             }
-    plist_path = _launchd_agent_dir() / f'{LAUNCHD_LABEL}.plist'
-    if not plist_path.exists():
+    if kind == 'launchd':
+        plist_path = _launchd_agent_dir() / f'{LAUNCHD_LABEL}.plist'
+        if not plist_path.exists():
+            raise FileNotFoundError(
+                f'scheduler unit not installed at {plist_path};'
+                " run 'memman install' first")
+        subprocess.run(
+            ['launchctl', 'unload', '-w', str(plist_path)], check=False)
+        write_state(STATE_STOPPED)
+        return {
+            'platform': 'launchd',
+            'state': STATE_STOPPED,
+            'actions': [f'launchctl unload -w {plist_path}'],
+            }
+    if not is_inline_trigger():
         raise FileNotFoundError(
-            f'scheduler unit not installed at {plist_path};'
+            f'scheduler trigger not installed at {_inline_marker_path()};'
             " run 'memman install' first")
-    subprocess.run(
-        ['launchctl', 'unload', '-w', str(plist_path)], check=False)
-    write_state(STATE_PAUSED)
+    write_state(STATE_STOPPED)
     return {
-        'platform': 'launchd',
-        'state': STATE_PAUSED,
-        'actions': [f'launchctl unload -w {plist_path}'],
-        }
-
-
-def off() -> dict:
-    """Transition to `off`: remove scheduler unit files; keep integrations.
-
-    Queue protection (pending rows refused unless force/drain) is
-    enforced by the caller — CLI handles the `--force` / `--drain-first`
-    flags and calls this after the guard.
-    """
-    kind = detect_scheduler()
-    if not kind:
-        write_state(STATE_OFF)
-        return {'platform': 'unknown', 'state': STATE_OFF, 'actions': []}
-    if kind == 'systemd':
-        result = _uninstall_systemd()
-    else:
-        result = _uninstall_launchd()
-    result['state'] = STATE_OFF
-    write_state(STATE_OFF)
-    return result
-
-
-def reconcile() -> dict:
-    """Detect actual OS scheduler state and rewrite the state file."""
-    s = status()
-    if not s.get('installed'):
-        detected = STATE_OFF
-    elif s.get('enabled') or s.get('active'):
-        detected = STATE_ACTIVE
-    else:
-        detected = STATE_PAUSED
-    write_state(detected)
-    return {
-        'platform': s.get('platform'),
-        'state': detected,
-        'actions': [f'wrote {_state_file_path()} = {detected}'],
+        'platform': 'inline',
+        'state': STATE_STOPPED,
+        'actions': [f'wrote {_state_file_path()} = {STATE_STOPPED}'],
         }
 
 
 def trigger() -> dict:
-    """Run the installed scheduler unit once, immediately.
+    """Run the scheduler worker once, immediately.
 
-    Kicks the installed service so the drain runs under the scheduler's
-    environment and logs land where scheduled runs land. Does not
-    disturb the timer's next-fire schedule. Raises FileNotFoundError if
-    the unit file is absent (run `memman install` first).
+    systemd: `systemctl start --no-block` the service. launchd:
+    `launchctl start` the agent. inline: callers (the CLI) drain
+    in-process via _drain_queue; this function rejects on inline since
+    the trigger is implicit, not on-demand.
     """
     kind = detect_scheduler()
-    if not kind:
-        raise RuntimeError('no supported scheduler on this platform')
+    if kind == 'inline':
+        raise RuntimeError(
+            'scheduler trigger is implicit on this platform (inline);'
+            ' writes drain in-process. There is nothing to trigger.')
     if kind == 'systemd':
         service_path = _systemd_unit_dir() / SYSTEMD_SERVICE_NAME
         if not service_path.exists():
@@ -656,25 +636,21 @@ def _uninstall_launchd() -> dict:
 
 
 def change_interval(data_dir: str, new_seconds: int) -> dict:
-    """Rewrite the scheduler unit with a new interval.
+    """Rewrite the scheduler trigger with a new interval. Preserves state.
 
-    Does not touch ~/.memman/env. Requires the scheduler to already be
-    installed (an env file with the API keys should exist). Preserves
-    the prior enabled/disabled state: if the scheduler was disabled
-    before the call, it is re-disabled after the unit is rewritten.
+    systemd/launchd: rewrite unit file with new interval. inline:
+    record interval in the marker file (it is informational only —
+    inline drain runs after each enqueue regardless of interval).
     """
     if new_seconds < 60:
         raise RuntimeError(
             f'interval {new_seconds}s is too short; minimum is 60s')
+    prior_state = read_state()
     kind = detect_scheduler()
-    if not kind:
-        raise RuntimeError(
-            'no supported scheduler on this platform')
-    binary = memman_binary_path()
     if kind == 'systemd':
-        was_enabled = _systemd_is_enabled()
+        binary = memman_binary_path()
         result = _install_systemd(binary, data_dir, new_seconds)
-        if not was_enabled:
+        if prior_state == STATE_STOPPED:
             subprocess.run(
                 ['systemctl', '--user', 'stop', SYSTEMD_TIMER_NAME],
                 check=False, capture_output=True)
@@ -683,18 +659,36 @@ def change_interval(data_dir: str, new_seconds: int) -> dict:
                 check=False, capture_output=True)
             result['actions'].append(
                 'systemctl --user stop+disable memman-enrich.timer'
-                ' (restored prior disabled state)')
+                ' (restored prior stopped state)')
+            write_state(STATE_STOPPED)
+        else:
+            write_state(STATE_STARTED)
         return result
-    was_loaded = _launchd_is_loaded()
-    result = _install_launchd(binary, data_dir, new_seconds)
-    if not was_loaded:
-        plist_path = _launchd_agent_dir() / f'{LAUNCHD_LABEL}.plist'
-        subprocess.run(
-            ['launchctl', 'unload', '-w', str(plist_path)], check=False)
-        result['actions'].append(
-            f'launchctl unload -w {plist_path}'
-            ' (restored prior unloaded state)')
-    return result
+    if kind == 'launchd':
+        binary = memman_binary_path()
+        result = _install_launchd(binary, data_dir, new_seconds)
+        if prior_state == STATE_STOPPED:
+            plist_path = _launchd_agent_dir() / f'{LAUNCHD_LABEL}.plist'
+            subprocess.run(
+                ['launchctl', 'unload', '-w', str(plist_path)], check=False)
+            result['actions'].append(
+                f'launchctl unload -w {plist_path}'
+                ' (restored prior stopped state)')
+            write_state(STATE_STOPPED)
+        else:
+            write_state(STATE_STARTED)
+        return result
+    if not is_inline_trigger():
+        raise FileNotFoundError(
+            f'scheduler trigger not installed at {_inline_marker_path()};'
+            " run 'memman install' first")
+    return {
+        'platform': 'inline',
+        'interval_seconds': new_seconds,
+        'actions': [
+            'inline-drain interval is informational on this platform'
+            ' (worker runs after each enqueue regardless)'],
+        }
 
 
 def _systemd_is_enabled() -> bool:
@@ -849,13 +843,17 @@ def _launchd_status() -> dict:
 
 
 def status() -> dict:
-    """Return the scheduler's current status, including tri-state.
+    """Return the scheduler's current status under the bi-state model.
 
     Fields:
-      - platform / installed / enabled / active / next_run /
-        interval_seconds — OS truth.
-      - state — persisted user intent (active | paused | off).
-      - drift — True when state disagrees with OS truth.
+      - platform — 'systemd' | 'launchd' | 'inline'
+      - installed — True iff the trigger file/marker exists
+      - active — True iff the trigger is currently active (timer
+        running on systemd/launchd; STATE_STARTED on inline)
+      - next_run — best-effort next-fire timestamp (systemd/launchd
+        only; None on inline since drain is on-demand)
+      - interval_seconds — configured interval
+      - state — persisted user intent ('started' | 'stopped')
     """
     kind = detect_scheduler()
     if kind == 'systemd':
@@ -864,25 +862,11 @@ def status() -> dict:
         result = _launchd_status()
     else:
         result = {
-            'platform': 'unknown',
-            'installed': False,
-            'enabled': False,
-            'active': False,
+            'platform': 'inline',
+            'installed': is_inline_trigger(),
+            'active': is_inline_trigger() and read_state() == STATE_STARTED,
             'next_run': None,
             'interval_seconds': None,
             }
-    intent = read_state()
-    result['state'] = intent
-    if intent == STATE_OFF:
-        expected_installed = False
-        expected_enabled = False
-    elif intent == STATE_PAUSED:
-        expected_installed = True
-        expected_enabled = False
-    else:
-        expected_installed = True
-        expected_enabled = True
-    result['drift'] = (
-        bool(result.get('installed')) != expected_installed
-        or bool(result.get('enabled')) != expected_enabled)
+    result['state'] = read_state()
     return result

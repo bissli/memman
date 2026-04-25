@@ -353,7 +353,7 @@ def check_last_worker_run(data_dir: str) -> dict:
     without ever inspecting the unit file's text.
     """
     from memman.queue import last_worker_run, open_queue_db
-    from memman.setup.scheduler import STATE_ACTIVE
+    from memman.setup.scheduler import STATE_STARTED
     from memman.setup.scheduler import status as sch_status
 
     try:
@@ -366,7 +366,7 @@ def check_last_worker_run(data_dir: str) -> dict:
         state = None
         installed = False
 
-    if not installed or state != STATE_ACTIVE:
+    if not installed or state != STATE_STARTED:
         return {
             'name': 'last_worker_run',
             'status': 'pass',

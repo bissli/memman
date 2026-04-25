@@ -645,17 +645,6 @@ def test_guide_command_ignores_any_local_override_file(tmp_path, monkeypatch):
     assert '<!-- user overrides -->' not in result.output
 
 
-def test_skill_command_prints_shipped_content():
-    """`memman skill` prints the shipped SKILL.md from the package."""
-    from importlib.resources import files as pkg_files
-    shipped = (pkg_files('memman.setup.assets')
-               .joinpath('claude/SKILL.md').read_text())
-    runner = CliRunner()
-    result = runner.invoke(cli, ['skill'])
-    assert result.exit_code == 0
-    assert shipped.strip() in result.output
-
-
 def test_prime_command_emits_status_and_guide(tmp_path, monkeypatch):
     """`memman prime` emits a status line and the guide content."""
     monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)

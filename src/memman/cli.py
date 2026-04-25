@@ -79,6 +79,83 @@ def _json_out(obj: object) -> None:
     click.echo(json.dumps(obj, indent=2, sort_keys=True))
 
 
+def _require_started(action: str) -> None:
+    """Reject the current CLI invocation when the scheduler is stopped.
+
+    Single gate for write-producing commands. When the scheduler is
+    stopped, memman is recall-only — every write returns exit 1 with a
+    fixed message that points the operator at `memman scheduler start`.
+    """
+    from memman.setup.scheduler import STATE_STOPPED, read_state
+    if read_state() == STATE_STOPPED:
+        raise click.ClickException(
+            f"Scheduler is stopped; cannot {action}."
+            " Run 'memman scheduler start' to enable.")
+
+
+def _facts_from_queue_row(ctx: click.Context, row_id: int) -> list[dict] | None:
+    """After an inline drain, look up insights produced by this queue row.
+
+    Returns a list of fact dicts ({'id', 'content', 'category',
+    'importance', 'action'}) when the row's worker pass created
+    insights; None when no inline drain ran (host with OS timer) or
+    when nothing was produced. The action field is 'replace' when the
+    queue row carried a hint_replaced_id, else 'add'. This lets
+    nanoclaw / test callers see the new insight IDs without an extra
+    recall round-trip.
+    """
+    from memman.queue import open_queue_db
+    from memman.setup.scheduler import is_inline_trigger
+    if not is_inline_trigger():
+        return None
+    qconn = open_queue_db(ctx.obj['data_dir'])
+    try:
+        qrow = qconn.execute(
+            'select hint_replaced_id from queue where id = ?',
+            (row_id,)).fetchone()
+    finally:
+        qconn.close()
+    action = 'replace' if (qrow and qrow[0]) else 'add'
+    db = _open_db(ctx)
+    try:
+        rows = db._query(
+            'select id, content, category, importance from insights'
+            ' where source = ? and deleted_at is null'
+            ' order by created_at',
+            (f'queue:{row_id}',)).fetchall()
+    finally:
+        db.close()
+    if not rows:
+        return None
+    return [{
+        'id': r[0],
+        'content': r[1],
+        'category': r[2],
+        'importance': r[3],
+        'action': action,
+        } for r in rows]
+
+
+def _drain_inline_if_needed(ctx: click.Context) -> None:
+    """Run a drain pass in-process when the trigger is inline.
+
+    On systemd/launchd hosts the OS timer runs the worker; this is a
+    no-op. In environments without an OS timer (nanoclaw containers,
+    bare runners) the inline marker is set and we drain in-process so
+    the just-enqueued row is visible to the next CLI call. The drain
+    summary is suppressed so the CLI's stdout remains the single
+    queued-action JSON object (downstream consumers parse stdout).
+    """
+    import contextlib
+    import io
+    from memman.setup.scheduler import is_inline_trigger
+    if not is_inline_trigger():
+        return
+    with contextlib.redirect_stdout(io.StringIO()):
+        _drain_queue(ctx, limit=100, timeout=300, stores_filter='',
+                     verbose=False)
+
+
 def _resolve_store_name(data_dir: str, store_flag: str) -> str:
     """Resolve effective store name."""
     if store_flag:
@@ -243,23 +320,13 @@ def log() -> None:
 
 @cli.group(name='config')
 def config_cmd() -> None:
-    """Read-only inspection of effective settings.
-
-    To CHANGE settings, use the co-located setter for each subsystem:
-    `scheduler interval --seconds N`, `scheduler debug on/off`,
-    `store use <name>`, or env vars (MEMMAN_REMEMBER_DEFAULT,
-    MEMMAN_LLM_MODEL, etc).
-    """
+    """Read-only inspection of effective settings."""
 
 
 @config_cmd.command('show')
 @click.pass_context
 def config_show(ctx: click.Context) -> None:
-    """Dump effective config: env vars + on-disk files + defaults.
-
-    Each value is reported with its source (env / file / default) so
-    the operator can trace where a setting comes from.
-    """
+    """Dump effective config: env vars + on-disk files + scheduler state."""
     effective = config.enumerate_effective_config()
     data_dir = ctx.obj['data_dir']
     out: dict = {
@@ -268,20 +335,11 @@ def config_show(ctx: click.Context) -> None:
         'files': {},
         'active_store': _resolve_store_name(data_dir, ctx.obj['store']),
         }
-    try:
-        from memman.setup.scheduler import (
-            DEBUG_STATE_FILENAME, STATE_FILENAME, _debug_state_file_path,
-            _state_file_path, read_debug_state, read_state)
-        out['files']['scheduler.state'] = {
-            'path': str(_state_file_path()),
-            'value': read_state(),
-            }
-        out['files']['debug.state'] = {
-            'path': str(_debug_state_file_path()),
-            'value': read_debug_state(),
-            }
-    except ImportError:
-        pass
+    from memman.setup.scheduler import _state_file_path, read_state
+    out['files']['scheduler.state'] = {
+        'path': str(_state_file_path()),
+        'value': read_state(),
+        }
     try:
         from memman.setup.scheduler import status as scheduler_status_fn
         s = scheduler_status_fn()
@@ -296,52 +354,6 @@ def config_show(ctx: click.Context) -> None:
     _json_out(out)
 
 
-@config_cmd.command('get')
-@click.argument('key')
-@click.pass_context
-def config_get(ctx: click.Context, key: str) -> None:
-    """Print the value of one effective config key (env or file)."""
-    effective = config.enumerate_effective_config()
-    if key in effective:
-        _json_out({key: effective[key]})
-        return
-    if key == 'scheduler.state':
-        from memman.setup.scheduler import read_state
-        _json_out({key: read_state()})
-        return
-    if key == 'debug':
-        from memman.setup.scheduler import read_debug_state
-        _json_out({key: read_debug_state()})
-        return
-    if key == 'store.active':
-        active = _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store'])
-        _json_out({key: active})
-        return
-    if key == 'data_dir':
-        _json_out({key: ctx.obj['data_dir']})
-        return
-    raise click.ClickException(
-        f'unknown config key: {key} (try `memman config show`)')
-
-
-@config_cmd.command('path')
-@click.pass_context
-def config_path(ctx: click.Context) -> None:
-    """Print the locations of memman's on-disk config files."""
-    from memman.setup.scheduler import (
-        _debug_state_file_path, _env_file_path, _state_file_path)
-    from memman.store.db import active_file
-
-    out = {
-        'data_dir': ctx.obj['data_dir'],
-        'active_store_pointer': active_file(ctx.obj['data_dir']),
-        'scheduler_state': str(_state_file_path()),
-        'debug_state': str(_debug_state_file_path()),
-        'env_file': str(_env_file_path()),
-        }
-    _json_out(out)
-
-
 @cli.command()
 @click.argument('content', nargs=-1, required=True)
 @click.option('--cat', default='general', help='Category')
@@ -349,27 +361,19 @@ def config_path(ctx: click.Context) -> None:
 @click.option('--tags', default='', help='Comma-separated tags')
 @click.option('--source', default='user', help='Source')
 @click.option('--entities', default='', help='Comma-separated entities')
-@click.option('--no-reconcile', is_flag=True, default=False, help='Skip LLM reconciliation')
-@click.option('--defer/--sync', 'defer', default=None,
-              help=('Defer to background worker or run synchronously.'
-                    ' Default follows the scheduler state (active/paused'
-                    ' -> defer, off -> sync) unless MEMMAN_REMEMBER_DEFAULT'
-                    ' env is set.'))
-@click.option('--priority', default=0, type=int,
-              help='Queue priority when --defer (higher drains first)')
+@click.option('--no-reconcile', is_flag=True, default=False,
+              help='Skip LLM reconciliation')
 @click.pass_context
 def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
              imp: int, tags: str, source: str, entities: str,
-             no_reconcile: bool, defer: bool | None, priority: int) -> None:
-    """Store a new insight.
+             no_reconcile: bool) -> None:
+    """Store a new insight via the queue.
 
-    Default mode (defer vs sync) follows the scheduler state; when the
-    scheduler is `off` the default is --sync because no worker will
-    drain queued rows. Override per-call with --sync or --defer, or set
-    `MEMMAN_REMEMBER_DEFAULT=sync|defer` for CI/headless contexts.
+    Always enqueues. The worker drains the queue (under systemd/launchd
+    on a host, or in-process when the trigger is inline). Rejected when
+    the scheduler is stopped (memman is recall-only in that state).
     """
-    if defer is None:
-        defer = config.resolve_remember_default()
+    _require_started('write')
     content_str = ' '.join(content)
     content_bytes = len(content_str.encode('utf-8'))
     if content_bytes > 8000:
@@ -385,60 +389,50 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
         raise click.ClickException(
             f'importance must be 1-5, got {imp}')
 
-    tag_list = _parse_tags(tags)
-    entity_list = _parse_entities(entities)
+    from memman.search.quality import check_content_quality
+    quality_warnings = check_content_quality(content_str)
 
     data_dir_val = ctx.obj['data_dir']
-    store_flag = ctx.obj['store']
-    name = _resolve_store_name(data_dir_val, store_flag)
+    name = _resolve_store_name(data_dir_val, ctx.obj['store'])
 
-    if defer:
-        from memman.queue import enqueue, open_queue_db
-        conn = open_queue_db(data_dir_val)
-        try:
-            cat_hint = cat if cat != 'general' else None
-            imp_hint = imp if imp != 3 else None
-            row_id = enqueue(
-                conn, store=name, content=content_str,
-                hint_cat=cat_hint, hint_imp=imp_hint,
-                hint_tags=tags or None,
-                hint_source=source if source != 'user' else None,
-                hint_entities=entities or None,
-                priority=priority)
-        finally:
-            conn.close()
+    if len(quality_warnings) >= 2:
         _json_out({
-            'action': 'queued',
-            'queue_id': row_id,
+            'action': 'rejected',
             'store': name,
+            'content': content_str,
+            'quality_warnings': quality_warnings,
             })
         return
 
-    now = datetime.now(timezone.utc)
-    insight = Insight(
-        id=str(uuid.uuid4()), content=content_str,
-        category=cat, importance=imp, tags=tag_list,
-        entities=entity_list, source=source,
-        created_at=now, updated_at=now)
-
-    cat_explicit = (ctx.get_parameter_source('cat')
-                    == click.core.ParameterSource.COMMANDLINE)
-    imp_explicit = (ctx.get_parameter_source('imp')
-                    == click.core.ParameterSource.COMMANDLINE)
-
-    from memman.exceptions import ConfigError
-    from memman.pipeline.remember import run_remember
-
-    db = _open_db(ctx)
+    from memman.queue import enqueue, open_queue_db
+    conn = open_queue_db(data_dir_val)
     try:
-        result = run_remember(
-            db, insight, content_str, no_reconcile=no_reconcile,
-            cat_explicit=cat_explicit, imp_explicit=imp_explicit)
-    except ConfigError as exc:
-        raise click.ClickException(str(exc)) from exc
+        cat_hint = cat if cat != 'general' else None
+        imp_hint = imp if imp != 3 else None
+        row_id = enqueue(
+            conn, store=name, content=content_str,
+            hint_cat=cat_hint, hint_imp=imp_hint,
+            hint_tags=tags or None,
+            hint_source=source if source != 'user' else None,
+            hint_entities=entities or None,
+            priority=0)
     finally:
-        db.close()
-    _json_out(result)
+        conn.close()
+    _drain_inline_if_needed(ctx)
+    out: dict = {
+        'action': 'queued',
+        'queue_id': row_id,
+        'store': name,
+        'quality_warnings': quality_warnings,
+        }
+    facts = _facts_from_queue_row(ctx, row_id)
+    if facts is not None:
+        out['facts'] = facts
+        out['action'] = facts[0]['action']
+        first = facts[0]
+        if 'id' in first:
+            out['id'] = first['id']
+    _json_out(out)
 
 
 @scheduler.command('drain', hidden=True)
@@ -778,7 +772,8 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
 @click.argument('id')
 @click.pass_context
 def forget(ctx: click.Context, id: str) -> None:
-    """Soft-delete an insight."""
+    """Soft-delete an insight. Rejected when the scheduler is stopped."""
+    _require_started('write')
     from memman.store.node import soft_delete_insight
     from memman.store.oplog import log_op
 
@@ -811,22 +806,14 @@ def forget(ctx: click.Context, id: str) -> None:
 @click.option('--reconcile/--no-reconcile', 'reconcile', default=False,
               help=('Run LLM reconciliation against existing insights.'
                     ' Default: skip — replace targets a specific id.'))
-@click.option('--defer/--sync', 'defer', default=None,
-              help=('Defer to background worker or run synchronously.'
-                    ' Default follows the scheduler state (same as'
-                    ' `remember`).'))
-@click.option('--priority', default=0, type=int,
-              help='Queue priority when --defer (higher drains first)')
 @click.pass_context
 def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             cat: str, imp: int, tags: str, source: str,
-            entities: str, reconcile: bool,
-            defer: bool | None, priority: int) -> None:
-    """Replace an insight by ID with new content."""
+            entities: str, reconcile: bool) -> None:
+    """Replace an insight by ID with new content via the queue."""
+    _require_started('write')
+    from memman.store.db import open_read_only
     from memman.store.node import get_insight_by_id
-
-    if defer is None:
-        defer = config.resolve_remember_default()
 
     content_str = ' '.join(content)
     content_bytes = len(content_str.encode('utf-8'))
@@ -844,96 +831,50 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             f'importance must be 1-5, got {imp}')
 
     data_dir_val = ctx.obj['data_dir']
-    store_flag = ctx.obj['store']
-    name = _resolve_store_name(data_dir_val, store_flag)
+    name = _resolve_store_name(data_dir_val, ctx.obj['store'])
 
-    if defer:
-        from memman.queue import enqueue, open_queue_db
-        from memman.store.db import open_read_only
-
-        try:
-            ro = open_read_only(store_dir(data_dir_val, name))
-        except FileNotFoundError:
-            raise click.ClickException(
-                f'store "{name}" has no database yet; nothing to replace')
-        try:
-            old = get_insight_by_id(ro, id)
-        finally:
-            ro.close()
-        if old is None:
-            raise click.ClickException(
-                f'insight {id} not found or already deleted')
-
-        conn = open_queue_db(data_dir_val)
-        try:
-            cat_hint = cat if cat != 'general' else None
-            imp_hint = imp if imp != 3 else None
-            row_id = enqueue(
-                conn, store=name, content=content_str,
-                hint_cat=cat_hint, hint_imp=imp_hint,
-                hint_tags=tags or None,
-                hint_source=source if source != 'user' else None,
-                hint_entities=entities or None,
-                hint_replaced_id=id,
-                priority=priority)
-        finally:
-            conn.close()
-        _json_out({
-            'action': 'queued',
-            'queue_id': row_id,
-            'store': name,
-            'replaced_id': id,
-            })
-        return
-
-    db = _open_db(ctx)
     try:
-        old = get_insight_by_id(db, id)
-        if old is None:
-            raise click.ClickException(
-                f'insight {id} not found or already deleted')
-
-        cat_src = ctx.get_parameter_source('cat')
-        imp_src = ctx.get_parameter_source('imp')
-        tags_src = ctx.get_parameter_source('tags')
-        source_src = ctx.get_parameter_source('source')
-        entities_src = ctx.get_parameter_source('entities')
-
-        if cat_src != click.core.ParameterSource.COMMANDLINE:
-            cat = old.category
-        if imp_src != click.core.ParameterSource.COMMANDLINE:
-            imp = old.importance
-        if tags_src != click.core.ParameterSource.COMMANDLINE:
-            tag_list = list(old.tags)
-        else:
-            tag_list = _parse_tags(tags)
-        if source_src != click.core.ParameterSource.COMMANDLINE:
-            source = old.source
-        if entities_src != click.core.ParameterSource.COMMANDLINE:
-            entity_list = list(old.entities)
-        else:
-            entity_list = _parse_entities(entities)
-
-        now = datetime.now(timezone.utc)
-        new_insight = Insight(
-            id=str(uuid.uuid4()), content=content_str,
-            category=cat, importance=imp, tags=tag_list,
-            entities=entity_list, source=source,
-            access_count=old.access_count,
-            created_at=now, updated_at=now)
-
-        from memman.exceptions import ConfigError
-        from memman.pipeline.remember import run_remember
-        try:
-            result = run_remember(
-                db, new_insight, content_str,
-                no_reconcile=not reconcile, replaced_id=id,
-                cat_explicit=True, imp_explicit=True)
-        except ConfigError as exc:
-            raise click.ClickException(str(exc)) from exc
-        _json_out(result)
+        ro = open_read_only(store_dir(data_dir_val, name))
+    except FileNotFoundError:
+        raise click.ClickException(
+            f'store "{name}" has no database yet; nothing to replace')
+    try:
+        old = get_insight_by_id(ro, id)
     finally:
-        db.close()
+        ro.close()
+    if old is None:
+        raise click.ClickException(
+            f'insight {id} not found or already deleted')
+
+    from memman.queue import enqueue, open_queue_db
+    conn = open_queue_db(data_dir_val)
+    try:
+        cat_hint = cat if cat != 'general' else None
+        imp_hint = imp if imp != 3 else None
+        row_id = enqueue(
+            conn, store=name, content=content_str,
+            hint_cat=cat_hint, hint_imp=imp_hint,
+            hint_tags=tags or None,
+            hint_source=source if source != 'user' else None,
+            hint_entities=entities or None,
+            hint_replaced_id=id,
+            priority=0)
+    finally:
+        conn.close()
+    _drain_inline_if_needed(ctx)
+    out: dict = {
+        'action': 'queued',
+        'queue_id': row_id,
+        'store': name,
+        'replaced_id': id,
+        }
+    facts = _facts_from_queue_row(ctx, row_id)
+    if facts is not None:
+        out['facts'] = facts
+        out['action'] = 'replace'
+        if 'id' in facts[0]:
+            out['id'] = facts[0]['id']
+    _json_out(out)
 
 
 @graph.command('link')
@@ -946,6 +887,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
 def graph_link(ctx: click.Context, source_id: str, target_id: str,
                edge_type: str, weight: float, meta: str) -> None:
     """Create a manual edge between two insights."""
+    _require_started('create edges')
     from memman.store.edge import insert_edge
     from memman.store.node import get_insight_by_id
     from memman.store.oplog import log_op
@@ -1174,33 +1116,18 @@ def scheduler_status(ctx: click.Context) -> None:
     _json_out(result)
 
 
-@scheduler.command('pause')
+@scheduler.command('start')
 @click.pass_context
-def scheduler_pause(ctx: click.Context) -> None:
-    """Pause the scheduler without removing unit files.
+def scheduler_start(ctx: click.Context) -> None:
+    """Start the scheduler. Worker drains; writes are accepted.
 
-    Queue accumulates; `scheduler enable` or `scheduler trigger` drains.
-    `remember` default stays `--defer`.
-    """
-    from memman.setup.scheduler import pause
-    try:
-        result = pause()
-    except (FileNotFoundError, RuntimeError) as exc:
-        raise click.ClickException(str(exc)) from exc
-    _json_out(result)
-
-
-@scheduler.command('enable')
-@click.pass_context
-def scheduler_enable(ctx: click.Context) -> None:
-    """Activate the scheduler. Worker drains; `remember` defaults to --defer.
-
-    From `paused`, sweeps long-stalled queue rows to `stale`.
+    Idempotent. Sweeps long-stalled queue rows to `stale` so they can
+    be retried with `scheduler queue retry`.
     """
     from memman.queue import mark_stale_on_resume, open_queue_db
-    from memman.setup.scheduler import resume
+    from memman.setup.scheduler import start
     try:
-        result = resume()
+        result = start()
     except (FileNotFoundError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -1218,58 +1145,21 @@ def scheduler_enable(ctx: click.Context) -> None:
     _json_out(result)
 
 
-@scheduler.command('disable')
-@click.option('--force', is_flag=True, default=False,
-              help='Remove units even when queue has pending rows.')
-@click.option('--drain-first', is_flag=True, default=False,
-              help='Run the worker synchronously before removing units.')
+@scheduler.command('stop')
 @click.pass_context
-def scheduler_disable(ctx: click.Context, force: bool,
-                      drain_first: bool) -> None:
-    """Remove scheduler unit files. `remember` default becomes `--sync`.
+def scheduler_stop(ctx: click.Context) -> None:
+    """Stop the scheduler. Trigger files stay; memman becomes recall-only.
+
+    Writes (`remember`/`replace`/`forget`/`graph link`/`graph rebuild`/
+    `insights protect`) reject until `scheduler start` re-arms the
+    worker. Use `memman uninstall` to remove trigger files entirely.
     """
-    from memman.queue import open_queue_db
-    from memman.queue import stats as queue_stats
-    from memman.setup.scheduler import off
-
-    data_dir_val = ctx.obj['data_dir']
-    conn = open_queue_db(data_dir_val)
+    from memman.setup.scheduler import stop
     try:
-        qs = queue_stats(conn)
-    finally:
-        conn.close()
-    pending = qs.get('pending', 0) if isinstance(qs, dict) else 0
-
-    if pending and not (force or drain_first):
-        raise click.ClickException(
-            f'{pending} pending queue rows; re-run with --drain-first'
-            ' to process them before removing the scheduler, or'
-            ' --force to remove anyway (rows will sit until the'
-            ' scheduler is reinstalled)')
-
-    actions: list[str] = []
-    if pending and drain_first:
-        from memman.setup.scheduler import trigger
-        try:
-            t = trigger()
-            actions.append(
-                f"drained via `memman scheduler trigger`: {t.get('note','')}")
-        except (FileNotFoundError, RuntimeError) as exc:
-            raise click.ClickException(
-                f'drain-first failed: {exc}') from exc
-
-    result = off()
-    result.setdefault('actions', [])
-    result['actions'][:0] = actions
+        result = stop()
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
     _json_out(result)
-
-
-@scheduler.command('reconcile')
-@click.pass_context
-def scheduler_reconcile(ctx: click.Context) -> None:
-    """Rewrite the state file from the OS's actual scheduler state."""
-    from memman.setup.scheduler import reconcile
-    _json_out(reconcile())
 
 
 @scheduler.command('install')
@@ -1343,7 +1233,8 @@ def scheduler_interval(ctx: click.Context, seconds: int | None) -> None:
 @scheduler.command('trigger')
 @click.pass_context
 def scheduler_trigger(ctx: click.Context) -> None:
-    """Run the scheduler's drain job now, outside the normal interval."""
+    """Run the scheduler's drain job now. Rejected when stopped."""
+    _require_started('trigger drain')
     from memman.setup.scheduler import trigger
     try:
         result = trigger()
@@ -1352,49 +1243,6 @@ def scheduler_trigger(ctx: click.Context) -> None:
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
     _json_out(result)
-
-
-@scheduler.group('debug', no_args_is_help=True)
-def scheduler_debug() -> None:
-    """Toggle debug traces for scheduler-driven runs."""
-
-
-@scheduler_debug.command('on')
-@click.pass_context
-def scheduler_debug_on(ctx: click.Context) -> None:
-    """Enable debug traces for future scheduler firings."""
-    from memman.setup.scheduler import set_debug
-    actions = set_debug(True)
-    logs_dir = pathlib.Path.home() / '.memman' / 'logs'
-    click.echo(
-        '[memman] debug traces ENABLED -- raw LLM request/response bodies'
-        f' (including memory content) will be written to {logs_dir}/debug.log'
-        ' (mode 600). Turn off with: memman scheduler debug off',
-        err=True)
-    _json_out({'debug': True, 'actions': actions})
-
-
-@scheduler_debug.command('off')
-@click.pass_context
-def scheduler_debug_off(ctx: click.Context) -> None:
-    """Disable debug traces; existing debug.log files are kept."""
-    from memman.setup.scheduler import set_debug
-    actions = set_debug(False)
-    _json_out({'debug': False, 'actions': actions})
-
-
-@scheduler_debug.command('status')
-@click.pass_context
-def scheduler_debug_status(ctx: click.Context) -> None:
-    """Show whether debug traces are enabled."""
-    from memman.setup.scheduler import get_debug
-    logs_dir = pathlib.Path.home() / '.memman' / 'logs'
-    debug_log = logs_dir / 'debug.log'
-    _json_out({
-        'debug': get_debug(),
-        'debug_log': str(debug_log),
-        'debug_log_exists': debug_log.is_file(),
-        })
 
 
 @cli.group(invoke_without_command=True)
@@ -1629,29 +1477,6 @@ def log_worker(ctx: click.Context, errors: bool, lines: int) -> None:
         click.echo(line_str)
 
 
-@log.command('trace')
-@click.option('--lines', type=int, default=50,
-              help='Number of tail lines to print (default 50).')
-@click.pass_context
-def log_trace(ctx: click.Context, lines: int) -> None:
-    """Print the tail of ~/.memman/logs/debug.log (JSONL trace events).
-
-    Trace logging toggles via `scheduler debug on|off`.
-    """
-    path = pathlib.Path.home() / '.memman' / 'logs' / 'debug.log'
-    if not path.is_file():
-        click.echo(f'[memman] no debug log yet at {path}', err=True)
-        return
-    try:
-        content = path.read_text(errors='replace').splitlines()
-    except OSError as exc:
-        raise click.ClickException(
-            f'failed to read {path}: {exc}') from exc
-    tail = content[-lines:] if lines > 0 else content
-    for line_str in tail:
-        click.echo(line_str)
-
-
 @insights.command('candidates')
 @click.option('--threshold', default=0.5, type=float,
               help='Effective-importance cutoff; insights below are surfaced (default 0.5).')
@@ -1740,6 +1565,7 @@ def insights_protect(ctx: click.Context, id: str) -> None:
     Increments access count by 3 and refreshes effective importance,
     keeping the insight off retention-candidate lists.
     """
+    _require_started('protect insights')
     from memman.store.node import boost_retention, get_insight_by_id
     from memman.store.node import refresh_effective_importance
     from memman.store.oplog import log_op
@@ -1784,124 +1610,6 @@ def insights_show(ctx: click.Context, id: str) -> None:
         db.close()
 
 
-@cli.group(invoke_without_command=True)
-@click.pass_context
-def embed(ctx: click.Context) -> None:
-    """Manage embeddings."""
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(embed_status)
-
-
-@embed.command('status')
-@click.pass_context
-def embed_status(ctx: click.Context) -> None:
-    """Show embedding coverage statistics."""
-    from memman.embed import get_client
-    from memman.store.node import embedding_stats
-
-    db = _open_db(ctx)
-    try:
-        ec = get_client()
-        total, embedded = embedding_stats(db)
-        coverage = f'{embedded * 100 // total}%' if total > 0 else '0%'
-        _json_out({
-            'total_insights': total,
-            'embedded': embedded,
-            'coverage': coverage,
-            'embed_available': ec.available(),
-            'model': ec.model,
-            })
-    finally:
-        db.close()
-
-
-@embed.command('backfill')
-@click.pass_context
-def embed_backfill(ctx: click.Context) -> None:
-    """Embed all insights missing embeddings."""
-    from memman.embed import get_client
-    from memman.embed.vector import serialize_vector
-    from memman.store.node import get_insights_without_embedding
-    from memman.store.node import update_embedding
-
-    db = _open_db(ctx)
-    try:
-        ec = get_client()
-        missing = get_insights_without_embedding(db, 1000)
-        if not missing:
-            _json_out({
-                'status': 'complete',
-                'message': 'all insights already have embeddings',
-                })
-            return
-        succeeded = 0
-        failed = 0
-        for ins in missing:
-            try:
-                vec = ec.embed(ins.content)
-                blob = serialize_vector(vec)
-                update_embedding(db, ins.id, blob)
-                succeeded += 1
-            except Exception:
-                failed += 1
-        _json_out({
-            'status': 'backfill_complete',
-            'succeeded': succeeded,
-            'failed': failed,
-            'model': ec.model,
-            })
-    finally:
-        db.close()
-
-
-@embed.command('run')
-@click.argument('id')
-@click.pass_context
-def embed_run(ctx: click.Context, id: str) -> None:
-    """Embed a single insight by ID."""
-    from memman.embed import get_client
-    from memman.embed.vector import serialize_vector
-    from memman.store.node import get_insight_by_id, update_embedding
-
-    db = _open_db(ctx)
-    try:
-        ec = get_client()
-        ins = get_insight_by_id(db, id)
-        if ins is None:
-            raise click.ClickException(f'insight {id} not found')
-        vec = ec.embed(ins.content)
-        blob = serialize_vector(vec)
-        update_embedding(db, id, blob)
-        _json_out({
-            'status': 'embedded',
-            'id': id,
-            'dimension': len(vec),
-            'model': ec.model,
-            })
-    finally:
-        db.close()
-
-
-@graph.command('reindex')
-@click.option('--dry-run', is_flag=True, default=False,
-              help='Show stats without modifying DB')
-@click.pass_context
-def graph_reindex(ctx: click.Context, dry_run: bool) -> None:
-    """Recalculate auto-created graph edges."""
-    from memman.graph.engine import reindex_auto_edges
-
-    db = _open_db(ctx)
-    try:
-        stats = reindex_auto_edges(db, dry_run=dry_run)
-        if dry_run:
-            click.echo('Dry run (no changes):')
-        else:
-            click.echo('Reindex complete:')
-        _json_out(stats)
-    finally:
-        db.close()
-
-
 @cli.command()
 @click.option('--target', default='',
               help='Target environment (claude-code | openclaw | nanoclaw)')
@@ -1930,19 +1638,10 @@ def _emit_guide() -> None:
     click.echo(shipped, nl=False)
 
 
-@cli.command()
+@cli.command(hidden=True)
 def guide() -> None:
-    """Print the memman behavioral guide."""
+    """Print the memman behavioral guide. Hidden — called by openclaw bootstrap."""
     _emit_guide()
-
-
-@cli.command()
-def skill() -> None:
-    """Print the memman SKILL.md command reference."""
-    from importlib.resources import files as pkg_files
-    content = (pkg_files('memman.setup.assets')
-               .joinpath('claude/SKILL.md').read_text())
-    click.echo(content, nl=False)
 
 
 @cli.command(hidden=True)
@@ -2006,6 +1705,8 @@ def prime() -> None:
 @click.pass_context
 def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
     """Re-enrich all insights through the full LLM pipeline."""
+    if not dry_run:
+        _require_started('rebuild')
     from memman.embed import get_client
     from memman.graph.engine import MAX_LINK_BATCH, link_pending
     from memman.graph.semantic import build_embed_cache

@@ -42,7 +42,7 @@ def parse_remember(result):
 def test_remember_basic(runner):
     """Store a basic insight."""
     result = invoke(runner, [
-        'remember', '--sync', 'Go uses SQLite for persistent storage',
+        'remember', 'Go uses SQLite for persistent storage',
         '--no-reconcile'])
     assert result.exit_code == 0
     data = parse_remember(result)
@@ -53,8 +53,7 @@ def test_remember_basic(runner):
 def test_remember_with_flags(runner):
     """Store with category, importance, tags."""
     result = invoke(runner, [
-        'remember', '--sync',
-        'Chose Docker for container orchestration in production',
+        'remember', 'Chose Docker for container orchestration in production',
         '--no-reconcile',
         '--cat', 'decision', '--imp', '4',
         '--tags', 'docker,deployment'])
@@ -72,21 +71,21 @@ def test_remember_with_flags(runner):
 def test_remember_invalid_category(runner):
     """Invalid category is rejected."""
     result = invoke(runner, [
-        'remember', '--sync', 'Go uses SQLite for storage', '--cat', 'bogus'])
+        'remember', 'Go uses SQLite for storage', '--cat', 'bogus'])
     assert result.exit_code != 0
 
 
 def test_remember_invalid_importance(runner):
     """Importance outside 1-5 is rejected."""
     result = invoke(runner, [
-        'remember', '--sync', 'Go uses SQLite for storage', '--imp', '0'])
+        'remember', 'Go uses SQLite for storage', '--imp', '0'])
     assert result.exit_code != 0
 
 
 def test_recall_basic(runner):
     """Recall after remembering."""
     invoke(runner, [
-        'remember', '--sync', 'Go uses SQLite for persistent storage',
+        'remember', 'Go uses SQLite for persistent storage',
         '--no-reconcile'])
     result = invoke(runner, ['recall', 'Go SQLite storage'])
     assert result.exit_code == 0
@@ -95,7 +94,7 @@ def test_recall_basic(runner):
 def test_recall_does_not_call_link_pending(runner, monkeypatch):
     """Recall path must not call link_pending (performance regression guard)."""
     invoke(runner, [
-        'remember', '--sync', 'Go uses SQLite for persistent storage',
+        'remember', 'Go uses SQLite for persistent storage',
         '--no-reconcile'])
 
     from unittest.mock import patch
@@ -109,7 +108,7 @@ def test_recall_does_not_call_link_pending(runner, monkeypatch):
 def test_remember_does_not_link_old_pending_insights(runner, monkeypatch):
     """Remember does inline enrichment, never calls link_pending."""
     invoke(runner, [
-        'remember', '--sync', 'Redis cache eviction uses LRU algorithm',
+        'remember', 'Redis cache eviction uses LRU algorithm',
         '--no-reconcile'])
 
     from unittest.mock import patch
@@ -117,8 +116,7 @@ def test_remember_does_not_link_old_pending_insights(runner, monkeypatch):
                side_effect=AssertionError(
                    'link_pending called from remember')) as mock_lp:
         result = invoke(runner, [
-            'remember', '--sync',
-            'PostgreSQL MVCC provides snapshot isolation',
+            'remember', 'PostgreSQL MVCC provides snapshot isolation',
             '--no-reconcile'])
         assert result.exit_code == 0
         mock_lp.assert_not_called()
@@ -127,7 +125,7 @@ def test_remember_does_not_link_old_pending_insights(runner, monkeypatch):
 def test_recall_basic_mode(runner):
     """Basic recall returns {results: [...], meta: {basic: True}}."""
     invoke(runner, [
-        'remember', '--sync', 'Go uses SQLite for persistent storage',
+        'remember', 'Go uses SQLite for persistent storage',
         '--no-reconcile'])
     result = invoke(runner, ['recall', 'Go SQLite', '--basic'])
     assert result.exit_code == 0
@@ -139,7 +137,7 @@ def test_recall_basic_mode(runner):
 def test_recall_basic_returns_envelope(runner):
     """Recall --basic returns insights wrapped in {results: [...]}."""
     invoke(runner, [
-        'remember', '--sync', 'Go uses SQLite for persistent storage',
+        'remember', 'Go uses SQLite for persistent storage',
         '--no-reconcile'])
     result = invoke(runner, ['recall', '--basic', 'Go SQLite'])
     assert result.exit_code == 0
@@ -151,8 +149,7 @@ def test_recall_basic_returns_envelope(runner):
 def test_forget_basic(runner):
     """Forget an insight by ID."""
     result = invoke(runner, [
-        'remember', '--sync',
-        'Redis cache eviction policy uses LRU by default',
+        'remember', 'Redis cache eviction policy uses LRU by default',
         '--no-reconcile'])
     data = parse_remember(result)
     iid = data['id']
@@ -165,8 +162,7 @@ def test_forget_basic(runner):
 def test_forget_writes_oplog(runner):
     """Forget command writes an oplog entry atomically."""
     result = invoke(runner, [
-        'remember', '--sync',
-        'PostgreSQL uses MVCC for transaction isolation',
+        'remember', 'PostgreSQL uses MVCC for transaction isolation',
         '--no-reconcile'])
     data = parse_remember(result)
     iid = data['id']
@@ -280,7 +276,7 @@ def test_store_auto_create_from_env(runner, monkeypatch):
 def test_status_basic(runner):
     """Status returns JSON."""
     invoke(runner, [
-        'remember', '--sync', 'Go uses SQLite for persistent storage',
+        'remember', 'Go uses SQLite for persistent storage',
         '--no-reconcile'])
     result = invoke(runner, ['status'])
     assert result.exit_code == 0
@@ -294,7 +290,7 @@ def test_doctor_basic(runner):
     Exit code may be 0 (pass/warn) or 1 (fail) depending on environment.
     """
     invoke(runner, [
-        'remember', '--sync', 'Go uses SQLite for persistent storage',
+        'remember', 'Go uses SQLite for persistent storage',
         '--no-reconcile'])
     result = invoke(runner, ['doctor'])
     assert result.exit_code in {0, 1}
@@ -307,7 +303,7 @@ def test_doctor_basic(runner):
 def test_log_basic(runner):
     """Log shows recent operations."""
     invoke(runner, [
-        'remember', '--sync', 'Go uses SQLite for persistent storage',
+        'remember', 'Go uses SQLite for persistent storage',
         '--no-reconcile'])
     result = invoke(runner, ['log', 'list'])
     assert result.exit_code == 0
@@ -316,7 +312,7 @@ def test_log_basic(runner):
 def test_gc_suggest(runner):
     """GC suggest mode returns JSON."""
     invoke(runner, [
-        'remember', '--sync', 'Go uses SQLite for persistent storage',
+        'remember', 'Go uses SQLite for persistent storage',
         '--no-reconcile'])
     result = invoke(runner, ['insights', 'candidates'])
     assert result.exit_code == 0
@@ -327,7 +323,7 @@ def test_gc_suggest(runner):
 def test_remember_quality_warnings(runner):
     """Content with 2+ quality warnings is rejected."""
     result = invoke(runner, [
-        'remember', '--sync', 'i-0c220c2402a5245bc deployed via Terraform',
+        'remember', 'i-0c220c2402a5245bc deployed via Terraform',
         '--no-reconcile'])
     assert result.exit_code == 0
     data = json.loads(result.output)
@@ -339,8 +335,7 @@ def test_remember_quality_warnings(runner):
 def test_remember_no_quality_warnings(runner):
     """Durable content produces empty quality_warnings."""
     result = invoke(runner, [
-        'remember', '--sync',
-        'SQLite chosen for single-node simplicity and embedded operation',
+        'remember', 'SQLite chosen for single-node simplicity and embedded operation',
         '--no-reconcile'])
     assert result.exit_code == 0
     raw = json.loads(result.output)
@@ -350,12 +345,10 @@ def test_remember_no_quality_warnings(runner):
 def test_gc_review(runner):
     """GC --review flags transient content with 1 warning (stored)."""
     invoke(runner, [
-        'remember', '--sync',
-        'Production outage traced to instance i-0c220c2402a5245bc running out of memory causing cascading failure',
+        'remember', 'Production outage traced to instance i-0c220c2402a5245bc running out of memory causing cascading failure',
         '--no-reconcile'])
     invoke(runner, [
-        'remember', '--sync',
-        'SQLite chosen for simplicity and embedded operation',
+        'remember', 'SQLite chosen for simplicity and embedded operation',
         '--no-reconcile', '--imp', '5'])
     result = invoke(runner, ['insights', 'review'])
     assert result.exit_code == 0
@@ -368,14 +361,14 @@ def test_gc_review(runner):
 def test_remember_quality_rejection(runner):
     """2+ warnings rejected, 1 warning stored, quality-reject in oplog."""
     result = invoke(runner, [
-        'remember', '--sync', 'Stack deployed via Terraform. 32 resources total.',
+        'remember', 'Stack deployed via Terraform. 32 resources total.',
         '--no-reconcile'])
     data = json.loads(result.output)
     assert data['action'] == 'rejected'
     assert len(data['quality_warnings']) >= 2
 
     result = invoke(runner, [
-        'remember', '--sync', 'Production outage traced to instance i-0c220c2402a5245bc running out of memory causing cascading failure',
+        'remember', 'Production outage traced to instance i-0c220c2402a5245bc running out of memory causing cascading failure',
         '--no-reconcile'])
     data = parse_remember(result)
     assert data['action'] == 'add'
@@ -389,13 +382,12 @@ def test_remember_quality_rejection(runner):
 def test_replace_quality_rejection(runner):
     """Replace path also rejects content with 2+ quality warnings."""
     result = invoke(runner, [
-        'remember', '--sync',
-        'Kafka chosen for event streaming due to partition tolerance',
+        'remember', 'Kafka chosen for event streaming due to partition tolerance',
         '--no-reconcile'])
     old_id = parse_remember(result)['id']
 
     result = invoke(runner, [
-        'replace', '--sync', old_id,
+        'replace', old_id,
         'Stack deployed via Terraform. 32 resources total.'])
     data = json.loads(result.output)
     assert data['action'] == 'rejected'
@@ -405,8 +397,7 @@ def test_replace_quality_rejection(runner):
 def test_gc_review_empty(runner):
     """GC --review with clean store returns zero flagged."""
     invoke(runner, [
-        'remember', '--sync',
-        'SQLite chosen for simplicity and embedded operation',
+        'remember', 'SQLite chosen for simplicity and embedded operation',
         '--no-reconcile'])
     result = invoke(runner, ['insights', 'review'])
     assert result.exit_code == 0
@@ -417,13 +408,12 @@ def test_gc_review_empty(runner):
 def test_replace_basic(runner):
     """Replace an insight, verify old soft-deleted, new exists."""
     result = invoke(runner, [
-        'remember', '--sync',
-        'Redis cache configured with 512MB memory limit',
+        'remember', 'Redis cache configured with 512MB memory limit',
         '--no-reconcile', '--cat', 'fact', '--imp', '3'])
     old_id = parse_remember(result)['id']
 
     result = invoke(runner, [
-        'replace', '--sync', old_id,
+        'replace', old_id,
         'Redis cache configured with 1GB memory limit for production'])
     assert result.exit_code == 0
     data = parse_remember(result)
@@ -435,15 +425,14 @@ def test_replace_basic(runner):
 def test_replace_inherits_metadata(runner):
     """Replace without flags inherits cat/imp/tags from original."""
     result = invoke(runner, [
-        'remember', '--sync',
-        'Chose PostgreSQL over MySQL for JSONB support',
+        'remember', 'Chose PostgreSQL over MySQL for JSONB support',
         '--no-reconcile',
         '--cat', 'decision', '--imp', '5',
         '--tags', 'arch,design'])
     old_id = parse_remember(result)['id']
 
     result = invoke(runner, [
-        'replace', '--sync', old_id,
+        'replace', old_id,
         'Chose PostgreSQL over MySQL for JSONB and CTE support'])
     assert result.exit_code == 0
     data = parse_remember(result)
@@ -461,13 +450,12 @@ def test_replace_inherits_metadata(runner):
 def test_replace_overrides_metadata(runner):
     """Replace with explicit flags uses new values."""
     result = invoke(runner, [
-        'remember', '--sync',
-        'Nginx configured as reverse proxy for API gateway',
+        'remember', 'Nginx configured as reverse proxy for API gateway',
         '--no-reconcile', '--cat', 'fact', '--imp', '2'])
     old_id = parse_remember(result)['id']
 
     result = invoke(runner, [
-        'replace', '--sync', old_id,
+        'replace', old_id,
         'Switched from Nginx to Envoy for service mesh integration',
         '--cat', 'decision', '--imp', '5'])
     assert result.exit_code == 0
@@ -484,15 +472,14 @@ def test_replace_overrides_metadata(runner):
 def test_replace_preserves_access_count(runner):
     """Replace carries over access_count from original."""
     result = invoke(runner, [
-        'remember', '--sync',
-        'Terraform modules organized by environment and region',
+        'remember', 'Terraform modules organized by environment and region',
         '--no-reconcile'])
     old_id = parse_remember(result)['id']
     invoke(runner, ['recall', 'Terraform modules', '--basic'])
     invoke(runner, ['recall', 'Terraform modules', '--basic'])
 
     result = invoke(runner, [
-        'replace', '--sync', old_id,
+        'replace', old_id,
         'Terraform modules organized by service and environment'])
     assert result.exit_code == 0
     new_id = parse_remember(result)['id']
@@ -507,7 +494,7 @@ def test_replace_preserves_access_count(runner):
 def test_replace_nonexistent_id(runner):
     """Replace a nonexistent ID produces error."""
     result = invoke(runner, [
-        'replace', '--sync', 'nonexistent-id',
+        'replace', 'nonexistent-id',
         'Redis configured for cluster mode replication'])
     assert result.exit_code != 0
     assert 'not found' in result.output
@@ -516,14 +503,13 @@ def test_replace_nonexistent_id(runner):
 def test_replace_already_deleted(runner):
     """Replace an already-deleted insight produces error."""
     result = invoke(runner, [
-        'remember', '--sync',
-        'Kafka consumer group rebalance strategy uses cooperative',
+        'remember', 'Kafka consumer group rebalance strategy uses cooperative',
         '--no-reconcile'])
     old_id = parse_remember(result)['id']
     invoke(runner, ['forget', old_id])
 
     result = invoke(runner, [
-        'replace', '--sync', old_id,
+        'replace', old_id,
         'Kafka consumer group rebalance uses eager strategy'])
     assert result.exit_code != 0
     assert 'not found' in result.output
@@ -532,13 +518,12 @@ def test_replace_already_deleted(runner):
 def test_replace_oplog_entries(runner):
     """Replace logs both replace and remember ops."""
     result = invoke(runner, [
-        'remember', '--sync',
-        'Prometheus alerting rules configured for SLO monitoring',
+        'remember', 'Prometheus alerting rules configured for SLO monitoring',
         '--no-reconcile'])
     old_id = parse_remember(result)['id']
 
     result = invoke(runner, [
-        'replace', '--sync', old_id,
+        'replace', old_id,
         'Prometheus alerting rules with Grafana dashboards for SLO'])
     parse_remember(result)
 
@@ -551,11 +536,11 @@ def test_replace_oplog_entries(runner):
 def test_link_creates_both_directions(runner):
     """Link creates edges in both directions atomically."""
     r1 = invoke(runner, [
-        'remember', '--sync', 'FastAPI chosen for async API development',
+        'remember', 'FastAPI chosen for async API development',
         '--no-reconcile'])
     id1 = parse_remember(r1)['id']
     r2 = invoke(runner, [
-        'remember', '--sync', 'Uvicorn configured as ASGI server for FastAPI',
+        'remember', 'Uvicorn configured as ASGI server for FastAPI',
         '--no-reconcile'])
     id2 = parse_remember(r2)['id']
 
@@ -580,11 +565,11 @@ def test_link_respects_user_created_by(runner):
     """
     import sqlite3
     r1 = invoke(runner, [
-        'remember', '--sync', 'Nginx is configured as the reverse proxy',
+        'remember', 'Nginx is configured as the reverse proxy',
         '--no-reconcile'])
     id1 = parse_remember(r1)['id']
     r2 = invoke(runner, [
-        'remember', '--sync', "Let's Encrypt auto-renews TLS certificates",
+        'remember', "Let's Encrypt auto-renews TLS certificates",
         '--no-reconcile'])
     id2 = parse_remember(r2)['id']
 
@@ -611,11 +596,11 @@ def test_link_respects_user_created_by(runner):
 def test_link_meta_non_dict_fails(runner):
     """Non-dict JSON metadata is rejected."""
     r1 = invoke(runner, [
-        'remember', '--sync', 'Elasticsearch configured for full-text search',
+        'remember', 'Elasticsearch configured for full-text search',
         '--no-reconcile'])
     id1 = parse_remember(r1)['id']
     r2 = invoke(runner, [
-        'remember', '--sync', 'Kibana dashboards visualize Elasticsearch data',
+        'remember', 'Kibana dashboards visualize Elasticsearch data',
         '--no-reconcile'])
     id2 = parse_remember(r2)['id']
 
@@ -628,8 +613,7 @@ def test_link_meta_non_dict_fails(runner):
 def test_link_self_edge_rejected(runner):
     """Linking an insight to itself is rejected."""
     r1 = invoke(runner, [
-        'remember', '--sync',
-        'GraphQL schema stitching combines microservice APIs',
+        'remember', 'GraphQL schema stitching combines microservice APIs',
         '--no-reconcile'])
     id1 = parse_remember(r1)['id']
 
@@ -641,10 +625,10 @@ def test_link_self_edge_rejected(runner):
 def test_recall_source_filter_smart(runner):
     """Smart recall respects --source filter."""
     invoke(runner, [
-        'remember', '--sync', 'Go uses SQLite for persistent storage',
+        'remember', 'Go uses SQLite for persistent storage',
         '--no-reconcile', '--source', 'agent'])
     invoke(runner, [
-        'remember', '--sync', 'Python uses PostgreSQL for web application storage',
+        'remember', 'Python uses PostgreSQL for web application storage',
         '--no-reconcile', '--source', 'human'])
 
     result = invoke(runner, [
@@ -658,13 +642,12 @@ def test_recall_source_filter_smart(runner):
 def test_replace_creates_background_edges(runner):
     """Replace passes store context so background edges are created."""
     r1 = invoke(runner, [
-        'remember', '--sync',
-        'Celery task queue configured for async job processing',
+        'remember', 'Celery task queue configured for async job processing',
         '--no-reconcile'])
     orig_id = parse_remember(r1)['id']
 
     r2 = invoke(runner, [
-        'replace', '--sync', orig_id,
+        'replace', orig_id,
         'Celery with Redis broker for distributed task processing'])
     assert r2.exit_code == 0
     new_id = parse_remember(r2)['id']
@@ -676,13 +659,11 @@ def test_replace_creates_background_edges(runner):
 def test_link_warns_when_lower_weight(runner):
     """Link output includes warning when requested weight < existing."""
     r1 = invoke(runner, [
-        'remember', '--sync',
-        'Consul service discovery enables dynamic routing',
+        'remember', 'Consul service discovery enables dynamic routing',
         '--no-reconcile'])
     id1 = parse_remember(r1)['id']
     r2 = invoke(runner, [
-        'remember', '--sync',
-        'Vault secrets management integrates with Consul',
+        'remember', 'Vault secrets management integrates with Consul',
         '--no-reconcile'])
     id2 = parse_remember(r2)['id']
 
@@ -700,8 +681,7 @@ class TestSingleTierEnrichment:
     def test_output_has_enrichment_dict(self, runner):
         """Remember output includes enrichment metadata."""
         result = invoke(runner, [
-            'remember', '--sync',
-            'Redis cache configured with LRU eviction policy',
+            'remember', 'Redis cache configured with LRU eviction policy',
             '--no-reconcile'])
         assert result.exit_code == 0
         data = parse_remember(result)
@@ -715,8 +695,7 @@ class TestSingleTierEnrichment:
     def test_output_has_causal_count(self, runner):
         """edges_created includes causal count."""
         result = invoke(runner, [
-            'remember', '--sync',
-            'PostgreSQL chosen for JSONB support in API layer',
+            'remember', 'PostgreSQL chosen for JSONB support in API layer',
             '--no-reconcile'])
         assert result.exit_code == 0
         data = parse_remember(result)
@@ -726,8 +705,7 @@ class TestSingleTierEnrichment:
     def test_no_link_pending_in_output(self, runner):
         """Output no longer includes link_pending field."""
         result = invoke(runner, [
-            'remember', '--sync',
-            'Docker containers orchestrated via Kubernetes',
+            'remember', 'Docker containers orchestrated via Kubernetes',
             '--no-reconcile'])
         assert result.exit_code == 0
         raw = json.loads(result.output)
@@ -736,8 +714,7 @@ class TestSingleTierEnrichment:
     def test_no_causal_candidates_in_output(self, runner):
         """Output no longer includes causal_candidates field."""
         result = invoke(runner, [
-            'remember', '--sync',
-            'Terraform modules organized by service boundaries',
+            'remember', 'Terraform modules organized by service boundaries',
             '--no-reconcile'])
         assert result.exit_code == 0
         data = parse_remember(result)
@@ -748,8 +725,7 @@ class TestSingleTierEnrichment:
         from memman.store.db import open_read_only
 
         result = invoke(runner, [
-            'remember', '--sync',
-            'Consul service mesh enables secure service communication',
+            'remember', 'Consul service mesh enables secure service communication',
             '--no-reconcile'])
         assert result.exit_code == 0
         data = parse_remember(result)
@@ -767,8 +743,7 @@ class TestSingleTierEnrichment:
     def test_graph_rebuild_zero_pending_after_remember(self, runner):
         """Graph rebuild processes already-linked insights after remember."""
         invoke(runner, [
-            'remember', '--sync',
-            'Kafka event streaming configured for microservices',
+            'remember', 'Kafka event streaming configured for microservices',
             '--no-reconcile'])
         result = invoke(runner, ['graph', 'rebuild', '--dry-run'])
         assert result.exit_code == 0
@@ -778,8 +753,7 @@ class TestSingleTierEnrichment:
         from memman.store.db import open_read_only
 
         result = invoke(runner, [
-            'remember', '--sync',
-            'Elasticsearch full-text search with custom analyzers',
+            'remember', 'Elasticsearch full-text search with custom analyzers',
             '--no-reconcile'])
         assert result.exit_code == 0
         data = parse_remember(result)
@@ -807,10 +781,9 @@ def test_recall_source_filter_inflates_fetch_limit(runner):
         ]
     for topic in topics:
         invoke(runner, [
-            'remember', '--sync', topic, '--no-reconcile', '--source', 'user'])
+            'remember', topic, '--no-reconcile', '--source', 'user'])
     invoke(runner, [
-        'remember', '--sync',
-        'PostgreSQL JSONB operators for document queries',
+        'remember', 'PostgreSQL JSONB operators for document queries',
         '--no-reconcile', '--source', 'agent'])
 
     result = invoke(runner, [
@@ -828,7 +801,7 @@ def test_recall_source_filter_inflates_fetch_limit(runner):
 def test_remember_output_includes_semantic_edge_count(runner):
     """Remember output edges_created must include semantic key."""
     result = invoke(runner, [
-        'remember', '--sync', 'Go uses SQLite for persistent storage',
+        'remember', 'Go uses SQLite for persistent storage',
         '--no-reconcile'])
     assert result.exit_code == 0
     raw = json.loads(result.output)
@@ -840,11 +813,11 @@ def test_remember_output_includes_semantic_edge_count(runner):
 def test_link_returns_actual_db_weight(runner):
     """Link output weight reflects the DB value, not the user-supplied value."""
     r1 = invoke(runner, [
-        'remember', '--sync', 'FastAPI chosen for async API development',
+        'remember', 'FastAPI chosen for async API development',
         '--no-reconcile'])
     id1 = parse_remember(r1)['id']
     r2 = invoke(runner, [
-        'remember', '--sync', 'Uvicorn configured as ASGI server for FastAPI',
+        'remember', 'Uvicorn configured as ASGI server for FastAPI',
         '--no-reconcile'])
     id2 = parse_remember(r2)['id']
 
@@ -857,121 +830,6 @@ def test_link_returns_actual_db_weight(runner):
         f'(MAX preserves higher weight over requested 0.3)')
     assert data['weight'] != 0.3, (
         'Link output should not show 0.3 — MAX should preserve higher')
-
-
-class TestEmbedSubcommands:
-    """Embed subcommand tests — status, backfill, run, bare invoke."""
-
-    def test_embed_status_shows_coverage(self, tmp_path, monkeypatch):
-        """Embed status reports total, embedded, and coverage."""
-        monkeypatch.delenv('MEMMAN_STORE', raising=False)
-        data_dir = str(tmp_path)
-        store_path = tmp_path / 'data' / 'default'
-        from memman.store.db import open_db
-        from memman.store.node import insert_insight
-        from tests.conftest import make_insight
-        db = open_db(str(store_path))
-        insert_insight(db, make_insight(
-            id='es-1', content='Python web framework'))
-        insert_insight(db, make_insight(
-            id='es-2', content='Go concurrency patterns'))
-        db.close()
-
-        runner = CliRunner()
-        result = runner.invoke(cli, [
-            '--data-dir', data_dir, 'embed', 'status'])
-        assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
-        assert 'total_insights' in data
-        assert 'embedded' in data
-        assert 'coverage' in data
-
-    def test_embed_backfill_embeds_missing(self, tmp_path, monkeypatch):
-        """Embed backfill embeds insights without embeddings."""
-        monkeypatch.delenv('MEMMAN_STORE', raising=False)
-        data_dir = str(tmp_path)
-        store_path = tmp_path / 'data' / 'default'
-        from memman.store.db import open_db
-        from memman.store.node import insert_insight
-        from tests.conftest import make_insight
-        db = open_db(str(store_path))
-        insert_insight(db, make_insight(
-            id='eb-1', content='Redis cache configuration'))
-        db.close()
-
-        runner = CliRunner()
-        result = runner.invoke(cli, [
-            '--data-dir', data_dir, 'embed', 'backfill'])
-        assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
-        assert data.get('succeeded', 0) >= 0
-
-    def test_embed_run_single(self, tmp_path, monkeypatch):
-        """Embed run <id> embeds a specific insight."""
-        monkeypatch.delenv('MEMMAN_STORE', raising=False)
-        data_dir = str(tmp_path)
-        store_path = tmp_path / 'data' / 'default'
-        from memman.store.db import open_db
-        from memman.store.node import insert_insight
-        from tests.conftest import make_insight
-        db = open_db(str(store_path))
-        insert_insight(db, make_insight(
-            id='er-1', content='Docker container strategy'))
-        db.close()
-
-        runner = CliRunner()
-        result = runner.invoke(cli, [
-            '--data-dir', data_dir, 'embed', 'run', 'er-1'])
-        assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
-        assert data['status'] == 'embedded'
-        assert 'dimension' in data
-
-    def test_embed_run_missing_id_errors(self, tmp_path, monkeypatch):
-        """Embed run with nonexistent ID returns error."""
-        monkeypatch.delenv('MEMMAN_STORE', raising=False)
-        data_dir = str(tmp_path)
-        store_path = tmp_path / 'data' / 'default'
-        from memman.store.db import open_db
-        open_db(str(store_path)).close()
-
-        runner = CliRunner()
-        result = runner.invoke(cli, [
-            '--data-dir', data_dir, 'embed', 'run', 'nonexistent'])
-        assert result.exit_code != 0
-
-    def test_embed_bare_defaults_to_status(self, tmp_path, monkeypatch):
-        """Bare embed with no subcommand shows status output."""
-        monkeypatch.delenv('MEMMAN_STORE', raising=False)
-        data_dir = str(tmp_path)
-        store_path = tmp_path / 'data' / 'default'
-        from memman.store.db import open_db
-        open_db(str(store_path)).close()
-
-        runner = CliRunner()
-        result = runner.invoke(cli, [
-            '--data-dir', data_dir, 'embed'])
-        assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
-        assert 'total_insights' in data
-
-
-def _parse_json_output(output: str) -> dict:
-    """Extract JSON object from CLI output that may contain stderr lines."""
-    lines = output.strip().split('\n')
-    for i in range(len(lines)):
-        candidate = '\n'.join(lines[i:])
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-    for i in range(len(lines) - 1, -1, -1):
-        candidate = '\n'.join(lines[:i + 1])
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-    raise ValueError(f'No JSON found in output: {output!r}')
 
 
 class TestGraphRebuild:
@@ -1137,58 +995,6 @@ class TestGraphRebuild:
         db.close()
 
 
-class TestNoReconcilePassthrough:
-    """--no-reconcile bypasses extract_facts entirely."""
-
-    def test_no_reconcile_never_skips(self, runner):
-        """Even when extract_facts returns [], --no-reconcile stores."""
-        def _skip_everything(llm_client, content):
-            return []
-
-        with patch('memman.llm.extract.extract_facts',
-                   _skip_everything):
-            result = invoke(runner, [
-                'remember', '--sync',
-                'Important architecture decision about caching',
-                '--no-reconcile', '--cat', 'decision', '--imp', '4'])
-        assert result.exit_code == 0, result.output
-        raw = json.loads(result.output)
-        assert 'facts' in raw, f'expected facts key, got: {raw.keys()}'
-        assert raw['facts'][0]['action'] == 'add'
-
-    def test_no_reconcile_preserves_content(self, runner):
-        """--no-reconcile stores exact input, no LLM rewriting."""
-        content = 'Exact content that must not be rewritten by LLM'
-        result = invoke(runner, [
-            'remember', '--sync', content,
-            '--no-reconcile', '--cat', 'fact', '--imp', '3'])
-        assert result.exit_code == 0
-        raw = json.loads(result.output)
-        assert raw['facts'][0]['content'] == content
-
-    def test_no_reconcile_passthrough_shape(self, runner):
-        """Passthrough fact has correct category and importance."""
-        result = invoke(runner, [
-            'remember', '--sync',
-            'User prefers dark mode in all environments',
-            '--no-reconcile', '--cat', 'preference', '--imp', '4'])
-        assert result.exit_code == 0
-        fact = json.loads(result.output)['facts'][0]
-        assert fact['category'] == 'preference'
-        assert fact['importance'] == 4
-
-    def test_no_reconcile_enrichment_runs(self, runner):
-        """Enrichment still runs after passthrough storage."""
-        result = invoke(runner, [
-            'remember', '--sync',
-            'Redis cache configured with LRU eviction policy',
-            '--no-reconcile', '--cat', 'fact', '--imp', '3'])
-        assert result.exit_code == 0
-        fact = json.loads(result.output)['facts'][0]
-        assert 'enrichment' in fact
-        assert 'edges_created' in fact
-
-
 class TestIntraBatchDedup:
     """Sibling facts from the same remember call must deduplicate."""
 
@@ -1215,8 +1021,7 @@ class TestIntraBatchDedup:
         with patch('memman.llm.extract.extract_facts',
                    _two_similar_facts):
             result = invoke(runner, [
-                'remember', '--sync',
-                ('Do not rename loop variables to avoid shadowing '
+                'remember', ('Do not rename loop variables to avoid shadowing '
                  'opts attributes')])
         assert result.exit_code == 0, result.output
         raw = json.loads(result.output)
@@ -1247,8 +1052,7 @@ class TestIntraBatchDedup:
         with patch('memman.llm.extract.extract_facts',
                    _two_distinct_facts):
             result = invoke(runner, [
-                'remember', '--sync',
-                'Switched to FastAPI and configured Redis cache'])
+                'remember', 'Switched to FastAPI and configured Redis cache'])
         assert result.exit_code == 0, result.output
         raw = json.loads(result.output)
         facts = raw['facts']
@@ -1263,8 +1067,7 @@ class TestIntraBatchDedup:
     def test_single_thought_not_duplicated_live(self, runner):
         """A single coherent preference should produce at most 1 stored fact."""
         result = invoke(runner, [
-            'remember', '--sync',
-            ('Loop variable naming: do not rename loop variables '
+            'remember', ('Loop variable naming: do not rename loop variables '
              'to avoid shadowing opts attributes. Maintain existing '
              'variable names to prevent unintended shadowing of '
              'options object properties.')])
@@ -1279,8 +1082,7 @@ class TestIntraBatchDedup:
     def test_two_updates_same_target_no_duplicate(self, runner):
         """Sibling UPDATEs must not create duplicates from stale candidates."""
         invoke(runner, [
-            'remember', '--sync',
-            'PostgreSQL chosen for ACID compliance and JSON support',
+            'remember', 'PostgreSQL chosen for ACID compliance and JSON support',
             '--no-reconcile'])
 
         def _two_update_facts(llm_client, content):
@@ -1304,8 +1106,7 @@ class TestIntraBatchDedup:
         with patch('memman.llm.extract.extract_facts',
                    _two_update_facts):
             result = invoke(runner, [
-                'remember', '--sync',
-                'PostgreSQL chosen for ACID compliance'])
+                'remember', 'PostgreSQL chosen for ACID compliance'])
         assert result.exit_code == 0, result.output
 
         search_result = invoke(runner, ['recall', '--basic', 'PostgreSQL'])
@@ -1316,8 +1117,7 @@ class TestIntraBatchDedup:
     def test_forced_update_stale_target_no_duplicate(self, runner):
         """Forced UPDATE against stale target must not create a duplicate."""
         invoke(runner, [
-            'remember', '--sync',
-            'Kafka uses topic partitioning for message ordering',
+            'remember', 'Kafka uses topic partitioning for message ordering',
             '--no-reconcile'])
 
         def _two_facts(llm_client, content):
@@ -1349,7 +1149,7 @@ class TestIntraBatchDedup:
         patch('memman.llm.extract.reconcile_memories',
               _force_update):
             result = invoke(runner, [
-                'remember', '--sync', 'Kafka topic partitioning'])
+                'remember', 'Kafka topic partitioning'])
         assert result.exit_code == 0, result.output
 
         search_result = invoke(runner, ['recall', '--basic', 'Kafka'])
@@ -1363,8 +1163,7 @@ class TestIntraBatchDedup:
     def test_near_identical_updates_no_duplicate_live(self, runner):
         """Near-identical sibling facts must not create duplicates with real LLM."""
         invoke(runner, [
-            'remember', '--sync',
-            'Redis cache uses 4GB max memory for session storage',
+            'remember', 'Redis cache uses 4GB max memory for session storage',
             '--no-reconcile'])
 
         def _near_identical_facts(llm_client, content):
@@ -1388,8 +1187,7 @@ class TestIntraBatchDedup:
         with patch('memman.llm.extract.extract_facts',
                    _near_identical_facts):
             result = invoke(runner, [
-                'remember', '--sync',
-                'Redis cache memory configuration'])
+                'remember', 'Redis cache memory configuration'])
         assert result.exit_code == 0, result.output
 
         search_result = invoke(runner, ['recall', '--basic', 'Redis'])
@@ -1446,8 +1244,7 @@ class TestIntraBatchDedup:
               _force_update), \
         patch('memman.embed.voyage.Client.embed', _fixed_embed):
             result = invoke(runner, [
-                'remember', '--sync',
-                'Delta mode dropdown defaults to incremental_sync'])
+                'remember', 'Delta mode dropdown defaults to incremental_sync'])
         assert result.exit_code == 0, result.output
 
         store_path = pathlib.Path(data_dir) / 'data' / 'default'

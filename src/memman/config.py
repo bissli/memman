@@ -28,7 +28,6 @@ CACHE_DIR = 'MEMMAN_CACHE_DIR'
 DEBUG = 'MEMMAN_DEBUG'
 WORKER = 'MEMMAN_WORKER'
 LOG_LEVEL = 'MEMMAN_LOG_LEVEL'
-REMEMBER_DEFAULT = 'MEMMAN_REMEMBER_DEFAULT'
 
 OPENROUTER_API_KEY = 'OPENROUTER_API_KEY'
 VOYAGE_API_KEY = 'VOYAGE_API_KEY'
@@ -53,7 +52,6 @@ _ALL_VARS = (
     DEBUG,
     WORKER,
     LOG_LEVEL,
-    REMEMBER_DEFAULT,
     OPENROUTER_API_KEY,
     VOYAGE_API_KEY,
     )
@@ -92,19 +90,3 @@ def enumerate_effective_config(redact: bool = True) -> dict[str, Any]:
             continue
         out[name] = raw
     return dict(sorted(out.items()))
-
-
-def resolve_remember_default() -> bool:
-    """Pick the default for --defer/--sync based on env + scheduler state.
-
-    MEMMAN_REMEMBER_DEFAULT=sync|defer wins outright. Otherwise the
-    scheduler's persisted state picks: active/paused -> defer,
-    off -> sync. Missing state file defaults to active -> defer.
-    """
-    override = os.environ.get(REMEMBER_DEFAULT, '').strip().lower()
-    if override == 'sync':
-        return False
-    if override == 'defer':
-        return True
-    from memman.setup.scheduler import STATE_OFF, read_state
-    return read_state() != STATE_OFF

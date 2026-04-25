@@ -18,7 +18,6 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_DEBUG',
     'MEMMAN_WORKER',
     'MEMMAN_LOG_LEVEL',
-    'MEMMAN_REMEMBER_DEFAULT',
     'OPENROUTER_API_KEY',
     'VOYAGE_API_KEY',
     }
@@ -31,7 +30,7 @@ def test_constants_match_expected_names():
         config.DATA_DIR, config.STORE, config.LLM_PROVIDER,
         config.LLM_MODEL, config.OPENROUTER_ENDPOINT, config.CACHE_DIR,
         config.DEBUG, config.WORKER, config.LOG_LEVEL,
-        config.REMEMBER_DEFAULT, config.OPENROUTER_API_KEY,
+        config.OPENROUTER_API_KEY,
         config.VOYAGE_API_KEY,
         }
     assert actual == ALL_EXPECTED_NAMES
@@ -114,35 +113,3 @@ def test_enumerate_empty_string_is_unset(monkeypatch):
     assert out[config.LLM_MODEL] is None
 
 
-def test_resolve_remember_default_env_override_sync(monkeypatch):
-    """MEMMAN_REMEMBER_DEFAULT=sync returns False regardless of state.
-    """
-    monkeypatch.setenv(config.REMEMBER_DEFAULT, 'sync')
-    assert config.resolve_remember_default() is False
-    monkeypatch.setenv(config.REMEMBER_DEFAULT, 'SYNC')
-    assert config.resolve_remember_default() is False
-
-
-def test_resolve_remember_default_env_override_defer(monkeypatch):
-    """MEMMAN_REMEMBER_DEFAULT=defer returns True regardless of state.
-    """
-    monkeypatch.setenv(config.REMEMBER_DEFAULT, 'defer')
-    assert config.resolve_remember_default() is True
-
-
-def test_resolve_remember_default_follows_scheduler_active(monkeypatch):
-    """With no env override and scheduler active, defer is the default.
-    """
-    monkeypatch.delenv(config.REMEMBER_DEFAULT, raising=False)
-    from memman.setup import scheduler as sch
-    monkeypatch.setattr(sch, 'read_state', lambda: sch.STATE_ACTIVE)
-    assert config.resolve_remember_default() is True
-
-
-def test_resolve_remember_default_follows_scheduler_off(monkeypatch):
-    """With no env override and scheduler off, sync is the default.
-    """
-    monkeypatch.delenv(config.REMEMBER_DEFAULT, raising=False)
-    from memman.setup import scheduler as sch
-    monkeypatch.setattr(sch, 'read_state', lambda: sch.STATE_OFF)
-    assert config.resolve_remember_default() is False

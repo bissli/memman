@@ -31,6 +31,48 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _scheduler_started(request, monkeypatch):
+    """Force scheduler to appear started + inline-trigger for tests.
+
+    cli.py's `_require_started` rejects writes when `read_state()`
+    returns STATE_STOPPED. cli.py's `_drain_inline_if_needed` runs an
+    in-process drain after each enqueue when `is_inline_trigger()` is
+    True. Together these make tests self-contained: a single
+    `runner.invoke(['remember', ...])` call enqueues + drains in the
+    same process, so a follow-up `recall` sees the row.
+
+    Skipped for `test_scheduler_setup.py` (which exercises read_state /
+    is_inline_trigger / install behavior directly) and for any test
+    marked `no_scheduler_started_mock` (rare opt-out).
+    """
+    if request.node.fspath.basename == 'test_scheduler_setup.py':
+        return
+    if 'no_scheduler_started_mock' in request.keywords:
+        return
+    from memman.setup import scheduler as sched_mod
+    monkeypatch.setattr(sched_mod, 'read_state',
+                        lambda: sched_mod.STATE_STARTED)
+    monkeypatch.setattr(sched_mod, 'is_inline_trigger', lambda: True)
+
+
+def force_drain(data_dir: str) -> None:
+    """Synchronously drain the queue for the given data dir.
+
+    Tests that follow `remember`/`replace` with a read assertion call
+    this to flush pending work through the worker before reading. Uses
+    the same `scheduler drain --pending` code path the OS timer fires.
+    """
+    from click.testing import CliRunner
+    from memman.cli import cli
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ['--data-dir', data_dir, 'scheduler', 'drain', '--pending'])
+    assert result.exit_code == 0, (
+        f'force_drain failed: exit={result.exit_code} '
+        f'output={result.output} exc={result.exception}')
+
+
+@pytest.fixture(autouse=True)
 def _mock_apis(request, monkeypatch):
     """Mock LLM and embedding HTTP calls unless --live is set.
 

@@ -118,7 +118,7 @@ def test_remember_sync_stamps_provenance(runner):
     with patch('memman.llm.extract.extract_facts', _one_fact):
         result = r.invoke(cli, [
             '--data-dir', data_dir,
-            'remember', '--sync', '--no-reconcile',
+            'remember', '--no-reconcile',
             'provenance stamping end-to-end'])
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)

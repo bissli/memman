@@ -86,16 +86,6 @@ def test_install_launchd_writes_plist_and_wrapper(
     assert os.access(result['wrapper_path'], os.X_OK)
 
 
-def test_install_unknown_platform_raises(monkeypatch):
-    """Install raises when no supported scheduler is detected.
-    """
-    monkeypatch.setattr(sch, 'detect_scheduler', lambda: '')
-    with pytest.raises(RuntimeError, match='no supported scheduler'):
-        sch.install(data_dir='/tmp',
-                    openrouter_api_key='x',
-                    voyage_api_key='y')
-
-
 def test_install_writes_both_keys_to_env_file(
         fake_home, fake_binary, monkeypatch):
     """Both OPENROUTER_API_KEY and VOYAGE_API_KEY are written at mode 600.
@@ -115,54 +105,6 @@ def test_install_writes_both_keys_to_env_file(
     assert 'MEMMAN_LLM_PROVIDER=openrouter' in contents
     mode = stat.S_IMODE(os.stat(env_path).st_mode)
     assert mode == 0o600
-
-
-def test_set_debug_on_writes_debug_state_file_mode_600(
-        fake_home, monkeypatch):
-    """set_debug(True) writes 'on' to ~/.memman/debug.state at mode 600.
-    """
-    import stat
-    sch.set_debug(True)
-    state_path = fake_home / '.memman' / 'debug.state'
-    assert state_path.exists()
-    assert state_path.read_text().strip() == 'on'
-    mode = stat.S_IMODE(os.stat(state_path).st_mode)
-    assert mode == 0o600
-
-
-def test_set_debug_off_writes_off_to_state_file(
-        fake_home, monkeypatch):
-    """set_debug(False) writes 'off' to ~/.memman/debug.state.
-    """
-    sch.set_debug(True)
-    sch.set_debug(False)
-    state_path = fake_home / '.memman' / 'debug.state'
-    assert state_path.read_text().strip() == 'off'
-
-
-def test_get_debug_round_trips_state_file(fake_home, monkeypatch):
-    """get_debug() reflects whatever write_debug_state() last wrote.
-    """
-    assert sch.get_debug() is False
-    sch.write_debug_state(sch.DEBUG_ON)
-    assert sch.get_debug() is True
-    sch.write_debug_state(sch.DEBUG_OFF)
-    assert sch.get_debug() is False
-
-
-def test_set_debug_does_not_touch_env_file(fake_home, monkeypatch):
-    """set_debug() never reads or writes ~/.memman/env.
-    """
-    env_path = fake_home / '.memman' / 'env'
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    original = (
-        'MEMMAN_LLM_PROVIDER=openrouter\n'
-        'OPENROUTER_API_KEY=sk-x\n'
-        'VOYAGE_API_KEY=vk-y\n')
-    env_path.write_text(original)
-    sch.set_debug(True)
-    sch.set_debug(False)
-    assert env_path.read_text() == original
 
 
 def test_install_merges_existing_env_file(
@@ -323,25 +265,20 @@ def test_uninstall_systemd_removes_unit_files(
     assert not service_path.exists()
 
 
-def test_resume_raises_when_not_installed(fake_home, monkeypatch):
-    """resume() raises FileNotFoundError when unit files are absent.
-    """
+def test_start_raises_when_not_installed(fake_home, monkeypatch):
+    """start() raises FileNotFoundError when unit files are absent."""
     monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
     _no_subprocess(monkeypatch)
     with pytest.raises(FileNotFoundError, match='not installed'):
-        sch.resume()
+        sch.start()
 
 
-def test_pause_raises_when_not_installed(fake_home, monkeypatch):
-    """pause() raises FileNotFoundError when unit files are absent.
-
-    Paused only makes sense with units present; the no-units state is
-    represented by `off`.
-    """
+def test_stop_raises_when_not_installed(fake_home, monkeypatch):
+    """stop() raises FileNotFoundError when unit files are absent."""
     monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
     _no_subprocess(monkeypatch)
     with pytest.raises(FileNotFoundError, match='not installed'):
-        sch.pause()
+        sch.stop()
 
 
 def _record_subprocess(monkeypatch, *, returncode: int = 0,
@@ -542,20 +479,20 @@ def test_systemd_status_next_run_when_malformed(
 
 def test_state_file_round_trip(fake_home):
     """write_state persists; read_state returns the value."""
-    sch.write_state(sch.STATE_PAUSED)
-    assert sch.read_state() == sch.STATE_PAUSED
+    sch.write_state(sch.STATE_STARTED)
+    assert sch.read_state() == sch.STATE_STARTED
 
 
-def test_state_file_missing_defaults_to_active(fake_home):
-    """No state file -> default is `active`."""
-    assert sch.read_state() == sch.STATE_ACTIVE
+def test_state_file_missing_defaults_to_stopped(fake_home):
+    """No state file -> default is `stopped` (no scheduler activity)."""
+    assert sch.read_state() == sch.STATE_STOPPED
 
 
-def test_state_file_invalid_value_defaults_to_active(fake_home):
-    """Arbitrary garbage in the state file is ignored; fall back to active."""
+def test_state_file_invalid_value_defaults_to_stopped(fake_home):
+    """Arbitrary garbage in the state file is treated as stopped."""
     sch._state_file_path().parent.mkdir(parents=True, exist_ok=True)
     sch._state_file_path().write_text('garbage\n')
-    assert sch.read_state() == sch.STATE_ACTIVE
+    assert sch.read_state() == sch.STATE_STOPPED
 
 
 def test_write_state_rejects_bad_value(fake_home):
@@ -564,36 +501,19 @@ def test_write_state_rejects_bad_value(fake_home):
 
 
 def test_clear_state_removes_file(fake_home):
-    sch.write_state(sch.STATE_PAUSED)
+    sch.write_state(sch.STATE_STARTED)
     assert sch._state_file_path().exists()
     sch.clear_state()
     assert not sch._state_file_path().exists()
 
 
-def test_off_writes_state_without_units(fake_home, monkeypatch):
-    """off() on a platform without a scheduler still records intent."""
-    monkeypatch.setattr(sch, 'detect_scheduler', lambda: '')
-    result = sch.off()
-    assert result['state'] == sch.STATE_OFF
-    assert sch.read_state() == sch.STATE_OFF
-
-
-def test_reconcile_infers_off_when_not_installed(fake_home, monkeypatch):
-    """reconcile() with no units writes state=off."""
-    _no_subprocess(monkeypatch)
-    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
-    sch.write_state(sch.STATE_ACTIVE)
-    result = sch.reconcile()
-    assert result['state'] == sch.STATE_OFF
-    assert sch.read_state() == sch.STATE_OFF
-
-
-def test_status_reports_state_and_drift(fake_home, monkeypatch):
-    """status() surfaces the persisted state and flags drift."""
-    _no_subprocess(monkeypatch)
-    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
-    sch.write_state(sch.STATE_ACTIVE)
-    s = sch.status()
-    assert s['state'] == sch.STATE_ACTIVE
-    # Not installed but state says active -> drift.
-    assert s['drift'] is True
+def test_inline_install_marks_started(fake_home, monkeypatch):
+    """install() on a platform without systemd/launchd writes the inline marker."""
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'inline')
+    monkeypatch.setattr(sch, 'memman_binary_path', lambda: '/usr/local/bin/memman')
+    monkeypatch.setattr(sch, '_write_env_file', lambda *a, **k: ['noop'])
+    result = sch.install(str(fake_home / 'data'), 'or-key', 'vy-key')
+    assert result['platform'] == 'inline'
+    assert result['state'] == sch.STATE_STARTED
+    assert sch.is_inline_trigger() is True
+    assert sch.read_state() == sch.STATE_STARTED

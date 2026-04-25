@@ -74,7 +74,7 @@ def test_enrich_pending_empty_queue(runner):
 def test_queue_list_returns_stats_and_rows(runner):
     """`memman scheduler queue list` wraps rows in a {stats, rows} envelope.
     """
-    invoke(runner, ['remember', '--defer', 'hello queue'])
+    invoke(runner, ['remember', 'hello queue'])
     result = invoke(runner, ['scheduler', 'queue', 'list'])
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
@@ -147,20 +147,6 @@ def test_scheduler_resume_fails_when_not_installed(runner, monkeypatch):
     monkeypatch.setattr(Path, 'home',
                         lambda: Path(runner[1]))
     result = invoke(runner, ['scheduler', 'enable'])
-    assert result.exit_code != 0
-    assert 'not installed' in result.output.lower()
-
-
-def test_scheduler_pause_fails_when_not_installed(runner, monkeypatch):
-    """`memman scheduler pause` errors when unit files are absent.
-
-    No-units is represented by `off`, not `paused`, so pause refuses.
-    """
-    _patch_no_subprocess(monkeypatch)
-    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
-    monkeypatch.setattr(Path, 'home',
-                        lambda: Path(runner[1]))
-    result = invoke(runner, ['scheduler', 'pause'])
     assert result.exit_code != 0
     assert 'not installed' in result.output.lower()
 
