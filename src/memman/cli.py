@@ -136,24 +136,49 @@ def _facts_from_queue_row(ctx: click.Context, row_id: int) -> list[dict] | None:
         } for r in rows]
 
 
-def _drain_inline_if_needed(ctx: click.Context) -> None:
+_INLINE_DRAIN_LAST: list[dict] = []
+
+
+def _drain_inline_if_needed(ctx: click.Context) -> list[dict]:
     """Run a drain pass in-process when the trigger is inline.
 
-    On systemd/launchd hosts the OS timer runs the worker; this is a
-    no-op. In environments without an OS timer (nanoclaw containers,
-    bare runners) the inline marker is set and we drain in-process so
-    the just-enqueued row is visible to the next CLI call. The drain
-    summary is suppressed so the CLI's stdout remains the single
-    queued-action JSON object (downstream consumers parse stdout).
+    Returns the list of per-row worker results (`run_remember` outputs)
+    captured during this drain pass. On systemd/launchd hosts the OS
+    timer runs the worker and this is a no-op (returns []).
+
+    The drain summary written to stdout is captured and parsed so the
+    caller can merge enrichment fields (`edges_created`, `enrichment`,
+    etc.) into the queued-action response. nanoclaw and tests rely on
+    this so a single `remember` call returns the same shape as the old
+    sync path.
     """
     import contextlib
     import io
+
     from memman.setup.scheduler import is_inline_trigger
+    _INLINE_DRAIN_LAST.clear()
     if not is_inline_trigger():
-        return
-    with contextlib.redirect_stdout(io.StringIO()):
+        return _INLINE_DRAIN_LAST
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
         _drain_queue(ctx, limit=100, timeout=300, stores_filter='',
                      verbose=False)
+    raw = buf.getvalue()
+    decoder = json.JSONDecoder()
+    pos = 0
+    while pos < len(raw):
+        while pos < len(raw) and raw[pos] in ' \r\n\t':
+            pos += 1
+        if pos >= len(raw):
+            break
+        try:
+            obj, end = decoder.raw_decode(raw, pos)
+        except json.JSONDecodeError:
+            break
+        if isinstance(obj, dict):
+            _INLINE_DRAIN_LAST.append(obj)
+        pos = end
+    return _INLINE_DRAIN_LAST
 
 
 def _resolve_store_name(data_dir: str, store_flag: str) -> str:
@@ -396,6 +421,16 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     name = _resolve_store_name(data_dir_val, ctx.obj['store'])
 
     if len(quality_warnings) >= 2:
+        from memman.store.oplog import log_op
+        try:
+            db = _open_db(ctx)
+            try:
+                log_op(db, 'quality-reject', '',
+                       f'{content_str[:200]}|warnings={quality_warnings}')
+            finally:
+                db.close()
+        except Exception:
+            pass
         _json_out({
             'action': 'rejected',
             'store': name,
@@ -415,22 +450,38 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
             hint_tags=tags or None,
             hint_source=source if source != 'user' else None,
             hint_entities=entities or None,
+            hint_no_reconcile=no_reconcile,
             priority=0)
     finally:
         conn.close()
-    _drain_inline_if_needed(ctx)
+    drain_results = _drain_inline_if_needed(ctx)
     out: dict = {
         'action': 'queued',
         'queue_id': row_id,
         'store': name,
         'quality_warnings': quality_warnings,
         }
-    facts = _facts_from_queue_row(ctx, row_id)
-    if facts is not None:
-        out['facts'] = facts
-        out['action'] = facts[0]['action']
-        first = facts[0]
-        if 'id' in first:
+    if drain_results:
+        worker_result = drain_results[0]
+        for k in ('facts', 'enrichment', 'edges_created',
+                  'effective_importance', 'auto_pruned',
+                  'embedded', 'llm_calls'):
+            if k in worker_result:
+                out[k] = worker_result[k]
+        if 'id' in worker_result:
+            out['id'] = worker_result['id']
+        if 'action' in worker_result:
+            out['action'] = worker_result['action']
+    if 'facts' not in out:
+        facts = _facts_from_queue_row(ctx, row_id)
+        if facts is not None:
+            out['facts'] = facts
+            out['action'] = facts[0]['action']
+            if 'id' in facts[0]:
+                out['id'] = facts[0]['id']
+    elif out.get('facts'):
+        first = out['facts'][0] if isinstance(out['facts'], list) else None
+        if first and 'id' in first:
             out['id'] = first['id']
     _json_out(out)
 
@@ -641,16 +692,23 @@ def _process_queue_row(row: 'memman.queue.QueueRow', store_data_dir: str,
                 return
 
         now = datetime.now(timezone.utc)
+        access_count = 0
+        if row.hint_replaced_id:
+            from memman.store.node import get_insight_by_id
+            old = get_insight_by_id(db, row.hint_replaced_id)
+            if old is not None:
+                access_count = old.access_count
         insight = Insight(
             id=str(uuid.uuid4()), content=row.content,
             category=category, importance=importance,
             tags=tag_list, entities=entity_list, source=source,
+            access_count=access_count,
             created_at=now, updated_at=now)
 
         from memman.pipeline.remember import run_remember
         result = run_remember(
             db, insight, row.content,
-            no_reconcile=bool(row.hint_replaced_id),
+            no_reconcile=row.hint_no_reconcile or bool(row.hint_replaced_id),
             replaced_id=row.hint_replaced_id or '',
             cat_explicit=row.hint_cat is not None,
             imp_explicit=row.hint_imp is not None)
@@ -830,34 +888,70 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         raise click.ClickException(
             f'importance must be 1-5, got {imp}')
 
+    from memman.search.quality import check_content_quality
+    quality_warnings = check_content_quality(content_str)
+
     data_dir_val = ctx.obj['data_dir']
     name = _resolve_store_name(data_dir_val, ctx.obj['store'])
 
+    if len(quality_warnings) >= 2:
+        from memman.store.oplog import log_op
+        try:
+            db = _open_db(ctx)
+            try:
+                log_op(db, 'quality-reject', id,
+                       f'{content_str[:200]}|warnings={quality_warnings}')
+            finally:
+                db.close()
+        except Exception:
+            pass
+        _json_out({
+            'action': 'rejected',
+            'store': name,
+            'replaced_id': id,
+            'content': content_str,
+            'quality_warnings': quality_warnings,
+            })
+        return
+
     try:
         ro = open_read_only(store_dir(data_dir_val, name))
-    except FileNotFoundError:
-        raise click.ClickException(
-            f'store "{name}" has no database yet; nothing to replace')
-    try:
         old = get_insight_by_id(ro, id)
-    finally:
         ro.close()
+    except FileNotFoundError:
+        old = None
     if old is None:
         raise click.ClickException(
             f'insight {id} not found or already deleted')
 
+    cat_src = ctx.get_parameter_source('cat')
+    imp_src = ctx.get_parameter_source('imp')
+    tags_src = ctx.get_parameter_source('tags')
+    source_src = ctx.get_parameter_source('source')
+    entities_src = ctx.get_parameter_source('entities')
+    if cat_src != click.core.ParameterSource.COMMANDLINE:
+        cat = old.category
+    if imp_src != click.core.ParameterSource.COMMANDLINE:
+        imp = old.importance
+    if tags_src != click.core.ParameterSource.COMMANDLINE:
+        tags = ','.join(old.tags) if old.tags else ''
+    source_explicit = source_src == click.core.ParameterSource.COMMANDLINE
+    if not source_explicit:
+        source = old.source
+    if entities_src != click.core.ParameterSource.COMMANDLINE:
+        entities = ','.join(old.entities) if old.entities else ''
+
     from memman.queue import enqueue, open_queue_db
     conn = open_queue_db(data_dir_val)
     try:
-        cat_hint = cat if cat != 'general' else None
-        imp_hint = imp if imp != 3 else None
         row_id = enqueue(
             conn, store=name, content=content_str,
-            hint_cat=cat_hint, hint_imp=imp_hint,
+            hint_cat=cat, hint_imp=imp,
             hint_tags=tags or None,
-            hint_source=source if source != 'user' else None,
+            hint_source=source if source_explicit else None,
             hint_entities=entities or None,
             hint_replaced_id=id,
+            hint_no_reconcile=not reconcile,
             priority=0)
     finally:
         conn.close()
@@ -870,6 +964,8 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         }
     facts = _facts_from_queue_row(ctx, row_id)
     if facts is not None:
+        for f in facts:
+            f['replaced_id'] = id
         out['facts'] = facts
         out['action'] = 'replace'
         if 'id' in facts[0]:
@@ -1490,8 +1586,7 @@ def insights_candidates(ctx: click.Context, threshold: float,
     to actually remove an insight, or `memman insights protect <id>` to
     boost its retention.
     """
-    from memman.store.node import MAX_INSIGHTS
-    from memman.store.node import get_retention_candidates
+    from memman.store.node import MAX_INSIGHTS, get_retention_candidates
 
     db = _open_db(ctx)
     try:

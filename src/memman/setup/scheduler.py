@@ -65,7 +65,7 @@ def read_state() -> str:
 
 def write_state(state: str) -> None:
     """Atomically persist the scheduler intent state."""
-    if state not in (STATE_STARTED, STATE_STOPPED):
+    if state not in {STATE_STARTED, STATE_STOPPED}:
         raise ValueError(f'invalid scheduler state {state!r}')
     path = _state_file_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -686,8 +686,8 @@ def change_interval(data_dir: str, new_seconds: int) -> dict:
         'platform': 'inline',
         'interval_seconds': new_seconds,
         'actions': [
-            'inline-drain interval is informational on this platform'
-            ' (worker runs after each enqueue regardless)'],
+            ('inline-drain interval is informational on this platform'
+             ' (worker runs after each enqueue regardless)')],
         }
 
 

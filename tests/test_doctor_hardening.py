@@ -110,42 +110,42 @@ def test_scheduler_state_fail_on_drift(monkeypatch):
     assert result['status'] == 'fail'
 
 
-def _active_scheduler_status(interval=900):
-    """Test helper: pretend the scheduler is installed + active."""
+def _started_scheduler_status(interval=900):
+    """Test helper: pretend the scheduler is installed + started."""
     return {
         'interval_seconds': interval,
-        'state': 'active',
+        'state': 'started',
         'installed': True,
         }
 
 
-def test_last_worker_run_fail_when_no_drains_and_active(tmp_path, monkeypatch):
-    """Scheduler active + installed but no worker_runs row yet -> fail."""
+def test_last_worker_run_fail_when_no_drains_and_started(tmp_path, monkeypatch):
+    """Scheduler started + installed but no worker_runs row yet -> fail."""
     from memman.setup import scheduler as sch
-    monkeypatch.setattr(sch, 'status', _active_scheduler_status)
+    monkeypatch.setattr(sch, 'status', _started_scheduler_status)
     result = check_last_worker_run(str(tmp_path))
     assert result['status'] == 'fail'
     assert 'no drains recorded' in result['detail']['reason']
 
 
-def test_last_worker_run_pass_when_paused(tmp_path, monkeypatch):
-    """Scheduler in paused state -> pass (no drain expected)."""
+def test_last_worker_run_pass_when_stopped(tmp_path, monkeypatch):
+    """Scheduler stopped -> pass (no drain expected; recall-only mode)."""
     from memman.setup import scheduler as sch
     monkeypatch.setattr(
         sch, 'status', lambda: {
-            'interval_seconds': 900, 'state': 'paused',
+            'interval_seconds': 900, 'state': 'stopped',
             'installed': True})
     result = check_last_worker_run(str(tmp_path))
     assert result['status'] == 'pass'
-    assert "'paused'" in result['detail']['reason']
+    assert "'stopped'" in result['detail']['reason']
 
 
-def test_last_worker_run_pass_when_disabled(tmp_path, monkeypatch):
-    """Scheduler disabled (uninstalled) -> pass (not relevant)."""
+def test_last_worker_run_pass_when_uninstalled(tmp_path, monkeypatch):
+    """Scheduler uninstalled -> pass (not relevant)."""
     from memman.setup import scheduler as sch
     monkeypatch.setattr(
         sch, 'status', lambda: {
-            'interval_seconds': None, 'state': 'off',
+            'interval_seconds': None, 'state': 'stopped',
             'installed': False})
     result = check_last_worker_run(str(tmp_path))
     assert result['status'] == 'pass'
@@ -156,7 +156,7 @@ def test_last_worker_run_pass_on_recent_drain(tmp_path, monkeypatch):
     from memman.queue import finish_worker_run, open_queue_db, start_worker_run
     from memman.setup import scheduler as sch
 
-    monkeypatch.setattr(sch, 'status', _active_scheduler_status)
+    monkeypatch.setattr(sch, 'status', _started_scheduler_status)
     conn = open_queue_db(str(tmp_path))
     try:
         run_id = start_worker_run(conn, worker_pid=1)
@@ -172,7 +172,7 @@ def test_last_worker_run_fail_on_recorded_error(tmp_path, monkeypatch):
     from memman.queue import finish_worker_run, open_queue_db, start_worker_run
     from memman.setup import scheduler as sch
 
-    monkeypatch.setattr(sch, 'status', _active_scheduler_status)
+    monkeypatch.setattr(sch, 'status', _started_scheduler_status)
     conn = open_queue_db(str(tmp_path))
     try:
         run_id = start_worker_run(conn, worker_pid=1)

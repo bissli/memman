@@ -40,6 +40,7 @@ class QueueRow:
     hint_source: str | None
     hint_entities: str | None
     hint_replaced_id: str | None
+    hint_no_reconcile: bool
     priority: int
     queued_at: int
     attempts: int
@@ -72,6 +73,7 @@ CREATE TABLE IF NOT EXISTS queue (
     hint_source   TEXT,
     hint_entities TEXT,
     hint_replaced_id TEXT,
+    hint_no_reconcile INTEGER NOT NULL DEFAULT 0,
     priority      INTEGER NOT NULL DEFAULT 0,
     queued_at     INTEGER NOT NULL,
     claimed_at    INTEGER,
@@ -111,10 +113,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """Apply the canonical queue schema.
 
     Single-user tool: one authoritative schema (`_BASELINE_SCHEMA`),
-    always the latest. `CREATE TABLE IF NOT EXISTS` creates fresh
-    queue databases; existing databases are expected to already match.
+    always the latest. Existing databases that pre-date a column add
+    are tolerated by a best-effort ALTER TABLE that ignores duplicate-
+    column errors. No version table — this is the only forward path.
     """
     conn.executescript(_BASELINE_SCHEMA)
+    try:
+        conn.execute(
+            'ALTER TABLE queue ADD COLUMN hint_no_reconcile INTEGER NOT NULL DEFAULT 0')
+    except sqlite3.OperationalError:
+        pass
 
 
 def enqueue(
@@ -127,22 +135,25 @@ def enqueue(
         hint_source: str | None = None,
         hint_entities: str | None = None,
         hint_replaced_id: str | None = None,
+        hint_no_reconcile: bool = False,
         priority: int = 0,
         ) -> int:
     """Append a blob to the queue. Returns the new row's id.
 
     `hint_replaced_id` carries the id of the insight to soft-delete
-    when the worker commits this row — used by `remember --defer`
-    from the `replace` subcommand.
+    when the worker commits this row — used by the `replace` command.
+    `hint_no_reconcile` skips the LLM reconciliation pass for fast
+    deterministic stores (`remember --no-reconcile`).
     """
     now = int(time.time())
     cur = conn.execute(
         'INSERT INTO queue (store, content, hint_cat, hint_imp,'
         ' hint_tags, hint_source, hint_entities, hint_replaced_id,'
-        ' priority, queued_at)'
-        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ' hint_no_reconcile, priority, queued_at)'
+        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (store, content, hint_cat, hint_imp, hint_tags, hint_source,
-         hint_entities, hint_replaced_id, priority, now))
+         hint_entities, hint_replaced_id,
+         1 if hint_no_reconcile else 0, priority, now))
     row_id = cur.lastrowid
     logger.debug(f'queued blob {row_id} for store {store}')
     return row_id
@@ -183,7 +194,7 @@ def claim(
         ' )'
         ' RETURNING id, store, content, hint_cat, hint_imp, hint_tags,'
         '           hint_source, hint_entities, hint_replaced_id,'
-        '           priority, queued_at, attempts')
+        '           hint_no_reconcile, priority, queued_at, attempts')
 
     params = [now, worker_pid, now, stale_after_seconds, *store_params]
     row = conn.execute(sql, params).fetchone()
@@ -194,7 +205,8 @@ def claim(
         hint_cat=row[3], hint_imp=row[4], hint_tags=row[5],
         hint_source=row[6], hint_entities=row[7],
         hint_replaced_id=row[8],
-        priority=row[9], queued_at=row[10], attempts=row[11])
+        hint_no_reconcile=bool(row[9]),
+        priority=row[10], queued_at=row[11], attempts=row[12])
 
 
 def mark_done(conn: sqlite3.Connection, row_id: int) -> None:

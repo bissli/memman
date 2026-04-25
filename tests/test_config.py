@@ -111,5 +111,3 @@ def test_enumerate_empty_string_is_unset(monkeypatch):
     monkeypatch.setenv(config.LLM_MODEL, '')
     out = config.enumerate_effective_config()
     assert out[config.LLM_MODEL] is None
-
-

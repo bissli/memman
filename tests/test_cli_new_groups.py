@@ -139,14 +139,13 @@ def test_scheduler_status_reports_not_installed(runner, monkeypatch):
     assert data['installed'] is False
 
 
-def test_scheduler_resume_fails_when_not_installed(runner, monkeypatch):
-    """`memman scheduler enable` errors when unit files are missing.
-    """
+def test_scheduler_start_fails_when_not_installed(runner, monkeypatch):
+    """`memman scheduler start` errors when unit files are missing."""
     _patch_no_subprocess(monkeypatch)
     monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
     monkeypatch.setattr(Path, 'home',
                         lambda: Path(runner[1]))
-    result = invoke(runner, ['scheduler', 'enable'])
+    result = invoke(runner, ['scheduler', 'start'])
     assert result.exit_code != 0
     assert 'not installed' in result.output.lower()
 

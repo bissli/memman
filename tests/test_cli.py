@@ -897,7 +897,7 @@ class TestGraphRebuild:
         result = runner.invoke(cli, [
             '--data-dir', data_dir, 'graph', 'rebuild'])
         assert result.exit_code == 0, result.output
-        data = _parse_json_output(result.output)
+        data = json.loads(result.output)
         assert data['processed'] >= 2
 
         db = open_db(str(store_path))
@@ -940,7 +940,7 @@ class TestGraphRebuild:
         result = runner.invoke(cli, [
             '--data-dir', data_dir, 'graph', 'rebuild'])
         assert result.exit_code == 0, result.output
-        data = _parse_json_output(result.output)
+        data = json.loads(result.output)
         assert data['processed'] >= 2
 
         db = open_db(str(store_path))
@@ -1022,7 +1022,7 @@ class TestIntraBatchDedup:
                    _two_similar_facts):
             result = invoke(runner, [
                 'remember', ('Do not rename loop variables to avoid shadowing '
-                 'opts attributes')])
+                             'opts attributes')])
         assert result.exit_code == 0, result.output
         raw = json.loads(result.output)
         facts = raw['facts']
@@ -1068,9 +1068,9 @@ class TestIntraBatchDedup:
         """A single coherent preference should produce at most 1 stored fact."""
         result = invoke(runner, [
             'remember', ('Loop variable naming: do not rename loop variables '
-             'to avoid shadowing opts attributes. Maintain existing '
-             'variable names to prevent unintended shadowing of '
-             'options object properties.')])
+                         'to avoid shadowing opts attributes. Maintain existing '
+                         'variable names to prevent unintended shadowing of '
+                         'options object properties.')])
         assert result.exit_code == 0, result.output
         raw = json.loads(result.output)
         facts = raw['facts']
