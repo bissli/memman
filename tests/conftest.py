@@ -45,6 +45,8 @@ def _scheduler_started(request, monkeypatch):
     is_inline_trigger / install behavior directly) and for any test
     marked `no_scheduler_started_mock` (rare opt-out).
     """
+    if 'tests/e2e/' in str(request.node.fspath):
+        return
     if request.node.fspath.basename == 'test_scheduler_setup.py':
         return
     if 'no_scheduler_started_mock' in request.keywords:
@@ -87,6 +89,8 @@ def _mock_apis(request, monkeypatch):
     `@pytest.mark.no_mock_llm` to skip the method-level patch while
     keeping the ZDR and embedding stubs in place.
     """
+    if 'tests/e2e/' in str(request.node.fspath):
+        return
     if request.config.getoption('--live'):
         return
 

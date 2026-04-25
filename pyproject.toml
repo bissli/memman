@@ -23,6 +23,7 @@ tqdm = "^4.66"
 pytest = "^8.0"
 matplotlib = "^3.8"
 networkx = "^3.2"
+testcontainers = "^4.14.2"
 
 [build-system]
 requires = ["poetry-core"]
@@ -32,4 +33,8 @@ build-backend = "poetry.core.masonry.api"
 testpaths = ["tests"]
 markers = [
     "no_mock_llm: skip the autouse OpenRouterClient.complete mock; keep ZDR + embedding stubs",
+    "e2e_cli: end-to-end CLI tests run via subprocess against the installed memman; no Docker required",
+    "e2e_container: end-to-end tests that build/run a Docker container via testcontainers",
+    "systemd: tests that require systemd-as-PID-1 (privileged container); opt-in only",
+    "live_claude: tests that invoke a real Anthropic Claude Code session (requires ANTHROPIC_API_KEY)",
 ]
