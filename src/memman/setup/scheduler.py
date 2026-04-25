@@ -471,6 +471,7 @@ def _install_systemd(binary: str, data_dir: str,
         'Description=MemMan background enrichment timer\n\n'
         '[Timer]\n'
         'OnBootSec=2min\n'
+        f'OnActiveSec={interval_seconds}s\n'
         f'OnUnitActiveSec={interval_seconds}s\n'
         'Persistent=true\n\n'
         '[Install]\n'
@@ -497,9 +498,17 @@ def _install_systemd(binary: str, data_dir: str,
     subprocess.run(
         ['systemctl', '--user', 'daemon-reload'], check=False)
     subprocess.run(
-        ['systemctl', '--user', 'enable', '--now',
-         SYSTEMD_TIMER_NAME], check=False)
-    actions.append('systemctl --user enable --now memman-enrich.timer')
+        ['systemctl', '--user', 'enable', SYSTEMD_TIMER_NAME],
+        check=False, capture_output=True)
+    actions.append('systemctl --user enable memman-enrich.timer')
+    # restart (not just `enable --now`) ensures a freshly-rearmed timer
+    # when re-installing over an already-active unit; `enable --now` is
+    # a no-op on a running timer, leaving the schedule based on the
+    # pre-reload state.
+    subprocess.run(
+        ['systemctl', '--user', 'restart', SYSTEMD_TIMER_NAME],
+        check=False, capture_output=True)
+    actions.append('systemctl --user restart memman-enrich.timer')
     _verify_systemd_active()
 
     return {
