@@ -12,6 +12,7 @@ from memman.embed.voyage import DEFAULT_ENDPOINT, DEFAULT_MODEL, EMBEDDING_DIM
 from memman.embed.voyage import Client
 
 _original_embed = Client.embed
+_original_embed_batch = Client.embed_batch
 _original_available = Client.available
 
 
@@ -19,6 +20,7 @@ _original_available = Client.available
 def real_client(monkeypatch):
     """Client with real methods restored (undo autouse mock)."""
     monkeypatch.setattr(Client, 'embed', _original_embed)
+    monkeypatch.setattr(Client, 'embed_batch', _original_embed_batch)
     monkeypatch.setattr(Client, 'available', _original_available)
     monkeypatch.setenv('VOYAGE_API_KEY', 'test-key-123')
     return Client()
@@ -139,7 +141,7 @@ class TestEmbed:
             voyage, '_CLIENT',
             type('FakeClient', (), {
                 'post': staticmethod(mock_post)})())
-        with pytest.raises(RuntimeError, match='empty'):
+        with pytest.raises(RuntimeError, match='0 vectors'):
             real_client.embed('test')
 
 

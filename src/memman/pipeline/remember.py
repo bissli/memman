@@ -107,10 +107,20 @@ def run_remember(
         replaced_id: str = '',
         cat_explicit: bool = False,
         imp_explicit: bool = False,
+        embed_cache: dict[str, list[float]] | None = None,
+        insights_by_id: dict[str, Insight] | None = None,
+        executor: ThreadPoolExecutor | None = None,
+        llm_client=None,
+        ec=None,
         ) -> dict:
     """Run the full remember pipeline and return the result dict.
 
     See module docstring for the overall shape.
+
+    `embed_cache`, `insights_by_id`, `executor`, `llm_client`, `ec`
+    are optional drain-scope state hoisted by `_drain_queue` to amortize
+    setup across rows in one drain pass. When omitted (e.g., direct
+    test use), the function builds them from the DB itself.
     """
     quality_warnings = check_content_quality(content)
     if len(quality_warnings) >= 2:
@@ -123,8 +133,10 @@ def run_remember(
             'quality_warnings': quality_warnings,
             }
 
-    llm_client = get_llm_client('slow')
-    ec = get_client()
+    if llm_client is None:
+        llm_client = get_llm_client('slow')
+    if ec is None:
+        ec = get_client()
     llm_calls = 0
 
     if no_reconcile:
@@ -147,13 +159,20 @@ def run_remember(
                 'llm_calls': llm_calls,
                 }
 
-    embed_cache: dict[str, list[float]] = {}
-    for eid, _content, blob in get_all_embeddings(db):
-        v = deserialize_vector(blob)
-        if v is not None:
-            embed_cache[eid] = v
-    all_insights = get_all_active_insights(db)
-    insights_by_id = {i.id: i for i in all_insights}
+    if embed_cache is None:
+        embed_cache = {}
+        for eid, _content, blob in get_all_embeddings(db):
+            v = deserialize_vector(blob)
+            if v is not None:
+                embed_cache[eid] = v
+    if insights_by_id is None:
+        all_insights = get_all_active_insights(db)
+        insights_by_id = {i.id: i for i in all_insights}
+
+    owned_executor: ThreadPoolExecutor | None = None
+    if executor is None:
+        owned_executor = ThreadPoolExecutor(max_workers=2)
+        executor = owned_executor
 
     data_dir_for_ro = str(pathlib.Path(db.path).parent)
     deleted_in_batch: set[str] = set()
@@ -163,72 +182,122 @@ def run_remember(
     prompt_version = compute_prompt_version()
     llm_model_id = getattr(llm_client, 'model', None)
     embed_model = getattr(ec, 'model', None)
-    for fact in facts:
-        plan, calls = _plan_fact(
-            fact, insight, pending_replaced_id, no_reconcile,
-            cat_explicit, imp_explicit, insights_by_id,
-            embed_cache, deleted_in_batch, llm_client, ec,
-            data_dir_for_ro)
-        llm_calls += calls
-        pending_replaced_id = ''
+    try:
+        for fact in facts:
+            plan, calls = _plan_fact(
+                fact, insight, pending_replaced_id, no_reconcile,
+                cat_explicit, imp_explicit, insights_by_id,
+                embed_cache, deleted_in_batch, llm_client, ec,
+                data_dir_for_ro, executor)
+            llm_calls += calls
+            pending_replaced_id = ''
 
-        if plan.fact_insight is not None:
-            plan.fact_insight.prompt_version = prompt_version
-            plan.fact_insight.model_id = llm_model_id
-            plan.fact_insight.embedding_model = embed_model
+            if plan.fact_insight is not None:
+                plan.fact_insight.prompt_version = prompt_version
+                plan.fact_insight.model_id = llm_model_id
+                plan.fact_insight.embedding_model = embed_model
 
-        if plan.target_id and plan.action in {
-                'delete', 'update', 'replace'}:
-            deleted_in_batch.add(plan.target_id)
-            insights_by_id.pop(plan.target_id, None)
-            embed_cache.pop(plan.target_id, None)
+            if plan.target_id and plan.action in {
+                    'delete', 'update', 'replace'}:
+                deleted_in_batch.add(plan.target_id)
+                insights_by_id.pop(plan.target_id, None)
+                embed_cache.pop(plan.target_id, None)
 
-        if plan.fact_insight and plan.action != 'skipped':
-            insights_by_id[plan.fact_insight.id] = plan.fact_insight
-            vec = plan.enriched_vec or plan.embed_vec
-            if vec is not None:
-                embed_cache[plan.fact_insight.id] = vec
+            if plan.fact_insight and plan.action != 'skipped':
+                insights_by_id[plan.fact_insight.id] = plan.fact_insight
+                vec = plan.enriched_vec or plan.embed_vec
+                if vec is not None:
+                    embed_cache[plan.fact_insight.id] = vec
 
-        plans.append(plan)
+            plans.append(plan)
 
-    fact_results: list[dict] = []
+        _batch_enriched_embeds(plans, ec)
 
-    def apply_all() -> None:
-        new_ids: list[str] = []
-        for plan in plans:
-            result = _apply_plan(db, plan, embed_cache)
-            fact_results.append(result)
-            if plan.fact_insight and plan.action not in {
-                    'skipped', 'deleted'}:
-                new_ids.append(plan.fact_insight.id)
+        fact_results: list[dict] = []
 
-        for nid in new_ids:
-            try:
-                ei = refresh_effective_importance(db, nid)
-            except Exception:
-                ei = 0.0
-            for r in fact_results:
-                if r.get('id') == nid:
-                    r['effective_importance'] = ei
-                    break
+        def apply_all() -> None:
+            new_ids: list[str] = []
+            for plan in plans:
+                result = _apply_plan(db, plan, embed_cache)
+                fact_results.append(result)
+                if plan.fact_insight and plan.action not in {
+                        'skipped', 'deleted'}:
+                    new_ids.append(plan.fact_insight.id)
 
-        if new_ids:
-            try:
-                pruned = auto_prune(db, MAX_INSIGHTS, new_ids)
-            except Exception:
-                pruned = 0
-            for r in fact_results:
-                if r.get('id') in new_ids:
-                    r['auto_pruned'] = pruned
-                    break
+            for nid in new_ids:
+                try:
+                    ei = refresh_effective_importance(db, nid)
+                except Exception:
+                    ei = 0.0
+                for r in fact_results:
+                    if r.get('id') == nid:
+                        r['effective_importance'] = ei
+                        break
 
-    db.in_transaction(apply_all)
+            if new_ids:
+                try:
+                    pruned = auto_prune(db, MAX_INSIGHTS, new_ids)
+                except Exception:
+                    pruned = 0
+                for r in fact_results:
+                    if r.get('id') in new_ids:
+                        r['auto_pruned'] = pruned
+                        break
+
+        db.in_transaction(apply_all)
+    finally:
+        if owned_executor is not None:
+            owned_executor.shutdown(wait=True)
 
     return {
         'facts': fact_results,
         'quality_warnings': quality_warnings,
         'llm_calls': llm_calls,
         }
+
+
+def _batch_enriched_embeds(
+        plans: list[FactPlan], ec: object) -> None:
+    """Embed every plan's enriched text in one HTTP round-trip.
+
+    Called once per row after planning completes. Plans whose
+    enrichment yielded keywords get an enriched-text embedding
+    distributed back into `enriched_vec`/`enriched_blob`. Plans
+    without keywords are untouched.
+    """
+    if ec is None or not ec.available():
+        return
+    pending: list[tuple[FactPlan, str]] = []
+    for plan in plans:
+        if plan.fact_insight is None:
+            continue
+        if plan.enriched_vec is not None:
+            continue
+        keywords = plan.enrichment.get('keywords', [])
+        if not keywords:
+            continue
+        enriched_text = build_enriched_text(
+            plan.fact_insight.content, keywords)
+        pending.append((plan, enriched_text))
+
+    if not pending:
+        return
+
+    texts = [t for _p, t in pending]
+    try:
+        vectors = ec.embed_batch(texts)
+    except Exception as exc:
+        logger.warning(f'enriched-text embed_batch failed: {exc}')
+        return
+
+    if len(vectors) != len(pending):
+        logger.warning(
+            f'embed_batch returned {len(vectors)} for {len(pending)} inputs')
+        return
+
+    for (plan, _t), vec in zip(pending, vectors):
+        plan.enriched_vec = vec
+        plan.enriched_blob = serialize_vector(vec)
 
 
 def _plan_fact(
@@ -244,8 +313,13 @@ def _plan_fact(
         llm_client: object,
         ec: object,
         data_dir_for_ro: str,
+        executor: ThreadPoolExecutor,
         ) -> tuple[FactPlan, int]:
     """Plan a single fact without touching the DB. Returns (plan, llm_calls).
+
+    Enriched-text re-embeds are deferred to a row-level batch pass
+    (`_batch_enriched_embeds`) so multiple facts in one row collapse
+    into one HTTP round-trip.
     """
     calls = 0
     fact_text = fact['text']
@@ -387,34 +461,21 @@ def _plan_fact(
         finally:
             ro_db.close()
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        fut_e = pool.submit(_do_enrich)
-        fut_c = pool.submit(_do_causal)
-        try:
-            enrichment = fut_e.result()
-            calls += 1
-        except Exception:
-            enrichment = {}
-        try:
-            causal_edges = fut_c.result()
-            calls += 1
-        except Exception:
-            causal_edges = []
+    fut_e = executor.submit(_do_enrich)
+    fut_c = executor.submit(_do_causal)
+    try:
+        enrichment = fut_e.result()
+        calls += 1
+    except Exception:
+        enrichment = {}
+    try:
+        causal_edges = fut_c.result()
+        calls += 1
+    except Exception:
+        causal_edges = []
 
     if enrichment:
         fact_insight.entities = enrichment.get('entities', [])
-
-    enriched_vec = None
-    enriched_blob = None
-    keywords = enrichment.get('keywords', [])
-    if keywords and ec is not None and ec.available():
-        enriched_text = build_enriched_text(
-            fact_insight.content, keywords)
-        try:
-            enriched_vec = ec.embed(enriched_text)
-            enriched_blob = serialize_vector(enriched_vec)
-        except Exception:
-            pass
 
     return FactPlan(
         action=action.lower(),
@@ -425,8 +486,8 @@ def _plan_fact(
         embed_blob=embed_blob,
         enrichment=enrichment,
         causal_edges=causal_edges,
-        enriched_vec=enriched_vec,
-        enriched_blob=enriched_blob,
+        enriched_vec=None,
+        enriched_blob=None,
         ), calls
 
 

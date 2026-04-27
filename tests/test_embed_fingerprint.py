@@ -553,12 +553,12 @@ def test_fingerprint_from_json_missing_keys():
 
 
 def test_worker_blocks_on_mismatch(tmp_path, monkeypatch):
-    """The worker's _process_queue_row asserts fingerprint consistency
-    before running run_remember; mismatched stored fingerprint causes
-    the queue row to fail rather than be silently consumed.
+    """The worker asserts fingerprint consistency before processing rows.
+
+    Now enforced when `_StoreContext` opens the store DB at the start
+    of a drain rather than per-row inside `_process_queue_row`.
     """
-    from memman.cli import _process_queue_row
-    from memman.queue import QueueRow
+    from memman.cli import _StoreContext
     from memman.store.db import store_dir
 
     sdir = store_dir(str(tmp_path), 'default')
@@ -569,12 +569,5 @@ def test_worker_blocks_on_mismatch(tmp_path, monkeypatch):
     finally:
         db.close()
 
-    row = QueueRow(
-        id=1, store='default', content='test',
-        hint_cat=None, hint_imp=None, hint_tags=None,
-        hint_source=None, hint_entities=None,
-        hint_replaced_id=None, hint_no_reconcile=False,
-        priority=0, queued_at=0, attempts=0)
-
     with pytest.raises(EmbedFingerprintError):
-        _process_queue_row(row, sdir, str(tmp_path))
+        _StoreContext(sdir)

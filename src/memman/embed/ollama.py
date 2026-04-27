@@ -103,6 +103,12 @@ class Client:
             dim=len(vec))
         return vec
 
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Embed many texts. Ollama's /api/embeddings is single-input only,
+        so this calls embed() per text.
+        """
+        return [self.embed(t) for t in texts]
+
     def unavailable_message(self) -> str:
         """Return error message when Ollama is not available."""
         return (

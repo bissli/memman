@@ -133,6 +133,8 @@ def _mock_apis(request, monkeypatch):
     monkeypatch.setattr(
         'memman.embed.voyage.Client.embed', _mock_embed)
     monkeypatch.setattr(
+        'memman.embed.voyage.Client.embed_batch', _mock_embed_batch)
+    monkeypatch.setattr(
         'memman.embed.voyage.Client.available', lambda self: True)
     monkeypatch.setenv('OPENROUTER_API_KEY', 'mock-key-for-testing')
     from memman.llm import client as llm_client_mod
@@ -307,6 +309,12 @@ def _infer_importance(text: str) -> int:
                                 'architecture']):
         return 4
     return 3
+
+
+def _mock_embed_batch(
+        self: object, texts: list[str]) -> list[list[float]]:
+    """Batch variant of `_mock_embed`. One vector per input."""
+    return [_mock_embed(self, t) for t in texts]
 
 
 def _mock_embed(self: object, text: str) -> list[float]:

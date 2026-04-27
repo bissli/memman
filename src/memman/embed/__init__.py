@@ -40,6 +40,14 @@ class EmbeddingProvider(Protocol):
         """
         ...
 
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Return embedding vectors for many texts in one round-trip.
+
+        Used by the worker pipeline to batch enriched-text re-embeds
+        across all facts in a row, replacing N HTTP calls with one.
+        """
+        ...
+
     def unavailable_message(self) -> str:
         """Return a user-facing message explaining why unavailable.
         """

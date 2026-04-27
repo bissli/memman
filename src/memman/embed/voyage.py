@@ -76,15 +76,23 @@ class Client:
 
     def embed(self, text: str) -> list[float]:
         """Generate embedding for text via Voyage API."""
+        return self.embed_batch([text])[0]
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Embed many texts in one HTTP round-trip (Voyage accepts up to 128).
+        """
+        if not texts:
+            return []
         url = f'{self.endpoint}/v1/embeddings'
         headers = self._headers()
-        body = {'model': self.model, 'input': [text]}
+        body = {'model': self.model, 'input': texts}
         trace.event(
             'embed_request',
             provider='voyage',
             url=url,
             model=self.model,
-            input_len=len(text),
+            batch_size=len(texts),
+            input_lens=[len(t) for t in texts],
             headers=trace.redact_headers(headers))
         t0 = time.monotonic()
         resp = _session().post(url, headers=headers, json=body, timeout=30.0)
@@ -100,23 +108,29 @@ class Client:
                 f'Voyage returned status {resp.status_code}')
         data = resp.json()
         items = data.get('data', [])
-        if not items or 'embedding' not in items[0]:
+        if len(items) != len(texts):
             trace.event(
                 'embed_response',
                 provider='voyage',
                 status=resp.status_code,
                 elapsed_ms=elapsed_ms,
-                error='empty')
-            raise RuntimeError('empty embedding returned')
-        vec = items[0]['embedding']
+                error='length_mismatch',
+                expected=len(texts),
+                got=len(items))
+            raise RuntimeError(
+                f'Voyage returned {len(items)} vectors for {len(texts)} inputs')
+        vectors = [item.get('embedding') for item in items]
+        if any(v is None for v in vectors):
+            raise RuntimeError('Voyage returned a row with no embedding')
         trace.event(
             'embed_response',
             provider='voyage',
             status=resp.status_code,
             elapsed_ms=elapsed_ms,
-            dim=len(vec),
+            batch_size=len(vectors),
+            dim=len(vectors[0]) if vectors else 0,
             usage=data.get('usage'))
-        return vec
+        return vectors
 
     def unavailable_message(self) -> str:
         """Return error message when Voyage is not available."""

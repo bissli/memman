@@ -691,11 +691,15 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         timeout=timeout,
         stores=store_list)
 
+    from concurrent.futures import ThreadPoolExecutor
+
     conn = open_queue_db(data_dir_val)
     processed = 0
     failed = 0
     claimed = 0
     touched_stores: set[str] = set()
+    store_contexts: dict[str, _StoreContext] = {}
+    executor = ThreadPoolExecutor(max_workers=2)
     run_id = start_worker_run(conn, worker_pid)
     run_error: str | None = None
 
@@ -715,7 +719,6 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 break
             claimed += 1
 
-            sdir = store_dir(data_dir_val, row.store)
             trace.event(
                 'queue_claim',
                 row_id=row.id,
@@ -729,9 +732,29 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 hint_source=row.hint_source,
                 hint_entities=row.hint_entities)
 
+            ctx = store_contexts.get(row.store)
+            if ctx is None:
+                try:
+                    ctx = _StoreContext(store_dir(data_dir_val, row.store))
+                except Exception as exc:
+                    mark_failed(
+                        conn, row.id, f'{type(exc).__name__}: {exc}')
+                    failed += 1
+                    trace.event(
+                        'queue_failed',
+                        row_id=row.id,
+                        store=row.store,
+                        error_class=type(exc).__name__,
+                        error_message=str(exc)[:500])
+                    logger.exception(
+                        f'enrich row {row.id} failed during store open')
+                    continue
+                store_contexts[row.store] = ctx
+
+            embed_snap, insights_snap = ctx.snapshot_caches()
             try:
                 row_t0 = _time.monotonic()
-                _process_queue_row(row, sdir, data_dir_val)
+                _process_queue_row(row, ctx, executor)
                 row_elapsed_ms = int((_time.monotonic() - row_t0) * 1000)
                 mark_done(conn, row.id)
                 processed += 1
@@ -746,6 +769,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                         f'[enrich] done id={row.id} store={row.store}',
                         err=True)
             except Exception as exc:
+                ctx.restore_caches(embed_snap, insights_snap)
                 mark_failed(conn, row.id, f'{type(exc).__name__}: {exc}')
                 failed += 1
                 trace.event(
@@ -763,6 +787,9 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         run_error = f'{type(exc).__name__}: {exc}'
         raise
     finally:
+        executor.shutdown(wait=True)
+        for ctx in store_contexts.values():
+            ctx.close()
         for store_name in touched_stores:
             try:
                 _write_recall_snapshot_for_store(data_dir_val, store_name)
@@ -811,16 +838,75 @@ def _write_recall_snapshot_for_store(
         db.close()
 
 
-def _process_queue_row(row: 'memman.queue.QueueRow', store_data_dir: str,
-                       base_data_dir: str) -> None:
+class _StoreContext:
+    """Per-store drain-scope state hoisted out of the row loop.
+
+    One context per store touched in a drain: the open store DB
+    connection, the embedding+insight cache (built lazily on first
+    use), and the slow-role LLM client + embed client. Reused across
+    every row that targets the same store so that scans and HTTP
+    setup amortize.
+    """
+
+    def __init__(self, store_data_dir: str) -> None:
+        from memman.embed import get_client as _get_ec
+        from memman.embed.fingerprint import assert_consistent
+        from memman.embed.vector import deserialize_vector
+        from memman.llm.client import get_llm_client
+        from memman.store.db import open_db as _open_store_db
+        from memman.store.node import (
+            get_all_active_insights, get_all_embeddings)
+
+        self.store_data_dir = store_data_dir
+        self.db = _open_store_db(store_data_dir)
+        assert_consistent(self.db)
+        self.ec = _get_ec()
+        self.llm_client = get_llm_client('slow')
+        self.embed_cache: dict[str, list[float]] = {}
+        for eid, _content, blob in get_all_embeddings(self.db):
+            v = deserialize_vector(blob)
+            if v is not None:
+                self.embed_cache[eid] = v
+        self.insights_by_id = {
+            i.id: i for i in get_all_active_insights(self.db)}
+
+    def snapshot_caches(self) -> tuple[dict, dict]:
+        """Return shallow copies of the caches for rollback."""
+        return dict(self.embed_cache), dict(self.insights_by_id)
+
+    def restore_caches(self, embed: dict, insights: dict) -> None:
+        """Restore caches to a prior snapshot after a failed row."""
+        self.embed_cache.clear()
+        self.embed_cache.update(embed)
+        self.insights_by_id.clear()
+        self.insights_by_id.update(insights)
+
+    def close(self) -> None:
+        """Close the store DB connection."""
+        try:
+            self.db.close()
+        except Exception:
+            logger.exception(
+                f'failed closing store DB at {self.store_data_dir}')
+
+
+def _process_queue_row(
+        row: 'memman.queue.QueueRow',
+        ctx: _StoreContext,
+        executor: 'ThreadPoolExecutor') -> None:
     """Run the full remember pipeline on a claimed queue row.
 
     The insight's `source` is set to `row.hint_source` when provided
     (so the user's `--source` flag survives the queue), falling back
     to `queue:<row.id>`. Crash-recovery idempotency is enforced only
     when `hint_source` is absent, via a `source=queue:<id>` lookup.
+
+    Hoisted state (db, embed_cache, insights_by_id, llm_client, ec,
+    executor) comes from `ctx` and the drain-level executor. The
+    drain loop snapshots and restores `ctx`'s caches around this call
+    so a transaction failure can't pollute the next row's planning.
     """
-    from memman.store.db import open_db as _open_store_db
+    from memman import trace as _trace
 
     tag_list = _parse_tags(row.hint_tags or '')
     entity_list = _parse_entities(row.hint_entities or '')
@@ -833,65 +919,59 @@ def _process_queue_row(row: 'memman.queue.QueueRow', store_data_dir: str,
     if importance < 1 or importance > 5:
         importance = 3
 
-    from memman import trace as _trace
-    from memman.embed.fingerprint import assert_consistent
-
-    db = _open_store_db(store_data_dir)
-    assert_consistent(db)
+    db = ctx.db
     _trace.event(
         'process_row',
         row_id=row.id,
         store=row.store,
-        store_dir=store_data_dir,
+        store_dir=ctx.store_data_dir,
         db_path=db.path,
         source=source,
         category=category,
         importance=importance)
-    try:
-        from memman.store.oplog import trim_oplog_by_age
-        pruned = trim_oplog_by_age(db)
-        if pruned:
-            _trace.event('oplog_trimmed', store=row.store, rows=pruned)
 
-        if row.hint_source is None:
-            already = db._query(
-                'SELECT 1 FROM insights WHERE source = ?'
-                ' AND deleted_at IS NULL LIMIT 1',
-                (source,)).fetchone()
-            if already is not None:
-                logger.info(
-                    f'queue row {row.id} already committed to store'
-                    f' {row.store!r}; skipping re-processing')
-                _trace.event(
-                    'process_row_skipped',
-                    row_id=row.id,
-                    reason='already_committed')
-                return
+    if row.hint_source is None:
+        already = db._query(
+            'SELECT 1 FROM insights WHERE source = ?'
+            ' AND deleted_at IS NULL LIMIT 1',
+            (source,)).fetchone()
+        if already is not None:
+            logger.info(
+                f'queue row {row.id} already committed to store'
+                f' {row.store!r}; skipping re-processing')
+            _trace.event(
+                'process_row_skipped',
+                row_id=row.id,
+                reason='already_committed')
+            return
 
-        now = datetime.now(timezone.utc)
-        access_count = 0
-        if row.hint_replaced_id:
-            from memman.store.node import get_insight_by_id
-            old = get_insight_by_id(db, row.hint_replaced_id)
-            if old is not None:
-                access_count = old.access_count
-        insight = Insight(
-            id=str(uuid.uuid4()), content=row.content,
-            category=category, importance=importance,
-            tags=tag_list, entities=entity_list, source=source,
-            access_count=access_count,
-            created_at=now, updated_at=now)
+    now = datetime.now(timezone.utc)
+    access_count = 0
+    if row.hint_replaced_id:
+        from memman.store.node import get_insight_by_id
+        old = get_insight_by_id(db, row.hint_replaced_id)
+        if old is not None:
+            access_count = old.access_count
+    insight = Insight(
+        id=str(uuid.uuid4()), content=row.content,
+        category=category, importance=importance,
+        tags=tag_list, entities=entity_list, source=source,
+        access_count=access_count,
+        created_at=now, updated_at=now)
 
-        from memman.pipeline.remember import run_remember
-        result = run_remember(
-            db, insight, row.content,
-            no_reconcile=row.hint_no_reconcile or bool(row.hint_replaced_id),
-            replaced_id=row.hint_replaced_id or '',
-            cat_explicit=row.hint_cat is not None,
-            imp_explicit=row.hint_imp is not None)
-        _json_out(result)
-    finally:
-        db.close()
+    from memman.pipeline.remember import run_remember
+    result = run_remember(
+        db, insight, row.content,
+        no_reconcile=row.hint_no_reconcile or bool(row.hint_replaced_id),
+        replaced_id=row.hint_replaced_id or '',
+        cat_explicit=row.hint_cat is not None,
+        imp_explicit=row.hint_imp is not None,
+        embed_cache=ctx.embed_cache,
+        insights_by_id=ctx.insights_by_id,
+        executor=executor,
+        llm_client=ctx.llm_client,
+        ec=ctx.ec)
+    _json_out(result)
 
 
 @cli.command()
