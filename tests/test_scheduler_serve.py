@@ -31,7 +31,6 @@ def test_serve_once_drains_and_exits(runner, monkeypatch):
     from memman.setup import scheduler as sched_mod
     monkeypatch.setattr(sched_mod, 'read_state',
                         lambda: sched_mod.STATE_STARTED)
-    monkeypatch.setattr(sched_mod, 'is_inline_trigger', lambda: False)
 
     r, data_dir = runner
     add_result = r.invoke(
@@ -58,7 +57,6 @@ def test_serve_writes_interval_file(runner, monkeypatch):
     from memman.setup import scheduler as sched_mod
     monkeypatch.setattr(sched_mod, 'read_state',
                         lambda: sched_mod.STATE_STARTED)
-    monkeypatch.setattr(sched_mod, 'is_inline_trigger', lambda: False)
 
     interval_path = Path(os.environ['HOME']) / '.memman' / 'scheduler.serve_interval'
     captured: dict = {}
@@ -94,7 +92,6 @@ def test_serve_stops_when_state_file_says_stopped(runner, monkeypatch):
     """
     from memman.setup import scheduler as sched_mod
 
-    monkeypatch.setattr(sched_mod, 'is_inline_trigger', lambda: False)
     monkeypatch.setattr(sched_mod, 'read_state',
                         lambda: sched_mod.STATE_STOPPED)
 

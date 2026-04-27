@@ -107,94 +107,6 @@ def _require_stopped(action: str) -> None:
             " Run 'memman scheduler stop' first.")
 
 
-def _facts_from_queue_row(ctx: click.Context, row_id: int) -> list[dict] | None:
-    """After an inline drain, look up insights produced by this queue row.
-
-    Returns a list of fact dicts ({'id', 'content', 'category',
-    'importance', 'action'}) when the row's worker pass created
-    insights; None when no inline drain ran (host with OS timer) or
-    when nothing was produced. The action field is 'replace' when the
-    queue row carried a hint_replaced_id, else 'add'. This lets
-    nanoclaw / test callers see the new insight IDs without an extra
-    recall round-trip.
-    """
-    from memman.queue import open_queue_db
-    from memman.setup.scheduler import is_inline_trigger
-    if not is_inline_trigger():
-        return None
-    qconn = open_queue_db(ctx.obj['data_dir'])
-    try:
-        qrow = qconn.execute(
-            'select hint_replaced_id from queue where id = ?',
-            (row_id,)).fetchone()
-    finally:
-        qconn.close()
-    action = 'replace' if (qrow and qrow[0]) else 'add'
-    db = _open_db(ctx)
-    try:
-        rows = db._query(
-            'select id, content, category, importance from insights'
-            ' where source = ? and deleted_at is null'
-            ' order by created_at',
-            (f'queue:{row_id}',)).fetchall()
-    finally:
-        db.close()
-    if not rows:
-        return None
-    return [{
-        'id': r[0],
-        'content': r[1],
-        'category': r[2],
-        'importance': r[3],
-        'action': action,
-        } for r in rows]
-
-
-_INLINE_DRAIN_LAST: list[dict] = []
-
-
-def _drain_inline_if_needed(ctx: click.Context) -> list[dict]:
-    """Run a drain pass in-process when the trigger is inline.
-
-    Returns the list of per-row worker results (`run_remember` outputs)
-    captured during this drain pass. On systemd/launchd hosts the OS
-    timer runs the worker and this is a no-op (returns []).
-
-    The drain summary written to stdout is captured and parsed so the
-    caller can merge enrichment fields (`edges_created`, `enrichment`,
-    etc.) into the queued-action response. nanoclaw and tests rely on
-    this so a single `remember` call returns the new insight ids and
-    enrichment counts in one shot.
-    """
-    import contextlib
-    import io
-
-    from memman.setup.scheduler import is_inline_trigger
-    _INLINE_DRAIN_LAST.clear()
-    if not is_inline_trigger():
-        return _INLINE_DRAIN_LAST
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        _drain_queue(ctx, limit=100, timeout=300, stores_filter='',
-                     verbose=False)
-    raw = buf.getvalue()
-    decoder = json.JSONDecoder()
-    pos = 0
-    while pos < len(raw):
-        while pos < len(raw) and raw[pos] in ' \r\n\t':
-            pos += 1
-        if pos >= len(raw):
-            break
-        try:
-            obj, end = decoder.raw_decode(raw, pos)
-        except json.JSONDecodeError:
-            break
-        if isinstance(obj, dict):
-            _INLINE_DRAIN_LAST.append(obj)
-        pos = end
-    return _INLINE_DRAIN_LAST
-
-
 def _resolve_store_name(data_dir: str, store_flag: str) -> str:
     """Resolve effective store name."""
     if store_flag:
@@ -482,36 +394,12 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
             priority=0)
     finally:
         conn.close()
-    drain_results = _drain_inline_if_needed(ctx)
-    out: dict = {
+    _json_out({
         'action': 'queued',
         'queue_id': row_id,
         'store': name,
         'quality_warnings': quality_warnings,
-        }
-    if drain_results:
-        worker_result = drain_results[0]
-        for k in ('facts', 'enrichment', 'edges_created',
-                  'effective_importance', 'auto_pruned',
-                  'embedded', 'llm_calls'):
-            if k in worker_result:
-                out[k] = worker_result[k]
-        if 'id' in worker_result:
-            out['id'] = worker_result['id']
-        if 'action' in worker_result:
-            out['action'] = worker_result['action']
-    if 'facts' not in out:
-        facts = _facts_from_queue_row(ctx, row_id)
-        if facts is not None:
-            out['facts'] = facts
-            out['action'] = facts[0]['action']
-            if 'id' in facts[0]:
-                out['id'] = facts[0]['id']
-    elif out.get('facts'):
-        first = out['facts'][0] if isinstance(out['facts'], list) else None
-        if first and 'id' in first:
-            out['id'] = first['id']
-    _json_out(out)
+        })
 
 
 _STOP_REQUESTED = False
@@ -590,9 +478,8 @@ def scheduler_serve(ctx: click.Context, interval: int, once: bool) -> None:
     from memman import __version__ as _memman_version
     from memman import trace
     from memman.queue import mark_stale_on_resume, open_queue_db
-    from memman.setup.scheduler import (
-        STATE_STOPPED, clear_serve_interval, read_state,
-        write_serve_interval)
+    from memman.setup.scheduler import STATE_STOPPED, clear_serve_interval
+    from memman.setup.scheduler import read_state, write_serve_interval
 
     if interval < 0:
         raise click.ClickException('--interval must be >= 0')
@@ -852,16 +739,16 @@ class _StoreContext:
 
     def __init__(self, store_data_dir: str) -> None:
         from memman.embed import get_client as _get_ec
-        from memman.embed.fingerprint import assert_consistent
+        from memman.embed import fingerprint as _fp_mod
         from memman.embed.vector import deserialize_vector
         from memman.llm.client import get_llm_client
         from memman.store.db import open_db as _open_store_db
-        from memman.store.node import (
-            get_all_active_insights, get_all_embeddings)
+        from memman.store.node import get_all_active_insights
+        from memman.store.node import get_all_embeddings
 
         self.store_data_dir = store_data_dir
         self.db = _open_store_db(store_data_dir)
-        assert_consistent(self.db)
+        _fp_mod.assert_consistent(self.db)
         self.ec = _get_ec()
         self.llm_client = get_llm_client('slow')
         self.embed_cache: dict[str, list[float]] = {}
@@ -1214,22 +1101,12 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             priority=0)
     finally:
         conn.close()
-    _drain_inline_if_needed(ctx)
-    out: dict = {
+    _json_out({
         'action': 'queued',
         'queue_id': row_id,
         'store': name,
         'replaced_id': id,
-        }
-    facts = _facts_from_queue_row(ctx, row_id)
-    if facts is not None:
-        for f in facts:
-            f['replaced_id'] = id
-        out['facts'] = facts
-        out['action'] = 'replace'
-        if 'id' in facts[0]:
-            out['id'] = facts[0]['id']
-    _json_out(out)
+        })
 
 
 @graph.command('link')

@@ -78,8 +78,6 @@ def test_queue_list_returns_stats_and_rows(runner, monkeypatch):
     to `queue list`. With drain enabled the maintenance phase would
     purge the row before the assertion runs.
     """
-    from memman.setup import scheduler as sched_mod
-    monkeypatch.setattr(sched_mod, 'is_inline_trigger', lambda: False)
 
     invoke(runner, ['remember', 'hello queue'])
     result = invoke(runner, ['scheduler', 'queue', 'list'])

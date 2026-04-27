@@ -12,15 +12,13 @@ from datetime import datetime, timezone
 import pytest
 from click.testing import CliRunner
 from memman.cli import cli
-from memman.embed.fingerprint import (
-    Fingerprint, active_fingerprint, write_fingerprint)
+from memman.embed.fingerprint import Fingerprint, active_fingerprint
 from memman.embed.vector import serialize_vector
 from memman.model import Edge
 from memman.store.edge import insert_edge
 from memman.store.node import insert_insight, update_embedding
-from memman.store.snapshot import (
-    SNAPSHOT_FILENAME, delete_snapshot, read_snapshot, snapshot_path,
-    write_snapshot)
+from memman.store.snapshot import SNAPSHOT_FILENAME, delete_snapshot
+from memman.store.snapshot import read_snapshot, snapshot_path, write_snapshot
 from tests.conftest import make_insight
 
 
@@ -107,7 +105,7 @@ def test_skipped_when_over_max_insights(tmp_db, tmp_path, monkeypatch):
 
 
 def test_recall_consumes_snapshot_when_present(tmp_path, monkeypatch):
-    """recall must use the snapshot rather than calling SQL helpers.
+    """Recall must use the snapshot rather than calling SQL helpers.
 
     Patch the SQL helpers to raise; recall succeeds only because the
     snapshot path bypasses them.
@@ -115,7 +113,6 @@ def test_recall_consumes_snapshot_when_present(tmp_path, monkeypatch):
     from memman.setup import scheduler as sched_mod
     monkeypatch.setattr(sched_mod, 'read_state',
                         lambda: sched_mod.STATE_STARTED)
-    monkeypatch.setattr(sched_mod, 'is_inline_trigger', lambda: False)
 
     r = CliRunner()
     data_dir = str(tmp_path / 'data')
@@ -154,15 +151,14 @@ def test_recall_falls_back_when_snapshot_absent(tmp_path, monkeypatch):
     from memman.setup import scheduler as sched_mod
     monkeypatch.setattr(sched_mod, 'read_state',
                         lambda: sched_mod.STATE_STARTED)
-    monkeypatch.setattr(sched_mod, 'is_inline_trigger', lambda: False)
 
     r = CliRunner()
     data_dir = str(tmp_path / 'data')
     r.invoke(cli, ['--data-dir', data_dir, 'remember', 'gamma topic'])
     r.invoke(cli, ['--data-dir', data_dir, 'scheduler', 'drain', '--pending'])
 
-    from memman.store.db import default_data_dir, store_dir as _store_dir
     from memman.store.db import read_active
+    from memman.store.db import store_dir as _store_dir
     name = read_active(data_dir)
     delete_snapshot(_store_dir(data_dir, name))
 

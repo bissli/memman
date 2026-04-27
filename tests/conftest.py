@@ -32,18 +32,18 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 @pytest.fixture(autouse=True)
 def _scheduler_started(request, monkeypatch):
-    """Force scheduler to appear started + inline-trigger for tests.
+    """Force scheduler state to STARTED so writes are accepted in tests.
 
     cli.py's `_require_started` rejects writes when `read_state()`
-    returns STATE_STOPPED. cli.py's `_drain_inline_if_needed` runs an
-    in-process drain after each enqueue when `is_inline_trigger()` is
-    True. Together these make tests self-contained: a single
-    `runner.invoke(['remember', ...])` call enqueues + drains in the
-    same process, so a follow-up `recall` sees the row.
+    returns STATE_STOPPED. The autouse fixture monkeypatches it to
+    STARTED for all non-e2e tests.
 
-    Skipped for `test_scheduler_setup.py` (which exercises read_state /
-    is_inline_trigger / install behavior directly) and for any test
-    marked `no_scheduler_started_mock` (rare opt-out).
+    Inline-mode auto-drain is NOT injected here -- write commands
+    enqueue and return immediately, exactly as production. Tests that
+    need to read what was just written go through the
+    `MemmanCliRunner` (default `runner` fixture) which auto-drains
+    after `remember`/`replace`. Tests that intentionally inspect a
+    pre-drain queue should use the `no_auto_drain` mark.
     """
     if 'tests/e2e/' in str(request.node.fspath):
         return
@@ -54,7 +54,60 @@ def _scheduler_started(request, monkeypatch):
     from memman.setup import scheduler as sched_mod
     monkeypatch.setattr(sched_mod, 'read_state',
                         lambda: sched_mod.STATE_STARTED)
-    monkeypatch.setattr(sched_mod, 'is_inline_trigger', lambda: True)
+
+    import click.testing
+    original_invoke = click.testing.CliRunner.invoke
+
+    def _wrapped_invoke(self, cli_obj, args=None, **kwargs):
+        result = original_invoke(self, cli_obj, args, **kwargs)
+        if (result.exit_code == 0
+                and 'no_auto_drain' not in request.keywords
+                and _args_target_write(args)):
+            data_dir = _args_data_dir(args)
+            if data_dir is not None:
+                _force_drain_with(self.__class__, data_dir, original_invoke)
+        return result
+
+    monkeypatch.setattr(
+        click.testing.CliRunner, 'invoke', _wrapped_invoke)
+
+
+_AUTO_DRAIN_TRIGGERS = ('remember', 'replace')
+
+
+def _args_target_write(args) -> bool:
+    if not args:
+        return False
+    for arg in args:
+        if isinstance(arg, str) and arg in _AUTO_DRAIN_TRIGGERS:
+            return True
+    return False
+
+
+def _args_data_dir(args) -> str | None:
+    if not args:
+        return None
+    seq = list(args)
+    for i, arg in enumerate(seq):
+        if arg == '--data-dir' and i + 1 < len(seq):
+            return seq[i + 1]
+    return None
+
+
+def _force_drain_with(runner_cls, data_dir, original_invoke) -> None:
+    """Run `scheduler drain --pending` via the underlying click invoke.
+
+    Bypasses the autouse-wrapped `invoke` to avoid re-triggering the
+    auto-drain path on the drain command itself.
+    """
+    from memman.cli import cli
+    instance = runner_cls()
+    result = original_invoke(
+        instance, cli,
+        ['--data-dir', data_dir, 'scheduler', 'drain', '--pending'])
+    assert result.exit_code == 0, (
+        f'force_drain failed: exit={result.exit_code} '
+        f'output={result.output} exc={result.exception}')
 
 
 def force_drain(data_dir: str) -> None:
@@ -64,11 +117,12 @@ def force_drain(data_dir: str) -> None:
     this to flush pending work through the worker before reading. Uses
     the same `scheduler drain --pending` code path the OS timer fires.
     """
-    from click.testing import CliRunner
+    import click.testing
     from memman.cli import cli
-    runner = CliRunner()
-    result = runner.invoke(
-        cli, ['--data-dir', data_dir, 'scheduler', 'drain', '--pending'])
+    instance = click.testing.CliRunner()
+    result = instance.invoke(
+        cli, ['--data-dir', data_dir,
+              'scheduler', 'drain', '--pending'])
     assert result.exit_code == 0, (
         f'force_drain failed: exit={result.exit_code} '
         f'output={result.output} exc={result.exception}')
@@ -350,8 +404,8 @@ def tmp_db(request, tmp_path):
     from memman.store.db import open_db
     db = open_db(str(tmp_path))
     if 'no_autoseed_fingerprint' not in request.keywords:
-        from memman.embed.fingerprint import (
-            active_fingerprint, write_fingerprint)
+        from memman.embed.fingerprint import active_fingerprint
+        from memman.embed.fingerprint import write_fingerprint
         write_fingerprint(db, active_fingerprint())
     yield db
     db.close()

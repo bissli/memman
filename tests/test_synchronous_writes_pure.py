@@ -8,7 +8,6 @@ embed call to any of these paths, the corresponding test fails loudly.
 """
 
 import json
-from datetime import datetime, timezone
 
 import pytest
 from click.testing import CliRunner
@@ -111,8 +110,6 @@ def test_remember_returns_queued_only(runner_with_seed, monkeypatch):
     in this test file's parents. Override it here so the LLM mock
     actually fails if the hot path tries to enrich.
     """
-    from memman.setup import scheduler as sched_mod
-    monkeypatch.setattr(sched_mod, 'is_inline_trigger', lambda: False)
     monkeypatch.setattr(
         'memman.llm.openrouter_client.OpenRouterClient.complete',
         _make_failing_complete)

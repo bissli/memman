@@ -548,13 +548,24 @@ def test_clear_state_removes_file(fake_home):
     assert not sch._state_file_path().exists()
 
 
-def test_inline_install_marks_started(fake_home, monkeypatch):
-    """install() on a platform without systemd/launchd writes the inline marker."""
-    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'inline')
+def test_serve_install_records_interval(fake_home, monkeypatch):
+    """install() in serve mode records the interval and writes STATE_STARTED."""
+    monkeypatch.setattr(sch, 'detect_scheduler',
+                        lambda: sch.SCHEDULER_KIND_SERVE)
     monkeypatch.setattr(sch, 'memman_binary_path', lambda: '/usr/local/bin/memman')
     monkeypatch.setattr(sch, '_write_env_file', lambda *a, **k: ['noop'])
     result = sch.install(str(fake_home / 'data'), 'or-key', 'vy-key')
-    assert result['platform'] == 'inline'
+    assert result['platform'] == sch.SCHEDULER_KIND_SERVE
     assert result['state'] == sch.STATE_STARTED
-    assert sch.is_inline_trigger() is True
+    assert sch.read_serve_interval() == sch.DEFAULT_INTERVAL_SECONDS
     assert sch.read_state() == sch.STATE_STARTED
+
+
+def test_detect_raises_when_no_scheduler(monkeypatch):
+    """detect_scheduler raises RuntimeError when no kind is available."""
+    import platform as _platform
+    monkeypatch.delenv(sch.SCHEDULER_KIND_ENV, raising=False)
+    monkeypatch.setattr(_platform, 'system', lambda: 'Linux')
+    monkeypatch.setattr(sch.shutil, 'which', lambda _: None)
+    with pytest.raises(RuntimeError, match='no scheduler available'):
+        sch.detect_scheduler()

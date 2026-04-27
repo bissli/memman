@@ -301,9 +301,15 @@ def test_reembed_converges_after_provider_swap(
 
 
 @pytest.mark.no_autoseed_fingerprint
-def test_remember_blocks_on_mismatch(tmp_path, monkeypatch):
-    """Remember against a stale DB fails before queueing.
+@pytest.mark.no_auto_drain
+def test_drain_blocks_on_mismatch(tmp_path, monkeypatch):
+    """Worker drain fails on a fingerprint-mismatched store.
+
+    `remember` itself only enqueues, so it succeeds even against a
+    stale store. The fingerprint check happens when the worker opens
+    the store DB; the queue row lands in `failed` with a clear error.
     """
+    from memman.queue import open_queue_db
     from memman.store.db import store_dir
     sdir = store_dir(str(tmp_path), 'default')
     db = open_db(sdir)
@@ -316,8 +322,23 @@ def test_remember_blocks_on_mismatch(tmp_path, monkeypatch):
 
     result = _invoke([
         '--data-dir', str(tmp_path), 'remember', 'something'])
-    assert result.exit_code != 0
-    assert 'embed reembed' in result.output
+    assert result.exit_code == 0, result.output
+
+    drain_result = _invoke([
+        '--data-dir', str(tmp_path),
+        'scheduler', 'drain', '--pending'])
+    assert drain_result.exit_code == 0, drain_result.output
+
+    qconn = open_queue_db(str(tmp_path))
+    try:
+        status, last_err = qconn.execute(
+            'select status, last_error from queue order by id desc limit 1'
+            ).fetchone()
+    finally:
+        qconn.close()
+    assert status in {'pending', 'failed'}
+    assert last_err is not None
+    assert 'fingerprint' in last_err.lower()
 
 
 # ----- embed status --------------------------------------------

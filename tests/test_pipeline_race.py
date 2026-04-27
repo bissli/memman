@@ -23,8 +23,6 @@ def runner(tmp_path, monkeypatch):
     immediate inline drain. Override the autouse-fixture's
     `is_inline_trigger=True` to False so the queue actually buffers.
     """
-    from memman.setup import scheduler as sched_mod
-    monkeypatch.setattr(sched_mod, 'is_inline_trigger', lambda: False)
     return CliRunner(), str(tmp_path)
 
 
@@ -35,6 +33,7 @@ def _invoke(r, data_dir, *args):
     return json.loads(result.output) if result.output.strip() else {}
 
 
+@pytest.mark.no_auto_drain
 def test_forget_then_replace_race(runner):
     """Replace queued + forget on target + drain = add (target gone).
 

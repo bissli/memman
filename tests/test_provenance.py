@@ -121,7 +121,7 @@ def test_remember_stamps_provenance(runner):
             'provenance stamping end-to-end'])
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
-    row_id = data['facts'][0]['id']
+    queue_id = data['queue_id']
 
     import sqlite3
     store_path = Path(data_dir) / 'data' / 'default' / 'memman.db'
@@ -129,8 +129,8 @@ def test_remember_stamps_provenance(runner):
     try:
         prompt_v, model_id, embed_model = conn.execute(
             'SELECT prompt_version, model_id, embedding_model'
-            ' FROM insights WHERE id = ?',
-            (row_id,)).fetchone()
+            ' FROM insights WHERE source = ?',
+            (f'queue:{queue_id}',)).fetchone()
     finally:
         conn.close()
 
