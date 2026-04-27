@@ -443,7 +443,7 @@ def check_llm_probe() -> dict:
         from memman.exceptions import ConfigError
         from memman.llm.client import get_llm_client
         try:
-            client = get_llm_client()
+            client = get_llm_client('fast')
         except ConfigError as exc:
             detail['error'] = str(exc)
             detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)

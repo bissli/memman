@@ -61,6 +61,11 @@ def compute_prompt_version() -> str:
     inference). Query-time prompts (QUERY_EXPANSION) are excluded
     because they don't affect stored content. The hash is cached for
     the life of the process — the prompts are module-level constants.
+
+    Note: the slow-role model id is *not* part of this hash. Swapping
+    `MEMMAN_LLM_MODEL_SLOW` to a model that produces structurally
+    different facts will not invalidate stored insights. Run
+    `memman graph rebuild` after a model swap to re-enrich.
     """
     from memman.graph.causal import LLM_SYSTEM_PROMPT as CAUSAL_PROMPT
     from memman.graph.enrichment import ENRICHMENT_SYSTEM_PROMPT
@@ -118,7 +123,7 @@ def run_remember(
             'quality_warnings': quality_warnings,
             }
 
-    llm_client = get_llm_client()
+    llm_client = get_llm_client('slow')
     ec = get_client()
     llm_calls = 0
 

@@ -1,19 +1,24 @@
-"""LLM provider protocol, registry, and selector.
+"""LLM provider protocol, registry, and per-role selector.
 
 `LLMProvider` is the structural contract every provider class must
 satisfy: a `.complete(system, user) -> str` method. Concrete clients
-(currently only OpenRouter) register themselves in the `PROVIDERS`
-dict via a zero-arg factory that reads provider-specific env vars.
+register themselves in the `PROVIDERS` dict via a factory that takes a
+role and reads role-specific env vars.
 
-`get_llm_client()` resolves the active provider by looking up
-`MEMMAN_LLM_PROVIDER` in the registry and invoking its factory.
-Unknown providers and missing API keys both surface as `ConfigError`
-— the CLI layer (`cli._get_llm_client_or_fail`) re-wraps as
-`click.ClickException`.
+Two roles exist:
 
-Adding a new provider = write a class in `llm/<name>_client.py` that
-implements `.complete(...)` using helpers from `llm.shared`, plus one
-`PROVIDERS[<name>] = factory` line here.
+- `fast` — used on the synchronous CLI hot path (recall query
+  expansion, doctor's connectivity probe). Reads `MEMMAN_LLM_MODEL_FAST`.
+- `slow` — used in the scheduler-driven worker (fact extraction,
+  reconciliation, enrichment, causal inference) and the operator
+  `graph rebuild` sweep. Reads `MEMMAN_LLM_MODEL_SLOW`.
+
+Routing the recall path to a small/fast model and the worker to a
+larger/slow/reasoning model means switching the worker model never
+adds latency to interactive commands.
+
+`get_llm_client(role)` resolves the active provider via
+`MEMMAN_LLM_PROVIDER` and returns a per-role cached client.
 """
 
 import os
@@ -22,6 +27,10 @@ from typing import Protocol
 
 from memman import config
 from memman.exceptions import ConfigError
+
+ROLE_FAST = 'fast'
+ROLE_SLOW = 'slow'
+VALID_ROLES = frozenset({ROLE_FAST, ROLE_SLOW})
 
 
 class LLMProvider(Protocol):
@@ -37,29 +46,38 @@ class LLMProvider(Protocol):
         ...
 
 
-def _openrouter_factory() -> LLMProvider:
-    """Build the registered OpenRouter client (factory indirection).
+def _openrouter_factory(role: str) -> LLMProvider:
+    """Build the registered OpenRouter client for a role.
 
     Imported lazily so starting up memman does not fetch the ZDR cache
     or touch provider-specific env vars unless that provider is
     actually selected.
     """
     from memman.llm.openrouter_client import get_openrouter_client
-    return get_openrouter_client()
+    return get_openrouter_client(role)
 
 
-PROVIDERS: dict[str, Callable[[], LLMProvider]] = {
+PROVIDERS: dict[str, Callable[[str], LLMProvider]] = {
     'openrouter': _openrouter_factory,
     }
 
+_ROLE_CACHE: dict[str, LLMProvider] = {}
 
-def get_llm_client() -> LLMProvider:
-    """Return the LLM client for the configured provider.
 
-    Routes by `MEMMAN_LLM_PROVIDER` (default: 'openrouter'). Raises
-    `ConfigError` when the provider name is unknown or the selected
-    provider's required env vars are missing.
+def get_llm_client(role: str) -> LLMProvider:
+    """Return a cached LLM client for the given role.
+
+    `role` must be one of `'fast'` or `'slow'`. Routes by
+    `MEMMAN_LLM_PROVIDER` (default: 'openrouter'). Raises `ConfigError`
+    when the provider name is unknown or the selected provider's
+    required env vars are missing.
     """
+    if role not in VALID_ROLES:
+        raise ValueError(
+            f'unknown LLM role {role!r}; valid roles: {sorted(VALID_ROLES)}')
+    cached = _ROLE_CACHE.get(role)
+    if cached is not None:
+        return cached
     name = os.environ.get(
         config.LLM_PROVIDER, config.DEFAULT_LLM_PROVIDER).lower()
     factory = PROVIDERS.get(name)
@@ -68,4 +86,11 @@ def get_llm_client() -> LLMProvider:
         raise ConfigError(
             f'unknown {config.LLM_PROVIDER}={name!r};'
             f' registered providers: {known}')
-    return factory()
+    client = factory(role)
+    _ROLE_CACHE[role] = client
+    return client
+
+
+def reset_role_cache() -> None:
+    """Drop cached per-role clients. Used by tests that swap env vars."""
+    _ROLE_CACHE.clear()

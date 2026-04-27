@@ -106,12 +106,13 @@ def test_cache_fail_loud_when_no_source_available(tmp_path, monkeypatch):
 
 
 def test_client_uses_picked_haiku_when_no_override(monkeypatch):
-    """Without MEMMAN_LLM_MODEL, the client picks the latest Haiku.
+    """Without a per-role override, the client picks the latest Haiku.
     """
     monkeypatch.setattr(cache_mod, '_fetch', lambda: SAMPLE_ZDR)
     client = OpenRouterClient(
         endpoint='https://openrouter.ai/api/v1',
-        api_key='fake-key')
+        api_key='fake-key',
+        role_env_var='MEMMAN_LLM_MODEL_FAST')
     assert client.model == 'anthropic/claude-haiku-4.5'
 
 
@@ -122,6 +123,7 @@ def test_client_honors_valid_model_override(monkeypatch):
     client = OpenRouterClient(
         endpoint='https://openrouter.ai/api/v1',
         api_key='fake-key',
+        role_env_var='MEMMAN_LLM_MODEL_FAST',
         model='openai/gpt-5-mini')
     assert client.model == 'openai/gpt-5-mini'
 
@@ -134,8 +136,9 @@ def test_client_rejects_non_zdr_override(monkeypatch):
     client = OpenRouterClient(
         endpoint='https://openrouter.ai/api/v1',
         api_key='fake-key',
+        role_env_var='MEMMAN_LLM_MODEL_SLOW',
         model='deepseek/deepseek-chat')
-    with pytest.raises(ConfigError, match='not in the current'):
+    with pytest.raises(ConfigError, match='MEMMAN_LLM_MODEL_SLOW'):
         _ = client.model
 
 
@@ -159,7 +162,8 @@ def test_client_complete_injects_zdr_provider_block(monkeypatch):
         type('FakeClient', (), {'post': staticmethod(_fake_post)})())
     client = OpenRouterClient(
         endpoint='https://openrouter.ai/api/v1',
-        api_key='fake-key')
+        api_key='fake-key',
+        role_env_var='MEMMAN_LLM_MODEL_FAST')
     out = client.complete('sys', 'user')
     assert out == 'ok'
     assert seen['url'].endswith('/chat/completions')
@@ -175,8 +179,9 @@ def test_get_llm_client_routes_to_openrouter(monkeypatch):
     """
     monkeypatch.setenv('MEMMAN_LLM_PROVIDER', 'openrouter')
     monkeypatch.setenv('OPENROUTER_API_KEY', 'fake-key')
-    from memman.llm.client import get_llm_client
-    c = get_llm_client()
+    from memman.llm.client import get_llm_client, reset_role_cache
+    reset_role_cache()
+    c = get_llm_client('fast')
     assert type(c).__name__ == 'OpenRouterClient'
 
 
@@ -185,8 +190,9 @@ def test_get_llm_client_default_is_openrouter(monkeypatch):
     """
     monkeypatch.delenv('MEMMAN_LLM_PROVIDER', raising=False)
     monkeypatch.setenv('OPENROUTER_API_KEY', 'fake-key')
-    from memman.llm.client import get_llm_client
-    c = get_llm_client()
+    from memman.llm.client import get_llm_client, reset_role_cache
+    reset_role_cache()
+    c = get_llm_client('slow')
     assert type(c).__name__ == 'OpenRouterClient'
 
 
@@ -196,9 +202,36 @@ def test_get_llm_client_rejects_unknown_provider(monkeypatch):
     from memman.exceptions import ConfigError
     monkeypatch.setenv('MEMMAN_LLM_PROVIDER', 'wat')
     monkeypatch.setenv('OPENROUTER_API_KEY', 'fake-key')
-    from memman.llm.client import get_llm_client
+    from memman.llm.client import get_llm_client, reset_role_cache
+    reset_role_cache()
     with pytest.raises(ConfigError, match='unknown'):
-        get_llm_client()
+        get_llm_client('fast')
+
+
+def test_get_llm_client_rejects_unknown_role(monkeypatch):
+    """Unknown role raises ValueError before touching env vars.
+    """
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'fake-key')
+    from memman.llm.client import get_llm_client, reset_role_cache
+    reset_role_cache()
+    with pytest.raises(ValueError, match='unknown LLM role'):
+        get_llm_client('medium')
+
+
+def test_fast_and_slow_clients_can_use_different_models(monkeypatch):
+    """Setting FAST and SLOW to different models yields two distinct clients.
+    """
+    monkeypatch.setattr(cache_mod, '_fetch', lambda: SAMPLE_ZDR)
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'fake-key')
+    monkeypatch.setenv('MEMMAN_LLM_MODEL_FAST', 'anthropic/claude-haiku-4.5')
+    monkeypatch.setenv('MEMMAN_LLM_MODEL_SLOW', 'openai/gpt-5-mini')
+    from memman.llm.client import get_llm_client, reset_role_cache
+    reset_role_cache()
+    fast = get_llm_client('fast')
+    slow = get_llm_client('slow')
+    assert fast.model == 'anthropic/claude-haiku-4.5'
+    assert slow.model == 'openai/gpt-5-mini'
+    assert fast is not slow
 
 
 @pytest.mark.no_mock_llm
@@ -218,7 +251,8 @@ def test_complete_raises_on_empty_choices(monkeypatch):
         type('FakeClient', (), {'post': staticmethod(_empty_choices)})())
     client = OpenRouterClient(
         endpoint='https://openrouter.ai/api/v1',
-        api_key='fake-key')
+        api_key='fake-key',
+        role_env_var='MEMMAN_LLM_MODEL_FAST')
     with pytest.raises(RuntimeError, match='no choices'):
         client.complete('sys', 'user')
 
@@ -240,7 +274,8 @@ def test_complete_raises_on_missing_content(monkeypatch):
         type('FakeClient', (), {'post': staticmethod(_no_content)})())
     client = OpenRouterClient(
         endpoint='https://openrouter.ai/api/v1',
-        api_key='fake-key')
+        api_key='fake-key',
+        role_env_var='MEMMAN_LLM_MODEL_FAST')
     with pytest.raises(RuntimeError, match='missing message.content'):
         client.complete('sys', 'user')
 

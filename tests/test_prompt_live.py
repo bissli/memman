@@ -20,7 +20,7 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture(scope='module')
 def llm_client():
     """Shared LLM client for all tests in this module."""
-    return get_llm_client()
+    return get_llm_client('slow')
 
 
 class TestCategoryAccuracy:

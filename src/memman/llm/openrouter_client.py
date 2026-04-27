@@ -5,11 +5,12 @@ Speaks OpenAI-schema /v1/chat/completions. Every request forces the
 OpenRouter routes only to endpoints with formal zero-data-retention
 agreements.
 
-Model selection is dynamic: on first call the client fetches (or reuses
-the cached) ZDR endpoint list and picks the latest Anthropic Haiku
-available. `MEMMAN_LLM_MODEL` overrides the auto-pick, but the override
-is still validated against the ZDR list — the client refuses to send
-to a non-ZDR endpoint.
+Model selection is per-role and dynamic: on first call the client
+fetches (or reuses the cached) ZDR endpoint list and picks the latest
+Anthropic Haiku available. `MEMMAN_LLM_MODEL_FAST` and
+`MEMMAN_LLM_MODEL_SLOW` override the auto-pick for the recall hot path
+and the worker pipeline respectively. Overrides are validated against
+the ZDR list — the client refuses to send to a non-ZDR endpoint.
 """
 
 import logging
@@ -45,13 +46,20 @@ class OpenRouterClient:
             self,
             endpoint: str,
             api_key: str,
+            role_env_var: str,
             model: str | None = None,
             max_tokens: int = 1024,
             timeout: float = ENRICHMENT_TIMEOUT,
             ) -> None:
-        """Initialize with endpoint and API key; model resolved lazily."""
+        """Initialize with endpoint and API key; model resolved lazily.
+
+        `role_env_var` is the env var name (`MEMMAN_LLM_MODEL_FAST` or
+        `MEMMAN_LLM_MODEL_SLOW`) used to populate `model`; included so
+        ZDR-validation errors can quote the right knob to set.
+        """
         self.endpoint = endpoint.rstrip('/')
         self.api_key = api_key
+        self.role_env_var = role_env_var
         self._model_override = model
         self._resolved_model: str | None = None
         self.max_tokens = max_tokens
@@ -71,7 +79,7 @@ class OpenRouterClient:
             available = {e.get('model_id') for e in endpoints}
             if self._model_override not in available:
                 raise ConfigError(
-                    f'{config.LLM_MODEL}={self._model_override!r} is not in'
+                    f'{self.role_env_var}={self._model_override!r} is not in'
                     ' the current OpenRouter ZDR inventory; refusing to'
                     ' route via non-ZDR endpoints')
             logger.debug(
@@ -165,8 +173,14 @@ class OpenRouterClient:
                     f' ({exc}): {data!r}') from exc
 
 
-def get_openrouter_client() -> OpenRouterClient:
-    """Build an OpenRouter client from environment variables."""
+_ROLE_ENV_VARS = {
+    'fast': config.LLM_MODEL_FAST,
+    'slow': config.LLM_MODEL_SLOW,
+    }
+
+
+def get_openrouter_client(role: str) -> OpenRouterClient:
+    """Build an OpenRouter client for a role from environment variables."""
     endpoint = os.environ.get(
         config.OPENROUTER_ENDPOINT, DEFAULT_OPENROUTER_ENDPOINT)
     api_key = os.environ.get(config.OPENROUTER_API_KEY)
@@ -174,5 +188,9 @@ def get_openrouter_client() -> OpenRouterClient:
         raise ConfigError(
             f'{config.OPENROUTER_API_KEY} must be set'
             f' when {config.LLM_PROVIDER}=openrouter')
-    model_override = os.environ.get(config.LLM_MODEL)
-    return OpenRouterClient(endpoint, api_key, model=model_override)
+    role_env_var = _ROLE_ENV_VARS[role]
+    model_override = os.environ.get(role_env_var) or None
+    return OpenRouterClient(
+        endpoint, api_key,
+        role_env_var=role_env_var,
+        model=model_override)

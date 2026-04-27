@@ -205,16 +205,18 @@ def _resolve_store_name(data_dir: str, store_flag: str) -> str:
     return read_active(data_dir)
 
 
-def _get_llm_client_or_fail():
-    """Return an LLM client, re-wrapping ConfigError as ClickException.
+def _get_llm_client_or_fail(role: str):
+    """Return a per-role LLM client, re-wrapping ConfigError as ClickException.
 
     Keeps `memman.llm` free of `click` — the CLI boundary is the only
     place that should know how to surface a user-facing config error.
+    `role` is `'fast'` (recall hot path) or `'slow'` (worker pipeline,
+    operator rebuilds).
     """
     from memman.exceptions import ConfigError
     from memman.llm.client import get_llm_client
     try:
-        return get_llm_client()
+        return get_llm_client(role)
     except ConfigError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -782,7 +784,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                 })
             return
 
-        llm_client = _get_llm_client_or_fail()
+        llm_client = _get_llm_client_or_fail('fast')
         expansion = expand_query(llm_client, keyword_str)
         keyword_str = expansion['expanded_query']
 
@@ -1890,7 +1892,7 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
 
     db = _open_db(ctx)
     try:
-        llm_client = _get_llm_client_or_fail()
+        llm_client = _get_llm_client_or_fail('slow')
         ec = get_client()
 
         all_ids = get_active_insight_ids(db)

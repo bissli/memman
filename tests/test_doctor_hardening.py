@@ -229,7 +229,7 @@ def test_doctor_reports_llm_probe_failure(runner, monkeypatch):
     r, data_dir = runner
     monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
 
-    def _raise():
+    def _raise(role):
         raise ConfigError('OPENROUTER_API_KEY must be set')
     monkeypatch.setattr(
         'memman.llm.client.get_llm_client', _raise)

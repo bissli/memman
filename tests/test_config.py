@@ -10,7 +10,8 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_DATA_DIR',
     'MEMMAN_STORE',
     'MEMMAN_LLM_PROVIDER',
-    'MEMMAN_LLM_MODEL',
+    'MEMMAN_LLM_MODEL_FAST',
+    'MEMMAN_LLM_MODEL_SLOW',
     'MEMMAN_EMBED_PROVIDER',
     'MEMMAN_OPENROUTER_ENDPOINT',
     'MEMMAN_CACHE_DIR',
@@ -32,7 +33,8 @@ def test_constants_match_expected_names():
     """
     actual = {
         config.DATA_DIR, config.STORE, config.LLM_PROVIDER,
-        config.LLM_MODEL, config.EMBED_PROVIDER,
+        config.LLM_MODEL_FAST, config.LLM_MODEL_SLOW,
+        config.EMBED_PROVIDER,
         config.OPENROUTER_ENDPOINT, config.CACHE_DIR,
         config.DEBUG, config.WORKER, config.LOG_LEVEL,
         config.OPENROUTER_API_KEY,
@@ -91,10 +93,12 @@ def test_enumerate_reflects_current_env(monkeypatch):
     """enumerate_effective_config() returns live values for set vars.
     """
     monkeypatch.setenv(config.LLM_PROVIDER, 'openrouter')
-    monkeypatch.setenv(config.LLM_MODEL, 'anthropic/claude-haiku-4.5')
+    monkeypatch.setenv(config.LLM_MODEL_FAST, 'anthropic/claude-haiku-4.5')
+    monkeypatch.setenv(config.LLM_MODEL_SLOW, 'anthropic/claude-sonnet-4.6')
     out = config.enumerate_effective_config()
     assert out[config.LLM_PROVIDER] == 'openrouter'
-    assert out[config.LLM_MODEL] == 'anthropic/claude-haiku-4.5'
+    assert out[config.LLM_MODEL_FAST] == 'anthropic/claude-haiku-4.5'
+    assert out[config.LLM_MODEL_SLOW] == 'anthropic/claude-sonnet-4.6'
 
 
 def test_enumerate_redacts_secrets_by_default(monkeypatch):
@@ -118,6 +122,6 @@ def test_enumerate_redact_false_exposes_secrets(monkeypatch):
 def test_enumerate_empty_string_is_unset(monkeypatch):
     """Empty-string env vars map to None (not the empty string).
     """
-    monkeypatch.setenv(config.LLM_MODEL, '')
+    monkeypatch.setenv(config.LLM_MODEL_FAST, '')
     out = config.enumerate_effective_config()
-    assert out[config.LLM_MODEL] is None
+    assert out[config.LLM_MODEL_FAST] is None

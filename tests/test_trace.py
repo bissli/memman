@@ -222,7 +222,8 @@ def test_openrouter_complete_emits_request_and_response(
     trace.setup()
     client = OpenRouterClient(
         endpoint='https://openrouter.ai/api/v1',
-        api_key='fake-secret-key')
+        api_key='fake-secret-key',
+        role_env_var='MEMMAN_LLM_MODEL_FAST')
     out = client.complete('sys', 'user')
     assert out == 'hi'
 
