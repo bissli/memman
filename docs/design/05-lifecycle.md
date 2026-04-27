@@ -1,4 +1,4 @@
-# 6. Lifecycle & Embedding
+# 5. Lifecycle & Embedding
 
 [< Back to Design Overview](../DESIGN.md)
 
@@ -8,7 +8,7 @@ MemMan is not an append-only system. Effective memory management requires import
 
 ![Lifecycle & Retention](../diagrams/06-lifecycle-retention.drawio.png)
 
-## 6.1 Effective Importance (EI)
+## 5.1 Effective Importance (EI)
 
 EI combines base importance, access frequency, time decay, and graph connectivity:
 
@@ -33,7 +33,7 @@ Interpretation:
 - **`HALF_LIFE_DAYS = 30`**: One calendar month. Balances retention vs decay across typical project lifecycles: at 30 days EI halves, at 60 days quarters, at 90 days ~12.5%. Inspired by Ebbinghaus forgetting curve research but not derived from a specific paper — chosen as a round-number approximation for monthly project cadence. Not from MAGMA (the paper has no decay mechanism).
 - **`edge_factor`: cap at 5 edges, +0.1 per edge (max +50%)**: Prevents highly-connected hub nodes from becoming permanently immune through connectivity alone.
 
-## 6.2 Immunity Rules
+## 5.2 Immunity Rules
 
 The following insights are exempt from automatic cleanup:
 - `importance >= 4` (high-value memories)
@@ -44,7 +44,7 @@ The following insights are exempt from automatic cleanup:
 - **`importance >= 4`**: Follows directly from the importance scale definition — importance 4 = "immune to auto-pruning" (Section 3.1).
 - **`access_count >= 3`**: Three independent retrievals provide statistical evidence of genuine utility, not coincidental access. The threshold is deliberately low — in a personal memory system, even two recalls suggest real value, but three provides a safety margin.
 
-## 6.3 Auto-Pruning
+## 5.3 Auto-Pruning
 
 Triggered when the total number of active insights exceeds **1000**:
 
@@ -60,7 +60,7 @@ Triggered when the total number of active insights exceeds **1000**:
 - **`PRUNE_BATCH_SIZE = 10`**: ~1% of MAX_INSIGHTS. Limits write amplification per `remember` call — a single insert never cascades into mass deletion.
 - **`MAX_OPLOG_ENTRIES = 5000`**: 5× MAX_INSIGHTS; retains approximately five operations per insight on average. Sufficient audit trail without unbounded growth.
 
-## 6.4 Insights Group
+## 5.4 Insights Group
 
 Manual lifecycle management lives under the `memman insights` group:
 
@@ -86,7 +86,7 @@ memman insights show <id>
 
 ---
 
-## 6.5 Embedding Support
+## 5.5 Embedding Support
 
 Voyage AI provides 512-dim embeddings for semantic search and graph connectivity.
 

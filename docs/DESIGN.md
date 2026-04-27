@@ -6,34 +6,26 @@ MemMan is a persistent memory system designed for LLM agents. It adopts the **LL
 
 ## Table of Contents
 
-### [1. Vision & Problem](design/01-vision.md)
+### [1. Background](design/01-background.md)
 
-Why MemMan exists — the amnesia problem in LLM agents and structural limitations of traditional approaches.
+The amnesia problem MemMan addresses, the LLM-Supervised pattern, theoretical foundations from MAGMA and RRF, and key design trade-offs (LLM-Supervised vs embedded, SQLite WAL vs graph DB, beam search vs BFS, soft delete) including deviations from the MAGMA paper and the storage-side pluggability roadmap.
 
-### [2. Design Philosophy](design/02-philosophy.md)
-
-The LLM-Supervised pattern, theoretical foundations from MAGMA and RRF.
-
-### [3. Core Concepts & Architecture](design/03-concepts.md)
+### [2. Core Concepts & Architecture](design/02-concepts.md)
 
 The Insight/Edge data model, database schema (SQLite WAL), system architecture (CLI layer → engine → storage), code structure, and store isolation via named stores.
 
-### [4. Graph Model](design/04-graph-model.md)
+### [3. Graph Model](design/03-graph-model.md)
 
 MAGMA four-graph model (temporal, entity, causal, semantic) with creation logic, thresholds, and metadata for each edge type.
 
-### [5. Read & Write Pipelines](design/05-pipelines.md)
+### [4. Read & Write Pipelines](design/04-pipelines.md)
 
-The two-tier deferred write pipeline (`remember` is a queue-append; a scheduler-driven `enrich --pending` worker runs fact extraction, reconciliation, parallel enrichment/causal inference out of band). Scheduler installs per platform (systemd on Linux, launchd on macOS) and routes LLM calls through OpenRouter with ZDR enforced. Read pipeline (LLM query expansion, RRF anchor fusion, beam search traversal, multi-factor re-ranking).
+The two-tier deferred write pipeline (`remember` is a queue-append; a scheduler-driven `scheduler drain --pending` worker runs fact extraction, reconciliation, parallel enrichment/causal inference out of band). Scheduler installs per platform (systemd on Linux, launchd on macOS) and routes LLM calls through OpenRouter with ZDR enforced. Read pipeline (LLM query expansion, RRF anchor fusion, beam search traversal, multi-factor re-ranking).
 
-### [6. Lifecycle & Embedding](design/06-lifecycle.md)
+### [5. Lifecycle & Embedding](design/05-lifecycle.md)
 
 Effective Importance (EI) decay formula, immunity rules, auto-pruning, GC commands, and Voyage AI embedding support.
 
-### [7. LLM CLI Integration](design/07-integration.md)
+### [6. LLM CLI Integration](design/06-integration.md)
 
 Lifecycle hooks (Prime, Remind, Nudge, Compact, Recall), skill file, behavioral guide, automated setup via `memman install`. The host agent calls `memman remember` directly via Bash — no sub-agent delegation — because the binary is a fast queue-append. Supported targets: claude-code, openclaw, nanoclaw.
-
-### [8. Design Decisions & Future Direction](design/08-decisions.md)
-
-Key trade-offs (LLM-Supervised vs embedded, SQLite WAL vs graph DB, beam search vs BFS, soft delete), deviations from the MAGMA paper, and storage-side pluggability roadmap.

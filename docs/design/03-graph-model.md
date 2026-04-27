@@ -1,4 +1,4 @@
-# 4. Graph Model
+# 3. Graph Model
 
 [< Back to Design Overview](../DESIGN.md)
 
@@ -10,7 +10,7 @@ MemMan implements four graphs, each capturing one dimension of relationships:
 
 ![MAGMA Four-Graph Model](../diagrams/04-magma-four-graph.drawio.png)
 
-## 4.1 Temporal Graph
+## 3.1 Temporal Graph
 
 **Purpose**: Capture the chronological order of memories.
 
@@ -35,7 +35,7 @@ Insight A (2h ago) ←── backbone ──→ Insight B (1h ago) ←── bac
 - **`TEMPORAL_WINDOW_HOURS = 4`**: A focused session window. Memories created within the same few hours are likely contextually related.
 - **`MAX_PROXIMITY_EDGES = 10`**: Limits fan-out per insert.
 
-## 4.2 Entity Graph
+## 3.2 Entity Graph
 
 **Purpose**: Link insights that mention the same entities.
 
@@ -58,7 +58,7 @@ Insight A ←── entity ──→ Insight B ←── entity ──→ Insigh
 - **`MAX_TOTAL_ENTITY_EDGES = 50`**: Hard cap across all entities per insert.
 - **IDF weighting**: `log(N/df) / log(N)` (floored at 0.1), where N = total active insights and df = count of insights containing the entity. Disabled when N ≤ 5.
 
-## 4.3 Causal Graph
+## 3.3 Causal Graph
 
 **Purpose**: Capture cause-effect relationships and decision rationale.
 
@@ -86,7 +86,7 @@ Insight A ──── causal ────→ Insight B
 - **`LLM_RECENT_COUNT = 20`**: Recent insights added to candidate pool.
 - **`LLM_CONFIDENCE_FLOOR = 0.75`**: High bar for accepting inferred edges.
 
-## 4.4 Semantic Graph
+## 3.4 Semantic Graph
 
 **Purpose**: Connect semantically similar insights based on embedding distance.
 
@@ -103,7 +103,7 @@ Embeddings are Voyage AI 512-dim vectors. Semantic edges are created initially f
 
 > **If the embedding model changes, this threshold must be recalibrated.** Different models (and different dimensionalities) produce different similarity distributions. Compute all pairwise cosine similarities, inspect quality at each band, and pick the cutoff where noise begins. There is no reliable formula — empirical calibration on actual data is required.
 
-## 4.5 Intent-Adaptive Weighting
+## 3.5 Intent-Adaptive Weighting
 
 Different query intents activate different graph traversal weights:
 

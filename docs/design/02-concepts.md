@@ -1,4 +1,4 @@
-# 3. Core Concepts & Architecture
+# 2. Core Concepts & Architecture
 
 [< Back to Design Overview](../DESIGN.md)
 
@@ -6,14 +6,14 @@
 
 ![Insight & Edge Data Model](../diagrams/09-insight-edge-datamodel.drawio.png)
 
-## 3.1 Insight (Memory Node)
+## 2.1 Insight (Memory Node)
 
 An Insight is the fundamental memory unit in MemMan. Each insight represents an independent piece of knowledge:
 
 ```
 ┌──────────────────────────────────────────────┐
 │ Insight                                      │
-├─────────────────────────────────────────────┤
+├──────────────────────────────────────────────┤
 │ id         : UUID                            │
 │ content    : "Chose Qdrant over Milvus..."   │
 │ category   : decision                        │
@@ -46,7 +46,7 @@ An Insight is the fundamental memory unit in MemMan. Each insight represents an 
 - **2**: Low priority
 - **1**: Temporary information, first to be cleaned up
 
-## 3.2 Edge (Relationship)
+## 2.2 Edge (Relationship)
 
 An Edge connects two insights, representing their relationship. Each edge contains:
 
@@ -62,9 +62,9 @@ An Edge connects two insights, representing their relationship. Each edge contai
 └────────────────────────────────────────────┘
 ```
 
-The four edge types form the foundation of the MAGMA four-graph model, detailed in [Graph Model & Theory](04-graph-model.md).
+The four edge types form the foundation of the MAGMA four-graph model, detailed in [Graph Model & Theory](03-graph-model.md).
 
-## 3.3 Database Schema
+## 2.3 Database Schema
 
 Each named store has its own SQLite file under `~/.memman/data/<store>/memman.db`, using WAL mode to support concurrent reads. The default store is `default`; additional stores can be created for data isolation (see [Store Management](../USAGE.md#store-management)).
 
@@ -95,24 +95,24 @@ oplog (
 
 ---
 
-## 3.4 System Architecture
+## 2.4 System Architecture
 
 MemMan's architecture is divided into five layers:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  Integration Layer    Hook / Skill / Guide                   │
-├─────────────────────────────────────────────────────────────┤
+├──────────────────────────────────────────────────────────────┤
 │  CLI Layer            remember, recall, search, link, gc ... │
-├─────────────────────────────────────────────────────────────┤
+├──────────────────────────────────────────────────────────────┤
 │  Core Engine          search/ (recall, intent, keyword)      │
 │                       graph/  (temporal, entity, causal,     │
 │                                semantic)                     │
 │                       embed/  (voyage, vector)               │
 │                       llm/   (client, extract)               │
-├─────────────────────────────────────────────────────────────┤
+├──────────────────────────────────────────────────────────────┤
 │  Storage Layer        store/  (db, node, edge, oplog)        │
-├─────────────────────────────────────────────────────────────┤
+├──────────────────────────────────────────────────────────────┤
 │  External             Anthropic API (Haiku)                  │
 │                       Voyage AI (embeddings)                 │
 └──────────────────────────────────────────────────────────────┘
@@ -141,7 +141,7 @@ memman/
 └── Makefile
 ```
 
-## 3.5 Data Directory Layout
+## 2.5 Data Directory Layout
 
 ```
 ~/.memman/
@@ -164,7 +164,7 @@ memman/
 
 **Isolation boundary**: Each store contains an independent `memman.db` — insights, edges, and oplog are fully isolated. Shipped assets (`guide.md`, `SKILL.md`) live inside the installed package and are read via `importlib.resources`; nothing memman deploys lives under `~/.memman/`. `~/.memman/` is strictly user state: memory data, API keys, caches, logs, queued work.
 
-## 3.6 Store Isolation
+## 2.6 Store Isolation
 
 MemMan supports named stores for lightweight data isolation between different agents, projects, or scenarios.
 

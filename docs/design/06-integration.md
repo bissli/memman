@@ -1,4 +1,4 @@
-# 7. LLM CLI Integration
+# 6. LLM CLI Integration
 
 [< Back to Design Overview](../DESIGN.md)
 
@@ -8,7 +8,7 @@
 
 MemMan integrates with LLM CLIs through lifecycle hooks, a skill file, and a behavioral guide. Claude Code's [hook system](https://docs.anthropic.com/en/docs/claude-code/hooks) is the reference implementation — all components are deployed automatically via `memman install`.
 
-## 7.1 Integration Architecture
+## 6.1 Integration Architecture
 
 Six hooks drive the memory lifecycle:
 
@@ -54,7 +54,7 @@ Three layers work together:
 | **Skill** | `SKILL.md` — command reference in Claude Code skill format                  | `.claude/skills/memman/`                    | Teaches the LLM *how* to use memman commands                                                                                                        |
 | **Guide** | `guide.md` — detailed execution manual for recall, remember, and delegation | Installed package (read via `memman guide`) | Teaches the LLM *when* to recall, *what* to remember, and *how* to delegate                                                                         |
 
-## 7.2 Hook Details
+## 6.2 Hook Details
 
 Claude Code fires hooks at specific lifecycle events. MemMan registers up to six, each with a distinct role in the memory lifecycle:
 
@@ -138,7 +138,7 @@ exit 0
 
 Stale `stop_fired/` directories (older than 2 hours) are cleaned up by `prime.sh` at session start.
 
-## 7.3 Automated Setup
+## 6.3 Automated Setup
 
 `memman install` deploys everything via symlinks to the installed package, so `pipx upgrade memman` refreshes hook scripts and SKILL.md automatically — no re-run needed:
 
@@ -191,7 +191,7 @@ Key install options:
 
 The Prime hook is always installed. Remind, Nudge, Compact, Recall, and ExitPlan hooks are optional (all enabled by default).
 
-## 7.4 Sub-Agent Delegation
+## 6.4 Sub-Agent Delegation
 
 Memory writes don't happen in the main conversation. Instead, the host LLM delegates to a lightweight sub-agent:
 
@@ -223,7 +223,7 @@ This separation means:
 - **Context isolation**: Memory processing doesn't pollute the main conversation context
 - **Model efficiency**: Sonnet handles routine execution while Opus focuses on high-level decisions
 
-## 7.5 Adapting to Other LLM CLIs
+## 6.5 Adapting to Other LLM CLIs
 
 For CLIs with hook support, replicate the Claude Code pattern: register lifecycle hooks that call memman commands, deploy the skill file, and provide the behavioral guide.
 

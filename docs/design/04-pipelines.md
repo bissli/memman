@@ -1,10 +1,10 @@
-# 5. Read & Write Pipelines
+# 4. Read & Write Pipelines
 
 [< Back to Design Overview](../DESIGN.md)
 
 ---
 
-## 5.1 Write Pipeline: Remember (deferred, two-tier)
+## 4.1 Write Pipeline: Remember (deferred, two-tier)
 
 `memman remember` is a fast queue-append (~50 ms). A user-scope scheduler (systemd timer on Linux, launchd agent on macOS) invokes the hidden worker entrypoint `memman scheduler drain --pending` every 60 s to drain the queue through the full extraction + reconciliation + enrichment pipeline out of band.
 
@@ -60,7 +60,7 @@ Session-path (`memman recall` query expansion) uses direct Anthropic API with ha
 
 ---
 
-## 5.2 Read Pipeline: Smart Recall
+## 4.2 Read Pipeline: Smart Recall
 
 `memman recall` combines LLM query expansion, intent detection, multi-signal anchor selection, beam search graph traversal, and multi-factor re-ranking. Use `--basic` for SQL LIKE fallback.
 
