@@ -1,144 +1,162 @@
 <mxfile host="app.diagrams.net" agent="Claude" version="24.0.0" type="device">
   <diagram id="remember" name="Remember Pipeline">
-    <mxGraphModel dx="1422" dy="1400" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1000" pageHeight="1900" math="0" shadow="0">
+    <mxGraphModel dx="1422" dy="1400" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="1500" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="r_title" value="&lt;b&gt;memman remember Pipeline&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;strokeColor=none;fillColor=none;" vertex="1" parent="1">
-          <mxGeometry x="300" y="10" width="300" height="30" as="geometry" />
+        <mxCell id="r_title" value="&lt;b&gt;memman remember Pipeline (deferred, two-tier)&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="280" y="10" width="500" height="30" as="geometry" />
         </mxCell>
-        <mxCell id="r_start" value="memman remember &amp;lt;content&amp;gt;&lt;br&gt;--cat --imp --tags --entities --source" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;fontStyle=1;" vertex="1" parent="1">
-          <mxGeometry x="280" y="50" width="340" height="50" as="geometry" />
+
+        <mxCell id="t1_box" value="&lt;b&gt;Tier 1 — Synchronous queue-append (host session, ~50 ms)&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="1020" height="240" as="geometry" />
         </mxCell>
-        <mxCell id="r_parse" value="Parse &amp; Validate Args&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;category ∈ {preference,decision,fact,insight,context,general}&lt;br&gt;importance ∈ [1,5] | content ≤ 8000 chars&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="280" y="130" width="340" height="60" as="geometry" />
+
+        <mxCell id="r_start" value="memman remember &amp;lt;content&amp;gt;&lt;br&gt;[--cat --imp --tags --entities --source]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="80" y="100" width="280" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="r_e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_start" target="r_parse">
+
+        <mxCell id="r_validate" value="Validate args&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;importance ∈ [1,5]&lt;br&gt;content ≤ 8000 chars&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="400" y="100" width="180" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_check_state" value="Check scheduler state&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;reject when STOPPED&lt;/font&gt;" style="rhombus;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="620" y="90" width="170" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_reject" value="Scheduler is stopped;&lt;br&gt;cannot remember." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="830" y="100" width="200" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_enqueue" value="Append row to ~/.memman/queue.db (SQLite WAL)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;status='pending', priority, queued_at,&lt;br&gt;hint_cat / hint_imp / hint_entities / hint_no_reconcile&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="120" y="180" width="500" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_return" value="Return JSON&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;{action: queued, queue_id: N, store, quality_warnings}&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="660" y="190" width="370" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_t1_note" value="&lt;font style=&quot;font-size:9px;color:#9673a6&quot;&gt;No LLM. No embedding. No similarity scan. No edges. The host session never blocks on the network.&lt;/font&gt;" style="text;html=1;align=left;fontSize=9;fillColor=none;strokeColor=none;fontColor=#9673a6;" vertex="1" parent="1">
+          <mxGeometry x="80" y="260" width="900" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_start" target="r_validate">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="r_quality" value="&lt;b&gt;Quality Gate&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;check_content_quality(content)&lt;br&gt;scan for transient patterns&lt;/font&gt;" style="rhombus;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="355" y="210" width="170" height="80" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e_q1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_parse" target="r_quality">
+        <mxCell id="r_e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_validate" target="r_check_state">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="r_reject" value="&lt;b&gt;REJECTED&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;action=&quot;rejected&quot;&lt;br&gt;log quality-reject to oplog&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=9;" vertex="1" parent="1">
-          <mxGeometry x="600" y="220" width="150" height="55" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e_q2" value="≥2 warnings" style="edgeStyle=orthogonalEdgeStyle;rounded=1;fontSize=9;strokeColor=#b85450;" edge="1" parent="1" source="r_quality" target="r_reject">
+        <mxCell id="r_e3" value="STOPPED" style="edgeStyle=orthogonalEdgeStyle;rounded=1;fontSize=9;strokeColor=#b85450;" edge="1" parent="1" source="r_check_state" target="r_reject">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="r_embed_q" value="LLM Fact&lt;br&gt;Extraction" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="380" y="320" width="120" height="70" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e2" value="0-1 warnings" style="edgeStyle=orthogonalEdgeStyle;rounded=1;fontSize=9;" edge="1" parent="1" source="r_quality" target="r_embed_q">
+        <mxCell id="r_e4" value="STARTED" style="edgeStyle=orthogonalEdgeStyle;rounded=1;fontSize=9;" edge="1" parent="1" source="r_check_state" target="r_enqueue">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="r_embed_yes" value="extract_facts() → 1-5 facts&lt;br&gt;Voyage embed (512d)&lt;br&gt;→ serialize_vector()" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" vertex="1" parent="1">
-          <mxGeometry x="560" y="325" width="160" height="60" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e_yes" value="Yes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;fontSize=9;" edge="1" parent="1" source="r_embed_q" target="r_embed_yes">
+        <mxCell id="r_e5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_enqueue" target="r_return">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="r_embed_no" value="reconcile_memories()&lt;br&gt;ADD/UPDATE/DELETE/NONE" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=9;" vertex="1" parent="1">
-          <mxGeometry x="170" y="330" width="170" height="50" as="geometry" />
+
+        <mxCell id="r_trigger" value="&lt;b&gt;Trigger&lt;/b&gt;  systemd timer (Linux)  ·  launchd agent (macOS)  ·  serve loop PID 1 (container)" style="text;html=1;align=center;fontSize=12;fillColor=none;strokeColor=none;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="320" width="1020" height="20" as="geometry" />
         </mxCell>
-        <mxCell id="r_e_no" value="No" style="edgeStyle=orthogonalEdgeStyle;rounded=1;fontSize=9;" edge="1" parent="1" source="r_embed_q" target="r_embed_no">
+        <mxCell id="r_trigger_arrow" value="every 60 s (or continuous if --interval 0)" style="endArrow=classic;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=9;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="550" y="345" as="sourcePoint" />
+            <mxPoint x="550" y="380" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="t2_box" value="&lt;b&gt;Tier 2 — Background worker (memman scheduler drain --pending)&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="385" width="1020" height="690" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_lock" value="acquire flock on ~/.memman/drain.lock&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;drains never overlap; concurrent triggers exit 0 with 'another drain in progress'&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="80" y="420" width="500" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_claim" value="Atomic claim&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;UPDATE queue SET claimed_at=..., attempts=attempts+1&lt;br&gt;WHERE id = (SELECT ... WHERE status='pending'&lt;br&gt;ORDER BY priority DESC, queued_at ASC LIMIT 1) RETURNING ...&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="80" y="490" width="500" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_idem" value="Idempotency check&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;if any insight has source='queue:&amp;lt;id&amp;gt;'&lt;br&gt;→ skip + mark done (crash recovery)&lt;/font&gt;" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="640" y="495" width="220" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_qg" value="Quality gate&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;check_content_quality(content)&lt;br&gt;reject ≥ 2 transient warnings&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="80" y="590" width="280" height="55" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_extract" value="LLM fact extraction&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;extract_facts() → 1-5 atomic facts&lt;br&gt;each with category, importance, entities&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="80" y="665" width="280" height="55" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_perfact" value="&lt;b&gt;Per-fact&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="80" y="740" width="940" height="160" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_embed" value="Embed (Voyage 512d default;&lt;br&gt;openai_compat / ollama optional)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;serialize_vector → BLOB&lt;br&gt;dim × 8 bytes&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="100" y="775" width="200" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_sim" value="Find similar&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;keyword search (top 5)&lt;br&gt;+ cosine scan (≥ 0.5)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="320" y="775" width="180" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_recon" value="LLM reconcile&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;ADD / UPDATE / DELETE / NONE&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="520" y="775" width="180" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_apply" value="Apply action&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;INSERT new / UPDATE existing /&lt;br&gt;soft-DELETE / SKIP&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="720" y="775" width="180" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_e_pf1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_embed" target="r_sim">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="r_diff_box" value="&lt;b&gt;LLM Reconciliation&lt;/b&gt; (per-fact, pre-transaction)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;fontSize=11;align=left;spacingLeft=10;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="200" y="420" width="500" height="110" as="geometry" />
-        </mxCell>
-        <mxCell id="r_diff_check" value="&lt;b&gt;Find Similar&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;keyword search (top 5) +&lt;br&gt;cosine scan (threshold 0.5)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="220" y="450" width="200" height="55" as="geometry" />
-        </mxCell>
-        <mxCell id="r_diff_result" value="&lt;b&gt;LLM Decision&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;ADD → insert new insight&lt;br&gt;UPDATE → refine existing&lt;br&gt;DELETE → soft-delete target&lt;br&gt;NONE → skip (already captured)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="450" y="445" width="230" height="65" as="geometry" />
-        </mxCell>
-        <mxCell id="r_diff_e" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_diff_check" target="r_diff_result">
+        <mxCell id="r_e_pf2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_sim" target="r_recon">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="r_tx" value="&lt;b&gt;SQLite Transaction&lt;/b&gt;  (atomic)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;verticalAlign=top;fontSize=11;align=left;spacingLeft=10;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="150" y="560" width="600" height="420" as="geometry" />
-        </mxCell>
-        <mxCell id="r_softdel" value="⓪ Soft-delete replaced insight (if CONFLICT/UPDATE)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;SET deleted_at = now() on old insight&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="280" y="585" width="340" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="r_ins" value="① insert_insight&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;id=uuid, content, category, importance, tags, entities, source&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="280" y="640" width="340" height="45" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e_softdel" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_softdel" target="r_ins">
+        <mxCell id="r_e_pf3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_recon" target="r_apply">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="r_store_emb" value="② update_embedding (if blob is not None)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;insights.embedding = blob (6144 bytes)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="280" y="700" width="340" height="40" as="geometry" />
+
+        <mxCell id="r_fast" value="&lt;b&gt;Fast edges&lt;/b&gt; (per fact)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;temporal (backbone + 4h proximity, MAX_PROXIMITY_EDGES=5) ·&lt;br&gt;entity (IDF-weighted, MAX_ENTITY_LINKS=5/entity, MAX_TOTAL_ENTITY_EDGES=50) ·&lt;br&gt;semantic (cos ≥ AUTO_SEMANTIC_THRESHOLD=0.62, MAX_AUTO_SEMANTIC_EDGES=3)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="80" y="920" width="940" height="65" as="geometry" />
         </mxCell>
-        <mxCell id="r_e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_ins" target="r_store_emb">
+
+        <mxCell id="r_parallel" value="&lt;b&gt;Parallel enrichment&lt;/b&gt; (ThreadPoolExecutor, 2 workers)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;A: enrich_with_llm() — keywords, summary, semantic_facts, refined entities&amp;nbsp;&amp;nbsp;|&amp;nbsp;&amp;nbsp;B: infer_llm_causal_edges() — causes/enables/prevents (LLM_CONFIDENCE_FLOOR=0.75)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFE6E6;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="80" y="1000" width="940" height="55" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_done" value="Re-embed with enriched keywords  ·  rebuild auto edges  ·  refresh effective importance  ·  auto_prune  ·  mark_done(queue_id)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1090" width="1020" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r_e_lock_claim" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_lock" target="r_claim">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="r_engine" value="③ Graph Engine: fast_edges" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;fontStyle=1;" vertex="1" parent="1">
-          <mxGeometry x="280" y="760" width="340" height="30" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_store_emb" target="r_engine">
+        <mxCell id="r_e_claim_idem" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_claim" target="r_idem">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="r_temp" value="&lt;b&gt;Temporal&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;backbone (prev)&lt;br&gt;proximity (4h window)&lt;br&gt;max 10 edges&lt;br&gt;w=1/(1+hours_diff)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6F3FF;strokeColor=#6c8ebf;" vertex="1" parent="1">
-          <mxGeometry x="170" y="810" width="130" height="75" as="geometry" />
-        </mxCell>
-        <mxCell id="r_ent" value="&lt;b&gt;Entity&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;LLM-extracted entities&lt;br&gt;merge with --entities&lt;br&gt;bidirectional, IDF-weighted&lt;br&gt;on shared entities&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6F3FF;strokeColor=#6c8ebf;" vertex="1" parent="1">
-          <mxGeometry x="310" y="810" width="130" height="75" as="geometry" />
-        </mxCell>
-        <mxCell id="r_caus" value="&lt;b&gt;Causal&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;LLM inference&lt;br&gt;(parallel via&lt;br&gt;ThreadPoolExecutor)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#FFE6E6;strokeColor=#b85450;" vertex="1" parent="1">
-          <mxGeometry x="450" y="810" width="130" height="75" as="geometry" />
-        </mxCell>
-        <mxCell id="r_sema" value="&lt;b&gt;Semantic&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;cosine similarity&lt;br&gt;AUTO: ≥ 0.70 (max 3)&lt;br&gt;bidirectional edges&lt;br&gt;needs embedding&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
-          <mxGeometry x="590" y="810" width="130" height="75" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e5a" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#6c8ebf;" edge="1" parent="1" source="r_engine" target="r_temp">
+        <mxCell id="r_e_idem_qg" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_idem" target="r_qg">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="r_e5b" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#6c8ebf;" edge="1" parent="1" source="r_engine" target="r_ent">
+        <mxCell id="r_e_qg_ext" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_qg" target="r_extract">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="r_e5c" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#b85450;" edge="1" parent="1" source="r_engine" target="r_caus">
+        <mxCell id="r_e_ext_pf" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_extract" target="r_perfact">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="r_e5d" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#82b366;" edge="1" parent="1" source="r_engine" target="r_sema">
+        <mxCell id="r_e_pf_fast" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_perfact" target="r_fast">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="r_ei" value="④ refresh_effective_importance&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;EI = base_importance × decay × (1 + edge_bonus)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="280" y="910" width="340" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="r_prune" value="⑤ auto_prune (if total &gt; 1000)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;soft-delete lowest EI, skip immune (imp≥4 or access≥3)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="280" y="965" width="340" height="40" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_ei" target="r_prune">
+        <mxCell id="r_e_fast_par" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_fast" target="r_parallel">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="r_post" value="&lt;b&gt;Post-Transaction (read-only)&lt;/b&gt;" style="text;html=1;align=left;fontSize=11;fillColor=none;strokeColor=none;fontStyle=1;fontColor=#333333;" vertex="1" parent="1">
-          <mxGeometry x="170" y="1060" width="250" height="20" as="geometry" />
-        </mxCell>
-        <mxCell id="r_sem_cand" value="find_semantic_candidates&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;cosine ∈ [0.40, 0.70) → REVIEW (LLM judges)&lt;br&gt;cosine ≥ 0.70 → AUTO (already linked)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="170" y="1090" width="260" height="55" as="geometry" />
-        </mxCell>
-        <mxCell id="r_cau_cand" value="find_causal_candidates&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;BFS 2-hop neighborhood&lt;br&gt;causal_signal + suggested_sub_type&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFE6E6;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="470" y="1090" width="260" height="55" as="geometry" />
-        </mxCell>
-        <mxCell id="r_out" value="&lt;b&gt;JSON Output&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;{id, action, diff_suggestion, replaced_id,&lt;br&gt;edges_created: {temporal, entity, causal, semantic},&lt;br&gt;semantic_candidates: [{id, content, auto_linked, ...}],&lt;br&gt;causal_candidates: [{id, content, hop, via_edge, ...}],&lt;br&gt;quality_warnings,&lt;br&gt;embedded, effective_importance, auto_pruned}&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="220" y="1180" width="450" height="90" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e7a" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_sem_cand" target="r_out">
+        <mxCell id="r_e_par_done" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_parallel" target="r_done">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="r_e7b" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_cau_cand" target="r_out">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="r_llm" value="&lt;b&gt;LLM evaluates candidates&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;decides which to link via:&lt;br&gt;memman graph link &amp;lt;src&amp;gt; &amp;lt;tgt&amp;gt; --type semantic|causal&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="280" y="1300" width="340" height="55" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;dashed=1;strokeColor=#82b366;" edge="1" parent="1" source="r_out" target="r_llm">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
+
       </root>
     </mxGraphModel>
   </diagram>

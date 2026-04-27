@@ -1,10 +1,10 @@
 <mxfile host="app.diagrams.net" agent="Claude" version="24.0.0" type="device">
-  <diagram id="llm-supervised" name="Three-Tier Architecture">
+  <diagram id="llm-supervised" name="LLM-Supervised Architecture">
     <mxGraphModel dx="1522" dy="950" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="900" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="title" value="&lt;b&gt;Three-Tier Architecture&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;Binary handles deterministic computation; Internal Haiku handles lightweight judgment; Host LLM supervises triage &amp;amp; context&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+        <mxCell id="title" value="&lt;b&gt;LLM-Supervised Architecture&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;Binary handles deterministic computation; pipeline LLM (Haiku) handles lightweight judgment; Host LLM supervises triage &amp;amp; context&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;strokeColor=none;fillColor=none;" vertex="1" parent="1">
           <mxGeometry x="150" y="10" width="1100" height="45" as="geometry" />
         </mxCell>
 
@@ -64,7 +64,7 @@
           <mxGeometry x="485" y="425" width="330" height="45" as="geometry" />
         </mxCell>
 
-        <mxCell id="haiku_note" value="&lt;font style=&quot;font-size:9px&quot;&gt;&lt;b&gt;Model:&lt;/b&gt; claude-haiku-4-5&lt;br&gt;&lt;b&gt;Embeddings:&lt;/b&gt; Voyage voyage-3-lite (512d)&lt;br&gt;&lt;b&gt;Requires:&lt;/b&gt; OPENROUTER_API_KEY + VOYAGE_API_KEY&lt;/font&gt;" style="text;html=1;align=center;fontSize=10;fillColor=none;strokeColor=none;verticalAlign=middle;" vertex="1" parent="1">
+        <mxCell id="haiku_note" value="&lt;font style=&quot;font-size:9px&quot;&gt;&lt;b&gt;Model:&lt;/b&gt; latest Anthropic Haiku via OpenRouter ZDR (auto-picked, 24 h cache)&lt;br&gt;&lt;b&gt;Embeddings:&lt;/b&gt; Voyage voyage-3-lite 512d (default; pluggable: openai_compat / ollama)&lt;br&gt;&lt;b&gt;Requires:&lt;/b&gt; OPENROUTER_API_KEY + VOYAGE_API_KEY&lt;/font&gt;" style="text;html=1;align=center;fontSize=10;fillColor=none;strokeColor=none;verticalAlign=middle;" vertex="1" parent="1">
           <mxGeometry x="500" y="510" width="300" height="50" as="geometry" />
         </mxCell>
 

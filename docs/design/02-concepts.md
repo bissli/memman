@@ -4,7 +4,7 @@
 
 ---
 
-![Insight & Edge Data Model](../diagrams/09-insight-edge-datamodel.drawio.png)
+![Insight & Edge Data Model](../diagrams/08-insight-edge-datamodel.drawio.png)
 
 ## 2.1 Insight (Memory Node)
 

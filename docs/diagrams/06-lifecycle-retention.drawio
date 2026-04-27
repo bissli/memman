@@ -82,13 +82,13 @@
         <mxCell id="lc_gc_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
           <mxGeometry x="40" y="420" width="480" height="100" as="geometry" />
         </mxCell>
-        <mxCell id="lc_gc_title" value="&lt;b&gt;Manual GC Controls&lt;/b&gt;" style="text;html=1;align=left;fontSize=11;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+        <mxCell id="lc_gc_title" value="&lt;b&gt;Manual Retention Controls&lt;/b&gt;" style="text;html=1;align=left;fontSize=11;fillColor=none;strokeColor=none;" vertex="1" parent="1">
           <mxGeometry x="60" y="430" width="200" height="20" as="geometry" />
         </mxCell>
-        <mxCell id="lc_gc1" value="&lt;b&gt;gc --threshold 0.5&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;list candidates with EI &lt; 0.5&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="lc_gc1" value="&lt;b&gt;insights candidates --threshold 0.5&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;list candidates with EI &lt; 0.5&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="60" y="460" width="200" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="lc_gc2" value="&lt;b&gt;gc --keep &amp;lt;id&amp;gt;&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;access_count += 3 → boost retention&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="lc_gc2" value="&lt;b&gt;insights protect &amp;lt;id&amp;gt;&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;access_count += 3 → boost retention&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="280" y="460" width="220" height="40" as="geometry" />
         </mxCell>
         <mxCell id="lc_time_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;dashed=1;" vertex="1" parent="1">

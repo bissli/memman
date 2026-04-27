@@ -13,7 +13,7 @@
         <mxCell id="a_claude" value="&lt;b&gt;Claude Code&lt;/b&gt;&lt;br&gt;LLM Agent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="70" y="90" width="120" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="a_hooks" value="&lt;b&gt;Hooks&lt;/b&gt;&lt;br&gt;Prime / Remind / Nudge&lt;br&gt;Compact / Recall" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="a_hooks" value="&lt;b&gt;Hooks&lt;/b&gt;&lt;br&gt;Prime / Remind / Nudge&lt;br&gt;Compact / Recall / ExitPlan" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="220" y="90" width="140" height="60" as="geometry" />
         </mxCell>
         <mxCell id="a_claudemd" value="&lt;b&gt;Guide&lt;/b&gt;&lt;br&gt;recall/remember rules" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
@@ -34,40 +34,40 @@
         <mxCell id="a_cmd_rec" value="&lt;b&gt;recall&lt;/b&gt;&lt;br&gt;(smart default)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="165" y="235" width="90" height="55" as="geometry" />
         </mxCell>
-        <mxCell id="a_cmd_sea" value="&lt;b&gt;search&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="a_cmd_sea" value="&lt;b&gt;prime&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="270" y="235" width="70" height="55" as="geometry" />
         </mxCell>
         <mxCell id="a_cmd_rep" value="&lt;b&gt;replace&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="355" y="235" width="70" height="55" as="geometry" />
         </mxCell>
-        <mxCell id="a_cmd_lnk" value="&lt;b&gt;link&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="a_cmd_lnk" value="&lt;b&gt;doctor&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="440" y="235" width="60" height="55" as="geometry" />
         </mxCell>
-        <mxCell id="a_cmd_gc" value="&lt;b&gt;gc&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="a_cmd_gc" value="&lt;b&gt;config&lt;/b&gt;&lt;br&gt;(group)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="515" y="235" width="50" height="55" as="geometry" />
         </mxCell>
         <mxCell id="a_cmd_for" value="&lt;b&gt;forget&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="580" y="235" width="60" height="55" as="geometry" />
         </mxCell>
-        <mxCell id="a_cmd_rel" value="&lt;b&gt;related&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="a_cmd_rel" value="&lt;b&gt;log&lt;/b&gt;&lt;br&gt;(group)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="655" y="235" width="65" height="55" as="geometry" />
         </mxCell>
-        <mxCell id="a_cmd_emb" value="&lt;b&gt;embed&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="a_cmd_emb" value="&lt;b&gt;embed&lt;/b&gt;&lt;br&gt;(group)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="735" y="235" width="60" height="55" as="geometry" />
         </mxCell>
-        <mxCell id="a_cmd_sta" value="&lt;b&gt;status&lt;/b&gt; / &lt;b&gt;log&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="a_cmd_sta" value="&lt;b&gt;status&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="810" y="235" width="85" height="55" as="geometry" />
         </mxCell>
-        <mxCell id="a_cmd_store" value="&lt;b&gt;store&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="a_cmd_store" value="&lt;b&gt;store&lt;/b&gt;&lt;br&gt;(group)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="910" y="235" width="50" height="55" as="geometry" />
         </mxCell>
-        <mxCell id="a_cmd_graph" value="&lt;b&gt;graph&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="a_cmd_graph" value="&lt;b&gt;graph&lt;/b&gt;&lt;br&gt;(group)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="975" y="235" width="50" height="55" as="geometry" />
         </mxCell>
         <mxCell id="a_cmd_install" value="&lt;b&gt;install&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="1040" y="235" width="50" height="55" as="geometry" />
         </mxCell>
-        <mxCell id="a_cmd_viz" value="&lt;b&gt;viz&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="a_cmd_viz" value="&lt;b&gt;insights&lt;/b&gt;&lt;br&gt;(group)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="1105" y="235" width="45" height="55" as="geometry" />
         </mxCell>
         <mxCell id="a_l3" value="&lt;b&gt;Core Engine Layer&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
@@ -94,25 +94,25 @@
         <mxCell id="a_temp" value="&lt;b&gt;temporal.py&lt;/b&gt;&lt;br&gt;backbone +&lt;br&gt;proximity(4h)" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6F3FF;strokeColor=#6c8ebf;" vertex="1" parent="1">
           <mxGeometry x="510" y="395" width="100" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="a_ent" value="&lt;b&gt;entity.py&lt;/b&gt;&lt;br&gt;regex + dict&lt;br&gt;co-occurrence" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6F3FF;strokeColor=#6c8ebf;" vertex="1" parent="1">
+        <mxCell id="a_ent" value="&lt;b&gt;entity.py&lt;/b&gt;&lt;br&gt;LLM-extracted&lt;br&gt;IDF-weighted" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6F3FF;strokeColor=#6c8ebf;" vertex="1" parent="1">
           <mxGeometry x="620" y="395" width="100" height="50" as="geometry" />
         </mxCell>
         <mxCell id="a_sem" value="&lt;b&gt;semantic.py&lt;/b&gt;&lt;br&gt;auto: cos≥0.62" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
           <mxGeometry x="510" y="455" width="100" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="a_cau" value="&lt;b&gt;causal.py&lt;/b&gt;&lt;br&gt;keyword signal&lt;br&gt;BFS candidates" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#FFE6E6;strokeColor=#b85450;" vertex="1" parent="1">
+        <mxCell id="a_cau" value="&lt;b&gt;causal.py&lt;/b&gt;&lt;br&gt;LLM inference&lt;br&gt;(parallel)" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#FFE6E6;strokeColor=#b85450;" vertex="1" parent="1">
           <mxGeometry x="620" y="455" width="100" height="50" as="geometry" />
         </mxCell>
         <mxCell id="a_lbl_auto" value="auto" style="text;html=1;fontSize=8;fillColor=none;strokeColor=none;fontColor=#82b366;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="735" y="395" width="30" height="15" as="geometry" />
         </mxCell>
-        <mxCell id="a_lbl_llm" value="LLM&#10;review" style="text;html=1;fontSize=8;fillColor=none;strokeColor=none;fontColor=#b85450;fontStyle=1;" vertex="1" parent="1">
+        <mxCell id="a_lbl_llm" value="LLM" style="text;html=1;fontSize=8;fillColor=none;strokeColor=none;fontColor=#b85450;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="735" y="460" width="40" height="25" as="geometry" />
         </mxCell>
         <mxCell id="a_embed" value="&lt;b&gt;embed/&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=11;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="870" y="370" width="270" height="130" as="geometry" />
         </mxCell>
-        <mxCell id="a_ollama_c" value="&lt;b&gt;voyage.py&lt;/b&gt;&lt;br&gt;Client class&lt;br&gt;voyage-3-lite&lt;br&gt;512-dim vectors" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=5;" vertex="1" parent="1">
+        <mxCell id="a_ollama_c" value="&lt;b&gt;voyage.py / openai_compat.py / ollama.py&lt;/b&gt;&lt;br&gt;pluggable provider&lt;br&gt;default: voyage-3-lite&lt;br&gt;dim is provider-defined" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=5;" vertex="1" parent="1">
           <mxGeometry x="880" y="395" width="120" height="70" as="geometry" />
         </mxCell>
         <mxCell id="a_vec" value="&lt;b&gt;vector.py&lt;/b&gt;&lt;br&gt;cosine_similarity&lt;br&gt;serialize_vector / deserialize_vector" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=5;" vertex="1" parent="1">
@@ -124,7 +124,7 @@
         <mxCell id="a_db" value="&lt;b&gt;db.py&lt;/b&gt;&lt;br&gt;SQLite via stdlib sqlite3&lt;br&gt;in_transaction()&lt;br&gt;schema migration" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#fce5cd;strokeColor=#d6b656;align=left;spacingLeft=5;" vertex="1" parent="1">
           <mxGeometry x="60" y="580" width="170" height="70" as="geometry" />
         </mxCell>
-        <mxCell id="a_node" value="&lt;b&gt;node.py&lt;/b&gt;&lt;br&gt;insert_insight / get_all_active_insights&lt;br&gt;get_all_embeddings / scan_embeddings&lt;br&gt;auto_prune / refresh_effective_importance&lt;br&gt;boost_retention / gc" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#fce5cd;strokeColor=#d6b656;align=left;spacingLeft=5;" vertex="1" parent="1">
+        <mxCell id="a_node" value="&lt;b&gt;node.py&lt;/b&gt;&lt;br&gt;insert_insight / get_all_active_insights&lt;br&gt;get_all_embeddings / scan_embeddings&lt;br&gt;auto_prune / refresh_effective_importance&lt;br&gt;boost_retention" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#fce5cd;strokeColor=#d6b656;align=left;spacingLeft=5;" vertex="1" parent="1">
           <mxGeometry x="250" y="580" width="200" height="75" as="geometry" />
         </mxCell>
         <mxCell id="a_edge" value="&lt;b&gt;edge.py&lt;/b&gt;&lt;br&gt;insert_edge&lt;br&gt;get_edges_by_node&lt;br&gt;get_recent_insights_in_window" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#fce5cd;strokeColor=#d6b656;align=left;spacingLeft=5;" vertex="1" parent="1">
@@ -133,14 +133,14 @@
         <mxCell id="a_tables" value="&lt;b&gt;SQLite Tables&lt;/b&gt;&lt;br&gt;insights (id, content, category,&lt;br&gt;  importance, entities, embedding,&lt;br&gt;  access_count, effective_importance)&lt;br&gt;edges (source_id, target_id, type, weight)&lt;br&gt;oplog (timestamp, op, detail)" style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#999999;align=left;spacingLeft=5;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="700" y="575" width="280" height="85" as="geometry" />
         </mxCell>
-        <mxCell id="a_cap" value="&lt;b&gt;MaxInsights = 1000&lt;/b&gt;&lt;br&gt;~7MB memory / ~1.4MB disk" style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f8cecc;strokeColor=#b85450;fontColor=#b85450;" vertex="1" parent="1">
+        <mxCell id="a_cap" value="&lt;b&gt;MAX_INSIGHTS = 1000&lt;/b&gt;&lt;br&gt;auto-prune trigger" style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f8cecc;strokeColor=#b85450;fontColor=#b85450;" vertex="1" parent="1">
           <mxGeometry x="1000" y="580" width="150" height="40" as="geometry" />
         </mxCell>
         <mxCell id="a_l5" value="&lt;b&gt;External Services&lt;/b&gt;  (optional)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;verticalAlign=top;fontSize=11;align=left;spacingLeft=10;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="40" y="700" width="1120" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="a_ollama_s" value="&lt;b&gt;Voyage AI&lt;/b&gt;&lt;br&gt;api.voyageai.com | voyage-3-lite (512d)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="60" y="725" width="300" height="40" as="geometry" />
+        <mxCell id="a_ollama_s" value="&lt;b&gt;OpenRouter&lt;/b&gt; (LLM, ZDR Haiku) &amp;nbsp;|&amp;nbsp; &lt;b&gt;Voyage AI&lt;/b&gt; (embeddings, default)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="725" width="320" height="40" as="geometry" />
         </mxCell>
         <mxCell id="a_fs" value="&lt;b&gt;File System&lt;/b&gt;&lt;br&gt;~/.memman/data/&amp;lt;store&amp;gt;/memman.db" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="400" y="725" width="280" height="40" as="geometry" />

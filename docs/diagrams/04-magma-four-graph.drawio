@@ -31,10 +31,10 @@
         <mxCell id="fg_t2" value="backbone" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#6c8ebf;strokeWidth=2;fontSize=9;fontColor=#6c8ebf;" edge="1" parent="1" source="fg_n2" target="fg_n3">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="fg_t3" value="proximity w=0.5" style="rounded=1;strokeColor=#6c8ebf;strokeWidth=1;dashed=1;fontSize=8;fontColor=#6c8ebf;" edge="1" parent="1" source="fg_n1" target="fg_n5">
+        <mxCell id="fg_t3" value="proximity w=1/(1+hours_diff)" style="rounded=1;strokeColor=#6c8ebf;strokeWidth=1;dashed=1;fontSize=8;fontColor=#6c8ebf;" edge="1" parent="1" source="fg_n1" target="fg_n5">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="fg_e_label" value="&lt;b&gt;② Entity Graph&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;co-occurrence on shared entities&lt;br&gt;regex + dictionary + user labels&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="fg_e_label" value="&lt;b&gt;② Entity Graph&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;co-occurrence on shared entities&lt;br&gt;LLM-extracted (extract_facts + enrich_with_llm)&lt;br&gt;IDF-weighted&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="280" y="550" width="200" height="60" as="geometry" />
         </mxCell>
         <mxCell id="fg_e1" value="entity: SQLite" style="rounded=1;strokeColor=#82b366;strokeWidth=2;fontSize=9;fontColor=#82b366;" edge="1" parent="1" source="fg_n1" target="fg_n3">
@@ -54,7 +54,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="fg_s_label" value="&lt;b&gt;④ Semantic Graph&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;semantic similarity links&lt;br&gt;cos ≥ 0.70 auto | 0.40-0.70 LLM review&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="fg_s_label" value="&lt;b&gt;④ Semantic Graph&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;semantic similarity links&lt;br&gt;auto: cos ≥ 0.62 (AUTO_SEMANTIC_THRESHOLD)&lt;br&gt;top 3 per insight&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="760" y="550" width="240" height="60" as="geometry" />
         </mxCell>
         <mxCell id="fg_s1" value="semantic cos=0.87 (auto)" style="rounded=1;strokeColor=#9673a6;strokeWidth=2;dashed=0;fontSize=9;fontColor=#9673a6;" edge="1" parent="1" source="fg_n3" target="fg_n4">

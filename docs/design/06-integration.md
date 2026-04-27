@@ -4,7 +4,7 @@
 
 ---
 
-![Integration Architecture](../diagrams/08-three-layer-integration.drawio.png)
+![Integration Architecture](../diagrams/07-three-layer-integration.drawio.png)
 
 MemMan integrates with LLM CLIs through lifecycle hooks, a skill file, and a behavioral guide. Claude Code's [hook system](https://docs.anthropic.com/en/docs/claude-code/hooks) is the reference implementation — all components are deployed automatically via `memman install`.
 
