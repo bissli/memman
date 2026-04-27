@@ -738,8 +738,8 @@ class _StoreContext:
     """
 
     def __init__(self, store_data_dir: str) -> None:
-        from memman.embed import get_client as _get_ec
         from memman.embed import fingerprint as _fp_mod
+        from memman.embed import get_client as _get_ec
         from memman.embed.vector import deserialize_vector
         from memman.llm.client import get_llm_client
         from memman.store.db import open_db as _open_store_db

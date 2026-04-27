@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 from memman.cli import cli
-from memman.doctor import check_env_permissions, check_scheduler_heartbeat
-from memman.doctor import check_queue_schema, check_scheduler_state
+from memman.doctor import check_env_permissions, check_queue_schema
+from memman.doctor import check_scheduler_heartbeat, check_scheduler_state
 from memman.doctor import check_schema_columns
 from memman.store.db import open_db
 

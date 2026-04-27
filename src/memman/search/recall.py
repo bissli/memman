@@ -16,7 +16,7 @@ logger = logging.getLogger('memman')
 
 from memman.embed.vector import cosine_similarity
 from memman.graph.semantic import build_embed_cache
-from memman.model import Edge, Insight
+from memman.model import Insight
 from memman.search.intent import detect_intent, get_weights
 from memman.search.keyword import insight_tokens, keyword_search, tokenize
 from memman.store.edge import get_edges_by_node, get_edges_by_source_and_type

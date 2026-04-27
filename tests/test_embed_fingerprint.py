@@ -440,7 +440,7 @@ def test_doctor_reports_fingerprint_fail_mismatch(tmp_path):
 
 @pytest.mark.no_autoseed_fingerprint
 def test_embed_status_reports_mismatch(tmp_path):
-    """embed status reports consistent=False with the right hint
+    """Embed status reports consistent=False with the right hint
     when stored fingerprint diverges from the active client.
     """
     from memman.store.db import store_dir
@@ -499,10 +499,13 @@ def test_reembed_blocks_when_provider_unavailable(
         name = 'fake'
         model = 'fake-model'
         dim = 1
+
         def available(self):
             return False
+
         def embed(self, text):
             return [0.0]
+
         def unavailable_message(self):
             return 'fake provider down: set FAKE_API_KEY'
 
@@ -541,11 +544,14 @@ def test_reembed_resumable_from_cursor(
         name = 'voyage'
         model = 'voyage-3-lite'
         dim = 512
+
         def available(self):
             return True
+
         def embed(self, text):
             embed_calls.append(text)
             return [0.0] * 512
+
         def unavailable_message(self):
             return 'down'
 

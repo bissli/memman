@@ -82,7 +82,7 @@ def write_snapshot(db, store_dir: str, fingerprint: Fingerprint) -> bool:
         embedding_pairs.append((eid, vec))
 
     insight_ids = [i.id for i in insights]
-    embed_index = {eid: vec for eid, vec in embedding_pairs}
+    embed_index = dict(embedding_pairs)
     ids_in_order = [iid for iid in insight_ids if iid in embed_index]
 
     embeddings_array = np.zeros(
@@ -128,7 +128,7 @@ def write_snapshot(db, store_dir: str, fingerprint: Fingerprint) -> bool:
     adj_bytes = json.dumps(adjacency).encode('utf-8')
     embed_bytes = embeddings_array.tobytes(order='C')
 
-    with open(tmp_path, 'wb') as f:
+    with Path(tmp_path).open('wb') as f:
         f.write(SNAPSHOT_MAGIC)
         f.write(struct.pack('<I', len(header_bytes)))
         f.write(header_bytes)
@@ -141,7 +141,7 @@ def write_snapshot(db, store_dir: str, fingerprint: Fingerprint) -> bool:
         f.flush()
         os.fsync(f.fileno())
 
-    os.replace(tmp_path, out_path)
+    Path(tmp_path).replace(out_path)
     logger.debug(
         f'snapshot wrote {out_path}'
         f' (insights={len(insights)} embedded={len(ids_in_order)}'
@@ -165,7 +165,7 @@ def read_snapshot(
     if not path.exists():
         return None
     try:
-        with open(path, 'rb') as f:
+        with Path(path).open('rb') as f:
             magic = f.read(4)
             if magic != SNAPSHOT_MAGIC:
                 logger.warning(f'snapshot {path} bad magic; ignoring')
@@ -214,9 +214,7 @@ def read_snapshot(
                 f' ({arr.size} != {len(embedded_ids)} * {dim})')
 
     meta_list = json.loads(meta_blob)
-    insights: list[Insight] = []
-    for entry in meta_list:
-        insights.append(Insight(
+    insights: list[Insight] = [Insight(
             id=entry['id'],
             content=entry['content'],
             category=entry['category'],
@@ -226,7 +224,7 @@ def read_snapshot(
             source=entry.get('source', 'user'),
             access_count=int(entry.get('access_count', 0)),
             created_at=parse_timestamp(entry['created_at']),
-            ))
+            ) for entry in meta_list]
 
     raw_adj = json.loads(adj_blob)
     adjacency: dict[str, list[tuple[str, str, float]]] = {}

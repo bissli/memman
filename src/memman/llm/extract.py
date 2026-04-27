@@ -305,7 +305,7 @@ def _expand_cache_key(query: str) -> str:
     import os
     salt = os.environ.get(config.LLM_MODEL_FAST) or '<auto>'
     digest = hashlib.sha256(
-        f'{_normalize_for_cache(query)}|{salt}'.encode('utf-8'))
+        f'{_normalize_for_cache(query)}|{salt}'.encode())
     return digest.hexdigest()[:16]
 
 

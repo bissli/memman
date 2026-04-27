@@ -5,7 +5,6 @@ the MEMMAN_LLM_MODEL_FAST salt invalidates it. Cache key never
 triggers a network round-trip (uses raw env-var, not client.model).
 """
 
-import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -97,8 +96,8 @@ def test_cache_failure_is_not_cached(monkeypatch):
     client = MagicMock()
     client.complete.side_effect = [
         RuntimeError('transient'),
-        '{"expanded_query": "alpha", "keywords": ["alpha"],'
-        ' "entities": [], "intent": "GENERAL"}',
+        ('{"expanded_query": "alpha", "keywords": ["alpha"],'
+         ' "entities": [], "intent": "GENERAL"}'),
         ]
 
     first = expand_query(client, 'alpha')
