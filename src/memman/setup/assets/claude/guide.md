@@ -142,12 +142,18 @@ long-running `memman scheduler serve` process inside containers (set
 When the scheduler is **stopped**, memman is recall-only: every write
 exits 1 with `Scheduler is stopped; cannot <verb>. Run 'memman
 scheduler start' to enable.` The serve loop polls the state file every
-iteration and exits cleanly when stopped.
+iteration and mid-drain, so pause is observed within seconds even
+during long drains.
 
-- `memman scheduler serve [--interval N] [--once]` — long-running drain loop (used as PID 1 in containers).
+Drains never overlap: an `fcntl.flock` on `~/.memman/drain.lock`
+gates `_drain_queue` entry. If a manual `scheduler trigger` fires
+while a timer-driven drain is running, the second invocation logs
+`drain: another drain is in progress, skipping` and exits 0.
+
+- `memman scheduler serve [--interval N] [--once]` — long-running drain loop (used as PID 1 in containers). `--interval 0` means continuous (drains back-to-back, with a 100 ms idle backoff when the queue is empty).
 - `memman scheduler status` — platform, interval, next run, state, last heartbeat.
 - `memman scheduler start` — flip state to STARTED (resume drains + writes).
 - `memman scheduler stop` — flip state to STOPPED (pause drains + reject writes).
-- `memman scheduler interval --seconds N` — change cadence (min 60s).
+- `memman scheduler interval --seconds N` — change cadence (min 60s for systemd/launchd; serve mode accepts any value `>= 0`, with `0` meaning continuous).
 - `memman scheduler trigger` — run the drain now on systemd/launchd; not applicable in serve mode.
 - `memman log worker [--errors]` — tail the enrichment worker logs.

@@ -45,16 +45,16 @@ Session-path (`memman recall` query expansion) uses direct Anthropic API with ha
 
 ### Operational controls
 
-| Command                                   | Effect                                         |
-| ----------------------------------------- | ---------------------------------------------- |
-| `memman scheduler queue list [--limit N]` | inspect pending/done/failed rows               |
-| `memman scheduler queue retry <id>`       | re-queue a failed row                          |
-| `memman scheduler queue purge --done`     | delete completed rows                          |
-| `memman scheduler status`                 | install state, interval, next run, queue depth |
-| `memman scheduler start`                  | activate the trigger (idempotent)              |
-| `memman scheduler stop`                   | deactivate the trigger; trigger files stay     |
-| `memman scheduler interval --seconds N`   | change cadence (min 60 s)                      |
-| `memman scheduler trigger`                | run the drain now (rejects when stopped)       |
+| Command                                   | Effect                                                                                     |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `memman scheduler queue list [--limit N]` | inspect pending/done/failed rows                                                           |
+| `memman scheduler queue retry <id>`       | re-queue a failed row                                                                      |
+| `memman scheduler queue purge --done`     | delete completed rows                                                                      |
+| `memman scheduler status`                 | install state, interval, next run, queue depth                                             |
+| `memman scheduler start`                  | activate the trigger (idempotent)                                                          |
+| `memman scheduler stop`                   | deactivate the trigger; trigger files stay                                                 |
+| `memman scheduler interval --seconds N`   | change cadence; min 60 s for systemd/launchd; serve mode accepts `>= 0` (`0` = continuous) |
+| `memman scheduler trigger`                | run the drain now (rejects when stopped)                                                   |
 
 `memman graph rebuild` re-enriches all already-stored insights through the full LLM pipeline (useful after model/prompt changes; rejects when the scheduler is stopped). Auto-created edges (semantic, entity, temporal) are recomputed automatically on DB open when edge constants change — no operator command for that.
 
