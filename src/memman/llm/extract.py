@@ -2,7 +2,8 @@
 
 import logging
 
-from memman import trace
+import cachetools
+from memman import config, trace
 from memman.llm.client import LLMProvider
 from memman.llm.shared import parse_json_response
 
@@ -285,14 +286,58 @@ def reconcile_memories(
     return results
 
 
+_EXPAND_CACHE_TTL = 300
+_EXPAND_CACHE_MAX = 256
+
+
+def _normalize_for_cache(query: str) -> str:
+    """Lowercase + collapse whitespace; nothing else."""
+    return ' '.join(query.lower().split())
+
+
+def _expand_cache_key(query: str) -> str:
+    """Salt with the raw fast-model env var, not the resolved id.
+
+    The resolved id triggers a network ZDR-cache fetch; the raw env-var
+    string is identity-stable and resolves without network I/O.
+    """
+    import hashlib
+    import os
+    salt = os.environ.get(config.LLM_MODEL_FAST) or '<auto>'
+    digest = hashlib.sha256(
+        f'{_normalize_for_cache(query)}|{salt}'.encode('utf-8'))
+    return digest.hexdigest()[:16]
+
+
+_expand_cache: cachetools.TTLCache = cachetools.TTLCache(
+    maxsize=_EXPAND_CACHE_MAX, ttl=_EXPAND_CACHE_TTL)
+
+
+def reset_expand_cache() -> None:
+    """Drop cached query expansions. Used by tests that swap env vars."""
+    _expand_cache.clear()
+
+
 def expand_query(
         llm_client: LLMProvider,
         query: str) -> dict:
     """Expand recall query with synonyms and related terms.
 
     Returns dict with: expanded_query, keywords, entities, intent.
-    On failure: passthrough with original query.
+    On failure: passthrough with original query. Repeated calls with
+    the same query in the same process hit a `cachetools.TTLCache`
+    keyed by sha256(normalized_query | $MEMMAN_LLM_MODEL_FAST). Cache
+    lives only for the duration of one CLI invocation (memman is a
+    one-shot CLI), so persistence across processes is left to the
+    LLM provider's own response cache.
     """
+    cache_key = _expand_cache_key(query)
+    cached = _expand_cache.get(cache_key)
+    if cached is not None:
+        trace.event(
+            'query_expand_result', outcome='cache_hit', **cached)
+        return dict(cached)
+
     trace.event('query_expand_start', query=query)
     try:
         raw = llm_client.complete(QUERY_EXPANSION_SYSTEM, query)
@@ -334,5 +379,6 @@ def expand_query(
         'entities': entities,
         'intent': intent,
         }
+    _expand_cache[cache_key] = dict(result)
     trace.event('query_expand_result', outcome='ok', **result)
     return result

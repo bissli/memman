@@ -136,7 +136,9 @@ def _mock_apis(request, monkeypatch):
         'memman.embed.voyage.Client.available', lambda self: True)
     monkeypatch.setenv('OPENROUTER_API_KEY', 'mock-key-for-testing')
     from memman.llm import client as llm_client_mod
+    from memman.llm import extract as llm_extract_mod
     llm_client_mod.reset_role_cache()
+    llm_extract_mod.reset_expand_cache()
 
 
 def _mock_llm_complete(self: object, system: str, user: str) -> str:
