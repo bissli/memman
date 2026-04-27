@@ -101,17 +101,32 @@ def query_insights(db: 'DB', keyword: str = '', category: str = '',
     return [_scan_insight(r) for r in rows]
 
 
-def soft_delete_insight(db: 'DB', id: str) -> None:
-    """Set deleted_at on an insight and remove all associated edges."""
+def soft_delete_insight(
+        db: 'DB', id: str, tolerate_missing: bool = False) -> bool:
+    """Set deleted_at on an insight and remove all associated edges.
+
+    Returns True if the insight was soft-deleted, False if it was
+    already gone and `tolerate_missing=True`. With `tolerate_missing=False`
+    (the default) a missing/already-deleted target raises ValueError —
+    the right behavior for `memman forget`, where an unknown id is a
+    user bug.
+
+    The worker pipeline passes `tolerate_missing=True` so that a queued
+    `replace` whose target was concurrently `forget`-ed degrades to a
+    plain add instead of crashing the row's transaction.
+    """
     now = format_timestamp(datetime.now(timezone.utc))
     cursor = db._exec(
         'UPDATE insights SET deleted_at = ?, updated_at = ?'
         ' WHERE id = ? AND deleted_at IS NULL',
         (now, now, id))
     if cursor.rowcount == 0:
+        if tolerate_missing:
+            return False
         raise ValueError(f'insight {id} not found or already deleted')
     from memman.store.edge import delete_edges_by_node
     delete_edges_by_node(db, id)
+    return True
 
 
 def update_entities(db: 'DB', id: str, entities: list[str]) -> None:

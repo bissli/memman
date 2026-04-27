@@ -447,21 +447,35 @@ def _apply_plan(
             }
 
     if plan.action == 'delete' and plan.target_id:
-        soft_delete_insight(db, plan.target_id)
-        log_op(db, 'reconcile-delete', plan.target_id,
-               f'contradicted by: {plan.fact_text[:200]}')
+        deleted_now = soft_delete_insight(
+            db, plan.target_id, tolerate_missing=True)
+        if deleted_now:
+            log_op(db, 'reconcile-delete', plan.target_id,
+                   f'contradicted by: {plan.fact_text[:200]}')
+        else:
+            logger.warning(
+                f'reconcile-delete target {plan.target_id} already gone;'
+                ' skipping')
         return {
             'id': fi.id,
             'content': fi.content,
-            'action': 'deleted',
+            'action': 'deleted' if deleted_now else 'skipped',
             'target_id': plan.target_id,
             }
 
+    target_already_gone = False
     if plan.action in {'update', 'replace'} and plan.target_id:
         op_name = ('replace' if plan.action == 'replace'
                    else 'reconcile-update')
-        soft_delete_insight(db, plan.target_id)
-        log_op(db, op_name, plan.target_id, f'replaced by {fi.id}')
+        deleted_now = soft_delete_insight(
+            db, plan.target_id, tolerate_missing=True)
+        if deleted_now:
+            log_op(db, op_name, plan.target_id, f'replaced by {fi.id}')
+        else:
+            target_already_gone = True
+            logger.warning(
+                f'{plan.action} target {plan.target_id} already deleted;'
+                ' degrading to add')
 
     insert_insight(db, fi)
 
@@ -494,6 +508,7 @@ def _apply_plan(
             plan.enrichment.get('semantic_facts', []))
         stamp_enriched(db, fi.id, now)
 
+    reported_action = 'add' if target_already_gone else plan.action
     result: dict = {
         'id': fi.id,
         'content': fi.content,
@@ -501,7 +516,7 @@ def _apply_plan(
         'importance': fi.importance,
         'tags': fi.tags,
         'entities': fi.entities,
-        'action': plan.action,
+        'action': reported_action,
         'created_at': format_timestamp(fi.created_at),
         'edges_created': {
             **edge_stats,
@@ -515,6 +530,6 @@ def _apply_plan(
             },
         'embedded': embedded,
         }
-    if plan.target_id:
+    if plan.target_id and not target_already_gone:
         result['replaced_id'] = plan.target_id
     return result
