@@ -41,7 +41,7 @@ The following insights are exempt from automatic cleanup:
 
 **Rationale:**
 
-- **`importance >= 4`**: Follows directly from the importance scale definition — importance 4 = "immune to auto-pruning" (Section 3.1).
+- **`importance >= 4`**: Follows directly from the importance scale definition — importance 4 = "immune to auto-pruning" (Section 2.1).
 - **`access_count >= 3`**: Three independent retrievals provide statistical evidence of genuine utility, not coincidental access. The threshold is deliberately low — in a personal memory system, even two recalls suggest real value, but three provides a safety margin.
 
 ## 5.3 Auto-Pruning

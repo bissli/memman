@@ -29,8 +29,8 @@ Store one self-contained fact per call. Pick the most accurate `--cat`.
 memman remember "<fact>" --cat <category> --imp <1-5> --tags "t1,t2" --entities "e1,e2" --source agent
 ```
 
-Categories: `preference` · `decision` · `fact` · `insight` · `context`.
-Importance is 1 (passing mention) to 5 (architectural / strong preference).
+Categories: `preference` · `decision` · `fact` · `insight` · `context` · `general`.
+Importance is 2 (passing mention) to 5 (architectural / strong preference). The extraction worker silently floors importance at 2 — `--imp 1` becomes `--imp 2`.
 
 To correct a stored insight by ID without losing its `access_count` and
 edges:

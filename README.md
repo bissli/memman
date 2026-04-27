@@ -227,7 +227,7 @@ The shipped `guide.md` (behavioral policy) and `SKILL.md` (command reference) li
 See [Inside Claude Code vs outside](#inside-claude-code-vs-outside). Short version: `remember` is a queue-append (~50 ms); newly stored memories become recallable on the next drain tick (default 60 s).
 
 **How do I pause the scheduler?**
-`memman scheduler stop` flips the persistent state to STOPPED and disables the timer on systemd/launchd hosts. While stopped, memman is **recall-only** — `remember`, `replace`, `forget`, `graph link`, `graph rebuild`, and `insights protect` reject with `Scheduler is stopped; cannot <verb>. Run 'memman scheduler start' to enable.` Resume with `memman scheduler start` (on serve hosts the operator must also re-run `memman scheduler serve`). Change cadence with `memman scheduler interval --seconds N`. Tail the worker output with `memman log worker [--errors]`; logs live at `~/.memman/data/logs/memman.log`.
+`memman scheduler stop` flips the persistent state to STOPPED and disables the timer on systemd/launchd hosts. While stopped, memman is **recall-only** — `remember`, `replace`, `forget`, `graph link`, `graph rebuild`, and `insights protect` reject with `Scheduler is stopped; cannot <verb>. Run 'memman scheduler start' to enable.` Resume with `memman scheduler start` (on serve hosts the operator must also re-run `memman scheduler serve`). Change cadence with `memman scheduler interval --seconds N`. Tail the worker output with `memman log worker [--errors]`; logs live at `~/.memman/logs/enrich.{log,err}`.
 
 **Upgrading?**
 After `pipx upgrade memman`, re-run `memman install` to refresh the scheduler unit's `ExecStart` line. `make e2e` and `memman doctor` will catch unit-file drift.
@@ -243,7 +243,7 @@ memman install      # deploy integration
 memman uninstall    # remove integration
 ```
 
-**Dependencies**: Python 3.11+, Click, httpx, cachetools, tqdm. **Required at runtime**: an LLM provider API key and an embedding provider API key. Defaults today are `OPENROUTER_API_KEY` for inference and `VOYAGE_API_KEY` for embeddings; both providers are pluggable and may change in future releases. See [Usage & Reference](docs/USAGE.md#configuration) for the current set of supported providers.
+**Dependencies**: Python 3.11+, Click, httpx, cachetools, tqdm, numpy. **Required at runtime**: an LLM provider API key and an embedding provider API key. Defaults today are `OPENROUTER_API_KEY` for inference and `VOYAGE_API_KEY` for embeddings; both providers are pluggable and may change in future releases. See [Usage & Reference](docs/USAGE.md#configuration) for the current set of supported providers.
 
 ## Documentation
 

@@ -405,7 +405,7 @@ def check_scheduler_heartbeat(data_dir: str) -> dict:
             'status': 'fail',
             'detail': {
                 'reason': ('scheduler is active but no drains recorded yet;'
-                           ' check ~/.memman/data/logs/memman.log'),
+                           ' check ~/.memman/logs/enrich.log'),
                 'state': state,
                 'platform': platform,
                 'interval_seconds': interval,
@@ -437,7 +437,7 @@ def check_scheduler_heartbeat(data_dir: str) -> dict:
         detail['reason'] = (
             'scheduler is active but worker has not fired in '
             f'{age}s (interval={interval}s, threshold={threshold_fail}s);'
-            ' check ~/.memman/data/logs/memman.log')
+            ' check ~/.memman/logs/enrich.log')
     elif age > threshold_warn:
         status = 'warn'
     else:

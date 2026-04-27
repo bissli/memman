@@ -103,18 +103,29 @@ MemMan's architecture is divided into five layers:
 ┌──────────────────────────────────────────────────────────────┐
 │  Integration Layer    Hook / Skill / Guide                   │
 ├──────────────────────────────────────────────────────────────┤
-│  CLI Layer            remember, recall, search, link, gc ... │
+│  CLI Layer            remember · recall · replace · forget   │
+│                       prime · status · doctor · install      │
+│                       graph · scheduler · insights · store   │
+│                       embed · log · config                   │
 ├──────────────────────────────────────────────────────────────┤
-│  Core Engine          search/ (recall, intent, keyword)      │
+│  Pipeline             pipeline/ (remember, drain worker)     │
+├──────────────────────────────────────────────────────────────┤
+│  Core Engine          search/ (recall, intent, keyword,      │
+│                                quality)                      │
 │                       graph/  (temporal, entity, causal,     │
-│                                semantic)                     │
-│                       embed/  (voyage, vector)               │
-│                       llm/   (client, extract)               │
+│                                semantic, engine, bfs,        │
+│                                enrichment)                   │
+│                       embed/  (voyage, openai_compat,        │
+│                                ollama, vector)               │
+│                       llm/    (client, extract,              │
+│                                openrouter_client)            │
 ├──────────────────────────────────────────────────────────────┤
-│  Storage Layer        store/  (db, node, edge, oplog)        │
+│  Storage Layer        store/   (db, node, edge, oplog,       │
+│                                snapshot)                     │
+│                       queue.py (deferred-write queue)        │
 ├──────────────────────────────────────────────────────────────┤
-│  External             Anthropic API (Haiku)                  │
-│                       Voyage AI (embeddings)                 │
+│  External             OpenRouter (LLM, ZDR-routed Haiku)     │
+│                       Voyage AI (embeddings, default)        │
 └──────────────────────────────────────────────────────────────┘
 ```
 

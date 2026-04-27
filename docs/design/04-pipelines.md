@@ -26,7 +26,7 @@ There is no sync path: every write goes through the queue. When the scheduler is
 
 - **Linux host**: `systemctl --user` timer at `~/.config/systemd/user/memman-enrich.timer`, `Persistent=true` so sleep/off catch-up is automatic.
 - **macOS host**: launchd agent at `~/Library/LaunchAgents/com.memman.enrich.plist` with `StartInterval=60`.
-- **nanoclaw container** (no systemd / launchd): inline trigger marker at `~/.memman/scheduler.inline`. The CLI runs the same `_drain_queue` code in-process after each successful enqueue, so the just-written row is visible to the next CLI call.
+- **nanoclaw container** (no systemd / launchd): `memman scheduler serve --interval 60` runs as PID 1. Set `MEMMAN_SCHEDULER_KIND=serve`. The drain loop polls the state file every iteration, so `scheduler stop` is observed within seconds; the loop then exits — in a PID-1 container that exits the container.
 
 Per-blob processing inside `_process_queue_row`:
 
@@ -41,7 +41,7 @@ Per-blob processing inside `_process_queue_row`:
 
 ### LLM routing
 
-Session-path (`memman recall` query expansion) uses direct Anthropic API with hard-coded Haiku. The scheduler path routes through OpenRouter with `provider.zdr=true, data_collection="deny"`. The model is auto-picked from a cached `/api/v1/endpoints/zdr` inventory (24 h TTL, cachetools in-process + disk JSON) — the latest Anthropic Haiku is selected via version parsing.
+Both the session path (`memman recall` query expansion) and the scheduler path route through OpenRouter with `provider.zdr=true, data_collection="deny"`. They use separate role slots: `MEMMAN_LLM_MODEL_FAST` for the recall hot path (and `doctor`'s connectivity probe), `MEMMAN_LLM_MODEL_SLOW` for the scheduler worker (extraction, reconciliation, enrichment, causal inference). When unset, both auto-pick the latest Anthropic Haiku from a cached `/api/v1/endpoints/zdr` inventory (24 h TTL, cachetools in-process + disk JSON), selected via version parsing.
 
 ### Operational controls
 
@@ -94,9 +94,9 @@ Supports the `--intent` flag to manually override automatic detection.
 Multiple signals run in parallel and are merged via Reciprocal Rank Fusion:
 
 ```
-Signal 1: Keyword     → KeywordSearch(all_insights, query, top-20)
-Signal 2: Vector      → CosineSimilarity(query_vec, all_embeddings, top-20)
-Signal 3: Recency     → sort by created_at DESC, top-20
+Signal 1: Keyword     → KeywordSearch(all_insights, query, top-30)
+Signal 2: Vector      → CosineSimilarity(query_vec, all_embeddings, top-30)
+Signal 3: Recency     → sort by created_at DESC, top-30
 
 RRF Score = Σ  1 / (k + r)    (k = 60, r = 1-based rank)
                  for each signal
@@ -108,7 +108,7 @@ Each insight may rank differently across signals; RRF fusion produces a robust c
 
 **Rationale:**
 
-- **`ANCHOR_TOP_K = 20`**: Directly from MAGMA Table 5 ("Vector Top-K: 20").
+- **`ANCHOR_TOP_K = 30`**: Per-signal anchor pool size. MAGMA Table 5 specifies 20; MemMan uses 30 to give beam search a richer starting frontier given the flat insight hierarchy (no episode/narrative super-nodes).
 - **`RRF_K = 60`**: Standard value from the original RRF paper (Cormack, Clarke & Büttcher, SIGIR 2009). MAP scores nearly flat from k=50–90, with k=60 validated across four TREC collections.
 - **`VECTOR_SEARCH_MIN_SIM = 0.10`**: Noise floor matching MAGMA's lower similarity threshold bound. Below 0.10, vector search hits add noise rather than signal.
 

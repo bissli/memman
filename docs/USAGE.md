@@ -191,15 +191,26 @@ memman log worker [--errors] [--lines N]            # tail worker output (~/.mem
 
 ## Configuration
 
-| Variable                     | Default                        | Description                                                                                  |
-| ---------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------- |
-| `MEMMAN_DATA_DIR`            | `~/.memman`                    | Base data directory                                                                          |
-| `MEMMAN_STORE`               | `default`                      | Active named store                                                                           |
-| `OPENROUTER_API_KEY`         | —                              | Required: LLM inference (fact extraction, reconciliation, causal inference, query expansion) |
-| `VOYAGE_API_KEY`             | —                              | Required: Voyage AI embeddings (512-dim)                                                     |
-| `MEMMAN_LLM_PROVIDER`        | `openrouter`                   | Registered LLM provider name (see `memman.llm.client.PROVIDERS`)                             |
-| `MEMMAN_OPENROUTER_ENDPOINT` | `https://openrouter.ai/api/v1` | Override endpoint for the OpenRouter client                                                  |
-| `MEMMAN_LLM_MODEL`           | auto-picked latest Haiku       | Override model id; validated against the current ZDR inventory                               |
+| Variable                       | Default                        | Description                                                                                  |
+| ------------------------------ | ------------------------------ | -------------------------------------------------------------------------------------------- |
+| `MEMMAN_DATA_DIR`              | `~/.memman`                    | Base data directory                                                                          |
+| `MEMMAN_STORE`                 | `default`                      | Active named store                                                                           |
+| `OPENROUTER_API_KEY`           | —                              | Required: LLM inference (fact extraction, reconciliation, causal inference, query expansion) |
+| `VOYAGE_API_KEY`               | —                              | Required: Voyage AI embeddings (512-dim)                                                     |
+| `MEMMAN_LLM_PROVIDER`          | `openrouter`                   | Registered LLM provider name (see `memman.llm.client.PROVIDERS`)                             |
+| `MEMMAN_OPENROUTER_ENDPOINT`   | `https://openrouter.ai/api/v1` | Override endpoint for the OpenRouter client                                                  |
+| `MEMMAN_LLM_MODEL_FAST`        | auto-picked latest Haiku       | Override model id for the recall hot path (query expansion, doctor probe).                   |
+| `MEMMAN_LLM_MODEL_SLOW`        | auto-picked latest Haiku       | Override model id for the scheduler worker (extraction, reconciliation, enrichment, causal). |
+| `MEMMAN_EMBED_PROVIDER`        | `voyage`                       | Embedding provider: `voyage`, `openai_compat`, `ollama`.                                     |
+| `MEMMAN_OPENAI_EMBED_API_KEY`  | —                              | API key for `openai_compat` provider.                                                        |
+| `MEMMAN_OPENAI_EMBED_ENDPOINT` | —                              | Endpoint URL for `openai_compat` provider.                                                   |
+| `MEMMAN_OPENAI_EMBED_MODEL`    | —                              | Model id for `openai_compat` provider.                                                       |
+| `MEMMAN_OLLAMA_HOST`           | `http://localhost:11434`       | Host URL for `ollama` provider.                                                              |
+| `MEMMAN_OLLAMA_EMBED_MODEL`    | —                              | Model id for `ollama` provider.                                                              |
+| `MEMMAN_CACHE_DIR`             | `~/.cache/memman`              | Override the ZDR endpoint-list cache location.                                               |
+| `MEMMAN_DEBUG`                 | (unset)                        | Truthy value enables JSONL tracing to `~/.memman/logs/debug.log`.                            |
+| `MEMMAN_WORKER`                | (unset)                        | `1` inside the scheduler-triggered worker; enables the rotating log.                         |
+| `MEMMAN_LOG_LEVEL`             | `WARNING`                      | Override logger level when neither `--verbose` nor `--debug` is passed.                      |
 
 ---
 

@@ -62,9 +62,9 @@ The [RRF paper](https://dl.acm.org/doi/10.1145/1571941.1572114) (Cormack, Clarke
 
 **MemMan's Engineering Choices**
 
-MemMan uses Haiku for fact extraction, reconciliation, enrichment, causal inference, and query expansion. The host LLM handles higher-level judgment (what to remember, when to recall). The write path uses LLM reconciliation (ADD/UPDATE/DELETE/NONE) instead of threshold-based comparison. The lifecycle is hook-driven: remember → reconcile → link → gc.
+MemMan uses Haiku for fact extraction, reconciliation, enrichment, causal inference, and query expansion. The host LLM handles higher-level judgment (what to remember, when to recall). The write path uses LLM reconciliation (ADD/UPDATE/DELETE/NONE) instead of threshold-based comparison. The lifecycle is hook-driven: remember → reconcile → enrich → auto-prune.
 
-Where MAGMA's reference implementation is a Python library with in-memory NetworkX graphs, MemMan persists everything in SQLite with a complete write-back lifecycle. CLI commands as the interface — constrained, but auditable, portable, and sandboxed.
+Where MAGMA's reference implementation is a Python library with in-memory NetworkX graphs, MemMan persists everything in SQLite with a complete write-back lifecycle. The system is exposed through CLI commands — constrained, but auditable, portable, and sandboxed.
 
 ![LLM-Supervised Architecture](../diagrams/05-llm-supervised.drawio.png)
 
@@ -80,7 +80,7 @@ Where MAGMA's reference implementation is a Python library with in-memory Networ
 | ------------------ | ------------------------- | ----------------------------------------------------------------------------- |
 | LLM Capability     | Same model for everything | Host LLM + Haiku for pipeline                                                 |
 | Pipeline LLM       | Same model for everything | Haiku for extraction, reconciliation, expansion, enrichment, causal inference |
-| Network Dependency | Required                  | Required (Anthropic + Voyage APIs)                                            |
+| Network Dependency | Required                  | Required (OpenRouter + Voyage APIs)                                           |
 | Swappability       | API-bound                 | Any LLM CLI                                                                   |
 
 ### Why SQLite WAL Instead of an Embedded Graph Database?
@@ -119,7 +119,7 @@ Where MAGMA's reference implementation is a Python library with in-memory Networ
 | Node Types        | EVENT, EPISODE, SESSION, NARRATIVE                 | Insight only (flat)                                                                                                                                                                         |
 | Storage           | NetworkX (in-memory)                               | SQLite (persistent)                                                                                                                                                                         |
 | Embeddings        | FAISS + OpenAI                                     | Voyage AI (voyage-3-lite, 512-dim)                                                                                                                                                          |
-| Quality Review    | Slow-path LLM refinement (Alg. 3)                  | Pattern-based quality warnings + async gc --review                                                                                                                                          |
+| Quality Review    | Slow-path LLM refinement (Alg. 3)                  | Pattern-based quality warnings + `memman insights review`                                                                                                                                   |
 | Deployment        | Python library                                     | Python package (CLI)                                                                                                                                                                        |
 
 MemMan retains MAGMA's **architectural skeleton** (four-graph separation, intent-adaptive retrieval, multi-signal fusion) while using Haiku for pipeline intelligence (fact extraction, reconciliation, query expansion, enrichment, causal inference) and the host LLM for high-level judgment.

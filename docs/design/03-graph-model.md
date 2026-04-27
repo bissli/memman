@@ -21,7 +21,7 @@ MemMan implements four graphs, each capturing one dimension of relationships:
   - Metadata: `{"sub_type": "backbone", "direction": "precedes"|"succeeds"}`
 - **Proximity**: New insight <-> insights within a 4-hour window (bidirectional)
   - Weight formula: `w = 1 / (1 + hours_diff)`
-  - Up to 10 proximity edges
+  - Up to 5 proximity edges
   - Metadata: `{"sub_type": "proximity", "hours_diff": "2.34"}`
 
 ```
@@ -33,7 +33,7 @@ Insight A (2h ago) ←── backbone ──→ Insight B (1h ago) ←── bac
 **Constants:**
 
 - **`TEMPORAL_WINDOW_HOURS = 4`**: A focused session window. Memories created within the same few hours are likely contextually related.
-- **`MAX_PROXIMITY_EDGES = 10`**: Limits fan-out per insert.
+- **`MAX_PROXIMITY_EDGES = 5`**: Limits fan-out per insert.
 
 ## 3.2 Entity Graph
 

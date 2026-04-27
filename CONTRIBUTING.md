@@ -6,8 +6,8 @@ memman is a single-user CLI memory daemon backed by SQLite. This file covers the
 
 ```bash
 make dev           # poetry install (editable)
-make test          # run the unit/integration suite (~700+ tests)
-make e2e           # run the end-to-end shell script against real DBs
+make test          # run the unit/integration suite (pytest)
+make e2e           # run the end-to-end pytest suite against real DBs
 ```
 
 The project uses Poetry; run commands via `poetry run <cmd>` or inside `poetry shell`.
@@ -28,7 +28,8 @@ Optional:
 | `MEMMAN_DATA_DIR`            | Override `~/.memman` as the data root.                                     |
 | `MEMMAN_STORE`               | Override the active store without editing `~/.memman/active`.              |
 | `MEMMAN_LLM_PROVIDER`        | Registered provider name (default `openrouter`).                           |
-| `MEMMAN_LLM_MODEL`           | Override the auto-picked Haiku model id (validated against ZDR inventory). |
+| `MEMMAN_LLM_MODEL_FAST`      | Override the auto-picked Haiku for the recall hot path (query expansion).  |
+| `MEMMAN_LLM_MODEL_SLOW`      | Override the auto-picked Haiku for the scheduler worker (extraction etc.). |
 | `MEMMAN_OPENROUTER_ENDPOINT` | Override the OpenRouter base URL.                                          |
 | `MEMMAN_CACHE_DIR`           | Override the ZDR endpoint-list cache location.                             |
 | `MEMMAN_DEBUG`               | Truthy value enables JSONL tracing to `~/.memman/logs/debug.log`.          |

@@ -69,7 +69,9 @@ Run this decision tree after every substantive response:
 memman remember "<fact>" --cat <category> --imp <1-5> --tags "t1,t2" --entities "e1,e2" --source agent
 ```
 
-Categories: `preference` · `decision` · `fact` · `insight` · `context`.
+Categories: `preference` · `decision` · `fact` · `insight` · `context` · `general`.
+
+Importance is 2 (passing mention) to 5 (architectural / strong preference). The extraction worker silently floors importance at 2 — `--imp 1` becomes `--imp 2`.
 
 Correct an existing insight by ID:
 
