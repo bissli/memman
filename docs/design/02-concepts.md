@@ -134,9 +134,6 @@ memman/
 │   ├── llm/                  # LLM client + extraction/reconciliation
 │   └── setup/                # LLM CLI integration setup
 ├── tests/
-├── scripts/
-│   ├── e2e_test.sh
-│   └── visualize_graph.py
 ├── pyproject.toml            # Poetry package config
 └── Makefile
 ```

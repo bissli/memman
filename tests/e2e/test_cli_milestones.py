@@ -1,17 +1,15 @@
-"""Pytest port of scripts/e2e_test.sh.
+"""End-to-end CLI milestone tests.
 
-One test per `step` block in the bash script, class-grouped per banner.
-Helpers in `tests/e2e/helpers.py` mirror the bash assertion semantics
-1:1 — no jq filter is silently weakened.
+One test per milestone step, class-grouped per banner. Helpers in
+`tests/e2e/helpers.py` provide JSON-walk assertion utilities.
 
 Cross-milestone state sharing (M2 -> M3, M4 -> M11, etc.) is preserved
 via module-scoped data-dir fixtures. Tests within a class run in
 declaration order (pytest default), and module fixtures retain state
 across classes within this file.
 
-The original `sleep 1` guards in the bash script (lines 280, 286, 314,
-360, 366, 413, 469, 475, 641, 666) ensure distinct timestamps for
-temporal-edge detection; preserved as `time.sleep(1)`.
+`time.sleep(1)` guards ensure distinct timestamps for temporal-edge
+detection.
 """
 
 import time

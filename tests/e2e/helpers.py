@@ -1,9 +1,8 @@
 """Helpers for memman end-to-end tests.
 
 Subprocess wrappers around the installed `memman` CLI and JSON-walk
-assertion helpers that mirror the bash idioms (`assert_jq`,
-`assert_jq_gte`, `assert_contains`, `extract_id`) from
-scripts/e2e_test.sh:50-107.
+assertion helpers (`assert_jq`, `assert_jq_gte`, `assert_contains`,
+`extract_id`).
 
 Every CLI invocation goes through `run_cli` so the HOME redirect, env
 inheritance, and key gating live in exactly one place.
