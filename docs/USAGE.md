@@ -216,18 +216,26 @@ memman log worker [--errors] [--lines N]            # tail worker output (~/.mem
 
 ## Architecture
 
-### Write Pipeline (Single-Tier Synchronous)
+### Write Pipeline (Deferred, Two-Tier)
 
-`remember` uses a single synchronous pipeline:
+`memman remember` is a fast queue-append (~50 ms) on the host session — no
+LLM calls, no embeddings, no edges. The full pipeline runs out of band in
+a scheduler-driven worker:
 
-1. **Sequential** — Quality check, LLM fact extraction, Voyage embedding,
-   LLM reconciliation (ADD/UPDATE/DELETE/NONE), insert, fast edges
-   (temporal + entity), semantic edges, EI refresh, auto-prune.
-2. **Parallel (ThreadPoolExecutor)** — LLM enrichment (keywords, summary,
-   entities) + LLM causal edge inference run concurrently.
-3. **Sequential finalization** — Write enrichment results, re-embed with
-   keywords, rebuild entity/semantic/causal edges, stamp `linked_at`.
-   Returns JSON with `facts` array.
+1. **Tier 1 (host session)** — append a row to `~/.memman/queue.db` with
+   `status='pending'`, the raw text, and any `--cat`/`--imp`/`--entities`
+   hints. Returns `{action: queued, queue_id, store}`.
+2. **Tier 2 (worker)** — systemd timer (Linux), launchd agent (macOS), or
+   `memman scheduler serve` PID 1 (containers) invokes
+   `memman scheduler drain --pending` every 60 s under an `flock` on
+   `~/.memman/drain.lock`. For each queued row: quality gate → LLM fact
+   extraction → per-fact embed (Voyage) + similarity scan + LLM
+   reconciliation (ADD/UPDATE/DELETE/NONE) → insert/update → fast edges
+   (temporal + entity + semantic) → parallel enrichment + LLM causal
+   inference → re-embed → rebuild auto edges → mark done.
+
+The host session never blocks on the network. Newly stored memories
+become recallable on the next drain tick (default 60 s).
 
 ### Recall Pipeline
 

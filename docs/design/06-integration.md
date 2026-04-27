@@ -38,7 +38,7 @@ Session starts
   Compact (PreCompact) ─── compact.sh ──→ flag file for post-compact recall
     │
     ▼
-  (before delegating to sub-agents)
+  (before invoking the Task tool)
   Recall (PreToolUse) ─── task_recall.sh ──→ remind agent to recall before delegation
     │
     ▼
@@ -92,7 +92,7 @@ if echo "$INPUT" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; th
   exit 0
 fi
 cat <<'EOF'
-{"decision": "block", "reason": "[memman] Memory check: did the user state a preference, make a decision, give a correction, or reach a conclusion? If yes, store via Agent(model=sonnet) sub-agent. Only skip if the exchange was purely open-ended questions with no resolution."}
+{"decision": "block", "reason": "[memman] Memory check: did the user state a preference, make a decision, give a correction, or reach a conclusion? If yes, call `memman remember \"<self-contained text>\"` directly via Bash in your next turn (no sub-agent, no delegation). Dereference anaphora before storing. Only skip if the exchange was purely open-ended questions with no resolution."}
 EOF
 ```
 
@@ -131,7 +131,6 @@ echo "[memman] Before delegating: recall relevant context first (memman recall \
 Fires before the agent exits plan mode. Outputs an advisory reminder to store memories before the plan-to-execute transition. Non-blocking — the agent always proceeds:
 
 ```bash
-cat > /dev/null
 echo "[memman] Plan-to-execute transition: store any conclusions, decisions, or preferences from this planning session via Bash (memman remember ...) before proceeding."
 exit 0
 ```
@@ -191,37 +190,26 @@ Key install options:
 
 The Prime hook is always installed. Remind, Nudge, Compact, Recall, and ExitPlan hooks are optional (all enabled by default).
 
-## 6.4 Sub-Agent Delegation
+## 6.4 Direct-Bash Invocation (No Sub-Agent)
 
-Memory writes don't happen in the main conversation. Instead, the host LLM delegates to a lightweight sub-agent:
+The host agent calls `memman remember` directly via Bash in the same turn —
+no sub-agent, no Task delegation, no context isolation. This is intentional:
 
-```
-Main Agent (Opus)                     Sub-Agent (Sonnet)
-┌──────────────────────┐              ┌──────────────────────┐
-│ Full conversation     │  delegates   │ ~1000 tokens context │
-│ context (~25k tokens)  │ ──────────→ │ Reads SKILL.md       │
-│                       │              │ Executes commands    │
-│ Decides WHAT to       │  result      │ Evaluates candidates │
-│ remember               │ ←────────── │ with judgment        │
-└──────────────────────┘              └──────────────────────┘
-```
+- **The binary is a fast queue-append** (~50 ms). The cost that would
+  justify offloading to a sub-agent (LLM extraction, embedding, edge
+  inference) doesn't run in-band — it runs in the scheduler worker
+  out of band. The host turn pays only the queue-append latency.
+- **The host LLM already holds the context** needed to choose the right
+  `--cat`, `--imp`, `--entities`, and to dereference anaphora before
+  storing. A sub-agent would pay tokens to re-read context the host
+  already has.
+- **One-way visibility** (writes are not recallable in the same turn)
+  means there's no callback the sub-agent could provide that the host
+  couldn't get itself. Recall remains a separate Bash call.
 
-**Why sub-agent?**
-
-| Dimension    | Main conversation        | Sub-agent                |
-| ------------ | ------------------------ | ------------------------ |
-| Context size | ~25,000 tokens           | ~1,000 tokens            |
-| Model        | Opus (expensive)         | Sonnet (cheaper)         |
-| Scope        | Full conversation        | Memory task only         |
-| Execution    | Synchronous, blocks user | Background, non-blocking |
-
-The main agent provides only WHAT to store — content, category, importance, entities. The sub-agent reads SKILL.md, executes the correct `memman remember` command, and evaluates `remember`'s link candidates with judgment — not mechanical rules.
-
-This separation means:
-
-- **Token economy**: ~7,000 total tokens per memory write vs ~25,000 if done in main conversation
-- **Context isolation**: Memory processing doesn't pollute the main conversation context
-- **Model efficiency**: Sonnet handles routine execution while Opus focuses on high-level decisions
+The shipped `guide.md` enforces this rule explicitly: *"call `memman
+remember "<self-contained text>"` directly via Bash in your current
+turn. No sub-agent delegation."*
 
 ## 6.5 Adapting to Other LLM CLIs
 

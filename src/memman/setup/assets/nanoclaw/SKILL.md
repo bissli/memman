@@ -34,11 +34,6 @@ Each group gets its own isolated memman store. An optional global store provides
    docker image inspect nanoclaw-agent:latest >/dev/null 2>&1 && echo "OK"
    ```
 
-3. Fetch the latest memman version for the Dockerfile:
-   ```bash
-   curl -s https://api.github.com/repos/bissli/memman/releases/latest | grep -o '"tag_name": "v[^"]*"' | cut -d'"' -f4 | sed 's/^v//'
-   ```
-
 ---
 
 ## Phase 2: Apply Code Changes
@@ -47,7 +42,7 @@ Each group gets its own isolated memman store. An optional global store provides
 
 **File**: `container/Dockerfile`
 
-Add the following block **after** the `apt-get install` section and **before** the `npm install -g` line. Replace `<version>` with the version from Phase 1 step 3:
+Add the following block **after** the `apt-get install` section and **before** the `npm install -g` line:
 
 ```dockerfile
 # Install memman for persistent agent memory
@@ -256,7 +251,7 @@ Adapt this to match the existing settings.json construction pattern in `containe
 
 To remove memman from your NanoClaw installation:
 
-1. Remove from Dockerfile: delete the `ARG MEMMAN_VERSION` + `RUN ... memman` block and the `COPY hooks/memman/` line
+1. Remove from Dockerfile: delete the `RUN pip install ... memman` block, the `ENV MEMMAN_SCHEDULER_KIND` block, the `CMD ["memman", "scheduler", "serve", ...]` line (or wrapper if used), and the `COPY hooks/memman/` line
 2. Remove container skill: `rm -rf container/skills/memman/`
 3. Remove hook scripts: `rm -rf container/hooks/memman/`
 4. Remove volume mounts from `src/container-runner.ts`: delete the memman mount blocks

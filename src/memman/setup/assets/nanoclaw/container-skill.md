@@ -13,10 +13,10 @@ with `{action: queued, queue_id}`; the new insight becomes recallable
 within the next drain interval.
 
 If `memman scheduler stop` is run inside the container, memman becomes
-recall-only: `remember` / `replace` / `forget` reject with a clear error
-and the serve loop exits at its next iteration. `memman scheduler start`
-flips the state back so writes are accepted; the operator must re-run
-`memman scheduler serve` to resume drains.
+recall-only and the serve loop exits at its next iteration. Because the
+serve loop is PID 1, the container also exits. To resume, restart the
+container — do not invoke `scheduler stop` inside a container where
+serve is PID 1 unless you intend to terminate the container.
 
 ## Memory stores
 
@@ -34,8 +34,10 @@ Never write to the global store — the mount is read-only.
 
 ```bash
 memman recall "<query>" --limit 5
-memman recall "<query>" --store global --readonly --limit 5
+memman --store global --readonly recall "<query>" --limit 5
 ```
+
+Note: `--store` and `--readonly` are root-group flags and must come **before** the subcommand name (e.g. `recall`).
 
 Craft a focused, keyword-rich query — do not pass the raw user prompt.
 
