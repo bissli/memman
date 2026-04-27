@@ -514,6 +514,31 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     _json_out(out)
 
 
+_STOP_REQUESTED = False
+
+
+def _request_stop() -> None:
+    """Flip the module-level stop flag.
+
+    Polled by the serve loop and `_drain_queue`'s inner row loop so a
+    SIGTERM during a long drain exits within seconds rather than the
+    full per-row timeout.
+    """
+    global _STOP_REQUESTED
+    _STOP_REQUESTED = True
+
+
+def _stop_requested() -> bool:
+    """Return whether a stop has been signaled."""
+    return _STOP_REQUESTED
+
+
+def _reset_stop_for_tests() -> None:
+    """Test-only: clear the stop flag between in-process serve invocations."""
+    global _STOP_REQUESTED
+    _STOP_REQUESTED = False
+
+
 @scheduler.command('drain', hidden=True)
 @click.option('--pending', is_flag=True, default=False,
               help='Drain the deferred-write queue')
@@ -541,6 +566,95 @@ def scheduler_drain(ctx: click.Context, pending: bool, limit: int,
     if trace:
         os.environ[config.DEBUG] = '1'
     _drain_queue(ctx, limit, timeout, stores, progress)
+
+
+@scheduler.command('serve')
+@click.option('--interval', default=60, type=int,
+              help='Seconds between drain iterations (default 60)')
+@click.option('--once', is_flag=True, default=False,
+              help='Run a single drain pass and exit')
+@click.pass_context
+def scheduler_serve(ctx: click.Context, interval: int, once: bool) -> None:
+    """Run the drain loop continuously as a long-lived process.
+
+    Used as PID 1 in containers and by hosts where systemd/launchd are
+    not available (set MEMMAN_SCHEDULER_KIND=serve). On SIGTERM/SIGINT
+    the current drain finishes (bounded by the per-iteration timeout)
+    and the process exits 0.
+    """
+    import signal
+    import socket
+    import sys as _sys
+    import time as _time
+
+    from memman import __version__ as _memman_version
+    from memman import trace
+    from memman.queue import mark_stale_on_resume, open_queue_db
+    from memman.setup.scheduler import (
+        STATE_STOPPED, clear_serve_interval, read_state,
+        write_serve_interval)
+
+    if interval < 0:
+        raise click.ClickException('--interval must be >= 0')
+
+    os.environ[config.WORKER] = '1'
+    _reset_stop_for_tests()
+
+    def _handle_stop(signum, frame):
+        logger.info(
+            f'scheduler serve: caught signal {signum}, finishing drain')
+        _request_stop()
+
+    prior_term = signal.signal(signal.SIGTERM, _handle_stop)
+    prior_int = signal.signal(signal.SIGINT, _handle_stop)
+    try:
+        write_serve_interval(interval)
+
+        data_dir_val = ctx.obj['data_dir']
+        conn = open_queue_db(data_dir_val)
+        try:
+            reclaimed = mark_stale_on_resume(conn)
+            if reclaimed:
+                logger.info(
+                    f'scheduler serve: reclaimed {reclaimed} stale rows')
+        finally:
+            conn.close()
+
+        trace.setup()
+        trace.event(
+            'scheduler_serve_start',
+            pid=os.getpid(),
+            hostname=socket.gethostname(),
+            python=_sys.version.split()[0],
+            memman_version=_memman_version,
+            interval=interval,
+            once=once)
+
+        per_drain_timeout = max(10, interval - 10) if interval > 0 else 300
+
+        while True:
+            if read_state() == STATE_STOPPED:
+                logger.info('scheduler serve: state=STOPPED, exiting')
+                break
+            _drain_queue(ctx, limit=100, timeout=per_drain_timeout,
+                         stores_filter='', verbose=False)
+            if _stop_requested() or once or interval == 0:
+                break
+            slept = 0.0
+            while slept < interval and not _stop_requested():
+                if read_state() == STATE_STOPPED:
+                    break
+                _time.sleep(min(1.0, interval - slept))
+                slept += 1.0
+
+        trace.event('scheduler_serve_stop', pid=os.getpid())
+    finally:
+        signal.signal(signal.SIGTERM, prior_term)
+        signal.signal(signal.SIGINT, prior_int)
+        try:
+            clear_serve_interval()
+        except OSError:
+            pass
 
 
 def _drain_queue(ctx: click.Context, limit: int, timeout: int,
@@ -586,6 +700,10 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
 
     try:
         while processed + failed < limit:
+            if _stop_requested():
+                logger.info('drain: stop requested, exiting loop')
+                trace.event('drain_stop_requested')
+                break
             if _time.monotonic() >= deadline:
                 logger.info(f'enrich: timeout after {timeout}s')
                 trace.event('drain_timeout', timeout=timeout)

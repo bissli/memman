@@ -24,6 +24,9 @@ LAUNCHD_LABEL = 'com.memman.enrich'
 ENV_FILENAME = 'env'
 STATE_FILENAME = 'scheduler.state'
 INLINE_MARKER_FILENAME = 'scheduler.inline'
+SERVE_INTERVAL_FILENAME = 'scheduler.serve_interval'
+SCHEDULER_KIND_ENV = 'MEMMAN_SCHEDULER_KIND'
+SCHEDULER_KIND_SERVE = 'serve'
 DEBUG_STATE_FILENAME = 'debug.state'
 DEFAULT_INTERVAL_SECONDS = 60
 
@@ -98,6 +101,41 @@ def is_inline_trigger() -> bool:
     return _inline_marker_path().exists()
 
 
+def _serve_interval_path() -> Path:
+    """Return ~/.memman/scheduler.serve_interval. Per-host; never synced."""
+    return Path.home() / '.memman' / SERVE_INTERVAL_FILENAME
+
+
+def write_serve_interval(seconds: int) -> None:
+    """Persist the active serve loop's interval for status/doctor reads."""
+    path = _serve_interval_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp.write_text(f'{int(seconds)}\n')
+    Path(tmp).chmod(0o600)
+    Path(tmp).replace(path)
+
+
+def read_serve_interval() -> int | None:
+    """Read the persisted serve interval, or None if absent/unreadable."""
+    path = _serve_interval_path()
+    try:
+        raw = path.read_text().strip()
+    except (OSError, FileNotFoundError):
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def clear_serve_interval() -> None:
+    """Remove the serve interval file if present."""
+    path = _serve_interval_path()
+    if path.exists():
+        path.unlink()
+
+
 def _debug_state_file_path() -> Path:
     """Return ~/.memman/debug.state. Per-host; never synced."""
     return Path.home() / '.memman' / DEBUG_STATE_FILENAME
@@ -145,12 +183,18 @@ def get_debug() -> bool:
 
 
 def detect_scheduler() -> str:
-    """Return 'systemd', 'launchd', or 'inline' for the current environment.
+    """Return 'systemd', 'launchd', 'serve', or 'inline' for this host.
 
-    'inline' covers any environment without systemd/launchd (e.g.,
-    nanoclaw containers): the worker runs in-process after each enqueue
-    rather than under an OS-managed timer.
+    Resolution order:
+    1. `MEMMAN_SCHEDULER_KIND=serve` -> 'serve' (explicit opt-in for
+       containers and any host that runs `memman scheduler serve` itself).
+    2. macOS -> 'launchd'.
+    3. Linux with systemctl + /run/systemd/system -> 'systemd'.
+    4. Otherwise -> 'inline' (legacy fallback; removed in a later step).
     """
+    import os as _os
+    if _os.environ.get(SCHEDULER_KIND_ENV) == SCHEDULER_KIND_SERVE:
+        return SCHEDULER_KIND_SERVE
     system = platform.system()
     if system == 'Darwin':
         return 'launchd'
@@ -201,6 +245,9 @@ def install(data_dir: str,
     elif kind == 'launchd':
         result = _install_launchd(binary, data_dir, interval_seconds)
         _clear_inline_marker()
+    elif kind == SCHEDULER_KIND_SERVE:
+        result = _install_serve(interval_seconds)
+        _clear_inline_marker()
     else:
         result = _install_inline(interval_seconds)
 
@@ -208,6 +255,26 @@ def install(data_dir: str,
     result['state'] = STATE_STARTED
     result['env_actions'] = env_actions
     return result
+
+
+def _install_serve(interval_seconds: int) -> dict:
+    """Record the configured interval for serve-mode hosts.
+
+    Serve mode has no installable artifact — the user runs
+    `memman scheduler serve` themselves (typically as PID 1 of a
+    container). Install just records the interval so `status` and
+    `doctor` can report it.
+    """
+    write_serve_interval(interval_seconds)
+    return {
+        'platform': SCHEDULER_KIND_SERVE,
+        'interval_seconds': interval_seconds,
+        'actions': [
+            f'wrote {_serve_interval_path()} (mode 600)',
+            ('start `memman scheduler serve` to run the drain loop'
+             ' (typically as PID 1 in a container)'),
+            ],
+        }
 
 
 def _install_inline(interval_seconds: int) -> dict:
@@ -300,6 +367,12 @@ def uninstall() -> dict:
         result = _uninstall_systemd()
     elif kind == 'launchd':
         result = _uninstall_launchd()
+    elif kind == SCHEDULER_KIND_SERVE:
+        clear_serve_interval()
+        result = {
+            'platform': SCHEDULER_KIND_SERVE,
+            'actions': [f'removed {_serve_interval_path()}'],
+            }
     else:
         result = {'platform': 'inline', 'actions': actions}
     if _inline_marker_path().exists():
@@ -349,6 +422,17 @@ def start() -> dict:
             'platform': 'launchd',
             'state': STATE_STARTED,
             'actions': [f'launchctl load -w {plist_path}'],
+            }
+    if kind == SCHEDULER_KIND_SERVE:
+        write_state(STATE_STARTED)
+        return {
+            'platform': SCHEDULER_KIND_SERVE,
+            'state': STATE_STARTED,
+            'actions': [
+                f'wrote {_state_file_path()} = {STATE_STARTED}',
+                ('start `memman scheduler serve` if it is not already'
+                 ' running'),
+                ],
             }
     if not is_inline_trigger():
         raise FileNotFoundError(
@@ -404,6 +488,17 @@ def stop() -> dict:
             'state': STATE_STOPPED,
             'actions': [f'launchctl unload -w {plist_path}'],
             }
+    if kind == SCHEDULER_KIND_SERVE:
+        write_state(STATE_STOPPED)
+        return {
+            'platform': SCHEDULER_KIND_SERVE,
+            'state': STATE_STOPPED,
+            'actions': [
+                f'wrote {_state_file_path()} = {STATE_STOPPED}',
+                ('the running serve loop polls this state and will exit'
+                 ' on its next iteration (within ~`--interval` seconds)'),
+                ],
+            }
     if not is_inline_trigger():
         raise FileNotFoundError(
             f'scheduler trigger not installed at {_inline_marker_path()};'
@@ -429,6 +524,11 @@ def trigger() -> dict:
         raise RuntimeError(
             'scheduler trigger is implicit on this platform (inline);'
             ' writes drain in-process. There is nothing to trigger.')
+    if kind == SCHEDULER_KIND_SERVE:
+        raise RuntimeError(
+            'scheduler trigger is not applicable in serve mode;'
+            ' the serve loop drains on its own cadence.'
+            ' Use `memman scheduler serve --once` to run a single drain.')
     if kind == 'systemd':
         service_path = _systemd_unit_dir() / SYSTEMD_SERVICE_NAME
         if not service_path.exists():
@@ -730,6 +830,18 @@ def change_interval(data_dir: str, new_seconds: int) -> dict:
         else:
             write_state(STATE_STARTED)
         return result
+    if kind == SCHEDULER_KIND_SERVE:
+        write_serve_interval(new_seconds)
+        return {
+            'platform': SCHEDULER_KIND_SERVE,
+            'interval_seconds': new_seconds,
+            'actions': [
+                f'wrote {_serve_interval_path()} = {new_seconds}',
+                ('the running serve loop reads its interval from the CLI'
+                 ' flag, not this file; restart `memman scheduler serve`'
+                 f' with --interval {new_seconds} to apply'),
+                ],
+            }
     if not is_inline_trigger():
         raise FileNotFoundError(
             f'scheduler trigger not installed at {_inline_marker_path()};'
@@ -895,16 +1007,16 @@ def _launchd_status() -> dict:
 
 
 def status() -> dict:
-    """Return the scheduler's current status under the bi-state model.
+    """Return the scheduler's current status.
 
     Fields:
-      - platform — 'systemd' | 'launchd' | 'inline'
+      - platform — 'systemd' | 'launchd' | 'serve' | 'inline'
       - installed — True iff the trigger file/marker exists
       - active — True iff the trigger is currently active (timer
-        running on systemd/launchd; STATE_STARTED on inline)
-      - next_run — best-effort next-fire timestamp (systemd/launchd
-        only; None on inline since drain is on-demand)
-      - interval_seconds — configured interval
+        running on systemd/launchd; STATE_STARTED for serve/inline)
+      - next_run — best-effort next-fire timestamp (systemd/launchd only)
+      - interval_seconds — configured interval (read from
+        ~/.memman/scheduler.serve_interval for serve mode)
       - state — persisted user intent ('started' | 'stopped')
     """
     kind = detect_scheduler()
@@ -912,6 +1024,15 @@ def status() -> dict:
         result = _systemd_status()
     elif kind == 'launchd':
         result = _launchd_status()
+    elif kind == SCHEDULER_KIND_SERVE:
+        interval = read_serve_interval()
+        result = {
+            'platform': SCHEDULER_KIND_SERVE,
+            'installed': interval is not None,
+            'active': read_state() == STATE_STARTED,
+            'next_run': None,
+            'interval_seconds': interval,
+            }
     else:
         result = {
             'platform': 'inline',
