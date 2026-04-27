@@ -342,14 +342,15 @@ def check_scheduler_state() -> dict:
 
 
 def check_scheduler_heartbeat(data_dir: str) -> dict:
-    """Verify the worker fired within 3 x the scheduler interval.
+    """Verify the worker fired within max(3 x interval, 180s).
 
     Cross-references scheduler state: only fails when the scheduler is
-    installed AND active but no recent worker_runs row exists. The
-    serve loop writes a heartbeat row every iteration (even on empty
-    drains), so the threshold is `3 x interval` — two consecutive
-    misses indicate a real problem; one-miss tolerance handles
-    transient delays.
+    installed AND active but no recent worker_runs row exists. Empty
+    drains rate-limit the heartbeat write to once per 60s wall, so a
+    floor of 180s (3 x 60s) avoids false fails at sub-minute intervals
+    (interval=0, 1, 10, etc. — serve mode only). At intervals >= 60s
+    the 3x multiplier dominates: two consecutive misses indicate a
+    real problem; one-miss tolerance handles transient delays.
     """
     from memman.queue import last_worker_run, open_queue_db
     from memman.setup.scheduler import STATE_STARTED
@@ -424,15 +425,20 @@ def check_scheduler_heartbeat(data_dir: str) -> dict:
         'platform': platform,
         }
 
+    threshold_fail = (
+        max(3 * interval, 180) if interval is not None else 180)
+    threshold_warn = (
+        max(2 * interval, 120) if interval is not None else 120)
+    detail['threshold_fail_seconds'] = threshold_fail
     if last['error']:
         status = 'fail'
-    elif interval and age > 3 * interval:
+    elif age > threshold_fail:
         status = 'fail'
         detail['reason'] = (
             'scheduler is active but worker has not fired in '
-            f'{age}s (interval={interval}s, threshold=3x); check '
-            '~/.memman/data/logs/memman.log')
-    elif interval and age > 2 * interval:
+            f'{age}s (interval={interval}s, threshold={threshold_fail}s);'
+            ' check ~/.memman/data/logs/memman.log')
+    elif age > threshold_warn:
         status = 'warn'
     else:
         status = 'pass'

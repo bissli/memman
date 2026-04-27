@@ -714,15 +714,31 @@ def _uninstall_launchd() -> dict:
 def change_interval(data_dir: str, new_seconds: int) -> dict:
     """Rewrite the scheduler trigger with a new interval. Preserves state.
 
-    systemd/launchd: rewrite unit file with new interval. inline:
-    record interval in the marker file (it is informational only —
-    inline drain runs after each enqueue regardless of interval).
+    systemd/launchd: rewrite unit file with new interval (min 60s).
+    serve: write the requested interval to the serve interval file
+    (any value >= 0; 0 means continuous mode). The running serve loop
+    reads its interval from the CLI flag, so the file write is
+    advisory until the next `memman scheduler serve` restart.
     """
-    if new_seconds < 60:
+    if new_seconds < 0:
         raise RuntimeError(
-            f'interval {new_seconds}s is too short; minimum is 60s')
+            f'interval {new_seconds}s is negative; must be >= 0')
     prior_state = read_state()
     kind = detect_scheduler()
+    if kind in {'systemd', 'launchd'} and new_seconds < 60:
+        raise RuntimeError(
+            f'interval {new_seconds}s is too short for {kind};'
+            ' minimum is 60s. To use sub-minute intervals, set'
+            ' MEMMAN_SCHEDULER_KIND=serve and run'
+            ' `memman scheduler serve --interval N`.')
+    if kind == SCHEDULER_KIND_SERVE and (
+            _systemd_is_enabled() or _launchd_is_loaded()):
+        import logging as _logging
+        _logging.getLogger('memman').warning(
+            'MEMMAN_SCHEDULER_KIND=serve is set but a systemd/launchd'
+            ' unit is still active. Drains may run from both. Run'
+            ' `memman uninstall` to remove the OS timer if you intend'
+            ' to use serve mode exclusively.')
     if kind == 'systemd':
         binary = memman_binary_path()
         result = _install_systemd(binary, data_dir, new_seconds)

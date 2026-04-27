@@ -427,6 +427,21 @@ def _reset_stop_for_tests() -> None:
     _STOP_REQUESTED = False
 
 
+_LAST_HEARTBEAT_AT: dict[str, float] = {}
+HEARTBEAT_MIN_INTERVAL_SECONDS = 60
+
+
+def _reset_heartbeat_state() -> None:
+    """Test-only: clear the heartbeat tracking dict.
+
+    `_LAST_HEARTBEAT_AT` is module-level. In-process CliRunner tests
+    share it across test invocations, which can cause cross-test
+    contamination if data_dir paths are reused. Tests reset between
+    invocations via an autouse conftest fixture.
+    """
+    _LAST_HEARTBEAT_AT.clear()
+
+
 @scheduler.command('drain', hidden=True)
 @click.option('--pending', is_flag=True, default=False,
               help='Drain the deferred-write queue')
@@ -523,16 +538,20 @@ def scheduler_serve(ctx: click.Context, interval: int, once: bool) -> None:
             if read_state() == STATE_STOPPED:
                 logger.info('scheduler serve: state=STOPPED, exiting')
                 break
-            _drain_queue(ctx, limit=100, timeout=per_drain_timeout,
-                         stores_filter='', verbose=False)
-            if _stop_requested() or once or interval == 0:
+            result = _drain_queue(
+                ctx, limit=100, timeout=per_drain_timeout,
+                stores_filter='', verbose=False)
+            if _stop_requested() or once:
                 break
-            slept = 0.0
-            while slept < interval and not _stop_requested():
-                if read_state() == STATE_STOPPED:
-                    break
-                _time.sleep(min(1.0, interval - slept))
-                slept += 1.0
+            if interval > 0:
+                slept = 0.0
+                while slept < interval and not _stop_requested():
+                    if read_state() == STATE_STOPPED:
+                        break
+                    _time.sleep(min(1.0, interval - slept))
+                    slept += 1.0
+            elif result and result.get('claimed', 0) == 0:
+                _time.sleep(0.1)
 
         trace.event('scheduler_serve_stop', pid=os.getpid())
     finally:
@@ -545,17 +564,24 @@ def scheduler_serve(ctx: click.Context, interval: int, once: bool) -> None:
 
 
 def _drain_queue(ctx: click.Context, limit: int, timeout: int,
-                 stores_filter: str, verbose: bool) -> None:
-    """Claim and process queue rows until limit, timeout, or empty."""
+                 stores_filter: str, verbose: bool) -> dict | None:
+    """Claim and process queue rows until limit, timeout, or empty.
+
+    Returns a status dict `{claimed, processed, failed}` so callers
+    can detect empty drains. Returns None if the drain was skipped
+    because another drain is already running.
+    """
     import socket
     import sys as _sys
     import time as _time
 
     from memman import __version__ as _memman_version
     from memman import trace
+    from memman.drain_lock import DrainLockBusy, acquire, release
     from memman.queue import claim, finish_worker_run, mark_done, mark_failed
     from memman.queue import open_queue_db, queue_db_path, start_worker_run
     from memman.queue import stats
+    from memman.setup.scheduler import STATE_STOPPED, read_state
 
     data_dir_val = ctx.obj['data_dir']
     worker_pid = os.getpid()
@@ -570,6 +596,21 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         python=_sys.version.split()[0],
         memman_version=_memman_version,
         env=config.enumerate_effective_config())
+
+    try:
+        lock_fd = acquire(data_dir_val)
+    except DrainLockBusy:
+        logger.info('drain: another drain is in progress, skipping')
+        trace.event('drain_skipped_locked', data_dir=data_dir_val)
+        _json_out({
+            'processed': 0,
+            'failed': 0,
+            'remaining': {'pending': 0, 'claimed': 0,
+                          'failed': 0, 'done': 0},
+            'skipped': 'another drain in progress',
+            })
+        return None
+
     trace.event(
         'drain_start',
         data_dir=data_dir_val,
@@ -587,12 +628,15 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
     touched_stores: set[str] = set()
     store_contexts: dict[str, _StoreContext] = {}
     executor = ThreadPoolExecutor(max_workers=2)
-    run_id = start_worker_run(conn, worker_pid)
     run_error: str | None = None
+
+    last_hb = _LAST_HEARTBEAT_AT.get(data_dir_val, 0.0)
+    record_run = (_time.monotonic() - last_hb) >= HEARTBEAT_MIN_INTERVAL_SECONDS
+    run_id = start_worker_run(conn, worker_pid) if record_run else None
 
     try:
         while processed + failed < limit:
-            if _stop_requested():
+            if _stop_requested() or read_state() == STATE_STOPPED:
                 logger.info('drain: stop requested, exiting loop')
                 trace.event('drain_stop_requested')
                 break
@@ -685,14 +729,21 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
             logger.exception('drain maintenance phase failed')
         for ctx in store_contexts.values():
             ctx.close()
-        try:
-            finish_worker_run(
-                conn, run_id, claimed, processed, failed,
-                error=run_error)
-        except Exception:
-            logger.exception('failed to stamp worker_runs finish row')
+        if processed > 0:
+            record_run = True
+        if record_run:
+            try:
+                if run_id is None:
+                    run_id = start_worker_run(conn, worker_pid)
+                finish_worker_run(
+                    conn, run_id, claimed, processed, failed,
+                    error=run_error)
+                _LAST_HEARTBEAT_AT[data_dir_val] = _time.monotonic()
+            except Exception:
+                logger.exception('failed to stamp worker_runs finish row')
         s = stats(conn)
         conn.close()
+        release(lock_fd)
 
     trace.event(
         'drain_end',
@@ -704,6 +755,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         'failed': failed,
         'remaining': s,
         })
+    return {'claimed': claimed, 'processed': processed, 'failed': failed}
 
 
 def _write_recall_snapshot_for_store(
@@ -1396,7 +1448,10 @@ def scheduler_stop(ctx: click.Context) -> None:
 
 @scheduler.command('install')
 @click.option('--interval', type=int, default=None,
-              help='Polling interval in seconds (min 60). Default: 60.')
+              help=('Polling interval in seconds (min 60 for'
+                    ' systemd/launchd). Default: 60. For sub-minute'
+                    ' intervals, use serve mode instead'
+                    ' (`memman scheduler serve --interval N`).'))
 @click.pass_context
 def scheduler_install(ctx: click.Context, interval: int | None) -> None:
     """Install the scheduler unit only (no agent integration).
@@ -1418,7 +1473,10 @@ def scheduler_install(ctx: click.Context, interval: int | None) -> None:
             'VOYAGE_API_KEY env var is required to install the scheduler')
     seconds = interval if interval is not None else DEFAULT_INTERVAL_SECONDS
     if seconds < 60:
-        raise click.ClickException('--interval must be at least 60 seconds')
+        raise click.ClickException(
+            '--interval must be at least 60 seconds for systemd/launchd.'
+            ' For sub-minute intervals, set MEMMAN_SCHEDULER_KIND=serve'
+            ' and run `memman scheduler serve --interval N` instead.')
     try:
         result = install(
             ctx.obj['data_dir'], openrouter, voyage, seconds)
@@ -1442,7 +1500,9 @@ def scheduler_uninstall(ctx: click.Context) -> None:
 
 @scheduler.command('interval')
 @click.option('--seconds', type=int, default=None,
-              help='New interval in seconds (min 60). Omit to show current.')
+              help=('New interval in seconds. Omit to show current.'
+                    ' min 60 for systemd/launchd; 0 (continuous) or any'
+                    ' non-negative value allowed for serve mode.'))
 @click.pass_context
 def scheduler_interval(ctx: click.Context, seconds: int | None) -> None:
     """Show or set the scheduler interval."""

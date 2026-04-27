@@ -31,6 +31,20 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _reset_heartbeat_state():
+    """Clear the module-level heartbeat dict between tests.
+
+    `cli._LAST_HEARTBEAT_AT` is process-global; in-process CliRunner
+    tests share it. Reset before AND after each test to prevent
+    cross-test contamination if a future fixture reuses a data_dir.
+    """
+    from memman.cli import _reset_heartbeat_state as _reset
+    _reset()
+    yield
+    _reset()
+
+
+@pytest.fixture(autouse=True)
 def _scheduler_started(request, monkeypatch):
     """Force scheduler state to STARTED so writes are accepted in tests.
 
