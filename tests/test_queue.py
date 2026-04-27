@@ -161,7 +161,7 @@ def test_stats_reports_counts_and_oldest_age(queue_conn):
 
 
 def test_purge_done_deletes_completed_rows(queue_conn):
-    """purge_done removes all status=done rows and returns count deleted.
+    """purge_done removes status=done rows older than the grace window.
     """
     enqueue(queue_conn, 'main', 'a')
     enqueue(queue_conn, 'main', 'b')
@@ -169,9 +169,19 @@ def test_purge_done_deletes_completed_rows(queue_conn):
     mark_done(queue_conn, r1.id)
     r2 = claim(queue_conn, worker_pid=1)
     mark_done(queue_conn, r2.id)
-    deleted = purge_done(queue_conn)
+    deleted = purge_done(queue_conn, keep_seconds=0)
     assert deleted == 2
     assert stats(queue_conn)['done'] == 0
+
+
+def test_purge_done_respects_keep_seconds(queue_conn):
+    """purge_done with default keep_seconds leaves recent rows alone."""
+    enqueue(queue_conn, 'main', 'a')
+    r = claim(queue_conn, worker_pid=1)
+    mark_done(queue_conn, r.id)
+    deleted = purge_done(queue_conn)
+    assert deleted == 0
+    assert stats(queue_conn)['done'] == 1
 
 
 def test_list_rows_returns_preview(queue_conn):

@@ -71,9 +71,16 @@ def test_enrich_pending_empty_queue(runner):
     assert data['remaining']['pending'] == 0
 
 
-def test_queue_list_returns_stats_and_rows(runner):
+def test_queue_list_returns_stats_and_rows(runner, monkeypatch):
     """`memman scheduler queue list` wraps rows in a {stats, rows} envelope.
+
+    Disables inline drain so the queued row stays pending and visible
+    to `queue list`. With drain enabled the maintenance phase would
+    purge the row before the assertion runs.
     """
+    from memman.setup import scheduler as sched_mod
+    monkeypatch.setattr(sched_mod, 'is_inline_trigger', lambda: False)
+
     invoke(runner, ['remember', 'hello queue'])
     result = invoke(runner, ['scheduler', 'queue', 'list'])
     assert result.exit_code == 0, result.output

@@ -788,14 +788,16 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         raise
     finally:
         executor.shutdown(wait=True)
+        try:
+            from memman.maintenance import run_maintenance
+            run_maintenance(
+                conn, data_dir_val, touched_stores,
+                store_contexts, deadline,
+                _write_recall_snapshot_for_store)
+        except Exception:
+            logger.exception('drain maintenance phase failed')
         for ctx in store_contexts.values():
             ctx.close()
-        for store_name in touched_stores:
-            try:
-                _write_recall_snapshot_for_store(data_dir_val, store_name)
-            except Exception:
-                logger.exception(
-                    f'recall snapshot write failed for store {store_name!r}')
         try:
             finish_worker_run(
                 conn, run_id, claimed, processed, failed,

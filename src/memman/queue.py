@@ -347,9 +347,37 @@ def retry_row(conn: sqlite3.Connection, row_id: int) -> bool:
     return cur.rowcount > 0
 
 
-def purge_done(conn: sqlite3.Connection) -> int:
-    """Delete all rows with status='done'. Returns deleted count."""
-    cur = conn.execute("DELETE FROM queue WHERE status = 'done'")
+DONE_RETENTION_SECONDS = 60
+
+
+def purge_done(
+        conn: sqlite3.Connection,
+        keep_seconds: int = DONE_RETENTION_SECONDS) -> int:
+    """Delete `done` queue rows older than `keep_seconds`.
+
+    Recently-completed rows are kept so the inline-drain CLI can read
+    back the worker's per-row JSON output for the response (legacy path
+    in `_facts_from_queue_row`). Once the inline path is removed this
+    grace period stops being load-bearing.
+    """
+    cutoff = int(time.time()) - keep_seconds
+    cur = conn.execute(
+        "DELETE FROM queue WHERE status = 'done' AND processed_at <= ?",
+        (cutoff,))
+    return cur.rowcount
+
+
+def purge_worker_runs(
+        conn: sqlite3.Connection, keep_days: int = 7) -> int:
+    """Drop worker_runs rows older than `keep_days`. Returns deleted count.
+
+    The serve loop writes a heartbeat row every iteration (including
+    empty drains) — at 60 s cadence that is ~525 k rows/year without
+    pruning. The maintenance phase calls this once per drain.
+    """
+    cutoff = int(time.time()) - keep_days * 86400
+    cur = conn.execute(
+        'DELETE FROM worker_runs WHERE started_at < ?', (cutoff,))
     return cur.rowcount
 
 
