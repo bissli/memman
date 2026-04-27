@@ -112,7 +112,7 @@
         <mxCell id="a_embed" value="&lt;b&gt;embed/&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=11;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="870" y="370" width="270" height="130" as="geometry" />
         </mxCell>
-        <mxCell id="a_ollama_c" value="&lt;b&gt;voyage.py / openai_compat.py / ollama.py&lt;/b&gt;&lt;br&gt;pluggable provider&lt;br&gt;default: voyage-3-lite&lt;br&gt;dim is provider-defined" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=5;" vertex="1" parent="1">
+        <mxCell id="a_ollama_c" value="&lt;b&gt;voyage / openai_compat / openrouter / ollama&lt;/b&gt;&lt;br&gt;pluggable provider&lt;br&gt;default: voyage-3-lite&lt;br&gt;dim is provider-defined" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=5;" vertex="1" parent="1">
           <mxGeometry x="880" y="395" width="120" height="70" as="geometry" />
         </mxCell>
         <mxCell id="a_vec" value="&lt;b&gt;vector.py&lt;/b&gt;&lt;br&gt;cosine_similarity&lt;br&gt;serialize_vector / deserialize_vector" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=5;" vertex="1" parent="1">

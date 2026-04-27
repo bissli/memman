@@ -74,9 +74,16 @@ def _ollama_factory() -> EmbeddingProvider:
     return Client()
 
 
+def _openrouter_factory() -> EmbeddingProvider:
+    """Build the registered OpenRouter embed client."""
+    from memman.embed.openrouter import Client
+    return Client()
+
+
 PROVIDERS: dict[str, Callable[[], EmbeddingProvider]] = {
     'voyage': _voyage_factory,
     'openai': _openai_factory,
+    'openrouter': _openrouter_factory,
     'ollama': _ollama_factory,
     }
 

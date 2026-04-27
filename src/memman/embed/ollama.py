@@ -13,21 +13,11 @@ empirical recalibration on real data is required.
 import logging
 import time
 
-import httpx
 from memman import config, trace
+from memman._http import get_session, post_with_retry
 from memman.exceptions import ConfigError
 
 logger = logging.getLogger('memman')
-
-_CLIENT: httpx.Client | None = None
-
-
-def _session() -> httpx.Client:
-    """Return the module-level httpx.Client, creating it lazily."""
-    global _CLIENT
-    if _CLIENT is None:
-        _CLIENT = httpx.Client()
-    return _CLIENT
 
 
 class Client:
@@ -72,7 +62,8 @@ class Client:
             model=self.model,
             input_len=len(text))
         t0 = time.monotonic()
-        resp = _session().post(url, json=body, timeout=30.0)
+        resp = post_with_retry(
+            get_session(__name__), url, json=body, timeout=30.0)
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         if resp.status_code != 200:
             trace.event(

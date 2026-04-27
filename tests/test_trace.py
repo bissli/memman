@@ -210,9 +210,10 @@ def test_openrouter_complete_emits_request_and_response(
             request=httpx.Request('POST', url),
             json={'choices': [{'message': {'content': 'hi'}}]})
 
+    from memman import _http
     from memman.llm import openrouter_client as or_mod
-    monkeypatch.setattr(
-        or_mod, '_CLIENT',
+    monkeypatch.setitem(
+        _http._SESSIONS, or_mod.__name__,
         type('FakeClient', (), {'post': staticmethod(_fake_post)})())
     trace.setup()
     client = OpenRouterClient(

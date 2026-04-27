@@ -134,9 +134,10 @@ MemMan's architecture is divided into five layers:
 │                                semantic, engine, bfs,         │
 │                                enrichment)                    │
 │                       embed/  (voyage, openai_compat,         │
-│                                ollama, vector)                │
+│                                openrouter, ollama, vector)    │
 │                       llm/    (client, extract,               │
-│                                openrouter_client)             │
+│                                openrouter_client,             │
+│                                openrouter_models)             │
 ├──────────────────────────────────────────────────────────────┤
 │  Storage Layer        store/   (db, node, edge, oplog,        │
 │                                snapshot)                      │

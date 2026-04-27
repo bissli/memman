@@ -1,15 +1,14 @@
-"""OpenAI-compatible embedding client (OpenAI, OpenRouter, vLLM,
-LiteLLM, any other provider exposing `/v1/embeddings`).
+"""OpenRouter embedding client.
 
-Endpoint, model, and API key are read from the env-or-file resolver
-(populated at install time from `INSTALL_DEFAULTS`).
+OpenRouter exposes an OpenAI-schema `/embeddings` endpoint. Unlike the
+generic `openai_compat` provider, this one shares its endpoint and
+API key with the LLM client (`OPENROUTER_API_KEY`,
+`MEMMAN_OPENROUTER_ENDPOINT`), so the user does not duplicate
+credentials when running OpenRouter for both modalities. The model id
+lives in `MEMMAN_OPENROUTER_EMBED_MODEL` and ships a
+ZDR-compliant default (`baai/bge-m3`).
 
-`dim` is discovered from the first successful embed call and
-cached on the client; `available()` performs the discovery probe.
-
-Suggested semantic threshold (0.75) is a starting point only —
-empirical recalibration on real data is required before relying on
-edge density assumptions.
+`dim` is discovered from the first successful embed call.
 """
 
 import logging
@@ -17,28 +16,20 @@ import time
 
 from memman import config, trace
 from memman._http import get_session, post_with_retry
-from memman.exceptions import ConfigError
 
 logger = logging.getLogger('memman')
 
 
 class Client:
-    """HTTP client for OpenAI-compatible `/v1/embeddings` endpoints."""
+    """HTTP client for OpenRouter's `/embeddings` endpoint."""
 
-    name = 'openai'
+    name = 'openrouter'
 
     def __init__(self) -> None:
-        endpoint = config.get(config.OPENAI_EMBED_ENDPOINT)
-        model = config.get(config.OPENAI_EMBED_MODEL)
-        if not endpoint or not model:
-            raise ConfigError(
-                f'{config.OPENAI_EMBED_ENDPOINT} or'
-                f' {config.OPENAI_EMBED_MODEL} is unset; run'
-                ' `memman install` to populate the env file')
-        self.endpoint = endpoint
-        self.model = model
+        self.endpoint = config.require(config.OPENROUTER_ENDPOINT)
+        self._api_key = config.require(config.OPENROUTER_API_KEY)
+        self.model = config.require(config.OPENROUTER_EMBED_MODEL)
         self.dim = 0
-        self._api_key = config.get(config.OPENAI_EMBED_API_KEY) or ''
         self._availability_cache: bool | None = None
 
     def _headers(self) -> dict[str, str]:
@@ -46,16 +37,14 @@ class Client:
         return {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {self._api_key}',
+            'HTTP-Referer': 'https://github.com/bissli/memman',
+            'X-Title': 'memman',
             }
 
     def available(self) -> bool:
-        """Probe the endpoint with a 1-token embed and cache the dim.
-        """
+        """Probe the endpoint with a 1-token embed and cache the dim."""
         if self._availability_cache is not None:
             return self._availability_cache
-        if not self._api_key:
-            self._availability_cache = False
-            return False
         try:
             vec = self.embed('test')
             self.dim = len(vec)
@@ -66,19 +55,23 @@ class Client:
         return result
 
     def embed(self, text: str) -> list[float]:
-        """Generate embedding for text via OpenAI-compatible API."""
+        """Generate embedding for text via OpenRouter."""
         return self.embed_batch([text])[0]
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Embed many texts in one HTTP round-trip."""
         if not texts:
             return []
-        url = f'{self.endpoint}/v1/embeddings'
+        url = f'{self.endpoint.rstrip("/")}/embeddings'
         headers = self._headers()
-        body = {'model': self.model, 'input': texts}
+        body = {
+            'model': self.model,
+            'input': texts,
+            'encoding_format': 'float',
+            }
         trace.event(
             'embed_request',
-            provider='openai',
+            provider='openrouter',
             url=url,
             model=self.model,
             batch_size=len(texts),
@@ -92,35 +85,34 @@ class Client:
         if resp.status_code != 200:
             trace.event(
                 'embed_response',
-                provider='openai',
+                provider='openrouter',
                 status=resp.status_code,
                 elapsed_ms=elapsed_ms,
                 error='http_status')
             raise RuntimeError(
-                f'OpenAI-compatible endpoint returned status'
-                f' {resp.status_code}')
+                f'OpenRouter embed returned status {resp.status_code}')
         data = resp.json()
         items = data.get('data', [])
         if len(items) != len(texts):
             trace.event(
                 'embed_response',
-                provider='openai',
+                provider='openrouter',
                 status=resp.status_code,
                 elapsed_ms=elapsed_ms,
                 error='length_mismatch',
                 expected=len(texts),
                 got=len(items))
             raise RuntimeError(
-                f'OpenAI-compatible endpoint returned {len(items)}'
-                f' vectors for {len(texts)} inputs')
+                f'OpenRouter returned {len(items)} vectors for'
+                f' {len(texts)} inputs')
         vectors = [item.get('embedding') for item in items]
         if any(v is None for v in vectors):
-            raise RuntimeError('OpenAI endpoint returned a row with no embedding')
+            raise RuntimeError('OpenRouter returned a row with no embedding')
         if self.dim == 0 and vectors:
             self.dim = len(vectors[0])
         trace.event(
             'embed_response',
-            provider='openai',
+            provider='openrouter',
             status=resp.status_code,
             elapsed_ms=elapsed_ms,
             batch_size=len(vectors),
@@ -129,8 +121,9 @@ class Client:
         return vectors
 
     def unavailable_message(self) -> str:
-        """Return error message when the endpoint is not available."""
+        """Return error message when OpenRouter embed is not available."""
         return (
-            f'OpenAI-compatible endpoint not available at'
-            f' {self.endpoint} -- set'
-            f' {config.OPENAI_EMBED_API_KEY} to enable embeddings')
+            f'OpenRouter embed not available at {self.endpoint}'
+            f' (model={self.model}); verify {config.OPENROUTER_API_KEY}'
+            f' and that {self.model!r} is reachable under your'
+            ' account privacy policy')

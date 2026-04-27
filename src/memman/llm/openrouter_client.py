@@ -13,21 +13,12 @@ import time
 
 import httpx
 from memman import config, trace
+from memman._http import get_session
 from memman.exceptions import ConfigError
 from memman.llm.shared import ENRICHMENT_TIMEOUT, MAX_RETRIES, RETRY_BACKOFF
 from memman.llm.shared import RETRYABLE_STATUS_CODES, safe_json
 
 logger = logging.getLogger('memman')
-
-_CLIENT: httpx.Client | None = None
-
-
-def _session() -> httpx.Client:
-    """Return the module-level httpx.Client, creating it lazily."""
-    global _CLIENT
-    if _CLIENT is None:
-        _CLIENT = httpx.Client()
-    return _CLIENT
 
 
 class OpenRouterClient:
@@ -86,7 +77,7 @@ class OpenRouterClient:
                 headers=trace.redact_headers(headers),
                 body=body)
             t0 = time.monotonic()
-            resp = _session().post(
+            resp = get_session(__name__).post(
                 url, headers=headers, json=body, timeout=self.timeout)
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             try:
