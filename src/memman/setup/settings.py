@@ -270,14 +270,14 @@ _REMOVE_IF_EMPTY_ROOTS = frozenset({
     'claude', 'openclaw', 'nanoclaw',
     })
 _REMOVE_IF_EMPTY_LEAVES = frozenset({
-    'hooks', 'skills', 'extensions', 'mm',
+    'hooks', 'skills', 'extensions', 'memman',
     })
 
 
 def remove_if_empty(dir_path: str) -> None:
     """Remove a directory only if it exists, is empty, AND either is a
     known agent-config root (`.claude`, `.openclaw`, `.nanoclaw`) or a
-    known leaf inside one (`hooks`, `skills`, `extensions`, `mm`).
+    known leaf inside one (`hooks`, `skills`, `extensions`, `memman`).
 
     Raises ValueError on a path outside the allowlist; defensive
     against a future caller passing a surprising path like `/tmp/x`

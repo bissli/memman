@@ -50,7 +50,7 @@ Three layers work together:
 
 | Layer     | What                                                                        | Where                                       | Role                                                                                                                                                |
 | --------- | --------------------------------------------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Hooks** | Shell scripts triggered by Claude Code lifecycle events                     | `.claude/hooks/mm/`                         | Prime (guide), Remind (recall & remember), Nudge (remember), Compact (pre-compact bridge), Recall (pre-delegation), ExitPlan (plan-mode transition) |
+| **Hooks** | Shell scripts triggered by Claude Code lifecycle events                     | `.claude/hooks/memman/`                     | Prime (guide), Remind (recall & remember), Nudge (remember), Compact (pre-compact bridge), Recall (pre-delegation), ExitPlan (plan-mode transition) |
 | **Skill** | `SKILL.md` — command reference in Claude Code skill format                  | `.claude/skills/memman/`                    | Teaches the LLM *how* to use memman commands                                                                                                        |
 | **Guide** | `guide.md` — detailed execution manual for recall, remember, and delegation | Installed package (read via `memman guide`) | Teaches the LLM *when* to recall, *what* to remember, and *how* to delegate                                                                         |
 
@@ -154,12 +154,12 @@ Setting up Claude Code (~/.claude/)...
   ✓ Skill     ~/.claude/skills/memman/SKILL.md
 
 [2/2] Hooks
-  ✓ Hook: prime     ~/.claude/hooks/mm/prime.sh
-  ✓ Hook: remind    ~/.claude/hooks/mm/user_prompt.sh
-  ✓ Hook: nudge     ~/.claude/hooks/mm/stop.sh
-  ✓ Hook: compact   ~/.claude/hooks/mm/compact.sh
-  ✓ Hook: recall    ~/.claude/hooks/mm/task_recall.sh
-  ✓ Hook: exit_plan ~/.claude/hooks/mm/exit_plan.sh
+  ✓ Hook: prime     ~/.claude/hooks/memman/prime.sh
+  ✓ Hook: remind    ~/.claude/hooks/memman/user_prompt.sh
+  ✓ Hook: nudge     ~/.claude/hooks/memman/stop.sh
+  ✓ Hook: compact   ~/.claude/hooks/memman/compact.sh
+  ✓ Hook: recall    ~/.claude/hooks/memman/task_recall.sh
+  ✓ Hook: exit_plan ~/.claude/hooks/memman/exit_plan.sh
   ✓ Settings         ~/.claude/settings.json (updated)
   ✓ Permission       Bash(memman:*) added to settings.json
 
@@ -172,7 +172,7 @@ Start a new Claude Code session to activate.
 Deployment model:
 
 - `~/.claude/skills/memman/SKILL.md` → symlink into the installed package's `memman/setup/assets/claude/SKILL.md`.
-- `~/.claude/hooks/mm/*.sh` → symlinks into the same package path. `prime.sh` is a thin shim that delegates to `memman prime` (status + compact hint + guide in one Python call).
+- `~/.claude/hooks/memman/*.sh` → symlinks into the same package path. `prime.sh` is a thin shim that delegates to `memman prime` (status + compact hint + guide in one Python call).
 - Shipped `guide.md` is never deployed to disk — `memman guide` reads it from the package via `importlib.resources` every time `prime.sh` fires.
 
 `pipx upgrade memman` refreshes hook scripts and `SKILL.md` automatically through the symlinks; `guide.md` is read live from the new package version. Asset-only changes propagate without any re-install step.

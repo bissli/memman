@@ -31,7 +31,7 @@ memman install
 `pipx install` puts the `memman` binary on your PATH. `memman install` wires integration into Claude Code, [OpenClaw](https://github.com/openclaw/openclaw), and/or [NanoClaw](https://github.com/qwibitai/nanoclaw):
 
 - skill file symlinked into `~/.claude/skills/memman/SKILL.md` (or equivalent)
-- lifecycle hook scripts symlinked into `~/.claude/hooks/mm/`
+- lifecycle hook scripts symlinked into `~/.claude/hooks/memman/`
 - `~/.claude/settings.json` hook registrations and `Bash(memman:*)` permission
 - scheduler unit (systemd timer on Linux, launchd agent on macOS)
 - `~/.memman/logs/` directory (scheduler enrichment worker stdout/stderr)

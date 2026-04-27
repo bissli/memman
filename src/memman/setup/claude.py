@@ -61,7 +61,7 @@ def claude_write_skill(config_dir: str) -> str:
 
 def claude_write_hook(config_dir: str, filename: str) -> str:
     """Symlink a hook script into the config dir."""
-    link = Path(config_dir) / 'hooks' / 'mm' / filename
+    link = Path(config_dir) / 'hooks' / 'memman' / filename
     symlink_asset(f'claude/{filename}', link)
     return str(link)
 
@@ -72,7 +72,7 @@ def claude_register_hooks(config_dir: str,
                           task_recall: bool = True,
                           exit_plan: bool = True) -> str:
     """Register hooks in settings.json."""
-    hooks_dir = os.path.join(config_dir, 'hooks', 'mm')
+    hooks_dir = os.path.join(config_dir, 'hooks', 'memman')
     settings_path = os.path.join(config_dir, 'settings.json')
     data = read_json_file(settings_path)
     add_claude_hooks_selective(
@@ -90,7 +90,10 @@ def claude_uninstall(config_dir: str) -> list[Exception]:
 
     print(f'\nRemoving Claude Code integration ({config_dir})...')
 
-    hooks_dir = os.path.join(config_dir, 'hooks', 'mm')
+    legacy_hooks_dir = os.path.join(config_dir, 'hooks', 'mm')
+    shutil.rmtree(legacy_hooks_dir, ignore_errors=True)
+
+    hooks_dir = os.path.join(config_dir, 'hooks', 'memman')
     shutil.rmtree(hooks_dir, ignore_errors=True)
     status_ok('Hooks', hooks_dir + ' removed')
     remove_if_empty(os.path.join(config_dir, 'hooks'))
@@ -158,6 +161,10 @@ def _install_claude_code(env: dict, data_dir: str) -> None:
 
     logs_dir = Path.home() / '.memman' / 'logs'
     logs_dir.mkdir(mode=0o755, parents=True, exist_ok=True)
+
+    legacy_hooks_dir = os.path.join(config_dir, 'hooks', 'mm')
+    if os.path.isdir(legacy_hooks_dir):
+        shutil.rmtree(legacy_hooks_dir, ignore_errors=True)
 
     print('\n[1/2] Skill')
     path = claude_write_skill(config_dir)
