@@ -1,17 +1,27 @@
-"""Intent-aware recall with beam search, RRF, Kahn's topological sort."""
+"""Intent-aware recall with beam search, RRF, Kahn's topological sort.
+
+Reads from a worker-materialized snapshot file when one is present
+(see `memman.store.snapshot`). Falls back to direct SQL when the
+snapshot is missing, fingerprint-mismatched, or unreadable. The
+snapshot path eliminates `get_all_active_insights`,
+`build_embed_cache`, `get_edges_by_node`, and `get_insight_by_id`
+calls from the synchronous recall hot path.
+"""
 
 import heapq
 import logging
+import pathlib
 
 logger = logging.getLogger('memman')
 
 from memman.embed.vector import cosine_similarity
 from memman.graph.semantic import build_embed_cache
-from memman.model import Insight
+from memman.model import Edge, Insight
 from memman.search.intent import detect_intent, get_weights
 from memman.search.keyword import insight_tokens, keyword_search, tokenize
 from memman.store.edge import get_edges_by_node, get_edges_by_source_and_type
 from memman.store.node import get_all_active_insights, get_insight_by_id
+from memman.store.snapshot import Snapshot, read_snapshot
 
 ANCHOR_TOP_K = 30
 LAMBDA1 = 1.0
@@ -73,8 +83,25 @@ def vector_search_from_cache(
     return result
 
 
+def _bidirectional_adjacency(
+        directed: dict[str, list[tuple[str, str, float]]],
+        ) -> dict[str, list[tuple[str, str, float]]]:
+    """Mirror a directional source -> targets map into both directions.
+
+    Beam search walks edges as undirected; the snapshot stores them
+    keyed by source. This helper materializes the reverse direction so
+    `nid -> incoming + outgoing` is one dict lookup.
+    """
+    bidir: dict[str, list[tuple[str, str, float]]] = {}
+    for source_id, edges in directed.items():
+        bidir.setdefault(source_id, []).extend(edges)
+        for target_id, etype, weight in edges:
+            bidir.setdefault(target_id, []).append(
+                (source_id, etype, weight))
+    return bidir
+
+
 def beam_search_from_anchor(
-        db: 'DB',
         start_id: str,
         start_score: float,
         weights: dict[str, float],
@@ -82,8 +109,16 @@ def beam_search_from_anchor(
         score_map: dict[str, float],
         via_map: dict[str, str],
         insight_map: dict[str, Insight],
-        sim_cache: dict[str, float] | None) -> None:
-    """Perform beam search from a single anchor node."""
+        sim_cache: dict[str, float] | None,
+        edges_lookup,
+        insight_lookup) -> None:
+    """Perform beam search from a single anchor node.
+
+    `edges_lookup(nid) -> iterable of (neighbor_id, edge_type, weight)`
+    `insight_lookup(nid) -> Insight | None`
+    Both lookups encapsulate either a snapshot dict access or a SQL
+    query so callers don't branch on data source.
+    """
     beam_width, max_depth, max_visited = params
     visited = {start_id: True}
     total_visited = 1
@@ -98,16 +133,12 @@ def beam_search_from_anchor(
 
         for neg_score, nid, _d in current:
             cur_score = -neg_score
-            edges = get_edges_by_node(db, nid)
 
-            for e in edges:
+            for neighbor_id, etype, weight in edges_lookup(nid):
                 if total_visited >= max_visited:
                     break
-                neighbor_id = e.target_id
-                if neighbor_id == nid:
-                    neighbor_id = e.source_id
 
-                structural = weights.get(e.edge_type, 0.0) * e.weight
+                structural = weights.get(etype, 0.0) * weight
                 semantic = (
                     sim_cache.get(neighbor_id, 0.0)
                     if sim_cache is not None else 0.0)
@@ -118,9 +149,9 @@ def beam_search_from_anchor(
                 existing = score_map.get(neighbor_id)
                 if existing is None or neighbor_score > existing:
                     score_map[neighbor_id] = neighbor_score
-                    via_map[neighbor_id] = e.edge_type
+                    via_map[neighbor_id] = etype
                     if neighbor_id not in insight_map:
-                        ins = get_insight_by_id(db, neighbor_id)
+                        ins = insight_lookup(neighbor_id)
                         if ins is not None:
                             insight_map[neighbor_id] = ins
 
@@ -141,9 +172,14 @@ def beam_search_from_anchor(
 
 
 def causal_topological_sort(
-        db: 'DB',
-        results: list[dict]) -> list[dict]:
-    """Reorder results so causes appear before effects using Kahn's algorithm."""
+        results: list[dict],
+        causal_edges_lookup) -> list[dict]:
+    """Reorder results so causes appear before effects using Kahn's algorithm.
+
+    `causal_edges_lookup(source_id) -> iterable of target_ids` exposes
+    only the source-keyed causal edges, since this sort treats edges as
+    strictly directional.
+    """
     if len(results) <= 1:
         return results
 
@@ -154,11 +190,11 @@ def causal_topological_sort(
     in_degree: dict[str, int] = {r['insight'].id: 0 for r in results}
 
     for r in results:
-        edges = get_edges_by_source_and_type(db, r['insight'].id, 'causal')
-        for e in edges:
-            if e.target_id in id_set:
-                adj.setdefault(e.source_id, []).append(e.target_id)
-                in_degree[e.target_id] += 1
+        rid = r['insight'].id
+        for target_id in causal_edges_lookup(rid):
+            if target_id in id_set:
+                adj.setdefault(rid, []).append(target_id)
+                in_degree[target_id] += 1
 
     heap_list: list[tuple[float, str]] = []
     for r in results:
@@ -191,7 +227,13 @@ def intent_aware_recall(
         query_entities: list[str],
         limit: int,
         intent_override: str | None = None) -> dict:
-    """Perform MAGMA-aligned intent-aware retrieval."""
+    """Perform MAGMA-aligned intent-aware retrieval.
+
+    Loads the worker-materialized snapshot when present and consumes
+    it for all hot-path reads. Falls back to direct SQL when the
+    snapshot is missing or its embedding fingerprint doesn't match
+    the active client.
+    """
     if intent_override:
         intent = intent_override
         intent_source = 'override'
@@ -202,9 +244,49 @@ def intent_aware_recall(
     weights = get_weights(intent)
     params = get_traversal_params(intent)
 
-    all_insights = get_all_active_insights(db)
+    snapshot: Snapshot | None = None
+    try:
+        from memman.embed.fingerprint import active_fingerprint
+        store_dir = str(pathlib.Path(db.path).parent)
+        snapshot = read_snapshot(store_dir, active_fingerprint())
+    except Exception as exc:
+        logger.warning(f'snapshot load failed, using SQL: {exc}')
+        snapshot = None
 
-    embed_cache = build_embed_cache(db)
+    if snapshot is not None:
+        all_insights = snapshot.insights
+        embed_cache = snapshot.embeddings
+        bidir = _bidirectional_adjacency(snapshot.adjacency)
+        insights_by_id = {i.id: i for i in snapshot.insights}
+
+        def _edges_lookup(nid):
+            return bidir.get(nid, ())
+
+        def _insight_lookup(nid):
+            return insights_by_id.get(nid)
+
+        def _causal_edges_lookup(source_id):
+            return [
+                target for target, etype, _w
+                in snapshot.adjacency.get(source_id, ())
+                if etype == 'causal']
+    else:
+        all_insights = get_all_active_insights(db)
+        embed_cache = build_embed_cache(db)
+
+        def _edges_lookup(nid):
+            for e in get_edges_by_node(db, nid):
+                neighbor_id = e.target_id if e.target_id != nid else e.source_id
+                yield (neighbor_id, e.edge_type, e.weight)
+
+        def _insight_lookup(nid):
+            return get_insight_by_id(db, nid)
+
+        def _causal_edges_lookup(source_id):
+            return [
+                e.target_id
+                for e in get_edges_by_source_and_type(
+                    db, source_id, 'causal')]
 
     sim_cache: dict[str, float] = {}
     if query_vec is not None and embed_cache:
@@ -232,7 +314,7 @@ def intent_aware_recall(
                 anchor_map[vid] = (
                     ins, old_score + rrf_score, 'hybrid')
             else:
-                ins = get_insight_by_id(db, vid)
+                ins = _insight_lookup(vid)
                 if ins is not None:
                     anchor_map[vid] = (ins, rrf_score, 'vector')
 
@@ -277,8 +359,9 @@ def intent_aware_recall(
 
     for aid, (ins, score, via) in anchor_map.items():
         beam_search_from_anchor(
-            db, aid, score, weights, params,
-            score_map, via_map, insight_map, sim_cache)
+            aid, score, weights, params,
+            score_map, via_map, insight_map, sim_cache,
+            _edges_lookup, _insight_lookup)
 
     traversed_count = len(score_map)
 
@@ -364,7 +447,7 @@ def intent_aware_recall(
         results = results[:limit]
 
     if intent == 'WHY':
-        results = causal_topological_sort(db, results)
+        results = causal_topological_sort(results, _causal_edges_lookup)
     elif intent == 'WHEN':
         results.sort(
             key=lambda r: (r['insight'].created_at, r['score']),

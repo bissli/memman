@@ -695,6 +695,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
     processed = 0
     failed = 0
     claimed = 0
+    touched_stores: set[str] = set()
     run_id = start_worker_run(conn, worker_pid)
     run_error: str | None = None
 
@@ -734,6 +735,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 row_elapsed_ms = int((_time.monotonic() - row_t0) * 1000)
                 mark_done(conn, row.id)
                 processed += 1
+                touched_stores.add(row.store)
                 trace.event(
                     'queue_done',
                     row_id=row.id,
@@ -761,6 +763,12 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         run_error = f'{type(exc).__name__}: {exc}'
         raise
     finally:
+        for store_name in touched_stores:
+            try:
+                _write_recall_snapshot_for_store(data_dir_val, store_name)
+            except Exception:
+                logger.exception(
+                    f'recall snapshot write failed for store {store_name!r}')
         try:
             finish_worker_run(
                 conn, run_id, claimed, processed, failed,
@@ -780,6 +788,27 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         'failed': failed,
         'remaining': s,
         })
+
+
+def _write_recall_snapshot_for_store(
+        data_dir_val: str, store_name: str) -> None:
+    """Materialize the recall snapshot for one store after a successful drain.
+
+    Snapshot writes are idempotent and bounded (cap at 1000 active
+    insights). Failures here are isolated per store and never abort
+    the drain or cause queue rows to retry.
+    """
+    from memman.embed.fingerprint import active_fingerprint
+    from memman.store.db import open_db as _open_store_db
+    from memman.store.snapshot import write_snapshot
+
+    sdir = store_dir(data_dir_val, store_name)
+    db = _open_store_db(sdir)
+    try:
+        fp = active_fingerprint()
+        write_snapshot(db, sdir, fp)
+    finally:
+        db.close()
 
 
 def _process_queue_row(row: 'memman.queue.QueueRow', store_data_dir: str,
