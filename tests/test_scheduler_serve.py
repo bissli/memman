@@ -112,6 +112,89 @@ def test_serve_stops_when_state_file_says_stopped(runner, monkeypatch):
         'serve should not drain when state=STOPPED')
 
 
+def test_serve_interval_zero_loops_until_signaled(runner, monkeypatch):
+    """interval=0 must NOT exit after one drain; must loop until stop.
+
+    Validates the bug fix at cli.py removing `or interval == 0` from the
+    break condition. Patches `_drain_queue` to count iterations and
+    requests stop on the 5th call — proves the loop is iterating, not
+    exiting after the first drain.
+    """
+    from memman.setup import scheduler as sched_mod
+    monkeypatch.setattr(sched_mod, 'read_state',
+                        lambda: sched_mod.STATE_STARTED)
+
+    import memman.cli as cli_mod
+    drain_calls = {'count': 0}
+
+    def _counting_drain(*args, **kwargs):
+        drain_calls['count'] += 1
+        if drain_calls['count'] >= 5:
+            cli_mod._request_stop()
+        return {'claimed': 0, 'processed': 0, 'failed': 0}
+
+    monkeypatch.setattr(cli_mod, '_drain_queue', _counting_drain)
+
+    r, data_dir = runner
+    result = r.invoke(
+        cli,
+        ['--data-dir', data_dir, 'scheduler', 'serve', '--interval', '0'])
+    assert result.exit_code == 0, result.output
+    assert drain_calls['count'] >= 5, (
+        f'expected 5+ drain calls (continuous loop); got '
+        f'{drain_calls["count"]} — interval=0 exited too early')
+
+
+def test_serve_interval_zero_idle_backoff(runner, monkeypatch):
+    """Empty drains at interval=0 are throttled by the 100ms backoff.
+
+    With an empty queue (claimed=0), the loop sleeps 100ms between
+    iterations to bound CPU and SQLite WAL fsync rate. Caps the loop
+    at ~10 Hz instead of unbounded spin.
+    """
+    from memman.setup import scheduler as sched_mod
+    monkeypatch.setattr(sched_mod, 'read_state',
+                        lambda: sched_mod.STATE_STARTED)
+
+    import memman.cli as cli_mod
+    drain_calls = {'count': 0}
+
+    def _empty_drain(*args, **kwargs):
+        drain_calls['count'] += 1
+        if drain_calls['count'] >= 3:
+            cli_mod._request_stop()
+        return {'claimed': 0, 'processed': 0, 'failed': 0}
+
+    monkeypatch.setattr(cli_mod, '_drain_queue', _empty_drain)
+
+    r, data_dir = runner
+    t0 = time.monotonic()
+    result = r.invoke(
+        cli,
+        ['--data-dir', data_dir, 'scheduler', 'serve', '--interval', '0'])
+    elapsed = time.monotonic() - t0
+
+    assert result.exit_code == 0, result.output
+    assert drain_calls['count'] >= 3
+    assert elapsed >= 0.2, (
+        f'expected >=200ms wall (2x100ms backoff between 3 drains);'
+        f' got {elapsed:.3f}s — backoff missing')
+
+
+def test_serve_default_interval_runs_one_drain(runner, monkeypatch):
+    """interval=60 with --once still works and writes one heartbeat."""
+    from memman.setup import scheduler as sched_mod
+    monkeypatch.setattr(sched_mod, 'read_state',
+                        lambda: sched_mod.STATE_STARTED)
+
+    r, data_dir = runner
+    serve_result = r.invoke(
+        cli,
+        ['--data-dir', data_dir, 'scheduler', 'serve',
+         '--interval', '60', '--once'])
+    assert serve_result.exit_code == 0, serve_result.output
+
+
 @pytest.mark.no_mock_llm
 def test_serve_handles_sigterm_cleanly(tmp_path):
     """A real subprocess running serve exits 0 on SIGTERM.

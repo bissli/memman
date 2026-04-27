@@ -167,6 +167,67 @@ def test_scheduler_heartbeat_pass_on_recent_drain(tmp_path, monkeypatch):
     assert result['status'] == 'pass'
 
 
+def test_scheduler_heartbeat_threshold_floors_at_180s(tmp_path, monkeypatch):
+    """At interval=0 (serve continuous), the threshold floors at 180s.
+
+    Without the floor, `3 * 0 = 0` would fail every heartbeat check.
+    With the floor (max(3*interval, 180s)), serve mode is robust to
+    sub-minute intervals — the rate-limited heartbeat writes 1/min so
+    a 180s window allows two-miss tolerance.
+    """
+    from memman.queue import finish_worker_run, open_queue_db
+    from memman.queue import start_worker_run
+    from memman.setup import scheduler as sch
+
+    monkeypatch.setattr(sch, 'status',
+                        lambda: _started_scheduler_status(interval=0))
+    conn = open_queue_db(str(tmp_path))
+    try:
+        run_id = start_worker_run(conn, worker_pid=1)
+        finish_worker_run(conn, run_id, 0, 0, 0)
+        conn.execute(
+            'UPDATE worker_runs SET started_at = started_at - 90'
+            ' WHERE id = ?', (run_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    result = check_scheduler_heartbeat(str(tmp_path))
+    assert result['status'] == 'pass', (
+        f'90s old heartbeat at interval=0 should PASS under 180s floor;'
+        f' got {result}')
+    assert result['detail']['threshold_fail_seconds'] == 180
+
+
+def test_scheduler_heartbeat_fails_at_interval_zero_when_stale(
+        tmp_path, monkeypatch):
+    """At interval=0, a heartbeat older than 180s fails.
+
+    Validates that the `interval and` truthiness guard is removed —
+    interval=0 must reach the threshold comparison, not short-circuit
+    to PASS.
+    """
+    from memman.queue import finish_worker_run, open_queue_db
+    from memman.queue import start_worker_run
+    from memman.setup import scheduler as sch
+
+    monkeypatch.setattr(sch, 'status',
+                        lambda: _started_scheduler_status(interval=0))
+    conn = open_queue_db(str(tmp_path))
+    try:
+        run_id = start_worker_run(conn, worker_pid=1)
+        finish_worker_run(conn, run_id, 0, 0, 0)
+        conn.execute(
+            'UPDATE worker_runs SET started_at = started_at - 200'
+            ' WHERE id = ?', (run_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    result = check_scheduler_heartbeat(str(tmp_path))
+    assert result['status'] == 'fail', (
+        f'200s old heartbeat at interval=0 should FAIL (180s floor);'
+        f' got {result}')
+
+
 def test_scheduler_heartbeat_fail_on_recorded_error(tmp_path, monkeypatch):
     """A finished run with an error string flips the check to fail."""
     from memman.queue import finish_worker_run, open_queue_db, start_worker_run

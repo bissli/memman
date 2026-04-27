@@ -192,12 +192,65 @@ def test_change_interval_rewrites_unit_without_touching_env(
 
 def test_change_interval_rejects_too_short(
         fake_home, fake_binary, monkeypatch):
-    """change_interval refuses values below the 60s floor.
+    """change_interval refuses values below the 60s floor on systemd.
     """
     monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
     _no_subprocess(monkeypatch)
-    with pytest.raises(RuntimeError, match='too short'):
+    with pytest.raises(RuntimeError, match='too short for systemd'):
         sch.change_interval(str(fake_home), 30)
+
+
+def test_change_interval_rejects_below_60_for_launchd(
+        fake_home, fake_binary, monkeypatch):
+    """change_interval refuses values below the 60s floor on launchd.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
+    _no_subprocess(monkeypatch)
+    with pytest.raises(RuntimeError, match='too short for launchd'):
+        sch.change_interval(str(fake_home), 30)
+
+
+def test_change_interval_accepts_zero_for_serve(
+        fake_home, fake_binary, monkeypatch):
+    """change_interval accepts 0 in serve mode (continuous loop).
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler',
+                        lambda: sch.SCHEDULER_KIND_SERVE)
+    monkeypatch.setattr(sch, '_systemd_is_enabled', lambda: False)
+    monkeypatch.setattr(sch, '_launchd_is_loaded', lambda: False)
+    _no_subprocess(monkeypatch)
+    result = sch.change_interval(str(fake_home), 0)
+    assert result['interval_seconds'] == 0
+    assert sch.read_serve_interval() == 0
+
+
+def test_change_interval_rejects_negative(
+        fake_home, fake_binary, monkeypatch):
+    """change_interval refuses negative values regardless of kind.
+    """
+    monkeypatch.setattr(sch, 'detect_scheduler',
+                        lambda: sch.SCHEDULER_KIND_SERVE)
+    _no_subprocess(monkeypatch)
+    with pytest.raises(RuntimeError, match='negative'):
+        sch.change_interval(str(fake_home), -1)
+
+
+def test_change_interval_warns_on_mixed_mode(
+        fake_home, fake_binary, monkeypatch, caplog):
+    """change_interval logs a warning when serve coexists with systemd.
+    """
+    import logging
+    monkeypatch.setattr(sch, 'detect_scheduler',
+                        lambda: sch.SCHEDULER_KIND_SERVE)
+    monkeypatch.setattr(sch, '_systemd_is_enabled', lambda: True)
+    monkeypatch.setattr(sch, '_launchd_is_loaded', lambda: False)
+    _no_subprocess(monkeypatch)
+    with caplog.at_level(logging.WARNING, logger='memman'):
+        sch.change_interval(str(fake_home), 30)
+    assert any('serve' in rec.message and 'systemd' in rec.message
+               for rec in caplog.records), (
+        f'expected mixed-mode warning; got: '
+        f'{[r.message for r in caplog.records]}')
 
 
 def test_default_interval_is_60_seconds():
