@@ -135,16 +135,19 @@ change — no operator command for that.
 
 Memman has a single write path: every `remember` / `replace` enqueues,
 and a worker drains the queue. The trigger varies by environment —
-systemd timer on Linux, launchd agent on macOS, in-process inline on
-nanoclaw containers — but the contract is the same.
+systemd timer on Linux hosts, launchd agent on macOS hosts, and a
+long-running `memman scheduler serve` process inside containers (set
+`MEMMAN_SCHEDULER_KIND=serve` and run the command as PID 1).
 
 When the scheduler is **stopped**, memman is recall-only: every write
 exits 1 with `Scheduler is stopped; cannot <verb>. Run 'memman
-scheduler start' to enable.`
+scheduler start' to enable.` The serve loop polls the state file every
+iteration and exits cleanly when stopped.
 
-- `memman scheduler status` — install state, interval, next run, queue depth.
-- `memman scheduler start` — activate the trigger (idempotent).
-- `memman scheduler stop` — deactivate the trigger; trigger files stay on disk.
+- `memman scheduler serve [--interval N] [--once]` — long-running drain loop (used as PID 1 in containers).
+- `memman scheduler status` — platform, interval, next run, state, last heartbeat.
+- `memman scheduler start` — flip state to STARTED (resume drains + writes).
+- `memman scheduler stop` — flip state to STOPPED (pause drains + reject writes).
 - `memman scheduler interval --seconds N` — change cadence (min 60s).
-- `memman scheduler trigger` — run the drain now (rejects when stopped).
+- `memman scheduler trigger` — run the drain now on systemd/launchd; not applicable in serve mode.
 - `memman log worker [--errors]` — tail the enrichment worker logs.
