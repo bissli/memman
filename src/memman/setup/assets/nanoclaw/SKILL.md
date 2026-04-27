@@ -53,16 +53,50 @@ Add the following block **after** the `apt-get install` section and **before** t
 # Install memman for persistent agent memory
 RUN pip install --no-cache-dir git+https://github.com/bissli/memman.git
 
-# Bootstrap memman scheduler markers: containers always run inline (no
-# systemd/launchd inside the image), so we pre-write the inline trigger
-# marker and the started-state file. Without these, every memman write
-# rejects with "Scheduler is stopped".
+# Containers have no systemd/launchd; memman runs its own drain loop
+# as PID 1 instead. The MEMMAN_SCHEDULER_KIND env var picks the serve
+# mode; STATE_STARTED is bootstrapped so writes are accepted on first run.
+ENV MEMMAN_SCHEDULER_KIND=serve
 RUN install -d -o node -g node -m 755 /home/node/.memman \
- && printf 'inline\n'  > /home/node/.memman/scheduler.inline \
  && printf 'started\n' > /home/node/.memman/scheduler.state \
- && chown node:node /home/node/.memman/scheduler.* \
- && chmod 600       /home/node/.memman/scheduler.*
+ && chown node:node /home/node/.memman/scheduler.state \
+ && chmod 600       /home/node/.memman/scheduler.state
 ```
+
+### 2a-bis. Run `memman scheduler serve` as PID 1
+
+Replace whatever long-running primitive the container currently uses
+(`CMD ["sleep", "infinity"]`, an entrypoint script that waits, etc.)
+with the memman scheduler loop. PID 1 *is* the scheduler — if the
+container is alive, the drain loop is alive.
+
+```dockerfile
+CMD ["memman", "scheduler", "serve", "--interval", "60"]
+```
+
+If the container already has its own foreground entrypoint that must
+remain PID 1, ship a wrapper that backgrounds the scheduler under a
+proper signal-forwarding trap:
+
+```sh
+#!/bin/sh
+set -e
+: "${MEMMAN_INTERVAL:=60}"
+memman scheduler serve --interval "$MEMMAN_INTERVAL" \
+    >> "$HOME/.memman/data/logs/memman.log" 2>&1 &
+scheduler_pid=$!
+trap 'kill -TERM $scheduler_pid 2>/dev/null; wait $scheduler_pid' TERM INT
+exec "$@"
+```
+
+The `trap` is mandatory — without it, a SIGTERM kills only the user
+entrypoint and leaves the backgrounded scheduler orphaned.
+
+**`queue.db` is per-container**: it lives at `$HOME/.memman/queue.db`
+inside the container and is **not** in the volume mount. A container
+restart loses any pending queue rows. This is intentional — the serve
+loop drains every `--interval` seconds, so pending rows are typically
+under one minute old.
 
 ### 2b. Add the container skill
 

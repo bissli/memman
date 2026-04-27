@@ -31,16 +31,14 @@ pytestmark = pytest.mark.e2e_cli
 
 @pytest.fixture(scope='module')
 def home_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """One HOME for the whole module; scheduler markers written once.
+    """One HOME for the whole module; scheduler started state written once.
     """
     home = tmp_path_factory.mktemp('e2e_home')
     dot = home / '.memman'
     dot.mkdir(parents=True, exist_ok=True)
     (dot / 'scheduler.state').write_text('started\n')
-    (dot / 'scheduler.inline').write_text('inline\n')
-    (dot / 'cache').mkdir(exist_ok=True)
     (dot / 'scheduler.state').chmod(0o600)
-    (dot / 'scheduler.inline').chmod(0o600)
+    (dot / 'cache').mkdir(exist_ok=True)
     return home
 
 

@@ -57,7 +57,7 @@ def _start_container(image: str, mounts: list[tuple[Path, str, str]],
         cmd += ['-v', f'{host}:{ctr}:{mode}']
     for k, v in (env or {}).items():
         cmd += ['-e', f'{k}={v}']
-    cmd += [image, 'sleep', 'infinity']
+    cmd += [image]
     out = subprocess.run(cmd, capture_output=True, text=True, check=True)
     return out.stdout.strip()
 
@@ -127,13 +127,17 @@ class TestStatus:
         out = _exec(cid, ['sh', '-c', 'command -v memman'])
         assert '/memman' in out.stdout
 
-    def test_scheduler_inline_active(self, nanoclaw_run):
-        """Container's scheduler is inline + started (pre-written by image).
+    def test_scheduler_serve_pid1(self, nanoclaw_run):
+        """PID 1 is `memman scheduler serve`; status reports serve mode.
         """
         cid, _ = nanoclaw_run()
-        out = _exec(cid, ['memman', 'scheduler', 'status'])
-        data = json.loads(out.stdout)
-        assert data['platform'] == 'inline'
+        out = _exec(cid, ['cat', '/proc/1/cmdline'])
+        cmdline = out.stdout.replace('\0', ' ')
+        assert 'scheduler' in cmdline and 'serve' in cmdline, cmdline
+
+        status_out = _exec(cid, ['memman', 'scheduler', 'status'])
+        data = json.loads(status_out.stdout)
+        assert data['platform'] == 'serve'
         assert data['state'] == 'started'
 
 

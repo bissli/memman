@@ -10,7 +10,9 @@ short-circuit. We re-emphasize the contract here:
 - e2e tests gate on real `OPENROUTER_API_KEY` / `VOYAGE_API_KEY` via
   the `live_keys` fixture rather than on a `--live` flag.
 - the `memman_home` fixture handles HOME redirection (env + Path.home),
-  scheduler.inline marker, and MEMMAN_CACHE_DIR redirect.
+  the started-state file, and MEMMAN_CACHE_DIR redirect. Hosts without
+  systemd/launchd opt into serve mode via `MEMMAN_SCHEDULER_KIND=serve`
+  in the test environment.
 """
 
 import os
@@ -23,11 +25,13 @@ import pytest
 @pytest.fixture
 def memman_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
                 ) -> tuple[Path, Path]:
-    """Per-test isolated HOME with scheduler.inline marker pre-written.
+    """Per-test isolated HOME with scheduler state pre-written.
 
     Returns `(home_dir, data_dir)`. Tests pass `data_dir` to
     `run_cli` so each test gets its own SQLite store under
-    `<tmp>/memman_data/`. Two-step HOME patch (env + Path.home class
+    `<tmp>/memman_data/`. `MEMMAN_SCHEDULER_KIND=serve` is set so
+    scheduler-stop / -start commands route to the serve branch
+    rather than raising. Two-step HOME patch (env + Path.home class
     attr) — the env var alone is not enough on macOS, where
     `Path.home()` may use `pwd.getpwuid` instead of `$HOME`.
     """
@@ -35,14 +39,13 @@ def memman_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     dot = home / '.memman'
     dot.mkdir(parents=True, exist_ok=True)
     (dot / 'scheduler.state').write_text('started\n')
-    (dot / 'scheduler.inline').write_text('inline\n')
     (dot / 'scheduler.state').chmod(0o600)
-    (dot / 'scheduler.inline').chmod(0o600)
     (dot / 'cache').mkdir(exist_ok=True)
 
     monkeypatch.setenv('HOME', str(home))
     monkeypatch.setattr(Path, 'home', lambda: home)
     monkeypatch.setenv('MEMMAN_CACHE_DIR', str(dot / 'cache'))
+    monkeypatch.setenv('MEMMAN_SCHEDULER_KIND', 'serve')
 
     data_dir = tmp_path / 'memman_data'
     data_dir.mkdir(exist_ok=True)
@@ -121,8 +124,6 @@ def _writable_mount_dir(parent: Path, group: str) -> Path:
     d = parent / 'data' / group
     d.mkdir(parents=True, exist_ok=True)
     d.chmod(0o777)
-    inline = d / 'scheduler.inline'
-    inline.write_text('inline\n')
     state = d / 'scheduler.state'
     state.write_text('started\n')
     return d

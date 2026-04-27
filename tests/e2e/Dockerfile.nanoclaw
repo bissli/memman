@@ -33,17 +33,19 @@ COPY src/memman/setup/assets/nanoclaw/container-skill.md \
      /app/skills/memman/SKILL.md
 
 # Memman state lives under /home/node/.memman in the running container.
-# Pre-write scheduler markers so writes don't reject with "Scheduler is
-# stopped" — containers always run inline (no systemd/launchd).
+# Pre-write the started state so writes are accepted on first run; the
+# scheduler runs as PID 1 (see CMD below).
 RUN install -d -o node -g node -m 755 /home/node/.memman \
  && install -d -o node -g node -m 755 /home/node/.memman/data \
- && printf 'inline\n'  > /home/node/.memman/scheduler.inline \
  && printf 'started\n' > /home/node/.memman/scheduler.state \
- && chown node:node /home/node/.memman/scheduler.* \
- && chmod 600       /home/node/.memman/scheduler.*
+ && chown node:node /home/node/.memman/scheduler.state \
+ && chmod 600       /home/node/.memman/scheduler.state
 
 USER node
 WORKDIR /home/node
 ENV PATH=/usr/local/bin:/usr/bin:/bin
+ENV MEMMAN_SCHEDULER_KIND=serve
 
-CMD ["sleep", "infinity"]
+# Run the scheduler drain loop as PID 1. The container is alive iff the
+# scheduler is alive. 10 s interval keeps e2e tests fast.
+CMD ["memman", "scheduler", "serve", "--interval", "10"]

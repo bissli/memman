@@ -6,15 +6,17 @@ description: Persistent graph-based memory. Recall context before responding, re
 # memman — Persistent Memory
 
 `memman` is a CLI on PATH inside the container. Memory is organized into
-typed insights and a graph of edges between them. The container has no
-systemd or launchd, so the scheduler trigger lands in inline mode:
-`remember` enqueues then drains in-process before returning. From your
-perspective writes are synchronous — same code path as a host with the
-scheduler started.
+typed insights and a graph of edges between them. PID 1 of the container
+is `memman scheduler serve`, which drains the write queue every 60
+seconds. From the agent's perspective `remember` returns immediately
+with `{action: queued, queue_id}`; the new insight becomes recallable
+within the next drain interval.
 
 If `memman scheduler stop` is run inside the container, memman becomes
 recall-only: `remember` / `replace` / `forget` reject with a clear error
-until `memman scheduler start` re-arms the worker.
+and the serve loop exits at its next iteration. `memman scheduler start`
+flips the state back so writes are accepted; the operator must re-run
+`memman scheduler serve` to resume drains.
 
 ## Memory stores
 
