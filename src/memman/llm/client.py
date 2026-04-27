@@ -48,9 +48,8 @@ class LLMProvider(Protocol):
 def _openrouter_factory(role: str) -> LLMProvider:
     """Build the registered OpenRouter client for a role.
 
-    Imported lazily so starting up memman does not fetch the ZDR cache
-    or touch provider-specific env vars unless that provider is
-    actually selected.
+    Imported lazily so starting up memman does not touch
+    provider-specific env vars unless that provider is actually selected.
     """
     from memman.llm.openrouter_client import get_openrouter_client
     return get_openrouter_client(role)

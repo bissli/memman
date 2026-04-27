@@ -118,33 +118,33 @@ is read/written through SQL helpers, not via the dataclass.
 MemMan's architecture is divided into five layers:
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  Integration Layer    Hook / Skill / Guide                   │
+┌───────────────────────────────────────────────────────────────┐
+│  Integration Layer    Hook / Skill / Guide                    │
 ├──────────────────────────────────────────────────────────────┤
-│  CLI Layer            remember · recall · replace · forget   │
-│                       prime · status · doctor · install      │
-│                       graph · scheduler · insights · store   │
-│                       embed · log · config                   │
+│  CLI Layer            remember · recall · replace · forget    │
+│                       prime · status · doctor · install       │
+│                       graph · scheduler · insights · store    │
+│                       embed · log · config                    │
 ├──────────────────────────────────────────────────────────────┤
-│  Pipeline             pipeline/ (remember, drain worker)     │
+│  Pipeline             pipeline/ (remember, drain worker)      │
 ├──────────────────────────────────────────────────────────────┤
-│  Core Engine          search/ (recall, intent, keyword,      │
-│                                quality)                      │
-│                       graph/  (temporal, entity, causal,     │
-│                                semantic, engine, bfs,        │
-│                                enrichment)                   │
-│                       embed/  (voyage, openai_compat,        │
-│                                ollama, vector)               │
-│                       llm/    (client, extract,              │
-│                                openrouter_client)            │
+│  Core Engine          search/ (recall, intent, keyword,       │
+│                                quality)                       │
+│                       graph/  (temporal, entity, causal,      │
+│                                semantic, engine, bfs,         │
+│                                enrichment)                    │
+│                       embed/  (voyage, openai_compat,         │
+│                                ollama, vector)                │
+│                       llm/    (client, extract,               │
+│                                openrouter_client)             │
 ├──────────────────────────────────────────────────────────────┤
-│  Storage Layer        store/   (db, node, edge, oplog,       │
-│                                snapshot)                     │
-│                       queue.py (deferred-write queue)        │
+│  Storage Layer        store/   (db, node, edge, oplog,        │
+│                                snapshot)                      │
+│                       queue.py (deferred-write queue)         │
 ├──────────────────────────────────────────────────────────────┤
-│  External             OpenRouter (LLM, ZDR-routed Haiku)     │
-│                       Voyage AI (embeddings, default)        │
-└──────────────────────────────────────────────────────────────┘
+│  External             OpenRouter (LLM, Anthropic Haiku/Sonnet)│
+│                       Voyage AI (embeddings, default)         │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 

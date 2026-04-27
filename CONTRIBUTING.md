@@ -29,10 +29,10 @@ There is no third-tier code default at runtime. Defaults live in `config.INSTALL
 
 ### Required keys
 
-| Variable             | Purpose                                              |
-| -------------------- | ---------------------------------------------------- |
-| `OPENROUTER_API_KEY` | LLM inference via OpenRouter (ZDR-enforced routing). |
-| `VOYAGE_API_KEY`     | Voyage AI embeddings (512-dim).                      |
+| Variable             | Purpose                         |
+| -------------------- | ------------------------------- |
+| `OPENROUTER_API_KEY` | LLM inference via OpenRouter.   |
+| `VOYAGE_API_KEY`     | Voyage AI embeddings (512-dim). |
 
 ### Persisted at install (`INSTALLABLE_KEYS`)
 

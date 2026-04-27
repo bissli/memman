@@ -1,12 +1,11 @@
 """OpenRouter client.
 
-Speaks OpenAI-schema /v1/chat/completions. Every request forces
-`provider.zdr=true` and `provider.data_collection="deny"`. OpenRouter
-enforces ZDR per request; we do not maintain a client-side ZDR
-inventory. The model id is resolved at `memman install` time
-(`memman.llm.openrouter_models.resolve_latest_in_family`) and persisted
-to `~/.memman/env`; the runtime client reads it via `config.get` and
-sends it through unchanged.
+Speaks OpenAI-schema /v1/chat/completions. The model id is resolved at
+`memman install` time (`memman.llm.openrouter_models.resolve_latest_in_family`)
+and persisted to `~/.memman/env`; the runtime client reads it via
+`config.get` and sends it through unchanged. Routing/privacy policy is
+configured at the OpenRouter account level (see
+https://openrouter.ai/settings/privacy).
 """
 
 import logging
@@ -32,7 +31,7 @@ def _session() -> httpx.Client:
 
 
 class OpenRouterClient:
-    """OpenAI-schema LLM client that requests ZDR routing."""
+    """OpenAI-schema LLM client for OpenRouter."""
 
     def __init__(
             self,
@@ -61,7 +60,7 @@ class OpenRouterClient:
         self.timeout = timeout
 
     def complete(self, system: str, user: str) -> str:
-        """Send a chat-completion request with ZDR enforced."""
+        """Send a chat-completion request."""
         headers = {
             'Authorization': f'Bearer {self.api_key}',
             'Content-Type': 'application/json',
@@ -75,11 +74,6 @@ class OpenRouterClient:
                 {'role': 'system', 'content': system},
                 {'role': 'user', 'content': user},
                 ],
-            'provider': {
-                'zdr': True,
-                'data_collection': 'deny',
-                'allow_fallbacks': True,
-                },
             }
 
         url = f'{self.endpoint}/chat/completions'

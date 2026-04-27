@@ -41,7 +41,7 @@ Per-blob processing inside `_process_queue_row`:
 
 ### LLM routing
 
-Both the session path (`memman recall` query expansion) and the scheduler path route through OpenRouter with `provider.zdr=true, data_collection="deny"`. They use separate role slots: `MEMMAN_LLM_MODEL_FAST` for the recall hot path (and `doctor`'s connectivity probe), `MEMMAN_LLM_MODEL_SLOW` for the scheduler worker (extraction, reconciliation, enrichment, causal inference). When unset, both auto-pick the latest Anthropic Haiku from a cached `/api/v1/endpoints/zdr` inventory (24 h TTL, cachetools in-process + disk JSON), selected via version parsing.
+Both the session path (`memman recall` query expansion) and the scheduler path route through OpenRouter. They use separate role slots: `MEMMAN_LLM_MODEL_FAST` for the recall hot path (and `doctor`'s connectivity probe), `MEMMAN_LLM_MODEL_SLOW` for the scheduler worker (extraction, reconciliation, enrichment, causal inference). Both values are populated by `memman install`, which queries OpenRouter's `/models` endpoint once per role and writes the resolved id to `~/.memman/env`. Runtime never queries the model inventory; it reads the persisted id and sends it through unchanged. Re-run `memman install` to bump to a current version when a new model family ships.
 
 ### Operational controls
 

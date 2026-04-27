@@ -10,9 +10,10 @@ internal packages raise user-facing errors without importing
 class ConfigError(Exception):
     """Raised when memman configuration is invalid or incomplete.
 
-    Typical causes: missing API keys, unknown provider, or a model
-    override that is not in the ZDR inventory. The message is
-    user-facing (no tracebacks needed).
+    Typical causes: missing API keys, unknown provider, or a required
+    `INSTALLABLE_KEYS` value that the env file does not contain (run
+    `memman install`). The message is user-facing (no tracebacks
+    needed).
     """
 
 

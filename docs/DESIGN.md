@@ -20,7 +20,7 @@ MAGMA four-graph model (temporal, entity, causal, semantic) with creation logic,
 
 ### [4. Read & Write Pipelines](design/04-pipelines.md)
 
-The two-tier deferred write pipeline (`remember` is a queue-append; a scheduler-driven `scheduler drain --pending` worker runs fact extraction, reconciliation, parallel enrichment/causal inference out of band). Scheduler installs per platform (systemd on Linux, launchd on macOS) and routes LLM calls through OpenRouter with ZDR enforced. Read pipeline (LLM query expansion, RRF anchor fusion, beam search traversal, multi-factor re-ranking).
+The two-tier deferred write pipeline (`remember` is a queue-append; a scheduler-driven `scheduler drain --pending` worker runs fact extraction, reconciliation, parallel enrichment/causal inference out of band). Scheduler installs per platform (systemd on Linux, launchd on macOS) and routes LLM calls through OpenRouter. Read pipeline (LLM query expansion, RRF anchor fusion, beam search traversal, multi-factor re-ranking).
 
 ### [5. Lifecycle & Embedding](design/05-lifecycle.md)
 

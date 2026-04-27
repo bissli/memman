@@ -9,10 +9,9 @@ short-circuit. We re-emphasize the contract here:
   in-process monkeypatches affecting it.
 - e2e tests gate on real `OPENROUTER_API_KEY` / `VOYAGE_API_KEY` via
   the `live_keys` fixture rather than on a `--live` flag.
-- the `memman_home` fixture handles HOME redirection (env + Path.home),
-  the started-state file, and MEMMAN_CACHE_DIR redirect. Hosts without
-  systemd/launchd opt into serve mode via `MEMMAN_SCHEDULER_KIND=serve`
-  in the test environment.
+- the `memman_home` fixture handles HOME redirection (env + Path.home)
+  and the started-state file. Hosts without systemd/launchd opt into
+  serve mode via `MEMMAN_SCHEDULER_KIND=serve` in the test environment.
 """
 
 import os

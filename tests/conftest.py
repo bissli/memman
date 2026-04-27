@@ -210,14 +210,14 @@ def _mock_apis(request, monkeypatch):
 
     Patches at the method layer: OpenRouterClient.complete returns
     realistic JSON that the real extract/reconcile/expand code parses.
-    Voyage embed returns a deterministic content-hash vector. The ZDR
-    cache fetcher is stubbed to a minimal Haiku endpoint so model
-    resolution never hits the network.
+    Voyage embed returns a deterministic content-hash vector.
+    `openrouter_models.resolve_latest_in_family` is stubbed to a fixed
+    id so install-path tests never hit the network.
 
     Tests that exercise the real OpenRouterClient.complete method
-    (e.g. ZDR-injection verification) should mark themselves with
-    `@pytest.mark.no_mock_llm` to skip the method-level patch while
-    keeping the ZDR and embedding stubs in place.
+    should mark themselves with `@pytest.mark.no_mock_llm` to skip
+    the method-level patch while keeping the resolver and embedding
+    stubs in place.
     """
     if 'tests/e2e/' in str(request.node.fspath):
         return

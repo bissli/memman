@@ -186,7 +186,7 @@ Key install options:
 | `memman uninstall`                    | Remove all memman integrations   |
 | `memman uninstall --target <name>`    | Remove from a single environment |
 
-`memman uninstall` never deletes anything under `~/.memman/` — memory store, API-key env file, caches, queue, and scheduler logs all survive. To fully remove the binary: `pipx uninstall memman`.
+`memman uninstall` strips secret keys (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`) from `~/.memman/env` while preserving non-secret model/provider settings, so a later `memman install` resurrects preferences without re-export. The memory store, queue, and scheduler logs under `~/.memman/` are untouched. To fully remove the binary: `pipx uninstall memman`.
 
 The Prime hook is always installed. Remind, Nudge, Compact, Recall, and ExitPlan hooks are optional (all enabled by default).
 

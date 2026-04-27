@@ -68,10 +68,12 @@ def test_normalized_query_collapses(monkeypatch):
 
 
 def test_cache_key_does_not_resolve_model(monkeypatch):
-    """Cache keying must not access llm_client.model (would hit network).
+    """Cache keying reads MEMMAN_LLM_MODEL_FAST directly, not the client.
 
-    `client.model` is a property that triggers the ZDR endpoint fetch
-    on first access. Cache keying uses the raw env var instead.
+    Historically `client.model` was a lazy property that would fetch a
+    model inventory on first access; the cache key avoided it for
+    speed. The lazy property is gone (model is required at construction
+    now) but the cache-key contract still uses the env var directly.
     """
     monkeypatch.setenv('MEMMAN_LLM_MODEL_FAST', 'safe-key')
     client = MagicMock()

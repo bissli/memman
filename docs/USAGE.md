@@ -34,14 +34,14 @@ memman uninstall
 memman uninstall --target claude-code
 ```
 
-| Command            | `--target <name>` | Effect                                                                                                                               |
-| ------------------ | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `memman install`   | (auto-detect)     | Deploy hook and skill symlinks, register in settings.json, install the scheduler unit, create `~/.memman/logs/` for scheduler output |
-| `memman install`   | `claude-code`     | Install into `~/.claude/` only                                                                                                       |
-| `memman install`   | `openclaw`        | Install into `~/.openclaw/` only                                                                                                     |
-| `memman install`   | `nanoclaw`        | Install into `~/.nanoclaw/` only                                                                                                     |
-| `memman uninstall` | (auto-detect)     | Remove hooks, skill, settings.json entries, and scheduler unit. Never touches `~/.memman/`                                           |
-| `memman uninstall` | `<name>`          | Remove memman from that environment only                                                                                             |
+| Command            | `--target <name>` | Effect                                                                                                                                                                                                                                                  |
+| ------------------ | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `memman install`   | (auto-detect)     | Deploy hook and skill symlinks, register in settings.json, install the scheduler unit, create `~/.memman/logs/` for scheduler output                                                                                                                    |
+| `memman install`   | `claude-code`     | Install into `~/.claude/` only                                                                                                                                                                                                                          |
+| `memman install`   | `openclaw`        | Install into `~/.openclaw/` only                                                                                                                                                                                                                        |
+| `memman install`   | `nanoclaw`        | Install into `~/.nanoclaw/` only                                                                                                                                                                                                                        |
+| `memman uninstall` | (auto-detect)     | Remove hooks, skill, settings.json entries, and scheduler unit. Strips secret keys (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`) from `~/.memman/env` but keeps non-secret settings; memory store, queue, and logs untouched. |
+| `memman uninstall` | `<name>`          | Remove memman from that environment only                                                                                                                                                                                                                |
 
 ### Live-read commands
 
@@ -191,7 +191,7 @@ Different agents or processes can use different stores via the `MEMMAN_STORE` en
 
 ```bash
 memman status                                       # memory statistics
-memman doctor                                       # health checks (sqlite, queue, keys, scheduler)
+memman doctor                                       # health checks (sqlite, queue, keys, scheduler, env_completeness)
 memman config show                                  # effective configuration (env + on-disk)
 
 memman log list                                     # operation audit log (default JSON, last 20)
@@ -207,25 +207,27 @@ memman log worker [--errors] [--lines N]            # tail worker output (~/.mem
 
 ## Configuration
 
-| Variable                       | Default                        | Description                                                                                  |
-| ------------------------------ | ------------------------------ | -------------------------------------------------------------------------------------------- |
-| `MEMMAN_DATA_DIR`              | `~/.memman`                    | Base data directory                                                                          |
-| `MEMMAN_STORE`                 | `default`                      | Active named store                                                                           |
-| `OPENROUTER_API_KEY`           | —                              | Required: LLM inference (fact extraction, reconciliation, causal inference, query expansion) |
-| `VOYAGE_API_KEY`               | —                              | Required: Voyage AI embeddings (512-dim)                                                     |
-| `MEMMAN_LLM_PROVIDER`          | `openrouter`                   | Registered LLM provider name (see `memman.llm.client.PROVIDERS`)                             |
-| `MEMMAN_OPENROUTER_ENDPOINT`   | `https://openrouter.ai/api/v1` | Override endpoint for the OpenRouter client                                                  |
-| `MEMMAN_LLM_MODEL_FAST`        | auto-picked latest Haiku       | Override model id for the recall hot path (query expansion, doctor probe).                   |
-| `MEMMAN_LLM_MODEL_SLOW`        | auto-picked latest Haiku       | Override model id for the scheduler worker (extraction, reconciliation, enrichment, causal). |
-| `MEMMAN_EMBED_PROVIDER`        | `voyage`                       | Embedding provider: `voyage`, `openai_compat`, `ollama`.                                     |
-| `MEMMAN_OPENAI_EMBED_API_KEY`  | —                              | API key for `openai_compat` provider.                                                        |
-| `MEMMAN_OPENAI_EMBED_ENDPOINT` | —                              | Endpoint URL for `openai_compat` provider.                                                   |
-| `MEMMAN_OPENAI_EMBED_MODEL`    | —                              | Model id for `openai_compat` provider.                                                       |
-| `MEMMAN_OLLAMA_HOST`           | `http://localhost:11434`       | Host URL for `ollama` provider.                                                              |
-| `MEMMAN_OLLAMA_EMBED_MODEL`    | —                              | Model id for `ollama` provider.                                                              |
-| `MEMMAN_DEBUG`                 | (unset)                        | Truthy value enables JSONL tracing to `~/.memman/logs/debug.log`.                            |
-| `MEMMAN_WORKER`                | (unset)                        | `1` inside the scheduler-triggered worker; enables the rotating log.                         |
-| `MEMMAN_LOG_LEVEL`             | `WARNING`                      | Override logger level when neither `--verbose` nor `--debug` is passed.                      |
+memman resolves user-config vars in two layers: `os.environ` first, then `<MEMMAN_DATA_DIR>/env` (the env file written by `memman install`, mode 0600). There is no code-default fallback at runtime — the defaults below live in `config.INSTALL_DEFAULTS` and are written to the env file at install time. See [CONTRIBUTING.md](../CONTRIBUTING.md#configuration) for the full design. Process-control vars (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`) bypass the file and read directly from `os.environ`.
+
+| Variable                       | Install-time default                              | Description                                                                              |
+| ------------------------------ | ------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `MEMMAN_DATA_DIR`              | `~/.memman`                                       | Base data directory (process-control; not persisted).                                    |
+| `MEMMAN_STORE`                 | `default`                                         | Active named store (process-control; not persisted).                                     |
+| `OPENROUTER_API_KEY`           | —                                                 | Required at install: LLM inference (fact extraction, reconciliation, causal, expansion). |
+| `VOYAGE_API_KEY`               | —                                                 | Required at install: Voyage AI embeddings (512-dim).                                     |
+| `MEMMAN_LLM_PROVIDER`          | `openrouter`                                      | Registered LLM provider name (see `memman.llm.client.PROVIDERS`).                        |
+| `MEMMAN_OPENROUTER_ENDPOINT`   | `https://openrouter.ai/api/v1`                    | Endpoint for the OpenRouter client.                                                      |
+| `MEMMAN_LLM_MODEL_FAST`        | resolved at install (haiku family via `/models`)  | Recall hot path model id (query expansion, doctor probe).                                |
+| `MEMMAN_LLM_MODEL_SLOW`        | resolved at install (sonnet family via `/models`) | Scheduler worker model id (extraction, reconciliation, enrichment, causal).              |
+| `MEMMAN_EMBED_PROVIDER`        | `voyage`                                          | Embedding provider: `voyage`, `openai_compat`, `ollama`.                                 |
+| `MEMMAN_OPENAI_EMBED_API_KEY`  | —                                                 | API key for `openai_compat` provider.                                                    |
+| `MEMMAN_OPENAI_EMBED_ENDPOINT` | `https://api.openai.com`                          | Endpoint URL for `openai_compat` provider.                                               |
+| `MEMMAN_OPENAI_EMBED_MODEL`    | `text-embedding-3-small`                          | Model id for `openai_compat` provider.                                                   |
+| `MEMMAN_OLLAMA_HOST`           | `http://localhost:11434`                          | Host URL for `ollama` provider.                                                          |
+| `MEMMAN_OLLAMA_EMBED_MODEL`    | `nomic-embed-text`                                | Model id for `ollama` provider.                                                          |
+| `MEMMAN_DEBUG`                 | (unset)                                           | Truthy value enables JSONL tracing to `~/.memman/logs/debug.log`.                        |
+| `MEMMAN_WORKER`                | (unset)                                           | `1` inside the scheduler-triggered worker; enables the rotating log.                     |
+| `MEMMAN_LOG_LEVEL`             | `WARNING`                                         | Logger level when neither `--verbose` nor `--debug` is passed.                           |
 
 ---
 

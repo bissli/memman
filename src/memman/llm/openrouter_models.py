@@ -3,8 +3,7 @@
 `memman install` calls `resolve_latest_in_family` once per role to pick
 the current latest haiku/sonnet from OpenRouter's full model inventory.
 The resolved id is written to `~/.memman/env`; runtime reads from the
-file. No runtime queries against OpenRouter, no on-disk cache, no ZDR
-filter (OpenRouter enforces ZDR per request).
+file. No runtime queries against OpenRouter, no on-disk cache.
 
 The TTL cache exists only to dedupe the two intra-install calls
 (`family='haiku'` and `family='sonnet'`) and to absorb a trivial retry

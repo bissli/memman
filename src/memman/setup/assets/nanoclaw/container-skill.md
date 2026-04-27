@@ -117,7 +117,7 @@ Causal `sub_type` values: `causes` · `enables` · `prevents`.
 
 ```bash
 memman status                         # insight count, store
-memman doctor                         # health check
+memman doctor                         # health check (sqlite, queue, keys, scheduler, env_completeness)
 memman log list [--since 7d]          # operation audit log
 ```
 

@@ -4,7 +4,6 @@ Detects platform (systemd on Linux, launchd on macOS) and writes the
 appropriate user-scope unit / plist that runs `memman scheduler drain
 --pending` every 60 s. Units handle sleep/power-off catch-up natively.
 
-The scheduler path always routes through OpenRouter with ZDR enforced.
 Every `INSTALLABLE_KEYS` value present in `os.environ` at install time
 is persisted to `<MEMMAN_DATA_DIR>/env` at mode 600 and sourced by
 EnvironmentFile (systemd) or a wrapper script (launchd).

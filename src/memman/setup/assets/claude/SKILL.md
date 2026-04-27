@@ -92,7 +92,7 @@ memman graph related <id> --edge causal
 
 ```bash
 memman status                         # insight count, store, scheduler state
-memman doctor                         # health check (sqlite, queue, keys, scheduler)
+memman doctor                         # health check (sqlite, queue, keys, scheduler, env_completeness)
 ```
 
 ## Operator commands the agent rarely runs
