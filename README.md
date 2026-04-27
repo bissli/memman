@@ -23,8 +23,8 @@ See [Design & Architecture](docs/DESIGN.md) for details.
 
 ```bash
 pipx install git+https://github.com/bissli/memman.git
-export OPENROUTER_API_KEY=...   # required for the background enrichment worker
-export VOYAGE_API_KEY=...       # required for embeddings
+export OPENROUTER_API_KEY=...   # LLM provider key (current default)
+export VOYAGE_API_KEY=...       # embedding provider key (current default)
 memman install
 ```
 
@@ -47,19 +47,7 @@ For NanoClaw (agents running inside Linux containers), install memman on the hos
 
 Start a new Claude Code session (or restart the OpenClaw gateway) to activate.
 
-### Development
-
-```bash
-git clone https://github.com/bissli/memman.git && cd memman
-pipx install -e . --force      # editable install — Python and asset edits go live
-memman install
-```
-
-Or for running the tests without wiring an integration:
-
-```bash
-make dev && make test
-```
+For editable installs and the test suite, see [Development](#development) below.
 
 ## Updating
 
@@ -80,52 +68,126 @@ Either can run alone. `memman uninstall` never deletes anything under `~/.memman
 
 ## How It Works
 
-Once set up, memory operates transparently via Claude Code's [hook system](https://docs.anthropic.com/en/docs/claude-code/hooks):
+Once installed, memory operates transparently — the agent recalls before responding and remembers after, driven by Claude Code's [hook system](https://docs.anthropic.com/en/docs/claude-code/hooks) (or, for OpenClaw, a `before_prompt_build` plugin). You never run memman commands yourself; the agent does.
+
+Six hook scripts drive the Claude Code lifecycle:
+
+| Hook script      | Event                       | Role                                                          |
+| ---------------- | --------------------------- | ------------------------------------------------------------- |
+| `prime.sh`       | `SessionStart`              | loads the behavioral guide; surfaces post-compact recall hint |
+| `user_prompt.sh` | `UserPromptSubmit`          | reminds the agent to recall before answering                  |
+| `stop.sh`        | `Stop`                      | reminds the agent to evaluate "remember?" after responding    |
+| `task_recall.sh` | `PreToolUse` (Task)         | reminds the agent to recall before sub-agent delegation       |
+| `compact.sh`     | `PreCompact`                | drops a flag so the next `SessionStart` re-recalls context    |
+| `exit_plan.sh`   | `PreToolUse` (ExitPlanMode) | prompts memory storage before plan-to-execute transitions     |
+
+### Inside Claude Code vs outside
+
+memman splits along a strict hot-path boundary: the agent's turn only does fast local work; everything slow is deferred to a background worker.
 
 ```
-Session starts
-    │
-    ▼
-  Prime (SessionStart) ─── prime.sh ──→ memman prime (status + guide + compact hint)
-    │
-    ▼
-  User sends message
-    │
-    ▼
-  Remind (UserPromptSubmit) ─── user_prompt.sh ──→ remind agent to recall & remember
-    │
-    ▼
-  LLM generates response (guided by skill + guide.md rules)
-    │
-    ▼
-  Nudge (Stop) ─── stop.sh ──→ remind agent to remember
-    │
-    ▼
-  (before delegating to sub-agents)
-  Recall (PreToolUse) ─── task_recall.sh ──→ remind agent to recall before delegation
-    │
-    ▼
-  (when context compacts)
-  Compact (PreCompact) ─── compact.sh ──→ flag file for post-compact recall
-    │
-    ▼
-  (before exiting plan mode)
-  ExitPlan (PreToolUse) ─── exit_plan.sh ──→ prompt memory storage before transition
+┌─────────── INSIDE Claude Code (synchronous, hot path) ────────────┐
+│                                                                   │
+│   user message                                                    │
+│       │                                                           │
+│       ▼                                                           │
+│   UserPromptSubmit hook ─► reminds agent to recall                │
+│       │                                                           │
+│       ▼                                                           │
+│   memman recall "<query>"  ── reads SQLite, returns ranked hits   │
+│       │                                                           │
+│       ▼                                                           │
+│   agent reasons + responds                                        │
+│       │                                                           │
+│       ▼                                                           │
+│   Stop hook ─► reminds agent to evaluate "remember?"              │
+│       │                                                           │
+│       ▼                                                           │
+│   memman remember "<text>"  ── appends raw blob to queue          │
+│       │                                                           │
+│       ▼                                                           │
+│   turn ends                                                       │
+│                                                                   │
+└───────────────────────────────────────────────────────────────────┘
+                               │
+                  (queue file; not yet recallable)
+                               │
+┌───────────────────────────────────────────────────────────────────────┐
+│                                                                       │
+│   systemd timer / launchd agent / `scheduler serve` loop              │
+│           │  fires every 60 s (or continuous if --interval 0)         │
+│       ▼                                                               │
+│   acquire flock on ~/.memman/drain.lock  (drains never overlap)       │
+│           │                                                           │
+│       ▼                                                               │
+│   memman scheduler drain --pending                                    │
+│           │                                                           │
+│       ├─► LLM extraction                facts from raw blob           │
+│       ├─► reconciliation                ADD/UPDATE/DELETE/NONE        │
+│       ├─► enrichment                    entities, tags, weight        │
+│       ├─► embedding                     vector (provider-defined dim) │
+│       ├─► edge inference                semantic/entity/causal        │
+│       └─► write to SQLite                                             │
+│           │                                                           │
+│       ▼                                                               │
+│   release lock; heartbeat; sleep until next tick                      │
+│                                                                       │
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
-Six hooks drive the lifecycle. **Prime** loads the behavioral guide at session start. **Remind** and **Nudge** prompt the agent to recall and remember before/after each response. **Compact** bridges context across compaction via a flag file that Prime detects on the next SessionStart. **Recall** fires before sub-agent delegation. **ExitPlan** prompts memory storage before plan-to-execute transitions.
+| Step                | Where   | Latency       | Notes                                     |
+| ------------------- | ------- | ------------- | ----------------------------------------- |
+| `memman recall`     | inside  | ~50–200 ms    | local SQLite read; no network             |
+| agent reasoning     | inside  | —             | uses recall results as context            |
+| `memman remember`   | inside  | ~50 ms        | enqueue only — no LLM, no embed, no edges |
+| drain trigger       | outside | every 60 s+   | systemd/launchd timer or serve loop       |
+| LLM extraction      | outside | network-bound | external LLM provider call                |
+| embedding           | outside | network-bound | external embedding provider call          |
+| edge inference + DB | outside | ms            | makes insight visible to *future* turns   |
 
-You don't run memman commands yourself. The agent does — driven by hooks and guided by the skill and behavioral guide.
+Two invariants follow from this split:
+
+- **Hot-path discipline.** Nothing the agent runs synchronously hits the network or an LLM. `recall` is a SQLite read; `remember` is a blob append.
+- **One-way visibility.** A memory written this turn is **not** recallable later in the same turn — it lands for future sessions only.
+
+### OpenClaw and NanoClaw — same split, different topology
+
+The hot-path/background split is universal across integrations. What changes is **what triggers the recall/remember reminders** and **where the worker runs**:
+
+| Integration | Trigger (inside)                                                          | Worker (outside)                                              | Data location                                                                                 |
+| ----------- | ------------------------------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Claude Code | six lifecycle hook scripts (`prime.sh`, `user_prompt.sh`, `stop.sh`, ...) | systemd timer (Linux) or launchd agent (macOS) on host        | `~/.memman/data/default/` on host                                                             |
+| OpenClaw    | `before_prompt_build` plugin injects recall/remember hints                | same host scheduler as Claude Code (shared)                   | `~/.memman/data/default/` on host                                                             |
+| NanoClaw    | three hook scripts inside the container                                   | `memman scheduler serve` as PID 1 inside the *same* container | host `~/.memman/data/{group}/` volume-mounted to container `/home/node/.memman/data/default/` |
+
+**OpenClaw** sits on the same host as Claude Code: install memman once on the host and the worker is shared. The agent invokes `memman` via the `exec` tool rather than Bash-hook nudges.
+
+**NanoClaw** is the only topology where the boundary actually moves. Agent and worker both live inside the container, but the SQLite store is volume-mounted from the host, so memory survives container restarts. Each WhatsApp group gets its own container and its own private store; an optional `~/.memman/data/global/` is mounted read-only into every container for shared knowledge.
+
+```
+┌────────────── HOST ──────────────┐     ┌──────────── CONTAINER (per group) ────────────┐
+│                                  │     │                                                │
+│  ~/.memman/data/{group}/  ── rw ─┼─────┼─► /home/node/.memman/data/default/             │
+│  ~/.memman/data/global/   ── ro ─┼─────┼─► /home/node/.memman/data/global/              │
+│                                  │     │                                                │
+│  (no host scheduler unit         │     │  PID 1: memman scheduler serve --interval 60   │
+│   needed for NanoClaw)           │     │    drains queue.db (per-container, ephemeral)  │
+│                                  │     │                                                │
+│                                  │     │  agent + hooks ─► memman recall / remember     │
+└──────────────────────────────────┘     └────────────────────────────────────────────────┘
+```
+
+The container's `queue.db` is intentionally outside the volume mount — pending writes are seconds old and re-driven on the next drain tick, so a restart loses at most one cycle of unprocessed items.
 
 ## Features
 
 - **Hook-driven** — six lifecycle hooks handle all memory operations automatically
-- **LLM-supervised** — the host LLM decides what to remember and forget; Haiku handles fact extraction, reconciliation, enrichment, causal inference, and query expansion
+- **LLM-supervised** — the host LLM decides what to remember and forget; a small worker model handles fact extraction, reconciliation, enrichment, causal inference, and query expansion
 - **Four-graph architecture** — temporal, entity, causal, and semantic edges
 - **Intent-aware recall** — graph beam search with RRF fusion; query intent (WHY/WHEN/ENTITY/GENERAL) controls edge weights and result ordering
 - **LLM reconciliation** — each fact classified as ADD/UPDATE/DELETE/NONE against existing memories
 - **Retention lifecycle** — importance decay, access-count boosting, immunity rules, garbage collection
-- **Voyage embeddings** — 512-dim vectors via Voyage AI for semantic search and edge creation
+- **Pluggable embeddings** — Voyage, any OpenAI-compatible endpoint (OpenAI, OpenRouter, vLLM, LiteLLM, ...), or Ollama; vector dim is provider-defined and recorded in a per-store fingerprint so switching providers is an explicit `memman embed reembed` step rather than a silent migration
 
 ## FAQ
 
@@ -150,17 +212,13 @@ Different agents/processes can use different stores via the `MEMMAN_STORE` envir
 The shipped `guide.md` (behavioral policy) and `SKILL.md` (command reference) live inside the installed package and update on `pipx upgrade memman`. memman does not deploy any user-override file under `~/.memman/`. To change behavior, edit the package source (editable installs pick up changes live) or propose a change upstream.
 
 **How does `memman remember` work?**
-It is a fast queue-append (~50 ms). A scheduler-driven worker drains the queue and runs the full pipeline — fact extraction, reconciliation, enrichment, causal inference, embedding — out of band. Three scheduler kinds: a `systemctl --user` timer on Linux hosts, a launchd agent on macOS hosts, and `memman scheduler serve` (a long-running drain loop) on hosts that opt in via `MEMMAN_SCHEDULER_KIND=serve` — typically containers running it as PID 1. Newly stored memories become recallable on the next drain tick (default 60 s).
+See [Inside Claude Code vs outside](#inside-claude-code-vs-outside). Short version: `remember` is a queue-append (~50 ms); newly stored memories become recallable on the next drain tick (default 60 s).
 
 **How do I pause the scheduler?**
-`memman scheduler stop` flips the persistent state to STOPPED. The serve loop polls the state every iteration AND mid-drain, so pause is observed within seconds even during long drains; on systemd/launchd hosts the timer is also disabled. While stopped, memman is **recall-only**: `remember`, `replace`, `forget`, `graph link`, `graph rebuild`, and `insights protect` reject with `Scheduler is stopped; cannot <verb>. Run 'memman scheduler start' to enable.` `memman scheduler start` resumes (and on serve hosts the operator must re-run `memman scheduler serve`). `memman scheduler interval --seconds N` changes the cadence (min 60 s for systemd/launchd; serve mode accepts any non-negative value, with `0` meaning continuous — drains run back-to-back, throttled by a 100 ms idle backoff when the queue is empty). Drains never overlap: the next trigger waits for the previous to finish, enforced by a process-level `fcntl.flock` on `~/.memman/drain.lock`. `memman log worker` prints the tail of the worker's output; add `--errors` for stderr. Logs live at `~/.memman/data/logs/memman.log`.
+`memman scheduler stop` flips the persistent state to STOPPED and disables the timer on systemd/launchd hosts. While stopped, memman is **recall-only** — `remember`, `replace`, `forget`, `graph link`, `graph rebuild`, and `insights protect` reject with `Scheduler is stopped; cannot <verb>. Run 'memman scheduler start' to enable.` Resume with `memman scheduler start` (on serve hosts the operator must also re-run `memman scheduler serve`). Change cadence with `memman scheduler interval --seconds N`. Tail the worker output with `memman log worker [--errors]`; logs live at `~/.memman/data/logs/memman.log`.
 
 **Upgrading?**
 After `pipx upgrade memman`, re-run `memman install` to refresh the scheduler unit's `ExecStart` line. `make e2e` and `memman doctor` will catch unit-file drift.
-
-## Configuration
-
-See [Usage & Reference](docs/USAGE.md#configuration) for all environment variables, API keys, and optional overrides.
 
 ## Development
 
@@ -173,7 +231,7 @@ memman install      # deploy integration
 memman uninstall    # remove integration
 ```
 
-**Dependencies**: Python 3.11+, Click, httpx, cachetools, tqdm. **Required**: `OPENROUTER_API_KEY` (LLM inference via OpenRouter's ZDR-enforced routing) and `VOYAGE_API_KEY` (embeddings).
+**Dependencies**: Python 3.11+, Click, httpx, cachetools, tqdm. **Required at runtime**: an LLM provider API key and an embedding provider API key. Defaults today are `OPENROUTER_API_KEY` for inference and `VOYAGE_API_KEY` for embeddings; both providers are pluggable and may change in future releases. See [Usage & Reference](docs/USAGE.md#configuration) for the current set of supported providers.
 
 ## Documentation
 
