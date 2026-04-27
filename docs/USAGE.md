@@ -144,6 +144,22 @@ memman insights review
 
 To actually delete an insight, use `memman forget <id>`.
 
+### Embedding Operations
+
+```bash
+# Show current embedding provider, model, and per-store fingerprint
+memman embed status
+
+# Re-embed all insights with the current provider (e.g., after switching
+# from Voyage to OpenAI-compatible). Rejected when scheduler is stopped.
+memman embed reembed
+memman embed reembed --dry-run    # preview count without modifying DB
+```
+
+Switching embedding providers (`MEMMAN_EMBED_PROVIDER`) requires an
+explicit `embed reembed` step. The per-store fingerprint detects
+provider/model drift and surfaces it in `embed status`.
+
 ### Store Management
 
 MemMan supports named stores for data isolation. Each store has its own independent database.

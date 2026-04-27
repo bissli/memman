@@ -38,13 +38,12 @@ An Insight is the fundamental memory unit in MemMan. Each insight represents an 
 | `context`    | Project context                  | "Phase 3 completed, 118 tests passing"              |
 | `general`    | General                          | Content that doesn't fit the above categories       |
 
-**Importance** ranges from 1 to 5 and affects retrieval ranking and lifecycle:
+**Importance** ranges from 2 to 5 and affects retrieval ranking and lifecycle. The CLI accepts `--imp 1` but the LLM extraction pipeline floors it at 2 — `1` is reserved for raw `--no-reconcile` writes only:
 
 - **5**: Critical decision, never automatically cleaned up
 - **4**: Important fact, immune to auto-pruning
-- **3**: Standard memory
-- **2**: Low priority
-- **1**: Temporary information, first to be cleaned up
+- **3**: Standard memory (default `--imp`)
+- **2**: Low priority / passing mention (effective floor for extracted facts)
 
 ## 2.2 Edge (Relationship)
 
@@ -73,11 +72,12 @@ Each named store has its own SQLite file under `~/.memman/data/<store>/memman.db
 insights (
   id, content, category, importance,
   tags, entities, source,
-  embedding,                    -- Voyage AI 512-dim vector (BLOB)
-  keywords, summary, semantic_facts,  -- LLM enrichment columns
+  embedding,                                    -- embedding vector (BLOB)
+  keywords, summary, semantic_facts,            -- LLM enrichment columns
   access_count, last_accessed_at,
-  effective_importance,          -- Decayed effective importance
-  linked_at, enriched_at,        -- Pipeline progress timestamps
+  effective_importance,                         -- Decayed effective importance
+  linked_at, enriched_at,                       -- Pipeline progress timestamps
+  prompt_version, model_id, embedding_model,    -- Provenance for re-enrichment
   created_at, updated_at, deleted_at
 )
 
@@ -91,7 +91,25 @@ edges (
 oplog (
   id, operation, insight_id, detail, created_at
 )
+
+-- Key/value metadata (e.g., embed/graph constants fingerprints)
+meta (
+  key, value
+)
 ```
+
+**Provenance columns** (`prompt_version`, `model_id`, `embedding_model`)
+record which LLM and embedding model produced each insight. They power
+`memman embed reembed` and `memman graph rebuild` decisions when models
+or prompts change.
+
+**Insight dataclass vs DB schema.** The `Insight` dataclass in
+`src/memman/model.py` is a subset of the DB schema — it holds the
+identity, content, category, importance, tags, entities, source,
+timestamps, access bookkeeping, effective_importance, and provenance
+columns. The enrichment payload (`embedding`, `keywords`, `summary`,
+`semantic_facts`, `linked_at`, `enriched_at`) lives in the DB only and
+is read/written through SQL helpers, not via the dataclass.
 
 ---
 
