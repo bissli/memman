@@ -1,5 +1,17 @@
 # MemMan
 
+```
+          _.--~~(~~--._
+        _{             )   )_
+      ,    ) -~~~~- ( ,-'    )_
+     (   `-,_..`.,    )-- '__,)
+    ( `  _)   (  -~( -_  `,    }
+    (_-   _    ~_-~~~~`,   ,'   )
+       `~ -^(     __;-,(((((  )))
+              ~~~~~ {_ -_(((  )))
+                       `\__/`
+```
+
 **LLM-supervised persistent memory for AI agents.**
 
 [![CI](https://github.com/bissli/memman/actions/workflows/ci.yml/badge.svg)](https://github.com/bissli/memman/actions/workflows/ci.yml)
