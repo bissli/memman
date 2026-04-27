@@ -45,22 +45,25 @@ class TestClientInit:
         client = Client()
         assert client._api_key == 'real-test-key'
 
-    def test_missing_api_key_empty(self, monkeypatch):
-        """Client has empty key when VOYAGE_API_KEY not set."""
+    @pytest.mark.no_default_env
+    def test_missing_api_key_raises(self, monkeypatch):
+        """Client raises ConfigError when VOYAGE_API_KEY is unset."""
+        from memman.exceptions import ConfigError
         monkeypatch.delenv('VOYAGE_API_KEY', raising=False)
-        client = Client()
-        assert client._api_key == ''
+        with pytest.raises(ConfigError, match='VOYAGE_API_KEY'):
+            Client()
 
 
 class TestAvailable:
     """Availability check behavior."""
 
-    def test_no_key_returns_false(self, monkeypatch):
-        """available() returns False with no API key."""
-        monkeypatch.setattr(Client, 'available', _original_available)
+    @pytest.mark.no_default_env
+    def test_no_key_raises_at_construction(self, monkeypatch):
+        """Construction raises before available() can be called."""
+        from memman.exceptions import ConfigError
         monkeypatch.delenv('VOYAGE_API_KEY', raising=False)
-        client = Client()
-        assert client.available() is False
+        with pytest.raises(ConfigError):
+            Client()
 
     def test_available_is_memoized(self, monkeypatch):
         """available() calls the HTTP probe at most once per instance.
@@ -76,10 +79,8 @@ class TestAvailable:
                 status_code = 200
             return Resp()
 
-        monkeypatch.setattr(
-            voyage, '_CLIENT',
-            type('FakeClient', (), {
-                'post': staticmethod(_mock_post)})())
+        from memman import _http
+        monkeypatch.setitem(_http._SESSIONS, voyage.__name__, type('FakeClient', (), {'post': staticmethod(_mock_post)})())
         client = Client()
         assert client.available() is True
         assert client.available() is True
@@ -103,10 +104,8 @@ class TestEmbed:
                     return {'data': [{'embedding': expected_vec}]}
             return Resp()
 
-        monkeypatch.setattr(
-            voyage, '_CLIENT',
-            type('FakeClient', (), {
-                'post': staticmethod(mock_post)})())
+        from memman import _http
+        monkeypatch.setitem(_http._SESSIONS, voyage.__name__, type('FakeClient', (), {'post': staticmethod(mock_post)})())
         vec = real_client.embed('test text')
         assert len(vec) == EMBEDDING_DIM
         assert vec == expected_vec
@@ -119,10 +118,8 @@ class TestEmbed:
                 status_code = 401
             return Resp()
 
-        monkeypatch.setattr(
-            voyage, '_CLIENT',
-            type('FakeClient', (), {
-                'post': staticmethod(mock_post)})())
+        from memman import _http
+        monkeypatch.setitem(_http._SESSIONS, voyage.__name__, type('FakeClient', (), {'post': staticmethod(mock_post)})())
         with pytest.raises(RuntimeError, match='401'):
             real_client.embed('test')
 
@@ -137,10 +134,8 @@ class TestEmbed:
                     return {'data': []}
             return Resp()
 
-        monkeypatch.setattr(
-            voyage, '_CLIENT',
-            type('FakeClient', (), {
-                'post': staticmethod(mock_post)})())
+        from memman import _http
+        monkeypatch.setitem(_http._SESSIONS, voyage.__name__, type('FakeClient', (), {'post': staticmethod(mock_post)})())
         with pytest.raises(RuntimeError, match='0 vectors'):
             real_client.embed('test')
 

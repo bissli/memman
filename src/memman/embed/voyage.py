@@ -1,32 +1,22 @@
 """Voyage AI HTTP client for embedding generation.
 
-Uses a module-level `httpx.Client` so repeated embed calls in one
-worker drain reuse the TLS connection. Tests that need to intercept
-the HTTP layer monkeypatch `_CLIENT` directly with a stand-in that
-implements `.post(url, headers=..., json=..., timeout=...)`.
+Uses the shared `memman._http.get_session` so repeated embed calls in
+one worker drain reuse the TLS connection. Tests that need to
+intercept the HTTP layer monkeypatch the session via
+`memman._http._SESSIONS[__name__]` or by patching `httpx.Client.post`.
 """
 
 import logging
 import time
 
-import httpx
 from memman import config, trace
+from memman._http import get_session, post_with_retry
 
 logger = logging.getLogger('memman')
 
 DEFAULT_MODEL = 'voyage-3-lite'
 DEFAULT_ENDPOINT = 'https://api.voyageai.com'
 EMBEDDING_DIM = 512
-
-_CLIENT: httpx.Client | None = None
-
-
-def _session() -> httpx.Client:
-    """Return the module-level httpx.Client, creating it lazily."""
-    global _CLIENT
-    if _CLIENT is None:
-        _CLIENT = httpx.Client()
-    return _CLIENT
 
 
 class Client:
@@ -38,7 +28,7 @@ class Client:
         self.endpoint = DEFAULT_ENDPOINT
         self.model = DEFAULT_MODEL
         self.dim = EMBEDDING_DIM
-        self._api_key = config.get(config.VOYAGE_API_KEY) or ''
+        self._api_key = config.require(config.VOYAGE_API_KEY)
         self._availability_cache: bool | None = None
 
     def _headers(self) -> dict[str, str]:
@@ -62,7 +52,7 @@ class Client:
             self._availability_cache = False
             return False
         try:
-            resp = _session().post(
+            resp = get_session(__name__).post(
                 f'{self.endpoint}/v1/embeddings',
                 headers=self._headers(),
                 json={'model': self.model, 'input': ['test']},
@@ -94,7 +84,9 @@ class Client:
             input_lens=[len(t) for t in texts],
             headers=trace.redact_headers(headers))
         t0 = time.monotonic()
-        resp = _session().post(url, headers=headers, json=body, timeout=30.0)
+        resp = post_with_retry(
+            get_session(__name__), url,
+            headers=headers, json=body, timeout=30.0)
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         if resp.status_code != 200:
             trace.event(

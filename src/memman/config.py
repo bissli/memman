@@ -48,6 +48,7 @@ OPENAI_EMBED_ENDPOINT = 'MEMMAN_OPENAI_EMBED_ENDPOINT'
 OPENAI_EMBED_MODEL = 'MEMMAN_OPENAI_EMBED_MODEL'
 OLLAMA_HOST = 'MEMMAN_OLLAMA_HOST'
 OLLAMA_EMBED_MODEL = 'MEMMAN_OLLAMA_EMBED_MODEL'
+OPENROUTER_EMBED_MODEL = 'MEMMAN_OPENROUTER_EMBED_MODEL'
 
 ENV_FILENAME = 'env'
 
@@ -71,6 +72,7 @@ INSTALLABLE_KEYS = (
     OPENAI_EMBED_MODEL,
     OLLAMA_HOST,
     OLLAMA_EMBED_MODEL,
+    OPENROUTER_EMBED_MODEL,
     OPENROUTER_API_KEY,
     VOYAGE_API_KEY,
     )
@@ -91,27 +93,12 @@ INSTALL_DEFAULTS: dict[str, str] = {
     OPENAI_EMBED_MODEL: 'text-embedding-3-small',
     OLLAMA_HOST: 'http://localhost:11434',
     OLLAMA_EMBED_MODEL: 'nomic-embed-text',
+    OPENROUTER_EMBED_MODEL: 'baai/bge-m3',
     }
 
-_ALL_VARS = (
-    DATA_DIR,
-    STORE,
-    LLM_PROVIDER,
-    LLM_MODEL_FAST,
-    LLM_MODEL_SLOW,
-    EMBED_PROVIDER,
-    OPENROUTER_ENDPOINT,
-    DEBUG,
-    WORKER,
-    LOG_LEVEL,
-    OPENROUTER_API_KEY,
-    VOYAGE_API_KEY,
-    OPENAI_EMBED_API_KEY,
-    OPENAI_EMBED_ENDPOINT,
-    OPENAI_EMBED_MODEL,
-    OLLAMA_HOST,
-    OLLAMA_EMBED_MODEL,
-    )
+_PROCESS_CONTROL_VARS = (DATA_DIR, STORE, WORKER, DEBUG)
+
+_ALL_VARS = INSTALLABLE_KEYS + _PROCESS_CONTROL_VARS
 
 
 _FILE_CACHE: dict[str, str] | None = None
@@ -188,6 +175,7 @@ def get(name: str) -> str | None:
 
     No code-default fallback at runtime — all defaults live in
     `INSTALL_DEFAULTS` and are written to the file at install time.
+    Callers that require a value should use `require()` instead.
     """
     raw = os.environ.get(name)
     if raw is not None and raw != '':
@@ -196,6 +184,25 @@ def get(name: str) -> str | None:
     if file_value is not None and file_value != '':
         return file_value
     return None
+
+
+def require(name: str) -> str:
+    """Return the resolved value for `name` or raise `ConfigError`.
+
+    Use at every call site that needs a value. After `memman install`
+    the env file holds every `INSTALLABLE_KEYS` entry, so `require`
+    succeeds; raising means install was never run, the file was
+    corrupted, or a required-but-optional key is being read on a
+    provider that doesn't have it set.
+    """
+    from memman.exceptions import ConfigError
+    value = get(name)
+    if value is None:
+        raise ConfigError(
+            f'{name} is not set in os.environ or'
+            f' {env_file_path()}; run `memman install` to populate'
+            ' the env file')
+    return value
 
 
 def get_bool(name: str, default: bool = False) -> bool:
@@ -269,41 +276,53 @@ def effective_source(name: str) -> str:
 def collect_install_knobs(data_dir: str) -> dict[str, str]:
     """Build the dict of values to persist to `~/.memman/env` at install.
 
-    For each `INSTALLABLE_KEYS` entry, prefer `os.environ` value; else
-    use `INSTALL_DEFAULTS`. When the active provider is `openrouter`
-    AND model FAST/SLOW are using the default fallback, query
-    OpenRouter's `/models` to resolve the actual latest haiku/sonnet.
-    On resolver failure the `INSTALL_DEFAULTS` value is kept.
+    Precedence per key: `os.environ` > existing env file >
+    OpenRouter live resolver (FAST/SLOW only) > `INSTALL_DEFAULTS`.
+    Whatever wins is what gets written to the file. Re-running install
+    after the user edited the file directly preserves the file value
+    unless an env export overrides it.
 
     Raises `ConfigError` (via the caller's import) when a mandatory
     secret is missing.
     """
     from memman.exceptions import ConfigError
 
+    file_values = parse_env_file(env_file_path(data_dir))
+
     knobs: dict[str, str] = {}
-    user_supplied: set[str] = set()
+    needs_resolve: set[str] = set()
     for key in INSTALLABLE_KEYS:
         env_value = os.environ.get(key, '').strip()
         if env_value:
             knobs[key] = env_value
-            user_supplied.add(key)
-        elif key in INSTALL_DEFAULTS:
-            knobs[key] = INSTALL_DEFAULTS[key]
+            continue
+        file_value = file_values.get(key, '').strip()
+        if file_value:
+            knobs[key] = file_value
+            continue
+        needs_resolve.add(key)
 
-    provider = knobs.get(LLM_PROVIDER, INSTALL_DEFAULTS.get(LLM_PROVIDER))
+    provider = knobs.get(LLM_PROVIDER) or INSTALL_DEFAULTS.get(LLM_PROVIDER)
     if provider == 'openrouter':
         from memman.llm.openrouter_models import resolve_latest_in_family
         api_key = knobs.get(OPENROUTER_API_KEY, '')
-        endpoint = knobs.get(
-            OPENROUTER_ENDPOINT, INSTALL_DEFAULTS[OPENROUTER_ENDPOINT])
+        endpoint = (
+            knobs.get(OPENROUTER_ENDPOINT)
+            or INSTALL_DEFAULTS[OPENROUTER_ENDPOINT])
         for role_key, family in (
                 (LLM_MODEL_FAST, 'haiku'),
                 (LLM_MODEL_SLOW, 'sonnet')):
-            if role_key in user_supplied or not api_key:
+            if role_key not in needs_resolve or not api_key:
                 continue
             resolved = resolve_latest_in_family(api_key, endpoint, family)
             if resolved:
                 knobs[role_key] = resolved
+                needs_resolve.discard(role_key)
+
+    for key in list(needs_resolve):
+        if key in INSTALL_DEFAULTS:
+            knobs[key] = INSTALL_DEFAULTS[key]
+            needs_resolve.discard(key)
 
     for required in MANDATORY_INSTALL_KEYS:
         if not knobs.get(required):
@@ -311,19 +330,3 @@ def collect_install_knobs(data_dir: str) -> dict[str, str]:
                 f'{required} is required; export it and re-run install')
 
     return knobs
-
-
-def write_default_env_file(data_dir: Path) -> None:
-    """Write `INSTALL_DEFAULTS` to `<data_dir>/env`.
-
-    Used only by the test fixture so runtime call sites resolve to the
-    canonical defaults without each test having to populate the file.
-    Production install uses `_write_env_keys` in `setup/scheduler.py`.
-    """
-    data_dir.mkdir(parents=True, exist_ok=True)
-    path = data_dir / ENV_FILENAME
-    contents = '\n'.join(
-        f'{k}={v}' for k, v in INSTALL_DEFAULTS.items()) + '\n'
-    path.write_text(contents)
-    path.chmod(0o600)
-    reset_file_cache()

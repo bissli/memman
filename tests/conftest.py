@@ -57,9 +57,26 @@ def _isolate_env(tmp_path, monkeypatch, request):
     monkeypatch.delenv('VOYAGE_API_KEY', raising=False)
     monkeypatch.delenv('MEMMAN_OPENAI_EMBED_API_KEY', raising=False)
     if 'no_default_env' not in request.keywords:
-        config.write_default_env_file(data_dir)
+        _write_default_env_file(data_dir)
     config.reset_file_cache()
     yield
+    config.reset_file_cache()
+
+
+def _write_default_env_file(data_dir):
+    """Seed `<data_dir>/env` with `INSTALL_DEFAULTS` for tests.
+
+    Mirrors a post-install state so runtime call sites (which use
+    `config.require`) resolve cleanly. Tests that need the broken
+    state opt out via `@pytest.mark.no_default_env`.
+    """
+    from memman import config
+    data_dir.mkdir(parents=True, exist_ok=True)
+    path = data_dir / config.ENV_FILENAME
+    contents = '\n'.join(
+        f'{k}={v}' for k, v in config.INSTALL_DEFAULTS.items()) + '\n'
+    path.write_text(contents)
+    path.chmod(0o600)
     config.reset_file_cache()
 
 
@@ -238,6 +255,7 @@ def _mock_apis(request, monkeypatch):
     monkeypatch.setattr(
         'memman.embed.voyage.Client.available', lambda self: True)
     monkeypatch.setenv('OPENROUTER_API_KEY', 'mock-key-for-testing')
+    monkeypatch.setenv('VOYAGE_API_KEY', 'mock-voyage-key-for-testing')
     from memman.llm import client as llm_client_mod
     from memman.llm import extract as llm_extract_mod
     llm_client_mod.reset_role_cache()

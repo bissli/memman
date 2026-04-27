@@ -25,7 +25,41 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_OPENAI_EMBED_MODEL',
     'MEMMAN_OLLAMA_HOST',
     'MEMMAN_OLLAMA_EMBED_MODEL',
+    'MEMMAN_OPENROUTER_EMBED_MODEL',
     }
+
+
+def test_mandatory_keys_subset_of_installable():
+    """MANDATORY_INSTALL_KEYS must be a subset of INSTALLABLE_KEYS."""
+    assert set(config.MANDATORY_INSTALL_KEYS) <= set(config.INSTALLABLE_KEYS)
+
+
+def test_secret_vars_subset_of_installable():
+    """Every secret must be in INSTALLABLE_KEYS so install can write it."""
+    assert config.SECRET_VARS <= set(config.INSTALLABLE_KEYS)
+
+
+def test_install_defaults_keys_subset_of_installable():
+    """INSTALL_DEFAULTS must not contain ghost keys outside INSTALLABLE_KEYS."""
+    assert set(config.INSTALL_DEFAULTS) <= set(config.INSTALLABLE_KEYS)
+
+
+def test_all_vars_covers_installable_plus_process_control():
+    """_ALL_VARS = INSTALLABLE_KEYS + process-control vars."""
+    expected = set(config.INSTALLABLE_KEYS) | {
+        config.DATA_DIR, config.STORE, config.WORKER, config.DEBUG,
+        }
+    assert set(config._ALL_VARS) == expected
+
+
+def test_log_level_bootstrap_literal_matches_install_default():
+    """The cli.py bootstrap fall-through literal must equal INSTALL_DEFAULTS.
+
+    `cli._configure_logging` uses `or 'WARNING'` as a pre-install
+    bootstrap default. If `INSTALL_DEFAULTS[LOG_LEVEL]` ever changes,
+    the literal must be updated alongside; this test wires them together.
+    """
+    assert config.INSTALL_DEFAULTS[config.LOG_LEVEL] == 'WARNING'
 
 
 def test_constants_match_expected_names():
@@ -44,6 +78,7 @@ def test_constants_match_expected_names():
         config.OPENAI_EMBED_MODEL,
         config.OLLAMA_HOST,
         config.OLLAMA_EMBED_MODEL,
+        config.OPENROUTER_EMBED_MODEL,
         }
     assert actual == ALL_EXPECTED_NAMES
 

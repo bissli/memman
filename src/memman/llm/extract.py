@@ -299,12 +299,12 @@ def _expand_cache_key(query: str) -> str:
     """Salt with the configured fast-model id.
 
     The model id is resolved at install time and persisted to
-    `~/.memman/env`, so `config.get` always returns a real value here
-    (or `None` if install was never run, which the caller would have
-    failed before reaching cache-key generation).
+    `~/.memman/env`, so `config.require` always returns a real value
+    here. Reaching this with an unset key means install was never run,
+    which is a `ConfigError` upstream callers handle.
     """
     import hashlib
-    salt = config.get(config.LLM_MODEL_FAST) or ''
+    salt = config.require(config.LLM_MODEL_FAST)
     digest = hashlib.sha256(
         f'{_normalize_for_cache(query)}|{salt}'.encode())
     return digest.hexdigest()[:16]

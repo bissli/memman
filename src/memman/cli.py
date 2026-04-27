@@ -34,6 +34,12 @@ _WORKER_LOG_BACKUPS = 3
 
 def _configure_logging(data_dir: str, verbose: bool, debug: bool) -> None:
     """Configure the memman logger once per process.
+
+    Bootstrap exception to the no-runtime-defaults rule: this function
+    runs on every CLI invocation including `memman install` itself,
+    before the env file exists. The literal `'WARNING'` fall-through
+    must equal `INSTALL_DEFAULTS[LOG_LEVEL]`; a unit test asserts that
+    invariant.
     """
     if debug:
         level = logging.DEBUG
