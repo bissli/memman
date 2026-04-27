@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 from memman.cli import cli
-from memman.doctor import check_env_permissions, check_last_worker_run
+from memman.doctor import check_env_permissions, check_scheduler_heartbeat
 from memman.doctor import check_queue_schema, check_scheduler_state
 from memman.doctor import check_schema_columns
 from memman.store.db import open_db
@@ -119,39 +119,39 @@ def _started_scheduler_status(interval=900):
         }
 
 
-def test_last_worker_run_fail_when_no_drains_and_started(tmp_path, monkeypatch):
+def test_scheduler_heartbeat_fail_when_no_drains_and_started(tmp_path, monkeypatch):
     """Scheduler started + installed but no worker_runs row yet -> fail."""
     from memman.setup import scheduler as sch
     monkeypatch.setattr(sch, 'status', _started_scheduler_status)
-    result = check_last_worker_run(str(tmp_path))
+    result = check_scheduler_heartbeat(str(tmp_path))
     assert result['status'] == 'fail'
     assert 'no drains recorded' in result['detail']['reason']
 
 
-def test_last_worker_run_pass_when_stopped(tmp_path, monkeypatch):
+def test_scheduler_heartbeat_pass_when_stopped(tmp_path, monkeypatch):
     """Scheduler stopped -> pass (no drain expected; recall-only mode)."""
     from memman.setup import scheduler as sch
     monkeypatch.setattr(
         sch, 'status', lambda: {
             'interval_seconds': 900, 'state': 'stopped',
             'installed': True})
-    result = check_last_worker_run(str(tmp_path))
+    result = check_scheduler_heartbeat(str(tmp_path))
     assert result['status'] == 'pass'
     assert "'stopped'" in result['detail']['reason']
 
 
-def test_last_worker_run_pass_when_uninstalled(tmp_path, monkeypatch):
+def test_scheduler_heartbeat_pass_when_uninstalled(tmp_path, monkeypatch):
     """Scheduler uninstalled -> pass (not relevant)."""
     from memman.setup import scheduler as sch
     monkeypatch.setattr(
         sch, 'status', lambda: {
             'interval_seconds': None, 'state': 'stopped',
             'installed': False})
-    result = check_last_worker_run(str(tmp_path))
+    result = check_scheduler_heartbeat(str(tmp_path))
     assert result['status'] == 'pass'
 
 
-def test_last_worker_run_pass_on_recent_drain(tmp_path, monkeypatch):
+def test_scheduler_heartbeat_pass_on_recent_drain(tmp_path, monkeypatch):
     """A drain within the interval window passes."""
     from memman.queue import finish_worker_run, open_queue_db, start_worker_run
     from memman.setup import scheduler as sch
@@ -163,11 +163,11 @@ def test_last_worker_run_pass_on_recent_drain(tmp_path, monkeypatch):
         finish_worker_run(conn, run_id, 0, 0, 0)
     finally:
         conn.close()
-    result = check_last_worker_run(str(tmp_path))
+    result = check_scheduler_heartbeat(str(tmp_path))
     assert result['status'] == 'pass'
 
 
-def test_last_worker_run_fail_on_recorded_error(tmp_path, monkeypatch):
+def test_scheduler_heartbeat_fail_on_recorded_error(tmp_path, monkeypatch):
     """A finished run with an error string flips the check to fail."""
     from memman.queue import finish_worker_run, open_queue_db, start_worker_run
     from memman.setup import scheduler as sch
@@ -180,7 +180,7 @@ def test_last_worker_run_fail_on_recorded_error(tmp_path, monkeypatch):
             conn, run_id, 1, 0, 1, error='RuntimeError: boom')
     finally:
         conn.close()
-    result = check_last_worker_run(str(tmp_path))
+    result = check_scheduler_heartbeat(str(tmp_path))
     assert result['status'] == 'fail'
 
 

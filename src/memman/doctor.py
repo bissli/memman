@@ -341,16 +341,15 @@ def check_scheduler_state() -> dict:
         }
 
 
-def check_last_worker_run(data_dir: str) -> dict:
-    """Verify the worker fired within 2 x the scheduler interval.
+def check_scheduler_heartbeat(data_dir: str) -> dict:
+    """Verify the worker fired within 3 x the scheduler interval.
 
     Cross-references scheduler state: only fails when the scheduler is
-    installed AND active but no recent worker_runs row exists. In paused
-    or disabled states a stale `last_worker_run` is expected.
-
-    This is the rename-agnostic catch-all that detects ExecStart drift,
-    PATH changes, chmod regressions, and other silent-failure modes
-    without ever inspecting the unit file's text.
+    installed AND active but no recent worker_runs row exists. The
+    serve loop writes a heartbeat row every iteration (even on empty
+    drains), so the threshold is `3 x interval` — two consecutive
+    misses indicate a real problem; one-miss tolerance handles
+    transient delays.
     """
     from memman.queue import last_worker_run, open_queue_db
     from memman.setup.scheduler import STATE_STARTED
@@ -361,18 +360,34 @@ def check_last_worker_run(data_dir: str) -> dict:
         interval = s.get('interval_seconds')
         state = s.get('state')
         installed = s.get('installed', False)
+        platform = s.get('platform', '')
     except Exception:
         interval = None
         state = None
         installed = False
+        platform = ''
 
     if not installed or state != STATE_STARTED:
         return {
-            'name': 'last_worker_run',
+            'name': 'scheduler_heartbeat',
             'status': 'pass',
             'detail': {
                 'reason': f'scheduler state is {state!r}; no drain expected',
                 'installed': installed,
+                'state': state,
+                'platform': platform,
+                },
+            }
+
+    if platform == 'serve' and interval is None:
+        return {
+            'name': 'scheduler_heartbeat',
+            'status': 'fail',
+            'detail': {
+                'reason': ('serve interval not recorded;'
+                           ' restart `memman scheduler serve` so the'
+                           ' interval file is rewritten'),
+                'platform': platform,
                 'state': state,
                 },
             }
@@ -385,13 +400,13 @@ def check_last_worker_run(data_dir: str) -> dict:
 
     if last is None:
         return {
-            'name': 'last_worker_run',
+            'name': 'scheduler_heartbeat',
             'status': 'fail',
             'detail': {
-                'reason': 'scheduler is active but no drains recorded yet;'
-                ' check ~/.memman/logs/enrich.err and re-run `memman install`'
-                ' if the unit was upgraded',
+                'reason': ('scheduler is active but no drains recorded yet;'
+                           ' check ~/.memman/data/logs/memman.log'),
                 'state': state,
+                'platform': platform,
                 'interval_seconds': interval,
                 },
             }
@@ -406,22 +421,24 @@ def check_last_worker_run(data_dir: str) -> dict:
         'error': last['error'],
         'interval_seconds': interval,
         'state': state,
+        'platform': platform,
         }
 
     if last['error']:
         status = 'fail'
-    elif interval and age > 2 * interval:
+    elif interval and age > 3 * interval:
         status = 'fail'
         detail['reason'] = (
             'scheduler is active but worker has not fired in '
-            f'{age}s (interval={interval}s); check '
-            '~/.memman/logs/enrich.err')
-    elif interval and age > interval + 60:
+            f'{age}s (interval={interval}s, threshold=3x); check '
+            '~/.memman/data/logs/memman.log')
+    elif interval and age > 2 * interval:
         status = 'warn'
     else:
         status = 'pass'
 
-    return {'name': 'last_worker_run', 'status': status, 'detail': detail}
+    return {
+        'name': 'scheduler_heartbeat', 'status': status, 'detail': detail}
 
 
 def check_llm_probe() -> dict:
@@ -580,7 +597,7 @@ def run_all_checks(db: 'DB', data_dir: str | None = None) -> dict:
         checks.extend((
             check_queue_schema(data_dir),
             check_queue_backlog(data_dir),
-            check_last_worker_run(data_dir),
+            check_scheduler_heartbeat(data_dir),
             check_env_permissions(),
             check_scheduler_state(),
             check_llm_probe(),
