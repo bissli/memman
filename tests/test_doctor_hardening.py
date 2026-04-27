@@ -175,8 +175,7 @@ def test_scheduler_heartbeat_threshold_floors_at_180s(tmp_path, monkeypatch):
     sub-minute intervals — the rate-limited heartbeat writes 1/min so
     a 180s window allows two-miss tolerance.
     """
-    from memman.queue import finish_worker_run, open_queue_db
-    from memman.queue import start_worker_run
+    from memman.queue import finish_worker_run, open_queue_db, start_worker_run
     from memman.setup import scheduler as sch
 
     monkeypatch.setattr(sch, 'status',
@@ -206,8 +205,7 @@ def test_scheduler_heartbeat_fails_at_interval_zero_when_stale(
     interval=0 must reach the threshold comparison, not short-circuit
     to PASS.
     """
-    from memman.queue import finish_worker_run, open_queue_db
-    from memman.queue import start_worker_run
+    from memman.queue import finish_worker_run, open_queue_db, start_worker_run
     from memman.setup import scheduler as sch
 
     monkeypatch.setattr(sch, 'status',
