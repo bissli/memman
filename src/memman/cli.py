@@ -40,9 +40,8 @@ def _configure_logging(data_dir: str, verbose: bool, debug: bool) -> None:
     elif verbose:
         level = logging.INFO
     else:
-        name = os.environ.get(
-            config.LOG_LEVEL, config.DEFAULT_LOG_LEVEL).upper()
-        level = getattr(logging, name, logging.WARNING)
+        raw = config.get(config.LOG_LEVEL) or 'WARNING'
+        level = getattr(logging, raw.upper(), logging.WARNING)
 
     logger.setLevel(level)
 
@@ -1461,16 +1460,14 @@ def scheduler_install(ctx: click.Context, interval: int | None) -> None:
     launchd plist that runs the worker every interval. For full agent-
     integration setup (hooks, skill, scheduler), use `memman install`.
     """
+    from memman.exceptions import ConfigError
     from memman.setup.scheduler import DEFAULT_INTERVAL_SECONDS, install
 
-    openrouter = os.environ.get('OPENROUTER_API_KEY', '').strip()
-    voyage = os.environ.get('VOYAGE_API_KEY', '').strip()
-    if not openrouter:
-        raise click.ClickException(
-            'OPENROUTER_API_KEY env var is required to install the scheduler')
-    if not voyage:
-        raise click.ClickException(
-            'VOYAGE_API_KEY env var is required to install the scheduler')
+    try:
+        knobs = config.collect_install_knobs(ctx.obj['data_dir'])
+    except ConfigError as exc:
+        raise click.ClickException(str(exc)) from exc
+
     seconds = interval if interval is not None else DEFAULT_INTERVAL_SECONDS
     if seconds < 60:
         raise click.ClickException(
@@ -1478,8 +1475,7 @@ def scheduler_install(ctx: click.Context, interval: int | None) -> None:
             ' For sub-minute intervals, set MEMMAN_SCHEDULER_KIND=serve'
             ' and run `memman scheduler serve --interval N` instead.')
     try:
-        result = install(
-            ctx.obj['data_dir'], openrouter, voyage, seconds)
+        result = install(ctx.obj['data_dir'], knobs, seconds)
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
     _json_out(result)
@@ -1495,7 +1491,7 @@ def scheduler_uninstall(ctx: click.Context) -> None:
     integration.
     """
     from memman.setup.scheduler import uninstall
-    _json_out(uninstall())
+    _json_out(uninstall(data_dir=ctx.obj['data_dir']))
 
 
 @scheduler.command('interval')

@@ -204,11 +204,6 @@ def test_openrouter_complete_emits_request_and_response(
         fake_home, debug_on, monkeypatch):
     """OpenRouterClient.complete emits llm_request and llm_response in order.
     """
-    from memman.llm import openrouter_cache as cache_mod
-    monkeypatch.setattr(cache_mod, '_fetch',
-                        lambda: [{'model_id': 'anthropic/claude-haiku-4.5'}])
-    monkeypatch.setenv('MEMMAN_CACHE_DIR', str(fake_home))
-
     def _fake_post(url, headers=None, json=None, timeout=None):
         return httpx.Response(
             200,
@@ -223,7 +218,8 @@ def test_openrouter_complete_emits_request_and_response(
     client = OpenRouterClient(
         endpoint='https://openrouter.ai/api/v1',
         api_key='fake-secret-key',
-        role_env_var='MEMMAN_LLM_MODEL_FAST')
+        role_env_var='MEMMAN_LLM_MODEL_FAST',
+        model='anthropic/claude-haiku-4.5')
     out = client.complete('sys', 'user')
     assert out == 'hi'
 

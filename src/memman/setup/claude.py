@@ -23,11 +23,16 @@ from memman.setup.settings import remove_memman_permission, write_json_file
 from memman.setup.settings import write_or_remove_json_file
 
 
-def check_prereqs() -> tuple[str, str]:
+def check_prereqs(data_dir: str) -> dict[str, str]:
     """Validate install prerequisites; raise ClickException on failure.
 
-    Returns (openrouter_api_key, voyage_api_key) once all checks pass.
+    Returns the install-time knobs dict (env-or-default for every
+    `INSTALLABLE_KEYS` entry, with model FAST/SLOW resolved from the
+    OpenRouter `/models` endpoint when applicable). Mandatory keys are
+    validated by `collect_install_knobs`.
     """
+    from memman.exceptions import ConfigError
+
     if not detect_scheduler():
         raise click.ClickException(
             f'unsupported platform {platform.system()!r}: expected'
@@ -37,19 +42,10 @@ def check_prereqs() -> tuple[str, str]:
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
 
-    openrouter_key = os.environ.get(config.OPENROUTER_API_KEY, '').strip()
-    if not openrouter_key:
-        raise click.ClickException(
-            f'{config.OPENROUTER_API_KEY} is required for the background'
-            ' enrichment worker; export it and re-run')
-
-    voyage_key = os.environ.get(config.VOYAGE_API_KEY, '').strip()
-    if not voyage_key:
-        raise click.ClickException(
-            f'{config.VOYAGE_API_KEY} is required for memory embeddings;'
-            ' export it and re-run')
-
-    return openrouter_key, voyage_key
+    try:
+        return config.collect_install_knobs(data_dir)
+    except ConfigError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 def claude_write_skill(config_dir: str) -> str:
@@ -89,9 +85,6 @@ def claude_uninstall(config_dir: str) -> list[Exception]:
     errs: list[Exception] = []
 
     print(f'\nRemoving Claude Code integration ({config_dir})...')
-
-    legacy_hooks_dir = os.path.join(config_dir, 'hooks', 'mm')
-    shutil.rmtree(legacy_hooks_dir, ignore_errors=True)
 
     hooks_dir = os.path.join(config_dir, 'hooks', 'memman')
     shutil.rmtree(hooks_dir, ignore_errors=True)
@@ -161,10 +154,6 @@ def _install_claude_code(env: dict, data_dir: str) -> None:
 
     logs_dir = Path.home() / '.memman' / 'logs'
     logs_dir.mkdir(mode=0o755, parents=True, exist_ok=True)
-
-    legacy_hooks_dir = os.path.join(config_dir, 'hooks', 'mm')
-    if os.path.isdir(legacy_hooks_dir):
-        shutil.rmtree(legacy_hooks_dir, ignore_errors=True)
 
     print('\n[1/2] Skill')
     path = claude_write_skill(config_dir)
@@ -241,23 +230,20 @@ def run_install(data_dir: str, target: str = '') -> None:
     """Install memman integration. Called by the `memman install` command."""
     _validate_target(target)
     envs = detect_environments()
-    openrouter_key, voyage_key = check_prereqs()
-    _run_install_flow(envs, target=target, data_dir=data_dir,
-                      openrouter_key=openrouter_key,
-                      voyage_key=voyage_key)
+    knobs = check_prereqs(data_dir)
+    _run_install_flow(envs, target=target, data_dir=data_dir, knobs=knobs)
 
 
 def run_uninstall(data_dir: str, target: str = '') -> None:
     """Remove memman integration. Called by the `memman uninstall` command."""
     _validate_target(target)
     envs = detect_environments()
-    _run_uninstall_flow(envs, target=target)
+    _run_uninstall_flow(envs, target=target, data_dir=data_dir)
 
 
 def _run_install_flow(envs: list[dict], target: str,
                       data_dir: str,
-                      openrouter_key: str,
-                      voyage_key: str) -> None:
+                      knobs: dict[str, str]) -> None:
     """Install CLI integrations and the scheduler unit."""
     if target:
         matched = next((e for e in envs if e['name'] == target), None)
@@ -293,10 +279,7 @@ def _run_install_flow(envs: list[dict], target: str,
                     f'{err_count} error(s) during CLI integration install')
 
     print('\n[scheduler]')
-    result = install_scheduler(
-        data_dir,
-        openrouter_api_key=openrouter_key,
-        voyage_api_key=voyage_key)
+    result = install_scheduler(data_dir, knobs)
     for action in result.get('env_actions', []) + result.get('actions', []):
         status_ok(result['platform'], action)
 
@@ -313,7 +296,8 @@ def _install_env(env: dict, data_dir: str) -> None:
         install_nanoclaw()
 
 
-def _run_uninstall_flow(envs: list[dict], target: str) -> None:
+def _run_uninstall_flow(envs: list[dict], target: str,
+                        data_dir: str) -> None:
     """Uninstall CLI integrations and remove the scheduler unit."""
     if target:
         matched = next((e for e in envs if e['name'] == target), None)
@@ -344,7 +328,7 @@ def _run_uninstall_flow(envs: list[dict], target: str) -> None:
                     f'{err_count} error(s) during CLI integration uninstall')
 
     print('\n[scheduler]')
-    result = uninstall_scheduler()
+    result = uninstall_scheduler(data_dir=data_dir)
     for action in result.get('actions', []):
         status_ok(result['platform'], action)
 

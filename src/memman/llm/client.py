@@ -21,7 +21,6 @@ adds latency to interactive commands.
 `MEMMAN_LLM_PROVIDER` and returns a per-role cached client.
 """
 
-import os
 from collections.abc import Callable
 from typing import Protocol
 
@@ -78,8 +77,12 @@ def get_llm_client(role: str) -> LLMProvider:
     cached = _ROLE_CACHE.get(role)
     if cached is not None:
         return cached
-    name = os.environ.get(
-        config.LLM_PROVIDER, config.DEFAULT_LLM_PROVIDER).lower()
+    raw = config.get(config.LLM_PROVIDER)
+    if not raw:
+        raise ConfigError(
+            f'{config.LLM_PROVIDER} is not set;'
+            ' run `memman install` to populate the env file')
+    name = raw.lower()
     factory = PROVIDERS.get(name)
     if factory is None:
         known = ', '.join(sorted(PROVIDERS)) or '(none)'

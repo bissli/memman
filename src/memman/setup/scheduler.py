@@ -5,9 +5,9 @@ appropriate user-scope unit / plist that runs `memman scheduler drain
 --pending` every 60 s. Units handle sleep/power-off catch-up natively.
 
 The scheduler path always routes through OpenRouter with ZDR enforced.
-Both OPENROUTER_API_KEY and VOYAGE_API_KEY are written to `~/.memman/env`
-at mode 600 and referenced by EnvironmentFile (systemd) or sourced via
-a wrapper script (launchd).
+Every `INSTALLABLE_KEYS` value present in `os.environ` at install time
+is persisted to `<MEMMAN_DATA_DIR>/env` at mode 600 and sourced by
+EnvironmentFile (systemd) or a wrapper script (launchd).
 """
 
 import platform
@@ -18,10 +18,11 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from memman import config
+
 SYSTEMD_TIMER_NAME = 'memman-enrich.timer'
 SYSTEMD_SERVICE_NAME = 'memman-enrich.service'
 LAUNCHD_LABEL = 'com.memman.enrich'
-ENV_FILENAME = 'env'
 STATE_FILENAME = 'scheduler.state'
 SERVE_INTERVAL_FILENAME = 'scheduler.serve_interval'
 SCHEDULER_KIND_ENV = 'MEMMAN_SCHEDULER_KIND'
@@ -204,14 +205,17 @@ def memman_binary_path() -> str:
 
 
 def install(data_dir: str,
-            openrouter_api_key: str,
-            voyage_api_key: str,
+            knobs: dict[str, str],
             interval_seconds: int = DEFAULT_INTERVAL_SECONDS) -> dict:
     """Install the scheduler trigger for the current environment.
 
-    Writes both API keys to ~/.memman/env at mode 600 (merging with any
-    existing keys) and installs the trigger that runs
+    Writes every key in `knobs` to <data_dir>/env at mode 600 (merging
+    with any existing keys) and installs the trigger that runs
     `memman scheduler drain --pending` at the given interval.
+
+    `knobs` is the install-time snapshot of `INSTALLABLE_KEYS` values
+    collected from `os.environ` by the caller. Empty values must be
+    omitted by the caller.
 
     Trigger by environment:
       - systemd (Linux host) -> user timer + service
@@ -226,7 +230,7 @@ def install(data_dir: str,
     binary = memman_binary_path()
 
     _enforce_data_dir_perms(data_dir)
-    env_actions = _write_env_file(openrouter_api_key, voyage_api_key)
+    env_actions = _write_env_file(knobs, data_dir=data_dir)
 
     kind = detect_scheduler()
     if kind == 'systemd':
@@ -262,36 +266,18 @@ def _install_serve(interval_seconds: int) -> dict:
         }
 
 
-def _env_file_path() -> Path:
-    return Path.home() / '.memman' / ENV_FILENAME
-
-
-def _read_env_file() -> dict[str, str]:
-    """Parse ~/.memman/env into a dict. Missing file -> empty dict."""
-    path = _env_file_path()
-    existing: dict[str, str] = {}
-    if not path.exists():
-        return existing
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith('#') or '=' not in line:
-            continue
-        k, v = line.split('=', 1)
-        existing[k] = v
-    return existing
-
-
 def _write_env_keys(updates: dict[str, str],
-                    removes: set[str] | None = None) -> list[str]:
-    """Merge updates into ~/.memman/env, atomically, at mode 600.
+                    removes: set[str] | None = None,
+                    data_dir: str | None = None) -> list[str]:
+    """Merge updates into <data_dir>/env, atomically, at mode 600.
 
     Preserves any keys already in the file that are not in updates or
     removes. Atomic: writes to a .tmp sibling at mode 600 then
     os.replace() so a concurrent reader never sees a partial file.
     """
-    path = _env_file_path()
+    path = config.env_file_path(data_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    existing = _read_env_file()
+    existing = config.parse_env_file(path)
     for k in (removes or ()):
         existing.pop(k, None)
     existing.update(updates)
@@ -300,37 +286,57 @@ def _write_env_keys(updates: dict[str, str],
     tmp.write_text(contents)
     Path(tmp).chmod(0o600)
     Path(tmp).replace(path)
+    config.reset_file_cache()
     return [f'wrote {path} (mode 600, atomic)']
 
 
-def _write_env_file(openrouter_api_key: str,
-                    voyage_api_key: str) -> list[str]:
-    """Write ~/.memman/env at mode 600 with provider + embedding keys."""
-    return _write_env_keys({
-        'MEMMAN_LLM_PROVIDER': 'openrouter',
-        'OPENROUTER_API_KEY': openrouter_api_key,
-        'VOYAGE_API_KEY': voyage_api_key,
-        })
+def _write_env_file(knobs: dict[str, str],
+                    data_dir: str | None = None) -> list[str]:
+    """Persist install-time `INSTALLABLE_KEYS` values to the env file.
+
+    Caller (`check_prereqs` / `scheduler install`) is responsible for
+    collecting the dict from `os.environ` and dropping empty values.
+    """
+    return _write_env_keys(knobs, data_dir=data_dir)
 
 
-def uninstall() -> dict:
-    """Remove the scheduler trigger and clear the state files.
+def uninstall(data_dir: str | None = None) -> dict:
+    """Remove the scheduler trigger, clear state, strip secrets.
 
-    Removes systemd units, launchd plist, or inline marker — whichever
-    is present. Clears scheduler.state and debug.state last.
+    Removes systemd units, launchd plist, or serve marker — whichever
+    is present. Clears scheduler.state and debug.state. Strips secret
+    keys from the env file but keeps non-secret settings so a later
+    re-install resurrects model/provider preferences without the user
+    having to re-export them.
+
+    `data_dir` locates the env file. When omitted, falls back to
+    `MEMMAN_DATA_DIR` then `~/.memman`.
     """
     clear_state()
     clear_debug_state()
+    env_actions = _strip_secrets_from_env_file(data_dir)
     kind = detect_scheduler()
     if kind == 'systemd':
-        return _uninstall_systemd()
-    if kind == 'launchd':
-        return _uninstall_launchd()
-    clear_serve_interval()
-    return {
-        'platform': SCHEDULER_KIND_SERVE,
-        'actions': [f'removed {_serve_interval_path()}'],
-        }
+        result = _uninstall_systemd()
+    elif kind == 'launchd':
+        result = _uninstall_launchd()
+    else:
+        clear_serve_interval()
+        result = {
+            'platform': SCHEDULER_KIND_SERVE,
+            'actions': [f'removed {_serve_interval_path()}'],
+            }
+    result['env_actions'] = env_actions
+    return result
+
+
+def _strip_secrets_from_env_file(data_dir: str | None) -> list[str]:
+    """Remove secret keys from the env file, keep non-secret settings."""
+    path = config.env_file_path(data_dir)
+    if not path.exists():
+        return []
+    return _write_env_keys(
+        {}, removes=set(config.SECRET_VARS), data_dir=data_dir)
 
 
 def start() -> dict:
@@ -558,7 +564,7 @@ def _install_systemd(binary: str, data_dir: str,
         '[Install]\n'
         'WantedBy=timers.target\n')
 
-    env_file = _env_file_path()
+    env_file = config.env_file_path(data_dir)
     service_contents = (
         '[Unit]\n'
         'Description=MemMan enrichment worker\n\n'
@@ -640,7 +646,7 @@ def _install_launchd(binary: str, data_dir: str,
     wrapper_path = Path.home() / '.memman' / 'bin' / 'memman-enrich-wrapper.sh'
     exec_timeout = max(60, interval_seconds - 20)
 
-    env_file_q = shlex.quote(str(_env_file_path()))
+    env_file_q = shlex.quote(str(config.env_file_path(data_dir)))
     data_dir_q = shlex.quote(data_dir)
     binary_q = shlex.quote(binary)
     logs_dir = Path.home() / '.memman' / 'logs'

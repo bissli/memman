@@ -296,14 +296,15 @@ def _normalize_for_cache(query: str) -> str:
 
 
 def _expand_cache_key(query: str) -> str:
-    """Salt with the raw fast-model env var, not the resolved id.
+    """Salt with the configured fast-model id.
 
-    The resolved id triggers a network ZDR-cache fetch; the raw env-var
-    string is identity-stable and resolves without network I/O.
+    The model id is resolved at install time and persisted to
+    `~/.memman/env`, so `config.get` always returns a real value here
+    (or `None` if install was never run, which the caller would have
+    failed before reaching cache-key generation).
     """
     import hashlib
-    import os
-    salt = os.environ.get(config.LLM_MODEL_FAST) or '<auto>'
+    salt = config.get(config.LLM_MODEL_FAST) or ''
     digest = hashlib.sha256(
         f'{_normalize_for_cache(query)}|{salt}'.encode())
     return digest.hexdigest()[:16]

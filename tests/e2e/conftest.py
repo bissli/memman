@@ -40,11 +40,9 @@ def memman_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     dot.mkdir(parents=True, exist_ok=True)
     (dot / 'scheduler.state').write_text('started\n')
     (dot / 'scheduler.state').chmod(0o600)
-    (dot / 'cache').mkdir(exist_ok=True)
 
     monkeypatch.setenv('HOME', str(home))
     monkeypatch.setattr(Path, 'home', lambda: home)
-    monkeypatch.setenv('MEMMAN_CACHE_DIR', str(dot / 'cache'))
     monkeypatch.setenv('MEMMAN_SCHEDULER_KIND', 'serve')
 
     data_dir = tmp_path / 'memman_data'

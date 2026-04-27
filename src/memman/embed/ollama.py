@@ -1,9 +1,8 @@
 """Ollama embedding client (local).
 
-Talks to a local Ollama server's `/api/embeddings` endpoint.
-Host configurable via `MEMMAN_OLLAMA_HOST` (default
-`http://localhost:11434`). Model by `MEMMAN_OLLAMA_EMBED_MODEL`
-(default `nomic-embed-text`, 768-dim).
+Talks to a local Ollama server's `/api/embeddings` endpoint. Host and
+model are read from the env-or-file resolver (populated at install
+time from `INSTALL_DEFAULTS`).
 
 `dim` is discovered from the first successful embed call.
 
@@ -12,16 +11,13 @@ empirical recalibration on real data is required.
 """
 
 import logging
-import os
 import time
 
 import httpx
 from memman import config, trace
+from memman.exceptions import ConfigError
 
 logger = logging.getLogger('memman')
-
-DEFAULT_MODEL = 'nomic-embed-text'
-DEFAULT_HOST = 'http://localhost:11434'
 
 _CLIENT: httpx.Client | None = None
 
@@ -40,10 +36,14 @@ class Client:
     name = 'ollama'
 
     def __init__(self) -> None:
-        self.host = (
-            os.environ.get(config.OLLAMA_HOST) or DEFAULT_HOST)
-        self.model = (
-            os.environ.get(config.OLLAMA_EMBED_MODEL) or DEFAULT_MODEL)
+        host = config.get(config.OLLAMA_HOST)
+        model = config.get(config.OLLAMA_EMBED_MODEL)
+        if not host or not model:
+            raise ConfigError(
+                f'{config.OLLAMA_HOST} or {config.OLLAMA_EMBED_MODEL}'
+                ' is unset; run `memman install` to populate the env file')
+        self.host = host
+        self.model = model
         self.dim = 0
         self._availability_cache: bool | None = None
 

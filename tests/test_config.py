@@ -4,6 +4,7 @@ Verifies the canonical env var names, typed helpers (`get_bool`,
 `is_worker`), and effective-config enumeration with secret redaction.
 """
 
+import pytest
 from memman import config
 
 ALL_EXPECTED_NAMES = {
@@ -14,7 +15,6 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_LLM_MODEL_SLOW',
     'MEMMAN_EMBED_PROVIDER',
     'MEMMAN_OPENROUTER_ENDPOINT',
-    'MEMMAN_CACHE_DIR',
     'MEMMAN_DEBUG',
     'MEMMAN_WORKER',
     'MEMMAN_LOG_LEVEL',
@@ -35,7 +35,7 @@ def test_constants_match_expected_names():
         config.DATA_DIR, config.STORE, config.LLM_PROVIDER,
         config.LLM_MODEL_FAST, config.LLM_MODEL_SLOW,
         config.EMBED_PROVIDER,
-        config.OPENROUTER_ENDPOINT, config.CACHE_DIR,
+        config.OPENROUTER_ENDPOINT,
         config.DEBUG, config.WORKER, config.LOG_LEVEL,
         config.OPENROUTER_API_KEY,
         config.VOYAGE_API_KEY,
@@ -79,14 +79,25 @@ def test_is_worker_detects_worker_env(monkeypatch):
     assert config.is_worker() is False
 
 
+@pytest.mark.no_default_env
 def test_enumerate_returns_all_known_vars(monkeypatch):
     """enumerate_effective_config() includes every known env var name.
+
+    Marked `no_default_env` so the conftest fixture skips seeding the
+    INSTALL_DEFAULTS file; with both env and file empty, every var
+    resolves to None.
     """
     for name in ALL_EXPECTED_NAMES:
+        if name == config.DATA_DIR:
+            continue
         monkeypatch.delenv(name, raising=False)
+    config.reset_file_cache()
     out = config.enumerate_effective_config()
     assert set(out.keys()) == ALL_EXPECTED_NAMES
-    assert all(v is None for v in out.values())
+    for name, value in out.items():
+        if name == config.DATA_DIR:
+            continue
+        assert value is None, f'{name}={value!r}'
 
 
 def test_enumerate_reflects_current_env(monkeypatch):
@@ -119,6 +130,7 @@ def test_enumerate_redact_false_exposes_secrets(monkeypatch):
     assert out[config.OPENROUTER_API_KEY] == 'sk-or-plaintext'
 
 
+@pytest.mark.no_default_env
 def test_enumerate_empty_string_is_unset(monkeypatch):
     """Empty-string env vars map to None (not the empty string).
     """

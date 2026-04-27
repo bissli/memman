@@ -31,6 +31,39 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_env(tmp_path, monkeypatch, request):
+    """Pin MEMMAN_DATA_DIR to tmp and seed the env file.
+
+    Prevents the user's real `~/.memman/env` from leaking into the
+    config resolver during unit tests. By default, seeds a fresh env
+    file with `INSTALL_DEFAULTS` so runtime call sites resolve cleanly
+    (no code-default fallback exists at runtime). Tests that need to
+    assert "absent key" behavior mark themselves
+    `@pytest.mark.no_default_env` and the seed step is skipped.
+
+    Skipped entirely for e2e tests, which run real binaries with the
+    inherited environment.
+    """
+    if 'tests/e2e/' in str(request.node.fspath):
+        return
+    from memman import config
+    data_dir = tmp_path / 'memman'
+    monkeypatch.setenv('MEMMAN_DATA_DIR', str(data_dir))
+    monkeypatch.delenv('MEMMAN_STORE', raising=False)
+    monkeypatch.delenv('MEMMAN_DEBUG', raising=False)
+    monkeypatch.delenv('MEMMAN_WORKER', raising=False)
+    monkeypatch.delenv('MEMMAN_SCHEDULER_KIND', raising=False)
+    monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
+    monkeypatch.delenv('VOYAGE_API_KEY', raising=False)
+    monkeypatch.delenv('MEMMAN_OPENAI_EMBED_API_KEY', raising=False)
+    if 'no_default_env' not in request.keywords:
+        config.write_default_env_file(data_dir)
+    config.reset_file_cache()
+    yield
+    config.reset_file_cache()
+
+
+@pytest.fixture(autouse=True)
 def _reset_heartbeat_state():
     """Clear the module-level heartbeat dict between tests.
 
@@ -196,8 +229,8 @@ def _mock_apis(request, monkeypatch):
             'memman.llm.openrouter_client.OpenRouterClient.complete',
             _mock_llm_complete)
     monkeypatch.setattr(
-        'memman.llm.openrouter_cache._fetch',
-        lambda: [{'model_id': 'anthropic/claude-haiku-4.5'}])
+        'memman.llm.openrouter_models.resolve_latest_in_family',
+        lambda api_key, endpoint, family: f'anthropic/claude-{family}-4.5')
     monkeypatch.setattr(
         'memman.embed.voyage.Client.embed', _mock_embed)
     monkeypatch.setattr(

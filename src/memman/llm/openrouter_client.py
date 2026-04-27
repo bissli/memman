@@ -1,32 +1,24 @@
-"""OpenRouter client with ZDR enforcement and dynamic Haiku selection.
+"""OpenRouter client.
 
-Speaks OpenAI-schema /v1/chat/completions. Every request forces the
-`provider.zdr=true` and `provider.data_collection="deny"` fields so
-OpenRouter routes only to endpoints with formal zero-data-retention
-agreements.
-
-Model selection is per-role and dynamic: on first call the client
-fetches (or reuses the cached) ZDR endpoint list and picks the latest
-Anthropic Haiku available. `MEMMAN_LLM_MODEL_FAST` and
-`MEMMAN_LLM_MODEL_SLOW` override the auto-pick for the recall hot path
-and the worker pipeline respectively. Overrides are validated against
-the ZDR list — the client refuses to send to a non-ZDR endpoint.
+Speaks OpenAI-schema /v1/chat/completions. Every request forces
+`provider.zdr=true` and `provider.data_collection="deny"`. OpenRouter
+enforces ZDR per request; we do not maintain a client-side ZDR
+inventory. The model id is resolved at `memman install` time
+(`memman.llm.openrouter_models.resolve_latest_in_family`) and persisted
+to `~/.memman/env`; the runtime client reads it via `config.get` and
+sends it through unchanged.
 """
 
 import logging
-import os
 import time
 
 import httpx
 from memman import config, trace
 from memman.exceptions import ConfigError
-from memman.llm.openrouter_cache import get_zdr_endpoints, pick_latest_haiku
 from memman.llm.shared import ENRICHMENT_TIMEOUT, MAX_RETRIES, RETRY_BACKOFF
 from memman.llm.shared import RETRYABLE_STATUS_CODES, safe_json
 
 logger = logging.getLogger('memman')
-
-DEFAULT_OPENROUTER_ENDPOINT = 'https://openrouter.ai/api/v1'
 
 _CLIENT: httpx.Client | None = None
 
@@ -40,64 +32,33 @@ def _session() -> httpx.Client:
 
 
 class OpenRouterClient:
-    """OpenAI-schema LLM client that enforces ZDR routing."""
+    """OpenAI-schema LLM client that requests ZDR routing."""
 
     def __init__(
             self,
             endpoint: str,
             api_key: str,
             role_env_var: str,
-            model: str | None = None,
+            model: str,
             max_tokens: int = 1024,
             timeout: float = ENRICHMENT_TIMEOUT,
             ) -> None:
-        """Initialize with endpoint and API key; model resolved lazily.
+        """Initialize with endpoint, API key, and an explicit model id.
 
         `role_env_var` is the env var name (`MEMMAN_LLM_MODEL_FAST` or
-        `MEMMAN_LLM_MODEL_SLOW`) used to populate `model`; included so
-        ZDR-validation errors can quote the right knob to set.
+        `MEMMAN_LLM_MODEL_SLOW`) the model came from; surfaced in error
+        messages so the user knows which knob to tune.
         """
+        if not model:
+            raise ConfigError(
+                f'{role_env_var} is empty; run `memman install` to'
+                ' populate it or export it manually')
         self.endpoint = endpoint.rstrip('/')
         self.api_key = api_key
         self.role_env_var = role_env_var
-        self._model_override = model
-        self._resolved_model: str | None = None
+        self.model = model
         self.max_tokens = max_tokens
         self.timeout = timeout
-
-    @property
-    def model(self) -> str:
-        """Return the resolved model ID, picking lazily if unset."""
-        if self._resolved_model is None:
-            self._resolved_model = self._resolve_model()
-        return self._resolved_model
-
-    def _resolve_model(self) -> str:
-        """Pick the model ID to use, validating against the ZDR cache."""
-        endpoints = get_zdr_endpoints()
-        if self._model_override:
-            available = {e.get('model_id') for e in endpoints}
-            if self._model_override not in available:
-                raise ConfigError(
-                    f'{self.role_env_var}={self._model_override!r} is not in'
-                    ' the current OpenRouter ZDR inventory; refusing to'
-                    ' route via non-ZDR endpoints')
-            logger.debug(
-                f'openrouter model override: {self._model_override}')
-            trace.event(
-                'llm_model_resolved',
-                source='override',
-                model=self._model_override,
-                endpoint_count=len(endpoints))
-            return self._model_override
-        picked = pick_latest_haiku(endpoints)
-        logger.debug(f'openrouter auto-picked model: {picked}')
-        trace.event(
-            'llm_model_resolved',
-            source='auto',
-            model=picked,
-            endpoint_count=len(endpoints))
-        return picked
 
     def complete(self, system: str, user: str) -> str:
         """Send a chat-completion request with ZDR enforced."""
@@ -180,17 +141,22 @@ _ROLE_ENV_VARS = {
 
 
 def get_openrouter_client(role: str) -> OpenRouterClient:
-    """Build an OpenRouter client for a role from environment variables."""
-    endpoint = os.environ.get(
-        config.OPENROUTER_ENDPOINT, DEFAULT_OPENROUTER_ENDPOINT)
-    api_key = os.environ.get(config.OPENROUTER_API_KEY)
+    """Build an OpenRouter client for a role from configured values."""
+    endpoint = config.get(config.OPENROUTER_ENDPOINT)
+    if not endpoint:
+        raise ConfigError(
+            f'{config.OPENROUTER_ENDPOINT} is not set;'
+            ' run `memman install` to populate the env file')
+    api_key = config.get(config.OPENROUTER_API_KEY)
     if not api_key:
         raise ConfigError(
             f'{config.OPENROUTER_API_KEY} must be set'
             f' when {config.LLM_PROVIDER}=openrouter')
     role_env_var = _ROLE_ENV_VARS[role]
-    model_override = os.environ.get(role_env_var) or None
+    model = config.get(role_env_var)
+    if not model:
+        raise ConfigError(
+            f'{role_env_var} is not set; run `memman install`'
+            ' to resolve and persist the latest model id')
     return OpenRouterClient(
-        endpoint, api_key,
-        role_env_var=role_env_var,
-        model=model_override)
+        endpoint, api_key, role_env_var=role_env_var, model=model)

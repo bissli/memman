@@ -25,7 +25,6 @@ verbatim -- this is deliberate per the feature's explicit design.
 import json
 import logging
 import logging.handlers
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -43,12 +42,13 @@ REDACT_VALUE = '***REDACTED***'
 def is_enabled() -> bool:
     """Return True when trace mode is on.
 
-    `MEMMAN_DEBUG` env var wins when set (truthy values per
-    `config.TRUTHY` enable; anything else explicitly disables). When
-    the env var is unset, fall back to `~/.memman/debug.state` written
+    `MEMMAN_DEBUG` resolves through the standard env -> file chain
+    (`os.environ` first, then `<MEMMAN_DATA_DIR>/env`). Truthy values
+    enable; anything else explicitly disables. When `MEMMAN_DEBUG` is
+    unset in both layers, fall back to `~/.memman/debug.state` written
     by `memman scheduler debug on`.
     """
-    raw = os.environ.get(config.DEBUG)
+    raw = config.get(config.DEBUG)
     if raw is not None:
         return raw.strip().lower() in config.TRUTHY
     from memman.setup.scheduler import get_debug

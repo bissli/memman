@@ -12,29 +12,57 @@ make e2e           # run the end-to-end pytest suite against real DBs
 
 The project uses Poetry; run commands via `poetry run <cmd>` or inside `poetry shell`.
 
-## Required environment variables
+## Configuration
 
-The scheduler-driven enrichment worker needs two API keys. Set them in `~/.memman/env` (mode 0600):
+memman resolves env vars in two layers at runtime:
+
+1. `os.environ` — wins when set (shell rc, direnv export, transient overrides).
+2. `<MEMMAN_DATA_DIR>/env` — `KEY=VALUE` file at mode 0600, default `~/.memman/env`.
+
+There is no third-tier code default at runtime. Defaults live in `config.INSTALL_DEFAULTS` and are consumed only by `memman install`, which writes them (or your exported overrides) to the env file. If a key is missing from both env and file, the resolver returns `None` and the caller raises a `ConfigError` with "run `memman install`" guidance.
+
+`memman install` snapshots every `INSTALLABLE_KEYS` value: prefer `os.environ`, else `INSTALL_DEFAULTS`. For OpenRouter, it queries `/models` once to pick the actual current latest haiku/sonnet rather than persisting a version that ages. After install, the keys do not need to be exported in every shell — interactive `memman recall`, `memman doctor`, and the scheduler-driven worker all read from the file. Per-project overrides are via direnv (or any tool that exports `KEY=VALUE` before invoking memman); memman itself does not parse a project-local file.
+
+`memman uninstall` strips the secret keys (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`) from the env file but keeps non-secret settings, so a later `memman install` resurrects model/provider preferences without re-export.
+
+`memman doctor` includes an `env_completeness` check: when `pipx upgrade memman` adds a new `INSTALLABLE_KEYS` entry, the check warns with the missing-keys list and "run `memman install`" guidance.
+
+### Required keys
 
 | Variable             | Purpose                                              |
 | -------------------- | ---------------------------------------------------- |
 | `OPENROUTER_API_KEY` | LLM inference via OpenRouter (ZDR-enforced routing). |
 | `VOYAGE_API_KEY`     | Voyage AI embeddings (512-dim).                      |
 
-Optional:
+### Persisted at install (`INSTALLABLE_KEYS`)
 
-| Variable                     | Purpose                                                                    |
-| ---------------------------- | -------------------------------------------------------------------------- |
-| `MEMMAN_DATA_DIR`            | Override `~/.memman` as the data root.                                     |
-| `MEMMAN_STORE`               | Override the active store without editing `~/.memman/active`.              |
-| `MEMMAN_LLM_PROVIDER`        | Registered provider name (default `openrouter`).                           |
-| `MEMMAN_LLM_MODEL_FAST`      | Override the auto-picked Haiku for the recall hot path (query expansion).  |
-| `MEMMAN_LLM_MODEL_SLOW`      | Override the auto-picked Haiku for the scheduler worker (extraction etc.). |
-| `MEMMAN_OPENROUTER_ENDPOINT` | Override the OpenRouter base URL.                                          |
-| `MEMMAN_CACHE_DIR`           | Override the ZDR endpoint-list cache location.                             |
-| `MEMMAN_DEBUG`               | Truthy value enables JSONL tracing to `~/.memman/logs/debug.log`.          |
-| `MEMMAN_WORKER`              | `1` inside the scheduler-triggered worker; enables the rotating log.       |
-| `MEMMAN_LOG_LEVEL`           | Override logger level when neither `--verbose` nor `--debug` is passed.    |
+Set any of these in your shell before `memman install` and they land in the env file. `memman doctor` shows the resolved value and which layer it came from.
+
+| Variable                       | Purpose                                                                            |
+| ------------------------------ | ---------------------------------------------------------------------------------- |
+| `MEMMAN_LLM_PROVIDER`          | Registered provider name (default `openrouter`).                                   |
+| `MEMMAN_LLM_MODEL_FAST`        | Hot-path model id. OpenRouter resolves the latest at install time.                 |
+| `MEMMAN_LLM_MODEL_SLOW`        | Worker-pipeline model id. OpenRouter resolves the latest at install time.          |
+| `MEMMAN_EMBED_PROVIDER`        | `voyage` (default), `openai_compat`, or `ollama`.                                  |
+| `MEMMAN_OPENROUTER_ENDPOINT`   | OpenRouter base URL (default `https://openrouter.ai/api/v1`).                      |
+| `MEMMAN_LOG_LEVEL`             | Logger level when neither `--verbose` nor `--debug` is passed (default `WARNING`). |
+| `MEMMAN_OPENAI_EMBED_API_KEY`  | Secret for the OpenAI-compatible embedding provider.                               |
+| `MEMMAN_OPENAI_EMBED_ENDPOINT` | Endpoint for the OpenAI-compatible embedding provider.                             |
+| `MEMMAN_OPENAI_EMBED_MODEL`    | Model name for the OpenAI-compatible embedding provider.                           |
+| `MEMMAN_OLLAMA_HOST`           | Ollama host URL (default `http://localhost:11434`).                                |
+| `MEMMAN_OLLAMA_EMBED_MODEL`    | Ollama embedding model name (default `nomic-embed-text`).                          |
+
+### Process-control vars (NOT persisted in the env file)
+
+These bypass the resolver and are read directly from `os.environ`. Persisting them would either be circular, override per-invocation choices, or leak deployment specifics across hosts.
+
+| Variable                | Why it stays direct                                                        |
+| ----------------------- | -------------------------------------------------------------------------- |
+| `MEMMAN_DATA_DIR`       | Locates the env file itself; persisting it inside the file is circular.    |
+| `MEMMAN_STORE`          | Per-invocation override of the active store; not a global default.         |
+| `MEMMAN_WORKER`         | Set to `1` by the systemd/launchd unit; enables the rotating worker log.   |
+| `MEMMAN_SCHEDULER_KIND` | Deployment directive (set by container entrypoint or auto-detected).       |
+| `MEMMAN_DEBUG`          | Runtime toggle; persistent state lives in `~/.memman/debug.state` instead. |
 
 Run `memman doctor` to probe both providers with cheap calls (the `llm_probe` and `embed_probe` checks).
 

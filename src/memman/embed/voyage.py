@@ -7,7 +7,6 @@ implements `.post(url, headers=..., json=..., timeout=...)`.
 """
 
 import logging
-import os
 import time
 
 import httpx
@@ -39,7 +38,7 @@ class Client:
         self.endpoint = DEFAULT_ENDPOINT
         self.model = DEFAULT_MODEL
         self.dim = EMBEDDING_DIM
-        self._api_key = os.environ.get(config.VOYAGE_API_KEY) or ''
+        self._api_key = config.get(config.VOYAGE_API_KEY) or ''
         self._availability_cache: bool | None = None
 
     def _headers(self) -> dict[str, str]:

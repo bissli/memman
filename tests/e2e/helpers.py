@@ -32,7 +32,6 @@ def run_cli(args: list[str], home: Path, data_dir: Path | None = None,
     cmd += args
     env = os.environ.copy()
     env['HOME'] = str(home)
-    env['MEMMAN_CACHE_DIR'] = str(home / '.memman' / 'cache')
     if extra_env:
         env.update(extra_env)
     return subprocess.run(cmd, capture_output=True, text=True,

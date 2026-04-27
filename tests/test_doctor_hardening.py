@@ -30,14 +30,14 @@ def test_schema_columns_passes_on_current_schema(tmp_path):
 
 
 def test_schema_columns_fails_when_column_missing(tmp_path):
-    """A DB predating provenance columns should fail the schema check.
+    """A DB without provenance columns should fail the schema check.
     """
     db = open_db(str(tmp_path))
     try:
         db._conn.executescript(
-            'CREATE TABLE insights_legacy (id TEXT PRIMARY KEY);'
+            'CREATE TABLE insights_minimal (id TEXT PRIMARY KEY);'
             'DROP TABLE insights;'
-            'ALTER TABLE insights_legacy RENAME TO insights;')
+            'ALTER TABLE insights_minimal RENAME TO insights;')
         result = check_schema_columns(db)
         assert result['status'] == 'fail'
         assert 'prompt_version' in result['detail']['missing']

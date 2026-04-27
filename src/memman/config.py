@@ -2,21 +2,31 @@
 
 This module owns the canonical list of environment variables memman
 reads. Every env var name is a module-level constant so call sites
-import the name rather than repeating the literal string. A single
-`enumerate_effective_config()` helper walks the whole list for
-diagnostics (`doctor`, scheduler trace events).
+import the name rather than repeating the literal string.
 
-Design notes:
-- Dependency-free on purpose (only `os` and `typing`). Safe to import
-  from anywhere without creating a cycle.
-- `os.environ.get(...)` is still used at call sites so tests that
-  `monkeypatch.setenv` work without further indirection; this module
-  standardizes the *names* and typed helpers, not the read mechanism.
-- Secrets are redacted in `enumerate_effective_config` by default; the
-  list in `_SECRET_VARS` is the single source of truth for what counts.
+Two-layer resolution for user-config vars:
+
+1. `os.environ[name]` — wins if set (shell rc, direnv, transient
+   overrides set via `os.environ[...] = ...`).
+2. `<MEMMAN_DATA_DIR>/env` — parsed once per process, dict-cached.
+   Default data dir is `~/.memman`.
+
+`config.get(name)` and `config.get_bool(name)` apply this resolution.
+There is no third-tier code-default fallback at runtime; if both env
+and file are unset, `get` returns `None` and the caller crashes with
+a meaningful error. `INSTALL_DEFAULTS` exists ONLY for install-time
+file population.
+
+Process-control vars (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`,
+`MEMMAN_SCHEDULER_KIND`, `MEMMAN_DEBUG`) bypass the file layer entirely.
+
+`INSTALLABLE_KEYS` is the single source of truth for what `memman
+install` persists to `~/.memman/env`. Adding a new global knob is
+one tuple entry plus an `INSTALL_DEFAULTS` row when a default exists.
 """
 
 import os
+from pathlib import Path
 from typing import Any
 
 DATA_DIR = 'MEMMAN_DATA_DIR'
@@ -26,7 +36,6 @@ LLM_MODEL_FAST = 'MEMMAN_LLM_MODEL_FAST'
 LLM_MODEL_SLOW = 'MEMMAN_LLM_MODEL_SLOW'
 EMBED_PROVIDER = 'MEMMAN_EMBED_PROVIDER'
 OPENROUTER_ENDPOINT = 'MEMMAN_OPENROUTER_ENDPOINT'
-CACHE_DIR = 'MEMMAN_CACHE_DIR'
 DEBUG = 'MEMMAN_DEBUG'
 WORKER = 'MEMMAN_WORKER'
 LOG_LEVEL = 'MEMMAN_LOG_LEVEL'
@@ -40,17 +49,49 @@ OPENAI_EMBED_MODEL = 'MEMMAN_OPENAI_EMBED_MODEL'
 OLLAMA_HOST = 'MEMMAN_OLLAMA_HOST'
 OLLAMA_EMBED_MODEL = 'MEMMAN_OLLAMA_EMBED_MODEL'
 
-DEFAULT_LLM_PROVIDER = 'openrouter'
-DEFAULT_EMBED_PROVIDER = 'voyage'
-DEFAULT_LOG_LEVEL = 'WARNING'
+ENV_FILENAME = 'env'
 
 TRUTHY = frozenset({'1', 'true', 'yes', 'on'})
 
-_SECRET_VARS = frozenset({
+SECRET_VARS = frozenset({
     OPENROUTER_API_KEY,
     VOYAGE_API_KEY,
     OPENAI_EMBED_API_KEY,
     })
+
+INSTALLABLE_KEYS = (
+    LLM_PROVIDER,
+    LLM_MODEL_FAST,
+    LLM_MODEL_SLOW,
+    EMBED_PROVIDER,
+    OPENROUTER_ENDPOINT,
+    LOG_LEVEL,
+    OPENAI_EMBED_API_KEY,
+    OPENAI_EMBED_ENDPOINT,
+    OPENAI_EMBED_MODEL,
+    OLLAMA_HOST,
+    OLLAMA_EMBED_MODEL,
+    OPENROUTER_API_KEY,
+    VOYAGE_API_KEY,
+    )
+
+MANDATORY_INSTALL_KEYS = (
+    OPENROUTER_API_KEY,
+    VOYAGE_API_KEY,
+    )
+
+INSTALL_DEFAULTS: dict[str, str] = {
+    LLM_PROVIDER: 'openrouter',
+    LLM_MODEL_FAST: 'anthropic/claude-haiku-4.5',
+    LLM_MODEL_SLOW: 'anthropic/claude-sonnet-4.6',
+    EMBED_PROVIDER: 'voyage',
+    OPENROUTER_ENDPOINT: 'https://openrouter.ai/api/v1',
+    LOG_LEVEL: 'WARNING',
+    OPENAI_EMBED_ENDPOINT: 'https://api.openai.com',
+    OPENAI_EMBED_MODEL: 'text-embedding-3-small',
+    OLLAMA_HOST: 'http://localhost:11434',
+    OLLAMA_EMBED_MODEL: 'nomic-embed-text',
+    }
 
 _ALL_VARS = (
     DATA_DIR,
@@ -60,7 +101,6 @@ _ALL_VARS = (
     LLM_MODEL_SLOW,
     EMBED_PROVIDER,
     OPENROUTER_ENDPOINT,
-    CACHE_DIR,
     DEBUG,
     WORKER,
     LOG_LEVEL,
@@ -74,17 +114,111 @@ _ALL_VARS = (
     )
 
 
-def get_bool(name: str) -> bool:
-    """Return True when env var `name` holds a truthy string value.
+_FILE_CACHE: dict[str, str] | None = None
+_FILE_CACHE_PATH: str | None = None
+
+
+def env_file_path(data_dir: str | None = None) -> Path:
+    """Return the path to the env file under the given data dir.
+
+    When `data_dir` is omitted, falls back to `MEMMAN_DATA_DIR` from
+    `os.environ`, then to `~/.memman`. The env-file location must not
+    flow through the resolver itself — that would be circular.
+    """
+    if data_dir:
+        return Path(data_dir) / ENV_FILENAME
+    env_data_dir = os.environ.get(DATA_DIR)
+    if env_data_dir:
+        return Path(env_data_dir) / ENV_FILENAME
+    return Path.home() / '.memman' / ENV_FILENAME
+
+
+def parse_env_file(path: Path) -> dict[str, str]:
+    """Parse `KEY=VALUE` env file. Missing file -> empty dict.
+
+    Matches systemd `EnvironmentFile=` semantics: blank lines and
+    `#`-prefixed comments are skipped, lines without `=` are skipped,
+    and a single matching pair of surrounding `'` or `"` is stripped
+    from each value. No `${VAR}` expansion.
+    """
+    parsed: dict[str, str] = {}
+    if not path.exists():
+        return parsed
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        parsed[key] = value
+    return parsed
+
+
+def _load_file_cache() -> dict[str, str]:
+    """Lazy-load the env-file cache. Reload when the path changes."""
+    global _FILE_CACHE, _FILE_CACHE_PATH
+    path = env_file_path()
+    path_str = str(path)
+    if _FILE_CACHE is None or _FILE_CACHE_PATH != path_str:
+        _FILE_CACHE = parse_env_file(path)
+        _FILE_CACHE_PATH = path_str
+    return _FILE_CACHE
+
+
+def reset_file_cache() -> None:
+    """Drop the cached env-file contents.
+
+    Tests call this when they mutate the file mid-process; production
+    callers don't need it (each CLI invocation is a fresh process).
+    """
+    global _FILE_CACHE, _FILE_CACHE_PATH
+    _FILE_CACHE = None
+    _FILE_CACHE_PATH = None
+
+
+def get(name: str) -> str | None:
+    """Return the resolved value for env var `name`.
+
+    Resolution order: `os.environ` first, then `<MEMMAN_DATA_DIR>/env`.
+    Returns `None` when both layers are unset. Empty strings are
+    treated as "not set" so the file fallback can supply a value.
+
+    No code-default fallback at runtime — all defaults live in
+    `INSTALL_DEFAULTS` and are written to the file at install time.
     """
     raw = os.environ.get(name)
+    if raw is not None and raw != '':
+        return raw
+    file_value = _load_file_cache().get(name)
+    if file_value is not None and file_value != '':
+        return file_value
+    return None
+
+
+def get_bool(name: str, default: bool = False) -> bool:
+    """Return True when env var `name` resolves to a truthy string.
+
+    Resolution order matches `get`: `os.environ` first, file fallback
+    second. The `default` argument exists for `MEMMAN_DEBUG` only —
+    `trace.is_enabled()` uses a tri-state pattern (env / file /
+    `~/.memman/debug.state`) and needs to distinguish "explicit off"
+    from "unset." Other call sites should not pass a default.
+    """
+    raw = get(name)
     if raw is None:
-        return False
+        return default
     return raw.strip().lower() in TRUTHY
 
 
 def is_worker() -> bool:
     """Return True when running under the scheduler-triggered worker.
+
+    Reads `MEMMAN_WORKER` directly from `os.environ` because it is a
+    transient subprocess flag (set by the unit and by `cli.py` when
+    spawning children). Never flows through the env file.
     """
     return os.environ.get(WORKER) == '1'
 
@@ -92,18 +226,104 @@ def is_worker() -> bool:
 def enumerate_effective_config(redact: bool = True) -> dict[str, Any]:
     """Return a dict of every known env var name and current value.
 
-    Unset or empty vars map to None. Secret vars are replaced with
-    '***REDACTED***' unless `redact=False`. The returned dict is sorted
-    by key for stable diagnostic output.
+    Resolves through the same env -> file chain that runtime callers
+    see. Unset/empty vars map to None. Secret vars are replaced with
+    '***REDACTED***' unless `redact=False`. Returned dict is sorted by
+    key for stable diagnostic output.
+
+    Note: process-control vars (`DATA_DIR`, `STORE`, `WORKER`, `DEBUG`)
+    are read directly from `os.environ` — they are not part of the file
+    fallback layer.
     """
+    direct_only = {DATA_DIR, STORE, WORKER, DEBUG}
     out: dict[str, Any] = {}
     for name in _ALL_VARS:
-        raw = os.environ.get(name)
+        if name in direct_only:
+            raw = os.environ.get(name)
+        else:
+            raw = get(name)
         if raw is None or raw == '':
             out[name] = None
             continue
-        if redact and name in _SECRET_VARS:
+        if redact and name in SECRET_VARS:
             out[name] = '***REDACTED***'
             continue
         out[name] = raw
     return dict(sorted(out.items()))
+
+
+def effective_source(name: str) -> str:
+    """Return where `name` resolves from: 'env', 'file', or 'unset'.
+
+    Diagnostic helper for `memman doctor` / `memman config show`.
+    """
+    raw = os.environ.get(name)
+    if raw is not None and raw != '':
+        return 'env'
+    file_value = _load_file_cache().get(name)
+    if file_value is not None and file_value != '':
+        return 'file'
+    return 'unset'
+
+
+def collect_install_knobs(data_dir: str) -> dict[str, str]:
+    """Build the dict of values to persist to `~/.memman/env` at install.
+
+    For each `INSTALLABLE_KEYS` entry, prefer `os.environ` value; else
+    use `INSTALL_DEFAULTS`. When the active provider is `openrouter`
+    AND model FAST/SLOW are using the default fallback, query
+    OpenRouter's `/models` to resolve the actual latest haiku/sonnet.
+    On resolver failure the `INSTALL_DEFAULTS` value is kept.
+
+    Raises `ConfigError` (via the caller's import) when a mandatory
+    secret is missing.
+    """
+    from memman.exceptions import ConfigError
+
+    knobs: dict[str, str] = {}
+    user_supplied: set[str] = set()
+    for key in INSTALLABLE_KEYS:
+        env_value = os.environ.get(key, '').strip()
+        if env_value:
+            knobs[key] = env_value
+            user_supplied.add(key)
+        elif key in INSTALL_DEFAULTS:
+            knobs[key] = INSTALL_DEFAULTS[key]
+
+    provider = knobs.get(LLM_PROVIDER, INSTALL_DEFAULTS.get(LLM_PROVIDER))
+    if provider == 'openrouter':
+        from memman.llm.openrouter_models import resolve_latest_in_family
+        api_key = knobs.get(OPENROUTER_API_KEY, '')
+        endpoint = knobs.get(
+            OPENROUTER_ENDPOINT, INSTALL_DEFAULTS[OPENROUTER_ENDPOINT])
+        for role_key, family in (
+                (LLM_MODEL_FAST, 'haiku'),
+                (LLM_MODEL_SLOW, 'sonnet')):
+            if role_key in user_supplied or not api_key:
+                continue
+            resolved = resolve_latest_in_family(api_key, endpoint, family)
+            if resolved:
+                knobs[role_key] = resolved
+
+    for required in MANDATORY_INSTALL_KEYS:
+        if not knobs.get(required):
+            raise ConfigError(
+                f'{required} is required; export it and re-run install')
+
+    return knobs
+
+
+def write_default_env_file(data_dir: Path) -> None:
+    """Write `INSTALL_DEFAULTS` to `<data_dir>/env`.
+
+    Used only by the test fixture so runtime call sites resolve to the
+    canonical defaults without each test having to populate the file.
+    Production install uses `_write_env_keys` in `setup/scheduler.py`.
+    """
+    data_dir.mkdir(parents=True, exist_ok=True)
+    path = data_dir / ENV_FILENAME
+    contents = '\n'.join(
+        f'{k}={v}' for k, v in INSTALL_DEFAULTS.items()) + '\n'
+    path.write_text(contents)
+    path.chmod(0o600)
+    reset_file_cache()

@@ -264,6 +264,44 @@ def check_queue_schema(data_dir: str) -> dict:
         }
 
 
+def check_env_completeness() -> dict:
+    """Verify ~/.memman/env contains every INSTALLABLE_KEYS entry.
+
+    Catches the upgrade case where a new release adds a key the user's
+    existing file lacks. Reports the missing keys so the user can run
+    `memman install` to repopulate. Optional secrets are not flagged
+    when absent (the user may not have configured an alternate provider).
+    """
+    from memman import config
+
+    path = config.env_file_path()
+    parsed = config.parse_env_file(path)
+
+    optional_secrets = {config.OPENAI_EMBED_API_KEY}
+    missing = [
+        key for key in config.INSTALLABLE_KEYS
+        if not parsed.get(key) and key not in optional_secrets
+        ]
+
+    if not missing:
+        return {
+            'name': 'env_completeness',
+            'status': 'pass',
+            'detail': {'env_file': str(path)},
+            }
+
+    return {
+        'name': 'env_completeness',
+        'status': 'warn',
+        'detail': {
+            'env_file': str(path),
+            'missing': missing,
+            'fix': ('run `memman install` to populate the env file with'
+                    ' the latest INSTALLABLE_KEYS values'),
+            },
+        }
+
+
 def check_env_permissions() -> dict:
     """Verify ~/.memman/env is 0600 and ~/.memman is 0700.
 
@@ -604,6 +642,7 @@ def run_all_checks(db: 'DB', data_dir: str | None = None) -> dict:
             check_queue_schema(data_dir),
             check_queue_backlog(data_dir),
             check_scheduler_heartbeat(data_dir),
+            check_env_completeness(),
             check_env_permissions(),
             check_scheduler_state(),
             check_llm_probe(),

@@ -14,7 +14,6 @@ Adding a new provider = drop `embed/<name>.py` implementing the
 Protocol, plus one `PROVIDERS[<name>] = factory` line here.
 """
 
-import os
 from collections.abc import Callable
 from typing import Protocol
 
@@ -85,11 +84,15 @@ PROVIDERS: dict[str, Callable[[], EmbeddingProvider]] = {
 def get_client() -> EmbeddingProvider:
     """Return the embed client for the configured provider.
 
-    Routes by `MEMMAN_EMBED_PROVIDER` (default: 'voyage'). Raises
-    `ConfigError` when the provider name is unknown.
+    Routes by `MEMMAN_EMBED_PROVIDER`. Raises `ConfigError` when the
+    var is unset (run `memman install`) or the provider name is unknown.
     """
-    name = os.environ.get(
-        config.EMBED_PROVIDER, config.DEFAULT_EMBED_PROVIDER).lower()
+    raw = config.get(config.EMBED_PROVIDER)
+    if not raw:
+        raise ConfigError(
+            f'{config.EMBED_PROVIDER} is not set;'
+            ' run `memman install` to populate the env file')
+    name = raw.lower()
     factory = PROVIDERS.get(name)
     if factory is None:
         known = ', '.join(sorted(PROVIDERS)) or '(none)'

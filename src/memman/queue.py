@@ -355,10 +355,8 @@ def purge_done(
         keep_seconds: int = DONE_RETENTION_SECONDS) -> int:
     """Delete `done` queue rows older than `keep_seconds`.
 
-    Recently-completed rows are kept so the inline-drain CLI can read
-    back the worker's per-row JSON output for the response (legacy path
-    in `_facts_from_queue_row`). Once the inline path is removed this
-    grace period stops being load-bearing.
+    The grace window avoids racing concurrent readers that may still
+    inspect a freshly-completed row via `memman queue list`.
     """
     cutoff = int(time.time()) - keep_seconds
     cur = conn.execute(

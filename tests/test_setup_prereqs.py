@@ -72,8 +72,9 @@ def test_uninstall_skips_prereq_checks(monkeypatch, tmp_path):
     """
     monkeypatch.setattr(setup_claude, 'detect_scheduler', lambda: '')
     monkeypatch.setattr(setup_claude, 'detect_environments', list)
-    monkeypatch.setattr(setup_claude, 'uninstall_scheduler',
-                        lambda: {'platform': 'unknown', 'actions': []})
+    monkeypatch.setattr(
+        setup_claude, 'uninstall_scheduler',
+        lambda data_dir=None: {'platform': 'unknown', 'actions': []})
     setup_claude.run_uninstall(data_dir=str(tmp_path))
 
 

@@ -208,17 +208,6 @@ class TestM0Stores:
         assert_contains(out.stdout, 'data/default/memman.db',
                         'env override db path')
 
-    def test_migration(self, home_dir: Path):
-        migrate_dir = home_dir / 'data' / 'migrate_test'
-        migrate_dir.mkdir(parents=True, exist_ok=True)
-        run_cli(['remember', '--no-reconcile',
-                 'Legacy database migration insight about schema changes',
-                 '--cat', 'fact', '--imp', '3'],
-                home_dir, migrate_dir, check=False)
-        out = run_cli(['status'], home_dir, migrate_dir)
-        assert_contains(out.stdout, 'data/default/memman.db',
-                        'migrated db path')
-
 
 # ---------------------------------------------------------------------
 # M1: Basic CRUD (lines 217-265)

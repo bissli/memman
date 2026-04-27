@@ -40,6 +40,8 @@ export VOYAGE_API_KEY=...       # embedding provider key (current default)
 memman install
 ```
 
+`memman install` snapshots the API keys plus every other `INSTALLABLE_KEYS` value from your shell into `~/.memman/env` (mode 0600) and queries OpenRouter for the current latest haiku/sonnet at install time. After install, you do not need to re-export the keys in every shell — runtime resolves env first, then the file. Per-project overrides via direnv (or any tool that exports `KEY=VALUE` before invoking memman). To bump model versions later, re-run `memman install`. See [CONTRIBUTING.md](CONTRIBUTING.md#configuration) for the full key list.
+
 `pipx install` puts the `memman` binary on your PATH. `memman install` wires integration into Claude Code, [OpenClaw](https://github.com/openclaw/openclaw), and/or [NanoClaw](https://github.com/qwibitai/nanoclaw):
 
 - skill file symlinked into `~/.claude/skills/memman/SKILL.md` (or equivalent)

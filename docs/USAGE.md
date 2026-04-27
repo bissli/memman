@@ -185,7 +185,7 @@ memman store remove old-project
 3. `~/.memman/active` file
 4. Falls back to `"default"`
 
-Different agents or processes can use different stores via the `MEMMAN_STORE` environment variable — no global state contention. Legacy databases (`~/.memman/memman.db`) are automatically migrated to `~/.memman/data/default/` on first run.
+Different agents or processes can use different stores via the `MEMMAN_STORE` environment variable — no global state contention.
 
 ### Observability
 
@@ -223,7 +223,6 @@ memman log worker [--errors] [--lines N]            # tail worker output (~/.mem
 | `MEMMAN_OPENAI_EMBED_MODEL`    | —                              | Model id for `openai_compat` provider.                                                       |
 | `MEMMAN_OLLAMA_HOST`           | `http://localhost:11434`       | Host URL for `ollama` provider.                                                              |
 | `MEMMAN_OLLAMA_EMBED_MODEL`    | —                              | Model id for `ollama` provider.                                                              |
-| `MEMMAN_CACHE_DIR`             | `~/.cache/memman`              | Override the ZDR endpoint-list cache location.                                               |
 | `MEMMAN_DEBUG`                 | (unset)                        | Truthy value enables JSONL tracing to `~/.memman/logs/debug.log`.                            |
 | `MEMMAN_WORKER`                | (unset)                        | `1` inside the scheduler-triggered worker; enables the rotating log.                         |
 | `MEMMAN_LOG_LEVEL`             | `WARNING`                      | Override logger level when neither `--verbose` nor `--debug` is passed.                      |

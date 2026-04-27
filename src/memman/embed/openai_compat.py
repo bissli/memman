@@ -1,10 +1,8 @@
 """OpenAI-compatible embedding client (OpenAI, OpenRouter, vLLM,
 LiteLLM, any other provider exposing `/v1/embeddings`).
 
-Endpoint is configurable via `MEMMAN_OPENAI_EMBED_ENDPOINT`
-(default `https://api.openai.com`). Model is set by
-`MEMMAN_OPENAI_EMBED_MODEL` (default `text-embedding-3-small`).
-API key by `MEMMAN_OPENAI_EMBED_API_KEY`.
+Endpoint, model, and API key are read from the env-or-file resolver
+(populated at install time from `INSTALL_DEFAULTS`).
 
 `dim` is discovered from the first successful embed call and
 cached on the client; `available()` performs the discovery probe.
@@ -15,16 +13,13 @@ edge density assumptions.
 """
 
 import logging
-import os
 import time
 
 import httpx
 from memman import config, trace
+from memman.exceptions import ConfigError
 
 logger = logging.getLogger('memman')
-
-DEFAULT_MODEL = 'text-embedding-3-small'
-DEFAULT_ENDPOINT = 'https://api.openai.com'
 
 _CLIENT: httpx.Client | None = None
 
@@ -43,14 +38,17 @@ class Client:
     name = 'openai'
 
     def __init__(self) -> None:
-        self.endpoint = (
-            os.environ.get(config.OPENAI_EMBED_ENDPOINT)
-            or DEFAULT_ENDPOINT)
-        self.model = (
-            os.environ.get(config.OPENAI_EMBED_MODEL) or DEFAULT_MODEL)
+        endpoint = config.get(config.OPENAI_EMBED_ENDPOINT)
+        model = config.get(config.OPENAI_EMBED_MODEL)
+        if not endpoint or not model:
+            raise ConfigError(
+                f'{config.OPENAI_EMBED_ENDPOINT} or'
+                f' {config.OPENAI_EMBED_MODEL} is unset; run'
+                ' `memman install` to populate the env file')
+        self.endpoint = endpoint
+        self.model = model
         self.dim = 0
-        self._api_key = (
-            os.environ.get(config.OPENAI_EMBED_API_KEY) or '')
+        self._api_key = config.get(config.OPENAI_EMBED_API_KEY) or ''
         self._availability_cache: bool | None = None
 
     def _headers(self) -> dict[str, str]:
