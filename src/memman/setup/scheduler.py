@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from memman import config
+from memman.setup._atomic import atomic_write_secure
 
 SYSTEMD_TIMER_NAME = 'memman-enrich.timer'
 SYSTEMD_SERVICE_NAME = 'memman-enrich.service'
@@ -69,12 +70,7 @@ def write_state(state: str) -> None:
     """Atomically persist the scheduler intent state."""
     if state not in {STATE_STARTED, STATE_STOPPED}:
         raise ValueError(f'invalid scheduler state {state!r}')
-    path = _state_file_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + '.tmp')
-    tmp.write_text(state + '\n')
-    Path(tmp).chmod(0o600)
-    Path(tmp).replace(path)
+    atomic_write_secure(_state_file_path(), state + '\n')
 
 
 def clear_state() -> None:
@@ -91,12 +87,7 @@ def _serve_interval_path() -> Path:
 
 def write_serve_interval(seconds: int) -> None:
     """Persist the active serve loop's interval for status/doctor reads."""
-    path = _serve_interval_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + '.tmp')
-    tmp.write_text(f'{int(seconds)}\n')
-    Path(tmp).chmod(0o600)
-    Path(tmp).replace(path)
+    atomic_write_secure(_serve_interval_path(), f'{int(seconds)}\n')
 
 
 def read_serve_interval() -> int | None:
@@ -138,12 +129,7 @@ def write_debug_state(state: str) -> None:
     """Atomically persist the debug-trace state."""
     if state not in VALID_DEBUG_STATES:
         raise ValueError(f'invalid debug state {state!r}')
-    path = _debug_state_file_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + '.tmp')
-    tmp.write_text(state + '\n')
-    Path(tmp).chmod(0o600)
-    Path(tmp).replace(path)
+    atomic_write_secure(_debug_state_file_path(), state + '\n')
 
 
 def clear_debug_state() -> None:
@@ -275,16 +261,12 @@ def _write_env_keys(updates: dict[str, str],
     os.replace() so a concurrent reader never sees a partial file.
     """
     path = config.env_file_path(data_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
     existing = config.parse_env_file(path)
     for k in (removes or ()):
         existing.pop(k, None)
     existing.update(updates)
     contents = '\n'.join(f'{k}={v}' for k, v in existing.items()) + '\n'
-    tmp = path.with_suffix(path.suffix + '.tmp')
-    tmp.write_text(contents)
-    Path(tmp).chmod(0o600)
-    Path(tmp).replace(path)
+    atomic_write_secure(path, contents)
     config.reset_file_cache()
     return [f'wrote {path} (mode 600, atomic)']
 

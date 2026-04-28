@@ -5,6 +5,7 @@ import os
 import shutil
 from pathlib import Path
 
+from memman.setup._atomic import atomic_write_secure
 from memman.setup.deploy import symlink_asset
 from memman.setup.prompt import status_error, status_ok, status_updated
 from memman.setup.settings import remove_if_empty
@@ -71,8 +72,7 @@ def openclaw_register_plugin(config_dir: str,
     cfg['plugins'] = plugins
 
     content = json.dumps(cfg, indent=2) + '\n'
-    Path(cfg_path).write_text(content)
-    Path(cfg_path).chmod(0o600)
+    atomic_write_secure(Path(cfg_path), content)
 
     return cfg_path
 
@@ -116,8 +116,7 @@ def openclaw_uninstall(config_dir: str) -> list[Exception]:
             plugins['entries'] = entries
             cfg['plugins'] = plugins
             content = json.dumps(cfg, indent=2) + '\n'
-            Path(cfg_path).write_text(content)
-            Path(cfg_path).chmod(0o600)
+            atomic_write_secure(Path(cfg_path), content)
     except Exception:
         pass
 
