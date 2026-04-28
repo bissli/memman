@@ -46,6 +46,7 @@ def link_pending(
         db: 'DB',
         embed_cache: dict[str, list[float]] | None = None,
         llm_client: object | None = None,
+        metadata_llm_client: object | None = None,
         embed_client: object | None = None,
         max_batch: int = MAX_LINK_BATCH,
         on_progress: 'Callable[[str, Insight], None] | None' = None,
@@ -61,6 +62,9 @@ def link_pending(
 
     if embed_cache is None:
         embed_cache = build_embed_cache(db)
+
+    if metadata_llm_client is None:
+        metadata_llm_client = llm_client
 
     from memman.graph.causal import infer_llm_causal_edges
     from memman.graph.enrichment import enrich_with_llm
@@ -82,13 +86,13 @@ def link_pending(
             ro_db = open_read_only(data_dir)
             try:
                 return infer_llm_causal_edges(
-                    ro_db, insight, llm_client)
+                    ro_db, insight, metadata_llm_client)
             finally:
                 ro_db.close()
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             fut_enrich = pool.submit(
-                enrich_with_llm, insight, llm_client)
+                enrich_with_llm, insight, metadata_llm_client)
             fut_causal = pool.submit(_do_causal)
             try:
                 enrichment = fut_enrich.result()

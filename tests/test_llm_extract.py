@@ -70,6 +70,47 @@ class TestStripLineRefs:
             ) == 'See for the diff'
 
 
+class TestSlowRoleSplit:
+    """The two slow roles resolve to independent env vars.
+
+    Both roles must be set explicitly; there is no back-compat fallback
+    from one to the other.
+    """
+
+    def test_canonical_and_metadata_resolve_independently(self, monkeypatch):
+        from memman.config import LLM_MODEL_SLOW_CANONICAL
+        from memman.config import LLM_MODEL_SLOW_METADATA, OPENROUTER_API_KEY
+        from memman.config import OPENROUTER_ENDPOINT
+        from memman.llm.openrouter_client import get_openrouter_client
+        monkeypatch.setenv(OPENROUTER_API_KEY, 'k')
+        monkeypatch.setenv(OPENROUTER_ENDPOINT, 'https://x')
+        monkeypatch.setenv(LLM_MODEL_SLOW_CANONICAL, 'anthropic/sonnet')
+        monkeypatch.setenv(LLM_MODEL_SLOW_METADATA, 'anthropic/haiku')
+        from memman import config as _cfg
+        _cfg.reset_file_cache()
+        canonical = get_openrouter_client('slow_canonical')
+        metadata = get_openrouter_client('slow_metadata')
+        assert canonical.model == 'anthropic/sonnet'
+        assert metadata.model == 'anthropic/haiku'
+
+    def test_unset_metadata_var_raises(self, monkeypatch, tmp_path):
+        import pytest
+        from memman.config import DATA_DIR, LLM_MODEL_SLOW_CANONICAL
+        from memman.config import LLM_MODEL_SLOW_METADATA, OPENROUTER_API_KEY
+        from memman.config import OPENROUTER_ENDPOINT
+        from memman.exceptions import ConfigError
+        from memman.llm.openrouter_client import get_openrouter_client
+        monkeypatch.setenv(DATA_DIR, str(tmp_path))
+        monkeypatch.setenv(OPENROUTER_API_KEY, 'k')
+        monkeypatch.setenv(OPENROUTER_ENDPOINT, 'https://x')
+        monkeypatch.setenv(LLM_MODEL_SLOW_CANONICAL, 'anthropic/sonnet')
+        monkeypatch.delenv(LLM_MODEL_SLOW_METADATA, raising=False)
+        from memman import config as _cfg
+        _cfg.reset_file_cache()
+        with pytest.raises(ConfigError):
+            get_openrouter_client('slow_metadata')
+
+
 class FakeLLMClient:
     """LLMClient that returns canned responses for unit testing."""
 

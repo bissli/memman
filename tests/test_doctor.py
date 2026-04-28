@@ -149,7 +149,7 @@ class TestProvenanceDrift:
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW)
+        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
 
         _insert_healthy_insight(tmp_db, 'p-1')
         tmp_db._exec(
@@ -168,7 +168,7 @@ class TestProvenanceDrift:
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW)
+        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
 
         _insert_healthy_insight(tmp_db, 'p-stale-1')
         _insert_healthy_insight(tmp_db, 'p-stale-2')
@@ -195,7 +195,7 @@ class TestProvenanceDrift:
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW)
+        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
 
         _insert_healthy_insight(tmp_db, 'm-old')
         tmp_db._exec(

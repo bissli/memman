@@ -181,4 +181,4 @@ class TestLLMCausalInference:
         monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
         reset_role_cache()
         with pytest.raises(ConfigError):
-            get_llm_client('slow')
+            get_llm_client('slow_canonical')

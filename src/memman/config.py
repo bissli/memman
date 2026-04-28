@@ -33,7 +33,8 @@ DATA_DIR = 'MEMMAN_DATA_DIR'
 STORE = 'MEMMAN_STORE'
 LLM_PROVIDER = 'MEMMAN_LLM_PROVIDER'
 LLM_MODEL_FAST = 'MEMMAN_LLM_MODEL_FAST'
-LLM_MODEL_SLOW = 'MEMMAN_LLM_MODEL_SLOW'
+LLM_MODEL_SLOW_CANONICAL = 'MEMMAN_LLM_MODEL_SLOW_CANONICAL'
+LLM_MODEL_SLOW_METADATA = 'MEMMAN_LLM_MODEL_SLOW_METADATA'
 EMBED_PROVIDER = 'MEMMAN_EMBED_PROVIDER'
 OPENROUTER_ENDPOINT = 'MEMMAN_OPENROUTER_ENDPOINT'
 DEBUG = 'MEMMAN_DEBUG'
@@ -63,7 +64,8 @@ SECRET_VARS = frozenset({
 INSTALLABLE_KEYS = (
     LLM_PROVIDER,
     LLM_MODEL_FAST,
-    LLM_MODEL_SLOW,
+    LLM_MODEL_SLOW_CANONICAL,
+    LLM_MODEL_SLOW_METADATA,
     EMBED_PROVIDER,
     OPENROUTER_ENDPOINT,
     LOG_LEVEL,
@@ -85,7 +87,8 @@ MANDATORY_INSTALL_KEYS = (
 INSTALL_DEFAULTS: dict[str, str] = {
     LLM_PROVIDER: 'openrouter',
     LLM_MODEL_FAST: 'anthropic/claude-haiku-4.5',
-    LLM_MODEL_SLOW: 'anthropic/claude-sonnet-4.6',
+    LLM_MODEL_SLOW_CANONICAL: 'anthropic/claude-sonnet-4.6',
+    LLM_MODEL_SLOW_METADATA: 'anthropic/claude-sonnet-4.6',
     EMBED_PROVIDER: 'voyage',
     OPENROUTER_ENDPOINT: 'https://openrouter.ai/api/v1',
     LOG_LEVEL: 'WARNING',
@@ -311,7 +314,8 @@ def collect_install_knobs(data_dir: str) -> dict[str, str]:
             or INSTALL_DEFAULTS[OPENROUTER_ENDPOINT])
         for role_key, family in (
                 (LLM_MODEL_FAST, 'haiku'),
-                (LLM_MODEL_SLOW, 'sonnet')):
+                (LLM_MODEL_SLOW_CANONICAL, 'sonnet'),
+                (LLM_MODEL_SLOW_METADATA, 'sonnet')):
             if role_key not in needs_resolve or not api_key:
                 continue
             resolved = resolve_latest_in_family(api_key, endpoint, family)

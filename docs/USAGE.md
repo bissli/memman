@@ -208,26 +208,27 @@ memman log worker [--errors] [--lines N]            # tail worker output (~/.mem
 
 memman resolves user-config vars in two layers: `os.environ` first, then `<MEMMAN_DATA_DIR>/env` (the env file written by `memman install`, mode 0600). There is no code-default fallback at runtime — the defaults below live in `config.INSTALL_DEFAULTS` and are written to the env file at install time. See [CONTRIBUTING.md](../CONTRIBUTING.md#configuration) for the full design. Process-control vars (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`) bypass the file and read directly from `os.environ`.
 
-| Variable                        | Install-time default                              | Description                                                                                           |
-| ------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `MEMMAN_DATA_DIR`               | `~/.memman`                                       | Base data directory (process-control; not persisted).                                                 |
-| `MEMMAN_STORE`                  | `default`                                         | Active named store (process-control; not persisted).                                                  |
-| `OPENROUTER_API_KEY`            | —                                                 | Required at install: LLM inference (fact extraction, reconciliation, causal, expansion).              |
-| `VOYAGE_API_KEY`                | —                                                 | Required at install: Voyage AI embeddings (512-dim).                                                  |
-| `MEMMAN_LLM_PROVIDER`           | `openrouter`                                      | Registered LLM provider name (see `memman.llm.client.PROVIDERS`).                                     |
-| `MEMMAN_OPENROUTER_ENDPOINT`    | `https://openrouter.ai/api/v1`                    | Endpoint for the OpenRouter client.                                                                   |
-| `MEMMAN_LLM_MODEL_FAST`         | resolved at install (haiku family via `/models`)  | Recall hot path model id (query expansion, doctor probe).                                             |
-| `MEMMAN_LLM_MODEL_SLOW`         | resolved at install (sonnet family via `/models`) | Scheduler worker model id (extraction, reconciliation, enrichment, causal).                           |
-| `MEMMAN_EMBED_PROVIDER`         | `voyage`                                          | Embedding provider: `voyage`, `openai`, `openrouter`, `ollama`.                                       |
-| `MEMMAN_OPENAI_EMBED_API_KEY`   | —                                                 | API key for `openai` provider.                                                                        |
-| `MEMMAN_OPENAI_EMBED_ENDPOINT`  | `https://api.openai.com`                          | Endpoint URL for `openai` provider.                                                                   |
-| `MEMMAN_OPENAI_EMBED_MODEL`     | `text-embedding-3-small`                          | Model id for `openai` provider.                                                                       |
-| `MEMMAN_OPENROUTER_EMBED_MODEL` | `baai/bge-m3`                                     | Model id for `openrouter` embed provider; reuses `OPENROUTER_API_KEY` + `MEMMAN_OPENROUTER_ENDPOINT`. |
-| `MEMMAN_OLLAMA_HOST`            | `http://localhost:11434`                          | Host URL for `ollama` provider.                                                                       |
-| `MEMMAN_OLLAMA_EMBED_MODEL`     | `nomic-embed-text`                                | Model id for `ollama` provider.                                                                       |
-| `MEMMAN_DEBUG`                  | (unset)                                           | Truthy value enables JSONL tracing to `~/.memman/logs/debug.log`.                                     |
-| `MEMMAN_WORKER`                 | (unset)                                           | `1` inside the scheduler-triggered worker; enables the rotating log.                                  |
-| `MEMMAN_LOG_LEVEL`              | `WARNING`                                         | Logger level when neither `--verbose` nor `--debug` is passed.                                        |
+| Variable                          | Install-time default                              | Description                                                                                           |
+| --------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `MEMMAN_DATA_DIR`                 | `~/.memman`                                       | Base data directory (process-control; not persisted).                                                 |
+| `MEMMAN_STORE`                    | `default`                                         | Active named store (process-control; not persisted).                                                  |
+| `OPENROUTER_API_KEY`              | —                                                 | Required at install: LLM inference (fact extraction, reconciliation, causal, expansion).              |
+| `VOYAGE_API_KEY`                  | —                                                 | Required at install: Voyage AI embeddings (512-dim).                                                  |
+| `MEMMAN_LLM_PROVIDER`             | `openrouter`                                      | Registered LLM provider name (see `memman.llm.client.PROVIDERS`).                                     |
+| `MEMMAN_OPENROUTER_ENDPOINT`      | `https://openrouter.ai/api/v1`                    | Endpoint for the OpenRouter client.                                                                   |
+| `MEMMAN_LLM_MODEL_FAST`           | resolved at install (haiku family via `/models`)  | Recall hot path model id (query expansion, doctor probe).                                             |
+| `MEMMAN_LLM_MODEL_SLOW_CANONICAL` | resolved at install (sonnet family via `/models`) | Worker model for canonical content (fact extraction, reconciliation).                                 |
+| `MEMMAN_LLM_MODEL_SLOW_METADATA`  | resolved at install (sonnet family via `/models`) | Worker model for derived metadata (enrichment summaries/keywords, causal-edge inference).             |
+| `MEMMAN_EMBED_PROVIDER`           | `voyage`                                          | Embedding provider: `voyage`, `openai`, `openrouter`, `ollama`.                                       |
+| `MEMMAN_OPENAI_EMBED_API_KEY`     | —                                                 | API key for `openai` provider.                                                                        |
+| `MEMMAN_OPENAI_EMBED_ENDPOINT`    | `https://api.openai.com`                          | Endpoint URL for `openai` provider.                                                                   |
+| `MEMMAN_OPENAI_EMBED_MODEL`       | `text-embedding-3-small`                          | Model id for `openai` provider.                                                                       |
+| `MEMMAN_OPENROUTER_EMBED_MODEL`   | `baai/bge-m3`                                     | Model id for `openrouter` embed provider; reuses `OPENROUTER_API_KEY` + `MEMMAN_OPENROUTER_ENDPOINT`. |
+| `MEMMAN_OLLAMA_HOST`              | `http://localhost:11434`                          | Host URL for `ollama` provider.                                                                       |
+| `MEMMAN_OLLAMA_EMBED_MODEL`       | `nomic-embed-text`                                | Model id for `ollama` provider.                                                                       |
+| `MEMMAN_DEBUG`                    | (unset)                                           | Truthy value enables JSONL tracing to `~/.memman/logs/debug.log`.                                     |
+| `MEMMAN_WORKER`                   | (unset)                                           | `1` inside the scheduler-triggered worker; enables the rotating log.                                  |
+| `MEMMAN_LOG_LEVEL`                | `WARNING`                                         | Logger level when neither `--verbose` nor `--debug` is passed.                                        |
 
 ---
 

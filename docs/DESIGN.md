@@ -1,6 +1,6 @@
 # MemMan — Design & Architecture
 
-MemMan is a persistent memory system designed for LLM agents. It adopts the **LLM-Supervised** pattern: the host LLM acts as external orchestrator of a standalone memory binary through symbolic CLI interfaces, while Haiku (routed through OpenRouter) handles pipeline intelligence (fact extraction, reconciliation, query expansion). Memory is organized as a four-graph knowledge structure with temporal, entity, causal, and semantic edges. Writes are deferred to a scheduler-driven background worker so the host session never blocks on LLM calls. Implemented as a Python package + SQLite, requiring OpenRouter and Voyage AI API keys.
+MemMan is a persistent memory system designed for LLM agents. It adopts the **LLM-Supervised** pattern: the host LLM acts as external orchestrator of a standalone memory binary through symbolic CLI interfaces, while three internal LLM roles routed through OpenRouter handle pipeline intelligence — Haiku for the recall-time fast path (query expansion), Sonnet for canonical content (fact extraction, reconciliation), and Sonnet for derived metadata (enrichment, causal-edge inference; independently tunable). Memory is organized as a four-graph knowledge structure with temporal, entity, causal, and semantic edges. Writes are deferred to a scheduler-driven background worker so the host session never blocks on LLM calls. Implemented as a Python package + SQLite, requiring OpenRouter and Voyage AI API keys.
 
 ---
 

@@ -5,17 +5,20 @@ satisfy: a `.complete(system, user) -> str` method. Concrete clients
 register themselves in the `PROVIDERS` dict via a factory that takes a
 role and reads role-specific env vars.
 
-Two roles exist:
+Three roles exist:
 
-- `fast` — used on the synchronous CLI hot path (recall query
-  expansion, doctor's connectivity probe). Reads `MEMMAN_LLM_MODEL_FAST`.
-- `slow` — used in the scheduler-driven worker (fact extraction,
-  reconciliation, enrichment, causal inference) and the operator
-  `graph rebuild` sweep. Reads `MEMMAN_LLM_MODEL_SLOW`.
+- `fast` — synchronous CLI hot path (recall query expansion, doctor's
+  connectivity probe). Reads `MEMMAN_LLM_MODEL_FAST`.
+- `slow_canonical` — canonical-content path (fact extraction,
+  reconciliation). Reads `MEMMAN_LLM_MODEL_SLOW_CANONICAL`.
+- `slow_metadata` — derived-metadata path (enrichment, causal-edge
+  inference). Reads `MEMMAN_LLM_MODEL_SLOW_METADATA`.
 
 Routing the recall path to a small/fast model and the worker to a
 larger/slow/reasoning model means switching the worker model never
-adds latency to interactive commands.
+adds latency to interactive commands. Splitting the slow worker into
+canonical vs metadata leaves a knob for tuning enrichment cost
+separately from the load-bearing extraction prompt.
 
 `get_llm_client(role)` resolves the active provider via
 `MEMMAN_LLM_PROVIDER` and returns a per-role cached client.
@@ -28,8 +31,9 @@ from memman import config
 from memman.exceptions import ConfigError
 
 ROLE_FAST = 'fast'
-ROLE_SLOW = 'slow'
-VALID_ROLES = frozenset({ROLE_FAST, ROLE_SLOW})
+ROLE_SLOW_CANONICAL = 'slow_canonical'
+ROLE_SLOW_METADATA = 'slow_metadata'
+VALID_ROLES = frozenset({ROLE_FAST, ROLE_SLOW_CANONICAL, ROLE_SLOW_METADATA})
 
 
 class LLMProvider(Protocol):
@@ -65,7 +69,8 @@ _ROLE_CACHE: dict[str, LLMProvider] = {}
 def get_llm_client(role: str) -> LLMProvider:
     """Return a cached LLM client for the given role.
 
-    `role` must be one of `'fast'` or `'slow'`. Routes by
+    `role` must be one of `'fast'`, `'slow_canonical'`, or
+    `'slow_metadata'`. Routes by
     `MEMMAN_LLM_PROVIDER` (default: 'openrouter'). Raises `ConfigError`
     when the provider name is unknown or the selected provider's
     required env vars are missing.

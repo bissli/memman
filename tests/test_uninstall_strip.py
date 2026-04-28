@@ -23,7 +23,7 @@ def _install_env(data_dir):
     contents = '\n'.join([
         f'{config.LLM_PROVIDER}=openrouter',
         f'{config.LLM_MODEL_FAST}=anthropic/claude-haiku-4.5',
-        f'{config.LLM_MODEL_SLOW}=anthropic/claude-sonnet-4.6',
+        f'{config.LLM_MODEL_SLOW_CANONICAL}=anthropic/claude-sonnet-4.6',
         f'{config.EMBED_PROVIDER}=voyage',
         f'{config.OPENROUTER_API_KEY}=sk-or-installed',
         f'{config.VOYAGE_API_KEY}=pa-installed',

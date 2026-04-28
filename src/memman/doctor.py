@@ -638,9 +638,15 @@ def check_provenance_drift(db: 'DB') -> dict:
             'name': 'provenance_drift', 'status': 'fail',
             'detail': detail}
     try:
-        detail['active_model_slow'] = config.require(config.LLM_MODEL_SLOW)
+        detail['active_model_slow_canonical'] = config.require(
+            config.LLM_MODEL_SLOW_CANONICAL)
     except Exception:
-        detail['active_model_slow'] = None
+        detail['active_model_slow_canonical'] = None
+    try:
+        detail['active_model_slow_metadata'] = config.require(
+            config.LLM_MODEL_SLOW_METADATA)
+    except Exception:
+        detail['active_model_slow_metadata'] = None
 
     rows = db._query(
         'SELECT prompt_version, model_id, COUNT(*) AS n'
@@ -649,7 +655,7 @@ def check_provenance_drift(db: 'DB') -> dict:
         ' ORDER BY n DESC').fetchall()
 
     active_pv = detail['active_prompt_version']
-    active_model = detail['active_model_slow']
+    active_model = detail['active_model_slow_canonical']
     stale_rows = 0
     breakdown: list[dict] = []
     for pv, mid, n in rows:

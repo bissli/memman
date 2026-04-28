@@ -35,9 +35,10 @@ class OpenRouterClient:
             ) -> None:
         """Initialize with endpoint, API key, and an explicit model id.
 
-        `role_env_var` is the env var name (`MEMMAN_LLM_MODEL_FAST` or
-        `MEMMAN_LLM_MODEL_SLOW`) the model came from; surfaced in error
-        messages so the user knows which knob to tune.
+        `role_env_var` is the env var name (`MEMMAN_LLM_MODEL_FAST`,
+        `MEMMAN_LLM_MODEL_SLOW_CANONICAL`, or
+        `MEMMAN_LLM_MODEL_SLOW_METADATA`) the model came from; surfaced
+        in error messages so the user knows which knob to tune.
         """
         if not model:
             raise ConfigError(
@@ -121,7 +122,8 @@ class OpenRouterClient:
 
 _ROLE_ENV_VARS = {
     'fast': config.LLM_MODEL_FAST,
-    'slow': config.LLM_MODEL_SLOW,
+    'slow_canonical': config.LLM_MODEL_SLOW_CANONICAL,
+    'slow_metadata': config.LLM_MODEL_SLOW_METADATA,
     }
 
 

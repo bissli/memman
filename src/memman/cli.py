@@ -127,7 +127,7 @@ def _get_llm_client_or_fail(role: str):
 
     Keeps `memman.llm` free of `click` — the CLI boundary is the only
     place that should know how to surface a user-facing config error.
-    `role` is `'fast'` (recall hot path) or `'slow'` (worker pipeline,
+    `role` is `'fast'`, `'slow_canonical'`, or `'slow_metadata'` (worker pipeline,
     operator rebuilds).
     """
     from memman.exceptions import ConfigError
@@ -765,7 +765,7 @@ class _StoreContext:
         self.db = _open_store_db(store_data_dir)
         _fp_mod.assert_consistent(self.db)
         self.ec = _get_ec()
-        self.llm_client = get_llm_client('slow')
+        self.llm_client = get_llm_client('slow_canonical')
         self.embed_cache: dict[str, list[float]] = {}
         for eid, _content, blob in get_all_embeddings(self.db):
             v = deserialize_vector(blob)
@@ -1997,7 +1997,8 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
 
     db = _open_db(ctx)
     try:
-        llm_client = _get_llm_client_or_fail('slow')
+        llm_client = _get_llm_client_or_fail('slow_canonical')
+        metadata_llm_client = _get_llm_client_or_fail('slow_metadata')
         ec = get_client()
 
         all_ids = get_active_insight_ids(db)
@@ -2033,7 +2034,9 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
             while True:
                 count = link_pending(
                     db, embed_cache=embed_cache,
-                    llm_client=llm_client, embed_client=ec,
+                    llm_client=llm_client,
+                    metadata_llm_client=metadata_llm_client,
+                    embed_client=ec,
                     on_progress=_on_progress)
                 processed += count
                 if count == 0:

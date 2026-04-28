@@ -51,21 +51,21 @@ def test_parser_skips_blank_lines_and_comments(env_file):
         f'{config.LLM_MODEL_FAST}=fast',
         '   ',
         '# Another comment',
-        f'{config.LLM_MODEL_SLOW}=slow',
+        f'{config.LLM_MODEL_SLOW_CANONICAL}=slow',
         ])
     write_env(env_file, contents + '\n')
     assert config.get(config.LLM_MODEL_FAST) == 'fast'
-    assert config.get(config.LLM_MODEL_SLOW) == 'slow'
+    assert config.get(config.LLM_MODEL_SLOW_CANONICAL) == 'slow'
 
 
 def test_parser_strips_quoted_values(env_file):
     contents = '\n'.join([
         f'{config.LLM_MODEL_FAST}="quoted-fast"',
-        f"{config.LLM_MODEL_SLOW}='quoted-slow'",
+        f"{config.LLM_MODEL_SLOW_CANONICAL}='quoted-slow'",
         ])
     write_env(env_file, contents + '\n')
     assert config.get(config.LLM_MODEL_FAST) == 'quoted-fast'
-    assert config.get(config.LLM_MODEL_SLOW) == 'quoted-slow'
+    assert config.get(config.LLM_MODEL_SLOW_CANONICAL) == 'quoted-slow'
 
 
 def test_parser_does_not_expand_variables(env_file):

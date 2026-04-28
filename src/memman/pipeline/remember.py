@@ -62,10 +62,11 @@ def compute_prompt_version() -> str:
     because they don't affect stored content. The hash is cached for
     the life of the process — the prompts are module-level constants.
 
-    Note: the slow-role model id is *not* part of this hash. Swapping
-    `MEMMAN_LLM_MODEL_SLOW` to a model that produces structurally
-    different facts will not invalidate stored insights. Run
-    `memman graph rebuild` after a model swap to re-enrich.
+    Note: the slow-role model ids are *not* part of this hash. Swapping
+    `MEMMAN_LLM_MODEL_SLOW_CANONICAL` or `MEMMAN_LLM_MODEL_SLOW_METADATA`
+    to a model that produces structurally different facts will not
+    invalidate stored insights. Run `memman graph rebuild` after a
+    model swap to re-enrich.
     """
     from memman.graph.causal import LLM_SYSTEM_PROMPT as CAUSAL_PROMPT
     from memman.graph.enrichment import ENRICHMENT_SYSTEM_PROMPT
@@ -125,7 +126,10 @@ def run_remember(
     quality_warnings = check_content_quality(content)
 
     if llm_client is None:
-        llm_client = get_llm_client('slow')
+        llm_client = get_llm_client('slow_canonical')
+        metadata_llm_client = get_llm_client('slow_metadata')
+    else:
+        metadata_llm_client = llm_client
     if ec is None:
         ec = get_client()
     llm_calls = 0
@@ -178,7 +182,8 @@ def run_remember(
             plan, calls = _plan_fact(
                 fact, insight, pending_replaced_id, no_reconcile,
                 cat_explicit, imp_explicit, insights_by_id,
-                embed_cache, deleted_in_batch, llm_client, ec,
+                embed_cache, deleted_in_batch, llm_client,
+                metadata_llm_client, ec,
                 data_dir_for_ro, executor)
             llm_calls += calls
             pending_replaced_id = ''
@@ -302,6 +307,7 @@ def _plan_fact(
         embed_cache: dict[str, list[float]],
         deleted_in_batch: set[str],
         llm_client: object,
+        metadata_llm_client: object,
         ec: object,
         data_dir_for_ro: str,
         executor: ThreadPoolExecutor,
@@ -440,13 +446,13 @@ def _plan_fact(
     causal_edges: list[Edge] = []
 
     def _do_enrich() -> dict:
-        return enrich_with_llm(fact_insight, llm_client)
+        return enrich_with_llm(fact_insight, metadata_llm_client)
 
     def _do_causal() -> list[Edge]:
         ro_db = open_read_only(data_dir_for_ro)
         try:
             return infer_llm_causal_edges(
-                ro_db, fact_insight, llm_client)
+                ro_db, fact_insight, metadata_llm_client)
         finally:
             ro_db.close()
 

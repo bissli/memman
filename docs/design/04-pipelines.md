@@ -41,7 +41,7 @@ Per-blob processing inside `_process_queue_row`:
 
 ### LLM routing
 
-Both the session path (`memman recall` query expansion) and the scheduler path route through OpenRouter. They use separate role slots: `MEMMAN_LLM_MODEL_FAST` for the recall hot path (and `doctor`'s connectivity probe), `MEMMAN_LLM_MODEL_SLOW` for the scheduler worker (extraction, reconciliation, enrichment, causal inference). Both values are populated by `memman install`, which queries OpenRouter's `/models` endpoint once per role and writes the resolved id to `~/.memman/env`. Runtime never queries the model inventory; it reads the persisted id and sends it through unchanged. Re-run `memman install` to bump to a current version when a new model family ships.
+Both the session path (`memman recall` query expansion) and the scheduler path route through OpenRouter. They use three role slots: `MEMMAN_LLM_MODEL_FAST` for the recall hot path (and `doctor`'s connectivity probe), `MEMMAN_LLM_MODEL_SLOW_CANONICAL` for the worker's canonical-content path (fact extraction, reconciliation), and `MEMMAN_LLM_MODEL_SLOW_METADATA` for the worker's derived-metadata path (enrichment summaries/keywords, causal-edge inference). All three are populated by `memman install`, which queries OpenRouter's `/models` endpoint once per role and writes the resolved id to `~/.memman/env`. Runtime never queries the model inventory; it reads the persisted id and sends it through unchanged. Re-run `memman install` to bump to a current version when a new model family ships. Splitting the slow worker into `_CANONICAL` and `_METADATA` lets you tune enrichment cost (e.g., a cheaper model for summaries) independently of the load-bearing extraction prompt.
 
 ### Operational controls
 

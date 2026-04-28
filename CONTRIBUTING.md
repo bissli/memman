@@ -38,20 +38,21 @@ There is no third-tier code default at runtime. Defaults live in `config.INSTALL
 
 Set any of these in your shell before `memman install` and they land in the env file. `memman doctor` shows the resolved value and which layer it came from.
 
-| Variable                        | Purpose                                                                                                                                                                                          |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `MEMMAN_LLM_PROVIDER`           | Registered provider name (default `openrouter`).                                                                                                                                                 |
-| `MEMMAN_LLM_MODEL_FAST`         | Hot-path model id. OpenRouter resolves the latest at install time.                                                                                                                               |
-| `MEMMAN_LLM_MODEL_SLOW`         | Worker-pipeline model id. OpenRouter resolves the latest at install time.                                                                                                                        |
-| `MEMMAN_EMBED_PROVIDER`         | `voyage` (default), `openai`, `openrouter`, or `ollama`.                                                                                                                                         |
-| `MEMMAN_OPENROUTER_ENDPOINT`    | OpenRouter base URL (default `https://openrouter.ai/api/v1`).                                                                                                                                    |
-| `MEMMAN_LOG_LEVEL`              | Logger level when neither `--verbose` nor `--debug` is passed (default `WARNING`).                                                                                                               |
-| `MEMMAN_OPENAI_EMBED_API_KEY`   | Secret for the OpenAI-compatible embed provider (`MEMMAN_EMBED_PROVIDER=openai`).                                                                                                                |
-| `MEMMAN_OPENAI_EMBED_ENDPOINT`  | Endpoint for the OpenAI-compatible embed provider.                                                                                                                                               |
-| `MEMMAN_OPENAI_EMBED_MODEL`     | Model name for the OpenAI-compatible embed provider.                                                                                                                                             |
-| `MEMMAN_OPENROUTER_EMBED_MODEL` | Model id for the OpenRouter embed provider (`MEMMAN_EMBED_PROVIDER=openrouter`). Default `baai/bge-m3`. Reuses `OPENROUTER_API_KEY` and `MEMMAN_OPENROUTER_ENDPOINT`; no separate secret needed. |
-| `MEMMAN_OLLAMA_HOST`            | Ollama host URL (default `http://localhost:11434`).                                                                                                                                              |
-| `MEMMAN_OLLAMA_EMBED_MODEL`     | Ollama embedding model name (default `nomic-embed-text`).                                                                                                                                        |
+| Variable                          | Purpose                                                                                                                                                                                          |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `MEMMAN_LLM_PROVIDER`             | Registered provider name (default `openrouter`).                                                                                                                                                 |
+| `MEMMAN_LLM_MODEL_FAST`           | Hot-path model id. OpenRouter resolves the latest at install time.                                                                                                                               |
+| `MEMMAN_LLM_MODEL_SLOW_CANONICAL` | Worker model for canonical content (fact extraction, reconciliation). OpenRouter resolves the latest at install time.                                                                            |
+| `MEMMAN_LLM_MODEL_SLOW_METADATA`  | Worker model for derived metadata (enrichment summaries/keywords, causal-edge inference). OpenRouter resolves the latest at install time.                                                        |
+| `MEMMAN_EMBED_PROVIDER`           | `voyage` (default), `openai`, `openrouter`, or `ollama`.                                                                                                                                         |
+| `MEMMAN_OPENROUTER_ENDPOINT`      | OpenRouter base URL (default `https://openrouter.ai/api/v1`).                                                                                                                                    |
+| `MEMMAN_LOG_LEVEL`                | Logger level when neither `--verbose` nor `--debug` is passed (default `WARNING`).                                                                                                               |
+| `MEMMAN_OPENAI_EMBED_API_KEY`     | Secret for the OpenAI-compatible embed provider (`MEMMAN_EMBED_PROVIDER=openai`).                                                                                                                |
+| `MEMMAN_OPENAI_EMBED_ENDPOINT`    | Endpoint for the OpenAI-compatible embed provider.                                                                                                                                               |
+| `MEMMAN_OPENAI_EMBED_MODEL`       | Model name for the OpenAI-compatible embed provider.                                                                                                                                             |
+| `MEMMAN_OPENROUTER_EMBED_MODEL`   | Model id for the OpenRouter embed provider (`MEMMAN_EMBED_PROVIDER=openrouter`). Default `baai/bge-m3`. Reuses `OPENROUTER_API_KEY` and `MEMMAN_OPENROUTER_ENDPOINT`; no separate secret needed. |
+| `MEMMAN_OLLAMA_HOST`              | Ollama host URL (default `http://localhost:11434`).                                                                                                                                              |
+| `MEMMAN_OLLAMA_EMBED_MODEL`       | Ollama embedding model name (default `nomic-embed-text`).                                                                                                                                        |
 
 ### Process-control vars (NOT persisted in the env file)
 
