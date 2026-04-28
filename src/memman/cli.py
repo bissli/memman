@@ -183,7 +183,6 @@ def _insight_to_dict(i: Insight) -> dict:
         'content': i.content,
         'category': i.category,
         'importance': i.importance,
-        'tags': i.tags,
         'entities': i.entities,
         'source': i.source,
         'access_count': i.access_count,
@@ -193,25 +192,6 @@ def _insight_to_dict(i: Insight) -> dict:
     if i.deleted_at:
         d['deleted_at'] = format_timestamp(i.deleted_at)
     return d
-
-
-def _parse_tags(tags: str) -> list[str]:
-    """Parse and validate comma-separated tags."""
-    tag_list: list[str] = []
-    if not tags:
-        return tag_list
-    for t in tags.split(','):
-        t = t.strip()
-        if t:
-            if len(t) > 100:
-                raise click.ClickException(
-                    f'tag too long ({len(t)} chars, max 100):'
-                    f' {t[:50]}')
-            tag_list.append(t)
-    if len(tag_list) > 20:
-        raise click.ClickException(
-            f'too many tags ({len(tag_list)}, max 20)')
-    return tag_list
 
 
 def _parse_entities(entities: str) -> list[str]:
@@ -328,14 +308,13 @@ def config_show(ctx: click.Context) -> None:
 @click.argument('content', nargs=-1, required=True)
 @click.option('--cat', default='general', help='Category')
 @click.option('--imp', default=3, type=int, help='Importance (1-5)')
-@click.option('--tags', default='', help='Comma-separated tags')
 @click.option('--source', default='user', help='Source')
 @click.option('--entities', default='', help='Comma-separated entities')
 @click.option('--no-reconcile', is_flag=True, default=False,
               help='Skip LLM reconciliation')
 @click.pass_context
 def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
-             imp: int, tags: str, source: str, entities: str,
+             imp: int, source: str, entities: str,
              no_reconcile: bool) -> None:
     """Store a new insight via the queue.
 
@@ -392,7 +371,6 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
         row_id = enqueue(
             conn, store=name, content=content_str,
             hint_cat=cat_hint, hint_imp=imp_hint,
-            hint_tags=tags or None,
             hint_source=source if source != 'user' else None,
             hint_entities=entities or None,
             hint_no_reconcile=no_reconcile,
@@ -664,7 +642,6 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 content_len=len(row.content),
                 hint_cat=row.hint_cat,
                 hint_imp=row.hint_imp,
-                hint_tags=row.hint_tags,
                 hint_source=row.hint_source,
                 hint_entities=row.hint_entities)
 
@@ -854,7 +831,6 @@ def _process_queue_row(
     """
     from memman import trace as _trace
 
-    tag_list = _parse_tags(row.hint_tags or '')
     entity_list = _parse_entities(row.hint_entities or '')
     category = row.hint_cat or 'general'
     importance = row.hint_imp if row.hint_imp is not None else 3
@@ -901,7 +877,7 @@ def _process_queue_row(
     insight = Insight(
         id=str(uuid.uuid4()), content=row.content,
         category=category, importance=importance,
-        tags=tag_list, entities=entity_list, source=source,
+        entities=entity_list, source=source,
         access_count=access_count,
         created_at=now, updated_at=now)
 
@@ -1061,7 +1037,6 @@ def forget(ctx: click.Context, id: str) -> None:
 @click.argument('content', nargs=-1, required=True)
 @click.option('--cat', default='general', help='Category')
 @click.option('--imp', default=3, type=int, help='Importance (1-5)')
-@click.option('--tags', default='', help='Comma-separated tags')
 @click.option('--source', default='user', help='Source')
 @click.option('--entities', default='', help='Comma-separated entities')
 @click.option('--reconcile/--no-reconcile', 'reconcile', default=False,
@@ -1069,7 +1044,7 @@ def forget(ctx: click.Context, id: str) -> None:
                     ' Default: skip — replace targets a specific id.'))
 @click.pass_context
 def replace(ctx: click.Context, id: str, content: tuple[str, ...],
-            cat: str, imp: int, tags: str, source: str,
+            cat: str, imp: int, source: str,
             entities: str, reconcile: bool) -> None:
     """Replace an insight by ID with new content via the queue."""
     _require_started('write')
@@ -1129,15 +1104,12 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
 
     cat_src = ctx.get_parameter_source('cat')
     imp_src = ctx.get_parameter_source('imp')
-    tags_src = ctx.get_parameter_source('tags')
     source_src = ctx.get_parameter_source('source')
     entities_src = ctx.get_parameter_source('entities')
     if cat_src != click.core.ParameterSource.COMMANDLINE:
         cat = old.category
     if imp_src != click.core.ParameterSource.COMMANDLINE:
         imp = old.importance
-    if tags_src != click.core.ParameterSource.COMMANDLINE:
-        tags = ','.join(old.tags) if old.tags else ''
     source_explicit = source_src == click.core.ParameterSource.COMMANDLINE
     if not source_explicit:
         source = old.source
@@ -1150,7 +1122,6 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         row_id = enqueue(
             conn, store=name, content=content_str,
             hint_cat=cat, hint_imp=imp,
-            hint_tags=tags or None,
             hint_source=source if source_explicit else None,
             hint_entities=entities or None,
             hint_replaced_id=id,

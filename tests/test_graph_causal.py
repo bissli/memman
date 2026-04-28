@@ -190,7 +190,7 @@ class TestInferLLMCausalIncludesRecent:
         def _make(**kw):
             defaults = {
                 'id': 'x', 'content': 'x', 'category': 'fact', 'importance': 3,
-                'tags': [], 'entities': [], 'source': 'test', 'access_count': 0,
+                'entities': [], 'source': 'test', 'access_count': 0,
                 'created_at': now, 'updated_at': now, 'deleted_at': None,
                 'last_accessed_at': None, 'effective_importance': 0.0}
             defaults.update(kw)

@@ -86,12 +86,11 @@ def test_remember_basic(runner):
 
 
 def test_remember_with_flags(runner):
-    """Store with category, importance, tags."""
+    """Store with category and importance."""
     result = invoke(runner, [
         'remember', 'Chose Docker for container orchestration in production',
         '--no-reconcile',
-        '--cat', 'decision', '--imp', '4',
-        '--tags', 'docker,deployment'])
+        '--cat', 'decision', '--imp', '4'])
     assert result.exit_code == 0
     data = parse_remember(result, runner)
     assert 'id' in data
@@ -458,12 +457,11 @@ def test_replace_basic(runner):
 
 
 def test_replace_inherits_metadata(runner):
-    """Replace without flags inherits cat/imp/tags from original."""
+    """Replace without flags inherits cat/imp from original."""
     result = invoke(runner, [
         'remember', 'Chose PostgreSQL over MySQL for JSONB support',
         '--no-reconcile',
-        '--cat', 'decision', '--imp', '5',
-        '--tags', 'arch,design'])
+        '--cat', 'decision', '--imp', '5'])
     old_id = parse_remember(result, runner)['id']
 
     result = invoke(runner, [
@@ -478,8 +476,6 @@ def test_replace_inherits_metadata(runner):
     match = [h for h in hits if h['id'] == data['id']][0]
     assert match['category'] == 'decision'
     assert match['importance'] == 5
-    assert 'arch' in match['tags']
-    assert 'design' in match['tags']
 
 
 def test_replace_overrides_metadata(runner):

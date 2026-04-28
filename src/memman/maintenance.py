@@ -119,3 +119,12 @@ def _run_per_store_maintenance(
     except Exception:
         logger.exception(
             f'maintenance: link_pending failed for {store_name!r}')
+
+    if time.monotonic() >= deadline_monotonic:
+        return
+
+    try:
+        ctx.db._exec('PRAGMA incremental_vacuum(200)')
+    except Exception:
+        logger.exception(
+            f'maintenance: incremental_vacuum failed for {store_name!r}')

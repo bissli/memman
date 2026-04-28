@@ -22,7 +22,6 @@ class Insight:
     content: str = ''
     category: str = 'general'
     importance: int = 3
-    tags: list[str] = field(default_factory=list)
     entities: list[str] = field(default_factory=list)
     source: str = 'user'
     access_count: int = 0
@@ -37,22 +36,9 @@ class Insight:
     model_id: str | None = None
     embedding_model: str | None = None
 
-    def tags_json(self) -> str:
-        """Return tags as a JSON string for storage."""
-        return json.dumps(self.tags, sort_keys=True)
-
     def entities_json(self) -> str:
         """Return entities as a JSON string for storage."""
         return json.dumps(self.entities, sort_keys=True)
-
-    def parse_tags(self, s: str) -> None:
-        """Parse a JSON string into the tags field."""
-        try:
-            self.tags = json.loads(s)
-        except (json.JSONDecodeError, TypeError):
-            self.tags = []
-        if self.tags is None:
-            self.tags = []
 
     def parse_entities(self, s: str) -> None:
         """Parse a JSON string into the entities field."""

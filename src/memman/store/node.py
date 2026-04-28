@@ -26,12 +26,12 @@ def insert_insight(db: 'DB', i: Insight) -> None:
     """
     db._exec(
         'INSERT INTO insights'
-        ' (id, content, category, importance, tags, entities,'
+        ' (id, content, category, importance, entities,'
         '  source, access_count, created_at, updated_at,'
         '  prompt_version, model_id, embedding_model)'
-        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (i.id, i.content, i.category, i.importance,
-         i.tags_json(), i.entities_json(), i.source, i.access_count,
+         i.entities_json(), i.source, i.access_count,
          format_timestamp(i.created_at), format_timestamp(i.updated_at),
          i.prompt_version, i.model_id, i.embedding_model))
 
@@ -39,7 +39,7 @@ def insert_insight(db: 'DB', i: Insight) -> None:
 def get_insight_by_id(db: 'DB', id: str) -> Insight | None:
     """Return a single insight by ID (excludes soft-deleted)."""
     row = db._query(
-        'SELECT id, content, category, importance, tags, entities,'
+        'SELECT id, content, category, importance, entities,'
         ' source, access_count, created_at, updated_at, deleted_at'
         ' FROM insights WHERE id = ? AND deleted_at IS NULL',
         (id,)).fetchone()
@@ -51,7 +51,7 @@ def get_insight_by_id(db: 'DB', id: str) -> Insight | None:
 def get_insight_by_id_include_deleted(db: 'DB', id: str) -> Insight | None:
     """Return a single insight by ID, including soft-deleted."""
     row = db._query(
-        'SELECT id, content, category, importance, tags, entities,'
+        'SELECT id, content, category, importance, entities,'
         ' source, access_count, created_at, updated_at, deleted_at'
         ' FROM insights WHERE id = ?',
         (id,)).fetchone()
@@ -73,10 +73,9 @@ def query_insights(db: 'DB', keyword: str = '', category: str = '',
                 '\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
             conditions.append(
                 "(content LIKE ? ESCAPE '\\'"
-                " OR tags LIKE ? ESCAPE '\\'"
                 " OR entities LIKE ? ESCAPE '\\'"
                 " OR keywords LIKE ? ESCAPE '\\')")
-            args.extend([f'%{escaped}%'] * 4)
+            args.extend([f'%{escaped}%'] * 3)
     if category:
         conditions.append('category = ?')
         args.append(category)
@@ -92,7 +91,7 @@ def query_insights(db: 'DB', keyword: str = '', category: str = '',
     args.append(limit)
 
     sql = (
-        'SELECT id, content, category, importance, tags, entities,'
+        'SELECT id, content, category, importance, entities,'
         ' source, access_count, created_at, updated_at, deleted_at'
         ' FROM insights WHERE ' + ' AND '.join(conditions)
         + ' ORDER BY importance DESC, created_at DESC LIMIT ?')
@@ -216,15 +215,15 @@ def get_retention_candidates(
         limit: int) -> tuple[list[dict], int]:
     """Return non-immune insights sorted by effective_importance ascending."""
     rows = db._query(
-        'SELECT id, content, category, importance, tags, entities,'
+        'SELECT id, content, category, importance, entities,'
         ' source, access_count, created_at, updated_at, deleted_at,'
         ' last_accessed_at'
         ' FROM insights WHERE deleted_at IS NULL').fetchall()
 
     insight_rows = []
     for r in rows:
-        ins = _scan_insight(r[:11])
-        last_accessed_str = r[11]
+        ins = _scan_insight(r[:10])
+        last_accessed_str = r[10]
         last_access = ins.created_at
         if last_accessed_str:
             try:
@@ -380,7 +379,7 @@ def get_recent_insights_in_window(
     cutoff_dt = datetime.fromtimestamp(cutoff, tz=timezone.utc)
     cutoff_str = format_timestamp(cutoff_dt)
     rows = db._query(
-        'SELECT id, content, category, importance, tags, entities,'
+        'SELECT id, content, category, importance, entities,'
         ' source, access_count, created_at, updated_at, deleted_at'
         ' FROM insights WHERE id != ? AND deleted_at IS NULL'
         ' AND created_at >= ?'
@@ -393,7 +392,7 @@ def get_latest_insight_by_source(
         db: 'DB', source: str, exclude_id: str) -> Insight | None:
     """Return the most recent non-deleted insight for a given source."""
     row = db._query(
-        'SELECT id, content, category, importance, tags, entities,'
+        'SELECT id, content, category, importance, entities,'
         ' source, access_count, created_at, updated_at, deleted_at'
         ' FROM insights WHERE source = ? AND id != ?'
         ' AND deleted_at IS NULL'
@@ -409,7 +408,7 @@ def get_recent_active_insights(
         limit: int) -> list[Insight]:
     """Return the N most recent non-deleted insights regardless of source."""
     rows = db._query(
-        'SELECT id, content, category, importance, tags, entities,'
+        'SELECT id, content, category, importance, entities,'
         ' source, access_count, created_at, updated_at, deleted_at'
         ' FROM insights WHERE id != ? AND deleted_at IS NULL'
         ' ORDER BY created_at DESC LIMIT ?',
@@ -420,7 +419,7 @@ def get_recent_active_insights(
 def get_all_active_insights(db: 'DB') -> list[Insight]:
     """Return all non-deleted insights."""
     rows = db._query(
-        'SELECT id, content, category, importance, tags, entities,'
+        'SELECT id, content, category, importance, entities,'
         ' source, access_count, created_at, updated_at, deleted_at'
         ' FROM insights WHERE deleted_at IS NULL'
         ' ORDER BY created_at DESC').fetchall()
@@ -528,7 +527,7 @@ def get_insights_without_embedding(
     if limit <= 0:
         limit = 100
     rows = db._query(
-        'SELECT id, content, category, importance, tags, entities,'
+        'SELECT id, content, category, importance, entities,'
         ' source, access_count, created_at, updated_at, deleted_at'
         ' FROM insights WHERE deleted_at IS NULL AND embedding IS NULL'
         ' ORDER BY importance DESC, created_at DESC LIMIT ?',
@@ -603,12 +602,11 @@ def _scan_insight(row: tuple) -> Insight:
     i.content = row[1]
     i.category = row[2]
     i.importance = row[3]
-    i.parse_tags(row[4])
-    i.parse_entities(row[5])
-    i.source = row[6]
-    i.access_count = row[7]
-    i.created_at = parse_timestamp(row[8])
-    i.updated_at = parse_timestamp(row[9])
-    if row[10]:
-        i.deleted_at = parse_timestamp(row[10])
+    i.parse_entities(row[4])
+    i.source = row[5]
+    i.access_count = row[6]
+    i.created_at = parse_timestamp(row[7])
+    i.updated_at = parse_timestamp(row[8])
+    if row[9]:
+        i.deleted_at = parse_timestamp(row[9])
     return i

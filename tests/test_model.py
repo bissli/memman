@@ -7,38 +7,6 @@ from memman.model import base_weight, format_float, format_timestamp
 from memman.model import is_immune, parse_timestamp
 
 
-def test_tags_json_roundtrip():
-    """Verify tags serialize/deserialize correctly."""
-    ins = Insight(tags=['go', 'memory', 'graph'])
-    j = ins.tags_json()
-    restored = Insight()
-    restored.parse_tags(j)
-    assert restored.tags == ['go', 'memory', 'graph']
-
-
-def test_tags_json_empty():
-    """Empty tags produce '[]' JSON."""
-    ins = Insight(tags=[])
-    j = ins.tags_json()
-    restored = Insight()
-    restored.parse_tags(j)
-    assert restored.tags == []
-
-
-def test_parse_tags_null():
-    """Null JSON string produces empty list."""
-    ins = Insight()
-    ins.parse_tags('null')
-    assert ins.tags == []
-
-
-def test_parse_tags_invalid_json():
-    """Invalid JSON produces empty list."""
-    ins = Insight()
-    ins.parse_tags('not json')
-    assert ins.tags == []
-
-
 def test_entities_json_roundtrip():
     """Verify entities serialize/deserialize correctly."""
     ins = Insight(entities=['Go', 'SQLite', 'MAGMA'])
@@ -110,7 +78,6 @@ def test_insight_defaults():
     assert ins.content == ''
     assert ins.category == 'general'
     assert ins.importance == 3
-    assert ins.tags == []
     assert ins.entities == []
     assert ins.source == 'user'
     assert ins.access_count == 0

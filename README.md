@@ -138,7 +138,7 @@ memman splits along a strict hot-path boundary: the agent's turn only does fast 
 │           │                                                           │
 │       ├─► LLM extraction                facts from raw blob           │
 │       ├─► reconciliation                ADD/UPDATE/DELETE/NONE        │
-│       ├─► enrichment                    entities, tags, weight        │
+│       ├─► enrichment                    entities, weight              │
 │       ├─► embedding                     vector (provider-defined dim) │
 │       ├─► edge inference                semantic/entity/causal        │
 │       └─► write to SQLite                                             │

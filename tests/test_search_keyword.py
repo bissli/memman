@@ -81,11 +81,11 @@ def test_keyword_search_empty_query():
     assert len(results) == 0
 
 
-def test_keyword_search_tags_entities():
-    """Tags and entities contribute to matching."""
+def test_keyword_search_entities():
+    """Entities contribute to matching."""
     insights = [
         Insight(id='1', content='something unrelated',
-                tags=['database'], entities=['SQLite']),
+                entities=['SQLite']),
     ]
-    results = keyword_search(insights, 'SQLite database', 10)
+    results = keyword_search(insights, 'SQLite', 10)
     assert len(results) > 0

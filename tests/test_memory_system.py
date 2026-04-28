@@ -261,10 +261,9 @@ class TestReplaceAtomicity:
         assert any('FastAPI' in c for c in contents(hits_new))
 
     def test_replace_inherits_metadata(self, runner):
-        """Replace without flags inherits cat/imp/tags from original."""
+        """Replace without flags inherits cat/imp from original."""
         data = remember(runner, 'chose event sourcing for audit trail',
-                        no_reconcile=True, cat='decision', imp='5',
-                        tags='arch,design')
+                        no_reconcile=True, cat='decision', imp='5')
         result = invoke(runner, ['replace', data['id'],
                                  'chose CQRS with event sourcing for audit'])
         new = parse_remember(result, runner)
@@ -275,7 +274,6 @@ class TestReplaceAtomicity:
         match = [h for h in hits if h['id'] == new['id']][0]
         assert match['category'] == 'decision'
         assert match['importance'] == 5
-        assert 'arch' in match['tags']
 
     def test_replace_override_metadata(self, runner):
         """Replace with explicit flags overrides original metadata."""
@@ -637,29 +635,6 @@ class TestRecallFindsContentByEntities:
         hits = recall_basic(runner, 'Kubernetes')
         assert len(hits) > 0
 
-    def test_basic_recall_finds_by_tag(self, runner):
-        """Insight with tag 'compliance' found by recalling 'compliance'.
-
-        Content says 'Docker container security hardening with read-only root filesystem and non-root user' with no
-        mention of compliance, but the tags field has it.
-        """
-        remember(runner,
-                 'Docker container security hardening with read-only root filesystem and non-root user',
-                 no_reconcile=True, tags='security,docker,compliance')
-        hits = recall_basic(runner, 'compliance')
-        assert len(hits) > 0
-
-    def test_search_finds_by_entity_and_tag(self, runner):
-        """Search (token-based) does find entities and tags."""
-        remember(runner,
-                 'Kubernetes pod scheduling uses affinity rules and taints for node placement',
-                 no_reconcile=True, entities='Kubernetes',
-                 tags='infra,compliance')
-        entity_hits = search_cmd(runner, 'Kubernetes')
-        assert len(entity_hits) > 0
-        tag_hits = search_cmd(runner, 'compliance')
-        assert len(tag_hits) > 0
-
 
 class TestMultiWordRecall:
     """Multi-word queries should work across all retrieval paths."""
@@ -809,8 +784,7 @@ class TestRecallCompleteness:
         """
         remember(runner,
                  'AWS Lambda serverless functions with DynamoDB backend',
-                 no_reconcile=True, entities='Lambda,DynamoDB',
-                 tags='aws,serverless')
+                 no_reconcile=True, entities='Lambda,DynamoDB')
 
         search_hits = search_cmd(runner, 'Lambda')
         basic_hits = recall_basic(runner, 'Lambda')

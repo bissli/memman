@@ -133,7 +133,10 @@ def open_db(data_dir: str) -> DB:
     """
     Path(data_dir).mkdir(mode=0o755, exist_ok=True, parents=True)
     db_path = os.path.join(data_dir, 'memman.db')
+    is_new_db = not Path(db_path).exists()
     conn = sqlite3.connect(db_path, isolation_level=None)
+    if is_new_db:
+        conn.execute('PRAGMA auto_vacuum=INCREMENTAL')
     conn.execute('PRAGMA journal_mode=WAL')
     conn.execute('PRAGMA foreign_keys=ON')
     conn.execute('PRAGMA busy_timeout=5000')
@@ -160,7 +163,6 @@ CREATE TABLE IF NOT EXISTS insights (
     content     TEXT NOT NULL,
     category    TEXT DEFAULT 'general',
     importance  INTEGER DEFAULT 3,
-    tags        TEXT DEFAULT '[]',
     entities    TEXT DEFAULT '[]',
     source      TEXT DEFAULT 'user',
     access_count INTEGER DEFAULT 0,

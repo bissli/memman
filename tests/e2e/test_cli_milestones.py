@@ -215,20 +215,18 @@ class TestM0Stores:
 
 class TestM1CRUD:
 
-    def test_remember_with_tags(self, home_dir: Path, m1_dir: Path,
-                                shared_state: dict):
+    def test_remember_basic(self, home_dir: Path, m1_dir: Path,
+                            shared_state: dict):
         out = run_cli(
             ['remember', '--no-reconcile',
              'User prefers Qdrant for vector DB',
-             '--cat', 'preference', '--imp', '4',
-             '--tags', 'tool,db'],
+             '--cat', 'preference', '--imp', '4'],
             home_dir, m1_dir)
         data = json_out(out)
         shared_state['m1_id1'] = extract_id(data)
         assert_jq(data, 'facts.0.category', 'preference',
                   'category is preference')
         assert_jq(data, 'facts.0.importance', 4, 'importance is 4')
-        assert_contains(out.stdout, '"tool"', 'tags include tool')
         assert_contains(out.stdout, '"Qdrant"', 'entities has Qdrant')
 
     def test_recall_keyword(self, home_dir: Path, m1_dir: Path):

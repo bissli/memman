@@ -40,7 +40,7 @@ from memman.model import Edge, Insight, format_timestamp
 from memman.search.keyword import keyword_search
 from memman.search.quality import check_content_quality
 from memman.store.db import open_read_only
-from memman.store.edge import insert_edge
+from memman.store.edge import delete_edges_by_node, insert_edge
 from memman.store.node import MAX_INSIGHTS, auto_prune
 from memman.store.node import get_all_active_insights, get_all_embeddings
 from memman.store.node import insert_insight, refresh_effective_importance
@@ -390,7 +390,6 @@ def _plan_fact(
             fact_insight=Insight(
                 id=str(uuid.uuid4()), content=merged_text or fact_text,
                 category=fact_category, importance=fact_importance,
-                tags=list(parent.tags),
                 entities=fact_entities + list(parent.entities),
                 source=parent.source, access_count=parent.access_count,
                 created_at=parent.created_at,
@@ -406,7 +405,6 @@ def _plan_fact(
         content=effective_text,
         category=fact_category,
         importance=fact_importance,
-        tags=list(parent.tags),
         entities=fact_entities + list(parent.entities),
         source=parent.source,
         access_count=parent.access_count,
@@ -559,6 +557,10 @@ def _apply_plan(
         except Exception:
             pass
 
+    if (plan.action in {'update', 'replace'}
+            and plan.target_id and not target_already_gone):
+        delete_edges_by_node(db, plan.target_id)
+
     now = format_timestamp(datetime.now(timezone.utc))
     stamp_linked(db, fi.id, now)
     if plan.enrichment:
@@ -575,7 +577,6 @@ def _apply_plan(
         'content': fi.content,
         'category': fi.category,
         'importance': fi.importance,
-        'tags': fi.tags,
         'entities': fi.entities,
         'action': reported_action,
         'created_at': format_timestamp(fi.created_at),

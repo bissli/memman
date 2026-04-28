@@ -25,9 +25,9 @@ from tests.conftest import make_insight
 def _seed(tmp_db):
     """Insert two embedded insights with one semantic edge between them."""
     a = make_insight(id='snap-a', content='alpha topic',
-                     entities=['Alpha'], tags=['x'])
+                     entities=['Alpha'])
     b = make_insight(id='snap-b', content='beta topic',
-                     entities=['Beta'], tags=['y'])
+                     entities=['Beta'])
     insert_insight(tmp_db, a)
     insert_insight(tmp_db, b)
     fp = active_fingerprint()

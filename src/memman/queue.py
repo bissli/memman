@@ -36,7 +36,6 @@ class QueueRow:
     content: str
     hint_cat: str | None
     hint_imp: int | None
-    hint_tags: str | None
     hint_source: str | None
     hint_entities: str | None
     hint_replaced_id: str | None
@@ -69,7 +68,6 @@ CREATE TABLE IF NOT EXISTS queue (
     content       TEXT NOT NULL,
     hint_cat      TEXT,
     hint_imp      INTEGER,
-    hint_tags     TEXT,
     hint_source   TEXT,
     hint_entities TEXT,
     hint_replaced_id TEXT,
@@ -127,7 +125,6 @@ def enqueue(
         content: str,
         hint_cat: str | None = None,
         hint_imp: int | None = None,
-        hint_tags: str | None = None,
         hint_source: str | None = None,
         hint_entities: str | None = None,
         hint_replaced_id: str | None = None,
@@ -144,10 +141,10 @@ def enqueue(
     now = int(time.time())
     cur = conn.execute(
         'INSERT INTO queue (store, content, hint_cat, hint_imp,'
-        ' hint_tags, hint_source, hint_entities, hint_replaced_id,'
+        ' hint_source, hint_entities, hint_replaced_id,'
         ' hint_no_reconcile, priority, queued_at)'
-        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        (store, content, hint_cat, hint_imp, hint_tags, hint_source,
+        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        (store, content, hint_cat, hint_imp, hint_source,
          hint_entities, hint_replaced_id,
          1 if hint_no_reconcile else 0, priority, now))
     row_id = cur.lastrowid
@@ -188,7 +185,7 @@ def claim(
         '    ORDER BY priority DESC, queued_at ASC'
         '    LIMIT 1'
         ' )'
-        ' RETURNING id, store, content, hint_cat, hint_imp, hint_tags,'
+        ' RETURNING id, store, content, hint_cat, hint_imp,'
         '           hint_source, hint_entities, hint_replaced_id,'
         '           hint_no_reconcile, priority, queued_at, attempts')
 
@@ -198,11 +195,11 @@ def claim(
         return None
     return QueueRow(
         id=row[0], store=row[1], content=row[2],
-        hint_cat=row[3], hint_imp=row[4], hint_tags=row[5],
-        hint_source=row[6], hint_entities=row[7],
-        hint_replaced_id=row[8],
-        hint_no_reconcile=bool(row[9]),
-        priority=row[10], queued_at=row[11], attempts=row[12])
+        hint_cat=row[3], hint_imp=row[4],
+        hint_source=row[5], hint_entities=row[6],
+        hint_replaced_id=row[7],
+        hint_no_reconcile=bool(row[8]),
+        priority=row[9], queued_at=row[10], attempts=row[11])
 
 
 def mark_done(conn: sqlite3.Connection, row_id: int) -> None:
@@ -318,7 +315,7 @@ def get_row(
         ) -> dict | None:
     """Return full row (including content) as a dict."""
     row = conn.execute(
-        'SELECT id, store, content, hint_cat, hint_imp, hint_tags,'
+        'SELECT id, store, content, hint_cat, hint_imp,'
         ' hint_source, hint_entities, priority, queued_at, claimed_at,'
         ' worker_pid, attempts, status, last_error, processed_at'
         ' FROM queue WHERE id = ?',
@@ -327,12 +324,12 @@ def get_row(
         return None
     return {
         'id': row[0], 'store': row[1], 'content': row[2],
-        'hint_cat': row[3], 'hint_imp': row[4], 'hint_tags': row[5],
-        'hint_source': row[6], 'hint_entities': row[7],
-        'priority': row[8], 'queued_at': row[9],
-        'claimed_at': row[10], 'worker_pid': row[11],
-        'attempts': row[12], 'status': row[13],
-        'last_error': row[14], 'processed_at': row[15],
+        'hint_cat': row[3], 'hint_imp': row[4],
+        'hint_source': row[5], 'hint_entities': row[6],
+        'priority': row[7], 'queued_at': row[8],
+        'claimed_at': row[9], 'worker_pid': row[10],
+        'attempts': row[11], 'status': row[12],
+        'last_error': row[13], 'processed_at': row[14],
         }
 
 

@@ -482,12 +482,12 @@ def populated_db(tmp_db):
     from memman.store.node import insert_insight
     insights = [
         make_insight(id='pop-1', content='Go uses SQLite for storage',
-                     importance=3, tags=['go', 'sqlite'],
+                     importance=3,
                      entities=['Go', 'SQLite']),
         make_insight(id='pop-2', content='Python web framework comparison',
                      importance=2, category='decision'),
         make_insight(id='pop-3', content='Graph traversal algorithm for knowledge',
-                     importance=4, tags=['graph'],
+                     importance=4,
                      entities=['MAGMA']),
         make_insight(id='pop-4', content='Docker deployment strategy',
                      importance=5, category='preference',
@@ -508,7 +508,6 @@ def make_insight(**overrides) -> Insight:
         'content': 'test content',
         'category': 'fact',
         'importance': 3,
-        'tags': [],
         'entities': [],
         'source': 'test',
         'access_count': 0,
@@ -519,8 +518,6 @@ def make_insight(**overrides) -> Insight:
         'effective_importance': 0.0,
         }
     defaults.update(overrides)
-    if 'tags' in overrides and overrides['tags'] is None:
-        defaults['tags'] = []
     if 'entities' in overrides and overrides['entities'] is None:
         defaults['entities'] = []
     return Insight(**defaults)

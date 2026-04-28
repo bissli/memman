@@ -39,7 +39,7 @@ edges:
 memman replace <id> "<new content>"
 ```
 
-`replace` inherits the original's category, importance, tags, entities,
+`replace` inherits the original's category, importance, entities,
 and source unless you override per-flag.
 
 ## Recalling what you know

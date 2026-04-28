@@ -18,7 +18,6 @@ An Insight is the fundamental memory unit in MemMan. Each insight represents an 
 │ content    : "Chose Qdrant over Milvus..."   │
 │ category   : decision                        │
 │ importance : 5  (1-5)                        │
-│ tags       : ["vector-db", "architecture"]   │
 │ entities   : ["Qdrant", "Milvus"]            │
 │ source     : "user"                          │
 │ access_count        : 3                      │
@@ -71,7 +70,7 @@ Each named store has its own SQLite file under `~/.memman/data/<store>/memman.db
 -- Memory nodes
 insights (
   id, content, category, importance,
-  tags, entities, source,
+  entities, source,
   embedding,                                    -- embedding vector (BLOB)
   keywords, summary, semantic_facts,            -- LLM enrichment columns
   access_count, last_accessed_at,
@@ -105,7 +104,7 @@ or prompts change.
 
 **Insight dataclass vs DB schema.** The `Insight` dataclass in
 `src/memman/model.py` is a subset of the DB schema — it holds the
-identity, content, category, importance, tags, entities, source,
+identity, content, category, importance, entities, source,
 timestamps, access bookkeeping, effective_importance, and provenance
 columns. The enrichment payload (`embedding`, `keywords`, `summary`,
 `semantic_facts`, `linked_at`, `enriched_at`) lives in the DB only and

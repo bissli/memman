@@ -61,7 +61,7 @@ memman uninstall --target claude-code
 ```bash
 # Remember — store a new insight (LLM reconciliation: duplicates skipped, conflicts resolved)
 memman remember "Chose Qdrant over Milvus for vector search" \
-  --cat decision --imp 5 --entities "Qdrant,Milvus" --tags "architecture,search" --source agent
+  --cat decision --imp 5 --entities "Qdrant,Milvus" --source agent
 
 # Skip LLM reconciliation (direct insert)
 memman remember "Raw note" --no-reconcile
@@ -91,7 +91,6 @@ memman forget <id>
 | ---------------- | --------- | --------------------------------------------------------------------------- |
 | `--cat`          | `general` | Category: `preference`, `decision`, `fact`, `insight`, `context`, `general` |
 | `--imp`          | `3`       | Importance: 1–5                                                             |
-| `--tags`         |           | Comma-separated tags                                                        |
 | `--entities`     |           | Comma-separated entities (merged with LLM-extracted)                        |
 | `--source`       | `user`    | Source: `user`, `agent`, `external`                                         |
 | `--no-reconcile` | `false`   | Skip LLM reconciliation (direct insert)                                     |

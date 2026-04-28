@@ -23,15 +23,14 @@ from tests.conftest import make_edge, make_insight
 
 
 class TestInsertAndGetInsight:
-    """Insert with tags/entities and verify round-trip."""
+    """Insert with entities and verify round-trip."""
 
     def test_insert_and_get(self, tmp_db):
-        """Insert insight with tags and entities, retrieve by id, verify fields."""
+        """Insert insight with entities, retrieve by id, verify fields."""
         ins = make_insight(
             id='ins-1',
             content='Go uses SQLite for storage',
             importance=3,
-            tags=['go', 'sqlite'],
             entities=['Go', 'SQLite'])
         insert_insight(tmp_db, ins)
 
@@ -39,8 +38,6 @@ class TestInsertAndGetInsight:
         assert got is not None
         assert got.content == ins.content
         assert got.importance == 3
-        assert len(got.tags) == 2
-        assert got.tags[0] == 'go'
         assert len(got.entities) == 2
         assert got.entities[0] == 'Go'
 

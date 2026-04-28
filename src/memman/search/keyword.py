@@ -30,10 +30,8 @@ def tokenize(text: str) -> set[str]:
 
 
 def insight_tokens(ins: Insight) -> set[str]:
-    """Return combined token set from content, tags, and entities."""
+    """Return combined token set from content and entities."""
     tokens = tokenize(ins.content)
-    for tag in ins.tags:
-        tokens |= tokenize(tag)
     for ent in ins.entities:
         tokens |= tokenize(ent)
     return tokens
