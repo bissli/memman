@@ -615,6 +615,73 @@ def check_embed_fingerprint(db: 'DB') -> dict:
         'detail': detail}
 
 
+def check_provenance_drift(db: 'DB') -> dict:
+    """Surface rows whose prompt_version or model_id no longer matches active.
+
+    Reads per-row provenance columns directly. No meta-key fingerprint
+    is maintained; the data already lives on each insight.
+    """
+    from memman import config
+    from memman.pipeline.remember import compute_prompt_version
+
+    detail: dict = {
+        'active_prompt_version': None,
+        'active_model_slow': None,
+        'stale_rows': 0,
+        'breakdown': [],
+        }
+    try:
+        detail['active_prompt_version'] = compute_prompt_version()
+    except Exception as exc:
+        detail['error'] = f'compute_prompt_version: {exc}'
+        return {
+            'name': 'provenance_drift', 'status': 'fail',
+            'detail': detail}
+    try:
+        detail['active_model_slow'] = config.require(config.LLM_MODEL_SLOW)
+    except Exception:
+        detail['active_model_slow'] = None
+
+    rows = db._query(
+        'SELECT prompt_version, model_id, COUNT(*) AS n'
+        ' FROM insights WHERE deleted_at IS NULL'
+        ' GROUP BY prompt_version, model_id'
+        ' ORDER BY n DESC').fetchall()
+
+    active_pv = detail['active_prompt_version']
+    active_model = detail['active_model_slow']
+    stale_rows = 0
+    breakdown: list[dict] = []
+    for pv, mid, n in rows:
+        is_stale = (
+            (pv is not None and pv != active_pv)
+            or (mid is not None and active_model is not None
+                and mid != active_model))
+        breakdown.append({
+            'prompt_version': pv,
+            'model_id': mid,
+            'count': n,
+            'stale': is_stale,
+            })
+        if is_stale:
+            stale_rows += n
+    detail['breakdown'] = breakdown
+    detail['stale_rows'] = stale_rows
+
+    if stale_rows == 0:
+        return {
+            'name': 'provenance_drift', 'status': 'pass',
+            'detail': detail}
+    detail['remediation'] = (
+        "Run 'memman graph rebuild' to re-enrich every stale row,"
+        " or scope: UPDATE insights SET linked_at=NULL,"
+        " enriched_at=NULL WHERE prompt_version=<old> OR model_id=<old>;"
+        " then drain the scheduler.")
+    return {
+        'name': 'provenance_drift', 'status': 'warn',
+        'detail': detail}
+
+
 def run_all_checks(db: 'DB', data_dir: str | None = None) -> dict:
     """Run all health checks and return results with overall status."""
     total = db._query(
@@ -630,6 +697,7 @@ def run_all_checks(db: 'DB', data_dir: str | None = None) -> dict:
             check_dangling_edges(db),
             check_embedding_consistency(db),
             check_embed_fingerprint(db),
+            check_provenance_drift(db),
             check_edge_degree(db),
             ])
     else:

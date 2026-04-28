@@ -139,6 +139,35 @@ def test_recall_does_not_call_link_pending(runner, monkeypatch):
         mock_lp.assert_not_called()
 
 
+def test_recall_default_does_not_call_expand_query(runner):
+    """Default recall must not run LLM query expansion."""
+    invoke(runner, [
+        'remember', 'Go uses SQLite for persistent storage',
+        '--no-reconcile'])
+
+    from unittest.mock import patch
+    with patch('memman.llm.extract.expand_query',
+               side_effect=AssertionError('expand_query called')) as mock_ex:
+        result = invoke(runner, ['recall', 'Go SQLite storage'])
+        assert result.exit_code == 0
+        mock_ex.assert_not_called()
+
+
+def test_recall_expand_flag_calls_expand_query(runner):
+    """Recall --expand re-enables the LLM query expansion path."""
+    invoke(runner, [
+        'remember', 'Go uses SQLite for persistent storage',
+        '--no-reconcile'])
+
+    from unittest.mock import patch
+    fake = {'expanded_query': 'Go SQLite storage', 'intent': '', 'entities': []}
+    with patch('memman.llm.extract.expand_query',
+               return_value=fake) as mock_ex:
+        result = invoke(runner, ['recall', 'Go SQLite storage', '--expand'])
+        assert result.exit_code == 0
+        mock_ex.assert_called_once()
+
+
 def test_remember_does_not_link_old_pending_insights(runner, monkeypatch):
     """Remember does inline enrichment, never calls link_pending."""
     invoke(runner, [

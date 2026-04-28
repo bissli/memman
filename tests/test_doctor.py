@@ -132,6 +132,83 @@ class TestEmbeddingConsistency:
         assert len(result['detail']['sizes']) > 1
 
 
+class TestProvenanceDrift:
+
+    def test_no_rows_pass(self, tmp_db):
+        """Empty store: no stale rows."""
+        from memman.doctor import check_provenance_drift
+        result = check_provenance_drift(tmp_db)
+        assert result['name'] == 'provenance_drift'
+        assert result['status'] == 'pass'
+        assert result['detail']['stale_rows'] == 0
+
+    def test_all_current_pass(self, tmp_db):
+        """All rows stamped with active prompt_version + slow model: pass."""
+        from memman import config
+        from memman.doctor import check_provenance_drift
+        from memman.pipeline.remember import compute_prompt_version
+
+        active_pv = compute_prompt_version()
+        active_model = config.require(config.LLM_MODEL_SLOW)
+
+        _insert_healthy_insight(tmp_db, 'p-1')
+        tmp_db._exec(
+            'UPDATE insights SET prompt_version = ?, model_id = ?'
+            ' WHERE id = ?',
+            (active_pv, active_model, 'p-1'))
+
+        result = check_provenance_drift(tmp_db)
+        assert result['status'] == 'pass'
+        assert result['detail']['stale_rows'] == 0
+
+    def test_stale_prompt_version_warns(self, tmp_db):
+        """Rows with non-current prompt_version surface as a warning."""
+        from memman import config
+        from memman.doctor import check_provenance_drift
+        from memman.pipeline.remember import compute_prompt_version
+
+        active_pv = compute_prompt_version()
+        active_model = config.require(config.LLM_MODEL_SLOW)
+
+        _insert_healthy_insight(tmp_db, 'p-stale-1')
+        _insert_healthy_insight(tmp_db, 'p-stale-2')
+        _insert_healthy_insight(tmp_db, 'p-fresh')
+
+        tmp_db._exec(
+            'UPDATE insights SET prompt_version = ?, model_id = ?'
+            " WHERE id IN ('p-stale-1', 'p-stale-2')",
+            ('deadbeefdeadbeef', active_model))
+        tmp_db._exec(
+            'UPDATE insights SET prompt_version = ?, model_id = ?'
+            " WHERE id = 'p-fresh'",
+            (active_pv, active_model))
+
+        result = check_provenance_drift(tmp_db)
+        assert result['status'] == 'warn'
+        assert result['detail']['stale_rows'] == 2
+        assert 'remediation' in result['detail']
+
+    def test_stale_model_id_warns(self, tmp_db):
+        """Rows with non-current model_id surface as a warning."""
+        from memman import config
+        from memman.doctor import check_provenance_drift
+        from memman.pipeline.remember import compute_prompt_version
+
+        active_pv = compute_prompt_version()
+        active_model = config.require(config.LLM_MODEL_SLOW)
+
+        _insert_healthy_insight(tmp_db, 'm-old')
+        tmp_db._exec(
+            'UPDATE insights SET prompt_version = ?, model_id = ?'
+            " WHERE id = 'm-old'",
+            (active_pv, 'anthropic/claude-haiku-1.0'))
+        assert active_model != 'anthropic/claude-haiku-1.0'
+
+        result = check_provenance_drift(tmp_db)
+        assert result['status'] == 'warn'
+        assert result['detail']['stale_rows'] == 1
+
+
 class TestEdgeDegree:
 
     def test_healthy_pass(self, tmp_db):

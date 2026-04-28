@@ -903,10 +903,12 @@ def _process_queue_row(
 @click.option('--source', default='', help='Filter by source')
 @click.option('--basic', is_flag=True, default=False, help='Simple SQL LIKE matching')
 @click.option('--intent', default='', help='Override intent')
+@click.option('--expand', 'expand', is_flag=True, default=False,
+              help='Run LLM query expansion before retrieval (off by default)')
 @click.pass_context
 def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
            limit: int, source: str, basic: bool,
-           intent: str) -> None:
+           intent: str, expand: bool) -> None:
     """Retrieve insights by keyword."""
     from memman.embed import get_client
     from memman.llm.extract import expand_query
@@ -933,9 +935,11 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                 })
             return
 
-        llm_client = _get_llm_client_or_fail('fast')
-        expansion = expand_query(llm_client, keyword_str)
-        keyword_str = expansion['expanded_query']
+        expansion: dict = {}
+        if expand:
+            llm_client = _get_llm_client_or_fail('fast')
+            expansion = expand_query(llm_client, keyword_str)
+            keyword_str = expansion['expanded_query']
 
         intent_override = None
         if intent:

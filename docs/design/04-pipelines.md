@@ -66,7 +66,7 @@ Both the session path (`memman recall` query expansion) and the scheduler path r
 
 ![Smart Recall Pipeline](../diagrams/03-smart-recall-pipeline.drawio.png)
 
-### Step 0: LLM Query Expansion
+### Step 0: LLM Query Expansion (opt-in, off by default)
 
 `expand_query(llm_client, query)` sends the raw query to the LLM, which returns:
 - **expanded_query**: original + synonyms and related terms
@@ -74,7 +74,7 @@ Both the session path (`memman recall` query expansion) and the scheduler path r
 - **entities**: entities mentioned or implied in the query
 - **intent**: WHY / WHEN / ENTITY / GENERAL (can override regex detection)
 
-The expanded query and extracted entities feed into anchor selection.
+Expansion runs only when the user passes `--expand` to `memman recall`. By default the raw query is embedded directly. Expansion is gated because the LLM has no domain scope: it can pull the candidate pool toward general-knowledge synonyms that are then amplified by recency-aware rerank (Step 4). Voyage embeddings already capture most synonym intent; recency does the rest. See section 4.3.
 
 ### Step 1: Intent Detection
 
@@ -206,3 +206,27 @@ Each retrieval result includes signal details:
 ```
 
 The host LLM sees these signals and can apply its own judgment with full conversation context.
+
+## 4.3 Model Resilience
+
+memman uses LLMs at write time (extraction, reconciliation, enrichment, causal inference) and embedding models everywhere a vector is touched. Both can change underneath the store: prompts get edited, models get upgraded, providers get swapped. The system is designed so changes are **detectable** and **re-runnable**, not so its output stays bit-identical across model versions.
+
+Two design principles:
+
+1. **LLM stays out of hot paths.** The write path defers LLM work to the scheduler drain (Tier 2 in 4.1). The read path uses only the embedding model — no LLM at query time, with `--expand` as an explicit opt-in for callers who want synonym coverage. Where LLM judgment is unavoidable (extraction, reconciliation, enrichment, causal inference), the output is tagged with what produced it and re-runnable.
+2. **Provenance + re-run beats deterministic-rule replacement.** Hard rules (length thresholds, importance clamps, similarity cutoffs) calcify with one model's behavior baked in; provenance + re-run lets memman track what produced each row and re-derive when inputs change. Same precedent as the embed-fingerprint mechanism.
+
+### Invalidation hooks
+
+| Hook                                            | Stored at | Detects                            | Operator action                                                                                                                                                                    |
+| ----------------------------------------------- | --------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `embed_fingerprint`                             | `meta`    | provider / model / dim change      | `memman embed reembed` (hard fail until run)                                                                                                                                       |
+| `insights.prompt_version` + `insights.model_id` | per row   | system-prompt or slow-model change | `memman doctor` warns; remediate via `memman graph rebuild` or `UPDATE insights SET linked_at=NULL, enriched_at=NULL WHERE prompt_version='<old>' OR model_id='<old>';` then drain |
+| `constants_hash`                                | `meta`    | edge-construction constants change | auto-reindex on next open + warning                                                                                                                                                |
+| `linked_at` / `enriched_at`                     | per row   | per-row pipeline-stage completion  | `link_pending` drains naturally                                                                                                                                                    |
+
+The per-row provenance columns are deliberately preferred over global meta-key fingerprints because they expose the actual rebuild scope: how many rows came from which prompt or model. That distribution is what the operator needs to write a targeted hand-update SQL rather than rebuilding the whole store.
+
+### What is NOT used
+
+memman does not run multi-LLM consensus, calibrate against a target judgment distribution, or hold deterministic rules that override LLM output. Those approaches were considered and rejected: each adds permanent complexity that fights with future model improvements. Provenance + re-run keeps the implementation simple and lets future model upgrades be a deliberate operator action rather than a silent shift.
