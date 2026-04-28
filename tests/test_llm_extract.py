@@ -7,8 +7,67 @@ with real/mocked LLM is covered by test_cli.py and test_memory_system.py.
 
 import json
 
-from memman.llm.extract import expand_query, extract_facts, reconcile_memories
+from memman.llm.extract import _strip_line_refs, expand_query, extract_facts
+from memman.llm.extract import reconcile_memories
 from memman.llm.shared import parse_json_response
+
+
+class TestStripLineRefs:
+    """The post-extraction regex must strip file:line refs only.
+
+    Hostnames, IP:port, timestamps, version pins, and HTTP codes share
+    the surface shape `word:digits` but are NOT line references and
+    must be preserved.
+    """
+
+    def test_strips_module_py_line(self):
+        assert _strip_line_refs(
+            'See cli.py:182 for the fix') == 'See for the fix'
+
+    def test_strips_path_module_py_line(self):
+        assert _strip_line_refs(
+            'src/pkg/module/file.py:590 has the bug'
+            ) == 'has the bug'
+
+    def test_strips_explicit_line_n(self):
+        assert _strip_line_refs(
+            'Error on line 42 of the module'
+            ) == 'Error on of the module'
+
+    def test_preserves_localhost_port(self):
+        assert _strip_line_refs(
+            'Bind to localhost:8080'
+            ) == 'Bind to localhost:8080'
+
+    def test_preserves_ip_port(self):
+        assert _strip_line_refs(
+            'Reach 10.10.1.247:8000 over VPN'
+            ) == 'Reach 10.10.1.247:8000 over VPN'
+
+    def test_preserves_timestamp(self):
+        assert _strip_line_refs(
+            'Worker fires daily at 14:18'
+            ) == 'Worker fires daily at 14:18'
+
+    def test_preserves_http_code_word(self):
+        assert _strip_line_refs(
+            'Returns code:404 on miss'
+            ) == 'Returns code:404 on miss'
+
+    def test_preserves_version_pin(self):
+        assert _strip_line_refs(
+            'Use python:3.11 base image'
+            ) == 'Use python:3.11 base image'
+
+    def test_preserves_redis_port(self):
+        assert _strip_line_refs(
+            'redis:6379 is the cache'
+            ) == 'redis:6379 is the cache'
+
+    def test_strips_html_extension_line(self):
+        assert _strip_line_refs(
+            'See app/page.html:106 for the diff'
+            ) == 'See for the diff'
 
 
 class FakeLLMClient:

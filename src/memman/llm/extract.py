@@ -11,7 +11,7 @@ from memman.llm.shared import parse_json_response
 logger = logging.getLogger('memman')
 
 _LINE_REF_RE = re.compile(
-    r'\b(?:line \d+|[\w./]+:\d{2,})\b', re.IGNORECASE)
+    r'\b(?:line \d+|[\w./-]+\.[a-z]\w{0,4}:\d{1,5})\b', re.IGNORECASE)
 _WS_COLLAPSE_RE = re.compile(r'\s+')
 
 
