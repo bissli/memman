@@ -344,25 +344,6 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     data_dir_val = ctx.obj['data_dir']
     name = _resolve_store_name(data_dir_val, ctx.obj['store'])
 
-    if len(quality_warnings) >= 2:
-        from memman.store.oplog import log_op
-        try:
-            db = _open_db(ctx)
-            try:
-                log_op(db, 'quality-reject', '',
-                       f'{content_str[:200]}|warnings={quality_warnings}')
-            finally:
-                db.close()
-        except Exception:
-            pass
-        _json_out({
-            'action': 'rejected',
-            'store': name,
-            'content': content_str,
-            'quality_warnings': quality_warnings,
-            })
-        return
-
     from memman.queue import enqueue, open_queue_db
     conn = open_queue_db(data_dir_val)
     try:
@@ -1076,26 +1057,6 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
     data_dir_val = ctx.obj['data_dir']
     name = _resolve_store_name(data_dir_val, ctx.obj['store'])
 
-    if len(quality_warnings) >= 2:
-        from memman.store.oplog import log_op
-        try:
-            db = _open_db(ctx)
-            try:
-                log_op(db, 'quality-reject', id,
-                       f'{content_str[:200]}|warnings={quality_warnings}')
-            finally:
-                db.close()
-        except Exception:
-            pass
-        _json_out({
-            'action': 'rejected',
-            'store': name,
-            'replaced_id': id,
-            'content': content_str,
-            'quality_warnings': quality_warnings,
-            })
-        return
-
     try:
         ro = open_read_only(store_dir(data_dir_val, name))
         old = get_insight_by_id(ro, id)
@@ -1138,6 +1099,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         'queue_id': row_id,
         'store': name,
         'replaced_id': id,
+        'quality_warnings': quality_warnings,
         })
 
 

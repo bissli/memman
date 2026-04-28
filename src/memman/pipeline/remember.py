@@ -123,15 +123,6 @@ def run_remember(
     test use), the function builds them from the DB itself.
     """
     quality_warnings = check_content_quality(content)
-    if len(quality_warnings) >= 2:
-        log_op(db, 'quality-reject', insight.id,
-               f'{content[:200]}|warnings={quality_warnings}')
-        return {
-            'id': insight.id,
-            'content': content,
-            'action': 'rejected',
-            'quality_warnings': quality_warnings,
-            }
 
     if llm_client is None:
         llm_client = get_llm_client('slow')

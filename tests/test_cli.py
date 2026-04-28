@@ -384,13 +384,13 @@ def test_gc_suggest(runner):
 
 
 def test_remember_quality_warnings(runner):
-    """Content with 2+ quality warnings is rejected."""
+    """Content with quality warnings is queued; warnings populated as hints."""
     result = invoke(runner, [
         'remember', 'i-0c220c2402a5245bc deployed via Terraform',
         '--no-reconcile'])
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert data['action'] == 'rejected'
+    assert data['action'] == 'queued'
     assert 'AWS instance ID' in data['quality_warnings']
     assert 'deployment receipt' in data['quality_warnings']
 
@@ -421,13 +421,13 @@ def test_gc_review(runner):
     assert any('i-0c220c2402a5245bc' in c.lower() for c in flagged)
 
 
-def test_remember_quality_rejection(runner):
-    """2+ warnings rejected, 1 warning stored, quality-reject in oplog."""
+def test_remember_quality_warnings_populate(runner):
+    """Quality warnings populate as hints but never block the write."""
     result = invoke(runner, [
         'remember', 'Stack deployed via Terraform. 32 resources total.',
         '--no-reconcile'])
     data = json.loads(result.output)
-    assert data['action'] == 'rejected'
+    assert data['action'] == 'queued'
     assert len(data['quality_warnings']) >= 2
 
     result = invoke(runner, [
@@ -438,12 +438,9 @@ def test_remember_quality_rejection(runner):
     raw = json.loads(result.output)
     assert len(raw['quality_warnings']) == 1
 
-    result = invoke(runner, ['log', 'list', '--limit', '10'])
-    assert 'quality-reject' in result.output
 
-
-def test_replace_quality_rejection(runner):
-    """Replace path also rejects content with 2+ quality warnings."""
+def test_replace_quality_warnings_populate(runner):
+    """Replace path also passes quality warnings as hints, never blocks."""
     result = invoke(runner, [
         'remember', 'Kafka chosen for event streaming due to partition tolerance',
         '--no-reconcile'])
@@ -453,7 +450,7 @@ def test_replace_quality_rejection(runner):
         'replace', old_id,
         'Stack deployed via Terraform. 32 resources total.'])
     data = json.loads(result.output)
-    assert data['action'] == 'rejected'
+    assert data['action'] != 'rejected'
     assert len(data['quality_warnings']) >= 2
 
 

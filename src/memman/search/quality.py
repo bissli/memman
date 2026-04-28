@@ -21,6 +21,14 @@ TRANSIENT_PATTERNS: list[tuple[re.Pattern, str]] = [
         r'|debian|v?\d)\b)\w+:\d{2,}\b'),
         'function/symbol line reference'),
     (re.compile(r'\d+→\d+'), 'line number correction'),
+    (re.compile(r'\bmemor(?:y|ies)\s*\[\s*\d+\s*\]', re.IGNORECASE),
+        'back-reference'),
+    (re.compile(r'\b[A-Z][A-Z _-]{4,}:\s+'),
+        'uppercase section header'),
+    (re.compile(r'\bcurrently\b', re.IGNORECASE),
+        'transient time marker'),
+    (re.compile(r'\bas of \d{4}-\d{2}-\d{2}\b', re.IGNORECASE),
+        'dated observation'),
     ]
 
 

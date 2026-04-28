@@ -130,6 +130,94 @@ class TestLineNumberCorrection:
         assert 'line number correction' in w
 
 
+class TestBackReference:
+    """Cross-insight references trigger warnings."""
+
+    def test_memory_bracketed_index(self):
+        """'memory [3]' pattern matched."""
+        w = check_content_quality('Aligns with memory [3] on retries')
+        assert 'back-reference' in w
+
+    def test_memories_plural(self):
+        """'memories [0]' plural variant matched."""
+        w = check_content_quality('See memories [0] and [4] for context')
+        assert 'back-reference' in w
+
+    def test_memory_no_brackets_no_match(self):
+        """Plain word 'memory' should not match."""
+        w = check_content_quality('Volatile memory is cleared on reboot')
+        assert 'back-reference' not in w
+
+
+class TestUppercaseSectionHeader:
+    """All-caps section markers inside content trigger warnings."""
+
+    def test_root_cause_header(self):
+        """'ROOT CAUSE: ...' pattern matched."""
+        w = check_content_quality(
+            'Outage observed. ROOT CAUSE: misconfigured timeout.')
+        assert 'uppercase section header' in w
+
+    def test_key_finding_header(self):
+        """'KEY FINDING: ...' pattern matched."""
+        w = check_content_quality('KEY FINDING: replicas were stale')
+        assert 'uppercase section header' in w
+
+    def test_short_acronym_no_match(self):
+        """'URL: https://...' should not match (too short)."""
+        w = check_content_quality('See URL: https://example.com')
+        assert 'uppercase section header' not in w
+
+    def test_json_colon_no_match(self):
+        """'JSON:' four-letter acronym should not match."""
+        w = check_content_quality('Returned JSON: with the data')
+        assert 'uppercase section header' not in w
+
+    def test_no_space_after_colon_no_match(self):
+        """'FOO_BAR:value' without trailing space should not match."""
+        w = check_content_quality('Set ENV_VAR:production for the run')
+        assert 'uppercase section header' not in w
+
+
+class TestTransientTimeMarker:
+    """'currently' word triggers warning."""
+
+    def test_currently(self):
+        """'currently' lowercase matched."""
+        w = check_content_quality('The pipeline currently runs hourly')
+        assert 'transient time marker' in w
+
+    def test_currently_capitalized(self):
+        """'Currently' at sentence start matched."""
+        w = check_content_quality('Currently the queue is empty')
+        assert 'transient time marker' in w
+
+    def test_concurrent_no_match(self):
+        """'concurrent' should not match (not a whole word)."""
+        w = check_content_quality('Concurrent writes are serialized')
+        assert 'transient time marker' not in w
+
+
+class TestDatedObservation:
+    """'as of YYYY-MM-DD' triggers warning."""
+
+    def test_iso_date(self):
+        """'as of 2026-04-28' matched."""
+        w = check_content_quality(
+            'Throughput is 4 req/s as of 2026-04-28')
+        assert 'dated observation' in w
+
+    def test_case_insensitive(self):
+        """'AS OF 2026-04-28' matched case-insensitively."""
+        w = check_content_quality('AS OF 2026-04-28 nothing has changed')
+        assert 'dated observation' in w
+
+    def test_no_date_no_match(self):
+        """'as of last week' (no ISO date) should not match."""
+        w = check_content_quality('Stable as of last week')
+        assert 'dated observation' not in w
+
+
 class TestCleanContentNoWarnings:
     """Durable reasoning produces no warnings."""
 
