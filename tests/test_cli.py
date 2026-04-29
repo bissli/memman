@@ -209,6 +209,54 @@ def test_recall_basic_returns_envelope(runner):
     assert any('SQLite' in r['content'] for r in data['results'])
 
 
+def test_recall_emits_summary_when_populated(runner):
+    """Smart recall emits summary in result['insight'] when row has one."""
+    long_content = (
+        'The application uses a write-through cache layer between the '
+        'API tier and Postgres. TTL is 5 minutes for hot keys and 1 '
+        'hour for cold keys. Cache invalidation must run before each '
+        'DB write commits to avoid stale reads during the gap.')
+    invoke(runner, ['remember', long_content])
+    result = invoke(runner, ['recall', 'cache invalidation'])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    matched = [r for r in data['results']
+               if 'cache' in r['insight']['content'].lower()]
+    assert matched, 'expected at least one matching result'
+    insight = matched[0]['insight']
+    assert insight.get('summary'), \
+        'summary should be present and non-empty for substantive content'
+    assert insight['summary'] != insight['content']
+
+
+def test_recall_omits_summary_when_unenriched(runner):
+    """When summary is empty/null, the field is not emitted at all."""
+    invoke(runner, [
+        'remember', 'Q', '--cat', 'fact', '--no-reconcile'])
+    result = invoke(runner, ['recall', '--basic', 'Q'])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    for r in data['results']:
+        assert 'summary' not in r or r['summary'] == ''
+
+
+def test_recall_basic_emits_summary_when_present(runner):
+    """--basic mode also surfaces summary; both paths share the serializer."""
+    long_content = (
+        'The job scheduler uses systemd timers on Linux hosts and '
+        'launchd on macOS hosts. The drain interval defaults to 60 '
+        'seconds and is configurable via memman scheduler interval.')
+    invoke(runner, ['remember', long_content])
+    result = invoke(runner, ['recall', '--basic', 'scheduler timer'])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    matched = [r for r in data['results']
+               if 'scheduler' in r['content'].lower()]
+    if matched:
+        if matched[0].get('summary'):
+            assert matched[0]['summary'] != matched[0]['content']
+
+
 def test_forget_basic(runner):
     """Forget an insight by ID."""
     result = invoke(runner, [

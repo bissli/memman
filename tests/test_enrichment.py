@@ -47,7 +47,12 @@ class TestEnrichWithLLM:
     def test_happy_path(self):
         """Valid LLM response returns all enrichment fields."""
         insight = make_insight(
-            id='hp-1', content='Python web framework comparison',
+            id='hp-1',
+            content=(
+                'Python has several mature web frameworks: FastAPI for '
+                'async-first APIs, Django for full-stack with batteries '
+                'included, and Flask for minimal microframeworks. Each '
+                'targets different sweet spots in the deployment surface.'),
             entities=['Python'], created_at=OLD)
 
         mock_client = MagicMock()

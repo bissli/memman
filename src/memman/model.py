@@ -35,6 +35,7 @@ class Insight:
     prompt_version: str | None = None
     model_id: str | None = None
     embedding_model: str | None = None
+    summary: str = ''
 
     def entities_json(self) -> str:
         """Return entities as a JSON string for storage."""

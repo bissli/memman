@@ -78,6 +78,8 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
     summary = parsed.get('summary', '')
     if not isinstance(summary, str):
         summary = ''
+    if summary and len(summary) >= len(insight.content) * 0.85:
+        summary = ''
 
     facts = parsed.get('semantic_facts', [])
     if not isinstance(facts, list):

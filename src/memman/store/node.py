@@ -40,7 +40,8 @@ def get_insight_by_id(db: 'DB', id: str) -> Insight | None:
     """Return a single insight by ID (excludes soft-deleted)."""
     row = db._query(
         'SELECT id, content, category, importance, entities,'
-        ' source, access_count, created_at, updated_at, deleted_at'
+        ' source, access_count, created_at, updated_at, deleted_at,'
+        ' summary'
         ' FROM insights WHERE id = ? AND deleted_at IS NULL',
         (id,)).fetchone()
     if row is None:
@@ -52,7 +53,8 @@ def get_insight_by_id_include_deleted(db: 'DB', id: str) -> Insight | None:
     """Return a single insight by ID, including soft-deleted."""
     row = db._query(
         'SELECT id, content, category, importance, entities,'
-        ' source, access_count, created_at, updated_at, deleted_at'
+        ' source, access_count, created_at, updated_at, deleted_at,'
+        ' summary'
         ' FROM insights WHERE id = ?',
         (id,)).fetchone()
     if row is None:
@@ -92,7 +94,8 @@ def query_insights(db: 'DB', keyword: str = '', category: str = '',
 
     sql = (
         'SELECT id, content, category, importance, entities,'
-        ' source, access_count, created_at, updated_at, deleted_at'
+        ' source, access_count, created_at, updated_at, deleted_at,'
+        ' summary'
         ' FROM insights WHERE ' + ' AND '.join(conditions)
         + ' ORDER BY importance DESC, created_at DESC LIMIT ?')
 
@@ -217,13 +220,13 @@ def get_retention_candidates(
     rows = db._query(
         'SELECT id, content, category, importance, entities,'
         ' source, access_count, created_at, updated_at, deleted_at,'
-        ' last_accessed_at'
+        ' summary, last_accessed_at'
         ' FROM insights WHERE deleted_at IS NULL').fetchall()
 
     insight_rows = []
     for r in rows:
-        ins = _scan_insight(r[:10])
-        last_accessed_str = r[10]
+        ins = _scan_insight(r[:11])
+        last_accessed_str = r[11]
         last_access = ins.created_at
         if last_accessed_str:
             try:
@@ -380,7 +383,8 @@ def get_recent_insights_in_window(
     cutoff_str = format_timestamp(cutoff_dt)
     rows = db._query(
         'SELECT id, content, category, importance, entities,'
-        ' source, access_count, created_at, updated_at, deleted_at'
+        ' source, access_count, created_at, updated_at, deleted_at,'
+        ' summary'
         ' FROM insights WHERE id != ? AND deleted_at IS NULL'
         ' AND created_at >= ?'
         ' ORDER BY created_at DESC LIMIT ?',
@@ -393,7 +397,8 @@ def get_latest_insight_by_source(
     """Return the most recent non-deleted insight for a given source."""
     row = db._query(
         'SELECT id, content, category, importance, entities,'
-        ' source, access_count, created_at, updated_at, deleted_at'
+        ' source, access_count, created_at, updated_at, deleted_at,'
+        ' summary'
         ' FROM insights WHERE source = ? AND id != ?'
         ' AND deleted_at IS NULL'
         ' ORDER BY created_at DESC, rowid DESC LIMIT 1',
@@ -409,7 +414,8 @@ def get_recent_active_insights(
     """Return the N most recent non-deleted insights regardless of source."""
     rows = db._query(
         'SELECT id, content, category, importance, entities,'
-        ' source, access_count, created_at, updated_at, deleted_at'
+        ' source, access_count, created_at, updated_at, deleted_at,'
+        ' summary'
         ' FROM insights WHERE id != ? AND deleted_at IS NULL'
         ' ORDER BY created_at DESC LIMIT ?',
         (exclude_id, limit)).fetchall()
@@ -420,7 +426,8 @@ def get_all_active_insights(db: 'DB') -> list[Insight]:
     """Return all non-deleted insights."""
     rows = db._query(
         'SELECT id, content, category, importance, entities,'
-        ' source, access_count, created_at, updated_at, deleted_at'
+        ' source, access_count, created_at, updated_at, deleted_at,'
+        ' summary'
         ' FROM insights WHERE deleted_at IS NULL'
         ' ORDER BY created_at DESC').fetchall()
     return [_scan_insight(r) for r in rows]
@@ -528,7 +535,8 @@ def get_insights_without_embedding(
         limit = 100
     rows = db._query(
         'SELECT id, content, category, importance, entities,'
-        ' source, access_count, created_at, updated_at, deleted_at'
+        ' source, access_count, created_at, updated_at, deleted_at,'
+        ' summary'
         ' FROM insights WHERE deleted_at IS NULL AND embedding IS NULL'
         ' ORDER BY importance DESC, created_at DESC LIMIT ?',
         (limit,)).fetchall()
@@ -609,4 +617,6 @@ def _scan_insight(row: tuple) -> Insight:
     i.updated_at = parse_timestamp(row[8])
     if row[9]:
         i.deleted_at = parse_timestamp(row[9])
+    if len(row) > 10 and row[10]:
+        i.summary = row[10]
     return i

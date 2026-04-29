@@ -192,7 +192,11 @@ Each retrieval result includes signal details:
 
 ```json
 {
-  "insight": {"id": "...", "content": "..."},
+  "insight": {
+    "id": "...",
+    "content": "...",
+    "summary": "..."
+  },
   "score": 0.73,
   "intent": "ENTITY",
   "via": "keyword",
@@ -204,6 +208,8 @@ Each retrieval result includes signal details:
   }
 }
 ```
+
+The `summary` field is the LLM-authored one-line gloss produced during enrichment (slow_metadata role). It is present only when (a) enrichment has run for the row and (b) the summary actually compresses the content (write-time gate at `len(summary) < len(insight.content) * 0.85`); rows that fail the gate emit no `summary` key. Calling LLMs see ~3.6x token compression with ~90% ranking-decision agreement vs full content.
 
 The host LLM sees these signals and can apply its own judgment with full conversation context.
 

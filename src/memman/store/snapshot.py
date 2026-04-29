@@ -100,6 +100,7 @@ def write_snapshot(db, store_dir: str, fingerprint: Fingerprint) -> bool:
             'source': i.source,
             'access_count': i.access_count,
             'created_at': i.created_at.astimezone(timezone.utc).isoformat(),
+            'summary': i.summary,
             }
         for i in insights
         ]
@@ -222,6 +223,7 @@ def read_snapshot(
             source=entry.get('source', 'user'),
             access_count=int(entry.get('access_count', 0)),
             created_at=parse_timestamp(entry['created_at']),
+            summary=entry.get('summary', ''),
             ) for entry in meta_list]
 
     raw_adj = json.loads(adj_blob)

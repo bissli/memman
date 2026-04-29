@@ -191,6 +191,8 @@ def _insight_to_dict(i: Insight) -> dict:
         }
     if i.deleted_at:
         d['deleted_at'] = format_timestamp(i.deleted_at)
+    if i.summary:
+        d['summary'] = i.summary
     return d
 
 
