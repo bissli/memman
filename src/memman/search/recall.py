@@ -458,10 +458,12 @@ def intent_aware_recall(
         shortlist_size = min(RERANK_SHORTLIST, len(results))
         if shortlist_size >= 2:
             try:
-                from memman.embed.voyage import rerank as voyage_rerank
+                from memman.rerank import get_client as get_rerank_client
+                rerank_client = get_rerank_client()
                 shortlist = results[:shortlist_size]
                 docs = [r['insight'].content for r in shortlist]
-                scored = voyage_rerank(query, docs, top_k=shortlist_size)
+                scored = rerank_client.rerank(
+                    query, docs, top_k=shortlist_size)
                 reordered = []
                 for orig_idx, score in scored:
                     r = shortlist[orig_idx]

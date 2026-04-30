@@ -175,7 +175,7 @@ def test_recall_default_does_not_call_rerank(runner):
         '--no-reconcile'])
 
     from unittest.mock import patch
-    with patch('memman.embed.voyage.rerank',
+    with patch('memman.rerank.voyage.Client.rerank',
                side_effect=AssertionError('rerank called')) as mock_re:
         result = invoke(runner, ['recall', 'Go SQLite storage'])
         assert result.exit_code == 0
@@ -193,7 +193,7 @@ def test_recall_rerank_flag_invokes_reranker(runner):
         invoke(runner, ['remember', fact, '--no-reconcile'])
 
     from unittest.mock import patch
-    with patch('memman.embed.voyage.rerank',
+    with patch('memman.rerank.voyage.Client.rerank',
                return_value=[(0, 0.9), (1, 0.5), (2, 0.1)]) as mock_re:
         result = invoke(runner, [
             'recall', 'Go SQLite persistent storage', '--rerank'])
@@ -210,7 +210,7 @@ def test_recall_rerank_skipped_on_short_query(runner):
         '--no-reconcile'])
 
     from unittest.mock import patch
-    with patch('memman.embed.voyage.rerank',
+    with patch('memman.rerank.voyage.Client.rerank',
                side_effect=AssertionError('rerank called on short query')
                ) as mock_re:
         result = invoke(runner, ['recall', 'storage', '--rerank'])
@@ -229,7 +229,7 @@ def test_recall_rerank_failure_falls_back_gracefully(runner):
         invoke(runner, ['remember', fact, '--no-reconcile'])
 
     from unittest.mock import patch
-    with patch('memman.embed.voyage.rerank',
+    with patch('memman.rerank.voyage.Client.rerank',
                side_effect=RuntimeError('voyage 503')) as mock_re:
         result = invoke(runner, [
             'recall', 'Go SQLite persistent storage', '--rerank'])
@@ -321,9 +321,8 @@ def test_recall_basic_emits_summary_when_present(runner):
     data = json.loads(result.output)
     matched = [r for r in data['results']
                if 'scheduler' in r['content'].lower()]
-    if matched:
-        if matched[0].get('summary'):
-            assert matched[0]['summary'] != matched[0]['content']
+    if matched and matched[0].get('summary'):
+        assert matched[0]['summary'] != matched[0]['content']
 
 
 def test_forget_basic(runner):
