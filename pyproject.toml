@@ -1,8 +1,8 @@
 [tool.poetry]
 name = "memman"
-version = "0.10.0"
+version = "0.10.1"
 description = "Persistent memory for LLM agents"
-authors = ["memman-dev"]
+authors = ["bissli"]
 license = "MIT"
 readme = "README.md"
 packages = [{include = "memman", from = "src"}]

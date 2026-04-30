@@ -224,18 +224,128 @@ def test_reembed_passes_dry_run_when_started(tmp_path):
     assert result.exit_code == 0, result.output
 
 
+# ----- fresh-store auto-seeding ---------------------------------
+
+
+def _parse_recall_json(output: str) -> dict:
+    """Extract the JSON object from recall output (strips WARNING logs)."""
+    brace = output.index('{')
+    decoder = json.JSONDecoder()
+    obj, _ = decoder.raw_decode(output[brace:])
+    return obj
+
+
+@pytest.mark.no_autoseed_fingerprint
+def test_recall_on_fresh_store_returns_empty_not_error(tmp_path):
+    """Recall on a brand-new store auto-seeds the fingerprint and
+    returns empty results, instead of raising EmbedFingerprintError.
+    """
+    result = _invoke([
+        '--data-dir', str(tmp_path),
+        'recall', 'anything', '--limit', '5'])
+    assert result.exit_code == 0, (
+        f'recall failed: exit={result.exit_code} '
+        f'output={result.output}')
+    payload = _parse_recall_json(result.output)
+    assert payload['results'] == []
+
+    from memman.store.db import store_dir
+    sdir = store_dir(str(tmp_path), 'default')
+    db = open_db(sdir)
+    try:
+        assert stored_fingerprint(db) is not None
+    finally:
+        db.close()
+
+
+@pytest.mark.no_autoseed_fingerprint
+def test_custom_store_recall_on_fresh_returns_empty(tmp_path):
+    """Recall on a never-used --store custom name auto-seeds and
+    returns empty.
+    """
+    result = _invoke([
+        '--data-dir', str(tmp_path), '--store', 'custom',
+        'recall', 'x', '--limit', '5'])
+    assert result.exit_code == 0, (
+        f'recall failed: exit={result.exit_code} '
+        f'output={result.output}')
+    payload = _parse_recall_json(result.output)
+    assert payload['results'] == []
+
+
+@pytest.mark.no_autoseed_fingerprint
+def test_remember_on_fresh_store_seeds_and_drains(tmp_path):
+    """Memman remember on a fresh store seeds the fingerprint AND the
+    worker drain succeeds (covers the _StoreContext path).
+    """
+    result = _invoke([
+        '--data-dir', str(tmp_path), 'remember', 'a fresh memory'])
+    assert result.exit_code == 0, result.output
+
+    drain_result = _invoke([
+        '--data-dir', str(tmp_path),
+        'scheduler', 'drain', '--pending'])
+    assert drain_result.exit_code == 0, drain_result.output
+
+    from memman.store.db import store_dir
+    sdir = store_dir(str(tmp_path), 'default')
+    db = open_db(sdir)
+    try:
+        assert stored_fingerprint(db) is not None
+    finally:
+        db.close()
+
+
+@pytest.mark.no_autoseed_fingerprint
+def test_seed_if_fresh_short_circuits_on_present_insights(tmp_path):
+    """seed_if_fresh declines to seed when insights are non-empty and
+    fingerprint is missing -- that is corruption, not fresh state.
+    """
+    from memman.embed.fingerprint import seed_if_fresh
+    from memman.store.db import store_dir
+    sdir = store_dir(str(tmp_path), 'default')
+    db = open_db(sdir)
+    try:
+        _seed_row_with_embedding(db, id='r1', content='alpha')
+        assert stored_fingerprint(db) is None
+        wrote = seed_if_fresh(db)
+        assert wrote is False
+        assert stored_fingerprint(db) is None
+    finally:
+        db.close()
+
+
+@pytest.mark.no_autoseed_fingerprint
+def test_seed_if_fresh_raises_on_unavailable_client(
+        tmp_path, monkeypatch):
+    """When the embed client reports unavailable on a fresh store,
+    recall surfaces the unavailable-client message, not the misleading
+    'embed reembed' hint.
+    """
+    monkeypatch.setattr(
+        'memman.embed.voyage.Client.available', lambda self: False)
+    result = _invoke([
+        '--data-dir', str(tmp_path), 'recall', 'x'])
+    assert result.exit_code != 0
+    assert 'embed reembed' not in result.output
+
+
 # ----- block-on-mismatch ----------------------------------------
 
 
 @pytest.mark.no_autoseed_fingerprint
-def test_recall_blocks_on_unseeded_db(tmp_path):
-    """Recall against an unseeded DB exits non-zero with a remediation
-    message.
+def test_recall_blocks_on_corrupted_store(tmp_path):
+    """Recall raises EmbedFingerprintError when fingerprint is None
+    AND insights already exist (real corruption, not a fresh DB).
+    seed_if_fresh must short-circuit so assert_consistent still raises.
     """
     from memman.store.db import store_dir
     sdir = store_dir(str(tmp_path), 'default')
     db = open_db(sdir)
-    db.close()
+    try:
+        _seed_row_with_embedding(db, id='r1', content='alpha')
+    finally:
+        db.close()
 
     result = _invoke([
         '--data-dir', str(tmp_path), 'recall', 'anything'])

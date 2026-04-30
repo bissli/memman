@@ -196,14 +196,18 @@ def force_drain(data_dir: str) -> None:
 def _autoseed_fingerprint(request, monkeypatch):
     """Auto-seed `meta.embed_fingerprint` whenever assert_consistent runs.
 
-    Production: `setup.claude._init_default_store` seeds the meta row at
-    install time. Tests don't run install; instead, this fixture wraps
-    `assert_consistent` to seed-if-missing then assert. Net effect:
-    every fresh DB used in CLI tests behaves as if `memman install`
-    had pre-seeded it.
+    Production seeding (in `_open_db`, `_StoreContext`, `store_create`,
+    `_init_default_store`) routes through `seed_if_fresh`, which
+    declines to seed a DB that already has insights without a
+    fingerprint (corruption). This fixture is intentionally more
+    lenient: when a test hand-builds a DB by calling `open_db` and
+    `insert_insight` directly, the fixture seeds on first
+    `assert_consistent` regardless of insights count, so tests that
+    don't care about fingerprint mechanics don't need boilerplate.
 
-    Tests that exercise unseeded behavior (e.g. the assert itself)
-    should mark themselves `@pytest.mark.no_autoseed_fingerprint`.
+    Tests that exercise the strict production behavior (corruption
+    detection or the raw missing-fingerprint error) should mark
+    themselves `@pytest.mark.no_autoseed_fingerprint`.
     """
     if 'tests/e2e/' in str(request.node.fspath):
         return

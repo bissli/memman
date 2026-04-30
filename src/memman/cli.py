@@ -151,13 +151,14 @@ def _open_db(ctx: click.Context) -> 'DB':
         return open_read_only(sdir)
 
     db = open_db(sdir)
-    from memman.embed.fingerprint import assert_consistent
-    from memman.exceptions import EmbedFingerprintError
+    from memman.embed.fingerprint import assert_consistent, seed_if_fresh
+    from memman.exceptions import ConfigError, EmbedFingerprintError
     from memman.graph.engine import reindex_if_constants_changed
     reindex_if_constants_changed(db)
     try:
+        seed_if_fresh(db)
         assert_consistent(db)
-    except EmbedFingerprintError as exc:
+    except (EmbedFingerprintError, ConfigError) as exc:
         db.close()
         raise click.ClickException(str(exc)) from exc
     return db
@@ -765,6 +766,7 @@ class _StoreContext:
 
         self.store_data_dir = store_data_dir
         self.db = _open_store_db(store_data_dir)
+        _fp_mod.seed_if_fresh(self.db)
         _fp_mod.assert_consistent(self.db)
         self.ec = _get_ec()
         self.llm_client = get_llm_client('slow_canonical')
@@ -1561,7 +1563,15 @@ def store_create(ctx: click.Context, name: str) -> None:
             f'store "{name}" already exists')
     sdir = store_dir(data_dir, name)
     db = open_db(sdir)
-    db.close()
+    try:
+        from memman.embed.fingerprint import seed_if_fresh
+        from memman.exceptions import ConfigError, EmbedFingerprintError
+        try:
+            seed_if_fresh(db)
+        except (EmbedFingerprintError, ConfigError) as exc:
+            raise click.ClickException(str(exc)) from exc
+    finally:
+        db.close()
     _json_out({'action': 'created', 'store': name, 'path': sdir})
 
 

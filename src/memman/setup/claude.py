@@ -118,29 +118,22 @@ def claude_uninstall(config_dir: str) -> list[Exception]:
 def _init_default_store(data_dir: str) -> None:
     """Ensure the default store exists with a seeded embed fingerprint.
 
-    Probes the active client first so providers with dynamic dim
-    (openai, ollama) discover their actual dim before the
-    fingerprint is written. Voyage's dim is class-level so the
-    probe is a no-op for the default install path.
+    Delegates to `seed_if_fresh` so the install-time and lazy
+    first-open paths share a single seed implementation, including
+    the unavailable-client and dim>0 validation.
     """
-    from memman.embed import get_client
-    from memman.embed.fingerprint import Fingerprint, write_fingerprint
+    from memman.embed.fingerprint import seed_if_fresh
+    from memman.exceptions import ConfigError, EmbedFingerprintError
     from memman.store.db import open_db, store_dir, store_exists
 
     if not store_exists(data_dir, 'default'):
-        ec = get_client()
-        if not ec.available():
-            raise click.ClickException(ec.unavailable_message())
-        target = Fingerprint.from_client(ec)
-        if target.dim <= 0:
-            raise click.ClickException(
-                f'embed provider {target.provider} returned dim={target.dim};'
-                ' aborting install')
-
         sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
         try:
-            write_fingerprint(db, target)
+            try:
+                seed_if_fresh(db)
+            except (EmbedFingerprintError, ConfigError) as exc:
+                raise click.ClickException(str(exc)) from exc
         finally:
             db.close()
         print(f'  Initialized default store at {sdir}')
