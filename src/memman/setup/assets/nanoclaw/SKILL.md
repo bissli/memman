@@ -100,7 +100,7 @@ under one minute old.
 Create this file with the memman container skill content. This skill teaches the agent inside the container when and how to use memman. It should include:
 
 - **Memory stores section**: Explain that the default store is per-group (private, read-write) and the global store is shared (read-only, accessed via `--store global --readonly`).
-- **Recall guide**: Default recall on every new user message. Use `memman recall "<query>" --limit 5`. Also check the global store: `memman recall "<query>" --store global --readonly --limit 5`. Craft focused keyword-rich queries.
+- **Recall guide**: Default recall on every new user message. Use `memman recall "<query>" --limit 5 --rerank` (the `--rerank` flag enables the cross-encoder reranker for top-quality results; auto-skipped on 1-2 token queries). Also check the global store: `memman recall "<query>" --store global --readonly --limit 5 --rerank`. Craft focused keyword-rich queries.
 - **Remember guide**: Decision tree — Step 1: Does this exchange contain a user directive, reasoning conclusion, or durable observed state? Step 2: Does a memory already exist (create/update/skip)? Step 3: Is it worth storing?
 - **Workflow**: remember → graph link (evaluate semantic/causal candidates with judgment) → recall.
 - **Commands**: Full memman command reference (remember, replace, recall, forget, graph link/related, insights candidates/review/protect/show, status, doctor, log list).

@@ -178,6 +178,74 @@ These extend MAGMA's intent-adaptive philosophy (which steers beam search via ed
 
 Embeddings are Voyage AI 512-dim vectors. The expanded query from Step 0 is embedded for vector search and reranking.
 
+### Step 4b: Cross-Encoder Rerank
+
+When the caller passes `--rerank` and the query has more than `MIN_RERANK_TOKENS` (default 2) whitespace tokens, the top `RERANK_SHORTLIST` (default 100) candidates from Step 4 are re-scored by Voyage's `rerank-2.5-lite` cross-encoder, and the rerank score replaces the multi-signal score for the final ordering. The skill files (`SKILL.md`) instruct LLM agents to always pass `--rerank` on natural-language queries.
+
+Bi-encoder retrieval (Steps 1–4) embeds the query and each insight independently and ranks by cosine similarity plus the four signals. A cross-encoder reads `(query, content)` together with full attention and outputs a relevance score directly, so it can resolve cases where bi-encoder cosine misses the right answer despite low token overlap.
+
+Failures (timeouts, non-200 responses) are caught and logged; the baseline ordering is returned unchanged with `meta.reranked = false`. The 1-2 token query gate skips rerank when there is too little query signal for the cross-encoder to use.
+
+### Empirical evidence
+
+Two-phase evaluation supported the decision to ship rerank as a `--rerank` flag and to instruct LLM agents (via `SKILL.md`) to always pass it:
+
+**Phase 1 — Cheap-alternative ablation** (12 queries × 1 store, no labels): asked whether bumping `ANCHOR_TOP_K`, retuning weights, or LLM query expansion could close the gap without an LLM call on the read path. None did. Rerank changed 72% of the top-10; the next-best non-rerank config changed 35%.
+
+**Phase 2 — LLM-judged labeled eval** (90 queries × 3 stores `search`/`memman`/`main`, ~4500 graded relevance labels via Haiku 4.5): scored every config against ground truth with nDCG@5, Recall@5, MRR, P@1.
+
+Combined results across all 90 queries:
+
+| Config                        | nDCG@5    | Rec@5     | MRR       | P@1       | vs baseline |
+| ----------------------------- | ---------: | ---------: | ---------: | ---------: | -----------: |
+| `baseline`                    | 0.648     | 0.573     | 0.759     | 0.711     | —           |
+| `anchor_60` (cap 30→60)       | 0.646     | 0.576     | 0.738     | 0.678     | -0.002      |
+| `anchor_100` (cap 30→100)     | 0.648     | 0.583     | 0.734     | 0.678     | -0.001      |
+| `weights_v2` (retuned)        | 0.627     | 0.562     | 0.732     | 0.678     | -0.022      |
+| `expand_only` (LLM expansion) | 0.595     | 0.527     | 0.689     | 0.600     | -0.054      |
+| `rerank_replace_general_only` | 0.641     | 0.616     | 0.755     | 0.700     | -0.007      |
+| `rerank_blend_all`            | 0.719     | 0.624     | 0.783     | 0.733     | +0.070      |
+| **`rerank_voyage` (replace)** | **0.788** | **0.695** | **0.835** | **0.789** | **+0.140**  |
+
+Per-intent nDCG@5 (regression check):
+
+| Config                        | ENTITY (n=2) | GENERAL (n=52) | WHEN (n=18) | WHY (n=18) |
+| ----------------------------- | ------------: | --------------: | -----------: | ----------: |
+| `baseline`                    | 0.604        | 0.734          | 0.381       | 0.674      |
+| `rerank_replace_general_only` | 0.604        | 0.815          | **0.122**   | 0.661      |
+| `rerank_blend_all`            | 0.631        | 0.786          | 0.528       | 0.723      |
+| **`rerank_voyage`**           | **0.742**    | **0.815**      | **0.732**   | **0.771**  |
+
+Per-store consistency (rerank_voyage vs baseline nDCG@5):
+
+| Store    | baseline | rerank_voyage | delta  |
+| -------- | --------: | -------------: | ------: |
+| `search` | 0.655    | 0.809         | +0.154 |
+| `memman` | 0.596    | 0.737         | +0.141 |
+| `main`   | 0.695    | 0.819         | +0.124 |
+
+Rerank wins **56 of 90 queries**, ties 12, loses 22. The win is consistent across all three stores, contradicting an a-priori prediction that the cross-encoder would regress WHY/WHEN intents (it actually wins them by the largest margins because their bi-encoder baselines are weakest).
+
+User-facing top-5 impact (rerank_voyage vs baseline):
+
+| Metric                                                             | baseline | rerank          | Δ      |
+| ------------------------------------------------------------------ | --------: | ---------------: | ------: |
+| Mean P@5 (fraction of top-5 with rel ≥ 2)                          | 0.476    | 0.556           | +0.080 |
+| Queries where the directly-answers (rel=3) doc surfaces (in top-5) | 39       | 45 (+6 rescues) | +6     |
+| Queries where rerank loses a directly-answers doc                  | —        | 0               | 0      |
+
+Where the lift is biggest (sharpest cut: baseline strength):
+
+| Baseline mean rel of top-5 | n  | Δ     | wins | losses |
+| -------------------------- | ---: | -----: | ----: | ------: |
+| Weak (< 1.0)               | 22 | +0.40 | 18   | **1**  |
+| OK (1.0–1.6)               | 24 | +0.34 | 16   | 3      |
+| Strong (≥ 1.6)             | 44 | +0.06 | 19   | 9      |
+
+So rerank pays off most when the bi-encoder is uncertain. When the bi-encoder is already confident, rerank's average lift collapses and individual queries can mildly regress.
+
+The eval scripts and full per-query tables live under `experiments/eval/`. The labeled query set is in `experiments/eval/queries_labeled_<store>.jsonl`; each pair was scored by Haiku 4.5 on a 0–3 graded scale (cached so re-runs only score new pairs).
+
 ### Step 5: WHY Post-Processing — Causal Topological Sort
 
 If the intent is WHY, an additional topological sort using Kahn's algorithm is performed: results are arranged along causal edges so that **causes come first, effects follow**.
@@ -219,7 +287,7 @@ memman uses LLMs at write time (extraction, reconciliation, enrichment, causal i
 
 Two design principles:
 
-1. **LLM stays out of hot paths.** The write path defers LLM work to the scheduler drain (Tier 2 in 4.1). The read path uses only the embedding model — no LLM at query time, with `--expand` as an explicit opt-in for callers who want synonym coverage. Where LLM judgment is unavoidable (extraction, reconciliation, enrichment, causal inference), the output is tagged with what produced it and re-runnable.
+1. **Avoid slow work on the hot path.** "Slow" means anything that slows the user experience. The write path defers LLM work to the scheduler drain (Tier 2 in 4.1). The read path is embedding-only at the bare-CLI level, with `--expand` (LLM query expansion) and `--rerank` (cross-encoder reranking) as explicit flags; LLM agents using memman are instructed via `SKILL.md` to always pass `--rerank`. Where LLM judgment is unavoidable (extraction, reconciliation, enrichment, causal inference), the output is tagged with what produced it and re-runnable.
 2. **Provenance + re-run beats deterministic-rule replacement.** Hard rules (length thresholds, importance clamps, similarity cutoffs) calcify with one model's behavior baked in; provenance + re-run lets memman track what produced each row and re-derive when inputs change. Same precedent as the embed-fingerprint mechanism.
 
 ### Invalidation hooks

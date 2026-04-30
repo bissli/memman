@@ -28,6 +28,8 @@ LAMBDA1 = 1.0
 LAMBDA2 = 0.4
 RRF_K = 60
 VECTOR_SEARCH_MIN_SIM = 0.10
+RERANK_SHORTLIST = 100
+MIN_RERANK_TOKENS = 2
 
 TRAVERSAL_PARAMS: dict[str, tuple[int, int, int]] = {
     'WHY': (15, 5, 500),
@@ -226,13 +228,20 @@ def intent_aware_recall(
         query_vec: list[float] | None,
         query_entities: list[str],
         limit: int,
-        intent_override: str | None = None) -> dict:
+        intent_override: str | None = None,
+        rerank: bool = False) -> dict:
     """Perform MAGMA-aligned intent-aware retrieval.
 
     Loads the worker-materialized snapshot when present and consumes
     it for all hot-path reads. Falls back to direct SQL when the
     snapshot is missing or its embedding fingerprint doesn't match
     the active client.
+
+    When `rerank=True` and the query has more than `MIN_RERANK_TOKENS`
+    tokens, the top `RERANK_SHORTLIST` candidates by multi-signal score
+    are re-scored by Voyage rerank-2.5-lite and the rerank score
+    replaces the final ordering. On reranker failure the baseline
+    ordering is preserved.
     """
     if intent_override:
         intent = intent_override
@@ -443,6 +452,28 @@ def intent_aware_recall(
 
     results.sort(
         key=lambda r: (-r['score'], -r['insight'].importance))
+
+    reranked = False
+    if rerank and len(query.split()) > MIN_RERANK_TOKENS:
+        shortlist_size = min(RERANK_SHORTLIST, len(results))
+        if shortlist_size >= 2:
+            try:
+                from memman.embed.voyage import rerank as voyage_rerank
+                shortlist = results[:shortlist_size]
+                docs = [r['insight'].content for r in shortlist]
+                scored = voyage_rerank(query, docs, top_k=shortlist_size)
+                reordered = []
+                for orig_idx, score in scored:
+                    r = shortlist[orig_idx]
+                    r['score'] = float(score)
+                    r['signals']['rerank'] = float(score)
+                    reordered.append(r)
+                results = reordered + results[shortlist_size:]
+                reranked = True
+            except Exception as exc:
+                logger.warning(
+                    f'rerank failed, keeping baseline ordering: {exc}')
+
     if limit > 0 and len(results) > limit:
         results = results[:limit]
 
@@ -469,6 +500,7 @@ def intent_aware_recall(
         'traversed': traversed_count,
         'hint': RECALL_HINTS.get(intent, RECALL_HINTS['GENERAL']),
         'ordering': ordering,
+        'reranked': reranked,
         }
     if sparse:
         meta['sparse'] = True

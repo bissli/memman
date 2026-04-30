@@ -890,10 +890,13 @@ def _process_queue_row(
 @click.option('--intent', default='', help='Override intent')
 @click.option('--expand', 'expand', is_flag=True, default=False,
               help='Run LLM query expansion before retrieval (off by default)')
+@click.option('--rerank', 'rerank', is_flag=True, default=False,
+              help='Apply Voyage cross-encoder reranker on a 100-doc '
+                   'shortlist; auto-skipped on queries of 2 tokens or fewer')
 @click.pass_context
 def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
            limit: int, source: str, basic: bool,
-           intent: str, expand: bool) -> None:
+           intent: str, expand: bool, rerank: bool) -> None:
     """Retrieve insights by keyword."""
     from memman.embed import get_client
     from memman.llm.extract import expand_query
@@ -951,7 +954,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
         fetch_limit = limit * 3 if (cat or source) else limit
         resp = intent_aware_recall(
             db, keyword_str, query_vec, query_entities,
-            fetch_limit, intent_override)
+            fetch_limit, intent_override, rerank=rerank)
         if cat:
             resp['results'] = [
                 r for r in resp['results']

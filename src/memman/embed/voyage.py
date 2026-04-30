@@ -17,6 +17,7 @@ logger = logging.getLogger('memman')
 DEFAULT_MODEL = 'voyage-3-lite'
 DEFAULT_ENDPOINT = 'https://api.voyageai.com'
 EMBEDDING_DIM = 512
+DEFAULT_RERANK_MODEL = 'rerank-2.5-lite'
 
 
 class Client:
@@ -128,3 +129,58 @@ class Client:
         return (
             f'Voyage not available at {self.endpoint}'
             f' -- set {config.VOYAGE_API_KEY} to enable embeddings')
+
+
+def rerank(query: str, documents: list[str],
+           top_k: int | None = None) -> list[tuple[int, float]]:
+    """Score (query, document) pairs via Voyage cross-encoder rerank.
+
+    Returns a list of (original_index, relevance_score) tuples sorted
+    by score descending. Reuses VOYAGE_API_KEY and the per-module httpx
+    session. Model is governed by MEMMAN_VOYAGE_RERANK_MODEL (default
+    rerank-2.5-lite).
+    """
+    if not documents:
+        return []
+    api_key = config.require(config.VOYAGE_API_KEY)
+    model = config.get(config.VOYAGE_RERANK_MODEL) or DEFAULT_RERANK_MODEL
+    url = f'{DEFAULT_ENDPOINT}/v1/rerank'
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {api_key}',
+        }
+    body: dict = {'model': model, 'query': query, 'documents': documents}
+    if top_k is not None:
+        body['top_k'] = top_k
+    trace.event(
+        'rerank_request',
+        provider='voyage',
+        url=url,
+        model=model,
+        n_docs=len(documents),
+        query_len=len(query),
+        headers=trace.redact_headers(headers))
+    t0 = time.monotonic()
+    resp = post_with_retry(
+        get_session(__name__), url,
+        headers=headers, json=body, timeout=30.0)
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+    if resp.status_code != 200:
+        trace.event(
+            'rerank_response',
+            provider='voyage',
+            status=resp.status_code,
+            elapsed_ms=elapsed_ms,
+            error='http_status')
+        raise RuntimeError(
+            f'Voyage rerank returned status {resp.status_code}')
+    data = resp.json()
+    items = data.get('data', [])
+    trace.event(
+        'rerank_response',
+        provider='voyage',
+        status=resp.status_code,
+        elapsed_ms=elapsed_ms,
+        n_items=len(items),
+        usage=data.get('usage'))
+    return [(int(d['index']), float(d['relevance_score'])) for d in items]

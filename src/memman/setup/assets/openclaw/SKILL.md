@@ -44,16 +44,18 @@ and source unless you override per-flag.
 
 ## Recalling what you know
 
-Default recall does LLM query expansion + vector + graph traversal:
+Recall: vector + graph traversal + cross-encoder reranker. Always pass
+`--rerank` for the highest-quality top-K. The reranker auto-skips on
+1-2 token queries.
 
 ```bash
-memman recall "<query>" --limit 10
+memman recall "<query>" --limit 10 --rerank
 ```
 
 Add `--intent WHY|WHEN|ENTITY` to bias the ranking when intent is
 unambiguous. Add `--cat` or `--source` to filter.
 
-Fast token-only lookup that skips LLM expansion:
+Fast token-only lookup that skips graph and reranking:
 
 ```bash
 memman recall "<keyword>" --basic
