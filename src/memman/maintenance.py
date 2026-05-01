@@ -124,7 +124,8 @@ def _run_per_store_maintenance(
         return
 
     try:
-        ctx.db._exec('PRAGMA incremental_vacuum(200)')
+        from memman.store.oplog import maintenance_step
+        maintenance_step(ctx.db)
     except Exception:
         logger.exception(
             f'maintenance: incremental_vacuum failed for {store_name!r}')

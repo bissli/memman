@@ -33,6 +33,17 @@ def log_op(db: 'DB', operation: str, insight_id: str,
         logger.warning('oplog trim failed: %s', e)
 
 
+def maintenance_step(db: 'DB') -> None:
+    """Run the per-store backend maintenance step.
+
+    SQLite: `PRAGMA incremental_vacuum(200)` to reclaim freelist space.
+    On a future Postgres backend this is a no-op (autovacuum handles
+    it). Replaces the inline `db._exec('PRAGMA ...')` at
+    `maintenance.py:127`.
+    """
+    db._exec('PRAGMA incremental_vacuum(200)')
+
+
 def trim_oplog_by_age(
         db: 'DB', retention_days: int = OPLOG_RETENTION_DAYS) -> int:
     """Delete oplog rows older than retention_days. Returns deleted count.

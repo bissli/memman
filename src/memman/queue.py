@@ -362,6 +362,18 @@ def purge_done(
     return cur.rowcount
 
 
+def purge_store(conn: sqlite3.Connection, store: str) -> int:
+    """Delete all queue rows for the named store. Returns deleted count.
+
+    Called from `memman store remove` so that removing a store also
+    drops its in-flight queue rows; otherwise stale rows survive the
+    rmtree and the worker re-attempts them against a missing data dir.
+    """
+    cur = conn.execute(
+        'DELETE FROM queue WHERE store = ?', (store,))
+    return cur.rowcount
+
+
 def purge_worker_runs(
         conn: sqlite3.Connection, keep_days: int = 7) -> int:
     """Drop worker_runs rows older than `keep_days`. Returns deleted count.

@@ -4,6 +4,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
 logger = logging.getLogger('memman')
 
@@ -59,7 +60,7 @@ class Edge:
     target_id: str = ''
     edge_type: str = 'semantic'
     weight: float = 0.5
-    metadata: dict[str, str] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc))
 

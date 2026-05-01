@@ -407,6 +407,44 @@ def test_store_remove_yes(runner):
     assert payload['store'] == 'temp'
 
 
+def test_store_remove_purges_queue(runner):
+    """Removing a store also drops its in-flight queue rows.
+
+    Latent bug regression test: before Phase 0 the `store remove`
+    flow rmtreed the data dir but left queue rows orphaned, so the
+    worker would re-attempt them against a missing store dir. The
+    fix is `queue.purge_store(name)` before `shutil.rmtree(sdir)`.
+    """
+    import json as _json
+    from memman.queue import open_queue_db, enqueue, list_rows
+    _, data_dir = runner
+    invoke(runner, ['store', 'create', 'doomed'])
+    qconn = open_queue_db(data_dir)
+    try:
+        enqueue(qconn, 'doomed', 'a fact to remember')
+        qconn.commit()
+        before = [
+            r for r in list_rows(qconn, limit=50)
+            if r['store'] == 'doomed']
+        assert len(before) == 1
+    finally:
+        qconn.close()
+    result = invoke(runner, ['store', 'remove', '--yes', 'doomed'])
+    assert result.exit_code == 0
+    payload = _json.loads(result.output)
+    assert payload['action'] == 'removed'
+    qconn = open_queue_db(data_dir)
+    try:
+        after = [
+            r for r in list_rows(qconn, limit=50)
+            if r['store'] == 'doomed']
+        assert after == [], (
+            f'expected queue rows for doomed store to be purged, '
+            f'got {len(after)} survivors')
+    finally:
+        qconn.close()
+
+
 def test_store_remove_prompts_without_yes(runner):
     """Without --yes, remove prompts; typing 'n' aborts."""
     r, data_dir = runner

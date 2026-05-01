@@ -827,22 +827,19 @@ def _process_queue_row(
         importance = 3
 
     db = ctx.db
+    from memman.store.node import has_active_with_source
+
     _trace.event(
         'process_row',
         row_id=row.id,
         store=row.store,
         store_dir=ctx.store_data_dir,
-        db_path=db.path,
         source=source,
         category=category,
         importance=importance)
 
     if row.hint_source is None:
-        already = db._query(
-            'SELECT 1 FROM insights WHERE source = ?'
-            ' AND deleted_at IS NULL LIMIT 1',
-            (source,)).fetchone()
-        if already is not None:
+        if has_active_with_source(db, source):
             logger.info(
                 f'queue row {row.id} already committed to store'
                 f' {row.store!r}; skipping re-processing')
@@ -1160,11 +1157,10 @@ def graph_link(ctx: click.Context, source_id: str, target_id: str,
             raise click.ClickException(
                 f'insight {target_id} not found')
 
-        existing = db._query(
-            'SELECT weight FROM edges'
-            ' WHERE source_id = ? AND target_id = ? AND edge_type = ?',
-            (source_id, target_id, edge_type)).fetchone()
-        existing_weight = existing[0] if existing else None
+        from memman.store.edge import get_edge_weight
+
+        existing_weight = get_edge_weight(
+            db, source_id, target_id, edge_type)
 
         def do_link() -> None:
             insert_edge(db, Edge(
@@ -1179,11 +1175,9 @@ def graph_link(ctx: click.Context, source_id: str, target_id: str,
                    f'{source_id} <-> {target_id} ({edge_type})')
 
         db.in_transaction(do_link)
-        actual = db._query(
-            'SELECT weight FROM edges'
-            ' WHERE source_id = ? AND target_id = ? AND edge_type = ?',
-            (source_id, target_id, edge_type)).fetchone()
-        actual_weight = actual[0] if actual else weight
+        actual_weight = (
+            get_edge_weight(db, source_id, target_id, edge_type)
+            or weight)
         out = {
             'status': 'linked',
             'source_id': source_id,
@@ -1615,6 +1609,12 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
         click.confirm(
             f'Delete store "{name}" and all data at {sdir}?',
             abort=True)
+    from memman.queue import open_queue_db, purge_store as queue_purge_store
+    qconn = open_queue_db(data_dir)
+    try:
+        queue_purge_store(qconn, name)
+    finally:
+        qconn.close()
     shutil.rmtree(sdir)
     _json_out({'action': 'removed', 'store': name})
 
@@ -1623,16 +1623,13 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
 @click.pass_context
 def status(ctx: click.Context) -> None:
     """Show database statistics."""
+    from memman.store.db import storage_summary
     from memman.store.node import get_stats
 
     db = _open_db(ctx)
     try:
         stats = get_stats(db)
-        stats['db_path'] = db.path
-        try:
-            stats['db_size_bytes'] = pathlib.Path(db.path).stat().st_size
-        except OSError:
-            stats['db_size_bytes'] = 0
+        stats.update(storage_summary(db))
         _json_out(stats)
     finally:
         db.close()
@@ -1651,10 +1648,11 @@ def doctor(ctx: click.Context, text_output: bool) -> None:
 
     db = _open_db_unchecked(ctx)
     try:
+        from memman.store.db import storage_summary
         result = run_all_checks(db, data_dir=ctx.obj['data_dir'])
         result['store'] = _resolve_store_name(
             ctx.obj['data_dir'], ctx.obj['store'])
-        result['db_path'] = db.path
+        result['db_path'] = storage_summary(db)['db_path']
         if text_output:
             _doctor_text_report(result)
         else:
@@ -2130,12 +2128,11 @@ def _count_active_rows(sdir: str) -> int:
     """Return the count of non-deleted insights in the given store.
     """
     from memman.store.db import open_read_only
+    from memman.store.node import count_active_insights
 
     db = open_read_only(sdir)
     try:
-        return db._query(
-            'SELECT COUNT(*) FROM insights WHERE deleted_at IS NULL'
-            ).fetchone()[0]
+        return count_active_insights(db)
     finally:
         db.close()
 
@@ -2176,14 +2173,10 @@ def _reembed_one_store(
         if bar is not None:
             bar.set_description(f'reembed {store_name}')
 
+        from memman.store.node import iter_for_reembed
+
         while True:
-            rows = db._query(
-                'SELECT id, content, embedding_model,'
-                ' LENGTH(embedding)'
-                ' FROM insights'
-                ' WHERE deleted_at IS NULL AND id > ?'
-                ' ORDER BY id LIMIT ?',
-                (cursor, _REEMBED_BATCH)).fetchall()
+            rows = iter_for_reembed(db, cursor, _REEMBED_BATCH)
             if not rows:
                 break
 

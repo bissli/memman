@@ -191,6 +191,63 @@ def count_low_weight_temporal_proximity(
     return row[0] if row else 0
 
 
+def get_edge_weight(
+        db: 'DB', source_id: str, target_id: str,
+        edge_type: str) -> float | None:
+    """Return the weight of one directed edge, or None if absent.
+
+    Used by the `memman link` CLI command for the
+    "what was the existing weight before / after my upsert" probe.
+    """
+    row = db._query(
+        'SELECT weight FROM edges'
+        ' WHERE source_id = ? AND target_id = ? AND edge_type = ?',
+        (source_id, target_id, edge_type)).fetchone()
+    return row[0] if row else None
+
+
+def count_dangling_by_type(db: 'DB') -> dict[str, int]:
+    """Return {edge_type: count} for edges referencing missing or deleted nodes.
+
+    Used by `doctor.check_dangling_edges`. Composing this from
+    `get_all_edges` + `get_active_insight_ids` is O(N) Python work on
+    SQLite and O(N) network round-trips on Postgres; the `NOT EXISTS`
+    subquery keeps the work inside the database.
+    """
+    rows = db._query(
+        'SELECT e.edge_type, COUNT(*) FROM edges e'
+        ' WHERE NOT EXISTS ('
+        '  SELECT 1 FROM insights i'
+        '  WHERE i.id = e.source_id AND i.deleted_at IS NULL'
+        ') OR NOT EXISTS ('
+        '  SELECT 1 FROM insights i'
+        '  WHERE i.id = e.target_id AND i.deleted_at IS NULL'
+        ') GROUP BY e.edge_type').fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def degree_distribution(db: 'DB') -> dict[str, int]:
+    """Return {insight_id: total_degree} for all active insights.
+
+    Active insights with zero degree are included with value 0.
+    Used by `doctor.check_edge_degree`.
+    """
+    id_rows = db._query(
+        'SELECT id FROM insights WHERE deleted_at IS NULL').fetchall()
+    if not id_rows:
+        return {}
+    degree_rows = db._query(
+        'SELECT id, SUM(cnt) AS degree FROM ('
+        '  SELECT source_id AS id, COUNT(*) AS cnt'
+        '  FROM edges GROUP BY source_id'
+        '  UNION ALL'
+        '  SELECT target_id AS id, COUNT(*) AS cnt'
+        '  FROM edges GROUP BY target_id'
+        ') GROUP BY id').fetchall()
+    by_id = {r[0]: r[1] for r in degree_rows}
+    return {r[0]: by_id.get(r[0], 0) for r in id_rows}
+
+
 def _scan_edge(row: tuple) -> Edge:
     """Parse a database row into an Edge dataclass."""
     e = Edge()

@@ -113,10 +113,11 @@ def seed_if_fresh(db: DB) -> bool:
     no fingerprint is corruption and must surface the existing hard
     error from `assert_consistent`, not a misleading missing-key one.
     """
+    from memman.store.node import count_total_insights
+
     if stored_fingerprint(db) is not None:
         return False
-    row = db._query('SELECT COUNT(*) FROM insights').fetchone()
-    if row and int(row[0]) > 0:
+    if count_total_insights(db) > 0:
         return False
     from memman.embed import get_client
     ec = get_client()

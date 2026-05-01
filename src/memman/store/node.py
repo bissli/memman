@@ -291,6 +291,84 @@ def count_active_insights(db: 'DB') -> int:
     return row[0]
 
 
+def count_total_insights(db: 'DB') -> int:
+    """Return the total number of insights (active + soft-deleted).
+
+    Distinct from `count_active_insights`: used by
+    `embed.fingerprint.seed_if_fresh` to detect a genuinely empty
+    store. A soft-deleted row is still data with provenance, so the
+    fingerprint must not be re-seeded against it.
+    """
+    row = db._query('SELECT COUNT(*) FROM insights').fetchone()
+    return row[0]
+
+
+def has_active_with_source(db: 'DB', source: str) -> bool:
+    """Return True if any active insight exists with the given source."""
+    row = db._query(
+        'SELECT 1 FROM insights WHERE source = ?'
+        ' AND deleted_at IS NULL LIMIT 1',
+        (source,)).fetchone()
+    return row is not None
+
+
+def iter_for_reembed(
+        db: 'DB', cursor: str, batch: int
+        ) -> list[tuple[str, str, str | None, int | None]]:
+    """Return a batch of insights for the reembed sweep.
+
+    Returns rows of (id, content, embedding_model, blob_length).
+    The blob length is SQLite-specific (LENGTH(BLOB)); on Postgres
+    the dimension is invariant from the column type and a future
+    Backend-aware version can omit it.
+    """
+    rows = db._query(
+        'SELECT id, content, embedding_model,'
+        ' LENGTH(embedding)'
+        ' FROM insights'
+        ' WHERE deleted_at IS NULL AND id > ?'
+        ' ORDER BY id LIMIT ?',
+        (cursor, batch)).fetchall()
+    return list(rows)
+
+
+def count_orphans(db: 'DB') -> tuple[int, int]:
+    """Return (orphan_count, total_active).
+
+    An orphan is an active insight with zero edges. Used by
+    `doctor.check_orphan_insights`. Composing this from
+    `get_active_insight_ids` + `get_all_edges` is O(N) Python work
+    on SQLite but O(N^2) on Postgres at scale; this helper keeps the
+    set-difference inside the database.
+    """
+    total = db._query(
+        'SELECT COUNT(*) FROM insights WHERE deleted_at IS NULL'
+        ).fetchone()[0]
+    orphan_count = db._query(
+        'SELECT COUNT(*) FROM insights i'
+        ' WHERE i.deleted_at IS NULL'
+        ' AND NOT EXISTS ('
+        '  SELECT 1 FROM edges e'
+        '  WHERE e.source_id = i.id OR e.target_id = i.id'
+        ')').fetchone()[0]
+    return orphan_count, total
+
+
+def provenance_distribution(
+        db: 'DB') -> list[tuple[str | None, str | None, int]]:
+    """Return (prompt_version, model_id, count) groups for active rows.
+
+    Used by `doctor.check_provenance_drift` to detect rows enriched
+    by older prompt versions or models. Sorted by count descending.
+    """
+    rows = db._query(
+        'SELECT prompt_version, model_id, COUNT(*) AS n'
+        ' FROM insights WHERE deleted_at IS NULL'
+        ' GROUP BY prompt_version, model_id'
+        ' ORDER BY n DESC').fetchall()
+    return [(r[0], r[1], r[2]) for r in rows]
+
+
 def auto_prune(db: 'DB', max_insights: int,
                exclude_ids: list[str] | None = None) -> int:
     """Soft-delete the lowest EI non-immune insights when over capacity."""

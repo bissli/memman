@@ -115,6 +115,22 @@ def get_meta(db: 'DB', key: str) -> str | None:
     return row[0] if row else None
 
 
+def storage_summary(db: 'DB') -> dict:
+    """Return backend-specific storage information for the active DB.
+
+    SQLite: {'db_path': <file path>, 'db_size_bytes': <int>}.
+    A future Postgres backend returns relation_size data or an empty
+    dict; the SQLite-specific keys are inappropriate. Used by the
+    `memman status` command.
+    """
+    summary: dict = {'db_path': db.path}
+    try:
+        summary['db_size_bytes'] = Path(db.path).stat().st_size
+    except OSError:
+        summary['db_size_bytes'] = 0
+    return summary
+
+
 def set_meta(db: 'DB', key: str, value: str) -> None:
     """Write a value to the meta key-value table."""
     db._exec(
