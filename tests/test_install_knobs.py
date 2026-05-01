@@ -19,18 +19,45 @@ def stub_resolver(monkeypatch):
     return calls
 
 
-def test_env_value_wins_over_file_and_default(
+@pytest.mark.no_default_env
+def test_file_value_wins_over_shell_env_at_install(
         tmp_path, monkeypatch, stub_resolver):
-    """os.environ takes precedence over the env file and INSTALL_DEFAULTS."""
+    """File values are sticky; shell env never overrides them on reinstall.
+
+    Install pulls from `os.environ` only as a one-time seed for keys
+    missing from the file. Once a value is in the file, a later shell
+    export with a different value cannot override it.
+    """
+    data_dir = tmp_path / 'memman'
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / config.ENV_FILENAME).write_text(
+        f'{config.OPENROUTER_API_KEY}=file-or-key\n'
+        f'{config.VOYAGE_API_KEY}=file-vy-key\n'
+        f'{config.LLM_MODEL_FAST}=file/haiku-pin\n'
+        f'{config.LLM_PROVIDER}=openrouter\n')
+    monkeypatch.setenv(config.DATA_DIR, str(data_dir))
+    monkeypatch.setenv(config.LLM_MODEL_FAST, 'env/haiku-OVERRIDE')
+    monkeypatch.setenv(config.OPENROUTER_API_KEY, 'env-or-OVERRIDE')
+    config.reset_file_cache()
+    knobs = config.collect_install_knobs(str(data_dir))
+    assert knobs[config.LLM_MODEL_FAST] == 'file/haiku-pin'
+    assert knobs[config.OPENROUTER_API_KEY] == 'file-or-key'
+
+
+@pytest.mark.no_default_env
+def test_shell_env_seeds_file_when_key_missing(
+        tmp_path, monkeypatch, stub_resolver):
+    """Shell env values fill blanks in the file at install time."""
     data_dir = str(tmp_path / 'memman')
     monkeypatch.setenv(config.DATA_DIR, data_dir)
-    monkeypatch.setenv(config.OPENROUTER_API_KEY, 'env-or-key')
-    monkeypatch.setenv(config.VOYAGE_API_KEY, 'env-vy-key')
-    monkeypatch.setenv(config.LLM_MODEL_FAST, 'env/haiku-pin')
+    monkeypatch.setenv(config.OPENROUTER_API_KEY, 'shell-or-key')
+    monkeypatch.setenv(config.VOYAGE_API_KEY, 'shell-vy-key')
+    monkeypatch.setenv(config.LLM_MODEL_FAST, 'shell/haiku-seed')
     config.reset_file_cache()
     knobs = config.collect_install_knobs(data_dir)
-    assert knobs[config.LLM_MODEL_FAST] == 'env/haiku-pin'
-    assert knobs[config.OPENROUTER_API_KEY] == 'env-or-key'
+    assert knobs[config.OPENROUTER_API_KEY] == 'shell-or-key'
+    assert knobs[config.VOYAGE_API_KEY] == 'shell-vy-key'
+    assert knobs[config.LLM_MODEL_FAST] == 'shell/haiku-seed'
 
 
 @pytest.mark.no_default_env
@@ -62,17 +89,18 @@ def test_file_value_wins_over_resolver_and_default(
 
 
 @pytest.mark.no_default_env
-def test_resolver_fires_when_neither_env_nor_file_set(
+def test_resolver_fires_when_file_lacks_model_keys(
         tmp_path, monkeypatch, stub_resolver):
-    """Resolver runs only when both env and file are empty."""
-    data_dir = str(tmp_path / 'memman')
-    monkeypatch.setenv(config.DATA_DIR, data_dir)
-    monkeypatch.setenv(config.OPENROUTER_API_KEY, 'or-key')
-    monkeypatch.setenv(config.VOYAGE_API_KEY, 'vy-key')
-    monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
-    monkeypatch.delenv(config.LLM_MODEL_SLOW_CANONICAL, raising=False)
+    """Resolver runs only when the env file has no value for a model key."""
+    data_dir = tmp_path / 'memman'
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / config.ENV_FILENAME).write_text(
+        f'{config.OPENROUTER_API_KEY}=or-key\n'
+        f'{config.VOYAGE_API_KEY}=vy-key\n'
+        f'{config.LLM_PROVIDER}=openrouter\n')
+    monkeypatch.setenv(config.DATA_DIR, str(data_dir))
     config.reset_file_cache()
-    knobs = config.collect_install_knobs(data_dir)
+    knobs = config.collect_install_knobs(str(data_dir))
     families = [c[2] for c in stub_resolver]
     assert 'haiku' in families
     assert 'sonnet' in families
@@ -84,23 +112,24 @@ def test_resolver_fires_when_neither_env_nor_file_set(
 def test_resolver_none_falls_back_to_install_defaults(
         tmp_path, monkeypatch):
     """When the resolver returns None, INSTALL_DEFAULTS is used."""
-    data_dir = str(tmp_path / 'memman')
-    monkeypatch.setenv(config.DATA_DIR, data_dir)
-    monkeypatch.setenv(config.OPENROUTER_API_KEY, 'or-key')
-    monkeypatch.setenv(config.VOYAGE_API_KEY, 'vy-key')
-    monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
+    data_dir = tmp_path / 'memman'
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / config.ENV_FILENAME).write_text(
+        f'{config.OPENROUTER_API_KEY}=or-key\n'
+        f'{config.VOYAGE_API_KEY}=vy-key\n')
+    monkeypatch.setenv(config.DATA_DIR, str(data_dir))
     monkeypatch.setattr(
         'memman.llm.openrouter_models.resolve_latest_in_family',
         lambda *a, **k: None)
     config.reset_file_cache()
-    knobs = config.collect_install_knobs(data_dir)
+    knobs = config.collect_install_knobs(str(data_dir))
     assert knobs[config.LLM_MODEL_FAST] == \
         config.INSTALL_DEFAULTS[config.LLM_MODEL_FAST]
 
 
 @pytest.mark.no_default_env
 def test_missing_mandatory_secret_raises(tmp_path, monkeypatch):
-    """ConfigError is raised when a mandatory secret has no value."""
+    """ConfigError is raised when a mandatory secret is in neither file nor env."""
     data_dir = str(tmp_path / 'memman')
     monkeypatch.setenv(config.DATA_DIR, data_dir)
     monkeypatch.delenv(config.OPENROUTER_API_KEY, raising=False)

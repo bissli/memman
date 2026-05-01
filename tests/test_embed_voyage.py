@@ -39,17 +39,17 @@ class TestClientInit:
         client = Client()
         assert client.model == DEFAULT_MODEL
 
-    def test_api_key_from_env(self, monkeypatch):
-        """Client reads VOYAGE_API_KEY from environment."""
-        monkeypatch.setenv('VOYAGE_API_KEY', 'real-test-key')
+    def test_api_key_from_env_file(self, env_file):
+        """Client reads VOYAGE_API_KEY from the env file."""
+        env_file('VOYAGE_API_KEY', 'real-test-key')
         client = Client()
         assert client._api_key == 'real-test-key'
 
     @pytest.mark.no_default_env
-    def test_missing_api_key_raises(self, monkeypatch):
-        """Client raises ConfigError when VOYAGE_API_KEY is unset."""
+    def test_missing_api_key_raises(self, env_file):
+        """Client raises ConfigError when VOYAGE_API_KEY is absent from file."""
         from memman.exceptions import ConfigError
-        monkeypatch.delenv('VOYAGE_API_KEY', raising=False)
+        env_file('VOYAGE_API_KEY', None)
         with pytest.raises(ConfigError, match='VOYAGE_API_KEY'):
             Client()
 
@@ -58,10 +58,10 @@ class TestAvailable:
     """Availability check behavior."""
 
     @pytest.mark.no_default_env
-    def test_no_key_raises_at_construction(self, monkeypatch):
+    def test_no_key_raises_at_construction(self, env_file):
         """Construction raises before available() can be called."""
         from memman.exceptions import ConfigError
-        monkeypatch.delenv('VOYAGE_API_KEY', raising=False)
+        env_file('VOYAGE_API_KEY', None)
         with pytest.raises(ConfigError):
             Client()
 
@@ -143,9 +143,9 @@ class TestEmbed:
 class TestHeaders:
     """Request header construction."""
 
-    def test_bearer_token(self, monkeypatch):
+    def test_bearer_token(self, env_file):
         """Authorization header uses Bearer token."""
-        monkeypatch.setenv('VOYAGE_API_KEY', 'my-key')
+        env_file('VOYAGE_API_KEY', 'my-key')
         client = Client()
         headers = client._headers()
         assert headers['Authorization'] == 'Bearer my-key'

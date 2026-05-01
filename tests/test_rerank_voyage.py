@@ -19,10 +19,10 @@ class TestProviderRegistry:
         client = get_client()
         assert client.name == 'voyage'
 
-    def test_get_client_unknown_provider_raises(self, monkeypatch):
+    def test_get_client_unknown_provider_raises(self, env_file):
         """Unknown provider name surfaces as ConfigError."""
         from memman.exceptions import ConfigError
-        monkeypatch.setenv('MEMMAN_RERANK_PROVIDER', 'nosuch')
+        env_file('MEMMAN_RERANK_PROVIDER', 'nosuch')
         with pytest.raises(ConfigError, match='nosuch'):
             get_client()
 
@@ -45,10 +45,9 @@ class TestVoyageClient:
         client = voyage.Client()
         assert client.model == voyage.DEFAULT_MODEL == 'rerank-2.5-lite'
 
-    def test_configured_model_overrides(self, monkeypatch):
+    def test_configured_model_overrides(self, env_file):
         """MEMMAN_VOYAGE_RERANK_MODEL overrides the default."""
-        monkeypatch.setenv('VOYAGE_API_KEY', 'rk-2')
-        monkeypatch.setenv('MEMMAN_VOYAGE_RERANK_MODEL', 'rerank-2.5')
+        env_file('MEMMAN_VOYAGE_RERANK_MODEL', 'rerank-2.5')
         client = voyage.Client()
         assert client.model == 'rerank-2.5'
 

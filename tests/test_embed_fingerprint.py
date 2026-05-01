@@ -43,10 +43,10 @@ def _seed_row_with_embedding(db, *, id: str, content: str = 'x',
 # ----- Registry --------------------------------------------------
 
 
-def test_embed_registry_unknown_provider(monkeypatch):
+def test_embed_registry_unknown_provider(env_file):
     """Unknown MEMMAN_EMBED_PROVIDER raises ConfigError.
     """
-    monkeypatch.setenv('MEMMAN_EMBED_PROVIDER', 'bogus')
+    env_file('MEMMAN_EMBED_PROVIDER', 'bogus')
     from memman.embed import get_client
     with pytest.raises(ConfigError) as excinfo:
         get_client()
@@ -354,7 +354,7 @@ def test_recall_blocks_on_corrupted_store(tmp_path):
 
 
 def test_reembed_converges_after_provider_swap(
-        tmp_path, _scheduler_stopped, monkeypatch):
+        tmp_path, _scheduler_stopped, monkeypatch, env_file):
     """Swap to a stub provider with a different dim, run reembed,
     assert all rows are re-embedded and the fingerprint advances.
     """
@@ -385,7 +385,7 @@ def test_reembed_converges_after_provider_swap(
     from memman import embed as embed_mod
     monkeypatch.setitem(
         embed_mod.PROVIDERS, 'stub', _StubClient)
-    monkeypatch.setenv('MEMMAN_EMBED_PROVIDER', 'stub')
+    env_file('MEMMAN_EMBED_PROVIDER', 'stub')
 
     result = _invoke([
         '--data-dir', str(tmp_path), 'embed', 'reembed'])
@@ -601,7 +601,7 @@ def test_reembed_idempotent_on_repeat(tmp_path, _scheduler_stopped):
 
 
 def test_reembed_blocks_when_provider_unavailable(
-        tmp_path, _scheduler_stopped, monkeypatch):
+        tmp_path, _scheduler_stopped, monkeypatch, env_file):
     """If the active client's available() returns False, reembed
     refuses to run with the unavailable_message().
     """
@@ -622,7 +622,7 @@ def test_reembed_blocks_when_provider_unavailable(
     from memman import embed as embed_mod
     monkeypatch.setitem(
         embed_mod.PROVIDERS, 'fake', _UnavailableClient)
-    monkeypatch.setenv('MEMMAN_EMBED_PROVIDER', 'fake')
+    env_file('MEMMAN_EMBED_PROVIDER', 'fake')
 
     result = _invoke([
         '--data-dir', str(tmp_path), 'embed', 'reembed'])

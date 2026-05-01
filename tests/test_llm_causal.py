@@ -173,12 +173,12 @@ class TestLLMCausalInference:
         assert result == []
         mock_client.complete.assert_called_once()
 
-    def test_missing_provider_key_raises(self, monkeypatch):
+    def test_missing_provider_key_raises(self, env_file):
         """Without OPENROUTER_API_KEY set, get_llm_client raises ConfigError."""
         from memman.exceptions import ConfigError
         from memman.llm.client import reset_role_cache
-        monkeypatch.delenv('MEMMAN_LLM_PROVIDER', raising=False)
-        monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
+        env_file('MEMMAN_LLM_PROVIDER', None)
+        env_file('OPENROUTER_API_KEY', None)
         reset_role_cache()
         with pytest.raises(ConfigError):
             get_llm_client('slow_canonical')

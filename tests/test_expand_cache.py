@@ -19,10 +19,10 @@ def _clean_cache():
     reset_expand_cache()
 
 
-def test_repeated_query_hits_cache(monkeypatch):
+def test_repeated_query_hits_cache(env_file):
     """The second call with the same query does not invoke the LLM.
     """
-    monkeypatch.setenv('MEMMAN_LLM_MODEL_FAST', 'model-x')
+    env_file('MEMMAN_LLM_MODEL_FAST', 'model-x')
     client = MagicMock()
     client.complete.return_value = (
         '{"expanded_query": "alpha beta", "keywords": ["alpha"],'
@@ -35,7 +35,7 @@ def test_repeated_query_hits_cache(monkeypatch):
     assert client.complete.call_count == 1
 
 
-def test_changing_model_invalidates_cache(monkeypatch):
+def test_changing_model_invalidates_cache(env_file):
     """Switching MEMMAN_LLM_MODEL_FAST yields a fresh LLM call.
     """
     client = MagicMock()
@@ -43,18 +43,18 @@ def test_changing_model_invalidates_cache(monkeypatch):
         '{"expanded_query": "x", "keywords": [], "entities": [],'
         ' "intent": "GENERAL"}')
 
-    monkeypatch.setenv('MEMMAN_LLM_MODEL_FAST', 'fast-A')
+    env_file('MEMMAN_LLM_MODEL_FAST', 'fast-A')
     expand_query(client, 'foo')
-    monkeypatch.setenv('MEMMAN_LLM_MODEL_FAST', 'fast-B')
+    env_file('MEMMAN_LLM_MODEL_FAST', 'fast-B')
     expand_query(client, 'foo')
 
     assert client.complete.call_count == 2
 
 
-def test_normalized_query_collapses(monkeypatch):
+def test_normalized_query_collapses(env_file):
     """Whitespace-only and case differences collapse to one cache entry.
     """
-    monkeypatch.setenv('MEMMAN_LLM_MODEL_FAST', 'm')
+    env_file('MEMMAN_LLM_MODEL_FAST', 'm')
     client = MagicMock()
     client.complete.return_value = (
         '{"expanded_query": "ok", "keywords": [], "entities": [],'
@@ -67,7 +67,7 @@ def test_normalized_query_collapses(monkeypatch):
     assert client.complete.call_count == 1
 
 
-def test_cache_key_does_not_resolve_model(monkeypatch):
+def test_cache_key_does_not_resolve_model(env_file):
     """Cache keying reads MEMMAN_LLM_MODEL_FAST directly, not the client.
 
     Historically `client.model` was a lazy property that would fetch a
@@ -75,7 +75,7 @@ def test_cache_key_does_not_resolve_model(monkeypatch):
     speed. The lazy property is gone (model is required at construction
     now) but the cache-key contract still uses the env var directly.
     """
-    monkeypatch.setenv('MEMMAN_LLM_MODEL_FAST', 'safe-key')
+    env_file('MEMMAN_LLM_MODEL_FAST', 'safe-key')
     client = MagicMock()
     type(client).model = property(
         lambda self: (_ for _ in ()).throw(
@@ -88,13 +88,13 @@ def test_cache_key_does_not_resolve_model(monkeypatch):
     expand_query(client, 'sample')
 
 
-def test_cache_failure_is_not_cached(monkeypatch):
+def test_cache_failure_is_not_cached(env_file):
     """LLM errors return a passthrough but are not cached.
 
     Caching errors would freeze a transient outage into permanent bad
     state for the rest of the process.
     """
-    monkeypatch.setenv('MEMMAN_LLM_MODEL_FAST', 'm')
+    env_file('MEMMAN_LLM_MODEL_FAST', 'm')
     client = MagicMock()
     client.complete.side_effect = [
         RuntimeError('transient'),

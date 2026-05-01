@@ -70,18 +70,66 @@ def _isolate_env(tmp_path, monkeypatch, request):
     config.reset_file_cache()
 
 
+_TEST_MOCK_SECRETS = {
+    'OPENROUTER_API_KEY': 'mock-key-for-testing',
+    'VOYAGE_API_KEY': 'mock-voyage-key-for-testing',
+    }
+
+
+def _set_env_file_value(key: str, value: str | None) -> None:
+    """Write or remove a key in the active test env file.
+
+    Replacement for `monkeypatch.setenv` for installable keys -- the
+    runtime resolver no longer reads `os.environ`, so tests must mutate
+    the env file directly. Pass `value=None` to remove the key.
+    """
+    import os
+
+    from memman import config
+    data_dir = os.environ.get(config.DATA_DIR)
+    if not data_dir:
+        raise RuntimeError(
+            '_set_env_file_value requires MEMMAN_DATA_DIR;'
+            ' invoke from a test that uses the _isolate_env fixture')
+    path = config.env_file_path(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = config.parse_env_file(path) if path.exists() else {}
+    if value is None:
+        rows.pop(key, None)
+    else:
+        rows[key] = value
+    contents = '\n'.join(f'{k}={v}' for k, v in rows.items()) + '\n'
+    path.write_text(contents)
+    config.reset_file_cache()
+
+
+@pytest.fixture
+def env_file():
+    """Yield a callable that writes/removes keys in the test env file.
+
+    Usage: `env_file('MEMMAN_LLM_MODEL_FAST', 'foo')` writes the row;
+    `env_file('MEMMAN_LLM_MODEL_FAST', None)` removes it. Cache is
+    auto-reset; the autouse `_isolate_env` fixture handles cleanup.
+    """
+    return _set_env_file_value
+
+
 def _write_default_env_file(data_dir):
     """Seed `<data_dir>/env` with `INSTALL_DEFAULTS` for tests.
 
     Mirrors a post-install state so runtime call sites (which use
-    `config.require`) resolve cleanly. Tests that need the broken
-    state opt out via `@pytest.mark.no_default_env`.
+    `config.require`) resolve cleanly. Also seeds mock API key values
+    for `OPENROUTER_API_KEY` and `VOYAGE_API_KEY` since the runtime
+    resolver no longer consults `os.environ` -- the keys must live in
+    the env file. Tests that need the broken state opt out via
+    `@pytest.mark.no_default_env`.
     """
     from memman import config
     data_dir.mkdir(parents=True, exist_ok=True)
     path = data_dir / config.ENV_FILENAME
-    contents = '\n'.join(
-        f'{k}={v}' for k, v in config.INSTALL_DEFAULTS.items()) + '\n'
+    rows = list(config.INSTALL_DEFAULTS.items()) + list(
+        _TEST_MOCK_SECRETS.items())
+    contents = '\n'.join(f'{k}={v}' for k, v in rows) + '\n'
     path.write_text(contents)
     path.chmod(0o600)
     config.reset_file_cache()
@@ -265,8 +313,8 @@ def _mock_apis(request, monkeypatch):
         'memman.embed.voyage.Client.embed_batch', _mock_embed_batch)
     monkeypatch.setattr(
         'memman.embed.voyage.Client.available', lambda self: True)
-    monkeypatch.setenv('OPENROUTER_API_KEY', 'mock-key-for-testing')
-    monkeypatch.setenv('VOYAGE_API_KEY', 'mock-voyage-key-for-testing')
+    from memman import config
+    config.reset_file_cache()
     from memman.llm import client as llm_client_mod
     from memman.llm import extract as llm_extract_mod
     llm_client_mod.reset_role_cache()

@@ -2,8 +2,8 @@
 
 Default off. Two ways to enable:
 
-1. Set `MEMMAN_DEBUG` to a truthy value (`1`, `true`, `yes`, `on`) for
-   the current invocation only.
+1. Export `MEMMAN_DEBUG=1` in the current shell. `MEMMAN_DEBUG` is a
+   process-control variable -- the env file is never consulted for it.
 2. Run `memman scheduler debug on` to flip the persistent toggle in
    `~/.memman/debug.state`. Affects future scheduler-fired drains and
    any CLI invocation in a shell that has not exported MEMMAN_DEBUG.
@@ -25,6 +25,7 @@ verbatim -- this is deliberate per the feature's explicit design.
 import json
 import logging
 import logging.handlers
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -42,14 +43,14 @@ REDACT_VALUE = '***REDACTED***'
 def is_enabled() -> bool:
     """Return True when trace mode is on.
 
-    `MEMMAN_DEBUG` resolves through the standard env -> file chain
-    (`os.environ` first, then `<MEMMAN_DATA_DIR>/env`). Truthy values
-    enable; anything else explicitly disables. When `MEMMAN_DEBUG` is
-    unset in both layers, fall back to `~/.memman/debug.state` written
-    by `memman scheduler debug on`.
+    `MEMMAN_DEBUG` is a process-control var read directly from
+    `os.environ` -- it is never persisted to the env file. A truthy
+    value enables trace; anything else explicitly disables. When the
+    env var is unset, fall back to `~/.memman/debug.state` written by
+    `memman scheduler debug on`.
     """
-    raw = config.get(config.DEBUG)
-    if raw is not None:
+    raw = os.environ.get(config.DEBUG)
+    if raw is not None and raw != '':
         return raw.strip().lower() in config.TRUTHY
     from memman.setup.scheduler import get_debug
     return get_debug()

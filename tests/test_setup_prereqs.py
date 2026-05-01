@@ -9,11 +9,21 @@ from memman.cli import cli
 from memman.setup import claude as setup_claude
 
 
-@pytest.fixture(autouse=True)
-def _no_api_keys(monkeypatch):
-    """Start each test with no API keys exported."""
-    monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
-    monkeypatch.delenv('VOYAGE_API_KEY', raising=False)
+def _write_keys(data_dir: str | Path,
+                openrouter: str | None = None,
+                voyage: str | None = None) -> None:
+    """Seed the env file at data_dir with selected mandatory secrets."""
+    from memman import config
+    p = Path(data_dir)
+    p.mkdir(parents=True, exist_ok=True)
+    rows = []
+    if openrouter is not None:
+        rows.append(f'OPENROUTER_API_KEY={openrouter}')
+    if voyage is not None:
+        rows.append(f'VOYAGE_API_KEY={voyage}')
+    if rows:
+        (p / config.ENV_FILENAME).write_text('\n'.join(rows) + '\n')
+    config.reset_file_cache()
 
 
 @pytest.fixture
@@ -24,19 +34,18 @@ def all_prereqs_ok(monkeypatch):
                         lambda: '/fake/bin/memman')
 
 
-def test_unsupported_platform_fails_loud(monkeypatch):
+def test_unsupported_platform_fails_loud(monkeypatch, tmp_path):
     """run_install raises when no scheduler platform is detected.
     """
     monkeypatch.setattr(setup_claude, 'detect_scheduler', lambda: '')
     monkeypatch.setattr(setup_claude, 'memman_binary_path',
                         lambda: '/fake/bin/memman')
-    monkeypatch.setenv('OPENROUTER_API_KEY', 'x')
-    monkeypatch.setenv('VOYAGE_API_KEY', 'y')
+    _write_keys(tmp_path, openrouter='x', voyage='y')
     with pytest.raises(click.ClickException, match='unsupported platform'):
-        setup_claude.run_install(data_dir='/tmp/x')
+        setup_claude.run_install(data_dir=str(tmp_path))
 
 
-def test_missing_memman_binary_fails_loud(monkeypatch):
+def test_missing_memman_binary_fails_loud(monkeypatch, tmp_path):
     """run_install raises when the memman binary is not on PATH.
     """
     monkeypatch.setattr(setup_claude, 'detect_scheduler', lambda: 'systemd')
@@ -45,26 +54,25 @@ def test_missing_memman_binary_fails_loud(monkeypatch):
         raise RuntimeError('memman binary not on PATH')
 
     monkeypatch.setattr(setup_claude, 'memman_binary_path', _not_found)
-    monkeypatch.setenv('OPENROUTER_API_KEY', 'x')
-    monkeypatch.setenv('VOYAGE_API_KEY', 'y')
+    _write_keys(tmp_path, openrouter='x', voyage='y')
     with pytest.raises(click.ClickException, match='memman binary'):
-        setup_claude.run_install(data_dir='/tmp/x')
+        setup_claude.run_install(data_dir=str(tmp_path))
 
 
-def test_missing_openrouter_key_fails_loud(all_prereqs_ok, monkeypatch):
-    """run_install raises when OPENROUTER_API_KEY is unset.
+def test_missing_openrouter_key_fails_loud(all_prereqs_ok, tmp_path):
+    """run_install raises when OPENROUTER_API_KEY is absent from the env file.
     """
-    monkeypatch.setenv('VOYAGE_API_KEY', 'y')
+    _write_keys(tmp_path, voyage='y')
     with pytest.raises(click.ClickException, match='OPENROUTER_API_KEY'):
-        setup_claude.run_install(data_dir='/tmp/x')
+        setup_claude.run_install(data_dir=str(tmp_path))
 
 
-def test_missing_voyage_key_fails_loud(all_prereqs_ok, monkeypatch):
-    """run_install raises when VOYAGE_API_KEY is unset.
+def test_missing_voyage_key_fails_loud(all_prereqs_ok, tmp_path):
+    """run_install raises when VOYAGE_API_KEY is absent from the env file.
     """
-    monkeypatch.setenv('OPENROUTER_API_KEY', 'x')
+    _write_keys(tmp_path, openrouter='x')
     with pytest.raises(click.ClickException, match='VOYAGE_API_KEY'):
-        setup_claude.run_install(data_dir='/tmp/x')
+        setup_claude.run_install(data_dir=str(tmp_path))
 
 
 def test_uninstall_skips_prereq_checks(monkeypatch, tmp_path):
@@ -78,13 +86,12 @@ def test_uninstall_skips_prereq_checks(monkeypatch, tmp_path):
     setup_claude.run_uninstall(data_dir=str(tmp_path))
 
 
-def test_invalid_target_fails_loud(monkeypatch):
+def test_invalid_target_fails_loud(monkeypatch, tmp_path):
     """run_install raises on an unknown --target value.
     """
-    monkeypatch.setenv('OPENROUTER_API_KEY', 'x')
-    monkeypatch.setenv('VOYAGE_API_KEY', 'y')
+    _write_keys(tmp_path, openrouter='x', voyage='y')
     with pytest.raises(click.ClickException, match='invalid target'):
-        setup_claude.run_install(data_dir='/tmp/x', target='bogus')
+        setup_claude.run_install(data_dir=str(tmp_path), target='bogus')
 
 
 def test_prereq_failure_writes_nothing_to_filesystem(

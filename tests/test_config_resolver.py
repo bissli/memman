@@ -21,27 +21,29 @@ def write_env(path: Path, contents: str) -> None:
     config.reset_file_cache()
 
 
-def test_get_returns_env_value_when_set(env_file, monkeypatch):
+def test_get_ignores_shell_env_for_installable_keys(env_file, monkeypatch):
+    """Installable keys are file-canonical; shell env never overrides."""
     monkeypatch.setenv(config.LLM_MODEL_FAST, 'env-model')
     write_env(env_file, f'{config.LLM_MODEL_FAST}=file-model\n')
-    assert config.get(config.LLM_MODEL_FAST) == 'env-model'
+    assert config.get(config.LLM_MODEL_FAST) == 'file-model'
 
 
-def test_get_returns_file_value_when_env_unset(env_file, monkeypatch):
+def test_get_returns_file_value(env_file, monkeypatch):
     monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
     write_env(env_file, f'{config.LLM_MODEL_FAST}=file-model\n')
     assert config.get(config.LLM_MODEL_FAST) == 'file-model'
 
 
-def test_get_returns_none_when_both_unset(env_file, monkeypatch):
+def test_get_returns_none_when_file_missing_key(env_file, monkeypatch):
     monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
     assert config.get(config.LLM_MODEL_FAST) is None
 
 
-def test_get_treats_empty_env_as_unset(env_file, monkeypatch):
-    monkeypatch.setenv(config.LLM_MODEL_FAST, '')
-    write_env(env_file, f'{config.LLM_MODEL_FAST}=file-model\n')
-    assert config.get(config.LLM_MODEL_FAST) == 'file-model'
+def test_get_returns_none_when_shell_env_set_but_file_missing(
+        env_file, monkeypatch):
+    """Shell-only value is invisible -- file is the only source."""
+    monkeypatch.setenv(config.LLM_MODEL_FAST, 'env-only')
+    assert config.get(config.LLM_MODEL_FAST) is None
 
 
 def test_parser_skips_blank_lines_and_comments(env_file):
@@ -99,23 +101,26 @@ def test_data_dir_change_invalidates_cache(tmp_path, monkeypatch):
     assert config.get(config.LLM_MODEL_FAST) == 'from-b'
 
 
-def test_get_bool_resolves_through_chain(env_file, monkeypatch):
-    monkeypatch.delenv(config.DEBUG, raising=False)
-    write_env(env_file, f'{config.DEBUG}=on\n')
-    assert config.get_bool(config.DEBUG) is True
+def test_get_bool_resolves_through_file(env_file, monkeypatch):
+    monkeypatch.delenv(config.LOG_LEVEL, raising=False)
+    write_env(env_file, f'{config.LOG_LEVEL}=on\n')
+    assert config.get_bool(config.LOG_LEVEL) is True
 
 
-def test_get_bool_env_overrides_file(env_file, monkeypatch):
-    monkeypatch.setenv(config.DEBUG, 'off')
-    write_env(env_file, f'{config.DEBUG}=on\n')
-    assert config.get_bool(config.DEBUG) is False
+def test_get_bool_ignores_shell_env_for_installable_key(
+        env_file, monkeypatch):
+    """get_bool() reads file only for installable keys."""
+    monkeypatch.setenv(config.LOG_LEVEL, 'on')
+    write_env(env_file, f'{config.LOG_LEVEL}=off\n')
+    assert config.get_bool(config.LOG_LEVEL) is False
 
 
-def test_effective_source_reports_layer(env_file, monkeypatch):
+def test_effective_source_reports_file_only_for_installable(
+        env_file, monkeypatch):
+    """Installable keys report 'file' or 'unset'; shell env is invisible."""
     monkeypatch.setenv(config.LLM_MODEL_FAST, 'env-val')
-    assert config.effective_source(config.LLM_MODEL_FAST) == 'env'
+    assert config.effective_source(config.LLM_MODEL_FAST) == 'unset'
 
-    monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
     write_env(env_file, f'{config.LLM_MODEL_FAST}=file-val\n')
     assert config.effective_source(config.LLM_MODEL_FAST) == 'file'
 
@@ -123,8 +128,17 @@ def test_effective_source_reports_layer(env_file, monkeypatch):
     assert config.effective_source(config.LLM_MODEL_FAST) == 'unset'
 
 
+def test_effective_source_reports_env_for_process_control(
+        env_file, monkeypatch):
+    """Process-control vars (DEBUG, WORKER) read os.environ directly."""
+    monkeypatch.setenv(config.DEBUG, '1')
+    assert config.effective_source(config.DEBUG) == 'env'
+    monkeypatch.delenv(config.DEBUG, raising=False)
+    assert config.effective_source(config.DEBUG) == 'unset'
+
+
 def test_enumerate_effective_config_redacts_secrets(env_file, monkeypatch):
-    monkeypatch.setenv(config.OPENROUTER_API_KEY, 'super-secret')
+    write_env(env_file, f'{config.OPENROUTER_API_KEY}=super-secret\n')
     out = config.enumerate_effective_config(redact=True)
     assert out[config.OPENROUTER_API_KEY] == '***REDACTED***'
 

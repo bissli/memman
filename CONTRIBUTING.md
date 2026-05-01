@@ -14,14 +14,11 @@ The project uses Poetry; run commands via `poetry run <cmd>` or inside `poetry s
 
 ## Configuration
 
-memman resolves env vars in two layers at runtime:
+memman resolves env vars from a single canonical source at runtime: `<MEMMAN_DATA_DIR>/env`, a `KEY=VALUE` file at mode 0600 (default `~/.memman/env`). Shell environment variables are NOT consulted at runtime for installable settings, so a stale shell export cannot silently override the file. There is no code-default fallback at runtime. Defaults live in `config.INSTALL_DEFAULTS` and are consumed only by `memman install`, which writes them to the env file when the file lacks a value. If a key is missing from the file, the resolver returns `None` and the caller raises a `ConfigError` with "run `memman install`" guidance.
 
-1. `os.environ` — wins when set (shell rc, direnv export, transient overrides).
-2. `<MEMMAN_DATA_DIR>/env` — `KEY=VALUE` file at mode 0600, default `~/.memman/env`.
+`memman install` performs a one-time pull from the current shell into the env file. Precedence per key: existing file value > `os.environ` > OpenRouter `/models` resolver (FAST/SLOW only) > `INSTALL_DEFAULTS`. Existing file values are sticky -- a later shell export never overrides them on reinstall, so there is no override path; the shell only seeds blanks. Mandatory secrets (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`) must be present in either the file or the shell when install runs, otherwise install fails loud. After install, interactive `memman recall`, `memman doctor`, and the scheduler-driven worker all read from the file; the keys never need to be re-exported in subsequent shells.
 
-There is no third-tier code default at runtime. Defaults live in `config.INSTALL_DEFAULTS` and are consumed only by `memman install`, which writes them (or your exported overrides) to the env file. If a key is missing from both env and file, the resolver returns `None` and the caller raises a `ConfigError` with "run `memman install`" guidance.
-
-`memman install` snapshots every `INSTALLABLE_KEYS` value: prefer `os.environ`, else `INSTALL_DEFAULTS`. For OpenRouter, it queries `/models` once to pick the actual current latest haiku/sonnet rather than persisting a version that ages. After install, the keys do not need to be exported in every shell — interactive `memman recall`, `memman doctor`, and the scheduler-driven worker all read from the file. Per-project overrides are via direnv (or any tool that exports `KEY=VALUE` before invoking memman); memman itself does not parse a project-local file.
+Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`) are read directly from `os.environ` by their owners -- they are deliberately excluded from the env-file model.
 
 `memman uninstall` strips the secret keys (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`) from the env file but keeps non-secret settings, so a later `memman install` resurrects model/provider preferences without re-export.
 

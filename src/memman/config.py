@@ -4,21 +4,31 @@ This module owns the canonical list of environment variables memman
 reads. Every env var name is a module-level constant so call sites
 import the name rather than repeating the literal string.
 
-Two-layer resolution for user-config vars:
+Runtime resolution: the env file at `<MEMMAN_DATA_DIR>/env`
+(default `~/.memman/env`) is the canonical, global source of truth
+for all `INSTALLABLE_KEYS`. Shell environment variables are NOT
+consulted at runtime for installable keys -- this prevents stale
+shell exports from silently overriding values the user committed
+via `memman install`.
 
-1. `os.environ[name]` — wins if set (shell rc, direnv, transient
-   overrides set via `os.environ[...] = ...`).
-2. `<MEMMAN_DATA_DIR>/env` — parsed once per process, dict-cached.
-   Default data dir is `~/.memman`.
-
-`config.get(name)` and `config.get_bool(name)` apply this resolution.
-There is no third-tier code-default fallback at runtime; if both env
-and file are unset, `get` returns `None` and the caller crashes with
-a meaningful error. `INSTALL_DEFAULTS` exists ONLY for install-time
+`config.get(name)` and `config.get_bool(name)` read the env file only.
+There is no fallback to `os.environ` and no code-default fallback at
+runtime; if the file lacks the key, `get` returns `None` and `require`
+raises `ConfigError`. `INSTALL_DEFAULTS` exists only for install-time
 file population.
 
-Process-control vars (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`,
-`MEMMAN_SCHEDULER_KIND`, `MEMMAN_DEBUG`) bypass the file layer entirely.
+Install-time resolution (one-time seed): `collect_install_knobs`
+fills the env file using the precedence
+`file > os.environ > OpenRouter resolver > INSTALL_DEFAULTS`. Shell
+environment variables are read at install time only as a seed for
+keys missing from the file -- existing file values are sticky and
+never overridden by a later shell export.
+
+Process-control vars (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`,
+`MEMMAN_WORKER`, `MEMMAN_SCHEDULER_KIND`, `MEMMAN_DEBUG`) are NOT
+installable, never written to the env file, and are read directly
+from `os.environ` by their owners (`is_worker`, `trace.is_enabled`,
+etc.). They do not flow through `get()`.
 
 `INSTALLABLE_KEYS` is the single source of truth for what `memman
 install` persists to `~/.memman/env`. Adding a new global knob is
@@ -178,17 +188,15 @@ def reset_file_cache() -> None:
 def get(name: str) -> str | None:
     """Return the resolved value for env var `name`.
 
-    Resolution order: `os.environ` first, then `<MEMMAN_DATA_DIR>/env`.
-    Returns `None` when both layers are unset. Empty strings are
-    treated as "not set" so the file fallback can supply a value.
+    Reads from `<MEMMAN_DATA_DIR>/env` only. Shell environment is
+    never consulted; the env file is the canonical, global source of
+    truth for installable settings. Empty strings are treated as
+    "not set." Returns `None` when the file lacks the key.
 
-    No code-default fallback at runtime — all defaults live in
-    `INSTALL_DEFAULTS` and are written to the file at install time.
-    Callers that require a value should use `require()` instead.
+    Process-control vars (`DATA_DIR`, `STORE`, `WORKER`, `DEBUG`) are
+    never persisted to the file; their owners read `os.environ`
+    directly and must not call `get()` for them.
     """
-    raw = os.environ.get(name)
-    if raw is not None and raw != '':
-        return raw
     file_value = _load_file_cache().get(name)
     if file_value is not None and file_value != '':
         return file_value
@@ -208,20 +216,17 @@ def require(name: str) -> str:
     value = get(name)
     if value is None:
         raise ConfigError(
-            f'{name} is not set in os.environ or'
-            f' {env_file_path()}; run `memman install` to populate'
-            ' the env file')
+            f'{name} is not set in {env_file_path()};'
+            ' run `memman install` to populate the env file')
     return value
 
 
 def get_bool(name: str, default: bool = False) -> bool:
     """Return True when env var `name` resolves to a truthy string.
 
-    Resolution order matches `get`: `os.environ` first, file fallback
-    second. The `default` argument exists for `MEMMAN_DEBUG` only —
-    `trace.is_enabled()` uses a tri-state pattern (env / file /
-    `~/.memman/debug.state`) and needs to distinguish "explicit off"
-    from "unset." Other call sites should not pass a default.
+    Reads via `get`, so file-only resolution. The `default` argument
+    is preserved for callers that need to distinguish "unset" from
+    "explicit off" without re-implementing the truthy check.
     """
     raw = get(name)
     if raw is None:
@@ -242,14 +247,12 @@ def is_worker() -> bool:
 def enumerate_effective_config(redact: bool = True) -> dict[str, Any]:
     """Return a dict of every known env var name and current value.
 
-    Resolves through the same env -> file chain that runtime callers
-    see. Unset/empty vars map to None. Secret vars are replaced with
+    Installable keys resolve via `get` (env file only). Process-control
+    vars (`DATA_DIR`, `STORE`, `WORKER`, `DEBUG`) are read directly
+    from `os.environ` because they are never persisted to the file.
+    Unset/empty vars map to None. Secret vars are replaced with
     '***REDACTED***' unless `redact=False`. Returned dict is sorted by
     key for stable diagnostic output.
-
-    Note: process-control vars (`DATA_DIR`, `STORE`, `WORKER`, `DEBUG`)
-    are read directly from `os.environ` — they are not part of the file
-    fallback layer.
     """
     direct_only = {DATA_DIR, STORE, WORKER, DEBUG}
     out: dict[str, Any] = {}
@@ -271,11 +274,19 @@ def enumerate_effective_config(redact: bool = True) -> dict[str, Any]:
 def effective_source(name: str) -> str:
     """Return where `name` resolves from: 'env', 'file', or 'unset'.
 
+    Process-control vars (`DATA_DIR`, `STORE`, `WORKER`, `DEBUG`) read
+    `os.environ` and report 'env' when set. All other keys (the
+    installable ones) report 'file' when present in the env file,
+    'unset' otherwise. Shell-env values for installable keys are
+    invisible to the runtime resolver and are NOT reported here.
+
     Diagnostic helper for `memman doctor` / `memman config show`.
     """
-    raw = os.environ.get(name)
-    if raw is not None and raw != '':
-        return 'env'
+    if name in {DATA_DIR, STORE, WORKER, DEBUG}:
+        raw = os.environ.get(name)
+        if raw is not None and raw != '':
+            return 'env'
+        return 'unset'
     file_value = _load_file_cache().get(name)
     if file_value is not None and file_value != '':
         return 'file'
@@ -285,14 +296,16 @@ def effective_source(name: str) -> str:
 def collect_install_knobs(data_dir: str) -> dict[str, str]:
     """Build the dict of values to persist to `~/.memman/env` at install.
 
-    Precedence per key: `os.environ` > existing env file >
-    OpenRouter live resolver (FAST/SLOW only) > `INSTALL_DEFAULTS`.
-    Whatever wins is what gets written to the file. Re-running install
-    after the user edited the file directly preserves the file value
-    unless an env export overrides it.
+    Precedence per key: existing env file > `os.environ` > OpenRouter
+    live resolver (FAST/SLOW only) > `INSTALL_DEFAULTS`. The shell
+    environment is consulted at install time only as a one-time seed
+    for keys missing from the file -- existing file values are sticky
+    and a later shell export never overrides them. Once written,
+    runtime resolution reads only the file (`config.get` does not
+    consult `os.environ` for installable keys).
 
     Raises `ConfigError` (via the caller's import) when a mandatory
-    secret is missing.
+    secret is missing from both the file and the shell env.
     """
     from memman.exceptions import ConfigError
 
@@ -301,13 +314,13 @@ def collect_install_knobs(data_dir: str) -> dict[str, str]:
     knobs: dict[str, str] = {}
     needs_resolve: set[str] = set()
     for key in INSTALLABLE_KEYS:
-        env_value = os.environ.get(key, '').strip()
-        if env_value:
-            knobs[key] = env_value
-            continue
         file_value = file_values.get(key, '').strip()
         if file_value:
             knobs[key] = file_value
+            continue
+        env_value = os.environ.get(key, '').strip()
+        if env_value:
+            knobs[key] = env_value
             continue
         needs_resolve.add(key)
 
@@ -337,6 +350,7 @@ def collect_install_knobs(data_dir: str) -> dict[str, str]:
     for required in MANDATORY_INSTALL_KEYS:
         if not knobs.get(required):
             raise ConfigError(
-                f'{required} is required; export it and re-run install')
+                f'{required} is required; export it or add it to'
+                f' {env_file_path(data_dir)} and re-run install')
 
     return knobs

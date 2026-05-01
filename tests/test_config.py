@@ -90,22 +90,22 @@ def test_constants_match_expected_names():
     assert actual == ALL_EXPECTED_NAMES
 
 
-def test_get_bool_truthy_values(monkeypatch):
+def test_get_bool_truthy_values(env_file):
     """get_bool() treats '1', 'true', 'yes', 'on' (any case) as True.
     """
     for val in ['1', 'true', 'TRUE', 'yes', 'ON', 'On']:
-        monkeypatch.setenv(config.DEBUG, val)
-        assert config.get_bool(config.DEBUG) is True
+        env_file(config.LOG_LEVEL, val)
+        assert config.get_bool(config.LOG_LEVEL) is True
 
 
-def test_get_bool_falsy_values(monkeypatch):
+def test_get_bool_falsy_values(env_file):
     """get_bool() returns False for '0', 'false', '', and unset vars.
     """
-    monkeypatch.delenv(config.DEBUG, raising=False)
-    assert config.get_bool(config.DEBUG) is False
+    env_file(config.LOG_LEVEL, None)
+    assert config.get_bool(config.LOG_LEVEL) is False
     for val in ['0', 'false', 'no', 'off', '', 'garbage']:
-        monkeypatch.setenv(config.DEBUG, val)
-        assert config.get_bool(config.DEBUG) is False
+        env_file(config.LOG_LEVEL, val)
+        assert config.get_bool(config.LOG_LEVEL) is False
 
 
 def test_is_worker_detects_worker_env(monkeypatch):
@@ -142,41 +142,40 @@ def test_enumerate_returns_all_known_vars(monkeypatch):
         assert value is None, f'{name}={value!r}'
 
 
-def test_enumerate_reflects_current_env(monkeypatch):
+def test_enumerate_reflects_current_env(env_file):
     """enumerate_effective_config() returns live values for set vars.
     """
-    monkeypatch.setenv(config.LLM_PROVIDER, 'openrouter')
-    monkeypatch.setenv(config.LLM_MODEL_FAST, 'anthropic/claude-haiku-4.5')
-    monkeypatch.setenv(
-        config.LLM_MODEL_SLOW_CANONICAL, 'anthropic/claude-sonnet-4.6')
+    env_file(config.LLM_PROVIDER, 'openrouter')
+    env_file(config.LLM_MODEL_FAST, 'anthropic/claude-haiku-4.5')
+    env_file(config.LLM_MODEL_SLOW_CANONICAL, 'anthropic/claude-sonnet-4.6')
     out = config.enumerate_effective_config()
     assert out[config.LLM_PROVIDER] == 'openrouter'
     assert out[config.LLM_MODEL_FAST] == 'anthropic/claude-haiku-4.5'
     assert out[config.LLM_MODEL_SLOW_CANONICAL] == 'anthropic/claude-sonnet-4.6'
 
 
-def test_enumerate_redacts_secrets_by_default(monkeypatch):
+def test_enumerate_redacts_secrets_by_default(env_file):
     """API keys are replaced with ***REDACTED*** in the default output.
     """
-    monkeypatch.setenv(config.OPENROUTER_API_KEY, 'sk-or-secret-value')
-    monkeypatch.setenv(config.VOYAGE_API_KEY, 'pa-secret')
+    env_file(config.OPENROUTER_API_KEY, 'sk-or-secret-value')
+    env_file(config.VOYAGE_API_KEY, 'pa-secret')
     out = config.enumerate_effective_config()
     assert out[config.OPENROUTER_API_KEY] == '***REDACTED***'
     assert out[config.VOYAGE_API_KEY] == '***REDACTED***'
 
 
-def test_enumerate_redact_false_exposes_secrets(monkeypatch):
+def test_enumerate_redact_false_exposes_secrets(env_file):
     """redact=False returns the raw secret values (diagnostic override).
     """
-    monkeypatch.setenv(config.OPENROUTER_API_KEY, 'sk-or-plaintext')
+    env_file(config.OPENROUTER_API_KEY, 'sk-or-plaintext')
     out = config.enumerate_effective_config(redact=False)
     assert out[config.OPENROUTER_API_KEY] == 'sk-or-plaintext'
 
 
 @pytest.mark.no_default_env
-def test_enumerate_empty_string_is_unset(monkeypatch):
+def test_enumerate_empty_string_is_unset(env_file):
     """Empty-string env vars map to None (not the empty string).
     """
-    monkeypatch.setenv(config.LLM_MODEL_FAST, '')
+    env_file(config.LLM_MODEL_FAST, '')
     out = config.enumerate_effective_config()
     assert out[config.LLM_MODEL_FAST] is None
