@@ -2061,44 +2061,49 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
 
         from memman.store.sqlite import SqliteBackend
         backend = SqliteBackend(db)
-        embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
-        processed = 0
+        with backend.reembed_lock('rebuild') as held:
+            if not held:
+                raise click.ClickException(
+                    'another graph rebuild is in progress on this store')
 
-        bar = tqdm(
-            total=total_count, desc='Rebuilding',
-            unit='insight', file=sys.stderr,
-            dynamic_ncols=True,
-            disable=not sys.stderr.isatty())
+            embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
+            processed = 0
 
-        def _on_progress(stage: str, insight: Insight) -> None:
-            preview = insight.content[:40].replace('\n', ' ')
-            bar.set_description(f'{stage}: {preview}')
-            if stage == 'done':
-                bar.update(1)
+            bar = tqdm(
+                total=total_count, desc='Rebuilding',
+                unit='insight', file=sys.stderr,
+                dynamic_ncols=True,
+                disable=not sys.stderr.isatty())
 
-        for i in range(0, total_count, MAX_LINK_BATCH):
-            batch_ids = all_ids[i:i + MAX_LINK_BATCH]
-            reset_for_rebuild(db, batch_ids)
+            def _on_progress(stage: str, insight: Insight) -> None:
+                preview = insight.content[:40].replace('\n', ' ')
+                bar.set_description(f'{stage}: {preview}')
+                if stage == 'done':
+                    bar.update(1)
 
-            while True:
-                count = link_pending(
-                    backend, embed_cache=embed_cache,
-                    llm_client=llm_client,
-                    metadata_llm_client=metadata_llm_client,
-                    embed_client=ec,
-                    on_progress=_on_progress)
-                processed += count
-                if count == 0:
-                    break
+            for i in range(0, total_count, MAX_LINK_BATCH):
+                batch_ids = all_ids[i:i + MAX_LINK_BATCH]
+                reset_for_rebuild(db, batch_ids)
 
-        bar.set_description('Done')
-        bar.close()
+                while True:
+                    count = link_pending(
+                        backend, embed_cache=embed_cache,
+                        llm_client=llm_client,
+                        metadata_llm_client=metadata_llm_client,
+                        embed_client=ec,
+                        on_progress=_on_progress)
+                    processed += count
+                    if count == 0:
+                        break
 
-        remaining = count_pending_links(db)
+            bar.set_description('Done')
+            bar.close()
 
-        stats = {'processed': processed, 'remaining': remaining}
-        log_op(db, 'rebuild', '', json.dumps(stats))
-        _json_out(stats)
+            remaining = count_pending_links(db)
+
+            stats = {'processed': processed, 'remaining': remaining}
+            log_op(db, 'rebuild', '', json.dumps(stats))
+            _json_out(stats)
     finally:
         db.close()
 
@@ -2192,71 +2197,78 @@ def _reembed_one_store(
     db = open_db(sdir)
     backend = SqliteBackend(db)
     try:
-        cur_state = backend.meta.get('embed_reembed_state')
-        cursor = backend.meta.get('embed_reembed_cursor') or ''
+        with backend.reembed_lock('reembed') as held:
+            if not held:
+                raise click.ClickException(
+                    f'another reembed is in progress on {store_name}')
 
-        scanned = 0
-        reembedded = 0
+            cur_state = backend.meta.get('embed_reembed_state')
+            cursor = backend.meta.get('embed_reembed_cursor') or ''
 
-        if not dry_run and cur_state != 'in_progress':
+            scanned = 0
+            reembedded = 0
+
+            if not dry_run and cur_state != 'in_progress':
+                with backend.transaction():
+                    backend.meta.set('embed_reembed_state', 'in_progress')
+                    backend.meta.set('embed_reembed_cursor', '')
+                cursor = ''
+
+            if bar is not None:
+                bar.set_description(f'reembed {store_name}')
+
+            while True:
+                rows = iter_for_reembed(db, cursor, _REEMBED_BATCH)
+                if not rows:
+                    break
+
+                for row_id, content, row_model, blob_len in rows:
+                    scanned += 1
+                    row_dim = (blob_len // 8) if blob_len else 0
+                    matches = (
+                        row_model == target.model
+                        and row_dim == target.dim
+                        and blob_len)
+                    if not matches and not dry_run:
+                        new_vec = ec.embed(content)
+                        with backend.transaction():
+                            backend.nodes.update_embedding(
+                                row_id, new_vec, target.model)
+                            backend.meta.set(
+                                'embed_reembed_cursor', row_id)
+                        reembedded += 1
+                    else:
+                        if not dry_run:
+                            backend.meta.set(
+                                'embed_reembed_cursor', row_id)
+                    cursor = row_id
+                    if bar is not None:
+                        bar.update(1)
+
+            if dry_run:
+                return {
+                    'store': store_name,
+                    'scanned': scanned,
+                    'would_reembed': reembedded,
+                    }
+
             with backend.transaction():
-                backend.meta.set('embed_reembed_state', 'in_progress')
+                write_fingerprint(db, target)
                 backend.meta.set('embed_reembed_cursor', '')
-            cursor = ''
+                backend.meta.set('embed_reembed_state', 'idle')
 
-        if bar is not None:
-            bar.set_description(f'reembed {store_name}')
+            edge_stats = reindex_auto_edges(backend)
 
-        while True:
-            rows = iter_for_reembed(db, cursor, _REEMBED_BATCH)
-            if not rows:
-                break
-
-            for row_id, content, row_model, blob_len in rows:
-                scanned += 1
-                row_dim = (blob_len // 8) if blob_len else 0
-                matches = (
-                    row_model == target.model
-                    and row_dim == target.dim
-                    and blob_len)
-                if not matches and not dry_run:
-                    new_vec = ec.embed(content)
-                    with backend.transaction():
-                        backend.nodes.update_embedding(
-                            row_id, new_vec, target.model)
-                        backend.meta.set('embed_reembed_cursor', row_id)
-                    reembedded += 1
-                else:
-                    if not dry_run:
-                        backend.meta.set('embed_reembed_cursor', row_id)
-                cursor = row_id
-                if bar is not None:
-                    bar.update(1)
-
-        if dry_run:
-            return {
+            stats = {
                 'store': store_name,
                 'scanned': scanned,
-                'would_reembed': reembedded,
+                'reembedded': reembedded,
+                'edges': edge_stats,
                 }
-
-        with backend.transaction():
-            write_fingerprint(db, target)
-            backend.meta.set('embed_reembed_cursor', '')
-            backend.meta.set('embed_reembed_state', 'idle')
-
-        edge_stats = reindex_auto_edges(backend)
-
-        stats = {
-            'store': store_name,
-            'scanned': scanned,
-            'reembedded': reembedded,
-            'edges': edge_stats,
-            }
-        backend.oplog.log(
-            operation='embed_reembed', insight_id='',
-            detail=json.dumps(stats))
-        return stats
+            backend.oplog.log(
+                operation='embed_reembed', insight_id='',
+                detail=json.dumps(stats))
+            return stats
     finally:
         db.close()
 

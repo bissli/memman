@@ -27,6 +27,7 @@ measured RTT to operator deployments.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections import deque
 from collections.abc import Iterator, Sequence
@@ -52,6 +53,18 @@ EMBEDDING_DIM = 512
 _PG_SCHEMA_VERSION = 1
 _PG_MIGRATIONS: list[tuple[int, str]] = []
 
+_FORBIDDEN_MIGRATION_RE = re.compile(
+    r'(?im)\b(?:'
+    r'DROP\s+COLUMN|RENAME|DROP\s+TABLE|TRUNCATE'
+    r'|ALTER\s+COLUMN\b.*\bNOT\s+NULL\b'
+    r')')
+
+for _ver, _sql in _PG_MIGRATIONS:
+    if _FORBIDDEN_MIGRATION_RE.search(_sql):
+        raise AssertionError(
+            f'_PG_MIGRATIONS[{_ver}] contains a non-additive operation;'
+            ' the ladder is forward-only and additive-only')
+
 _VALID_SCHEMA_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
 
@@ -71,6 +84,11 @@ def _store_schema(name: str) -> str:
     """Return the Postgres schema name for a memman store."""
     _check_identifier(name)
     return f'store_{name}'
+
+
+def _advisory_lock_key(schema: str, name: str) -> int:
+    """Per-store, per-name int64 key for `pg_advisory_*lock` calls."""
+    return abs(hash(f'{schema}:{name}')) & 0x7FFFFFFFFFFFFFFF
 
 
 _PG_BASELINE_SCHEMA = """
@@ -307,6 +325,20 @@ class PostgresNodeStore(NodeStore):
     def _q(self, sql: str) -> str:
         """Format SQL with the per-store schema interpolated."""
         return sql.format(s=self._schema)
+
+    @contextmanager
+    def write_lock(self, name: str) -> Iterator[None]:
+        """Per-store transaction-scoped advisory lock on the same conn.
+
+        Mirrors `PostgresBackend.write_lock` (shared key namespace via
+        `_advisory_lock_key`). Used by `auto_prune` to serialize
+        prune sweeps against concurrent reindex/insert work without
+        going through the Backend object.
+        """
+        key = _advisory_lock_key(self._schema, name)
+        with self._conn.cursor() as cur:
+            cur.execute('SELECT pg_advisory_xact_lock(%s)', (key,))
+        yield
 
     def insert(self, ins: Insight) -> None:
         with self._conn.cursor() as cur:
@@ -625,53 +657,54 @@ class PostgresNodeStore(NodeStore):
             self, *, max_insights: int,
             exclude_ids: list[Id] | None = None) -> int:
         from memman.store.node import PRUNE_BATCH_SIZE
-        excludes = list(exclude_ids or [])
-        total = self.count_active()
-        if total <= max_insights:
-            return 0
-        excess = min(total - max_insights, PRUNE_BATCH_SIZE)
+        with self.write_lock('prune'):
+            excludes = list(exclude_ids or [])
+            total = self.count_active()
+            if total <= max_insights:
+                return 0
+            excess = min(total - max_insights, PRUNE_BATCH_SIZE)
 
-        cand_sql = self._q(
-            'SELECT id FROM {s}.insights'
-            ' WHERE deleted_at IS NULL AND importance < 4'
-            ' AND access_count < 3'
-            ' AND NOT (id = ANY(%s))'
-            ' ORDER BY effective_importance ASC LIMIT %s')
-        with self._conn.cursor() as cur:
-            cur.execute(cand_sql, (excludes, PRUNE_BATCH_SIZE))
-            cand_rows = cur.fetchall()
-        for (cid,) in cand_rows:
-            try:
-                self.refresh_effective_importance(cid)
-            except ValueError:
-                pass
+            cand_sql = self._q(
+                'SELECT id FROM {s}.insights'
+                ' WHERE deleted_at IS NULL AND importance < 4'
+                ' AND access_count < 3'
+                ' AND NOT (id = ANY(%s))'
+                ' ORDER BY effective_importance ASC LIMIT %s')
+            with self._conn.cursor() as cur:
+                cur.execute(cand_sql, (excludes, PRUNE_BATCH_SIZE))
+                cand_rows = cur.fetchall()
+            for (cid,) in cand_rows:
+                try:
+                    self.refresh_effective_importance(cid)
+                except ValueError:
+                    pass
 
-        with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'SELECT id FROM {s}.insights'
-                    ' WHERE deleted_at IS NULL AND importance < 4'
-                    ' AND access_count < 3'
-                    ' AND NOT (id = ANY(%s))'
-                    ' ORDER BY effective_importance ASC LIMIT %s'),
-                (excludes, excess))
-            target_rows = cur.fetchall()
-            pruned = 0
-            for (cid,) in target_rows:
+            with self._conn.cursor() as cur:
                 cur.execute(
                     self._q(
-                        'UPDATE {s}.insights'
-                        ' SET deleted_at = now(), updated_at = now()'
-                        ' WHERE id = %s AND deleted_at IS NULL'),
-                    (cid,))
-                if cur.rowcount > 0:
+                        'SELECT id FROM {s}.insights'
+                        ' WHERE deleted_at IS NULL AND importance < 4'
+                        ' AND access_count < 3'
+                        ' AND NOT (id = ANY(%s))'
+                        ' ORDER BY effective_importance ASC LIMIT %s'),
+                    (excludes, excess))
+                target_rows = cur.fetchall()
+                pruned = 0
+                for (cid,) in target_rows:
                     cur.execute(
                         self._q(
-                            'DELETE FROM {s}.edges'
-                            ' WHERE source_id = %s OR target_id = %s'),
-                        (cid, cid))
-                    pruned += 1
-        return pruned
+                            'UPDATE {s}.insights'
+                            ' SET deleted_at = now(), updated_at = now()'
+                            ' WHERE id = %s AND deleted_at IS NULL'),
+                        (cid,))
+                    if cur.rowcount > 0:
+                        cur.execute(
+                            self._q(
+                                'DELETE FROM {s}.edges'
+                                ' WHERE source_id = %s OR target_id = %s'),
+                            (cid, cid))
+                        pruned += 1
+            return pruned
 
     def boost_retention(self, id: Id) -> None:
         with self._conn.cursor() as cur:
@@ -1455,10 +1488,11 @@ class PostgresBackend(Backend):
 
         Postgres: `pg_advisory_xact_lock`. Must be called inside an
         active transaction; the lock auto-releases on transaction
-        commit/rollback. Phase 2 ships this implementation but does
-        not wire it into call sites (Phase 2.5 wires).
+        commit/rollback. Reentrant: the same session may acquire the
+        same key multiple times safely (used by the
+        `apply_all -> auto_prune` nested pattern).
         """
-        key = abs(hash(f'{self._schema}:{name}')) & 0x7FFFFFFFFFFFFFFF
+        key = _advisory_lock_key(self._schema, name)
         with self._conn.transaction():
             with self._conn.cursor() as cur:
                 cur.execute('SELECT pg_advisory_xact_lock(%s)', (key,))
@@ -1488,6 +1522,43 @@ class PostgresBackend(Backend):
         session = PostgresRecallSession(self._dsn, self._schema)
         with session:
             yield session
+
+    @contextmanager
+    def reembed_lock(self, name: str) -> Iterator[bool]:
+        """Acquire a per-store session-scoped advisory sweep lock.
+
+        Mirrors `drain_lock`: dedicated `psycopg.connect()` outside
+        any pool, autocommit, with `keepalives_idle=30`. Uses
+        `pg_try_advisory_lock` (non-blocking) so a second sweep
+        agent fails fast with `False` instead of waiting hours.
+        Released on connection close (intended crash-recovery
+        mechanism). Wrong primitive for `auto_prune` /
+        `reindex_auto_edges` -- those want `write_lock`'s
+        transaction-scoped variant.
+        """
+        key = _advisory_lock_key(self._schema, f'reembed:{name}')
+        conn = _open_connection(
+            self._dsn, autocommit=True, keepalives=True)
+        acquired = False
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    'SELECT pg_try_advisory_lock(%s)', (key,))
+                row = cur.fetchone()
+                acquired = bool(row[0]) if row else False
+            yield acquired
+        finally:
+            try:
+                if acquired:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            'SELECT pg_advisory_unlock(%s)', (key,))
+            except Exception:
+                pass
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     @contextmanager
     def drain_lock(
@@ -1584,6 +1655,51 @@ def _ensure_baseline_schema(
         conn.close()
 
 
+def _apply_pending_migrations(dsn: str, store: str) -> None:
+    """Apply forward-only `_PG_MIGRATIONS` entries to a store schema.
+
+    Reads `meta.pg_schema_version` (defaulting to 0 when absent),
+    runs every migration with `stored < target_ver <= code_version`
+    in one transaction, and writes the new version atomically. If
+    `stored > code_version` (older binary, newer store), refuses
+    with `BackendError`. Each SQL string interpolates `{schema}`.
+    """
+    schema = _store_schema(store)
+    conn = _open_connection(dsn, autocommit=False)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT value FROM {schema}.meta"
+                " WHERE key = 'pg_schema_version'")
+            row = cur.fetchone()
+            stored = int(row[0]) if row else 0
+            if stored > _PG_SCHEMA_VERSION:
+                raise BackendError(
+                    f'store {store!r} is at schema version {stored};'
+                    f' this binary supports {_PG_SCHEMA_VERSION}.'
+                    ' Upgrade memman before opening this store.')
+            if stored == _PG_SCHEMA_VERSION:
+                return
+            for target_ver, sql in _PG_MIGRATIONS:
+                if target_ver <= stored:
+                    continue
+                if target_ver > _PG_SCHEMA_VERSION:
+                    break
+                cur.execute(sql.format(schema=schema))
+            cur.execute(
+                f'INSERT INTO {schema}.meta (key, value)'
+                " VALUES ('pg_schema_version', %s)"
+                ' ON CONFLICT (key) DO UPDATE'
+                ' SET value = EXCLUDED.value',
+                (str(_PG_SCHEMA_VERSION),))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _ensure_hnsw_index(dsn: str, schema: str) -> None:
     """Create or recreate the HNSW index on `insights.embedding`.
 
@@ -1595,12 +1711,17 @@ def _ensure_hnsw_index(dsn: str, schema: str) -> None:
 
     Runs on a dedicated autocommit connection because
     `CREATE INDEX CONCURRENTLY` cannot run inside a transaction.
+    `statement_timeout` is set from `MEMMAN_REINDEX_TIMEOUT` (default
+    180 seconds) so a stuck build aborts and the next call's
+    invalid-remnant cleanup can recover.
     """
     _check_identifier(schema)
     index_name = f'idx_insights_hnsw_{schema}'
+    timeout_s = int(os.environ.get('MEMMAN_REINDEX_TIMEOUT', '180'))
     conn = _open_connection(dsn, autocommit=True)
     try:
         with conn.cursor() as cur:
+            cur.execute(f"SET statement_timeout = '{timeout_s}s'")
             cur.execute(
                 'SELECT i.indexrelid::regclass::text, i.indisvalid'
                 ' FROM pg_index i'
@@ -1753,6 +1874,7 @@ class PostgresCluster(Cluster):
 
     def open(self, *, store: str, data_dir: str) -> PostgresBackend:
         _ensure_baseline_schema(self._dsn, store)
+        _apply_pending_migrations(self._dsn, store)
         backend = PostgresBackend(self._dsn, store)
         try:
             _ensure_hnsw_index(self._dsn, _store_schema(store))

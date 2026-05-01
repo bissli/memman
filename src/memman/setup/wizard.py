@@ -11,10 +11,10 @@ features today:
 
 2. Backend selection (sqlite | postgres). Postgres is hidden until
    the `memman[postgres]` extras are importable AND the
-   `memman.backend.postgres` module exists (Phase 2). Until then,
-   only sqlite is selectable -- the wizard skips the prompt entirely
-   and passes `MEMMAN_BACKEND=sqlite` straight through, avoiding a
-   one-option confirmation prompt.
+   `memman.store.postgres` module exists (shipped in Phase 2).
+   Until both checks pass, only sqlite is selectable -- the wizard
+   skips the prompt entirely and passes `MEMMAN_BACKEND=sqlite`
+   straight through, avoiding a one-option confirmation prompt.
 
 Non-TTY mode (`sys.stdin.isatty()` False or `--no-wizard`) skips all
 prompts and uses flag values + defaults. The wizard never silently
@@ -86,6 +86,10 @@ def run_wizard(
             out[config.PG_DSN] = dsn
         _print_migration_hint(data_dir, file_values)
 
+    if interactive and not out:
+        click.echo(click.style(
+            'wizard: using existing env-file values', dim=True))
+
     return out
 
 
@@ -155,10 +159,9 @@ def _selectable_backends() -> list[str]:
     """Return the list of backends the wizard can offer.
 
     Sqlite is always available. Postgres is included only when both
-    `memman[postgres]` extras are importable AND a runtime
-    `memman.backend.postgres` module exists (Phase 2 of
-    DB-MIGRATION.md). Until Phase 2 ships, the second check is False,
-    so postgres is hidden and the wizard short-circuits the prompt.
+    `memman[postgres]` extras are importable AND the runtime
+    `memman.store.postgres` module exists (shipped in Phase 2 of
+    DB-MIGRATION.md).
     """
     out = ['sqlite']
     if extras.is_available('postgres') and _backend_module_exists():
@@ -167,14 +170,9 @@ def _selectable_backends() -> list[str]:
 
 
 def _backend_module_exists() -> bool:
-    """Return True when `memman.backend.postgres` can be imported.
-
-    Wraps `find_spec` in a try/except because it raises
-    `ModuleNotFoundError` when an intermediate package (e.g.,
-    `memman.backend`) is missing, rather than returning None.
-    """
+    """Return True when `memman.store.postgres` can be imported."""
     try:
-        return find_spec('memman.backend.postgres') is not None
+        return find_spec('memman.store.postgres') is not None
     except ModuleNotFoundError:
         return False
 

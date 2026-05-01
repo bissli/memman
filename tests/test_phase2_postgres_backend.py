@@ -21,9 +21,9 @@ from __future__ import annotations
 import psycopg
 import pytest
 from memman.store.model import Edge, Insight
-from memman.store.postgres import EMBEDDING_DIM
-from memman.store.postgres import PostgresCluster, _ensure_baseline_schema
-from memman.store.postgres import _ensure_hnsw_index, _store_schema
+from memman.store.postgres import EMBEDDING_DIM, PostgresCluster
+from memman.store.postgres import _ensure_baseline_schema, _ensure_hnsw_index
+from memman.store.postgres import _store_schema
 
 pytestmark = pytest.mark.postgres
 
@@ -317,21 +317,3 @@ def test_factory_dispatches_to_postgres(pg_dsn, monkeypatch):
                         else (pg_dsn if key == config.PG_DSN else None))
     cluster = factory.open_cluster()
     assert type(cluster).__name__ == 'PostgresCluster'
-
-
-def test_write_lock_unwired_in_callers():
-    r"""No call site uses `with .*\\.write_lock()` in Phase 2 -- the
-    Phase 2 gate item 8 grep guard.
-    """
-    import pathlib
-    import re
-
-    src = pathlib.Path(__file__).resolve().parent.parent / 'src'
-    pat = re.compile(r'with\s+\w+\.write_lock\s*\(')
-    hits: list[str] = []
-    for p in src.rglob('*.py'):
-        text = p.read_text()
-        hits.extend(f'{p}: {m.group(0)}' for m in pat.finditer(text))
-    assert hits == [], (
-        f'write_lock should not be wired into callers in Phase 2;'
-        f' found: {hits}')

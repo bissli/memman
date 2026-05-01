@@ -463,14 +463,20 @@ class SqliteBackend(Backend):
 
     @contextmanager
     def write_lock(self, name: str) -> Iterator[None]:
-        """Acquire a named exclusive write lock.
-
-        Phase 1a SQLite: no-op (`BEGIN IMMEDIATE` already serializes
-        per-process). Phase 2 Postgres: `pg_advisory_xact_lock`. The
-        verb exists so Phase 2.5 can wire it into call sites without
-        further Protocol churn.
+        """No-op on SQLite -- `BEGIN IMMEDIATE` already serializes
+        per-process. Postgres uses `pg_advisory_xact_lock`.
         """
         yield
+
+    @contextmanager
+    def reembed_lock(self, name: str) -> Iterator[bool]:
+        """Always yields True on SQLite (single-process by definition).
+
+        Postgres acquires `pg_try_advisory_lock` on a dedicated
+        connection so concurrent sweeps fail-fast instead of
+        racing.
+        """
+        yield True
 
     @contextmanager
     def readonly_context(self) -> Iterator['SqliteBackend']:

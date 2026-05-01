@@ -444,10 +444,29 @@ class Backend(Protocol):
         """Acquire a named exclusive write lock for the duration of
         the block.
 
-        SQLite: no-op. Postgres: `pg_advisory_xact_lock`. Phase 2.5
-        wires this into read-then-write call sites
-        (`reindex_auto_edges`, `auto_prune`, `embed reembed`); Phase
-        1a defines the verb but does not call it.
+        SQLite: no-op (`BEGIN IMMEDIATE` already serializes
+        per-process). Postgres: `pg_advisory_xact_lock` (transaction-
+        scoped, reentrant within the same session). Used by
+        `reindex_auto_edges` and `PostgresNodeStore.auto_prune` to
+        serialize read-then-write paths against concurrent writers.
+        Wrong primitive for sweeps that span minutes-to-hours; see
+        `reembed_lock` for that case.
+        """
+        ...
+
+    def reembed_lock(
+            self, name: str) -> AbstractContextManager[bool]:
+        """Acquire a session-scoped sweep lock for hours-long batch work.
+
+        SQLite: yields True (single-process). Postgres:
+        `pg_try_advisory_lock` on a dedicated connection outside any
+        pool, with TCP keepalives so a hung sweep is detected by the
+        kernel. Yields True when acquired, False otherwise (caller
+        prints "another <name> in progress" and exits non-zero).
+        Used by `embed reembed` and `graph rebuild`; do NOT use
+        `write_lock` for these because `pg_advisory_xact_lock` would
+        pin a transaction for the entire sweep duration and block
+        autovacuum.
         """
         ...
 

@@ -251,7 +251,7 @@ def reindex_auto_edges(
             operation='reindex', insight_id='',
             detail=json.dumps(stats))
 
-    with backend.transaction():
+    with backend.transaction(), backend.write_lock('reindex'):
         tx_body()
     return stats
 
