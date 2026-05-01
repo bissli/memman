@@ -28,7 +28,6 @@ def _make_plan(new_id, target_id, causal_edges):
         fact_text='replacement content',
         fact_insight=new_insight,
         target_id=target_id,
-        embed_blob=None,
         embed_vec=None,
         enrichment={},
         causal_edges=causal_edges,

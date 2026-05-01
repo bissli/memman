@@ -5,26 +5,12 @@ recalibrate by computing all pairwise cosine similarities and inspecting
 quality at each band. See docs/design/04-graph-model.md.
 """
 
-from memman.embed.vector import cosine_similarity, deserialize_vector
+from memman.embed.vector import cosine_similarity
 from memman.store.backend import Backend
 from memman.store.model import Edge, Insight, format_float
 
 AUTO_SEMANTIC_THRESHOLD = 0.62
 MAX_AUTO_SEMANTIC_EDGES = 3
-
-
-def build_embed_cache(
-        backend: Backend) -> dict[str, list[float]] | None:
-    """Load all embeddings from the backend into a map."""
-    all_embedded = backend.nodes.get_all_embeddings()
-    if not all_embedded:
-        return None
-    cache: dict[str, list[float]] = {}
-    for eid, _content, blob in all_embedded:
-        v = deserialize_vector(blob)
-        if v is not None:
-            cache[eid] = v
-    return cache or None
 
 
 def create_semantic_edges(
@@ -33,8 +19,8 @@ def create_semantic_edges(
         dry_run: bool = False) -> int:
     """Auto-create semantic edges for insights with high cosine similarity."""
     if embed_cache is None:
-        embed_cache = build_embed_cache(backend)
-    if embed_cache is None:
+        embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
+    if not embed_cache:
         return 0
 
     insight_vec = embed_cache.get(insight.id)

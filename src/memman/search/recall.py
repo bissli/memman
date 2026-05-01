@@ -4,15 +4,16 @@ Opens a `RecallSession` via `Backend.recall_session()` which reads
 the worker-materialized snapshot when present. Falls back to direct
 Backend verb calls when the snapshot is missing,
 fingerprint-mismatched, or unreadable. The snapshot path eliminates
-`get_all_active_insights`, `build_embed_cache`, `get_edges_by_node`,
-and `get_insight_by_id` calls from the synchronous recall hot path.
+`nodes.get_all_active`, `iter_embeddings_as_vecs`, `edges.by_node`,
+and `nodes.get` calls from the synchronous recall hot path.
 """
 
 import heapq
 import logging
+from collections.abc import Callable
+from typing import Any
 
 from memman.embed.vector import cosine_similarity
-from memman.graph.semantic import build_embed_cache
 from memman.search.intent import detect_intent, get_weights
 from memman.search.keyword import insight_tokens, keyword_search, tokenize
 from memman.store.backend import Backend
@@ -171,8 +172,9 @@ def beam_search_from_anchor(
 
 
 def causal_topological_sort(
-        results: list[dict],
-        causal_edges_lookup) -> list[dict]:
+        results: list[dict[str, Any]],
+        causal_edges_lookup: Callable[[str], list[str]]
+        ) -> list[dict[str, Any]]:
     """Reorder results so causes appear before effects using Kahn's algorithm.
 
     `causal_edges_lookup(source_id) -> iterable of target_ids` exposes
@@ -272,7 +274,7 @@ def intent_aware_recall(
                     if etype == 'causal']
         else:
             all_insights = backend.nodes.get_all_active()
-            embed_cache = build_embed_cache(backend)
+            embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
 
             def _edges_lookup(nid):
                 for e in backend.edges.by_node(nid):
@@ -369,7 +371,7 @@ def intent_aware_recall(
     query_tokens = tokenize(query)
     query_entity_set = {e.lower() for e in query_entities}
 
-    candidates = []
+    candidates: list[dict[str, Any]] = []
     graph_min = None
     graph_max = None
     for cid, graph_raw in score_map.items():
@@ -424,7 +426,7 @@ def intent_aware_recall(
     w_kw, w_ent, w_sim, w_gr = RERANK_WEIGHTS.get(
         intent, RERANK_WEIGHTS['GENERAL'])
 
-    results = []
+    results: list[dict[str, Any]] = []
     for c in candidates:
         final_score = (
             w_kw * c['kw_score'] + w_ent * c['ent_score']

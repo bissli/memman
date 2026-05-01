@@ -13,7 +13,12 @@ OPLOG_RETENTION_DAYS = 180
 
 def log_op(db: 'DB', operation: str, insight_id: str,
            detail: str) -> None:
-    """Record an operation to the oplog and trim old entries."""
+    """Record an operation to the oplog (INSERT-only).
+
+    Bounded growth is enforced by `maintenance_step` once per drain,
+    not on every write. This keeps the hot path INSERT-only so
+    Postgres `oplog.log` can be a single statement with no DELETE.
+    """
     now = format_timestamp(datetime.now(timezone.utc))
     try:
         db._exec(
@@ -24,23 +29,23 @@ def log_op(db: 'DB', operation: str, insight_id: str,
     except Exception as e:
         logger.warning('oplog insert failed: %s', e)
 
+
+def maintenance_step(db: 'DB') -> None:
+    """Run the per-store backend maintenance step.
+
+    SQLite: cap the oplog at `MAX_OPLOG_ENTRIES` (DELETE rows older
+    than the cap), then `PRAGMA incremental_vacuum(200)` to reclaim
+    freelist space. On a future Postgres backend the trim is a single
+    DELETE; the PRAGMA is a no-op (autovacuum handles it). Called
+    once per drain by the worker maintenance phase.
+    """
     try:
         db._exec(
             'DELETE FROM oplog WHERE id <='
             ' (SELECT MAX(id) FROM oplog) - ?',
             (MAX_OPLOG_ENTRIES,))
     except Exception as e:
-        logger.warning('oplog trim failed: %s', e)
-
-
-def maintenance_step(db: 'DB') -> None:
-    """Run the per-store backend maintenance step.
-
-    SQLite: `PRAGMA incremental_vacuum(200)` to reclaim freelist space.
-    On a future Postgres backend this is a no-op (autovacuum handles
-    it). Replaces the inline `db._exec('PRAGMA ...')` at
-    `maintenance.py:127`.
-    """
+        logger.warning('oplog cap trim failed: %s', e)
     db._exec('PRAGMA incremental_vacuum(200)')
 
 

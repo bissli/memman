@@ -17,13 +17,15 @@ moves that logic into `SqliteRecallSession` methods.
 
 import logging
 import shutil
-from collections.abc import Iterator
+from collections import deque
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from memman.embed.vector import deserialize_vector, serialize_vector
 from memman.store import db as _db
 from memman.store import edge as _edge
 from memman.store import node as _node
@@ -54,6 +56,16 @@ class SqliteNodeStore(NodeStore):
 
     def get_include_deleted(self, id: Id) -> Insight | None:
         return _node.get_insight_by_id_include_deleted(self._db, id)
+
+    def get_many(self, ids: Sequence[Id]) -> list[Insight]:
+        if not ids:
+            return []
+        by_id: dict[Id, Insight] = {}
+        for iid in ids:
+            ins = _node.get_insight_by_id(self._db, iid)
+            if ins is not None:
+                by_id[iid] = ins
+        return [by_id[i] for i in ids if i in by_id]
 
     def query(
             self, *, keyword: str = '', category: str = '',
@@ -158,14 +170,22 @@ class SqliteNodeStore(NodeStore):
             top_entities=d.get('top_entities', []))
 
     def update_embedding(
-            self, id: Id, blob: bytes, model: str) -> None:
-        _node.update_embedding(self._db, id, blob, model)
+            self, id: Id, vec: list[float], model: str) -> None:
+        _node.update_embedding(
+            self._db, id, serialize_vector(vec), model)
 
     def get_embedding(self, id: Id) -> bytes | None:
         return _node.get_embedding(self._db, id)
 
     def get_all_embeddings(self) -> list[tuple[Id, str, bytes]]:
         return _node.get_all_embeddings(self._db)
+
+    def iter_embeddings_as_vecs(
+            self) -> Iterator[tuple[Id, list[float]]]:
+        for eid, _content, blob in _node.get_all_embeddings(self._db):
+            v = deserialize_vector(blob)
+            if v is not None:
+                yield eid, v
 
     def embedding_stats(self) -> tuple[int, int]:
         return _node.embedding_stats(self._db)
@@ -272,6 +292,40 @@ class SqliteEdgeStore(EdgeStore):
 
     def degree_distribution(self) -> dict[Id, int]:
         return _edge.degree_distribution(self._db)
+
+    def get_neighborhood(
+            self, seed_id: Id, *, depth: int,
+            edge_filter: str = '') -> list[tuple[Id, int, str]]:
+        active_ids = set(_node.get_active_insight_ids(self._db))
+        edges = _edge.get_all_edges(self._db)
+        adj: dict[Id, list[Edge]] = {}
+        for e in edges:
+            adj.setdefault(e.source_id, []).append(e)
+            if e.source_id != e.target_id:
+                adj.setdefault(e.target_id, []).append(e)
+
+        visited = {seed_id}
+        queue: deque[tuple[Id, int]] = deque([(seed_id, 0)])
+        out: list[tuple[Id, int, str]] = []
+
+        while queue:
+            cur_id, hop = queue.popleft()
+            if hop >= depth:
+                continue
+            for edge in adj.get(cur_id, []):
+                if edge_filter and edge.edge_type != edge_filter:
+                    continue
+                neighbor_id = (
+                    edge.target_id if edge.target_id != cur_id
+                    else edge.source_id)
+                if neighbor_id in visited:
+                    continue
+                visited.add(neighbor_id)
+                if neighbor_id not in active_ids:
+                    continue
+                out.append((neighbor_id, hop + 1, edge.edge_type))
+                queue.append((neighbor_id, hop + 1))
+        return out
 
 
 class SqliteMetaStore(MetaStore):
@@ -471,6 +525,19 @@ class SqliteBackend(Backend):
 
     def close(self) -> None:
         self._db.close()
+
+
+def open_ro_db(sdir: str) -> DB:
+    """Open the SQLite store at `sdir` in read-only mode.
+
+    cli-internal helper that puts the only `open_read_only` literal
+    inside the SQLite backend module. Callers that need a raw DB
+    handle (because they do not yet take a Backend) reach this
+    instead of importing `store.db.open_read_only` directly. The
+    helper disappears when cli.py is rewired through Protocol verbs
+    in Phase 4.
+    """
+    return _db.open_read_only(sdir)
 
 
 class SqliteCluster(Cluster):

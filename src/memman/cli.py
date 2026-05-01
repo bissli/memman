@@ -19,10 +19,11 @@ import click
 import memman
 from memman import config
 from memman.store.db import default_data_dir, list_stores, open_db
-from memman.store.db import open_read_only, read_active, store_dir
-from memman.store.db import store_exists, valid_store_name, write_active
+from memman.store.db import read_active, store_dir, store_exists
+from memman.store.db import valid_store_name, write_active
 from memman.store.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge
 from memman.store.model import Insight, format_timestamp, is_immune
+from memman.store.sqlite import open_ro_db
 from tqdm import tqdm
 
 logger = logging.getLogger('memman')
@@ -148,7 +149,7 @@ def _open_db(ctx: click.Context) -> 'DB':
     sdir = store_dir(data_dir, name)
 
     if read_only:
-        return open_read_only(sdir)
+        return open_ro_db(sdir)
 
     db = open_db(sdir)
     from memman.embed.fingerprint import assert_consistent, seed_if_fresh
@@ -781,7 +782,6 @@ class _StoreContext:
     def __init__(self, store_data_dir: str) -> None:
         from memman.embed import fingerprint as _fp_mod
         from memman.embed import get_client as _get_ec
-        from memman.embed.vector import deserialize_vector
         from memman.llm.client import get_llm_client
         from memman.store.db import open_db as _open_store_db
         from memman.store.sqlite import SqliteBackend
@@ -793,11 +793,8 @@ class _StoreContext:
         _fp_mod.assert_consistent(self.db)
         self.ec = _get_ec()
         self.llm_client = get_llm_client('slow_canonical')
-        self.embed_cache: dict[str, list[float]] = {}
-        for eid, _content, blob in self.backend.nodes.get_all_embeddings():
-            v = deserialize_vector(blob)
-            if v is not None:
-                self.embed_cache[eid] = v
+        self.embed_cache: dict[str, list[float]] = dict(
+            self.backend.nodes.iter_embeddings_as_vecs())
         self.insights_by_id = {
             i.id: i for i in self.backend.nodes.get_all_active()}
 
@@ -1059,7 +1056,6 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             entities: str, reconcile: bool) -> None:
     """Replace an insight by ID with new content via the queue."""
     _require_started('write')
-    from memman.store.db import open_read_only
     from memman.store.node import get_insight_by_id
 
     content_str = ' '.join(content)
@@ -1084,7 +1080,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
     name = _resolve_store_name(data_dir_val, ctx.obj['store'])
 
     try:
-        ro = open_read_only(store_dir(data_dir_val, name))
+        ro = open_ro_db(store_dir(data_dir_val, name))
         old = get_insight_by_id(ro, id)
         ro.close()
     except FileNotFoundError:
@@ -2003,7 +1999,7 @@ def prime() -> None:
         env_store = os.environ.get(config.STORE, '').strip()
         name = env_store or read_active(data_dir)
         if store_exists(data_dir, name):
-            db = open_read_only(store_dir(data_dir, name))
+            db = open_ro_db(store_dir(data_dir, name))
             try:
                 stats = get_stats(db)
             finally:
@@ -2042,7 +2038,6 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
         _require_started('rebuild')
     from memman.embed import get_client
     from memman.graph.engine import MAX_LINK_BATCH, link_pending
-    from memman.graph.semantic import build_embed_cache
     from memman.store.node import count_pending_links, get_active_insight_ids
     from memman.store.node import reset_for_rebuild
     from memman.store.oplog import log_op
@@ -2066,7 +2061,7 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
 
         from memman.store.sqlite import SqliteBackend
         backend = SqliteBackend(db)
-        embed_cache = build_embed_cache(backend)
+        embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
         processed = 0
 
         bar = tqdm(
@@ -2168,10 +2163,9 @@ _REEMBED_BATCH = 50
 def _count_active_rows(sdir: str) -> int:
     """Return the count of non-deleted insights in the given store.
     """
-    from memman.store.db import open_read_only
     from memman.store.node import count_active_insights
 
-    db = open_read_only(sdir)
+    db = open_ro_db(sdir)
     try:
         return count_active_insights(db)
     finally:
@@ -2189,32 +2183,29 @@ def _reembed_one_store(
     cursor reset + state=idle + edge reindex is another.
     """
     from memman.embed.fingerprint import write_fingerprint
-    from memman.embed.vector import serialize_vector
     from memman.graph.engine import reindex_auto_edges
-    from memman.store.db import get_meta, open_db, set_meta
-    from memman.store.node import update_embedding
-    from memman.store.oplog import log_op
+    from memman.store.db import open_db
+    from memman.store.node import iter_for_reembed
+    from memman.store.sqlite import SqliteBackend
 
     store_name = pathlib.Path(sdir).name
     db = open_db(sdir)
+    backend = SqliteBackend(db)
     try:
-        cur_state = get_meta(db, 'embed_reembed_state')
-        cursor = get_meta(db, 'embed_reembed_cursor') or ''
+        cur_state = backend.meta.get('embed_reembed_state')
+        cursor = backend.meta.get('embed_reembed_cursor') or ''
 
         scanned = 0
         reembedded = 0
 
         if not dry_run and cur_state != 'in_progress':
-            def _start_sweep() -> None:
-                set_meta(db, 'embed_reembed_state', 'in_progress')
-                set_meta(db, 'embed_reembed_cursor', '')
-            db.in_transaction(_start_sweep)
+            with backend.transaction():
+                backend.meta.set('embed_reembed_state', 'in_progress')
+                backend.meta.set('embed_reembed_cursor', '')
             cursor = ''
 
         if bar is not None:
             bar.set_description(f'reembed {store_name}')
-
-        from memman.store.node import iter_for_reembed
 
         while True:
             rows = iter_for_reembed(db, cursor, _REEMBED_BATCH)
@@ -2230,17 +2221,14 @@ def _reembed_one_store(
                     and blob_len)
                 if not matches and not dry_run:
                     new_vec = ec.embed(content)
-                    blob = serialize_vector(new_vec)
-
-                    def _write_row() -> None:
-                        update_embedding(
-                            db, row_id, blob, target.model)
-                        set_meta(db, 'embed_reembed_cursor', row_id)
-                    db.in_transaction(_write_row)
+                    with backend.transaction():
+                        backend.nodes.update_embedding(
+                            row_id, new_vec, target.model)
+                        backend.meta.set('embed_reembed_cursor', row_id)
                     reembedded += 1
                 else:
                     if not dry_run:
-                        set_meta(db, 'embed_reembed_cursor', row_id)
+                        backend.meta.set('embed_reembed_cursor', row_id)
                 cursor = row_id
                 if bar is not None:
                     bar.update(1)
@@ -2252,14 +2240,12 @@ def _reembed_one_store(
                 'would_reembed': reembedded,
                 }
 
-        def _finalize() -> None:
+        with backend.transaction():
             write_fingerprint(db, target)
-            set_meta(db, 'embed_reembed_cursor', '')
-            set_meta(db, 'embed_reembed_state', 'idle')
+            backend.meta.set('embed_reembed_cursor', '')
+            backend.meta.set('embed_reembed_state', 'idle')
 
-        db.in_transaction(_finalize)
-        from memman.store.sqlite import SqliteBackend
-        edge_stats = reindex_auto_edges(SqliteBackend(db))
+        edge_stats = reindex_auto_edges(backend)
 
         stats = {
             'store': store_name,
@@ -2267,7 +2253,9 @@ def _reembed_one_store(
             'reembedded': reembedded,
             'edges': edge_stats,
             }
-        log_op(db, 'embed_reembed', '', json.dumps(stats))
+        backend.oplog.log(
+            operation='embed_reembed', insight_id='',
+            detail=json.dumps(stats))
         return stats
     finally:
         db.close()

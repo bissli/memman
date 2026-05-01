@@ -1,7 +1,13 @@
-"""Breadth-first graph traversal."""
+"""Breadth-first graph traversal.
 
-from collections import deque
+Wraps `EdgeStore.get_neighborhood` so callers can keep the
+existing dict-shaped result and `BFSOptions` ergonomics. The
+underlying traversal lives on the Backend Protocol so Postgres can
+implement it as a recursive CTE in Phase 2.
+"""
+
 from dataclasses import dataclass
+from typing import Any
 
 from memman.store.backend import Backend
 
@@ -16,59 +22,27 @@ class BFSOptions:
 
 
 def bfs(backend: Backend, start_id: str,
-        opts: BFSOptions) -> list[dict]:
-    """Perform breadth-first traversal from start_id over the full graph."""
-    all_insights = backend.nodes.get_all_active()
-    if not all_insights:
+        opts: BFSOptions) -> list[dict[str, Any]]:
+    """Bounded BFS from start_id.
+
+    Returns dicts with keys `insight`, `hop`, `via_edge`. The
+    bounded neighborhood comes from
+    `backend.edges.get_neighborhood`; insights are hydrated via
+    `backend.nodes.get_many`. Soft-deleted neighbors are dropped.
+    """
+    triples = backend.edges.get_neighborhood(
+        start_id, depth=opts.max_depth,
+        edge_filter=opts.edge_filter)
+    if opts.max_nodes > 0 and len(triples) > opts.max_nodes:
+        triples = triples[:opts.max_nodes]
+    if not triples:
         return []
-
-    insight_map = {ins.id: ins for ins in all_insights}
-
-    all_edges = backend.edges.all()
-    edge_adj: dict[str, list] = {}
-    for e in all_edges:
-        edge_adj.setdefault(e.source_id, []).append(e)
-        if e.source_id != e.target_id:
-            edge_adj.setdefault(e.target_id, []).append(e)
-
-    visited = {start_id}
-    queue: deque[tuple[str, int]] = deque([(start_id, 0)])
-    result = []
-
-    while queue:
-        if opts.max_nodes > 0 and len(result) >= opts.max_nodes:
-            break
-
-        cur_id, hop = queue.popleft()
-
-        if hop >= opts.max_depth:
-            continue
-
-        for edge in edge_adj.get(cur_id, []):
-            if opts.edge_filter and edge.edge_type != opts.edge_filter:
-                continue
-
-            neighbor_id = edge.target_id
-            if neighbor_id == cur_id:
-                neighbor_id = edge.source_id
-
-            if neighbor_id in visited:
-                continue
-            visited.add(neighbor_id)
-
-            ins = insight_map.get(neighbor_id)
-            if ins is None:
-                continue
-
-            result.append({
-                'insight': ins,
-                'hop': hop + 1,
-                'via_edge': edge.edge_type,
-                })
-
-            if opts.max_nodes > 0 and len(result) >= opts.max_nodes:
-                break
-
-            queue.append((neighbor_id, hop + 1))
-
-    return result
+    insights = {
+        ins.id: ins for ins in
+        backend.nodes.get_many([t[0] for t in triples])
+        }
+    return [
+        {'insight': insights[nid], 'hop': hop, 'via_edge': etype}
+        for nid, hop, etype in triples
+        if nid in insights
+        ]

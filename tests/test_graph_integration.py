@@ -10,7 +10,7 @@ from memman.embed.vector import serialize_vector
 from memman.graph.bfs import BFSOptions, bfs
 from memman.graph.engine import fast_edges
 from memman.graph.entity import create_entity_edges
-from memman.graph.semantic import build_embed_cache, create_semantic_edges
+from memman.graph.semantic import create_semantic_edges
 from memman.graph.temporal import create_temporal_edge
 from memman.store.edge import get_edges_by_node_and_type, insert_edge
 from memman.store.node import insert_insight, soft_delete_insight
@@ -379,14 +379,14 @@ class TestFastEdgesEngine:
         assert result['entity'] >= 1
 
 
-# --- Build Embed Cache ---
+# --- iter_embeddings_as_vecs ---
 
 
-class TestBuildEmbedCache:
-    """Loads embedding vectors from DB into dict."""
+class TestIterEmbeddingsAsVecs:
+    """Yields (id, vec) for every active insight with an embedding."""
 
-    def test_build_embed_cache(self, tmp_db, tmp_backend):
-        """Stored embeddings are deserialized into the cache dict."""
+    def test_iter_embeddings_as_vecs(self, tmp_db, tmp_backend):
+        """Stored embeddings are deserialized into the dict."""
         ins1 = make_insight(id='bc-1', content='first')
         ins2 = make_insight(id='bc-2', content='second')
         insert_insight(tmp_db, ins1)
@@ -397,21 +397,21 @@ class TestBuildEmbedCache:
         update_embedding(tmp_db, 'bc-1', serialize_vector(vec1), 'voyage-3-lite')
         update_embedding(tmp_db, 'bc-2', serialize_vector(vec2), 'voyage-3-lite')
 
-        cache = build_embed_cache(tmp_backend)
-        assert cache is not None
+        cache = dict(tmp_backend.nodes.iter_embeddings_as_vecs())
+        assert cache
         assert 'bc-1' in cache
         assert 'bc-2' in cache
         assert len(cache['bc-1']) == 3
         assert abs(cache['bc-1'][0] - 1.0) < 0.001
 
 
-class TestBuildEmbedCacheEmpty:
-    """No embeddings returns None."""
+class TestIterEmbeddingsAsVecsEmpty:
+    """No embeddings returns an empty iterator."""
 
-    def test_build_embed_cache_empty(self, tmp_db, tmp_backend):
-        """Empty DB (no embeddings) returns None from build_embed_cache."""
-        cache = build_embed_cache(tmp_backend)
-        assert cache is None
+    def test_iter_embeddings_as_vecs_empty(self, tmp_db, tmp_backend):
+        """Empty DB returns no pairs."""
+        cache = dict(tmp_backend.nodes.iter_embeddings_as_vecs())
+        assert cache == {}
 
 
 # --- Edge-worthy filtering ---

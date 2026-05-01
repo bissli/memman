@@ -6,7 +6,6 @@ from unittest.mock import MagicMock
 
 from memman.graph.engine import link_pending
 from memman.graph.enrichment import build_enriched_text, enrich_with_llm
-from memman.graph.semantic import build_embed_cache
 from memman.store.node import insert_insight
 from tests.conftest import make_insight
 
@@ -173,7 +172,7 @@ class TestReEmbed:
         mock_embed.embed.return_value = [0.1, 0.2, 0.3]
         mock_embed.model = 'voyage-3-lite'
 
-        embed_cache = build_embed_cache(tmp_backend) or {}
+        embed_cache = dict(tmp_backend.nodes.iter_embeddings_as_vecs())
         link_pending(
             tmp_backend, embed_cache=embed_cache,
             llm_client=mock_llm, embed_client=mock_embed,

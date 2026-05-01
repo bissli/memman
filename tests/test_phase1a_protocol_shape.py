@@ -109,3 +109,32 @@ def test_oplog_entry_created_at_is_required():
     assert (
         fields['created_at'].default_factory is dataclasses.MISSING)
     assert fields['created_at'].default is dataclasses.MISSING
+
+
+def test_node_iter_embeddings_as_vecs_exists():
+    """Phase 1b: NodeStore.iter_embeddings_as_vecs Protocol verb."""
+    assert hasattr(NodeStore, 'iter_embeddings_as_vecs')
+
+
+def test_node_get_many_exists():
+    """Phase 1b: NodeStore.get_many Protocol verb (bfs hydration)."""
+    assert hasattr(NodeStore, 'get_many')
+    sig = inspect.signature(NodeStore.get_many)
+    assert 'ids' in sig.parameters
+
+
+def test_edge_get_neighborhood_exists():
+    """Phase 1b: EdgeStore.get_neighborhood Protocol verb."""
+    assert hasattr(EdgeStore, 'get_neighborhood')
+    sig = inspect.signature(EdgeStore.get_neighborhood)
+    assert 'seed_id' in sig.parameters
+    assert 'depth' in sig.parameters
+    assert 'edge_filter' in sig.parameters
+
+
+def test_node_update_embedding_takes_vec_not_blob():
+    """Phase 1b: update_embedding signature flipped from bytes to list[float].
+    """
+    sig = inspect.signature(NodeStore.update_embedding)
+    assert 'vec' in sig.parameters
+    assert 'blob' not in sig.parameters

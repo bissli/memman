@@ -27,7 +27,7 @@ Distributed-shaping commitments baked into this Protocol surface:
    mode so reader threads see main-thread commits as they land.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager
 from typing import Any, Protocol, runtime_checkable
 
@@ -51,6 +51,15 @@ class NodeStore(Protocol):
 
     def get_include_deleted(self, id: Id) -> Insight | None:
         """Return one insight by id, including soft-deleted rows."""
+        ...
+
+    def get_many(self, ids: Sequence[Id]) -> list[Insight]:
+        """Return active insights for the given ids, in input order.
+
+        Missing ids are silently dropped from the result. Used by the
+        bfs caller to hydrate insights for the bounded neighborhood
+        returned by `EdgeStore.get_neighborhood`.
+        """
         ...
 
     def query(
@@ -153,12 +162,14 @@ class NodeStore(Protocol):
         ...
 
     def update_embedding(
-            self, id: Id, blob: bytes, model: str) -> None:
+            self, id: Id, vec: list[float], model: str) -> None:
         """Persist an embedding vector + its model name.
 
-        Phase 1a keeps the bytes-blob shape; Phase 1b changes the
-        signature to `(id, vec: list[float], model)` so backends can
-        bind native vector types (pgvector on Postgres).
+        Backends bind the vector to their native storage type
+        (BLOB on SQLite via `serialize_vector`; pgvector(512) on
+        Postgres). The Phase 1b cutover from `bytes` to
+        `list[float]` keeps `serialize_vector` /
+        `deserialize_vector` confined to the SqliteBackend.
         """
         ...
 
@@ -167,7 +178,27 @@ class NodeStore(Protocol):
         ...
 
     def get_all_embeddings(self) -> list[tuple[Id, str, bytes]]:
-        """Return all (id, content, blob) triples for active insights."""
+        """Return all (id, content, blob) triples for active insights.
+
+        Backwards-compat shape used by snapshot writes. Pipeline /
+        recall code prefers `iter_embeddings_as_vecs` -- the verb
+        below -- which yields native vectors and bypasses
+        SQLite-specific blob deserialization.
+        """
+        ...
+
+    def iter_embeddings_as_vecs(
+            self) -> Iterator[tuple[Id, list[float]]]:
+        """Yield (id, vec) for every active insight with an embedding.
+
+        SQLite implementation deserializes the blob inside the
+        backend so callers see only `list[float]`. Postgres implements
+        this as a server-side cursor over `SELECT id, embedding ...`,
+        binding pgvector(512) directly.
+
+        Use `dict(backend.nodes.iter_embeddings_as_vecs())` when a
+        cache is needed; iterate directly when memory matters.
+        """
         ...
 
     def embedding_stats(self) -> tuple[int, int]:
@@ -294,6 +325,21 @@ class EdgeStore(Protocol):
 
     def degree_distribution(self) -> dict[Id, int]:
         """{insight_id: total_degree} for all active insights."""
+        ...
+
+    def get_neighborhood(
+            self, seed_id: Id, *, depth: int,
+            edge_filter: str = '') -> list[tuple[Id, int, str]]:
+        """Bounded BFS neighborhood from one seed.
+
+        Returns `(neighbor_id, hop, via_edge_type)` triples ordered by
+        traversal arrival. Depth bound is enforced inside the verb so
+        Postgres can emit just the bounded subgraph via a recursive CTE
+        instead of streaming the full edge set to the client.
+
+        `edge_filter`: when non-empty, only edges of that `edge_type`
+        are followed.
+        """
         ...
 
 

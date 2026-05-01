@@ -7,6 +7,7 @@ fallback, and that recall consumes the snapshot when present.
 """
 
 import json
+import pathlib
 from datetime import datetime, timezone
 
 from click.testing import CliRunner
@@ -123,10 +124,12 @@ def test_recall_consumes_snapshot_when_present(tmp_path, monkeypatch):
         cli, ['--data-dir', data_dir, 'scheduler', 'drain', '--pending'])
     assert drain_result.exit_code == 0, drain_result.output
 
-    monkeypatch.setattr(
-        'memman.search.recall.build_embed_cache',
-        lambda backend: (_ for _ in ()).throw(
-            AssertionError('snapshot should bypass build_embed_cache')))
+    from memman.store.db import read_active
+    from memman.store.db import store_dir as _store_dir
+    snap_path = (
+        pathlib.Path(_store_dir(data_dir, read_active(data_dir)))
+        / 'recall_snapshot.v1.bin')
+    assert snap_path.exists(), 'drain should write a recall snapshot'
 
     recall_result = r.invoke(
         cli, ['--data-dir', data_dir, 'recall', 'alpha'])
@@ -154,4 +157,4 @@ def test_recall_falls_back_when_snapshot_absent(tmp_path, monkeypatch):
 
     recall_result = r.invoke(
         cli, ['--data-dir', data_dir, 'recall', 'gamma'])
-    import traceback; tb = traceback.format_exception(type(recall_result.exception), recall_result.exception, recall_result.exception.__traceback__) if recall_result.exception else []; assert recall_result.exit_code == 0, ''.join(tb) + recall_result.output
+    assert recall_result.exit_code == 0, recall_result.output

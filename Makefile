@@ -17,7 +17,10 @@ typecheck:
 	  src/memman/store/backend.py \
 	  src/memman/store/factory.py \
 	  src/memman/store/model.py \
-	  src/memman/store/sqlite.py
+	  src/memman/store/sqlite.py \
+	  src/memman/graph/bfs.py \
+	  src/memman/graph/semantic.py \
+	  src/memman/graph/engine.py
 
 e2e:
 	poetry run pytest tests/e2e/ -v

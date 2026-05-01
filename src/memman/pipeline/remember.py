@@ -25,8 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from memman.embed import get_client
-from memman.embed.vector import cosine_similarity, deserialize_vector
-from memman.embed.vector import serialize_vector
+from memman.embed.vector import cosine_similarity
 from memman.graph.causal import infer_llm_causal_edges
 from memman.graph.engine import fast_edges
 from memman.graph.enrichment import build_enriched_text, enrich_with_llm
@@ -81,12 +80,10 @@ class FactPlan:
     fact_text: str
     fact_insight: Insight | None = None
     target_id: str | None = None
-    embed_blob: bytes | None = None
     embed_vec: list[float] | None = None
     enrichment: dict = field(default_factory=dict)
     causal_edges: list[Edge] = field(default_factory=list)
     enriched_vec: list[float] | None = None
-    enriched_blob: bytes | None = None
     skip_reason: str = ''
 
 
@@ -145,11 +142,7 @@ def run_remember(
                 }
 
     if embed_cache is None:
-        embed_cache = {}
-        for eid, _content, blob in backend.nodes.get_all_embeddings():
-            v = deserialize_vector(blob)
-            if v is not None:
-                embed_cache[eid] = v
+        embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
     if insights_by_id is None:
         all_insights = backend.nodes.get_all_active()
         insights_by_id = {i.id: i for i in all_insights}
@@ -249,8 +242,8 @@ def _batch_enriched_embeds(
 
     Called once per row after planning completes. Plans whose
     enrichment yielded keywords get an enriched-text embedding
-    distributed back into `enriched_vec`/`enriched_blob`. Plans
-    without keywords are untouched.
+    written back into `enriched_vec`. Plans without keywords are
+    untouched.
     """
     if ec is None or not ec.available():
         return
@@ -284,7 +277,6 @@ def _batch_enriched_embeds(
 
     for (plan, _t), vec in zip(pending, vectors):
         plan.enriched_vec = vec
-        plan.enriched_blob = serialize_vector(vec)
 
 
 def _plan_fact(
@@ -318,10 +310,8 @@ def _plan_fact(
     fact_entities = fact.get('entities', [])
 
     fact_vec = None
-    fact_blob = None
     try:
         fact_vec = ec.embed(fact_text)
-        fact_blob = serialize_vector(fact_vec)
     except Exception:
         pass
 
@@ -400,11 +390,9 @@ def _plan_fact(
         updated_at=parent.updated_at)
 
     embed_vec = fact_vec
-    embed_blob = fact_blob
     if merged_text:
         try:
             embed_vec = ec.embed(effective_text)
-            embed_blob = serialize_vector(embed_vec)
         except Exception:
             pass
 
@@ -430,7 +418,6 @@ def _plan_fact(
             fact_insight=fact_insight,
             target_id=target_id,
             embed_vec=embed_vec,
-            embed_blob=embed_blob,
             ), calls
 
     enrichment: dict = {}
@@ -466,11 +453,9 @@ def _plan_fact(
         fact_insight=fact_insight,
         target_id=target_id,
         embed_vec=embed_vec,
-        embed_blob=embed_blob,
         enrichment=enrichment,
         causal_edges=causal_edges,
         enriched_vec=None,
-        enriched_blob=None,
         ), calls
 
 
@@ -527,11 +512,11 @@ def _apply_plan(
 
     backend.nodes.insert(fi)
 
-    final_blob = plan.enriched_blob or plan.embed_blob
-    embedded = final_blob is not None
-    if final_blob is not None:
+    final_vec = plan.enriched_vec or plan.embed_vec
+    embedded = final_vec is not None
+    if final_vec is not None:
         backend.nodes.update_embedding(
-            fi.id, final_blob, fi.embedding_model or '')
+            fi.id, final_vec, fi.embedding_model or '')
     if fi.entities:
         backend.nodes.update_entities(fi.id, fi.entities)
 

@@ -3,16 +3,18 @@
 import hashlib
 import json
 import logging
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 from memman.graph.entity import MAX_ENTITY_LINKS, MAX_TOTAL_ENTITY_EDGES
 from memman.graph.entity import create_entity_edges
-from memman.graph.semantic import AUTO_SEMANTIC_THRESHOLD, build_embed_cache
+from memman.graph.semantic import AUTO_SEMANTIC_THRESHOLD
 from memman.graph.semantic import create_semantic_edges
 from memman.graph.temporal import MAX_PROXIMITY_EDGES, MIN_PROXIMITY_WEIGHT
 from memman.graph.temporal import TEMPORAL_WINDOW_HOURS, create_temporal_edge
 from memman.store.backend import Backend
-from memman.store.model import Insight
+from memman.store.model import Edge, Insight
 
 logger = logging.getLogger('memman')
 
@@ -35,11 +37,11 @@ MAX_LINK_BATCH = 20
 def link_pending(
         backend: Backend,
         embed_cache: dict[str, list[float]] | None = None,
-        llm_client: object | None = None,
-        metadata_llm_client: object | None = None,
-        embed_client: object | None = None,
+        llm_client: Any | None = None,
+        metadata_llm_client: Any | None = None,
+        embed_client: Any | None = None,
         max_batch: int = MAX_LINK_BATCH,
-        on_progress: 'Callable[[str, Insight], None] | None' = None,
+        on_progress: Callable[[str, Insight], None] | None = None,
         ) -> int:
     """Process insights where linked_at IS NULL.
 
@@ -51,7 +53,7 @@ def link_pending(
         return 0
 
     if embed_cache is None:
-        embed_cache = build_embed_cache(backend)
+        embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
 
     if metadata_llm_client is None:
         metadata_llm_client = llm_client
@@ -69,7 +71,7 @@ def link_pending(
         if on_progress:
             on_progress('enrich', insight)
 
-        def _do_causal() -> list:
+        def _do_causal() -> list[Edge]:
             with backend.readonly_context() as ro:
                 return infer_llm_causal_edges(
                     ro, insight, metadata_llm_client)
@@ -114,11 +116,10 @@ def link_pending(
                 insight.entities = enrichment.get('entities', [])
 
             if new_vec is not None:
-                from memman.embed.vector import serialize_vector
                 if embed_cache is not None:
                     embed_cache[insight.id] = new_vec
                 backend.nodes.update_embedding(
-                    insight.id, serialize_vector(new_vec),
+                    insight.id, new_vec,
                     getattr(embed_client, 'model', None) or '')
 
             backend.edges.delete_auto_for_node(insight.id, 'entity')
@@ -184,7 +185,7 @@ def reindex_auto_edges(
     causal_del = backend.edges.count_auto_by_type('causal')
 
     if dry_run:
-        stats = {
+        dry_stats: dict[str, int] = {
             'semantic_deleted': semantic_del,
             'entity_deleted': entity_del,
             'temporal_pruned': temporal_del,
@@ -193,15 +194,16 @@ def reindex_auto_edges(
             'entity_created': 0,
             'dry_run': 1,
             }
-        insights = backend.nodes.get_all_active()
-        if insights:
-            embed_cache = build_embed_cache(backend)
-            for insight in insights:
-                stats['entity_created'] += create_entity_edges(
-                    backend, insight, dry_run=True)
-                stats['semantic_created'] += create_semantic_edges(
-                    backend, insight, embed_cache, dry_run=True)
-        return stats
+        dry_insights = backend.nodes.get_all_active()
+        if dry_insights:
+            dry_embed_cache = dict(
+                backend.nodes.iter_embeddings_as_vecs())
+            for ins in dry_insights:
+                dry_stats['entity_created'] += create_entity_edges(
+                    backend, ins, dry_run=True)
+                dry_stats['semantic_created'] += create_semantic_edges(
+                    backend, ins, dry_embed_cache, dry_run=True)
+        return dry_stats
 
     stats: dict[str, int] = {
         'semantic_deleted': 0,
@@ -230,7 +232,7 @@ def reindex_auto_edges(
         if not insights:
             return
 
-        embed_cache = build_embed_cache(backend)
+        embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
 
         for insight in insights:
             stats['entity_created'] += create_entity_edges(
