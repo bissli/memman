@@ -26,6 +26,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,19 @@ MAX_BYTES = 5 * 1024 * 1024
 BACKUP_COUNT = 3
 REDACT_HEADER_NAMES = {'authorization', 'x-api-key', 'api-key'}
 REDACT_VALUE = '***REDACTED***'
+
+_DSN_PASSWORD_RE = re.compile(
+    r'(?P<scheme>[a-z][a-z0-9+.-]*://[^:@/\s]+):[^@/\s]+@')
+
+
+def redact_dsn(value: str) -> str:
+    """Mask the password in a DSN of the form `scheme://user:pass@host`.
+
+    Pass-through for passwordless DSNs and strings that don't match.
+    Use at any log site that may carry a postgres connection string so
+    psycopg exception text or connection repr does not leak credentials.
+    """
+    return _DSN_PASSWORD_RE.sub(r'\g<scheme>:***@', value)
 
 
 def is_enabled() -> bool:

@@ -264,6 +264,22 @@ def check_queue_schema(data_dir: str) -> dict:
         }
 
 
+def check_optional_extras() -> dict:
+    """Report which `memman[extras]` install groups resolve at runtime.
+
+    Always passes; the result is informational. Lets users verify their
+    install matches their `MEMMAN_BACKEND` choice (e.g., backend=postgres
+    requires the `postgres` extra to be active).
+    """
+    from memman import extras
+    active = extras.detect_active_extras()
+    return {
+        'name': 'optional_extras',
+        'status': 'pass',
+        'detail': {'active': active},
+        }
+
+
 def check_env_completeness() -> dict:
     """Verify ~/.memman/env contains every INSTALLABLE_KEYS entry.
 
@@ -278,6 +294,8 @@ def check_env_completeness() -> dict:
     parsed = config.parse_env_file(path)
 
     optional_secrets = {config.OPENAI_EMBED_API_KEY}
+    if parsed.get(config.BACKEND, 'sqlite') != 'postgres':
+        optional_secrets |= {config.PG_DSN}
     missing = [
         key for key in config.INSTALLABLE_KEYS
         if not parsed.get(key) and key not in optional_secrets
@@ -720,7 +738,8 @@ def run_all_checks(db: 'DB', data_dir: str | None = None) -> dict:
             check_env_permissions(),
             check_scheduler_state(),
             check_llm_probe(),
-            check_embed_probe()))
+            check_embed_probe(),
+            check_optional_extras()))
     if total == 0 and data_dir is None:
         return {'status': 'empty', 'total_active': 0, 'checks': []}
     statuses = [c['status'] for c in checks]

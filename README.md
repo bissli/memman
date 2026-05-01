@@ -40,7 +40,9 @@ export VOYAGE_API_KEY=...       # embedding provider key (current default)
 memman install
 ```
 
-`memman install` performs a one-time pull of every `INSTALLABLE_KEYS` value from your shell into `~/.memman/env` (mode 0600), filling any remaining blanks via the OpenRouter `/models` resolver (FAST/SLOW only) or `INSTALL_DEFAULTS`. After install, the file is the canonical, global source of truth: runtime never consults the shell, and re-running `memman install` will not let a later shell export override what is already in the file. To change a setting, edit the file directly (or re-run `memman install` to bump model versions through the resolver). See [CONTRIBUTING.md](CONTRIBUTING.md#configuration) for the full key list.
+`memman install` performs a one-time pull of every `INSTALLABLE_KEYS` value from your shell into `~/.memman/env` (mode 0600), filling any remaining blanks via the OpenRouter `/models` resolver (FAST/SLOW only) or `INSTALL_DEFAULTS`. When run in a TTY without `OPENROUTER_API_KEY` or `VOYAGE_API_KEY` set, the install wizard prompts for them with masked input, so you do not strictly need to export anything first. Headless / CI installs use the `--no-wizard` flag (or simply have no TTY) and require the secrets in the shell or in the env file already.
+
+After install, the file is the canonical, global source of truth: runtime never consults the shell, and re-running `memman install` will not let a later shell export override what is already in the file. To change a setting, run `memman config set KEY VALUE` (e.g., `memman config set MEMMAN_BACKEND postgres`) -- this is the explicit override path. Re-running `memman install` is safe and idempotent; it bumps model versions through the resolver but never overwrites existing values. See [CONTRIBUTING.md](CONTRIBUTING.md#configuration) for the full key list.
 
 `pipx install` puts the `memman` binary on your PATH. `memman install` wires integration into Claude Code, [OpenClaw](https://github.com/openclaw/openclaw), and/or [NanoClaw](https://github.com/qwibitai/nanoclaw):
 

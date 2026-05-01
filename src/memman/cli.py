@@ -273,7 +273,30 @@ def log() -> None:
 
 @cli.group(name='config')
 def config_cmd() -> None:
-    """Read-only inspection of effective settings."""
+    """Inspect and modify persisted memman settings."""
+
+
+@config_cmd.command('set')
+@click.argument('key')
+@click.argument('value')
+@click.pass_context
+def config_set(ctx: click.Context, key: str, value: str) -> None:
+    """Write `KEY=VALUE` to the env file, bypassing the install seed model.
+
+    Use this to change an INSTALLABLE_KEYS value after initial install
+    -- switching backends, rotating an API key, updating a DSN. Install
+    flags remain sticky-seed (they never override an existing file
+    value); `config set` is the explicit override path.
+    """
+    if key not in config.INSTALLABLE_KEYS:
+        raise click.ClickException(
+            f'{key!r} is not in INSTALLABLE_KEYS; only persistable'
+            ' settings can be changed via `config set`')
+    from memman.setup.scheduler import _write_env_keys
+    data_dir = ctx.obj['data_dir']
+    _write_env_keys({key: value}, data_dir=data_dir)
+    config.reset_file_cache()
+    click.echo(f'set {key} in {config.env_file_path(data_dir)}')
 
 
 @config_cmd.command('show')
@@ -1907,11 +1930,25 @@ def insights_show(ctx: click.Context, id: str) -> None:
 @cli.command()
 @click.option('--target', default='',
               help='Target environment (claude-code | openclaw | nanoclaw)')
+@click.option('--backend', type=click.Choice(['sqlite', 'postgres']),
+              default=None,
+              help='Storage backend; bypasses the wizard prompt when set.')
+@click.option('--pg-dsn', default=None,
+              help='Postgres DSN (postgresql://...); required with'
+                   ' --backend postgres in non-interactive mode.')
+@click.option('--no-wizard', is_flag=True,
+              help='Disable interactive prompts; flags + defaults only.')
 @click.pass_context
-def install(ctx: click.Context, target: str) -> None:
+def install(ctx: click.Context, target: str, backend: str | None,
+            pg_dsn: str | None, no_wizard: bool) -> None:
     """Install memman integration: skill, hooks, scheduler."""
     from memman.setup.claude import run_install
-    run_install(ctx.obj['data_dir'], target=target)
+    run_install(
+        ctx.obj['data_dir'],
+        target=target,
+        backend=backend,
+        pg_dsn=pg_dsn,
+        no_wizard=no_wizard)
 
 
 @cli.command()

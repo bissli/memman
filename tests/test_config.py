@@ -21,6 +21,8 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_DEBUG',
     'MEMMAN_WORKER',
     'MEMMAN_LOG_LEVEL',
+    'MEMMAN_BACKEND',
+    'MEMMAN_PG_DSN',
     'OPENROUTER_API_KEY',
     'VOYAGE_API_KEY',
     'MEMMAN_OPENAI_EMBED_API_KEY',
@@ -86,6 +88,8 @@ def test_constants_match_expected_names():
         config.OLLAMA_HOST,
         config.OLLAMA_EMBED_MODEL,
         config.OPENROUTER_EMBED_MODEL,
+        config.BACKEND,
+        config.PG_DSN,
         }
     assert actual == ALL_EXPECTED_NAMES
 

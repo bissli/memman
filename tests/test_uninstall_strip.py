@@ -28,6 +28,8 @@ def _install_env(data_dir):
         f'{config.OPENROUTER_API_KEY}=sk-or-installed',
         f'{config.VOYAGE_API_KEY}=pa-installed',
         f'{config.OPENAI_EMBED_API_KEY}=sk-oa-installed',
+        f'{config.BACKEND}=postgres',
+        f'{config.PG_DSN}=postgresql://user:pw@host/db',
         ]) + '\n'
     (data_dir / config.ENV_FILENAME).write_text(contents)
     (data_dir / config.ENV_FILENAME).chmod(0o600)
@@ -58,9 +60,11 @@ def test_uninstall_strips_secrets_keeps_settings(fake_home, monkeypatch):
     assert config.OPENROUTER_API_KEY not in contents
     assert config.VOYAGE_API_KEY not in contents
     assert config.OPENAI_EMBED_API_KEY not in contents
+    assert config.PG_DSN not in contents
     assert f'{config.LLM_PROVIDER}=openrouter' in contents
     assert config.LLM_MODEL_FAST in contents
     assert config.EMBED_PROVIDER in contents
+    assert f'{config.BACKEND}=postgres' in contents
 
 
 @pytest.mark.no_default_env

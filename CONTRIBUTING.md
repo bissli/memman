@@ -16,13 +16,17 @@ The project uses Poetry; run commands via `poetry run <cmd>` or inside `poetry s
 
 memman resolves env vars from a single canonical source at runtime: `<MEMMAN_DATA_DIR>/env`, a `KEY=VALUE` file at mode 0600 (default `~/.memman/env`). Shell environment variables are NOT consulted at runtime for installable settings, so a stale shell export cannot silently override the file. There is no code-default fallback at runtime. Defaults live in `config.INSTALL_DEFAULTS` and are consumed only by `memman install`, which writes them to the env file when the file lacks a value. If a key is missing from the file, the resolver returns `None` and the caller raises a `ConfigError` with "run `memman install`" guidance.
 
-`memman install` performs a one-time pull from the current shell into the env file. Precedence per key: existing file value > `os.environ` > OpenRouter `/models` resolver (FAST/SLOW only) > `INSTALL_DEFAULTS`. Existing file values are sticky -- a later shell export never overrides them on reinstall, so there is no override path; the shell only seeds blanks. Mandatory secrets (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`) must be present in either the file or the shell when install runs, otherwise install fails loud. After install, interactive `memman recall`, `memman doctor`, and the scheduler-driven worker all read from the file; the keys never need to be re-exported in subsequent shells.
+`memman install` performs a one-time pull from the current shell into the env file. Precedence per key: existing file value > wizard prompt (TTY only) > `os.environ` > OpenRouter `/models` resolver (FAST/SLOW only) > `INSTALL_DEFAULTS`. Existing file values are sticky -- a later shell export never overrides them on reinstall, so there is no override path through install. Mandatory secrets (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`) must be present in the file, the shell, or be supplied via the wizard prompt; install fails loud otherwise. After install, interactive `memman recall`, `memman doctor`, and the scheduler-driven worker all read from the file; the keys never need to be re-exported in subsequent shells.
 
 Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`) are read directly from `os.environ` by their owners -- they are deliberately excluded from the env-file model.
 
-`memman uninstall` strips the secret keys (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`) from the env file but keeps non-secret settings, so a later `memman install` resurrects model/provider preferences without re-export.
+The install wizard adds three flags: `--backend [sqlite|postgres]` selects the storage backend (sqlite default; postgres hidden until the `memman[postgres]` extra and the `memman.backend.postgres` module are both available); `--pg-dsn URL` provides the Postgres DSN non-interactively; `--no-wizard` disables prompts so flags + defaults drive the install. Conflicts between an `INSTALLABLE_KEYS` flag and an existing env-file value are rejected loudly with the exact `memman config set ...` command to run -- install never silently swallows a flag.
 
-`memman doctor` includes an `env_completeness` check: when `pipx upgrade memman` adds a new `INSTALLABLE_KEYS` entry, the check warns with the missing-keys list and "run `memman install`" guidance.
+`memman config set KEY VALUE` is the explicit override path. Use it to change an `INSTALLABLE_KEYS` value after initial install (switching backends, rotating an API key, updating a DSN). The install command stays sticky-seed by design; `config set` is the unambiguous "I'm changing my mind" verb.
+
+`memman uninstall` strips the secret keys (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`, `MEMMAN_PG_DSN`) from the env file but keeps non-secret settings (including `MEMMAN_BACKEND`), so a later `memman install` resurrects model/provider/backend preferences without re-export.
+
+`memman doctor` includes an `env_completeness` check that warns when a new `INSTALLABLE_KEYS` entry is missing, plus an `optional_extras` check that reports which `memman[extras]` install groups (e.g., `postgres`) resolve at runtime.
 
 ### Required keys
 
@@ -50,6 +54,8 @@ Set any of these in your shell before `memman install` and they land in the env 
 | `MEMMAN_OPENROUTER_EMBED_MODEL`   | Model id for the OpenRouter embed provider (`MEMMAN_EMBED_PROVIDER=openrouter`). Default `baai/bge-m3`. Reuses `OPENROUTER_API_KEY` and `MEMMAN_OPENROUTER_ENDPOINT`; no separate secret needed. |
 | `MEMMAN_OLLAMA_HOST`              | Ollama host URL (default `http://localhost:11434`).                                                                                                                                              |
 | `MEMMAN_OLLAMA_EMBED_MODEL`       | Ollama embedding model name (default `nomic-embed-text`).                                                                                                                                        |
+| `MEMMAN_BACKEND`                  | Storage backend (`sqlite` default, `postgres` once the `memman[postgres]` extra and Phase 2 backend land).                                                                                       |
+| `MEMMAN_PG_DSN`                   | Postgres DSN (`postgresql://...`); secret. Stripped from the env file on `memman uninstall`.                                                                                                     |
 
 ### Process-control vars (NOT persisted in the env file)
 

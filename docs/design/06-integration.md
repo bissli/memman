@@ -178,15 +178,23 @@ Deployment model:
 
 Key install options:
 
-| Command / Flag                        | Effect                           |
-| ------------------------------------- | -------------------------------- |
-| `memman install --target claude-code` | Install into `~/.claude/` only   |
-| `memman install --target openclaw`    | Install into `~/.openclaw/` only |
-| `memman install --target nanoclaw`    | Install into `~/.nanoclaw/` only |
-| `memman uninstall`                    | Remove all memman integrations   |
-| `memman uninstall --target <name>`    | Remove from a single environment |
+| Command / Flag                        | Effect                                                                                    |
+| ------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `memman install --target claude-code` | Install into `~/.claude/` only                                                            |
+| `memman install --target openclaw`    | Install into `~/.openclaw/` only                                                          |
+| `memman install --target nanoclaw`    | Install into `~/.nanoclaw/` only                                                          |
+| `memman install --backend sqlite\     | postgres`                                                                                 | Pick the storage backend without prompting. |
+| `memman install --pg-dsn URL`         | Provide the Postgres DSN for non-interactive installs.                                    |
+| `memman install --no-wizard`          | Disable interactive prompts; flags + defaults only.                                       |
+| `memman config set KEY VALUE`         | Explicit override path (e.g., `MEMMAN_BACKEND postgres`); bypasses sticky-seed semantics. |
+| `memman uninstall`                    | Remove all memman integrations                                                            |
+| `memman uninstall --target <name>`    | Remove from a single environment                                                          |
 
-`memman uninstall` strips secret keys (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`) from `~/.memman/env` while preserving non-secret model/provider settings, so a later `memman install` resurrects preferences without re-export. The memory store, queue, and scheduler logs under `~/.memman/` are untouched. To fully remove the binary: `pipx uninstall memman`.
+When run in a TTY without `OPENROUTER_API_KEY` / `VOYAGE_API_KEY` set, the install wizard prompts for each missing mandatory secret with masked input. The backend selector only appears once both `memman[postgres]` extras and the Phase 2 `memman.backend.postgres` module exist; until then sqlite is the only path and the wizard short-circuits the backend prompt entirely.
+
+Backend-switch semantics: `MEMMAN_BACKEND` is global per data dir (no per-store backend choice; switching is all-or-nothing across all stores in `~/.memman/data/`). Postgres -> SQLite is unsupported (forward-only migration). `~/.memman/active` continues to hold a store-name string regardless of backend. Conflicts between an `INSTALLABLE_KEYS` flag and an existing env-file value are rejected loudly with the exact `memman config set ...` command to run -- install never silently swallows a flag.
+
+`memman uninstall` strips secret keys (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`, `MEMMAN_PG_DSN`) from `~/.memman/env` while preserving non-secret model/provider/backend settings, so a later `memman install` resurrects preferences (including `MEMMAN_BACKEND`) without re-export. The memory store, queue, and scheduler logs under `~/.memman/` are untouched. To fully remove the binary: `pipx uninstall memman`.
 
 The Prime hook is always installed. Remind, Nudge, Compact, Recall, and ExitPlan hooks are optional (all enabled by default).
 

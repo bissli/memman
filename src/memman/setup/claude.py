@@ -219,12 +219,66 @@ def _validate_target(target: str) -> None:
             ' (must be claude-code, openclaw, or nanoclaw)')
 
 
-def run_install(data_dir: str, target: str = '') -> None:
-    """Install memman integration. Called by the `memman install` command."""
+def run_install(data_dir: str, target: str = '',
+                backend: str | None = None,
+                pg_dsn: str | None = None,
+                no_wizard: bool = False) -> None:
+    """Install memman integration. Called by the `memman install` command.
+
+    Order of operations:
+
+    1. Validate target.
+    2. Reject flag-vs-file conflicts loudly (no silent override).
+    3. Detect LLM-CLI environments.
+    4. Run the wizard (secret prompts + backend selector + DSN). Merge
+       its output into the env file via `_write_env_keys` BEFORE the
+       prereq check so any wizard-collected secret is visible to
+       `collect_install_knobs`.
+    5. Check prereqs (platform / binary / mandatory secrets).
+    6. Install CLI integration + scheduler unit.
+    """
     _validate_target(target)
+    _reject_flag_file_conflicts(
+        data_dir=data_dir, backend=backend, pg_dsn=pg_dsn)
     envs = detect_environments()
+    from memman.setup import wizard as _wizard_mod
+    from memman.setup.scheduler import _write_env_keys
+    wizard_out = _wizard_mod.run_wizard(
+        data_dir, backend=backend, pg_dsn=pg_dsn, no_wizard=no_wizard)
+    if wizard_out:
+        _write_env_keys(wizard_out, data_dir=data_dir)
+        config.reset_file_cache()
     knobs = check_prereqs(data_dir)
     _run_install_flow(envs, target=target, data_dir=data_dir, knobs=knobs)
+
+
+def _reject_flag_file_conflicts(
+        *,
+        data_dir: str,
+        backend: str | None,
+        pg_dsn: str | None) -> None:
+    """Exit 1 when a flag value conflicts with the env file's current value.
+
+    The env-file canonical model means install flags are sticky-seed:
+    they fill blanks but never override an existing value. Silently
+    swallowing a flag is a footgun, so any conflict surfaces here with
+    the exact `memman config set ...` command the user should run.
+    """
+    file_values = config.parse_env_file(config.env_file_path(data_dir))
+    pairs: list[tuple[str, str | None]] = [
+        (config.BACKEND, backend),
+        (config.PG_DSN, pg_dsn),
+        ]
+    for key, flag_value in pairs:
+        if flag_value is None:
+            continue
+        existing = file_values.get(key, '').strip()
+        if existing and existing != flag_value:
+            env_path = config.env_file_path(data_dir)
+            raise click.ClickException(
+                f'{key} is already set to {existing!r} in {env_path};'
+                f' refusing to silently override with flag value'
+                f' {flag_value!r}.\nRun: memman config set {key} {flag_value}')
 
 
 def run_uninstall(data_dir: str, target: str = '') -> None:
