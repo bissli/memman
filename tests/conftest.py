@@ -20,7 +20,12 @@ from datetime import datetime, timezone
 import pytest
 from memman.model import Edge, Insight
 
-pytest_plugins = ['tests.fixtures.postgres']
+try:
+    import psycopg  # noqa: F401
+    import testcontainers.postgres  # noqa: F401
+    pytest_plugins = ['tests.fixtures.postgres']
+except ImportError:
+    pytest_plugins = ()
 
 EMBEDDING_DIM = 512
 

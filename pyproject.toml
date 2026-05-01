@@ -18,20 +18,18 @@ click = "^8.1"
 httpx = "^0.27"
 numpy = ">=1.26"
 tqdm = "^4.66"
+psycopg = {version = ">=3.2", extras = ["binary"], optional = true}
+psycopg-pool = {version = ">=3.2", optional = true}
+pgvector = {version = ">=0.3", optional = true}
+
+[tool.poetry.extras]
+postgres = ["psycopg", "psycopg-pool", "pgvector"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
 matplotlib = "^3.8"
 networkx = "^3.2"
 testcontainers = "^4.14.2"
-
-[tool.poetry.group.postgres]
-optional = true
-
-[tool.poetry.group.postgres.dependencies]
-psycopg = {version=">=3.2", extras=["binary"]}
-psycopg-pool = ">=3.2"
-pgvector = ">=0.3"
 
 [build-system]
 requires = ["poetry-core"]
@@ -49,5 +47,5 @@ markers = [
     "e2e_container: end-to-end tests that build/run a Docker container via testcontainers",
     "systemd: tests that require systemd-as-PID-1 (privileged container); opt-in only",
     "live_claude: tests that invoke a real Anthropic Claude Code session (requires ANTHROPIC_API_KEY)",
-    "postgres: tests requiring the pgvector testcontainer (postgres optional dep group)",
+    "postgres: tests requiring the pgvector testcontainer (install via memman[postgres])",
 ]
