@@ -20,8 +20,15 @@ def _sqlite_factory() -> Cluster:
     return SqliteCluster()
 
 
+def _postgres_factory() -> Cluster:
+    """Lazy import: psycopg + pgvector are an optional dependency."""
+    from memman.store.postgres import PostgresCluster
+    return PostgresCluster()
+
+
 BACKENDS: dict[str, Callable[[], Cluster]] = {
     'sqlite': _sqlite_factory,
+    'postgres': _postgres_factory,
     }
 
 
