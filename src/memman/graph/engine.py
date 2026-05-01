@@ -3,9 +3,7 @@
 import hashlib
 import json
 import logging
-import pathlib
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
 
 from memman.graph.entity import MAX_ENTITY_LINKS, MAX_TOTAL_ENTITY_EDGES
 from memman.graph.entity import create_entity_edges
@@ -13,29 +11,21 @@ from memman.graph.semantic import AUTO_SEMANTIC_THRESHOLD, build_embed_cache
 from memman.graph.semantic import create_semantic_edges
 from memman.graph.temporal import MAX_PROXIMITY_EDGES, MIN_PROXIMITY_WEIGHT
 from memman.graph.temporal import TEMPORAL_WINDOW_HOURS, create_temporal_edge
-from memman.model import Insight, format_timestamp
-from memman.store.edge import count_auto_edges_by_type
-from memman.store.edge import count_low_weight_temporal_proximity
-from memman.store.edge import delete_auto_edges_by_type
-from memman.store.edge import delete_auto_edges_for_node
-from memman.store.edge import delete_low_weight_temporal_proximity
-from memman.store.edge import insert_edge
-from memman.store.node import clear_linked_at, get_all_active_insights
-from memman.store.node import get_insight_by_id, get_pending_link_ids
-from memman.store.node import stamp_enriched, stamp_linked, update_entities
+from memman.store.backend import Backend
+from memman.store.model import Insight
 
 logger = logging.getLogger('memman')
 
 
-def fast_edges(db: 'DB', insight: Insight) -> dict[str, int]:
+def fast_edges(backend: Backend, insight: Insight) -> dict[str, int]:
     """Run cheap edge generators (temporal + entity).
 
     LLM causal inference is deferred to link_pending().
     Semantic edges are deferred to link_pending().
     """
     return {
-        'temporal': create_temporal_edge(db, insight),
-        'entity': create_entity_edges(db, insight),
+        'temporal': create_temporal_edge(backend, insight),
+        'entity': create_entity_edges(backend, insight),
         }
 
 
@@ -43,7 +33,7 @@ MAX_LINK_BATCH = 20
 
 
 def link_pending(
-        db: 'DB',
+        backend: Backend,
         embed_cache: dict[str, list[float]] | None = None,
         llm_client: object | None = None,
         metadata_llm_client: object | None = None,
@@ -56,26 +46,23 @@ def link_pending(
     Creates semantic edges (and optionally LLM causal/enrichment edges)
     for pending insights. Returns the number of insights processed.
     """
-    pending_ids = get_pending_link_ids(db, max_batch)
+    pending_ids = backend.nodes.get_pending_link_ids(limit=max_batch)
     if not pending_ids:
         return 0
 
     if embed_cache is None:
-        embed_cache = build_embed_cache(db)
+        embed_cache = build_embed_cache(backend)
 
     if metadata_llm_client is None:
         metadata_llm_client = llm_client
 
     from memman.graph.causal import infer_llm_causal_edges
     from memman.graph.enrichment import enrich_with_llm
-    from memman.store.db import open_read_only
 
-    now = format_timestamp(datetime.now(timezone.utc))
     processed = 0
-    data_dir = str(pathlib.Path(db.path).parent)
 
     for insight_id in pending_ids:
-        insight = get_insight_by_id(db, insight_id)
+        insight = backend.nodes.get(insight_id)
         if insight is None:
             continue
 
@@ -83,12 +70,9 @@ def link_pending(
             on_progress('enrich', insight)
 
         def _do_causal() -> list:
-            ro_db = open_read_only(data_dir)
-            try:
+            with backend.readonly_context() as ro:
                 return infer_llm_causal_edges(
-                    ro_db, insight, metadata_llm_client)
-            finally:
-                ro_db.close()
+                    ro, insight, metadata_llm_client)
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             fut_enrich = pool.submit(
@@ -120,45 +104,44 @@ def link_pending(
 
         def _write_results() -> int:
             if enrichment:
-                from memman.store.node import update_enrichment
-                update_enrichment(
-                    db, insight.id,
-                    enrichment.get('keywords', []),
-                    enrichment.get('summary', ''),
-                    enrichment.get('semantic_facts', []))
-                update_entities(
-                    db, insight.id, enrichment.get('entities', []))
+                backend.nodes.update_enrichment(
+                    insight.id,
+                    keywords=enrichment.get('keywords', []),
+                    summary=enrichment.get('summary', ''),
+                    semantic_facts=enrichment.get('semantic_facts', []))
+                backend.nodes.update_entities(
+                    insight.id, enrichment.get('entities', []))
                 insight.entities = enrichment.get('entities', [])
 
             if new_vec is not None:
                 from memman.embed.vector import serialize_vector
-                from memman.store.node import update_embedding
                 if embed_cache is not None:
                     embed_cache[insight.id] = new_vec
-                update_embedding(
-                    db, insight.id, serialize_vector(new_vec),
+                backend.nodes.update_embedding(
+                    insight.id, serialize_vector(new_vec),
                     getattr(embed_client, 'model', None) or '')
 
-            delete_auto_edges_for_node(db, insight.id, 'entity')
-            create_entity_edges(db, insight)
+            backend.edges.delete_auto_for_node(insight.id, 'entity')
+            create_entity_edges(backend, insight)
 
-            delete_auto_edges_for_node(db, insight.id, 'semantic')
+            backend.edges.delete_auto_for_node(insight.id, 'semantic')
             sem_count = create_semantic_edges(
-                db, insight, embed_cache)
+                backend, insight, embed_cache)
 
-            delete_auto_edges_for_node(db, insight.id, 'causal')
+            backend.edges.delete_auto_for_node(insight.id, 'causal')
             for edge in causal_edges:
                 try:
-                    insert_edge(db, edge)
+                    backend.edges.upsert(edge)
                 except Exception:
                     pass
 
-            stamp_linked(db, insight_id, now)
+            backend.nodes.stamp_linked(insight_id)
             if enrichment:
-                stamp_enriched(db, insight_id, now)
+                backend.nodes.stamp_enriched(insight_id)
             return sem_count
 
-        semantic_count = db.in_transaction(_write_results)
+        with backend.transaction():
+            semantic_count = _write_results()
         if on_progress:
             on_progress('done', insight)
         processed += 1
@@ -188,19 +171,17 @@ def compute_constants_hash() -> str:
 
 
 def reindex_auto_edges(
-        db: 'DB', dry_run: bool = False) -> dict[str, int]:
+        backend: Backend, dry_run: bool = False) -> dict[str, int]:
     """Delete auto-created edges and re-create semantic/entity edges.
 
     Heuristic causal edges are deleted (replaced by LLM in Tier 3).
     LLM/manual causal edges are preserved.
     """
-    from memman.store.oplog import log_op
-
-    semantic_del = count_auto_edges_by_type(db, 'semantic')
-    entity_del = count_auto_edges_by_type(db, 'entity')
-    temporal_del = count_low_weight_temporal_proximity(
-        db, MIN_PROXIMITY_WEIGHT)
-    causal_del = count_auto_edges_by_type(db, 'causal')
+    semantic_del = backend.edges.count_auto_by_type('semantic')
+    entity_del = backend.edges.count_auto_by_type('entity')
+    temporal_del = backend.edges.count_low_weight_temporal_proximity(
+        min_weight=MIN_PROXIMITY_WEIGHT)
+    causal_del = backend.edges.count_auto_by_type('causal')
 
     if dry_run:
         stats = {
@@ -212,14 +193,14 @@ def reindex_auto_edges(
             'entity_created': 0,
             'dry_run': 1,
             }
-        insights = get_all_active_insights(db)
+        insights = backend.nodes.get_all_active()
         if insights:
-            embed_cache = build_embed_cache(db)
+            embed_cache = build_embed_cache(backend)
             for insight in insights:
                 stats['entity_created'] += create_entity_edges(
-                    db, insight, dry_run=True)
+                    backend, insight, dry_run=True)
                 stats['semantic_created'] += create_semantic_edges(
-                    db, insight, embed_cache, dry_run=True)
+                    backend, insight, embed_cache, dry_run=True)
         return stats
 
     stats: dict[str, int] = {
@@ -232,43 +213,49 @@ def reindex_auto_edges(
         }
 
     def tx_body() -> None:
-        delete_auto_edges_by_type(db, 'semantic')
+        backend.edges.delete_auto_by_type('semantic')
         stats['semantic_deleted'] = semantic_del
 
-        delete_auto_edges_by_type(db, 'entity')
+        backend.edges.delete_auto_by_type('entity')
         stats['entity_deleted'] = entity_del
 
-        delete_low_weight_temporal_proximity(db, MIN_PROXIMITY_WEIGHT)
+        backend.edges.delete_low_weight_temporal_proximity(
+            min_weight=MIN_PROXIMITY_WEIGHT)
         stats['temporal_pruned'] = temporal_del
 
-        delete_auto_edges_by_type(db, 'causal')
+        backend.edges.delete_auto_by_type('causal')
         stats['causal_deleted'] = causal_del
 
-        insights = get_all_active_insights(db)
+        insights = backend.nodes.get_all_active()
         if not insights:
             return
 
-        embed_cache = build_embed_cache(db)
+        embed_cache = build_embed_cache(backend)
 
         for insight in insights:
             stats['entity_created'] += create_entity_edges(
-                db, insight)
+                backend, insight)
             stats['semantic_created'] += create_semantic_edges(
-                db, insight, embed_cache)
+                backend, insight, embed_cache)
 
-        stats['entity_created'] = count_auto_edges_by_type(db, 'entity')
-        stats['semantic_created'] = count_auto_edges_by_type(
-            db, 'semantic')
+        stats['entity_created'] = backend.edges.count_auto_by_type(
+            'entity')
+        stats['semantic_created'] = backend.edges.count_auto_by_type(
+            'semantic')
 
-        clear_linked_at(db)
+        backend.nodes.clear_linked_at()
 
-        log_op(db, 'reindex', '', json.dumps(stats))
+        backend.oplog.log(
+            operation='reindex', insight_id='',
+            detail=json.dumps(stats))
 
-    db.in_transaction(tx_body)
+    with backend.transaction():
+        tx_body()
     return stats
 
 
-def reindex_if_constants_changed(db: 'DB') -> dict[str, int] | None:
+def reindex_if_constants_changed(
+        backend: Backend) -> dict[str, int] | None:
     """Reindex auto-edges when the stored constants hash is stale.
 
     Returns the reindex stats dict on reindex, or None when the stored
@@ -276,15 +263,13 @@ def reindex_if_constants_changed(db: 'DB') -> dict[str, int] | None:
     drifted (operator hint to run `memman graph rebuild`) and a DEBUG
     line on first-time initialization.
     """
-    from memman.store.db import get_meta, set_meta
-
     current_hash = compute_constants_hash()
-    stored_hash = get_meta(db, 'constants_hash')
+    stored_hash = backend.meta.get('constants_hash')
     if stored_hash == current_hash:
         return None
 
-    stats = reindex_auto_edges(db)
-    set_meta(db, 'constants_hash', current_hash)
+    stats = reindex_auto_edges(backend)
+    backend.meta.set('constants_hash', current_hash)
     if stored_hash is not None:
         logger.warning(
             f'edge constants changed (hash {stored_hash} ->'

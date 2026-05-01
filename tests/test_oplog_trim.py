@@ -6,8 +6,8 @@ recent rows survive, and the function is safe on an empty table.
 
 from datetime import datetime, timedelta, timezone
 
-from memman.model import format_timestamp
 from memman.store.db import open_db
+from memman.store.model import format_timestamp
 from memman.store.oplog import OPLOG_RETENTION_DAYS, log_op, trim_oplog_by_age
 
 

@@ -1,8 +1,9 @@
 """Edge CRUD and traversal queries."""
 
 import logging
+from datetime import datetime, timezone
 
-from memman.model import Edge, format_timestamp, parse_timestamp
+from memman.store.model import Edge, format_timestamp, parse_timestamp
 
 logger = logging.getLogger('memman')
 
@@ -12,7 +13,12 @@ def insert_edge(db: 'DB', e: Edge) -> None:
 
     Edges with created_by 'claude' or 'manual' are protected: their
     metadata is never overwritten by auto-generated edges.
+
+    Stamps `created_at` server-side when absent on the incoming Edge,
+    matching the Phase 1a Protocol commitment that backends own
+    boundary timestamps.
     """
+    created_at = e.created_at or datetime.now(timezone.utc)
     db._exec(
         'INSERT INTO edges'
         ' (source_id, target_id, edge_type, weight, metadata, created_at)'
@@ -27,7 +33,7 @@ def insert_edge(db: 'DB', e: Edge) -> None:
         '                  ELSE metadata END,'
         '              weight = MAX(weight, excluded.weight)',
         (e.source_id, e.target_id, e.edge_type, e.weight,
-         e.metadata_json(), format_timestamp(e.created_at)))
+         e.metadata_json(), format_timestamp(created_at)))
 
 
 def get_edges_by_node(db: 'DB', node_id: str) -> list[Edge]:

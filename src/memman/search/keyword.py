@@ -3,7 +3,7 @@
 import heapq
 import re
 
-from memman.model import Insight
+from memman.store.model import Insight
 
 STOPWORDS = {
     'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',

@@ -5,25 +5,29 @@ import logging
 import math
 from datetime import datetime, timezone
 
-from memman.model import Insight, base_weight, format_timestamp, is_immune
-from memman.model import parse_timestamp
+from memman.store.model import MAX_INSIGHTS, Insight, base_weight
+from memman.store.model import format_timestamp, is_immune, parse_timestamp
 
 logger = logging.getLogger('memman')
 
 HALF_LIFE_DAYS = 30.0
-MAX_INSIGHTS = 1000
 PRUNE_BATCH_SIZE = 10
+
+__all__ = ['MAX_INSIGHTS']
 
 
 def insert_insight(db: 'DB', i: Insight) -> None:
     """Insert a new insight into the database.
 
-    Persists provenance columns (prompt_version, model_id,
-    embedding_model) as NULL when the Insight has not been stamped by
-    the pipeline — e.g. tests and manual fixtures that build Insights
-    directly. Production writes through `pipeline.remember` always
-    stamp these.
+    Stamps `created_at` / `updated_at` server-side when absent on the
+    incoming Insight. The dataclass carries no `default_factory` for
+    these fields per the Phase 1a Protocol commitment; pipeline code
+    builds Insights without timestamps and the backend fills them in
+    here.
     """
+    now = datetime.now(timezone.utc)
+    created_at = i.created_at or now
+    updated_at = i.updated_at or now
     db._exec(
         'INSERT INTO insights'
         ' (id, content, category, importance, entities,'
@@ -32,7 +36,7 @@ def insert_insight(db: 'DB', i: Insight) -> None:
         ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (i.id, i.content, i.category, i.importance,
          i.entities_json(), i.source, i.access_count,
-         format_timestamp(i.created_at), format_timestamp(i.updated_at),
+         format_timestamp(created_at), format_timestamp(updated_at),
          i.prompt_version, i.model_id, i.embedding_model))
 
 

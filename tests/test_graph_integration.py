@@ -23,7 +23,7 @@ from tests.conftest import make_edge, make_insight
 class TestTemporalBackboneChain:
     """Two insights with same source produce bidirectional backbone edges."""
 
-    def test_temporal_backbone_chain(self, tmp_db):
+    def test_temporal_backbone_chain(self, tmp_db, tmp_backend):
         """Insert two insights with same source; verify 2 backbone temporal edges."""
         now = datetime.now(timezone.utc)
         ins1 = make_insight(
@@ -35,7 +35,7 @@ class TestTemporalBackboneChain:
         insert_insight(tmp_db, ins1)
         insert_insight(tmp_db, ins2)
 
-        count = create_temporal_edge(tmp_db, ins2)
+        count = create_temporal_edge(tmp_backend, ins2)
         assert count >= 2
 
         edges = get_edges_by_node_and_type(tmp_db, 't-2', 'temporal')
@@ -52,7 +52,7 @@ class TestTemporalBackboneChain:
 class TestTemporalProximityDecay:
     """Closer insights get higher temporal proximity weight."""
 
-    def test_temporal_proximity_decay(self, tmp_db):
+    def test_temporal_proximity_decay(self, tmp_db, tmp_backend):
         """A close insight has higher weight than a far one."""
         now = datetime.now(timezone.utc)
         close = make_insight(
@@ -68,7 +68,7 @@ class TestTemporalProximityDecay:
         insert_insight(tmp_db, far)
         insert_insight(tmp_db, current)
 
-        create_temporal_edge(tmp_db, current)
+        create_temporal_edge(tmp_backend, current)
 
         edges = get_edges_by_node_and_type(tmp_db, 'tp-3', 'temporal')
         proximity_edges = [
@@ -88,12 +88,12 @@ class TestTemporalProximityDecay:
 class TestTemporalNoSource:
     """Single insight with no prior creates 0 backbone edges."""
 
-    def test_temporal_no_source(self, tmp_db):
+    def test_temporal_no_source(self, tmp_db, tmp_backend):
         """A lone insight in an empty DB produces 0 temporal edges."""
         ins = make_insight(id='ts-1', content='solo insight', source='solo')
         insert_insight(tmp_db, ins)
 
-        count = create_temporal_edge(tmp_db, ins)
+        count = create_temporal_edge(tmp_backend, ins)
         assert count == 0
 
 
@@ -103,7 +103,7 @@ class TestTemporalNoSource:
 class TestEntityCoOccurrence:
     """Shared entity creates bidirectional entity edges."""
 
-    def test_entity_co_occurrence(self, tmp_db):
+    def test_entity_co_occurrence(self, tmp_db, tmp_backend):
         """Two insights sharing 'Go' produce entity edges."""
         ins1 = make_insight(
             id='e-1', content='Go is fast', entities=['Go'])
@@ -112,7 +112,7 @@ class TestEntityCoOccurrence:
         insert_insight(tmp_db, ins1)
         insert_insight(tmp_db, ins2)
 
-        count = create_entity_edges(tmp_db, ins2)
+        count = create_entity_edges(tmp_backend, ins2)
         assert count >= 2
 
         edges = get_edges_by_node_and_type(tmp_db, 'e-2', 'entity')
@@ -122,7 +122,7 @@ class TestEntityCoOccurrence:
 class TestEntityNoShared:
     """No shared entities means 0 entity edges."""
 
-    def test_entity_no_shared(self, tmp_db):
+    def test_entity_no_shared(self, tmp_db, tmp_backend):
         """Two insights with disjoint entities produce 0 edges."""
         ins1 = make_insight(
             id='en-1', content='Go is fast', entities=['Go'])
@@ -131,26 +131,26 @@ class TestEntityNoShared:
         insert_insight(tmp_db, ins1)
         insert_insight(tmp_db, ins2)
 
-        count = create_entity_edges(tmp_db, ins2)
+        count = create_entity_edges(tmp_backend, ins2)
         assert count == 0
 
 
 class TestEntityEmpty:
     """Insight with no entities produces 0 edges."""
 
-    def test_entity_empty(self, tmp_db):
+    def test_entity_empty(self, tmp_db, tmp_backend):
         """No entities on insight means no entity edges."""
         ins = make_insight(id='ee-1', content='no entities', entities=[])
         insert_insight(tmp_db, ins)
 
-        count = create_entity_edges(tmp_db, ins)
+        count = create_entity_edges(tmp_backend, ins)
         assert count == 0
 
 
 class TestEntityHyphenatedUserProvided:
     """User-provided entities with non-standard patterns create edges."""
 
-    def test_user_provided_hyphenated_entity_creates_edges(self, tmp_db):
+    def test_user_provided_hyphenated_entity_creates_edges(self, tmp_db, tmp_backend):
         """User-provided entity like 'caching-layer' creates entity edges."""
         ins1 = make_insight(
             id='hyp-1', content='caching layer design',
@@ -160,14 +160,14 @@ class TestEntityHyphenatedUserProvided:
             entities=['caching-layer'])
         insert_insight(tmp_db, ins1)
         insert_insight(tmp_db, ins2)
-        count = create_entity_edges(tmp_db, ins2)
+        count = create_entity_edges(tmp_backend, ins2)
         assert count >= 2
 
 
 class TestEntityIdfWeightedEdges:
     """Entity edges carry IDF-based weights, not fixed 1.0."""
 
-    def test_rare_entity_high_weight(self, tmp_db):
+    def test_rare_entity_high_weight(self, tmp_db, tmp_backend):
         """Rare entity shared by 2 of many insights gets high weight."""
         for i in range(10):
             insert_insight(tmp_db, make_insight(
@@ -182,7 +182,7 @@ class TestEntityIdfWeightedEdges:
             entities=['UniqueEntity', 'Python'])
         insert_insight(tmp_db, target)
 
-        create_entity_edges(tmp_db, target)
+        create_entity_edges(tmp_backend, target)
 
         edges = get_edges_by_node_and_type(tmp_db, 'idf-rare2', 'entity')
         rare_edges = [
@@ -204,7 +204,7 @@ class TestEntityIdfWeightedEdges:
 class TestBFSBasic:
     """A→B→C graph: B at hop 1, C at hop 2, D disconnected."""
 
-    def test_bfs_basic(self, tmp_db):
+    def test_bfs_basic(self, tmp_db, tmp_backend):
         """BFS from A reaches B (hop 1) and C (hop 2) but not D."""
         insert_insight(tmp_db, make_insight(id='a', content='node A'))
         insert_insight(tmp_db, make_insight(id='b', content='node B'))
@@ -218,7 +218,7 @@ class TestBFSBasic:
             source_id='b', target_id='c',
             edge_type='semantic', weight=1.0))
 
-        result = bfs(tmp_db, 'a', BFSOptions(max_depth=3, max_nodes=0))
+        result = bfs(tmp_backend, 'a', BFSOptions(max_depth=3, max_nodes=0))
         ids = {r['insight'].id for r in result}
         assert 'b' in ids
         assert 'c' in ids
@@ -232,7 +232,7 @@ class TestBFSBasic:
 class TestBFSMaxHops:
     """maxHops=1 stops at direct neighbors."""
 
-    def test_bfs_max_hops(self, tmp_db):
+    def test_bfs_max_hops(self, tmp_db, tmp_backend):
         """BFS with max_depth=1 finds B but not C (2 hops away)."""
         insert_insight(tmp_db, make_insight(id='h-a', content='node A'))
         insert_insight(tmp_db, make_insight(id='h-b', content='node B'))
@@ -245,7 +245,7 @@ class TestBFSMaxHops:
             source_id='h-b', target_id='h-c',
             edge_type='semantic', weight=1.0))
 
-        result = bfs(tmp_db, 'h-a', BFSOptions(max_depth=1, max_nodes=0))
+        result = bfs(tmp_backend, 'h-a', BFSOptions(max_depth=1, max_nodes=0))
         ids = {r['insight'].id for r in result}
         assert 'h-b' in ids
         assert 'h-c' not in ids
@@ -254,7 +254,7 @@ class TestBFSMaxHops:
 class TestBFSMaxNodes:
     """max_nodes caps the result count."""
 
-    def test_bfs_max_nodes(self, tmp_db):
+    def test_bfs_max_nodes(self, tmp_db, tmp_backend):
         """BFS with max_nodes=1 returns at most 1 node."""
         insert_insight(tmp_db, make_insight(id='m-a', content='node A'))
         insert_insight(tmp_db, make_insight(id='m-b', content='node B'))
@@ -267,14 +267,14 @@ class TestBFSMaxNodes:
             source_id='m-a', target_id='m-c',
             edge_type='semantic', weight=1.0))
 
-        result = bfs(tmp_db, 'm-a', BFSOptions(max_depth=3, max_nodes=1))
+        result = bfs(tmp_backend, 'm-a', BFSOptions(max_depth=3, max_nodes=1))
         assert len(result) == 1
 
 
 class TestBFSSkipsDeleted:
     """Soft-deleted nodes excluded from BFS results."""
 
-    def test_bfs_skips_deleted(self, tmp_db):
+    def test_bfs_skips_deleted(self, tmp_db, tmp_backend):
         """BFS does not return soft-deleted neighbor."""
         insert_insight(tmp_db, make_insight(id='sd-a', content='node A'))
         insert_insight(tmp_db, make_insight(id='sd-b', content='node B'))
@@ -289,7 +289,7 @@ class TestBFSSkipsDeleted:
 
         soft_delete_insight(tmp_db, 'sd-b')
 
-        result = bfs(tmp_db, 'sd-a', BFSOptions(max_depth=3, max_nodes=0))
+        result = bfs(tmp_backend, 'sd-a', BFSOptions(max_depth=3, max_nodes=0))
         ids = {r['insight'].id for r in result}
         assert 'sd-b' not in ids
         assert 'sd-c' in ids
@@ -301,7 +301,7 @@ class TestBFSSkipsDeleted:
 class TestSemanticEdgesHighCosine:
     """Similar embeddings create semantic edges."""
 
-    def test_semantic_edges_high_cosine(self, tmp_db):
+    def test_semantic_edges_high_cosine(self, tmp_db, tmp_backend):
         """Nearly identical vectors exceed AUTO threshold and create edges."""
         ins1 = make_insight(id='sv-1', content='vector one')
         ins2 = make_insight(id='sv-2', content='vector two')
@@ -314,7 +314,7 @@ class TestSemanticEdgesHighCosine:
         update_embedding(tmp_db, 'sv-2', serialize_vector(vec2), 'voyage-3-lite')
 
         cache = {'sv-1': vec1, 'sv-2': vec2}
-        count = create_semantic_edges(tmp_db, ins1, embed_cache=cache)
+        count = create_semantic_edges(tmp_backend, ins1, embed_cache=cache)
         assert count >= 2
 
         edges = get_edges_by_node_and_type(tmp_db, 'sv-1', 'semantic')
@@ -324,7 +324,7 @@ class TestSemanticEdgesHighCosine:
 class TestSemanticEdgesLowCosine:
     """Orthogonal embeddings produce 0 semantic edges."""
 
-    def test_semantic_edges_low_cosine(self, tmp_db):
+    def test_semantic_edges_low_cosine(self, tmp_db, tmp_backend):
         """Orthogonal vectors yield cosine ~0, no edges created."""
         ins1 = make_insight(id='sl-1', content='vector one')
         ins2 = make_insight(id='sl-2', content='vector two')
@@ -337,19 +337,19 @@ class TestSemanticEdgesLowCosine:
         update_embedding(tmp_db, 'sl-2', serialize_vector(vec2), 'voyage-3-lite')
 
         cache = {'sl-1': vec1, 'sl-2': vec2}
-        count = create_semantic_edges(tmp_db, ins1, embed_cache=cache)
+        count = create_semantic_edges(tmp_backend, ins1, embed_cache=cache)
         assert count == 0
 
 
 class TestSemanticEdgesNoEmbedding:
     """No embeddings in cache means 0 semantic edges."""
 
-    def test_semantic_edges_no_embedding(self, tmp_db):
+    def test_semantic_edges_no_embedding(self, tmp_db, tmp_backend):
         """Insight without embedding in cache produces 0 edges."""
         ins = make_insight(id='sne-1', content='no embedding')
         insert_insight(tmp_db, ins)
 
-        count = create_semantic_edges(tmp_db, ins, embed_cache=None)
+        count = create_semantic_edges(tmp_backend, ins, embed_cache=None)
         assert count == 0
 
 
@@ -359,7 +359,7 @@ class TestSemanticEdgesNoEmbedding:
 class TestFastEdgesEngine:
     """fast_edges generates temporal + entity + causal edges (no semantic)."""
 
-    def test_fast_edges_creates_edges(self, tmp_db):
+    def test_fast_edges_creates_edges(self, tmp_db, tmp_backend):
         """Two insights with shared entity and same source create edges."""
         now = datetime.now(timezone.utc)
         ins1 = make_insight(
@@ -373,7 +373,7 @@ class TestFastEdgesEngine:
         insert_insight(tmp_db, ins1)
         insert_insight(tmp_db, ins2)
 
-        result = fast_edges(tmp_db, ins2)
+        result = fast_edges(tmp_backend, ins2)
         assert set(result.keys()) == {'temporal', 'entity'}
         assert result['temporal'] >= 2
         assert result['entity'] >= 1
@@ -385,7 +385,7 @@ class TestFastEdgesEngine:
 class TestBuildEmbedCache:
     """Loads embedding vectors from DB into dict."""
 
-    def test_build_embed_cache(self, tmp_db):
+    def test_build_embed_cache(self, tmp_db, tmp_backend):
         """Stored embeddings are deserialized into the cache dict."""
         ins1 = make_insight(id='bc-1', content='first')
         ins2 = make_insight(id='bc-2', content='second')
@@ -397,7 +397,7 @@ class TestBuildEmbedCache:
         update_embedding(tmp_db, 'bc-1', serialize_vector(vec1), 'voyage-3-lite')
         update_embedding(tmp_db, 'bc-2', serialize_vector(vec2), 'voyage-3-lite')
 
-        cache = build_embed_cache(tmp_db)
+        cache = build_embed_cache(tmp_backend)
         assert cache is not None
         assert 'bc-1' in cache
         assert 'bc-2' in cache
@@ -408,9 +408,9 @@ class TestBuildEmbedCache:
 class TestBuildEmbedCacheEmpty:
     """No embeddings returns None."""
 
-    def test_build_embed_cache_empty(self, tmp_db):
+    def test_build_embed_cache_empty(self, tmp_db, tmp_backend):
         """Empty DB (no embeddings) returns None from build_embed_cache."""
-        cache = build_embed_cache(tmp_db)
+        cache = build_embed_cache(tmp_backend)
         assert cache is None
 
 
@@ -420,7 +420,7 @@ class TestBuildEmbedCacheEmpty:
 class TestEdgeWorthyFiltering:
     """Entity edges created for legitimate shared entities."""
 
-    def test_tech_dict_allowed(self, tmp_db):
+    def test_tech_dict_allowed(self, tmp_db, tmp_backend):
         """Two insights sharing 'Redis' produce entity edges."""
         ins1 = make_insight(
             id='ew-3', content='Redis cache',
@@ -430,10 +430,10 @@ class TestEdgeWorthyFiltering:
             entities=['Redis'])
         insert_insight(tmp_db, ins1)
         insert_insight(tmp_db, ins2)
-        count = create_entity_edges(tmp_db, ins2)
+        count = create_entity_edges(tmp_backend, ins2)
         assert count >= 2
 
-    def test_camelcase_allowed(self, tmp_db):
+    def test_camelcase_allowed(self, tmp_db, tmp_backend):
         """Two insights sharing 'DataProcessor' produce entity edges."""
         ins1 = make_insight(
             id='ew-5', content='DataProcessor init',
@@ -443,10 +443,10 @@ class TestEdgeWorthyFiltering:
             entities=['DataProcessor'])
         insert_insight(tmp_db, ins1)
         insert_insight(tmp_db, ins2)
-        count = create_entity_edges(tmp_db, ins2)
+        count = create_entity_edges(tmp_backend, ins2)
         assert count >= 2
 
-    def test_url_allowed(self, tmp_db):
+    def test_url_allowed(self, tmp_db, tmp_backend):
         """Two insights sharing a URL produce entity edges."""
         url = 'https://example.com/api'
         ins1 = make_insight(
@@ -455,7 +455,7 @@ class TestEdgeWorthyFiltering:
             id='ew-8', content='api ref', entities=[url])
         insert_insight(tmp_db, ins1)
         insert_insight(tmp_db, ins2)
-        count = create_entity_edges(tmp_db, ins2)
+        count = create_entity_edges(tmp_backend, ins2)
         assert count >= 2
 
 
@@ -465,7 +465,7 @@ class TestEdgeWorthyFiltering:
 class TestTemporalOutsideWindow:
     """Insight outside the 4h window gets no proximity edges."""
 
-    def test_outside_window_no_proximity(self, tmp_db):
+    def test_outside_window_no_proximity(self, tmp_db, tmp_backend):
         """5-hour-old insight produces 0 proximity edges."""
         now = datetime.now(timezone.utc)
         old = make_insight(
@@ -476,7 +476,7 @@ class TestTemporalOutsideWindow:
             created_at=now)
         insert_insight(tmp_db, old)
         insert_insight(tmp_db, new)
-        create_temporal_edge(tmp_db, new)
+        create_temporal_edge(tmp_backend, new)
         proximity_edges = [
             e for e in get_edges_by_node_and_type(
                 tmp_db, 'tw-2', 'temporal')

@@ -1,27 +1,24 @@
 """Intent-aware recall with beam search, RRF, Kahn's topological sort.
 
-Reads from a worker-materialized snapshot file when one is present
-(see `memman.store.snapshot`). Falls back to direct SQL when the
-snapshot is missing, fingerprint-mismatched, or unreadable. The
-snapshot path eliminates `get_all_active_insights`,
-`build_embed_cache`, `get_edges_by_node`, and `get_insight_by_id`
-calls from the synchronous recall hot path.
+Opens a `RecallSession` via `Backend.recall_session()` which reads
+the worker-materialized snapshot when present. Falls back to direct
+Backend verb calls when the snapshot is missing,
+fingerprint-mismatched, or unreadable. The snapshot path eliminates
+`get_all_active_insights`, `build_embed_cache`, `get_edges_by_node`,
+and `get_insight_by_id` calls from the synchronous recall hot path.
 """
 
 import heapq
 import logging
-import pathlib
-
-logger = logging.getLogger('memman')
 
 from memman.embed.vector import cosine_similarity
 from memman.graph.semantic import build_embed_cache
-from memman.model import Insight
 from memman.search.intent import detect_intent, get_weights
 from memman.search.keyword import insight_tokens, keyword_search, tokenize
-from memman.store.edge import get_edges_by_node, get_edges_by_source_and_type
-from memman.store.node import get_all_active_insights, get_insight_by_id
-from memman.store.snapshot import Snapshot, read_snapshot
+from memman.store.backend import Backend
+from memman.store.model import Insight
+
+logger = logging.getLogger('memman')
 
 ANCHOR_TOP_K = 30
 LAMBDA1 = 1.0
@@ -224,7 +221,7 @@ def causal_topological_sort(
 
 
 def intent_aware_recall(
-        db: 'DB', query: str,
+        backend: Backend, query: str,
         query_vec: list[float] | None,
         query_entities: list[str],
         limit: int,
@@ -233,9 +230,9 @@ def intent_aware_recall(
     """Perform MAGMA-aligned intent-aware retrieval.
 
     Loads the worker-materialized snapshot when present and consumes
-    it for all hot-path reads. Falls back to direct SQL when the
-    snapshot is missing or its embedding fingerprint doesn't match
-    the active client.
+    it for all hot-path reads. Falls back to direct Backend verb
+    calls when the snapshot is missing or its embedding fingerprint
+    doesn't match the active client.
 
     When `rerank=True` and the query has more than `MIN_RERANK_TOKENS`
     tokens, the top `RERANK_SHORTLIST` candidates by multi-signal score
@@ -253,49 +250,44 @@ def intent_aware_recall(
     weights = get_weights(intent)
     params = get_traversal_params(intent)
 
-    snapshot: Snapshot | None = None
-    try:
-        from memman.embed.fingerprint import active_fingerprint
-        store_dir = str(pathlib.Path(db.path).parent)
-        snapshot = read_snapshot(store_dir, active_fingerprint())
-    except Exception as exc:
-        logger.warning(f'snapshot load failed, using SQL: {exc}')
-        snapshot = None
+    with backend.recall_session() as session:
+        snapshot = session.snapshot
 
-    if snapshot is not None:
-        all_insights = snapshot.insights
-        embed_cache = snapshot.embeddings
-        bidir = _bidirectional_adjacency(snapshot.adjacency)
-        insights_by_id = {i.id: i for i in snapshot.insights}
+        if snapshot is not None:
+            all_insights = snapshot.insights
+            embed_cache = snapshot.embeddings
+            bidir = _bidirectional_adjacency(snapshot.adjacency)
+            insights_by_id = {i.id: i for i in snapshot.insights}
 
-        def _edges_lookup(nid):
-            return bidir.get(nid, ())
+            def _edges_lookup(nid):
+                return bidir.get(nid, ())
 
-        def _insight_lookup(nid):
-            return insights_by_id.get(nid)
+            def _insight_lookup(nid):
+                return insights_by_id.get(nid)
 
-        def _causal_edges_lookup(source_id):
-            return [
-                target for target, etype, _w
-                in snapshot.adjacency.get(source_id, ())
-                if etype == 'causal']
-    else:
-        all_insights = get_all_active_insights(db)
-        embed_cache = build_embed_cache(db)
+            def _causal_edges_lookup(source_id):
+                return [
+                    target for target, etype, _w
+                    in snapshot.adjacency.get(source_id, ())
+                    if etype == 'causal']
+        else:
+            all_insights = backend.nodes.get_all_active()
+            embed_cache = build_embed_cache(backend)
 
-        def _edges_lookup(nid):
-            for e in get_edges_by_node(db, nid):
-                neighbor_id = e.target_id if e.target_id != nid else e.source_id
-                yield (neighbor_id, e.edge_type, e.weight)
+            def _edges_lookup(nid):
+                for e in backend.edges.by_node(nid):
+                    neighbor_id = (
+                        e.target_id if e.target_id != nid else e.source_id)
+                    yield (neighbor_id, e.edge_type, e.weight)
 
-        def _insight_lookup(nid):
-            return get_insight_by_id(db, nid)
+            def _insight_lookup(nid):
+                return backend.nodes.get(nid)
 
-        def _causal_edges_lookup(source_id):
-            return [
-                e.target_id
-                for e in get_edges_by_source_and_type(
-                    db, source_id, 'causal')]
+            def _causal_edges_lookup(source_id):
+                return [
+                    e.target_id
+                    for e in backend.edges.by_source_and_type(
+                        source_id, 'causal')]
 
     sim_cache: dict[str, float] = {}
     if query_vec is not None and embed_cache:

@@ -64,23 +64,23 @@ def test_rerank_general_similarity_highest():
 class TestRecallMeta:
     """Meta dict fields: hint, ordering, sparse."""
 
-    def _recall(self, db, intent):
+    def _recall(self, backend, intent):
         """Run recall with given intent override and a single matching insight."""
-        insert_insight(db, make_insight(
+        backend.nodes.insert(make_insight(
             id=f'meta-{intent}',
             content='test content for recall meta fields'))
         return intent_aware_recall(
-            db, query='test content recall',
+            backend, query='test content recall',
             query_vec=None, query_entities=[],
             limit=5, intent_override=intent)
 
-    def test_hint_field_by_intent(self, tmp_db):
+    def test_hint_field_by_intent(self, tmp_backend):
         """Each intent produces its expected hint string."""
         for intent in ['WHY', 'WHEN', 'ENTITY', 'GENERAL']:
-            result = self._recall(tmp_db, intent)
+            result = self._recall(tmp_backend, intent)
             assert result['meta']['hint'] == RECALL_HINTS[intent]
 
-    def test_ordering_field_by_intent(self, tmp_db):
+    def test_ordering_field_by_intent(self, tmp_backend):
         """Ordering field matches intent-specific sort strategy."""
         expected = {
             'WHY': 'causal_topological',
@@ -89,25 +89,25 @@ class TestRecallMeta:
             'GENERAL': 'score',
             }
         for intent, ordering in expected.items():
-            result = self._recall(tmp_db, intent)
+            result = self._recall(tmp_backend, intent)
             assert result['meta']['ordering'] == ordering
 
-    def test_sparse_flag_present(self, tmp_db):
+    def test_sparse_flag_present(self, tmp_backend):
         """Sparse flag set when results are below half the requested limit."""
         result = intent_aware_recall(
-            tmp_db, query='nonexistent query xyz',
+            tmp_backend, query='nonexistent query xyz',
             query_vec=None, query_entities=[],
             limit=10, intent_override='GENERAL')
         assert result['meta']['sparse'] is True
 
-    def test_sparse_flag_absent(self, tmp_db):
+    def test_sparse_flag_absent(self, tmp_db, tmp_backend):
         """Sparse flag absent when result count meets threshold."""
         for i in range(5):
             insert_insight(tmp_db, make_insight(
                 id=f'sparse-{i}',
                 content=f'common keyword topic alpha {i}'))
         result = intent_aware_recall(
-            tmp_db, query='common keyword topic alpha',
+            tmp_backend, query='common keyword topic alpha',
             query_vec=None, query_entities=[],
             limit=5, intent_override='GENERAL')
         assert 'sparse' not in result['meta']

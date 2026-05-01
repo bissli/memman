@@ -2,9 +2,9 @@
 
 from datetime import datetime, timezone
 
-from memman.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge, Insight
-from memman.model import base_weight, format_float, format_timestamp
-from memman.model import is_immune, parse_timestamp
+from memman.store.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge
+from memman.store.model import Insight, base_weight, format_float
+from memman.store.model import format_timestamp, is_immune, parse_timestamp
 
 
 def test_entities_json_roundtrip():

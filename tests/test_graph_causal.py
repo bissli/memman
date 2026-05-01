@@ -177,7 +177,7 @@ class TestFindCausalSignalNoMatch:
 class TestInferLLMCausalIncludesRecent:
     """infer_llm_causal_edges passes recent insights to LLM prompt."""
 
-    def test_recent_insights_in_llm_prompt(self, tmp_db):
+    def test_recent_insights_in_llm_prompt(self, tmp_db, tmp_backend):
         """LLM prompt contains recent insights, not just graph neighbors."""
 
         from memman.graph.causal import infer_llm_causal_edges
@@ -185,7 +185,7 @@ class TestInferLLMCausalIncludesRecent:
 
         now = __import__('datetime').datetime.now(
             __import__('datetime').timezone.utc)
-        from memman.model import Insight
+        from memman.store.model import Insight
 
         def _make(**kw):
             defaults = {
@@ -213,7 +213,7 @@ class TestInferLLMCausalIncludesRecent:
                 captured_prompts.append(user)
                 return '[]'
 
-        infer_llm_causal_edges(tmp_db, new_ins, MockLLM())
+        infer_llm_causal_edges(tmp_backend, new_ins, MockLLM())
 
         assert captured_prompts, 'LLM was never called'
         prompt = captured_prompts[0]

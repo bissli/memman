@@ -30,19 +30,19 @@ def test_constants_hash_changes_on_proximity_limit(monkeypatch):
     assert changed != original
 
 
-def test_relink_does_not_block_linking(tmp_db):
+def test_relink_does_not_block_linking(tmp_db, tmp_backend):
     """After relink, link_pending can still process insights."""
     insert_insight(tmp_db, make_insight(
         id='rbc-1', content='relink then link test'))
     insert_insight(tmp_db, make_insight(
         id='rbc-2', content='second insight for linking'))
 
-    reindex_auto_edges(tmp_db)
-    processed = link_pending(tmp_db)
+    reindex_auto_edges(tmp_backend)
+    processed = link_pending(tmp_backend)
     assert processed > 0
 
 
-def test_relink_preserves_manual_edge_metadata(tmp_db):
+def test_relink_preserves_manual_edge_metadata(tmp_db, tmp_backend):
     """Manual claude entity edge metadata survives relink with auto edges."""
     ins1 = make_insight(
         id='hw-1', content='Python web framework',
@@ -59,7 +59,7 @@ def test_relink_preserves_manual_edge_metadata(tmp_db):
         metadata={'entity': 'Python', 'created_by': 'claude'})
     insert_edge(tmp_db, manual_edge)
 
-    reindex_auto_edges(tmp_db)
+    reindex_auto_edges(tmp_backend)
 
     edges = get_all_edges(tmp_db)
     match = [e for e in edges

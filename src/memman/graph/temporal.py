@@ -1,45 +1,40 @@
 """Temporal edge creation (backbone chain + proximity)."""
 
-from datetime import datetime, timezone
-
-from memman.model import Edge, Insight
-from memman.store.edge import insert_edge
-from memman.store.node import get_latest_insight_by_source
-from memman.store.node import get_recent_insights_in_window
+from memman.store.backend import Backend
+from memman.store.model import Edge, Insight
 
 TEMPORAL_WINDOW_HOURS = 4.0
 MAX_PROXIMITY_EDGES = 5
 MIN_PROXIMITY_WEIGHT = 0.10
 
 
-def create_temporal_edge(db: 'DB', insight: Insight) -> int:
+def create_temporal_edge(backend: Backend, insight: Insight) -> int:
     """Create backbone and proximity temporal edges for a new insight."""
-    now = datetime.now(timezone.utc)
     count = 0
 
-    prev = get_latest_insight_by_source(db, insight.source, insight.id)
+    prev = backend.nodes.get_latest_by_source(
+        source=insight.source, exclude_id=insight.id)
     if prev is not None:
         try:
-            insert_edge(db, Edge(
+            backend.edges.upsert(Edge(
                 source_id=prev.id, target_id=insight.id,
                 edge_type='temporal', weight=1.0,
-                metadata={'sub_type': 'backbone', 'direction': 'precedes'},
-                created_at=now))
+                metadata={'sub_type': 'backbone', 'direction': 'precedes'}))
             count += 1
         except Exception:
             pass
         try:
-            insert_edge(db, Edge(
+            backend.edges.upsert(Edge(
                 source_id=insight.id, target_id=prev.id,
                 edge_type='temporal', weight=1.0,
-                metadata={'sub_type': 'backbone', 'direction': 'succeeds'},
-                created_at=now))
+                metadata={'sub_type': 'backbone', 'direction': 'succeeds'}))
             count += 1
         except Exception:
             pass
 
-    recent = get_recent_insights_in_window(
-        db, insight.id, TEMPORAL_WINDOW_HOURS, MAX_PROXIMITY_EDGES)
+    recent = backend.nodes.get_recent_in_window(
+        exclude_id=insight.id, window_hours=TEMPORAL_WINDOW_HOURS,
+        limit=MAX_PROXIMITY_EDGES)
     if not recent:
         return count
 
@@ -60,18 +55,18 @@ def create_temporal_edge(db: 'DB', insight: Insight) -> int:
             'hours_diff': f'{hours_diff:.2f}',
             }
         try:
-            insert_edge(db, Edge(
+            backend.edges.upsert(Edge(
                 source_id=insight.id, target_id=near.id,
                 edge_type='temporal', weight=weight,
-                metadata=meta, created_at=now))
+                metadata=meta))
             count += 1
         except Exception:
             pass
         try:
-            insert_edge(db, Edge(
+            backend.edges.upsert(Edge(
                 source_id=near.id, target_id=insight.id,
                 edge_type='temporal', weight=weight,
-                metadata=meta, created_at=now))
+                metadata=meta))
             count += 1
         except Exception:
             pass

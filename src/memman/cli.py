@@ -18,11 +18,11 @@ from datetime import datetime, timedelta, timezone
 import click
 import memman
 from memman import config
-from memman.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge, Insight
-from memman.model import format_timestamp, is_immune
 from memman.store.db import default_data_dir, list_stores, open_db
 from memman.store.db import open_read_only, read_active, store_dir
 from memman.store.db import store_exists, valid_store_name, write_active
+from memman.store.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge
+from memman.store.model import Insight, format_timestamp, is_immune
 from tqdm import tqdm
 
 logger = logging.getLogger('memman')
@@ -154,7 +154,8 @@ def _open_db(ctx: click.Context) -> 'DB':
     from memman.embed.fingerprint import assert_consistent, seed_if_fresh
     from memman.exceptions import ConfigError, EmbedFingerprintError
     from memman.graph.engine import reindex_if_constants_changed
-    reindex_if_constants_changed(db)
+    from memman.store.sqlite import SqliteBackend
+    reindex_if_constants_changed(SqliteBackend(db))
     try:
         seed_if_fresh(db)
         assert_consistent(db)
@@ -757,13 +758,12 @@ def _write_recall_snapshot_for_store(
     """
     from memman.embed.fingerprint import active_fingerprint
     from memman.store.db import open_db as _open_store_db
-    from memman.store.snapshot import write_snapshot
+    from memman.store.sqlite import SqliteBackend
 
     sdir = store_dir(data_dir_val, store_name)
     db = _open_store_db(sdir)
     try:
-        fp = active_fingerprint()
-        write_snapshot(db, sdir, fp)
+        SqliteBackend(db).write_snapshot(active_fingerprint())
     finally:
         db.close()
 
@@ -784,22 +784,22 @@ class _StoreContext:
         from memman.embed.vector import deserialize_vector
         from memman.llm.client import get_llm_client
         from memman.store.db import open_db as _open_store_db
-        from memman.store.node import get_all_active_insights
-        from memman.store.node import get_all_embeddings
+        from memman.store.sqlite import SqliteBackend
 
         self.store_data_dir = store_data_dir
         self.db = _open_store_db(store_data_dir)
+        self.backend = SqliteBackend(self.db)
         _fp_mod.seed_if_fresh(self.db)
         _fp_mod.assert_consistent(self.db)
         self.ec = _get_ec()
         self.llm_client = get_llm_client('slow_canonical')
         self.embed_cache: dict[str, list[float]] = {}
-        for eid, _content, blob in get_all_embeddings(self.db):
+        for eid, _content, blob in self.backend.nodes.get_all_embeddings():
             v = deserialize_vector(blob)
             if v is not None:
                 self.embed_cache[eid] = v
         self.insights_by_id = {
-            i.id: i for i in get_all_active_insights(self.db)}
+            i.id: i for i in self.backend.nodes.get_all_active()}
 
     def snapshot_caches(self) -> tuple[dict, dict]:
         """Return shallow copies of the caches for rollback."""
@@ -849,8 +849,7 @@ def _process_queue_row(
     if importance < 1 or importance > 5:
         importance = 3
 
-    db = ctx.db
-    from memman.store.node import has_active_with_source
+    backend = ctx.backend
 
     _trace.event(
         'process_row',
@@ -861,22 +860,21 @@ def _process_queue_row(
         category=category,
         importance=importance)
 
-    if row.hint_source is None:
-        if has_active_with_source(db, source):
-            logger.info(
-                f'queue row {row.id} already committed to store'
-                f' {row.store!r}; skipping re-processing')
-            _trace.event(
-                'process_row_skipped',
-                row_id=row.id,
-                reason='already_committed')
-            return
+    if (row.hint_source is None
+            and backend.nodes.has_active_with_source(source)):
+        logger.info(
+            f'queue row {row.id} already committed to store'
+            f' {row.store!r}; skipping re-processing')
+        _trace.event(
+            'process_row_skipped',
+            row_id=row.id,
+            reason='already_committed')
+        return
 
     now = datetime.now(timezone.utc)
     access_count = 0
     if row.hint_replaced_id:
-        from memman.store.node import get_insight_by_id
-        old = get_insight_by_id(db, row.hint_replaced_id)
+        old = backend.nodes.get(row.hint_replaced_id)
         if old is not None:
             access_count = old.access_count
     insight = Insight(
@@ -888,7 +886,7 @@ def _process_queue_row(
 
     from memman.pipeline.remember import run_remember
     result = run_remember(
-        db, insight, row.content,
+        backend, insight, row.content,
         no_reconcile=row.hint_no_reconcile or bool(row.hint_replaced_id),
         replaced_id=row.hint_replaced_id or '',
         cat_explicit=row.hint_cat is not None,
@@ -972,8 +970,9 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
         query_entities = list(expansion.get('entities', []))
 
         fetch_limit = limit * 3 if (cat or source) else limit
+        from memman.store.sqlite import SqliteBackend
         resp = intent_aware_recall(
-            db, keyword_str, query_vec, query_entities,
+            SqliteBackend(db), keyword_str, query_vec, query_entities,
             fetch_limit, intent_override, rerank=rerank)
         if cat:
             resp['results'] = [
@@ -1230,7 +1229,8 @@ def graph_related(ctx: click.Context, id: str, edge: str,
 
     db = _open_db(ctx)
     try:
-        nodes = bfs(db, id, BFSOptions(
+        from memman.store.sqlite import SqliteBackend
+        nodes = bfs(SqliteBackend(db), id, BFSOptions(
             max_depth=depth, max_nodes=0, edge_filter=edge))
         out = []
         for n in nodes:
@@ -1632,7 +1632,8 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
         click.confirm(
             f'Delete store "{name}" and all data at {sdir}?',
             abort=True)
-    from memman.queue import open_queue_db, purge_store as queue_purge_store
+    from memman.queue import open_queue_db
+    from memman.queue import purge_store as queue_purge_store
     qconn = open_queue_db(data_dir)
     try:
         queue_purge_store(qconn, name)
@@ -1808,7 +1809,8 @@ def insights_candidates(ctx: click.Context, threshold: float,
     to actually remove an insight, or `memman insights protect <id>` to
     boost its retention.
     """
-    from memman.store.node import MAX_INSIGHTS, get_retention_candidates
+    from memman.store.model import MAX_INSIGHTS
+    from memman.store.node import get_retention_candidates
 
     db = _open_db(ctx)
     try:
@@ -2062,7 +2064,9 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
             _json_out({'processed': 0, 'remaining': 0})
             return
 
-        embed_cache = build_embed_cache(db)
+        from memman.store.sqlite import SqliteBackend
+        backend = SqliteBackend(db)
+        embed_cache = build_embed_cache(backend)
         processed = 0
 
         bar = tqdm(
@@ -2083,7 +2087,7 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
 
             while True:
                 count = link_pending(
-                    db, embed_cache=embed_cache,
+                    backend, embed_cache=embed_cache,
                     llm_client=llm_client,
                     metadata_llm_client=metadata_llm_client,
                     embed_client=ec,
@@ -2254,7 +2258,8 @@ def _reembed_one_store(
             set_meta(db, 'embed_reembed_state', 'idle')
 
         db.in_transaction(_finalize)
-        edge_stats = reindex_auto_edges(db)
+        from memman.store.sqlite import SqliteBackend
+        edge_stats = reindex_auto_edges(SqliteBackend(db))
 
         stats = {
             'store': store_name,

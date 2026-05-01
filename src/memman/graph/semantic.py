@@ -5,20 +5,18 @@ recalibrate by computing all pairwise cosine similarities and inspecting
 quality at each band. See docs/design/04-graph-model.md.
 """
 
-from datetime import datetime, timezone
-
 from memman.embed.vector import cosine_similarity, deserialize_vector
-from memman.model import Edge, Insight, format_float
-from memman.store.edge import insert_edge
-from memman.store.node import get_all_embeddings
+from memman.store.backend import Backend
+from memman.store.model import Edge, Insight, format_float
 
 AUTO_SEMANTIC_THRESHOLD = 0.62
 MAX_AUTO_SEMANTIC_EDGES = 3
 
 
-def build_embed_cache(db: 'DB') -> dict[str, list[float]] | None:
-    """Load all embeddings from DB into a map."""
-    all_embedded = get_all_embeddings(db)
+def build_embed_cache(
+        backend: Backend) -> dict[str, list[float]] | None:
+    """Load all embeddings from the backend into a map."""
+    all_embedded = backend.nodes.get_all_embeddings()
     if not all_embedded:
         return None
     cache: dict[str, list[float]] = {}
@@ -30,12 +28,12 @@ def build_embed_cache(db: 'DB') -> dict[str, list[float]] | None:
 
 
 def create_semantic_edges(
-        db: 'DB', insight: Insight,
+        backend: Backend, insight: Insight,
         embed_cache: dict[str, list[float]] | None = None,
         dry_run: bool = False) -> int:
     """Auto-create semantic edges for insights with high cosine similarity."""
     if embed_cache is None:
-        embed_cache = build_embed_cache(db)
+        embed_cache = build_embed_cache(backend)
     if embed_cache is None:
         return 0
 
@@ -58,7 +56,6 @@ def create_semantic_edges(
     if len(scored) > MAX_AUTO_SEMANTIC_EDGES:
         scored = scored[:MAX_AUTO_SEMANTIC_EDGES]
 
-    now = datetime.now(timezone.utc)
     count = 0
     for eid, sim in scored:
         meta = {
@@ -67,19 +64,19 @@ def create_semantic_edges(
             }
         if not dry_run:
             try:
-                insert_edge(db, Edge(
+                backend.edges.upsert(Edge(
                     source_id=insight.id, target_id=eid,
                     edge_type='semantic', weight=sim,
-                    metadata=meta, created_at=now))
+                    metadata=meta))
             except Exception:
                 pass
         count += 1
         if not dry_run:
             try:
-                insert_edge(db, Edge(
+                backend.edges.upsert(Edge(
                     source_id=eid, target_id=insight.id,
                     edge_type='semantic', weight=sim,
-                    metadata=meta, created_at=now))
+                    metadata=meta))
             except Exception:
                 pass
         count += 1

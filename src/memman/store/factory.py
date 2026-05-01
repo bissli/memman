@@ -1,0 +1,40 @@
+"""Cluster factory dispatch on `MEMMAN_BACKEND`.
+
+Mirrors `embed/__init__.py`'s registry shape: a name -> factory
+mapping plus a single `open_cluster()` entry point. SQLite is always
+registered. Postgres registers in Phase 2 by adding `_postgres_factory`
+to `BACKENDS`; the install wizard's `find_spec` gate flips visible at
+the same time.
+"""
+
+from collections.abc import Callable
+
+from memman import config
+from memman.store.backend import Cluster
+from memman.store.errors import ConfigError
+
+
+def _sqlite_factory() -> Cluster:
+    """Lazy import to avoid pulling sqlite3 wiring at module load."""
+    from memman.store.sqlite import SqliteCluster
+    return SqliteCluster()
+
+
+BACKENDS: dict[str, Callable[[], Cluster]] = {
+    'sqlite': _sqlite_factory,
+    }
+
+
+def open_cluster() -> Cluster:
+    """Return the Cluster instance for `MEMMAN_BACKEND`.
+
+    Defaults to 'sqlite' when unset (matches install wizard default).
+    """
+    raw = config.get(config.BACKEND) or 'sqlite'
+    name = raw.lower()
+    factory = BACKENDS.get(name)
+    if factory is None:
+        known = ', '.join(sorted(BACKENDS))
+        raise ConfigError(
+            f'unknown {config.BACKEND}={name!r}; registered: {known}')
+    return factory()

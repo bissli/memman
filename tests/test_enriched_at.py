@@ -38,14 +38,14 @@ class TestEnrichedAtColumn:
 class TestEnrichedAtOnLinkPending:
     """link_pending sets enriched_at only when LLM enrichment succeeds."""
 
-    def test_no_llm_sets_linked_at_only(self, tmp_db):
+    def test_no_llm_sets_linked_at_only(self, tmp_db, tmp_backend):
         """Without LLM client, linked_at is set but enriched_at stays NULL."""
         _insert_pending(tmp_db, 'nl-1', 'test without llm')
         tmp_db._conn.execute(
             'UPDATE insights SET enriched_at = NULL'
             " WHERE id = 'nl-1'")
 
-        link_pending(tmp_db, llm_client=None)
+        link_pending(tmp_backend, llm_client=None)
 
         row = tmp_db._conn.execute(
             'SELECT linked_at, enriched_at FROM insights'
@@ -53,7 +53,7 @@ class TestEnrichedAtOnLinkPending:
         assert row[0] is not None
         assert row[1] is None
 
-    def test_llm_success_sets_enriched_at(self, tmp_db):
+    def test_llm_success_sets_enriched_at(self, tmp_db, tmp_backend):
         """With successful LLM enrichment, enriched_at is set."""
         _insert_pending(tmp_db, 'ls-1', 'test with llm enrichment')
         tmp_db._conn.execute(
@@ -65,7 +65,7 @@ class TestEnrichedAtOnLinkPending:
             '{"keywords": ["test"], "summary": "test",'
             ' "semantic_facts": [], "entities": []}')
 
-        link_pending(tmp_db, llm_client=mock_llm)
+        link_pending(tmp_backend, llm_client=mock_llm)
 
         row = tmp_db._conn.execute(
             'SELECT linked_at, enriched_at FROM insights'

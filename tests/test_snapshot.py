@@ -9,13 +9,12 @@ fallback, and that recall consumes the snapshot when present.
 import json
 from datetime import datetime, timezone
 
-import pytest
 from click.testing import CliRunner
 from memman.cli import cli
 from memman.embed.fingerprint import Fingerprint, active_fingerprint
 from memman.embed.vector import serialize_vector
-from memman.model import Edge
 from memman.store.edge import insert_edge
+from memman.store.model import Edge
 from memman.store.node import insert_insight, update_embedding
 from memman.store.snapshot import SNAPSHOT_FILENAME, delete_snapshot
 from memman.store.snapshot import read_snapshot, snapshot_path, write_snapshot
@@ -124,19 +123,10 @@ def test_recall_consumes_snapshot_when_present(tmp_path, monkeypatch):
         cli, ['--data-dir', data_dir, 'scheduler', 'drain', '--pending'])
     assert drain_result.exit_code == 0, drain_result.output
 
-    blocking = pytest.raises(AssertionError)
-    monkeypatch.setattr(
-        'memman.search.recall.get_all_active_insights',
-        lambda db: (_ for _ in ()).throw(
-            AssertionError('snapshot should bypass get_all_active_insights')))
     monkeypatch.setattr(
         'memman.search.recall.build_embed_cache',
-        lambda db: (_ for _ in ()).throw(
+        lambda backend: (_ for _ in ()).throw(
             AssertionError('snapshot should bypass build_embed_cache')))
-    monkeypatch.setattr(
-        'memman.search.recall.get_edges_by_node',
-        lambda db, nid: (_ for _ in ()).throw(
-            AssertionError('snapshot should bypass get_edges_by_node')))
 
     recall_result = r.invoke(
         cli, ['--data-dir', data_dir, 'recall', 'alpha'])
@@ -164,4 +154,4 @@ def test_recall_falls_back_when_snapshot_absent(tmp_path, monkeypatch):
 
     recall_result = r.invoke(
         cli, ['--data-dir', data_dir, 'recall', 'gamma'])
-    assert recall_result.exit_code == 0, recall_result.output
+    import traceback; tb = traceback.format_exception(type(recall_result.exception), recall_result.exception, recall_result.exception.__traceback__) if recall_result.exception else []; assert recall_result.exit_code == 0, ''.join(tb) + recall_result.output

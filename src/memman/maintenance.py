@@ -80,11 +80,9 @@ def _run_per_store_maintenance(
         ctx, store_name: str, deadline_monotonic: float) -> None:
     """Run oplog trim + bounded link_pending for one store."""
     from memman.graph.engine import link_pending
-    from memman.store.node import count_pending_links
-    from memman.store.oplog import trim_oplog_by_age
 
     try:
-        pruned = trim_oplog_by_age(ctx.db)
+        pruned = ctx.backend.oplog.trim_by_age()
         if pruned:
             logger.debug(
                 f'maintenance: trimmed {pruned} oplog rows in'
@@ -97,7 +95,7 @@ def _run_per_store_maintenance(
         return
 
     try:
-        pending = count_pending_links(ctx.db)
+        pending = ctx.backend.nodes.count_pending_links()
     except Exception:
         logger.exception(
             f'maintenance: count_pending_links failed for {store_name!r}')
@@ -107,7 +105,7 @@ def _run_per_store_maintenance(
 
     try:
         processed = link_pending(
-            ctx.db,
+            ctx.backend,
             embed_cache=ctx.embed_cache,
             llm_client=ctx.llm_client,
             embed_client=ctx.ec,
@@ -124,8 +122,7 @@ def _run_per_store_maintenance(
         return
 
     try:
-        from memman.store.oplog import maintenance_step
-        maintenance_step(ctx.db)
+        ctx.backend.oplog.maintenance_step()
     except Exception:
         logger.exception(
             f'maintenance: incremental_vacuum failed for {store_name!r}')

@@ -1,7 +1,7 @@
 """Tests for memman.search.keyword -- tokenization and keyword search."""
 
-from memman.model import Insight
 from memman.search.keyword import keyword_search, tokenize
+from memman.store.model import Insight
 
 
 def test_tokenize_english():

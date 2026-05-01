@@ -1,11 +1,9 @@
 """Entity edge creation via IDF-weighted co-occurrence."""
 
 import math
-from datetime import datetime, timezone
 
-from memman.model import Edge, Insight
-from memman.store.edge import count_insights_with_entity
-from memman.store.edge import find_insights_with_entity, insert_edge
+from memman.store.backend import Backend
+from memman.store.model import Edge, Insight
 
 MAX_ENTITY_LINKS = 5
 MAX_TOTAL_ENTITY_EDGES = 50
@@ -27,29 +25,27 @@ def entity_idf_weight(doc_freq: int, total_docs: int) -> float:
 
 
 def create_entity_edges(
-        db: 'DB', insight: Insight, dry_run: bool = False) -> int:
+        backend: Backend, insight: Insight, dry_run: bool = False) -> int:
     """Create entity co-occurrence edges between the insight and existing insights."""
     if not insight.entities:
         return 0
 
-    from memman.store.node import count_active_insights
-    total_docs = count_active_insights(db)
+    total_docs = backend.nodes.count_active()
     use_idf = total_docs > 5
 
-    now = datetime.now(timezone.utc)
     count = 0
 
     for entity in insight.entities:
         if count >= MAX_TOTAL_ENTITY_EDGES:
             break
-        ids = find_insights_with_entity(
-            db, entity, insight.id, MAX_ENTITY_LINKS)
+        ids = backend.edges.find_with_entity(
+            entity, exclude_id=insight.id, limit=MAX_ENTITY_LINKS)
         if not ids:
             continue
 
         if use_idf:
-            doc_freq = count_insights_with_entity(
-                db, entity, insight.id) + 1
+            doc_freq = backend.edges.count_with_entity(
+                entity, exclude_id=insight.id) + 1
             weight = entity_idf_weight(doc_freq, total_docs)
             if weight == 0.0:
                 continue
@@ -61,19 +57,19 @@ def create_entity_edges(
                 break
             if not dry_run:
                 try:
-                    insert_edge(db, Edge(
+                    backend.edges.upsert(Edge(
                         source_id=insight.id, target_id=target_id,
                         edge_type='entity', weight=weight,
-                        metadata={'entity': entity}, created_at=now))
+                        metadata={'entity': entity}))
                 except Exception:
                     pass
             count += 1
             if not dry_run:
                 try:
-                    insert_edge(db, Edge(
+                    backend.edges.upsert(Edge(
                         source_id=target_id, target_id=insight.id,
                         edge_type='entity', weight=weight,
-                        metadata={'entity': entity}, created_at=now))
+                        metadata={'entity': entity}))
                 except Exception:
                     pass
             count += 1

@@ -3,13 +3,21 @@ DIAGRAMS   := docs/diagrams
 DRAWIO_SRC := $(wildcard $(DIAGRAMS)/*.drawio)
 DRAWIO_PNG := $(DRAWIO_SRC:.drawio=.drawio.png)
 
-.PHONY: test e2e e2e-cli e2e-container e2e-claude clean dev diagrams
+.PHONY: test typecheck e2e e2e-cli e2e-container e2e-claude clean dev diagrams
 
 dev:
 	poetry install
 
 test:
 	poetry run pytest tests/ -v --ignore=tests/e2e
+
+typecheck:
+	poetry run mypy --strict --ignore-missing-imports \
+	  --follow-imports=silent \
+	  src/memman/store/backend.py \
+	  src/memman/store/factory.py \
+	  src/memman/store/model.py \
+	  src/memman/store/sqlite.py
 
 e2e:
 	poetry run pytest tests/e2e/ -v

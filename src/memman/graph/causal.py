@@ -2,13 +2,12 @@
 
 import logging
 import re
-from datetime import datetime, timezone
 
 from memman import trace
 from memman.llm.shared import parse_json_list_response
-from memman.model import Edge, Insight
 from memman.search.keyword import tokenize
-from memman.store.node import get_recent_active_insights
+from memman.store.backend import Backend
+from memman.store.model import Edge, Insight
 
 logger = logging.getLogger('memman')
 
@@ -61,10 +60,10 @@ def token_overlap(a: set[str], b: set[str]) -> float:
 
 
 def find_causal_candidates(
-        db: 'DB', insight: Insight) -> list[dict]:
+        backend: Backend, insight: Insight) -> list[dict]:
     """Return insights with potential causal relationships via 2-hop BFS."""
     from memman.graph.bfs import BFSOptions, bfs
-    nodes = bfs(db, insight.id, BFSOptions(
+    nodes = bfs(backend, insight.id, BFSOptions(
         max_depth=2, max_nodes=MAX_CAUSAL_CANDIDATES))
     if not nodes:
         return []
@@ -123,15 +122,15 @@ def _build_llm_prompt(
 
 
 def infer_llm_causal_edges(
-        db: 'DB', insight: Insight,
+        backend: Backend, insight: Insight,
         llm_client: object) -> list[Edge]:
     """Infer causal edges via LLM, returning Edge objects without inserting."""
     from memman.graph.bfs import BFSOptions, bfs
 
-    neighbors = bfs(db, insight.id, BFSOptions(
+    neighbors = bfs(backend, insight.id, BFSOptions(
         max_depth=2, max_nodes=LLM_BFS_NEIGHBORS))
-    recent = get_recent_active_insights(
-        db, insight.id, LLM_RECENT_COUNT)
+    recent = backend.nodes.get_recent_active(
+        exclude_id=insight.id, limit=LLM_RECENT_COUNT)
 
     new_tokens = tokenize(insight.content)
     candidates = []
@@ -182,7 +181,6 @@ def infer_llm_causal_edges(
             raw=raw)
         return []
 
-    now = datetime.now(timezone.utc)
     result = []
     valid_ids = {insight.id} | {
         n['insight'].id for n in candidates}
@@ -218,8 +216,7 @@ def infer_llm_causal_edges(
                 'confidence': confidence,
                 'rationale': edge_data.get('rationale', ''),
                 'sub_type': sub_type,
-                },
-            created_at=now))
+                }))
 
     logger.debug(
         f'LLM causal inference for {insight.id}: {len(result)} edges')

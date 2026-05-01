@@ -21,7 +21,7 @@ def _make_llm_response(edges):
 class TestLLMCausalInference:
     """LLM-based causal edge inference with mocked client."""
 
-    def test_prompt_format(self, tmp_db):
+    def test_prompt_format(self, tmp_db, tmp_backend):
         """Prompt includes new insight content and neighbor content."""
         insert_insight(tmp_db, make_insight(
             id='pf-1', content='database migration completed production',
@@ -33,7 +33,7 @@ class TestLLMCausalInference:
         mock_client = MagicMock()
         mock_client.complete.return_value = '[]'
 
-        infer_llm_causal_edges(tmp_db, make_insight(
+        infer_llm_causal_edges(tmp_backend, make_insight(
             id='pf-2', content='database schema changed production deploy',
             created_at=OLD + timedelta(hours=1)), mock_client)
 
@@ -42,7 +42,7 @@ class TestLLMCausalInference:
             assert 'pf-2' in user
             assert 'database schema changed' in user
 
-    def test_confidence_floor_boundary(self, tmp_db):
+    def test_confidence_floor_boundary(self, tmp_db, tmp_backend):
         """Edge below floor rejected; edge at floor accepted."""
         insert_insight(tmp_db, make_insight(
             id='cf-1', content='chose SQLite because embedded database',
@@ -66,11 +66,11 @@ class TestLLMCausalInference:
                 },
             ])
 
-        result = infer_llm_causal_edges(tmp_db, insight, mock_client)
+        result = infer_llm_causal_edges(tmp_backend, insight, mock_client)
         assert len(result) == 1
         assert result[0].weight == LLM_CONFIDENCE_FLOOR
 
-    def test_edge_metadata_shape(self, tmp_db):
+    def test_edge_metadata_shape(self, tmp_db, tmp_backend):
         """Returned edges have created_by, confidence, rationale, sub_type."""
         insert_insight(tmp_db, make_insight(
             id='ms-1', content='chose Redis because fast caching layer',
@@ -88,7 +88,7 @@ class TestLLMCausalInference:
             'rationale': 'Redis enables caching',
             }])
 
-        result = infer_llm_causal_edges(tmp_db, insight, mock_client)
+        result = infer_llm_causal_edges(tmp_backend, insight, mock_client)
         assert len(result) == 1
         meta = result[0].metadata
         assert meta['created_by'] == 'llm'
@@ -96,7 +96,7 @@ class TestLLMCausalInference:
         assert isinstance(meta['rationale'], str)
         assert meta['sub_type'] in {'causes', 'enables', 'prevents'}
 
-    def test_prefilter_short_circuit(self, tmp_db):
+    def test_prefilter_short_circuit(self, tmp_db, tmp_backend):
         """No LLM call when token overlap is below MIN_CAUSAL_OVERLAP."""
         insert_insight(tmp_db, make_insight(
             id='pf-a', content='alpha bravo charlie delta echo foxtrot',
@@ -110,10 +110,10 @@ class TestLLMCausalInference:
         mock_client = MagicMock()
         mock_client.complete.return_value = '[]'
 
-        infer_llm_causal_edges(tmp_db, insight, mock_client)
+        infer_llm_causal_edges(tmp_backend, insight, mock_client)
         mock_client.complete.assert_not_called()
 
-    def test_llm_unavailable_skips_silently(self, tmp_db):
+    def test_llm_unavailable_skips_silently(self, tmp_db, tmp_backend):
         """Connection error from LLM caught; returns empty list."""
         insert_insight(tmp_db, make_insight(
             id='ua-1', content='database migration completed production',
@@ -126,10 +126,10 @@ class TestLLMCausalInference:
         mock_client = MagicMock()
         mock_client.complete.side_effect = ConnectionError('unreachable')
 
-        result = infer_llm_causal_edges(tmp_db, insight, mock_client)
+        result = infer_llm_causal_edges(tmp_backend, insight, mock_client)
         assert result == []
 
-    def test_malformed_confidence_skips_edge(self, tmp_db):
+    def test_malformed_confidence_skips_edge(self, tmp_db, tmp_backend):
         """Non-numeric confidence skipped; valid edge still returned."""
         insert_insight(tmp_db, make_insight(
             id='mc-1', content='chose SQLite because embedded database',
@@ -153,10 +153,10 @@ class TestLLMCausalInference:
                 },
             ])
 
-        result = infer_llm_causal_edges(tmp_db, insight, mock_client)
+        result = infer_llm_causal_edges(tmp_backend, insight, mock_client)
         assert len(result) == 1
 
-    def test_non_list_json_response(self, tmp_db):
+    def test_non_list_json_response(self, tmp_db, tmp_backend):
         """JSON object (not array) from LLM returns empty list."""
         insert_insight(tmp_db, make_insight(
             id='nl-1', content='chose SQLite because embedded database',
@@ -169,7 +169,7 @@ class TestLLMCausalInference:
         mock_client = MagicMock()
         mock_client.complete.return_value = '{"error": "oops"}'
 
-        result = infer_llm_causal_edges(tmp_db, insight, mock_client)
+        result = infer_llm_causal_edges(tmp_backend, insight, mock_client)
         assert result == []
         mock_client.complete.assert_called_once()
 

@@ -94,13 +94,13 @@ class TestEnrichWithLLM:
         result = enrich_with_llm(insight, mock_client)
         assert result == {}
 
-    def test_llm_client_none_skips(self, tmp_db):
+    def test_llm_client_none_skips(self, tmp_db, tmp_backend):
         """link_pending with llm_client=None skips enrichment."""
         insight = make_insight(
             id='nc-1', content='test content', created_at=OLD)
         insert_insight(tmp_db, insight)
 
-        count = link_pending(tmp_db, llm_client=None, max_batch=1)
+        count = link_pending(tmp_backend, llm_client=None, max_batch=1)
         assert count == 1
 
         cols = _read_enrichment_columns(tmp_db, 'nc-1')
@@ -157,7 +157,7 @@ class TestEnrichWithLLM:
 class TestReEmbed:
     """Re-embedding with keyword-enriched text."""
 
-    def test_reembed_uses_keywords(self, tmp_db):
+    def test_reembed_uses_keywords(self, tmp_db, tmp_backend):
         """embed_client.embed() called with keyword-appended text."""
         insight = make_insight(
             id='re-1', content='Python web framework',
@@ -173,9 +173,9 @@ class TestReEmbed:
         mock_embed.embed.return_value = [0.1, 0.2, 0.3]
         mock_embed.model = 'voyage-3-lite'
 
-        embed_cache = build_embed_cache(tmp_db) or {}
+        embed_cache = build_embed_cache(tmp_backend) or {}
         link_pending(
-            tmp_db, embed_cache=embed_cache,
+            tmp_backend, embed_cache=embed_cache,
             llm_client=mock_llm, embed_client=mock_embed,
             max_batch=1)
 
@@ -184,7 +184,7 @@ class TestReEmbed:
         assert '[KEYWORDS: web framework]' in call_text
         assert 'Python web framework' in call_text
 
-    def test_reembed_skipped_when_no_embed_client(self, tmp_db):
+    def test_reembed_skipped_when_no_embed_client(self, tmp_db, tmp_backend):
         """No embed_client means no re-embed attempt."""
         insight = make_insight(
             id='rs-1', content='test content', created_at=OLD)
@@ -194,13 +194,13 @@ class TestReEmbed:
         mock_llm.complete.return_value = _make_enrichment_response()
 
         link_pending(
-            tmp_db, llm_client=mock_llm, embed_client=None,
+            tmp_backend, llm_client=mock_llm, embed_client=None,
             max_batch=1)
 
         cols = _read_enrichment_columns(tmp_db, 'rs-1')
         assert cols['keywords'] is not None
 
-    def test_embed_failure_still_stamps_linked_at(self, tmp_db):
+    def test_embed_failure_still_stamps_linked_at(self, tmp_db, tmp_backend):
         """Embed crash doesn't prevent linked_at stamp."""
         insight = make_insight(
             id='ef-1', content='test content', created_at=OLD)
@@ -214,7 +214,7 @@ class TestReEmbed:
         mock_embed.embed.side_effect = RuntimeError('embed crashed')
 
         link_pending(
-            tmp_db, llm_client=mock_llm, embed_client=mock_embed,
+            tmp_backend, llm_client=mock_llm, embed_client=mock_embed,
             max_batch=1)
 
         row = tmp_db._conn.execute(

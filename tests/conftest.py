@@ -18,7 +18,7 @@ import struct
 from datetime import datetime, timezone
 
 import pytest
-from memman.model import Edge, Insight
+from memman.store.model import Edge, Insight
 
 try:
     import psycopg  # noqa: F401
@@ -533,6 +533,19 @@ def tmp_db(request, tmp_path):
         write_fingerprint(db, active_fingerprint())
     yield db
     db.close()
+
+
+@pytest.fixture
+def tmp_backend(tmp_db):
+    """Wrap `tmp_db` in a SqliteBackend.
+
+    Pipeline / search / graph entry points take `Backend`. Tests that
+    drive those entry points against a fresh store use this fixture;
+    the underlying DB and SqliteBackend share the same connection so
+    free-function and verb-surface calls see one transaction.
+    """
+    from memman.store.sqlite import SqliteBackend
+    return SqliteBackend(tmp_db)
 
 
 @pytest.fixture

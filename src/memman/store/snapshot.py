@@ -27,8 +27,8 @@ from pathlib import Path
 import numpy as np
 from memman.embed.fingerprint import Fingerprint
 from memman.embed.vector import deserialize_vector
-from memman.model import Insight, parse_timestamp
 from memman.store.edge import get_all_edges
+from memman.store.model import Insight, parse_timestamp
 from memman.store.node import get_all_active_insights, get_all_embeddings
 
 logger = logging.getLogger('memman')
@@ -100,6 +100,10 @@ def write_snapshot(db, store_dir: str, fingerprint: Fingerprint) -> bool:
             'source': i.source,
             'access_count': i.access_count,
             'created_at': i.created_at.astimezone(timezone.utc).isoformat(),
+            'updated_at': (
+                i.updated_at.astimezone(timezone.utc).isoformat()
+                if i.updated_at else
+                i.created_at.astimezone(timezone.utc).isoformat()),
             'summary': i.summary,
             }
         for i in insights
@@ -223,6 +227,8 @@ def read_snapshot(
             source=entry.get('source', 'user'),
             access_count=int(entry.get('access_count', 0)),
             created_at=parse_timestamp(entry['created_at']),
+            updated_at=parse_timestamp(
+                entry.get('updated_at') or entry['created_at']),
             summary=entry.get('summary', ''),
             ) for entry in meta_list]
 

@@ -81,7 +81,7 @@ class TestEntitySqlCaseInsensitive:
 class TestEntityEdgeCaseInsensitive:
     """Entity edges connect insights with case-variant entities."""
 
-    def test_entity_edge_across_cases(self, tmp_db):
+    def test_entity_edge_across_cases(self, tmp_db, tmp_backend):
         """Insights with 'Thesis' and 'thesis' get connected."""
         insert_insight(tmp_db, make_insight(
             id='ee-1', content='about Thesis',
@@ -91,7 +91,7 @@ class TestEntityEdgeCaseInsensitive:
             entities=['thesis'])
         insert_insight(tmp_db, ins2)
 
-        count = create_entity_edges(tmp_db, ins2)
+        count = create_entity_edges(tmp_backend, ins2)
         assert count >= 2
 
         edges = get_edges_by_node_and_type(tmp_db, 'ee-2', 'entity')
@@ -164,7 +164,7 @@ class TestTemporalConstants:
         from memman.graph.temporal import MAX_PROXIMITY_EDGES
         assert MAX_PROXIMITY_EDGES == 5
 
-    def test_proximity_capped_at_5(self, tmp_db):
+    def test_proximity_capped_at_5(self, tmp_db, tmp_backend):
         """At most 5 proximity neighbors connected."""
         now = datetime.now(timezone.utc)
         for i in range(8):
@@ -177,7 +177,7 @@ class TestTemporalConstants:
             created_at=now)
         insert_insight(tmp_db, current)
 
-        create_temporal_edge(tmp_db, current)
+        create_temporal_edge(tmp_backend, current)
 
         edges = get_edges_by_node_and_type(
             tmp_db, 'pc-current', 'temporal')

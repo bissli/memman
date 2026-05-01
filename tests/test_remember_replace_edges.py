@@ -12,9 +12,9 @@ nodes.
 
 from datetime import datetime, timezone
 
-from memman.model import Edge
 from memman.pipeline.remember import FactPlan, _apply_plan
 from memman.store.edge import get_edges_by_node, insert_edge
+from memman.store.model import Edge
 from memman.store.node import get_insight_by_id_include_deleted, insert_insight
 from tests.conftest import make_edge, make_insight
 
@@ -35,7 +35,7 @@ def _make_plan(new_id, target_id, causal_edges):
         )
 
 
-def test_apply_plan_sweeps_edges_pointing_at_replaced_target(tmp_db):
+def test_apply_plan_sweeps_edges_pointing_at_replaced_target(tmp_db, tmp_backend):
     """Causal edge whose target is the replaced insight does not survive."""
     insert_insight(tmp_db, make_insight(id='old-1', content='original'))
     insert_insight(tmp_db, make_insight(id='ctx-1', content='context'))
@@ -48,7 +48,7 @@ def test_apply_plan_sweeps_edges_pointing_at_replaced_target(tmp_db):
 
     plan = _make_plan(
         new_id='new-1', target_id='old-1', causal_edges=[leaked])
-    _apply_plan(tmp_db, plan, embed_cache={})
+    _apply_plan(tmp_backend, plan, embed_cache={})
 
     deleted = get_insight_by_id_include_deleted(tmp_db, 'old-1')
     assert deleted is not None
@@ -57,7 +57,7 @@ def test_apply_plan_sweeps_edges_pointing_at_replaced_target(tmp_db):
     assert len(edges) == 0
 
 
-def test_apply_plan_preserves_edges_to_retained_history_nodes(tmp_db):
+def test_apply_plan_preserves_edges_to_retained_history_nodes(tmp_db, tmp_backend):
     """Sweep targets only the replaced id, not other retained nodes."""
     insert_insight(tmp_db, make_insight(id='old-2', content='original'))
     insert_insight(
@@ -76,7 +76,7 @@ def test_apply_plan_preserves_edges_to_retained_history_nodes(tmp_db):
 
     plan = _make_plan(
         new_id='new-2', target_id='old-2', causal_edges=[new_edge])
-    _apply_plan(tmp_db, plan, embed_cache={})
+    _apply_plan(tmp_backend, plan, embed_cache={})
 
     edges = get_edges_by_node(tmp_db, 'history-1')
     edge_keys = {(e.source_id, e.target_id, e.edge_type) for e in edges}

@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
-from memman.model import format_timestamp
+from memman.store.model import format_timestamp
 
 logger = logging.getLogger('memman')
 

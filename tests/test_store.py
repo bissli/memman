@@ -2,13 +2,13 @@
 
 
 import pytest
-from memman.model import base_weight, is_immune
 from memman.store.db import DEFAULT_STORE_NAME, list_stores, open_db
 from memman.store.db import read_active, store_dir, store_exists
 from memman.store.db import valid_store_name, write_active
 from memman.store.edge import count_insights_with_entity
 from memman.store.edge import find_insights_with_entity, get_edges_by_node
 from memman.store.edge import get_edges_by_source_and_type, insert_edge
+from memman.store.model import base_weight, is_immune
 from memman.store.node import auto_prune, compute_effective_importance
 from memman.store.node import count_active_insights, get_all_active_insights
 from memman.store.node import get_embedding, get_insight_by_id

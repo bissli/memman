@@ -18,10 +18,11 @@ def test_fresh_db_uses_incremental_autovacuum(tmp_db):
     assert row[0] == 2
 
 
-def test_maintenance_runs_incremental_vacuum_after_link_pending(tmp_db):
+def test_maintenance_runs_incremental_vacuum_after_link_pending(
+            tmp_db, tmp_backend):
     """`_run_per_store_maintenance` issues a PRAGMA incremental_vacuum."""
     ctx = MagicMock()
-    ctx.db = tmp_db
+    ctx.backend = tmp_backend
     ctx.embed_cache = {}
     ctx.llm_client = MagicMock()
     ctx.ec = MagicMock()
@@ -33,10 +34,12 @@ def test_maintenance_runs_incremental_vacuum_after_link_pending(tmp_db):
     assert last_query is not None
 
 
-def test_maintenance_skips_vacuum_when_deadline_exceeded(tmp_db):
+def test_maintenance_skips_vacuum_when_deadline_exceeded(tmp_backend):
     """Past-deadline maintenance must not issue more SQL after the gate."""
     ctx = MagicMock()
-    ctx.db = MagicMock(wraps=tmp_db)
+    wrapped = MagicMock(wraps=tmp_backend)
+    wrapped.oplog = MagicMock(wraps=tmp_backend.oplog)
+    ctx.backend = wrapped
     ctx.embed_cache = {}
     ctx.llm_client = MagicMock()
     ctx.ec = MagicMock()
@@ -44,8 +47,4 @@ def test_maintenance_skips_vacuum_when_deadline_exceeded(tmp_db):
     deadline = time.monotonic() - 1
     _run_per_store_maintenance(ctx, 'default', deadline)
 
-    issued = [
-        c.args[0] for c in ctx.db._exec.call_args_list
-        if c.args]
-    assert not any(
-        'incremental_vacuum' in q.lower() for q in issued)
+    assert not wrapped.oplog.maintenance_step.called

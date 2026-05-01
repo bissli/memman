@@ -13,9 +13,9 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 from memman.cli import cli
-from memman.model import Insight
 from memman.pipeline.remember import compute_prompt_version
 from memman.store.db import open_db
+from memman.store.model import Insight
 from memman.store.node import insert_insight
 
 

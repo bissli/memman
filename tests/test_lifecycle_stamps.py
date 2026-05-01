@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from memman.model import format_timestamp
+from memman.store.model import format_timestamp
 from memman.store.node import count_pending_links, get_active_insight_ids
 from memman.store.node import get_pending_link_ids, insert_insight
 from memman.store.node import reset_for_rebuild, stamp_enriched, stamp_linked

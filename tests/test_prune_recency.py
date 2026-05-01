@@ -8,7 +8,7 @@ last_accessed_at, created_at) ASC`) is exercised independently.
 
 from datetime import datetime, timedelta, timezone
 
-from memman.model import format_timestamp
+from memman.store.model import format_timestamp
 from memman.store.node import auto_prune, get_insight_by_id, insert_insight
 from tests.conftest import make_insight
 

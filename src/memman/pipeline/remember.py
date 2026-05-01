@@ -20,11 +20,9 @@ fact-loss gap for a single queue row.
 import functools
 import hashlib
 import logging
-import pathlib
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 
 from memman.embed import get_client
 from memman.embed.vector import cosine_similarity, deserialize_vector
@@ -36,18 +34,10 @@ from memman.graph.entity import create_entity_edges
 from memman.graph.semantic import create_semantic_edges
 from memman.llm import extract as llm_extract
 from memman.llm.client import get_llm_client
-from memman.model import Edge, Insight, format_timestamp
 from memman.search.keyword import keyword_search
 from memman.search.quality import check_content_quality
-from memman.store.db import open_read_only
-from memman.store.edge import delete_edges_by_node, insert_edge
-from memman.store.node import MAX_INSIGHTS, auto_prune
-from memman.store.node import get_all_active_insights, get_all_embeddings
-from memman.store.node import insert_insight, refresh_effective_importance
-from memman.store.node import soft_delete_insight, stamp_enriched
-from memman.store.node import stamp_linked, update_embedding
-from memman.store.node import update_enrichment, update_entities
-from memman.store.oplog import log_op
+from memman.store.backend import Backend
+from memman.store.model import MAX_INSIGHTS, Edge, Insight, format_timestamp
 
 logger = logging.getLogger('memman')
 
@@ -101,7 +91,7 @@ class FactPlan:
 
 
 def run_remember(
-        db,
+        backend: Backend,
         insight: Insight,
         content: str,
         no_reconcile: bool = False,
@@ -121,7 +111,7 @@ def run_remember(
     `embed_cache`, `insights_by_id`, `executor`, `llm_client`, `ec`
     are optional drain-scope state hoisted by `_drain_queue` to amortize
     setup across rows in one drain pass. When omitted (e.g., direct
-    test use), the function builds them from the DB itself.
+    test use), the function builds them from the backend itself.
     """
     quality_warnings = check_content_quality(content)
 
@@ -156,12 +146,12 @@ def run_remember(
 
     if embed_cache is None:
         embed_cache = {}
-        for eid, _content, blob in get_all_embeddings(db):
+        for eid, _content, blob in backend.nodes.get_all_embeddings():
             v = deserialize_vector(blob)
             if v is not None:
                 embed_cache[eid] = v
     if insights_by_id is None:
-        all_insights = get_all_active_insights(db)
+        all_insights = backend.nodes.get_all_active()
         insights_by_id = {i.id: i for i in all_insights}
 
     owned_executor: ThreadPoolExecutor | None = None
@@ -169,7 +159,6 @@ def run_remember(
         owned_executor = ThreadPoolExecutor(max_workers=2)
         executor = owned_executor
 
-    data_dir_for_ro = str(pathlib.Path(db.path).parent)
     deleted_in_batch: set[str] = set()
 
     plans: list[FactPlan] = []
@@ -184,7 +173,7 @@ def run_remember(
                 cat_explicit, imp_explicit, insights_by_id,
                 embed_cache, deleted_in_batch, llm_client,
                 metadata_llm_client, ec,
-                data_dir_for_ro, executor)
+                backend, executor)
             llm_calls += calls
             pending_replaced_id = ''
 
@@ -214,7 +203,7 @@ def run_remember(
         def apply_all() -> None:
             new_ids: list[str] = []
             for plan in plans:
-                result = _apply_plan(db, plan, embed_cache)
+                result = _apply_plan(backend, plan, embed_cache)
                 fact_results.append(result)
                 if plan.fact_insight and plan.action not in {
                         'skipped', 'deleted'}:
@@ -222,7 +211,7 @@ def run_remember(
 
             for nid in new_ids:
                 try:
-                    ei = refresh_effective_importance(db, nid)
+                    ei = backend.nodes.refresh_effective_importance(nid)
                 except Exception:
                     ei = 0.0
                 for r in fact_results:
@@ -232,7 +221,8 @@ def run_remember(
 
             if new_ids:
                 try:
-                    pruned = auto_prune(db, MAX_INSIGHTS, new_ids)
+                    pruned = backend.nodes.auto_prune(
+                        max_insights=MAX_INSIGHTS, exclude_ids=new_ids)
                 except Exception:
                     pruned = 0
                 for r in fact_results:
@@ -240,7 +230,8 @@ def run_remember(
                         r['auto_pruned'] = pruned
                         break
 
-        db.in_transaction(apply_all)
+        with backend.transaction():
+            apply_all()
     finally:
         if owned_executor is not None:
             owned_executor.shutdown(wait=True)
@@ -309,7 +300,7 @@ def _plan_fact(
         llm_client: object,
         metadata_llm_client: object,
         ec: object,
-        data_dir_for_ro: str,
+        backend: Backend,
         executor: ThreadPoolExecutor,
         ) -> tuple[FactPlan, int]:
     """Plan a single fact without touching the DB. Returns (plan, llm_calls).
@@ -449,12 +440,9 @@ def _plan_fact(
         return enrich_with_llm(fact_insight, metadata_llm_client)
 
     def _do_causal() -> list[Edge]:
-        ro_db = open_read_only(data_dir_for_ro)
-        try:
+        with backend.readonly_context() as ro:
             return infer_llm_causal_edges(
-                ro_db, fact_insight, metadata_llm_client)
-        finally:
-            ro_db.close()
+                ro, fact_insight, metadata_llm_client)
 
     fut_e = executor.submit(_do_enrich)
     fut_c = executor.submit(_do_causal)
@@ -487,7 +475,7 @@ def _plan_fact(
 
 
 def _apply_plan(
-        db,
+        backend: Backend,
         plan: FactPlan,
         embed_cache: dict[str, list[float]],
         ) -> dict:
@@ -503,11 +491,13 @@ def _apply_plan(
             }
 
     if plan.action == 'delete' and plan.target_id:
-        deleted_now = soft_delete_insight(
-            db, plan.target_id, tolerate_missing=True)
+        deleted_now = backend.nodes.soft_delete(
+            plan.target_id, tolerate_missing=True)
         if deleted_now:
-            log_op(db, 'reconcile-delete', plan.target_id,
-                   f'contradicted by: {plan.fact_text[:200]}')
+            backend.oplog.log(
+                operation='reconcile-delete',
+                insight_id=plan.target_id,
+                detail=f'contradicted by: {plan.fact_text[:200]}')
         else:
             logger.warning(
                 f'reconcile-delete target {plan.target_id} already gone;'
@@ -523,50 +513,54 @@ def _apply_plan(
     if plan.action in {'update', 'replace'} and plan.target_id:
         op_name = ('replace' if plan.action == 'replace'
                    else 'reconcile-update')
-        deleted_now = soft_delete_insight(
-            db, plan.target_id, tolerate_missing=True)
+        deleted_now = backend.nodes.soft_delete(
+            plan.target_id, tolerate_missing=True)
         if deleted_now:
-            log_op(db, op_name, plan.target_id, f'replaced by {fi.id}')
+            backend.oplog.log(
+                operation=op_name, insight_id=plan.target_id,
+                detail=f'replaced by {fi.id}')
         else:
             target_already_gone = True
             logger.warning(
                 f'{plan.action} target {plan.target_id} already deleted;'
                 ' degrading to add')
 
-    insert_insight(db, fi)
+    backend.nodes.insert(fi)
 
     final_blob = plan.enriched_blob or plan.embed_blob
     embedded = final_blob is not None
     if final_blob is not None:
-        update_embedding(db, fi.id, final_blob, fi.embedding_model or '')
+        backend.nodes.update_embedding(
+            fi.id, final_blob, fi.embedding_model or '')
     if fi.entities:
-        update_entities(db, fi.id, fi.entities)
+        backend.nodes.update_entities(fi.id, fi.entities)
 
-    log_op(db, 'remember', fi.id, fi.content)
+    backend.oplog.log(
+        operation='remember', insight_id=fi.id, detail=fi.content)
 
-    edge_stats = fast_edges(db, fi)
-    edge_stats['entity'] = create_entity_edges(db, fi)
-    edge_stats['semantic'] = create_semantic_edges(db, fi, embed_cache)
+    edge_stats = fast_edges(backend, fi)
+    edge_stats['entity'] = create_entity_edges(backend, fi)
+    edge_stats['semantic'] = create_semantic_edges(
+        backend, fi, embed_cache)
 
     for edge in plan.causal_edges:
         try:
-            insert_edge(db, edge)
+            backend.edges.upsert(edge)
         except Exception:
             pass
 
     if (plan.action in {'update', 'replace'}
             and plan.target_id and not target_already_gone):
-        delete_edges_by_node(db, plan.target_id)
+        backend.edges.delete_by_node(plan.target_id)
 
-    now = format_timestamp(datetime.now(timezone.utc))
-    stamp_linked(db, fi.id, now)
+    backend.nodes.stamp_linked(fi.id)
     if plan.enrichment:
-        update_enrichment(
-            db, fi.id,
-            plan.enrichment.get('keywords', []),
-            plan.enrichment.get('summary', ''),
-            plan.enrichment.get('semantic_facts', []))
-        stamp_enriched(db, fi.id, now)
+        backend.nodes.update_enrichment(
+            fi.id,
+            keywords=plan.enrichment.get('keywords', []),
+            summary=plan.enrichment.get('summary', ''),
+            semantic_facts=plan.enrichment.get('semantic_facts', []))
+        backend.nodes.stamp_enriched(fi.id)
 
     reported_action = 'add' if target_already_gone else plan.action
     result: dict = {

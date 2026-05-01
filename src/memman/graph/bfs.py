@@ -3,8 +3,7 @@
 from collections import deque
 from dataclasses import dataclass
 
-from memman.store.edge import get_all_edges
-from memman.store.node import get_all_active_insights
+from memman.store.backend import Backend
 
 
 @dataclass
@@ -16,16 +15,16 @@ class BFSOptions:
     edge_filter: str = ''
 
 
-def bfs(db: 'DB', start_id: str,
+def bfs(backend: Backend, start_id: str,
         opts: BFSOptions) -> list[dict]:
     """Perform breadth-first traversal from start_id over the full graph."""
-    all_insights = get_all_active_insights(db)
+    all_insights = backend.nodes.get_all_active()
     if not all_insights:
         return []
 
     insight_map = {ins.id: ins for ins in all_insights}
 
-    all_edges = get_all_edges(db)
+    all_edges = backend.edges.all()
     edge_adj: dict[str, list] = {}
     for e in all_edges:
         edge_adj.setdefault(e.source_id, []).append(e)
