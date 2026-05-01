@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 import pytest
 from memman.model import Edge, Insight
 
+pytest_plugins = ['tests.fixtures.postgres']
+
 EMBEDDING_DIM = 512
 
 

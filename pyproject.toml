@@ -25,6 +25,14 @@ matplotlib = "^3.8"
 networkx = "^3.2"
 testcontainers = "^4.14.2"
 
+[tool.poetry.group.postgres]
+optional = true
+
+[tool.poetry.group.postgres.dependencies]
+psycopg = {version=">=3.2", extras=["binary"]}
+psycopg-pool = ">=3.2"
+pgvector = ">=0.3"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
@@ -41,4 +49,5 @@ markers = [
     "e2e_container: end-to-end tests that build/run a Docker container via testcontainers",
     "systemd: tests that require systemd-as-PID-1 (privileged container); opt-in only",
     "live_claude: tests that invoke a real Anthropic Claude Code session (requires ANTHROPIC_API_KEY)",
+    "postgres: tests requiring the pgvector testcontainer (postgres optional dep group)",
 ]
