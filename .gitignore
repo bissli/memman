@@ -36,3 +36,7 @@ dist/
 .testdata/
 M/
 experiments/
+
+# Local planning / scratch documents (not for git)
+/DB-MIGRATION.md
+/*.plan.md
