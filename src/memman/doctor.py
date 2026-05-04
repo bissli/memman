@@ -470,6 +470,88 @@ def check_scheduler_heartbeat(data_dir: str) -> dict:
         'name': 'scheduler_heartbeat', 'status': status, 'detail': detail}
 
 
+DRAIN_HEARTBEAT_STALE_SECONDS = 5 * 60
+
+
+def check_drain_heartbeat() -> dict:
+    """Postgres-only: warn if any in-progress drain run is past 5 minutes
+    without a heartbeat.
+
+    Reads `queue.worker_runs` for rows with `ended_at IS NULL` and
+    flags any whose `last_heartbeat_at` is older than 5 minutes (the
+    documented threshold). No-op on SQLite (single-process; drain
+    hangs are visible to the operator at the foreground prompt).
+
+    Phase 4a installs the schema + Protocol verbs. Phase 4b's
+    drain-loop dispatch will start populating live rows; until then
+    a healthy Postgres deployment returns 'pass' with no in-progress
+    rows.
+    """
+    from datetime import datetime, timezone
+
+    from memman import config
+
+    backend_name = (config.get(config.BACKEND) or 'sqlite').lower()
+    if backend_name != 'postgres':
+        return {
+            'name': 'drain_heartbeat',
+            'status': 'pass',
+            'detail': {'skipped_reason': 'backend is sqlite'},
+            }
+    dsn = config.get(config.PG_DSN)
+    if not dsn:
+        return {
+            'name': 'drain_heartbeat',
+            'status': 'warn',
+            'detail': {'error': 'MEMMAN_PG_DSN not set'},
+            }
+
+    try:
+        from memman.store.postgres import PostgresQueueBackend
+        queue = PostgresQueueBackend(dsn=dsn)
+        runs = queue.recent_runs(limit=50)
+    except Exception as exc:
+        return {
+            'name': 'drain_heartbeat',
+            'status': 'fail',
+            'detail': {'error': f'{type(exc).__name__}: {exc}'},
+            }
+
+    now = datetime.now(timezone.utc)
+    stale: list[dict] = []
+    in_progress = 0
+    for r in runs:
+        if r.ended_at is not None:
+            continue
+        in_progress += 1
+        if r.last_heartbeat_at is None:
+            continue
+        age = (now - r.last_heartbeat_at).total_seconds()
+        if age > DRAIN_HEARTBEAT_STALE_SECONDS:
+            stale.append({
+                'run_id': r.id,
+                'age_seconds': int(age),
+                'last_heartbeat_at': r.last_heartbeat_at.isoformat(),
+                })
+
+    detail = {
+        'in_progress': in_progress,
+        'stale_runs': stale,
+        'threshold_seconds': DRAIN_HEARTBEAT_STALE_SECONDS,
+        }
+    if stale:
+        return {
+            'name': 'drain_heartbeat',
+            'status': 'warn',
+            'detail': detail,
+            }
+    return {
+        'name': 'drain_heartbeat',
+        'status': 'pass',
+        'detail': detail,
+        }
+
+
 def check_llm_probe() -> dict:
     """Probe the LLM endpoint with the cheapest possible call.
 
@@ -703,6 +785,7 @@ def run_all_checks(
             check_queue_schema(data_dir),
             check_queue_backlog(data_dir),
             check_scheduler_heartbeat(data_dir),
+            check_drain_heartbeat(),
             check_env_completeness(),
             check_env_permissions(),
             check_scheduler_state(),
