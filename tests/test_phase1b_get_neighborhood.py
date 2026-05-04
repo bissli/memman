@@ -38,52 +38,52 @@ def test_protocol_verb_signature():
     assert 'edge_filter' in sig.parameters
 
 
-def test_depth_one(tmp_backend):
+def test_depth_one(backend):
     """depth=1 reaches the immediate neighbors of `a`."""
-    _seed(tmp_backend)
-    triples = tmp_backend.edges.get_neighborhood('a', depth=1)
+    _seed(backend)
+    triples = backend.edges.get_neighborhood('a', depth=1)
     nbrs = {nid for nid, _hop, _etype in triples}
     assert nbrs == {'b', 'd'}
 
 
-def test_depth_two(tmp_backend):
+def test_depth_two(backend):
     """depth=2 reaches `c` via `b`."""
-    _seed(tmp_backend)
-    triples = tmp_backend.edges.get_neighborhood('a', depth=2)
+    _seed(backend)
+    triples = backend.edges.get_neighborhood('a', depth=2)
     nbrs = {nid for nid, _hop, _etype in triples}
     assert nbrs == {'b', 'c', 'd'}
 
 
-def test_edge_filter_causal(tmp_backend):
+def test_edge_filter_causal(backend):
     """edge_filter='causal' walks only causal edges."""
-    _seed(tmp_backend)
-    triples = tmp_backend.edges.get_neighborhood(
+    _seed(backend)
+    triples = backend.edges.get_neighborhood(
         'a', depth=2, edge_filter='causal')
     nbrs = {nid for nid, _hop, _etype in triples}
     assert nbrs == {'d'}
 
 
-def test_isolated_seed_returns_empty(tmp_backend):
+def test_isolated_seed_returns_empty(backend):
     """A node with no edges produces no triples."""
-    _seed(tmp_backend)
-    triples = tmp_backend.edges.get_neighborhood('e', depth=2)
+    _seed(backend)
+    triples = backend.edges.get_neighborhood('e', depth=2)
     assert triples == []
 
 
-def test_hop_values_are_correct(tmp_backend):
+def test_hop_values_are_correct(backend):
     """Each triple's hop value matches its distance from the seed."""
-    _seed(tmp_backend)
-    triples = tmp_backend.edges.get_neighborhood('a', depth=2)
+    _seed(backend)
+    triples = backend.edges.get_neighborhood('a', depth=2)
     by_id = {nid: hop for nid, hop, _etype in triples}
     assert by_id['b'] == 1
     assert by_id['d'] == 1
     assert by_id['c'] == 2
 
 
-def test_get_many_hydrates_in_order(tmp_backend):
+def test_get_many_hydrates_in_order(backend):
     """NodeStore.get_many returns insights in input order, drops misses.
     """
-    tmp_backend.nodes.insert(Insight(id='gm-1', content='one'))
-    tmp_backend.nodes.insert(Insight(id='gm-2', content='two'))
-    insights = tmp_backend.nodes.get_many(['gm-2', 'absent', 'gm-1'])
+    backend.nodes.insert(Insight(id='gm-1', content='one'))
+    backend.nodes.insert(Insight(id='gm-2', content='two'))
+    insights = backend.nodes.get_many(['gm-2', 'absent', 'gm-1'])
     assert [i.id for i in insights] == ['gm-2', 'gm-1']
