@@ -426,6 +426,7 @@ class SqliteRecallSession(RecallSession):
     """
 
     snapshot: _snapshot.Snapshot | None = None
+    _embed_cache: dict[Id, list[float]] | None = None
 
     def close(self) -> None:
         """No-op for SQLite (snapshot is in-memory, file-backed).
@@ -433,6 +434,33 @@ class SqliteRecallSession(RecallSession):
         Postgres' RecallSession in Phase 2 will close the connection
         here.
         """
+
+    def vector_anchors(
+            self, query_vec: list[float], *, k: int = 10,
+            min_sim: float = 0.0) -> list[tuple[Id, float]]:
+        """Return top-k (id, similarity) matches via Python cosine.
+
+        Uses the snapshot's pre-loaded embeddings when present;
+        falls back to `_embed_cache` (lazily populated by the
+        recall pipeline). Cosine similarity in [-1, 1].
+        """
+        from memman.embed.vector import cosine_similarity
+
+        if self.snapshot is not None:
+            cache = self.snapshot.embeddings
+        elif self._embed_cache is not None:
+            cache = self._embed_cache
+        else:
+            return []
+
+        scored: list[tuple[float, Id]] = []
+        for _id, vec in cache.items():
+            sim = cosine_similarity(query_vec, vec)
+            if sim < min_sim:
+                continue
+            scored.append((sim, _id))
+        scored.sort(reverse=True)
+        return [(eid, sim) for sim, eid in scored[:k]]
 
 
 class SqliteBackend(Backend):

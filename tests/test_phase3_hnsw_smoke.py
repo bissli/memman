@@ -7,19 +7,12 @@ backed by pgvector. If false, the recall path is falling through to
 `backend.nodes.iter_embeddings_as_vecs()` + Python-side cosine
 (`vector_search_from_cache`) and the pgvector index is dead code.
 
-This test is currently `xfail`: at HEAD the pipeline reads
-`session.snapshot` (None on Postgres), exits the `recall_session`
-context immediately, and routes all reads through Backend verbs on
-the primary connection rather than through `RecallSession` verbs.
-`PostgresRecallSession.vector_anchors()` is implemented but never
-called. The Phase 1a docstring in `src/memman/store/backend.py`
-(class `RecallSession`) promises typed verbs land in Phase 1b but
-they were never added; this test gates that future delivery.
-
-When the Phase 1b verbs are wired into `intent_aware_recall`, this
-test should start passing. The `xfail` will then convert to an
-XPASS warning at collection — that's the signal to remove the
-`xfail` marker.
+The Phase 1b RecallSession verbs (`vector_anchors` on both Sqlite
+and Postgres sessions) were finally wired in the cleanup-carryovers
+slice; `intent_aware_recall` calls `session.vector_anchors(qvec)`
+inside the `recall_session` context, which fires `embedding <=>` on
+Postgres via HNSW. This test guards against regressions back to the
+dead-strand state.
 """
 
 import random
@@ -46,17 +39,6 @@ def _gaussian_unit(seed: int) -> list[float]:
     return floats
 
 
-@pytest.mark.xfail(
-    reason='HNSW dead-strand: pipeline reads session.snapshot=None on '
-           'Postgres then exits recall_session, routing all reads '
-           'through Backend verbs (Python-side cosine via '
-           'vector_search_from_cache). PostgresRecallSession.'
-           'vector_anchors() is orphaned. Phase 1b RecallSession verbs '
-           '(keyword_anchors, vector_anchors, neighbors, hydrate, '
-           'similarity, causal_neighbors) per backend.py:401-407 '
-           'docstring promise were never delivered. This test gates '
-           'that future delivery; when it XPASSes, remove the xfail.',
-    strict=True)
 def test_postgres_recall_issues_pgvector_distance_operator(
         tmp_path, pg_dsn, monkeypatch):
     """Postgres `intent_aware_recall` issues SQL with pgvector `<=>`."""

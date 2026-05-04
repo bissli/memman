@@ -275,6 +275,10 @@ def intent_aware_recall(
         else:
             all_insights = backend.nodes.get_all_active()
             embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
+            try:
+                session._embed_cache = embed_cache
+            except AttributeError:
+                pass
 
             def _edges_lookup(nid):
                 for e in backend.edges.by_node(nid):
@@ -290,6 +294,18 @@ def intent_aware_recall(
                     e.target_id
                     for e in backend.edges.by_source_and_type(
                         source_id, 'causal')]
+
+        if query_vec is not None:
+            try:
+                vector_hits = session.vector_anchors(
+                    query_vec, k=ANCHOR_TOP_K,
+                    min_sim=VECTOR_SEARCH_MIN_SIM)
+            except Exception as exc:
+                logger.warning(
+                    f'session.vector_anchors failed, falling back: {exc}')
+                vector_hits = []
+        else:
+            vector_hits = []
 
     sim_cache: dict[str, float] = {}
     if query_vec is not None and embed_cache:
@@ -307,19 +323,23 @@ def intent_aware_recall(
         anchor_map[ins.id] = (
             ins, 1.0 / (RRF_K + rank + 1), 'keyword')
 
-    if query_vec is not None and embed_cache:
+    if vector_hits and not embed_cache:
+        embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
+
+    if query_vec is not None and not vector_hits and embed_cache:
         vector_hits = vector_search_from_cache(
             embed_cache, query_vec, ANCHOR_TOP_K)
-        for rank, (vid, _sim) in enumerate(vector_hits):
-            rrf_score = 1.0 / (RRF_K + rank + 1)
-            if vid in anchor_map:
-                ins, old_score, _via = anchor_map[vid]
-                anchor_map[vid] = (
-                    ins, old_score + rrf_score, 'hybrid')
-            else:
-                ins = _insight_lookup(vid)
-                if ins is not None:
-                    anchor_map[vid] = (ins, rrf_score, 'vector')
+
+    for rank, (vid, _sim) in enumerate(vector_hits):
+        rrf_score = 1.0 / (RRF_K + rank + 1)
+        if vid in anchor_map:
+            ins, old_score, _via = anchor_map[vid]
+            anchor_map[vid] = (
+                ins, old_score + rrf_score, 'hybrid')
+        else:
+            ins = _insight_lookup(vid)
+            if ins is not None:
+                anchor_map[vid] = (ins, rrf_score, 'vector')
 
     time_sorted = sorted(
         all_insights, key=lambda i: i.created_at, reverse=True)
