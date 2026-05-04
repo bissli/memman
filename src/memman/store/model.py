@@ -224,6 +224,7 @@ class WorkerRun:
     ended_at: datetime | None
     rows_processed: int
     error: str = ''
+    last_heartbeat_at: datetime | None = None
 
 
 @dataclass

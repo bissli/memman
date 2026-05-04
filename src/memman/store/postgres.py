@@ -52,13 +52,17 @@ logger = logging.getLogger('memman')
 
 EMBEDDING_DIM = 512
 
-_PG_SCHEMA_VERSION = 1
-_PG_MIGRATIONS: list[tuple[int, str]] = []
+_PG_SCHEMA_VERSION = 2
+_PG_MIGRATIONS: list[tuple[int, str]] = [
+    (2,
+     'ALTER TABLE queue.worker_runs'
+     ' ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ'),
+    ]
 
 _FORBIDDEN_MIGRATION_RE = re.compile(
     r'(?im)\b(?:'
     r'DROP\s+COLUMN|RENAME|DROP\s+TABLE|TRUNCATE'
-    r'|ALTER\s+COLUMN\b.*\bNOT\s+NULL\b'
+    r'|ALTER\s+COLUMN\b.*\b(?:NOT\s+NULL|TYPE)\b'
     r')')
 
 for _ver, _sql in _PG_MIGRATIONS:
@@ -184,7 +188,8 @@ CREATE TABLE IF NOT EXISTS queue.worker_runs (
     started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     ended_at      TIMESTAMPTZ,
     rows_processed INTEGER NOT NULL DEFAULT 0,
-    error         TEXT NOT NULL DEFAULT ''
+    error         TEXT NOT NULL DEFAULT '',
+    last_heartbeat_at TIMESTAMPTZ
 );
 """
 
@@ -1880,7 +1885,8 @@ class PostgresQueueBackend:
     def recent_runs(self, *, limit: int) -> list[WorkerRun]:
         with self._conn() as conn, conn.cursor() as cur:
             cur.execute(
-                'SELECT id, started_at, ended_at, rows_processed, error'
+                'SELECT id, started_at, ended_at, rows_processed, error,'
+                ' last_heartbeat_at'
                 ' FROM queue.worker_runs'
                 ' ORDER BY id DESC LIMIT %s',
                 (limit,))
@@ -1892,9 +1898,27 @@ class PostgresQueueBackend:
                 or datetime.now(timezone.utc),
                 ended_at=_datetime_or_none(r[2]),
                 rows_processed=int(r[3]),
-                error=r[4] or '')
+                error=r[4] or '',
+                last_heartbeat_at=_datetime_or_none(r[5]))
             for r in rows
             ]
+
+    def start_run(self) -> int:
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                'INSERT INTO queue.worker_runs (last_heartbeat_at)'
+                ' VALUES (now()) RETURNING id')
+            row = cur.fetchone()
+            conn.commit()
+        return int(row[0]) if row else 0
+
+    def beat_run(self, run_id: int) -> None:
+        with self._conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                'UPDATE queue.worker_runs SET last_heartbeat_at = now()'
+                ' WHERE id = %s',
+                (run_id,))
+            conn.commit()
 
     def integrity_report(self) -> IntegrityReport:
         return IntegrityReport()

@@ -625,6 +625,27 @@ class QueueBackend(Protocol):
         """Return recent worker drain runs."""
         ...
 
+    def start_run(self) -> int:
+        """Insert a new in-progress `worker_runs` row and return its id.
+
+        The row is stamped with `started_at = now()` and
+        `last_heartbeat_at = now()` server-side; `ended_at` stays
+        NULL until the drain completes. Used by the drain loop and
+        consumed by `memman doctor` for hung-worker detection.
+        """
+        ...
+
+    def beat_run(self, run_id: int) -> None:
+        """Advance `last_heartbeat_at = now()` on a specific run.
+
+        Called inline from the drain loop (one update per row
+        processed) so that a worker stuck mid-row is detectable
+        within a few enrichment cycles. The Phase 4a swarm review
+        chose inline updates over a separate `threading.Timer`
+        thread to keep cleanup hygiene simple.
+        """
+        ...
+
     def integrity_report(self) -> IntegrityReport:
         """Aggregate integrity findings used by `memman doctor`."""
         ...
