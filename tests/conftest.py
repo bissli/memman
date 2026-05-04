@@ -16,6 +16,7 @@ import json
 import re
 import struct
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from memman.store.model import Edge, Insight
@@ -571,6 +572,52 @@ def _backend_params() -> list:
 def backend_kind(request) -> str:
     """The backend identifier for this parametrization slot."""
     return request.param
+
+
+@pytest.fixture(params=_backend_params())
+def runner_kind(request) -> str:
+    """Backend identifier for CliRunner-driven cross-backend tests.
+
+    Pairs with the `cross_backend_runner` fixture below to flip
+    `MEMMAN_BACKEND` between sqlite and postgres for each test
+    invocation. Phase 4b adds this fixture so the deferred
+    `test_memory_system.py` 53 CliRunner tests can be parametrized
+    over both backends.
+    """
+    return request.param
+
+
+@pytest.fixture
+def cross_backend_runner(request, runner_kind, tmp_path, env_file):
+    """CliRunner whose env writes `MEMMAN_BACKEND=<runner_kind>` first.
+
+    For postgres mode also writes `MEMMAN_PG_DSN` from the session
+    container and registers a teardown that drops the per-test
+    schema. Returns the same `(runner, data_dir)` tuple shape as
+    the legacy `runner` fixture in `test_memory_system.py` so a
+    test can swap one for the other transparently.
+    """
+    from click.testing import CliRunner
+    r = CliRunner()
+    data_dir = str(tmp_path / 'memman_data')
+    Path(data_dir).mkdir(parents=True, exist_ok=True)
+
+    env_file('MEMMAN_BACKEND', runner_kind)
+    if runner_kind == 'postgres':
+        pg_dsn = request.getfixturevalue('pg_dsn')
+        env_file('MEMMAN_PG_DSN', pg_dsn)
+        store_name = _safe_store_name(request.node.name)
+        env_file('MEMMAN_STORE', store_name)
+
+        def _drop_postgres_schema() -> None:
+            try:
+                from memman.store.postgres import PostgresCluster
+                cluster = PostgresCluster(dsn=pg_dsn)
+                cluster.drop_store(store=store_name, data_dir='')
+            except Exception:
+                pass
+        request.addfinalizer(_drop_postgres_schema)
+    return r, data_dir
 
 
 @pytest.fixture
