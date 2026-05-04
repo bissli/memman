@@ -9,7 +9,22 @@ MIN_PROXIMITY_WEIGHT = 0.10
 
 
 def create_temporal_edge(backend: Backend, insight: Insight) -> int:
-    """Create backbone and proximity temporal edges for a new insight."""
+    """Create backbone and proximity temporal edges for a new insight.
+
+    Re-reads `insight.created_at` from the backend so the proximity
+    weight comparison uses the server-stamped value, not whatever was
+    on the in-memory dataclass when the caller built it. This makes
+    proximity edges deterministic across writers in the presence of
+    clock skew (Phase 1a Decision #1: backends own time).
+    """
+    stored = backend.nodes.get(insight.id)
+    if stored is not None and stored.created_at is not None:
+        insight = Insight(
+            **{**insight.__dict__,
+               'created_at': stored.created_at,
+               'updated_at': stored.updated_at,
+               })
+
     count = 0
 
     prev = backend.nodes.get_latest_by_source(

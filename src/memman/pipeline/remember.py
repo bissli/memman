@@ -511,6 +511,10 @@ def _apply_plan(
                 ' degrading to add')
 
     backend.nodes.insert(fi)
+    stored = backend.nodes.get(fi.id)
+    if stored is not None and stored.created_at is not None:
+        fi.created_at = stored.created_at
+        fi.updated_at = stored.updated_at
 
     final_vec = plan.enriched_vec or plan.embed_vec
     embedded = final_vec is not None
