@@ -34,9 +34,10 @@ from memman.store import snapshot as _snapshot
 from memman.store.backend import Backend, Cluster, EdgeStore, MetaStore
 from memman.store.backend import NodeStore, Oplog, RecallSession
 from memman.store.db import DB
-from memman.store.model import Edge, Id, Insight, NodeStats, OpLogEntry
-from memman.store.model import OpLogStats, ProvenanceCount, ReembedRow
-from memman.store.model import format_timestamp, parse_timestamp
+from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
+from memman.store.model import NodeStats, OpLogEntry, OpLogStats
+from memman.store.model import ProvenanceCount, ReembedRow, format_timestamp
+from memman.store.model import parse_timestamp
 
 logger = logging.getLogger('memman')
 
@@ -189,6 +190,34 @@ class SqliteNodeStore(NodeStore):
 
     def embedding_stats(self) -> tuple[int, int]:
         return _node.embedding_stats(self._db)
+
+    def enrichment_coverage(self) -> EnrichmentCoverage:
+        row = self._db._query(
+            'SELECT COUNT(*),'
+            ' SUM(CASE WHEN embedding IS NULL THEN 1 ELSE 0 END),'
+            " SUM(CASE WHEN keywords IS NULL OR keywords = '' THEN 1"
+            ' ELSE 0 END),'
+            " SUM(CASE WHEN summary IS NULL OR summary = '' THEN 1"
+            ' ELSE 0 END),'
+            " SUM(CASE WHEN semantic_facts IS NULL"
+            "        OR semantic_facts = '' THEN 1 ELSE 0 END)"
+            ' FROM insights WHERE deleted_at IS NULL').fetchone()
+        if row is None:
+            return EnrichmentCoverage()
+        total, miss_emb, miss_kw, miss_sum, miss_sf = row
+        return EnrichmentCoverage(
+            total_active=int(total or 0),
+            missing_embedding=int(miss_emb or 0),
+            missing_keywords=int(miss_kw or 0),
+            missing_summary=int(miss_sum or 0),
+            missing_semantic_facts=int(miss_sf or 0))
+
+    def embedding_size_distribution(self) -> dict[int, int]:
+        rows = self._db._query(
+            'SELECT LENGTH(embedding), COUNT(*) FROM insights'
+            ' WHERE deleted_at IS NULL AND embedding IS NOT NULL'
+            ' GROUP BY LENGTH(embedding)').fetchall()
+        return {int(size): int(count) for size, count in rows}
 
     def get_without_embedding(self, *, limit: int = 100) -> list[Insight]:
         return _node.get_insights_without_embedding(self._db, limit)

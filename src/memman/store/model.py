@@ -165,6 +165,22 @@ class IntegrityReport:
 
 
 @dataclass
+class EnrichmentCoverage:
+    """Per-field NULL counts for the enrichment columns on `insights`.
+
+    `memman doctor` consumes this to report which enrichment fields
+    (embedding, keywords, summary, semantic_facts) have unfilled
+    values among active insights.
+    """
+
+    total_active: int = 0
+    missing_embedding: int = 0
+    missing_keywords: int = 0
+    missing_summary: int = 0
+    missing_semantic_facts: int = 0
+
+
+@dataclass
 class QueueRow:
     """One claimable row from the per-host queue.
 

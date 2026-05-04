@@ -39,9 +39,10 @@ from memman.store.backend import Backend, Cluster, EdgeStore, MetaStore
 from memman.store.backend import NodeStore, Oplog, RecallSession
 from memman.store.backend import _check_identifier
 from memman.store.errors import BackendError, ConfigError
-from memman.store.model import Edge, Id, Insight, IntegrityReport, NodeStats
-from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
-from memman.store.model import QueueRow, QueueStats, ReembedRow, WorkerRun
+from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
+from memman.store.model import IntegrityReport, NodeStats, OpLogEntry
+from memman.store.model import OpLogStats, ProvenanceCount, QueueRow
+from memman.store.model import QueueStats, ReembedRow, WorkerRun
 from memman.store.model import parse_timestamp
 
 if TYPE_CHECKING:
@@ -843,6 +844,41 @@ class PostgresNodeStore(NodeStore):
                 ' FROM {s}.insights WHERE deleted_at IS NULL'))
             row = cur.fetchone()
         return (int(row[0]), int(row[1])) if row else (0, 0)
+
+    def enrichment_coverage(self) -> EnrichmentCoverage:
+        with self._conn.cursor() as cur:
+            cur.execute(self._q(
+                'SELECT COUNT(*),'
+                ' COUNT(*) FILTER (WHERE embedding IS NULL),'
+                ' COUNT(*) FILTER ('
+                "   WHERE keywords IS NULL OR keywords::text = '[]'"
+                '         OR jsonb_typeof(keywords) IS NULL),'
+                ' COUNT(*) FILTER ('
+                "   WHERE summary IS NULL OR summary = ''),"
+                ' COUNT(*) FILTER ('
+                '   WHERE semantic_facts IS NULL'
+                "         OR semantic_facts::text = '[]'"
+                '         OR jsonb_typeof(semantic_facts) IS NULL)'
+                ' FROM {s}.insights WHERE deleted_at IS NULL'))
+            row = cur.fetchone()
+        if row is None:
+            return EnrichmentCoverage()
+        return EnrichmentCoverage(
+            total_active=int(row[0] or 0),
+            missing_embedding=int(row[1] or 0),
+            missing_keywords=int(row[2] or 0),
+            missing_summary=int(row[3] or 0),
+            missing_semantic_facts=int(row[4] or 0))
+
+    def embedding_size_distribution(self) -> dict[int, int]:
+        with self._conn.cursor() as cur:
+            cur.execute(self._q(
+                'SELECT vector_dims(embedding), COUNT(*)'
+                ' FROM {s}.insights'
+                ' WHERE deleted_at IS NULL AND embedding IS NOT NULL'
+                ' GROUP BY vector_dims(embedding)'))
+            return {
+                int(size): int(count) for size, count in cur.fetchall()}
 
     def get_without_embedding(
             self, *, limit: int = 100) -> list[Insight]:

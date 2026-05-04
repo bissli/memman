@@ -33,9 +33,10 @@ from contextlib import AbstractContextManager
 from typing import Any, Protocol, runtime_checkable
 
 from memman.store.errors import ConfigError
-from memman.store.model import Edge, Id, Insight, IntegrityReport, NodeStats
-from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
-from memman.store.model import QueueRow, QueueStats, ReembedRow, WorkerRun
+from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
+from memman.store.model import IntegrityReport, NodeStats, OpLogEntry
+from memman.store.model import OpLogStats, ProvenanceCount, QueueRow
+from memman.store.model import QueueStats, ReembedRow, WorkerRun
 
 _VALID_IDENTIFIER_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
@@ -220,6 +221,25 @@ class NodeStore(Protocol):
 
     def embedding_stats(self) -> tuple[int, int]:
         """Return (total_active, embedded_count)."""
+        ...
+
+    def enrichment_coverage(self) -> EnrichmentCoverage:
+        """Per-field NULL counts on the enrichment columns.
+
+        Returns total_active + missing_{embedding,keywords,summary,
+        semantic_facts}. Doctor consumes this for the
+        enrichment-coverage check.
+        """
+        ...
+
+    def embedding_size_distribution(self) -> dict[int, int]:
+        """Histogram of stored embedding sizes for active insights.
+
+        SQLite: keyed by `LENGTH(embedding)` byte count. Postgres:
+        keyed by `vector_dims(embedding)` (the pgvector dim). A
+        healthy store has one bucket. More than one bucket means a
+        dim mismatch -- the doctor consistency check flags this.
+        """
         ...
 
     def get_without_embedding(self, *, limit: int = 100) -> list[Insight]:
