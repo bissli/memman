@@ -1376,7 +1376,14 @@ class PostgresRecallSession(RecallSession):
     (`"$user", public`) before the connection is closed -- per the
     Phase 2 gate's merge-blocker contract that no session leaks
     state when the connection is returned to a pool.
+
+    `snapshot` mirrors `SqliteRecallSession.snapshot` as a sentinel:
+    Postgres has no in-memory snapshot (HNSW + pgvector serve that
+    role), so the pipeline's `if session.snapshot is not None`
+    branching falls through to the Backend-verb path.
     """
+
+    snapshot: None = None
 
     def __init__(
             self, dsn: str, schema: str,

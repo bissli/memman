@@ -2,7 +2,6 @@
 
 from memman.search.recall import RECALL_HINTS, RERANK_WEIGHTS
 from memman.search.recall import get_traversal_params, intent_aware_recall
-from memman.store.node import insert_insight
 from tests.conftest import make_insight
 
 
@@ -74,13 +73,13 @@ class TestRecallMeta:
             query_vec=None, query_entities=[],
             limit=5, intent_override=intent)
 
-    def test_hint_field_by_intent(self, tmp_backend):
+    def test_hint_field_by_intent(self, backend):
         """Each intent produces its expected hint string."""
         for intent in ['WHY', 'WHEN', 'ENTITY', 'GENERAL']:
-            result = self._recall(tmp_backend, intent)
+            result = self._recall(backend, intent)
             assert result['meta']['hint'] == RECALL_HINTS[intent]
 
-    def test_ordering_field_by_intent(self, tmp_backend):
+    def test_ordering_field_by_intent(self, backend):
         """Ordering field matches intent-specific sort strategy."""
         expected = {
             'WHY': 'causal_topological',
@@ -89,25 +88,25 @@ class TestRecallMeta:
             'GENERAL': 'score',
             }
         for intent, ordering in expected.items():
-            result = self._recall(tmp_backend, intent)
+            result = self._recall(backend, intent)
             assert result['meta']['ordering'] == ordering
 
-    def test_sparse_flag_present(self, tmp_backend):
+    def test_sparse_flag_present(self, backend):
         """Sparse flag set when results are below half the requested limit."""
         result = intent_aware_recall(
-            tmp_backend, query='nonexistent query xyz',
+            backend, query='nonexistent query xyz',
             query_vec=None, query_entities=[],
             limit=10, intent_override='GENERAL')
         assert result['meta']['sparse'] is True
 
-    def test_sparse_flag_absent(self, tmp_db, tmp_backend):
+    def test_sparse_flag_absent(self, backend):
         """Sparse flag absent when result count meets threshold."""
         for i in range(5):
-            insert_insight(tmp_db, make_insight(
+            backend.nodes.insert(make_insight(
                 id=f'sparse-{i}',
                 content=f'common keyword topic alpha {i}'))
         result = intent_aware_recall(
-            tmp_backend, query='common keyword topic alpha',
+            backend, query='common keyword topic alpha',
             query_vec=None, query_entities=[],
             limit=5, intent_override='GENERAL')
         assert 'sparse' not in result['meta']
