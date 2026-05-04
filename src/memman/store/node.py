@@ -4,9 +4,13 @@ import json
 import logging
 import math
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any
 
 from memman.store.model import MAX_INSIGHTS, Insight, base_weight
 from memman.store.model import format_timestamp, is_immune, parse_timestamp
+
+if TYPE_CHECKING:
+    from memman.store.db import DB
 
 logger = logging.getLogger('memman')
 
@@ -70,7 +74,7 @@ def query_insights(db: 'DB', keyword: str = '', category: str = '',
                    limit: int = 20) -> list[Insight]:
     """Return insights matching filters, ordered by importance DESC, created_at DESC."""
     conditions = ['deleted_at IS NULL']
-    args: list = []
+    args: list[Any] = []
 
     if keyword:
         for word in keyword.split():
@@ -218,7 +222,7 @@ def refresh_effective_importance(db: 'DB', id: str) -> float:
 
 def get_retention_candidates(
         db: 'DB', threshold: float,
-        limit: int) -> tuple[list[dict], int]:
+        limit: int) -> tuple[list[dict[str, Any]], int]:
     """Return non-immune insights sorted by effective_importance ascending."""
     rows = db._query(
         'SELECT id, content, category, importance, entities,'
@@ -226,11 +230,11 @@ def get_retention_candidates(
         ' summary, last_accessed_at'
         ' FROM insights WHERE deleted_at IS NULL').fetchall()
 
-    insight_rows = []
+    insight_rows: list[tuple[Insight, datetime]] = []
     for r in rows:
         ins = _scan_insight(r[:11])
         last_accessed_str = r[11]
-        last_access = ins.created_at
+        last_access = ins.created_at or datetime.now(timezone.utc)
         if last_accessed_str:
             try:
                 last_access = parse_timestamp(last_accessed_str)
@@ -279,7 +283,8 @@ def get_retention_candidates(
         except Exception as e:
             logger.warning('batch EI update failed, rolled back: %s', e)
 
-    candidates.sort(key=lambda c: c['effective_importance'])
+    candidates.sort(
+        key=lambda c: float(c['effective_importance']))  # type: ignore[arg-type]
     total = len(insight_rows)
     if limit > 0 and len(candidates) > limit:
         candidates = candidates[:limit]
@@ -291,7 +296,7 @@ def count_active_insights(db: 'DB') -> int:
     row = db._query(
         'SELECT COUNT(*) FROM insights WHERE deleted_at IS NULL'
         ).fetchone()
-    return row[0]
+    return int(row[0])
 
 
 def count_total_insights(db: 'DB') -> int:
@@ -303,7 +308,7 @@ def count_total_insights(db: 'DB') -> int:
     fingerprint must not be re-seeded against it.
     """
     row = db._query('SELECT COUNT(*) FROM insights').fetchone()
-    return row[0]
+    return int(row[0])
 
 
 def has_active_with_source(db: 'DB', source: str) -> bool:
@@ -384,7 +389,7 @@ def auto_prune(db: 'DB', max_insights: int,
 
     excess = min(total - max_insights, PRUNE_BATCH_SIZE)
 
-    args: list = list(exclude_ids)
+    args: list[Any] = list(exclude_ids)
     exclude_clause = ''
     if exclude_ids:
         placeholders = ','.join('?' for _ in exclude_ids)
@@ -426,7 +431,7 @@ def auto_prune(db: 'DB', max_insights: int,
 
 
 def review_content_quality(
-        db: 'DB', limit: int = 50) -> list[dict]:
+        db: 'DB', limit: int = 50) -> list[dict[str, Any]]:
     """Review active insights for content quality issues."""
     from memman.search.quality import check_content_quality
 
@@ -439,7 +444,9 @@ def review_content_quality(
                 'insight': ins,
                 'quality_warnings': warnings,
                 })
-    flagged.sort(key=lambda x: len(x['quality_warnings']), reverse=True)
+    flagged.sort(
+        key=lambda x: len(x['quality_warnings']),  # type: ignore[arg-type]
+        reverse=True)
     return flagged[:limit]
 
 
@@ -514,9 +521,9 @@ def get_all_active_insights(db: 'DB') -> list[Insight]:
     return [_scan_insight(r) for r in rows]
 
 
-def get_stats(db: 'DB') -> dict:
+def get_stats(db: 'DB') -> dict[str, Any]:
     """Return aggregate statistics."""
-    stats: dict = {'by_category': {}}
+    stats: dict[str, Any] = {'by_category': {}}
 
     row = db._query(
         'SELECT COUNT(*) FROM insights WHERE deleted_at IS NULL'
@@ -581,7 +588,8 @@ def get_embedding(db: 'DB', id: str) -> bytes | None:
         (id,)).fetchone()
     if row is None or row[0] is None:
         return None
-    return row[0]
+    blob: bytes = row[0]
+    return blob
 
 
 def get_all_embeddings(db: 'DB') -> list[tuple[str, str, bytes]]:
@@ -674,7 +682,7 @@ def reset_for_rebuild(
     db._exec(
         f'UPDATE insights SET enriched_at = NULL, linked_at = NULL'
         f' WHERE id IN ({placeholders})',
-        insight_ids)
+        tuple(insight_ids))
 
 
 def clear_linked_at(db: 'DB') -> None:
@@ -684,7 +692,7 @@ def clear_linked_at(db: 'DB') -> None:
         ' WHERE deleted_at IS NULL')
 
 
-def _scan_insight(row: tuple) -> Insight:
+def _scan_insight(row: tuple[Any, ...]) -> Insight:
     """Parse a database row into an Insight dataclass."""
     i = Insight()
     i.id = row[0]

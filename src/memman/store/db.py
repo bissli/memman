@@ -4,6 +4,8 @@ import logging
 import os
 import re
 import sqlite3
+from collections.abc import Callable
+from typing import Any
 from pathlib import Path
 
 logger = logging.getLogger('memman')
@@ -83,15 +85,19 @@ class DB:
         """Close the database connection."""
         self._conn.close()
 
-    def _exec(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
+    def _exec(
+            self, sql: str,
+            params: tuple[Any, ...] = ()) -> sqlite3.Cursor:
         """Execute a write SQL statement."""
         return self._conn.execute(sql, params)
 
-    def _query(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
+    def _query(
+            self, sql: str,
+            params: tuple[Any, ...] = ()) -> sqlite3.Cursor:
         """Query SQL using the transaction cursor or connection."""
         return self._conn.execute(sql, params)
 
-    def in_transaction(self, fn: callable):
+    def in_transaction(self, fn: Callable[[], Any]) -> Any:
         """Run fn inside a single SQL transaction, returning its result."""
         if self._in_tx:
             raise RuntimeError('nested transactions not supported')
@@ -115,7 +121,7 @@ def get_meta(db: 'DB', key: str) -> str | None:
     return row[0] if row else None
 
 
-def storage_summary(db: 'DB') -> dict:
+def storage_summary(db: 'DB') -> dict[str, Any]:
     """Return backend-specific storage information for the active DB.
 
     SQLite: {'db_path': <file path>, 'db_size_bytes': <int>}.
@@ -123,7 +129,7 @@ def storage_summary(db: 'DB') -> dict:
     dict; the SQLite-specific keys are inappropriate. Used by the
     `memman status` command.
     """
-    summary: dict = {'db_path': db.path}
+    summary: dict[str, Any] = {'db_path': db.path}
     try:
         summary['db_size_bytes'] = Path(db.path).stat().st_size
     except OSError:

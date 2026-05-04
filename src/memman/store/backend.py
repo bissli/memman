@@ -434,14 +434,24 @@ class RecallSession(Protocol):
     or a postgres connection in autocommit mode) for the duration of
     a single recall request. Closes deterministically on context exit.
 
-    Phase 1a Protocol commitment is intentionally minimal -- the
-    session is a lifecycle handle that owns the read-side connection
-    or cached data. The high-level verbs (keyword_anchors,
-    vector_anchors, neighbors, hydrate, similarity, causal_neighbors)
-    land on this Protocol in Phase 1b once `search/recall.py` has
-    been refactored to call them. Concrete implementations in 1a
-    expose backend-specific attributes the pipeline reads directly.
+    `vector_anchors` is the Phase 1b high-level verb the pipeline
+    consumes inside the `with recall_session()` block. SQLite serves
+    it from the snapshot's pre-loaded `embeddings` (or a lazily-
+    populated `_embed_cache` on the snapshot-miss fallback path).
+    Postgres serves it via HNSW with `embedding <=>`. The other
+    Phase 1a-promised verbs (keyword_anchors, neighbors, hydrate,
+    similarity, causal_neighbors) remain implementation-side; the
+    pipeline still reads `session.snapshot` directly when present
+    for the broader recall flow.
     """
+
+    snapshot: Any
+
+    def vector_anchors(
+            self, query_vec: list[float], *, k: int = 10,
+            min_sim: float = 0.0) -> list[tuple[Id, float]]:
+        """Top-k (id, similarity) anchors. Cosine in [-1, 1]."""
+        ...
 
 
 @runtime_checkable

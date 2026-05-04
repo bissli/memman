@@ -10,11 +10,15 @@ import os
 import stat
 import statistics
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from memman.store.backend import Backend
 
+if TYPE_CHECKING:
+    from memman.store.db import DB
 
-def check_integrity(backend: Backend) -> dict:
+
+def check_integrity(backend: Backend) -> dict[str, Any]:
     """Run the backend's integrity probe."""
     result = backend.integrity_check()
     ok = bool(result.get('ok'))
@@ -25,7 +29,7 @@ def check_integrity(backend: Backend) -> dict:
         }
 
 
-def check_enrichment_coverage(backend: Backend) -> dict:
+def check_enrichment_coverage(backend: Backend) -> dict[str, Any]:
     """Check that embedding, keywords, summary, semantic_facts are populated."""
     cov = backend.nodes.enrichment_coverage()
     total = cov.total_active
@@ -56,7 +60,7 @@ def check_enrichment_coverage(backend: Backend) -> dict:
         }
 
 
-def check_orphan_insights(backend: Backend) -> dict:
+def check_orphan_insights(backend: Backend) -> dict[str, Any]:
     """Find active insights with zero edges."""
     orphan_count, total = backend.nodes.count_orphans()
     if total == 0:
@@ -81,7 +85,7 @@ def check_orphan_insights(backend: Backend) -> dict:
         }
 
 
-def check_dangling_edges(backend: Backend) -> dict:
+def check_dangling_edges(backend: Backend) -> dict[str, Any]:
     """Find edges referencing deleted or missing insights."""
     by_type = backend.edges.count_dangling_by_type()
     total = sum(by_type.values())
@@ -93,7 +97,7 @@ def check_dangling_edges(backend: Backend) -> dict:
         }
 
 
-def check_embedding_consistency(backend: Backend) -> dict:
+def check_embedding_consistency(backend: Backend) -> dict[str, Any]:
     """Verify all embeddings have the same size (byte length on SQLite,
     pgvector dimension on Postgres)."""
     dist = backend.nodes.embedding_size_distribution()
@@ -106,7 +110,7 @@ def check_embedding_consistency(backend: Backend) -> dict:
         }
 
 
-def check_edge_degree(backend: Backend) -> dict:
+def check_edge_degree(backend: Backend) -> dict[str, Any]:
     """Compute degree distribution stats across active insights."""
     active_ids = backend.nodes.get_active_ids()
     if not active_ids:
@@ -140,7 +144,7 @@ QUEUE_AGE_WARN_SECONDS = 3600
 QUEUE_AGE_FAIL_SECONDS = 86400
 
 
-def check_queue_backlog(data_dir: str) -> dict:
+def check_queue_backlog(data_dir: str) -> dict[str, Any]:
     """Report pending/failed counts and oldest-pending age."""
     from memman.queue import open_queue_db
     from memman.queue import stats as queue_stats
@@ -193,7 +197,7 @@ EXPECTED_INSIGHT_COLUMNS = {
 EXPECTED_QUEUE_TABLES = {'queue', 'worker_runs'}
 
 
-def check_schema_columns(backend: Backend) -> dict:
+def check_schema_columns(backend: Backend) -> dict[str, Any]:
     """Verify the insights table has the canonical provenance columns.
 
     Single-user canonical-schema policy: missing columns mean the DB
@@ -209,7 +213,7 @@ def check_schema_columns(backend: Backend) -> dict:
         }
 
 
-def check_queue_schema(data_dir: str) -> dict:
+def check_queue_schema(data_dir: str) -> dict[str, Any]:
     """Verify queue.db has the canonical tables (queue + worker_runs).
     """
     from memman.queue import open_queue_db
@@ -231,7 +235,7 @@ def check_queue_schema(data_dir: str) -> dict:
         }
 
 
-def check_optional_extras() -> dict:
+def check_optional_extras() -> dict[str, Any]:
     """Report which `memman[extras]` install groups resolve at runtime.
 
     Always passes; the result is informational. Lets users verify their
@@ -247,7 +251,7 @@ def check_optional_extras() -> dict:
         }
 
 
-def check_env_completeness() -> dict:
+def check_env_completeness() -> dict[str, Any]:
     """Verify ~/.memman/env contains every INSTALLABLE_KEYS entry.
 
     Catches the upgrade case where a new release adds a key the user's
@@ -287,7 +291,7 @@ def check_env_completeness() -> dict:
         }
 
 
-def check_env_permissions() -> dict:
+def check_env_permissions() -> dict[str, Any]:
     """Verify ~/.memman/env is 0600 and ~/.memman is 0700.
 
     Relaxed to a PASS when the files don't exist (fresh install, no
@@ -296,7 +300,7 @@ def check_env_permissions() -> dict:
     home = Path.home()
     mm_dir = home / '.memman'
     env_file = mm_dir / 'env'
-    detail: dict = {'mm_dir': str(mm_dir), 'env_file': str(env_file)}
+    detail: dict[str, Any] = {'mm_dir': str(mm_dir), 'env_file': str(env_file)}
 
     if not mm_dir.is_dir():
         return {'name': 'env_permissions', 'status': 'pass',
@@ -324,7 +328,7 @@ def check_env_permissions() -> dict:
     return {'name': 'env_permissions', 'status': status, 'detail': detail}
 
 
-def check_scheduler_state() -> dict:
+def check_scheduler_state() -> dict[str, Any]:
     """Compare persisted scheduler state against OS install/active truth.
     """
     from memman.setup.scheduler import status as sch_status
@@ -364,7 +368,7 @@ def check_scheduler_state() -> dict:
         }
 
 
-def check_scheduler_heartbeat(data_dir: str) -> dict:
+def check_scheduler_heartbeat(data_dir: str) -> dict[str, Any]:
     """Verify the worker fired within max(3 x interval, 180s).
 
     Cross-references scheduler state: only fails when the scheduler is
@@ -473,7 +477,7 @@ def check_scheduler_heartbeat(data_dir: str) -> dict:
 DRAIN_HEARTBEAT_STALE_SECONDS = 5 * 60
 
 
-def check_drain_heartbeat() -> dict:
+def check_drain_heartbeat() -> dict[str, Any]:
     """Postgres-only: warn if any in-progress drain run is past 5 minutes
     without a heartbeat.
 
@@ -518,7 +522,7 @@ def check_drain_heartbeat() -> dict:
             }
 
     now = datetime.now(timezone.utc)
-    stale: list[dict] = []
+    stale: list[dict[str, Any]] = []
     in_progress = 0
     for r in runs:
         if r.ended_at is not None:
@@ -552,7 +556,7 @@ def check_drain_heartbeat() -> dict:
         }
 
 
-def check_llm_probe() -> dict:
+def check_llm_probe() -> dict[str, Any]:
     """Probe the LLM endpoint with the cheapest possible call.
 
     Verifies API key validity + endpoint reachability. Subsumes what
@@ -560,7 +564,7 @@ def check_llm_probe() -> dict:
     """
     import time as _time
 
-    detail: dict = {
+    detail: dict[str, Any] = {
         'model': None,
         'elapsed_ms': None,
         'sample': None,
@@ -590,14 +594,14 @@ def check_llm_probe() -> dict:
         return {'name': 'llm_probe', 'status': 'fail', 'detail': detail}
 
 
-def check_embed_probe() -> dict:
+def check_embed_probe() -> dict[str, Any]:
     """Probe the embedding endpoint with the cheapest possible call.
 
     Subsumes what used to be `memman keys test`'s embed check.
     """
     import time as _time
 
-    detail: dict = {
+    detail: dict[str, Any] = {
         'provider': None,
         'model': None,
         'elapsed_ms': None,
@@ -627,7 +631,7 @@ def check_embed_probe() -> dict:
         return {'name': 'embed_probe', 'status': 'fail', 'detail': detail}
 
 
-def check_embed_fingerprint(backend: Backend) -> dict:
+def check_embed_fingerprint(backend: Backend) -> dict[str, Any]:
     """Compare active client fingerprint against `meta.embed_fingerprint`.
 
     Surfaces the same mismatch that `assert_consistent` enforces at
@@ -636,7 +640,7 @@ def check_embed_fingerprint(backend: Backend) -> dict:
     """
     from memman.embed.fingerprint import active_fingerprint, stored_fingerprint
 
-    detail: dict = {
+    detail: dict[str, Any] = {
         'active': None,
         'stored': None,
         'error': None,
@@ -682,7 +686,7 @@ def check_embed_fingerprint(backend: Backend) -> dict:
         'detail': detail}
 
 
-def check_provenance_drift(backend: Backend) -> dict:
+def check_provenance_drift(backend: Backend) -> dict[str, Any]:
     """Surface rows whose prompt_version or model_id no longer matches active.
 
     Reads per-row provenance columns directly. No meta-key fingerprint
@@ -691,7 +695,7 @@ def check_provenance_drift(backend: Backend) -> dict:
     from memman import config
     from memman.pipeline.remember import compute_prompt_version
 
-    detail: dict = {
+    detail: dict[str, Any] = {
         'active_prompt_version': None,
         'active_model_slow': None,
         'stale_rows': 0,
@@ -720,7 +724,7 @@ def check_provenance_drift(backend: Backend) -> dict:
     active_pv = detail['active_prompt_version']
     active_model = detail['active_model_slow_canonical']
     stale_rows = 0
-    breakdown: list[dict] = []
+    breakdown: list[dict[str, Any]] = []
     for pc in provenance:
         is_stale = (
             (pc.prompt_version is not None
@@ -754,7 +758,7 @@ def check_provenance_drift(backend: Backend) -> dict:
 
 def run_all_checks(
         backend: Backend, db: 'DB',
-        data_dir: str | None = None) -> dict:
+        data_dir: str | None = None) -> dict[str, Any]:
     """Run all health checks and return results with overall status.
 
     Takes both `backend` (for the Backend-Protocol-routed checks) and

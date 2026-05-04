@@ -2,8 +2,12 @@
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any
 
 from memman.store.model import format_timestamp
+
+if TYPE_CHECKING:
+    from memman.store.db import DB
 
 logger = logging.getLogger('memman')
 
@@ -62,14 +66,14 @@ def trim_oplog_by_age(
     try:
         cur = db._exec(
             'DELETE FROM oplog WHERE created_at < ?', (cutoff,))
-        return cur.rowcount
+        return int(cur.rowcount)
     except Exception as exc:
         logger.warning(f'oplog age trim failed: {exc}')
         return 0
 
 
 def get_oplog(db: 'DB', limit: int = 20,
-              since: str = '') -> list[dict]:
+              since: str = '') -> list[dict[str, Any]]:
     """Return the most recent N oplog entries, optionally filtered by date."""
     if limit <= 0:
         limit = 20
@@ -94,7 +98,7 @@ def get_oplog(db: 'DB', limit: int = 20,
     return entries
 
 
-def get_oplog_stats(db: 'DB', since: str = '') -> dict:
+def get_oplog_stats(db: 'DB', since: str = '') -> dict[str, Any]:
     """Return grouped operation counts and never-accessed insight count."""
     if since:
         rows = db._query(

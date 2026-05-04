@@ -23,6 +23,7 @@ import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from typing import Any
 
 from memman.embed import get_client
 from memman.embed.vector import cosine_similarity
@@ -81,7 +82,7 @@ class FactPlan:
     fact_insight: Insight | None = None
     target_id: str | None = None
     embed_vec: list[float] | None = None
-    enrichment: dict = field(default_factory=dict)
+    enrichment: dict[str, Any] = field(default_factory=dict)
     causal_edges: list[Edge] = field(default_factory=list)
     enriched_vec: list[float] | None = None
     skip_reason: str = ''
@@ -98,9 +99,9 @@ def run_remember(
         embed_cache: dict[str, list[float]] | None = None,
         insights_by_id: dict[str, Insight] | None = None,
         executor: ThreadPoolExecutor | None = None,
-        llm_client=None,
-        ec=None,
-        ) -> dict:
+        llm_client: Any = None,
+        ec: Any = None,
+        ) -> dict[str, Any]:
     """Run the full remember pipeline and return the result dict.
 
     See module docstring for the overall shape.
@@ -191,7 +192,7 @@ def run_remember(
 
         _batch_enriched_embeds(plans, ec)
 
-        fact_results: list[dict] = []
+        fact_results: list[dict[str, Any]] = []
 
         def apply_all() -> None:
             new_ids: list[str] = []
@@ -237,7 +238,7 @@ def run_remember(
 
 
 def _batch_enriched_embeds(
-        plans: list[FactPlan], ec: object) -> None:
+        plans: list[FactPlan], ec: Any) -> None:
     """Embed every plan's enriched text in one HTTP round-trip.
 
     Called once per row after planning completes. Plans whose
@@ -280,7 +281,7 @@ def _batch_enriched_embeds(
 
 
 def _plan_fact(
-        fact: dict,
+        fact: dict[str, Any],
         parent: Insight,
         replaced_id: str,
         no_reconcile: bool,
@@ -289,9 +290,9 @@ def _plan_fact(
         insights_by_id: dict[str, Insight],
         embed_cache: dict[str, list[float]],
         deleted_in_batch: set[str],
-        llm_client: object,
-        metadata_llm_client: object,
-        ec: object,
+        llm_client: Any,
+        metadata_llm_client: Any,
+        ec: Any,
         backend: Backend,
         executor: ThreadPoolExecutor,
         ) -> tuple[FactPlan, int]:
@@ -420,10 +421,10 @@ def _plan_fact(
             embed_vec=embed_vec,
             ), calls
 
-    enrichment: dict = {}
+    enrichment: dict[str, Any] = {}
     causal_edges: list[Edge] = []
 
-    def _do_enrich() -> dict:
+    def _do_enrich() -> dict[str, Any]:
         return enrich_with_llm(fact_insight, metadata_llm_client)
 
     def _do_causal() -> list[Edge]:
@@ -463,17 +464,21 @@ def _apply_plan(
         backend: Backend,
         plan: FactPlan,
         embed_cache: dict[str, list[float]],
-        ) -> dict:
+        ) -> dict[str, Any]:
     """Apply one planned fact. Must be invoked inside a transaction.
     """
-    fi = plan.fact_insight
     if plan.action == 'skipped':
+        skip_fi = plan.fact_insight
         return {
-            'id': fi.id if fi else str(uuid.uuid4()),
-            'content': fi.content if fi else plan.fact_text,
+            'id': skip_fi.id if skip_fi else str(uuid.uuid4()),
+            'content': skip_fi.content if skip_fi else plan.fact_text,
             'action': 'skipped',
             'reason': plan.skip_reason,
             }
+
+    assert plan.fact_insight is not None, (
+        'non-skipped FactPlan must carry a fact_insight')
+    fi = plan.fact_insight
 
     if plan.action == 'delete' and plan.target_id:
         deleted_now = backend.nodes.soft_delete(
@@ -552,14 +557,16 @@ def _apply_plan(
         backend.nodes.stamp_enriched(fi.id)
 
     reported_action = 'add' if target_already_gone else plan.action
-    result: dict = {
+    result: dict[str, Any] = {
         'id': fi.id,
         'content': fi.content,
         'category': fi.category,
         'importance': fi.importance,
         'entities': fi.entities,
         'action': reported_action,
-        'created_at': format_timestamp(fi.created_at),
+        'created_at': (
+            format_timestamp(fi.created_at)
+            if fi.created_at is not None else ''),
         'edges_created': {
             **edge_stats,
             'causal': len(plan.causal_edges),

@@ -16,6 +16,7 @@ the next drain.
 
 import logging
 import time
+from typing import Any
 
 logger = logging.getLogger('memman')
 
@@ -24,12 +25,12 @@ MAINTENANCE_LINK_PENDING_MAX = 3
 
 
 def run_maintenance(
-        queue_conn,
+        queue_conn: Any,
         data_dir: str,
         touched_stores: set[str],
-        store_contexts: dict[str, object],
+        store_contexts: dict[str, Any],
         deadline_monotonic: float,
-        snapshot_writer) -> None:
+        snapshot_writer: Any) -> None:
     """Execute the post-drain maintenance pass.
 
     `snapshot_writer(data_dir, store_name)` is the cli helper that
@@ -77,7 +78,8 @@ def run_maintenance(
 
 
 def _run_per_store_maintenance(
-        ctx, store_name: str, deadline_monotonic: float) -> None:
+        ctx: Any, store_name: str,
+        deadline_monotonic: float) -> None:
     """Run oplog trim + bounded link_pending for one store."""
     from memman.graph.engine import link_pending
 

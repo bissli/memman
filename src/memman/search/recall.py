@@ -110,8 +110,8 @@ def beam_search_from_anchor(
         via_map: dict[str, str],
         insight_map: dict[str, Insight],
         sim_cache: dict[str, float] | None,
-        edges_lookup,
-        insight_lookup) -> None:
+        edges_lookup: Callable[[str], Any],
+        insight_lookup: Callable[[str], Insight | None]) -> None:
     """Perform beam search from a single anchor node.
 
     `edges_lookup(nid) -> iterable of (neighbor_id, edge_type, weight)`
@@ -228,7 +228,7 @@ def intent_aware_recall(
         query_entities: list[str],
         limit: int,
         intent_override: str | None = None,
-        rerank: bool = False) -> dict:
+        rerank: bool = False) -> dict[str, Any]:
     """Perform MAGMA-aligned intent-aware retrieval.
 
     Loads the worker-materialized snapshot when present and consumes
@@ -261,13 +261,13 @@ def intent_aware_recall(
             bidir = _bidirectional_adjacency(snapshot.adjacency)
             insights_by_id = {i.id: i for i in snapshot.insights}
 
-            def _edges_lookup(nid):
+            def _edges_lookup(nid: str) -> Any:
                 return bidir.get(nid, ())
 
-            def _insight_lookup(nid):
+            def _insight_lookup(nid: str) -> Insight | None:
                 return insights_by_id.get(nid)
 
-            def _causal_edges_lookup(source_id):
+            def _causal_edges_lookup(source_id: str) -> list[str]:
                 return [
                     target for target, etype, _w
                     in snapshot.adjacency.get(source_id, ())
@@ -276,20 +276,20 @@ def intent_aware_recall(
             all_insights = backend.nodes.get_all_active()
             embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
             try:
-                session._embed_cache = embed_cache
+                session._embed_cache = embed_cache  # type: ignore[attr-defined]
             except AttributeError:
                 pass
 
-            def _edges_lookup(nid):
+            def _edges_lookup(nid: str) -> Any:
                 for e in backend.edges.by_node(nid):
                     neighbor_id = (
                         e.target_id if e.target_id != nid else e.source_id)
                     yield (neighbor_id, e.edge_type, e.weight)
 
-            def _insight_lookup(nid):
+            def _insight_lookup(nid: str) -> Insight | None:
                 return backend.nodes.get(nid)
 
-            def _causal_edges_lookup(source_id):
+            def _causal_edges_lookup(source_id: str) -> list[str]:
                 return [
                     e.target_id
                     for e in backend.edges.by_source_and_type(
@@ -337,9 +337,9 @@ def intent_aware_recall(
             anchor_map[vid] = (
                 ins, old_score + rrf_score, 'hybrid')
         else:
-            ins = _insight_lookup(vid)
-            if ins is not None:
-                anchor_map[vid] = (ins, rrf_score, 'vector')
+            looked = _insight_lookup(vid)
+            if looked is not None:
+                anchor_map[vid] = (looked, rrf_score, 'vector')
 
     time_sorted = sorted(
         all_insights, key=lambda i: i.created_at, reverse=True)
@@ -392,24 +392,24 @@ def intent_aware_recall(
     query_entity_set = {e.lower() for e in query_entities}
 
     candidates: list[dict[str, Any]] = []
-    graph_min = None
-    graph_max = None
+    graph_min: float | None = None
+    graph_max: float | None = None
     for cid, graph_raw in score_map.items():
-        ins = insight_map.get(cid)
-        if ins is None:
+        cid_ins = insight_map.get(cid)
+        if cid_ins is None:
             continue
-        if graph_min is None:
+        if graph_min is None or graph_max is None:
             graph_min = graph_raw
             graph_max = graph_raw
         else:
             graph_min = min(graph_min, graph_raw)
             graph_max = max(graph_max, graph_raw)
         candidates.append({
-            'id': cid, 'ins': ins, 'via': via_map.get(cid, ''),
+            'id': cid, 'ins': cid_ins, 'via': via_map.get(cid, ''),
             'graph_raw': graph_raw,
             })
 
-    if graph_min is None:
+    if graph_min is None or graph_max is None:
         graph_min = 0.0
         graph_max = 0.0
     graph_range = graph_max - graph_min

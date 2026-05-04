@@ -2,8 +2,12 @@
 
 import logging
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any
 
 from memman.store.model import Edge, format_timestamp, parse_timestamp
+
+if TYPE_CHECKING:
+    from memman.store.db import DB
 
 logger = logging.getLogger('memman')
 
@@ -254,7 +258,7 @@ def degree_distribution(db: 'DB') -> dict[str, int]:
     return {r[0]: by_id.get(r[0], 0) for r in id_rows}
 
 
-def _scan_edge(row: tuple) -> Edge:
+def _scan_edge(row: tuple[Any, ...]) -> Edge:
     """Parse a database row into an Edge dataclass."""
     e = Edge()
     e.source_id = row[0]
