@@ -1637,6 +1637,22 @@ class PostgresBackend(Backend):
         """
         _ensure_hnsw_index(self._dsn, self._schema)
 
+    def integrity_check(self) -> dict[str, Any]:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                f'SELECT 1 FROM {self._schema}.insights LIMIT 1')
+            cur.fetchone()
+        return {'ok': True, 'detail': 'schema reachable'}
+
+    def introspect_columns(self, table: str) -> set[str]:
+        _check_identifier(table)
+        with self._conn.cursor() as cur:
+            cur.execute(
+                'SELECT column_name FROM information_schema.columns'
+                ' WHERE table_schema = %s AND table_name = %s',
+                (self._schema, table))
+            return {row[0] for row in cur.fetchall()}
+
     def close(self) -> None:
         if self._owns_conn and self._conn is not None:
             try:

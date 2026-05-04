@@ -489,6 +489,30 @@ class Backend(Protocol):
         """Backend-specific storage info for `memman status`."""
         ...
 
+    def integrity_check(self) -> dict[str, Any]:
+        """Run a backend-specific integrity probe for `memman doctor`.
+
+        SQLite: `PRAGMA integrity_check`. Postgres: connectivity
+        probe + schema-presence verification (HNSW index validity is
+        checked separately at reindex time).
+
+        Returns a dict shaped `{'ok': bool, 'detail': str}` -- doctor
+        composes this with sub-store verbs to assemble its overall
+        report.
+        """
+        ...
+
+    def introspect_columns(self, table: str) -> set[str]:
+        """Return the column names on a named table in this store.
+
+        SQLite: `PRAGMA table_info(<table>)`. Postgres:
+        `information_schema.columns` filtered by the store's schema.
+        Returns an empty set when the table does not exist (rather
+        than raising) so doctor's schema-columns check can compute a
+        symmetric difference cleanly across backends.
+        """
+        ...
+
     def close(self) -> None:
         """Close the backend's connection."""
         ...

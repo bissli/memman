@@ -529,6 +529,16 @@ class SqliteBackend(Backend):
     def storage_summary(self) -> dict[str, Any]:
         return _db.storage_summary(self._db)
 
+    def integrity_check(self) -> dict[str, Any]:
+        row = self._db._query('PRAGMA integrity_check').fetchone()
+        result = row[0] if row else 'unknown'
+        return {'ok': result == 'ok', 'detail': result}
+
+    def introspect_columns(self, table: str) -> set[str]:
+        rows = self._db._query(
+            f'PRAGMA table_info({table})').fetchall()
+        return {row[1] for row in rows}
+
     def close(self) -> None:
         self._db.close()
 
