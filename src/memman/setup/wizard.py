@@ -226,14 +226,51 @@ def _probe_dsn_or_die(dsn: str) -> None:
 
 
 def _probe_dsn(dsn: str) -> None:
-    """Open and close a Postgres connection. Raises on failure.
+    """Open + verify pgvector + emit PgBouncer hint on remote DSN.
+
+    Per Phase 4 gate item 5: install-time probe asserts `SELECT 1`
+    and `pg_extension WHERE extname = 'vector'`; non-localhost URLs
+    emit a PgBouncer recommendation. Raises on hard failure (cannot
+    connect, pgvector missing).
 
     Lazy-imports `psycopg` so users without `memman[postgres]` are
     not blocked from importing the wizard module itself.
     """
     import psycopg
-    with psycopg.connect(dsn, connect_timeout=DSN_PROBE_TIMEOUT_SEC) as conn:
-        conn.execute('SELECT 1')
+    with psycopg.connect(
+            dsn, connect_timeout=DSN_PROBE_TIMEOUT_SEC) as conn:
+        with conn.cursor() as cur:
+            cur.execute('SELECT 1')
+            cur.execute(
+                "SELECT 1 FROM pg_extension WHERE extname = 'vector'")
+            if cur.fetchone() is None:
+                raise RuntimeError(
+                    "pgvector extension is not installed in the target "
+                    "database; run `CREATE EXTENSION vector;` as a "
+                    "superuser, then retry")
+    if _is_remote_dsn(dsn):
+        click.echo(click.style(
+            '  hint: non-localhost Postgres detected; consider'
+            ' running through PgBouncer (transaction-pooling mode)'
+            ' for connection-count safety in multi-agent'
+            ' deployments.',
+            dim=True))
+
+
+def _is_remote_dsn(dsn: str) -> bool:
+    """Best-effort detection of a non-localhost host in a DSN.
+
+    Handles both `host=...` keyword form and `postgresql://host/...`
+    URI form. Returns False on parse failure (defensive: don't
+    spam the hint for parse-edge-case DSNs).
+    """
+    lowered = dsn.lower()
+    for marker in ('host=localhost', 'host=127.0.0.1', '@localhost', '@127.0.0.1'):
+        if marker in lowered:
+            return False
+    if 'host=' in lowered or '://' in lowered:
+        return True
+    return False
 
 
 def _print_migration_hint(
@@ -255,8 +292,9 @@ def _print_migration_hint(
         f'Found {len(populated)} existing SQLite store(s):'
         f' {", ".join(sorted(populated))}.', fg='yellow'))
     click.echo(click.style(
-        '  To migrate them to postgres, run: memman migrate --all',
+        '  To migrate them to postgres, run:'
+        ' memman migrate --all --i-have-a-backup',
         dim=True))
     click.echo(click.style(
-        '  (the migrate command lands in a follow-up release)',
+        '  (or --dry-run first to see what would be moved)',
         dim=True))
