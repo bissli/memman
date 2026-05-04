@@ -491,6 +491,22 @@ class Backend(Protocol):
         """
         ...
 
+    def drain_lock(
+            self, store: str | None = None
+            ) -> AbstractContextManager[bool]:
+        """Acquire a per-store advisory drain lock.
+
+        SQLite: yields True (the SQLite drain path is gated by the
+        process-global fcntl `drain.lock` file; this verb is a no-op
+        for backend-Protocol parity). Postgres: opens a dedicated
+        connection outside any pool with `keepalives_idle=30`, runs
+        `pg_try_advisory_lock`. Yields True when acquired, False
+        otherwise. Lock auto-releases on connection close so a
+        hung worker is detected by TCP keepalives rather than
+        holding the lock indefinitely.
+        """
+        ...
+
     def reembed_lock(
             self, name: str) -> AbstractContextManager[bool]:
         """Acquire a session-scoped sweep lock for hours-long batch work.

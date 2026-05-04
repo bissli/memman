@@ -508,6 +508,19 @@ class SqliteBackend(Backend):
         yield True
 
     @contextmanager
+    def drain_lock(
+            self, store: str | None = None) -> Iterator[bool]:
+        """Always yields True on SQLite (single-process by definition).
+
+        SQLite drains are gated by the process-global fcntl
+        `drain.lock` file at the queue layer (`src/memman/drain_lock.py`),
+        not at the Backend level. This verb is a no-op for Backend
+        Protocol parity; Postgres opens a dedicated connection with
+        keepalives and acquires a per-store advisory lock.
+        """
+        yield True
+
+    @contextmanager
     def readonly_context(self) -> Iterator['SqliteBackend']:
         """Yield a read-only Backend bound to a separate connection.
 
