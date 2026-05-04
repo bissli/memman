@@ -548,6 +548,94 @@ def tmp_backend(tmp_db):
     return SqliteBackend(tmp_db)
 
 
+def _backend_params() -> list:
+    """Parametrize slots for the cross-backend `backend` fixture.
+
+    SQLite is always present. Postgres only emits when `psycopg` and
+    `testcontainers.postgres` are importable, and its slot carries
+    `pytest.mark.postgres` so `pytest -m "not postgres"` skips it.
+    """
+    params = [pytest.param('sqlite', id='sqlite')]
+    try:
+        import psycopg  # noqa: F401
+        import testcontainers.postgres  # noqa: F401
+        params.append(pytest.param(
+            'postgres', id='postgres',
+            marks=pytest.mark.postgres))
+    except ImportError:
+        pass
+    return params
+
+
+@pytest.fixture(params=_backend_params())
+def backend_kind(request) -> str:
+    """The backend identifier for this parametrization slot."""
+    return request.param
+
+
+@pytest.fixture
+def backend(request, backend_kind, tmp_path):
+    """Cross-backend Backend fixture for Phase 3 pipeline tests.
+
+    Parametrizes over `{sqlite, postgres}` (postgres slot active only
+    when extras are importable). Yields a fully-isolated Backend with
+    `meta.embed_fingerprint` pre-seeded so pipeline tests that touch
+    embeddings do not trip the fingerprint refusal. Postgres tests
+    get a unique store name per test so schemas don't collide; the
+    schema is dropped on teardown.
+
+    Pipeline / search / graph tests should use this fixture instead
+    of `tmp_backend` to gain Postgres parity.
+    """
+    from memman.embed.fingerprint import META_KEY, active_fingerprint
+    if backend_kind == 'sqlite':
+        from memman.store.sqlite import SqliteCluster
+        cluster = SqliteCluster()
+        data_dir = str(tmp_path / 'memman')
+        b = cluster.open(store='test', data_dir=data_dir)
+        store_name = 'test'
+    else:
+        pg_dsn = request.getfixturevalue('pg_dsn')
+        from memman.store.postgres import PostgresCluster
+        cluster = PostgresCluster(dsn=pg_dsn)
+        store_name = _safe_store_name(request.node.name)
+        try:
+            cluster.drop_store(store=store_name, data_dir='')
+        except Exception:
+            pass
+        b = cluster.open(store=store_name, data_dir='')
+    b.meta.set(META_KEY, active_fingerprint().to_json())
+    try:
+        yield b
+    finally:
+        try:
+            b.close()
+        except Exception:
+            pass
+        if backend_kind == 'postgres':
+            try:
+                cluster.drop_store(store=store_name, data_dir='')
+            except Exception:
+                pass
+        try:
+            cluster.close()
+        except Exception:
+            pass
+
+
+def _safe_store_name(test_id: str) -> str:
+    """Derive a postgres-schema-safe store name from a test node id.
+
+    Postgres identifiers must match `[a-z][a-z0-9_]*`; pytest test
+    node ids contain `[`, `]`, `-`, `.`, etc. Replace non-alnum with
+    underscores, lowercase, truncate to fit `_check_identifier`.
+    """
+    safe = ''.join(c if c.isalnum() else '_' for c in test_id).lower()
+    if safe and not safe[0].isalpha():
+        safe = 'p_' + safe
+    return safe[:40] or 'p_test'
+
+
 @pytest.fixture
 def populated_db(tmp_db):
     """DB pre-loaded with 5 insights for query/graph tests."""
