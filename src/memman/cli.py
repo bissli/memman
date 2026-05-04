@@ -1665,11 +1665,14 @@ def doctor(ctx: click.Context, text_output: bool) -> None:
     Exits 0 on pass/warn, 1 on fail — usable as a CI/scripted gate.
     """
     from memman.doctor import run_all_checks
+    from memman.store.sqlite import SqliteBackend
 
     db = _open_db_unchecked(ctx)
     try:
         from memman.store.db import storage_summary
-        result = run_all_checks(db, data_dir=ctx.obj['data_dir'])
+        backend = SqliteBackend(db)
+        result = run_all_checks(
+            backend, db, data_dir=ctx.obj['data_dir'])
         result['store'] = _resolve_store_name(
             ctx.obj['data_dir'], ctx.obj['store'])
         result['db_path'] = storage_summary(db)['db_path']

@@ -1515,8 +1515,9 @@ class TestIntraBatchDedup:
         store_path = pathlib.Path(data_dir) / 'data' / 'default'
         from memman.doctor import check_dangling_edges
         from memman.store.db import open_db
+        from memman.store.sqlite import SqliteBackend
         db = open_db(str(store_path))
-        doctor_result = check_dangling_edges(db)
+        doctor_result = check_dangling_edges(SqliteBackend(db))
         db.close()
 
         assert doctor_result['status'] == 'pass', (

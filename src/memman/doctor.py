@@ -1,7 +1,9 @@
 """Health checks for a memman store.
 
 Runs read-only diagnostics and reports per-check pass/warn/fail
-with an overall worst-status summary.
+with an overall worst-status summary. Each per-store check takes a
+`Backend` and routes through Protocol verbs; raw `db._query` /
+`db._exec` / `db.path` access is forbidden in this module.
 """
 
 import os
@@ -9,33 +11,32 @@ import stat
 import statistics
 from pathlib import Path
 
-
-def check_sqlite_integrity(db: 'DB') -> dict:
-    """Run PRAGMA integrity_check."""
-    row = db._query('PRAGMA integrity_check').fetchone()
-    result = row[0] if row else 'unknown'
-    status = 'pass' if result == 'ok' else 'fail'
-    return {'name': 'sqlite_integrity', 'status': status,
-            'detail': {'result': result}}
+from memman.store.backend import Backend
 
 
-def check_enrichment_coverage(db: 'DB') -> dict:
+def check_integrity(backend: Backend) -> dict:
+    """Run the backend's integrity probe."""
+    result = backend.integrity_check()
+    ok = bool(result.get('ok'))
+    return {
+        'name': 'integrity',
+        'status': 'pass' if ok else 'fail',
+        'detail': {'result': result.get('detail')},
+        }
+
+
+def check_enrichment_coverage(backend: Backend) -> dict:
     """Check that embedding, keywords, summary, semantic_facts are populated."""
-    row = db._query(
-        'SELECT COUNT(*) AS total,'
-        " SUM(CASE WHEN embedding IS NULL THEN 1 ELSE 0 END),"
-        " SUM(CASE WHEN keywords IS NULL OR keywords = '' THEN 1 ELSE 0 END),"
-        " SUM(CASE WHEN summary IS NULL OR summary = '' THEN 1 ELSE 0 END),"
-        " SUM(CASE WHEN semantic_facts IS NULL OR semantic_facts = ''"
-        "   THEN 1 ELSE 0 END)"
-        ' FROM insights WHERE deleted_at IS NULL').fetchone()
-    total, miss_emb, miss_kw, miss_sum, miss_sf = row
+    cov = backend.nodes.enrichment_coverage()
+    total = cov.total_active
     if total == 0:
         return {'name': 'enrichment_coverage', 'status': 'pass',
                 'detail': {'total_active': 0, 'coverage_pct': 100.0}}
-    missing_any = max(miss_emb, miss_kw, miss_sum, miss_sf)
+    missing_any = max(
+        cov.missing_embedding, cov.missing_keywords,
+        cov.missing_summary, cov.missing_semantic_facts)
     coverage_pct = round((total - missing_any) / total * 100, 1)
-    if miss_emb == 0 and miss_kw == 0 and miss_sum == 0 and miss_sf == 0:
+    if missing_any == 0:
         status = 'pass'
     elif coverage_pct >= 90:
         status = 'warn'
@@ -46,27 +47,18 @@ def check_enrichment_coverage(db: 'DB') -> dict:
         'status': status,
         'detail': {
             'total_active': total,
-            'missing_embedding': miss_emb,
-            'missing_keywords': miss_kw,
-            'missing_summary': miss_sum,
-            'missing_semantic_facts': miss_sf,
+            'missing_embedding': cov.missing_embedding,
+            'missing_keywords': cov.missing_keywords,
+            'missing_summary': cov.missing_summary,
+            'missing_semantic_facts': cov.missing_semantic_facts,
             'coverage_pct': coverage_pct,
             },
         }
 
 
-def check_orphan_insights(db: 'DB') -> dict:
+def check_orphan_insights(backend: Backend) -> dict:
     """Find active insights with zero edges."""
-    total = db._query(
-        'SELECT COUNT(*) FROM insights WHERE deleted_at IS NULL'
-        ).fetchone()[0]
-    orphan_count = db._query(
-        'SELECT COUNT(*) FROM insights i'
-        ' WHERE i.deleted_at IS NULL'
-        ' AND NOT EXISTS ('
-        '  SELECT 1 FROM edges e'
-        '  WHERE e.source_id = i.id OR e.target_id = i.id'
-        ')').fetchone()[0]
+    orphan_count, total = backend.nodes.count_orphans()
     if total == 0:
         return {'name': 'orphan_insights', 'status': 'pass',
                 'detail': {'orphan_count': 0, 'total_active': 0,
@@ -89,19 +81,10 @@ def check_orphan_insights(db: 'DB') -> dict:
         }
 
 
-def check_dangling_edges(db: 'DB') -> dict:
+def check_dangling_edges(backend: Backend) -> dict:
     """Find edges referencing deleted or missing insights."""
-    rows = db._query(
-        'SELECT e.edge_type, COUNT(*) FROM edges e'
-        ' WHERE NOT EXISTS ('
-        '  SELECT 1 FROM insights i'
-        '  WHERE i.id = e.source_id AND i.deleted_at IS NULL'
-        ') OR NOT EXISTS ('
-        '  SELECT 1 FROM insights i'
-        '  WHERE i.id = e.target_id AND i.deleted_at IS NULL'
-        ') GROUP BY e.edge_type').fetchall()
-    total = sum(cnt for _, cnt in rows)
-    by_type = dict(rows)
+    by_type = backend.edges.count_dangling_by_type()
+    total = sum(by_type.values())
     status = 'pass' if total == 0 else 'fail'
     return {
         'name': 'dangling_edges',
@@ -110,17 +93,12 @@ def check_dangling_edges(db: 'DB') -> dict:
         }
 
 
-def check_embedding_consistency(db: 'DB') -> dict:
-    """Verify all embeddings have the same byte size."""
-    rows = db._query(
-        'SELECT LENGTH(embedding), COUNT(*) FROM insights'
-        ' WHERE deleted_at IS NULL AND embedding IS NOT NULL'
-        ' GROUP BY LENGTH(embedding)').fetchall()
-    sizes = {str(size): cnt for size, cnt in rows}
-    if len(sizes) <= 1:
-        status = 'pass'
-    else:
-        status = 'fail'
+def check_embedding_consistency(backend: Backend) -> dict:
+    """Verify all embeddings have the same size (byte length on SQLite,
+    pgvector dimension on Postgres)."""
+    dist = backend.nodes.embedding_size_distribution()
+    sizes = {str(size): cnt for size, cnt in dist.items()}
+    status = 'pass' if len(sizes) <= 1 else 'fail'
     return {
         'name': 'embedding_consistency',
         'status': status,
@@ -128,23 +106,13 @@ def check_embedding_consistency(db: 'DB') -> dict:
         }
 
 
-def check_edge_degree(db: 'DB') -> dict:
+def check_edge_degree(backend: Backend) -> dict:
     """Compute degree distribution stats across active insights."""
-    id_rows = db._query(
-        'SELECT id FROM insights WHERE deleted_at IS NULL').fetchall()
-    if not id_rows:
+    active_ids = backend.nodes.get_active_ids()
+    if not active_ids:
         return {'name': 'edge_degree', 'status': 'pass',
                 'detail': {'min': 0, 'max': 0, 'median': 0, 'mean': 0.0}}
-    degree_rows = db._query(
-        'SELECT id, SUM(cnt) AS degree FROM ('
-        '  SELECT source_id AS id, COUNT(*) AS cnt'
-        '  FROM edges GROUP BY source_id'
-        '  UNION ALL'
-        '  SELECT target_id AS id, COUNT(*) AS cnt'
-        '  FROM edges GROUP BY target_id'
-        ') GROUP BY id').fetchall()
-    degree_by_id = {row[0]: row[1] for row in degree_rows}
-    active_ids = {row[0] for row in id_rows}
+    degree_by_id = backend.edges.degree_distribution()
     degrees = sorted(degree_by_id.get(aid, 0) for aid in active_ids)
     med = statistics.median(degrees)
     avg = round(statistics.mean(degrees), 1)
@@ -225,14 +193,13 @@ EXPECTED_INSIGHT_COLUMNS = {
 EXPECTED_QUEUE_TABLES = {'queue', 'worker_runs'}
 
 
-def check_schema_columns(db: 'DB') -> dict:
+def check_schema_columns(backend: Backend) -> dict:
     """Verify the insights table has the canonical provenance columns.
 
     Single-user canonical-schema policy: missing columns mean the DB
     predates a schema change; the fix is a one-off ALTER TABLE.
     """
-    rows = db._query('PRAGMA table_info(insights)').fetchall()
-    present = {row[1] for row in rows}
+    present = backend.introspect_columns('insights')
     missing = sorted(EXPECTED_INSIGHT_COLUMNS - present)
     status = 'pass' if not missing else 'fail'
     return {
@@ -633,7 +600,7 @@ def check_embed_fingerprint(db: 'DB') -> dict:
         'detail': detail}
 
 
-def check_provenance_drift(db: 'DB') -> dict:
+def check_provenance_drift(backend: Backend) -> dict:
     """Surface rows whose prompt_version or model_id no longer matches active.
 
     Reads per-row provenance columns directly. No meta-key fingerprint
@@ -666,29 +633,26 @@ def check_provenance_drift(db: 'DB') -> dict:
     except Exception:
         detail['active_model_slow_metadata'] = None
 
-    rows = db._query(
-        'SELECT prompt_version, model_id, COUNT(*) AS n'
-        ' FROM insights WHERE deleted_at IS NULL'
-        ' GROUP BY prompt_version, model_id'
-        ' ORDER BY n DESC').fetchall()
+    provenance = backend.nodes.provenance_distribution()
 
     active_pv = detail['active_prompt_version']
     active_model = detail['active_model_slow_canonical']
     stale_rows = 0
     breakdown: list[dict] = []
-    for pv, mid, n in rows:
+    for pc in provenance:
         is_stale = (
-            (pv is not None and pv != active_pv)
-            or (mid is not None and active_model is not None
-                and mid != active_model))
+            (pc.prompt_version is not None
+             and pc.prompt_version != active_pv)
+            or (pc.model_id is not None and active_model is not None
+                and pc.model_id != active_model))
         breakdown.append({
-            'prompt_version': pv,
-            'model_id': mid,
-            'count': n,
+            'prompt_version': pc.prompt_version,
+            'model_id': pc.model_id,
+            'count': pc.count,
             'stale': is_stale,
             })
         if is_stale:
-            stale_rows += n
+            stale_rows += pc.count
     detail['breakdown'] = breakdown
     detail['stale_rows'] = stale_rows
 
@@ -706,27 +670,32 @@ def check_provenance_drift(db: 'DB') -> dict:
         'detail': detail}
 
 
-def run_all_checks(db: 'DB', data_dir: str | None = None) -> dict:
-    """Run all health checks and return results with overall status."""
-    total = db._query(
-        'SELECT COUNT(*) FROM insights WHERE deleted_at IS NULL'
-        ).fetchone()[0]
+def run_all_checks(
+        backend: Backend, db: 'DB',
+        data_dir: str | None = None) -> dict:
+    """Run all health checks and return results with overall status.
+
+    Takes both `backend` (for the Backend-Protocol-routed checks) and
+    `db` (still needed by `check_embed_fingerprint` until
+    `stored_fingerprint` is refactored to take a Backend).
+    """
+    total = backend.nodes.count_active()
     checks = []
     if total > 0:
         checks.extend([
-            check_sqlite_integrity(db),
-            check_schema_columns(db),
-            check_enrichment_coverage(db),
-            check_orphan_insights(db),
-            check_dangling_edges(db),
-            check_embedding_consistency(db),
+            check_integrity(backend),
+            check_schema_columns(backend),
+            check_enrichment_coverage(backend),
+            check_orphan_insights(backend),
+            check_dangling_edges(backend),
+            check_embedding_consistency(backend),
             check_embed_fingerprint(db),
-            check_provenance_drift(db),
-            check_edge_degree(db),
+            check_provenance_drift(backend),
+            check_edge_degree(backend),
             ])
     else:
         checks.extend([
-            check_schema_columns(db),
+            check_schema_columns(backend),
             check_embed_fingerprint(db),
             ])
     if data_dir:

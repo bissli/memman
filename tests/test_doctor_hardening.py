@@ -22,7 +22,8 @@ def test_schema_columns_passes_on_current_schema(tmp_path):
     """Fresh DB has all expected provenance columns."""
     db = open_db(str(tmp_path))
     try:
-        result = check_schema_columns(db)
+        from memman.store.sqlite import SqliteBackend
+        result = check_schema_columns(SqliteBackend(db))
         assert result['status'] == 'pass'
         assert result['detail']['missing'] == []
     finally:
@@ -38,7 +39,8 @@ def test_schema_columns_fails_when_column_missing(tmp_path):
             'CREATE TABLE insights_minimal (id TEXT PRIMARY KEY);'
             'DROP TABLE insights;'
             'ALTER TABLE insights_minimal RENAME TO insights;')
-        result = check_schema_columns(db)
+        from memman.store.sqlite import SqliteBackend
+        result = check_schema_columns(SqliteBackend(db))
         assert result['status'] == 'fail'
         assert 'prompt_version' in result['detail']['missing']
         assert 'model_id' in result['detail']['missing']
