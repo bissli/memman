@@ -1689,9 +1689,40 @@ class PostgresBackend(Backend):
                 pass
 
 
+def _resolve_active_dim() -> int:
+    """Return the active embedding client's dim, or `EMBEDDING_DIM` fallback.
+
+    Resolved lazily because the active client requires env-resolved
+    config that may not be set at module import time. Falls back to
+    the historical 512 default when the active client is not yet
+    available (the open will then proceed with vector(512), and
+    later writes will land on a 512-dim column).
+    """
+    try:
+        from memman.embed.fingerprint import active_fingerprint
+        active = active_fingerprint()
+        if active.dim > 0:
+            return int(active.dim)
+    except Exception as exc:
+        logger.warning(
+            f'active fingerprint resolution failed; '
+            f'using {EMBEDDING_DIM}-dim default: {exc}')
+    return EMBEDDING_DIM
+
+
 def _ensure_baseline_schema(
-        dsn: str, store: str) -> None:
-    """Create the schema and apply baseline DDL idempotently."""
+        dsn: str, store: str, *, dim: int = EMBEDDING_DIM) -> None:
+    """Create the schema and apply baseline DDL idempotently.
+
+    `dim` is the embedding dimension to bake into `vector(N)` for
+    new schemas. Resolved from `active_fingerprint().dim` by
+    `PostgresCluster.open()` so a non-Voyage operator (e.g. openai
+    1536) gets a correctly-sized column on first deploy. For
+    existing schemas the call is idempotent: `CREATE TABLE IF NOT
+    EXISTS` does not alter the existing column width, and the
+    open-time guard at `_assert_vector_dim_matches` refuses the
+    open if the stored width differs from `dim`.
+    """
     schema = _store_schema(store)
     conn = _open_connection(dsn, autocommit=True)
     try:
@@ -1701,9 +1732,48 @@ def _ensure_baseline_schema(
             cur.execute(_PG_QUEUE_SCHEMA)
             cur.execute(
                 _PG_BASELINE_SCHEMA.format(
-                    schema=schema, dim=EMBEDDING_DIM))
+                    schema=schema, dim=dim))
     finally:
         conn.close()
+
+
+def _assert_vector_dim_matches(
+        dsn: str, store: str, expected_dim: int) -> None:
+    """Refuse to open if the stored `vector(N)` column width differs.
+
+    pgvector stores `N` directly in `pg_attribute.atttypmod` (no
+    VARHDRSZ offset, unlike standard varlena types). Querying via
+    the conventional `information_schema.columns` does not work
+    because pgvector extension types do not populate
+    `character_maximum_length`.
+
+    Raises `BackendError` with an upgrade hint when the operator's
+    active embedding fingerprint dim differs from the stored column
+    width. This is the parallel of the schema-version skew refusal
+    for embedding-dim skew.
+    """
+    schema = _store_schema(store)
+    conn = _open_connection(dsn, autocommit=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                'SELECT atttypmod FROM pg_attribute'
+                " WHERE attrelid = (%s || '.insights')::regclass"
+                "   AND attname = 'embedding'"
+                "   AND NOT attisdropped",
+                (schema,))
+            row = cur.fetchone()
+            if row is None or row[0] is None or int(row[0]) <= 0:
+                return
+            stored_dim = int(row[0])
+    finally:
+        conn.close()
+    if stored_dim != expected_dim:
+        raise BackendError(
+            f'store {store!r} has vector({stored_dim}) but the active'
+            f' embedding client produces dim={expected_dim}.'
+            f" Run 'memman embed reembed' against a fresh store, or"
+            f' switch back to a {stored_dim}-dim provider.')
 
 
 def _apply_pending_migrations(dsn: str, store: str) -> None:
@@ -1943,7 +2013,9 @@ class PostgresCluster(Cluster):
         self._dsn = dsn
 
     def open(self, *, store: str, data_dir: str) -> PostgresBackend:
-        _ensure_baseline_schema(self._dsn, store)
+        active_dim = _resolve_active_dim()
+        _ensure_baseline_schema(self._dsn, store, dim=active_dim)
+        _assert_vector_dim_matches(self._dsn, store, active_dim)
         _apply_pending_migrations(self._dsn, store)
         backend = PostgresBackend(self._dsn, store)
         try:
