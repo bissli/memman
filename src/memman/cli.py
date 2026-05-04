@@ -1962,6 +1962,98 @@ def uninstall(ctx: click.Context, target: str) -> None:
     run_uninstall(ctx.obj['data_dir'], target=target)
 
 
+@cli.command()
+@click.option('--store', default='',
+              help='Store to migrate. Required unless --all.')
+@click.option('--all', 'migrate_all', is_flag=True,
+              help='Migrate every store under the data dir.')
+@click.option('--dry-run', is_flag=True,
+              help='Report what would be moved without writing.')
+@click.option('--i-have-a-backup', is_flag=True,
+              help='Confirmation gate; required for non-dry-run.')
+@click.option('--overwrite-schema', is_flag=True,
+              help='Drop and recreate the target schema if present.')
+@click.pass_context
+def migrate(
+        ctx: click.Context, store: str, migrate_all: bool,
+        dry_run: bool, i_have_a_backup: bool,
+        overwrite_schema: bool) -> None:
+    """Migrate a memman store from SQLite to Postgres.
+
+    Streams `insights`, `edges`, `oplog`, `meta` from
+    `<data_dir>/data/<store>/memman.db` into Postgres schema
+    `store_<name>` over `MEMMAN_PG_DSN`. Holds the shared drain.lock
+    for the duration so a scheduler-fired drain cannot race the
+    SQLite reader. ON CONFLICT (id) DO NOTHING on the insights
+    insert path so an interrupted run can be re-run safely.
+    """
+    from memman import config
+    from memman.migrate import (
+        MigrateError, held_drain_lock, migrate_store, preflight,
+    )
+    from memman.store.db import list_stores, store_dir
+
+    data_dir = ctx.obj['data_dir']
+
+    if not migrate_all and not store:
+        raise click.UsageError(
+            'pass --store NAME or --all')
+    if migrate_all and store:
+        raise click.UsageError(
+            'pass either --store NAME or --all, not both')
+    if not dry_run and not i_have_a_backup:
+        raise click.UsageError(
+            '--i-have-a-backup is required for non-dry-run; '
+            'export your SQLite store first or pass --dry-run')
+
+    dsn = config.get(config.PG_DSN)
+    if not dsn:
+        raise click.UsageError(
+            'MEMMAN_PG_DSN is not set; configure with '
+            '`memman config set MEMMAN_PG_DSN <url>` first')
+
+    try:
+        preflight(dsn)
+    except MigrateError as exc:
+        raise click.ClickException(str(exc))
+
+    if migrate_all:
+        stores = list_stores(data_dir)
+    else:
+        stores = [store]
+    if not stores:
+        click.echo('no stores to migrate', err=True)
+        return
+
+    results = []
+    try:
+        with held_drain_lock(data_dir):
+            for s in stores:
+                source = store_dir(data_dir, s)
+                try:
+                    res = migrate_store(
+                        source_dir=source, dsn=dsn, store=s,
+                        dry_run=dry_run,
+                        overwrite_schema=overwrite_schema)
+                    results.append(res)
+                    click.echo(
+                        f'{s}: insights={res.insights} '
+                        f'edges={res.edges} oplog={res.oplog} '
+                        f'meta={res.meta}'
+                        f'{" (dry-run)" if res.dry_run else ""}')
+                except MigrateError as exc:
+                    raise click.ClickException(
+                        f'{s}: {exc}')
+    except MigrateError as exc:
+        raise click.ClickException(str(exc))
+
+    if not dry_run:
+        click.echo(
+            'migrated successfully; verify with `memman doctor` then '
+            "set MEMMAN_BACKEND=postgres via `memman config set "
+            "MEMMAN_BACKEND postgres`")
+
+
 def _emit_guide() -> None:
     """Write shipped guide.md to stdout."""
     from importlib.resources import files as pkg_files
