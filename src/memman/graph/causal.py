@@ -2,6 +2,7 @@
 
 import logging
 import re
+from typing import Any
 
 from memman import trace
 from memman.llm.shared import parse_json_list_response
@@ -60,7 +61,7 @@ def token_overlap(a: set[str], b: set[str]) -> float:
 
 
 def find_causal_candidates(
-        backend: Backend, insight: Insight) -> list[dict]:
+        backend: Backend, insight: Insight) -> list[dict[str, Any]]:
     """Return insights with potential causal relationships via 2-hop BFS."""
     from memman.graph.bfs import BFSOptions, bfs
     nodes = bfs(backend, insight.id, BFSOptions(
@@ -104,7 +105,7 @@ LLM_SYSTEM_PROMPT = (
 
 def _build_llm_prompt(
         insight: Insight,
-        neighbors: list[dict],
+        neighbors: list[dict[str, Any]],
         recent: list[Insight],
         ) -> str:
     """Build the user prompt for LLM causal inference."""
@@ -123,7 +124,7 @@ def _build_llm_prompt(
 
 def infer_llm_causal_edges(
         backend: Backend, insight: Insight,
-        llm_client: object) -> list[Edge]:
+        llm_client: Any) -> list[Edge]:
     """Infer causal edges via LLM, returning Edge objects without inserting."""
     from memman.graph.bfs import BFSOptions, bfs
 

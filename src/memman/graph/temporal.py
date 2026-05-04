@@ -58,6 +58,8 @@ def create_temporal_edge(backend: Backend, insight: Insight) -> int:
     for near in recent:
         if near.id == backbone_id:
             continue
+        if insight.created_at is None or near.created_at is None:
+            continue
 
         hours_diff = abs(
             (insight.created_at - near.created_at).total_seconds() / 3600)

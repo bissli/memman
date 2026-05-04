@@ -25,7 +25,11 @@ typecheck:
 	  src/memman/store/postgres.py \
 	  src/memman/graph/bfs.py \
 	  src/memman/graph/semantic.py \
-	  src/memman/graph/engine.py
+	  src/memman/graph/engine.py \
+	  src/memman/graph/temporal.py \
+	  src/memman/graph/entity.py \
+	  src/memman/graph/causal.py \
+	  src/memman/embed/fingerprint.py
 
 e2e:
 	poetry run pytest tests/e2e/ -v
