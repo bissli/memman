@@ -24,18 +24,15 @@ class TestLLMCausalInference:
     def test_prompt_format(self, tmp_db, tmp_backend):
         """Prompt includes new insight content and neighbor content."""
         insert_insight(tmp_db, make_insight(
-            id='pf-1', content='database migration completed production',
-            created_at=OLD))
+            id='pf-1', content='database migration completed production'))
         insert_insight(tmp_db, make_insight(
-            id='pf-2', content='database schema changed production deploy',
-            created_at=OLD + timedelta(hours=1)))
+            id='pf-2', content='database schema changed production deploy'))
 
         mock_client = MagicMock()
         mock_client.complete.return_value = '[]'
 
         infer_llm_causal_edges(tmp_backend, make_insight(
-            id='pf-2', content='database schema changed production deploy',
-            created_at=OLD + timedelta(hours=1)), mock_client)
+            id='pf-2', content='database schema changed production deploy'), mock_client)
 
         if mock_client.complete.called:
             _system, user = mock_client.complete.call_args[0]
@@ -45,11 +42,9 @@ class TestLLMCausalInference:
     def test_confidence_floor_boundary(self, tmp_db, tmp_backend):
         """Edge below floor rejected; edge at floor accepted."""
         insert_insight(tmp_db, make_insight(
-            id='cf-1', content='chose SQLite because embedded database',
-            created_at=OLD))
+            id='cf-1', content='chose SQLite because embedded database'))
         insight = make_insight(
-            id='cf-2', content='SQLite chosen enables single-file deploy',
-            created_at=OLD + timedelta(hours=1))
+            id='cf-2', content='SQLite chosen enables single-file deploy')
         insert_insight(tmp_db, insight)
 
         mock_client = MagicMock()
@@ -73,11 +68,9 @@ class TestLLMCausalInference:
     def test_edge_metadata_shape(self, tmp_db, tmp_backend):
         """Returned edges have created_by, confidence, rationale, sub_type."""
         insert_insight(tmp_db, make_insight(
-            id='ms-1', content='chose Redis because fast caching layer',
-            created_at=OLD))
+            id='ms-1', content='chose Redis because fast caching layer'))
         insight = make_insight(
-            id='ms-2', content='Redis caching enables low latency response',
-            created_at=OLD + timedelta(hours=1))
+            id='ms-2', content='Redis caching enables low latency response')
         insert_insight(tmp_db, insight)
 
         mock_client = MagicMock()
@@ -99,12 +92,10 @@ class TestLLMCausalInference:
     def test_prefilter_short_circuit(self, tmp_db, tmp_backend):
         """No LLM call when token overlap is below MIN_CAUSAL_OVERLAP."""
         insert_insight(tmp_db, make_insight(
-            id='pf-a', content='alpha bravo charlie delta echo foxtrot',
-            created_at=OLD))
+            id='pf-a', content='alpha bravo charlie delta echo foxtrot'))
         insight = make_insight(
             id='pf-b',
-            content='xylophone zebra quantum neutrino plasma vortex',
-            created_at=OLD + timedelta(hours=1))
+            content='xylophone zebra quantum neutrino plasma vortex')
         insert_insight(tmp_db, insight)
 
         mock_client = MagicMock()
@@ -116,11 +107,9 @@ class TestLLMCausalInference:
     def test_llm_unavailable_skips_silently(self, tmp_db, tmp_backend):
         """Connection error from LLM caught; returns empty list."""
         insert_insight(tmp_db, make_insight(
-            id='ua-1', content='database migration completed production',
-            created_at=OLD))
+            id='ua-1', content='database migration completed production'))
         insight = make_insight(
-            id='ua-2', content='database schema changed production deploy',
-            created_at=OLD + timedelta(hours=1))
+            id='ua-2', content='database schema changed production deploy')
         insert_insight(tmp_db, insight)
 
         mock_client = MagicMock()
@@ -132,11 +121,9 @@ class TestLLMCausalInference:
     def test_malformed_confidence_skips_edge(self, tmp_db, tmp_backend):
         """Non-numeric confidence skipped; valid edge still returned."""
         insert_insight(tmp_db, make_insight(
-            id='mc-1', content='chose SQLite because embedded database',
-            created_at=OLD))
+            id='mc-1', content='chose SQLite because embedded database'))
         insight = make_insight(
-            id='mc-2', content='SQLite chosen enables single-file deploy',
-            created_at=OLD + timedelta(hours=1))
+            id='mc-2', content='SQLite chosen enables single-file deploy')
         insert_insight(tmp_db, insight)
 
         mock_client = MagicMock()
@@ -159,11 +146,9 @@ class TestLLMCausalInference:
     def test_non_list_json_response(self, tmp_db, tmp_backend):
         """JSON object (not array) from LLM returns empty list."""
         insert_insight(tmp_db, make_insight(
-            id='nl-1', content='chose SQLite because embedded database',
-            created_at=OLD))
+            id='nl-1', content='chose SQLite because embedded database'))
         insight = make_insight(
-            id='nl-2', content='SQLite chosen enables single-file deploy',
-            created_at=OLD + timedelta(hours=1))
+            id='nl-2', content='SQLite chosen enables single-file deploy')
         insert_insight(tmp_db, insight)
 
         mock_client = MagicMock()

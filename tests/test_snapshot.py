@@ -40,8 +40,7 @@ def _seed(tmp_db):
     edge = Edge(
         source_id='snap-a', target_id='snap-b',
         edge_type='semantic', weight=0.7,
-        metadata={'created_by': 'auto'},
-        created_at=datetime.now(timezone.utc))
+        metadata={'created_by': 'auto'})
     insert_edge(tmp_db, edge)
     return fp
 

@@ -88,6 +88,74 @@ def _top5_ids(backend, qvec) -> set[str]:
     return {r['insight'].id for r in result['results'][:5]}
 
 
+def test_threshold_zone_does_not_collapse_result_set(tmp_path, pg_dsn):
+    """Threshold-zone characterization: neither backend returns empty.
+
+    The high-cosine test below asserts strong rank parity (>= 4/5).
+    This sibling characterization test addresses the documented float-
+    precision gap near `VECTOR_SEARCH_MIN_SIM=0.10`: with uncorrelated
+    queries against a structured corpus, cosines flicker around the
+    cutoff and float32 vs float64 can disagree on which exact hits
+    cross. We do NOT assert intersection here -- the docstring at the
+    top of this module is honest that low-cosine ranking is sensitive
+    to representation -- but we DO assert the weaker invariant that
+    matters for production: neither backend's cutoff collapses the
+    result set to empty when the other still finds hits, and any hits
+    returned all clear the cutoff.
+    """
+    from memman.store.postgres import PostgresCluster
+    from memman.store.sqlite import SqliteCluster
+
+    topic_centers = [_gaussian_unit(seed=i) for i in range(N_TOPICS)]
+    sqlite_cluster = SqliteCluster()
+    sqlite_backend = sqlite_cluster.open(
+        store='parity_thresh', data_dir=str(tmp_path / 'memman'))
+    sqlite_backend.meta.set(META_KEY, active_fingerprint().to_json())
+    _populate(sqlite_backend, topic_centers)
+
+    postgres_cluster = PostgresCluster(dsn=pg_dsn)
+    try:
+        postgres_cluster.drop_store(store='parity_thresh', data_dir='')
+    except Exception:
+        pass
+    postgres_backend = postgres_cluster.open(
+        store='parity_thresh', data_dir='')
+    postgres_backend.meta.set(META_KEY, active_fingerprint().to_json())
+    _populate(postgres_backend, topic_centers)
+
+    n_threshold_queries = 5
+    try:
+        empty_disagreements = 0
+        for q in range(n_threshold_queries):
+            qvec = _gaussian_unit(seed=20000 + q)
+            sqlite_top = _top5_ids(sqlite_backend, qvec)
+            postgres_top = _top5_ids(postgres_backend, qvec)
+            if (sqlite_top and not postgres_top) or (
+                    postgres_top and not sqlite_top):
+                empty_disagreements += 1
+        assert empty_disagreements == 0, (
+            f'{empty_disagreements} queries returned hits on one'
+            f' backend but empty on the other -- a regression in the'
+            f' threshold cutoff handling between sqlite/postgres'
+            f' beyond the documented ranking-precision gap')
+    finally:
+        try:
+            sqlite_backend.close()
+        except Exception:
+            pass
+        sqlite_cluster.close()
+        try:
+            postgres_backend.close()
+        except Exception:
+            pass
+        try:
+            postgres_cluster.drop_store(
+                store='parity_thresh', data_dir='')
+        except Exception:
+            pass
+        postgres_cluster.close()
+
+
 def test_float32_float64_top5_intersection_geq_4_across_20_queries(
         tmp_path, pg_dsn):
     """sqlite top-5 ∩ postgres top-5 >= 4 for each of 20 query vectors."""

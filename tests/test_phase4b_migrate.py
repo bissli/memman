@@ -32,12 +32,10 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
             entities=[],
             source='migrate-test',
             access_count=0,
-            created_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
             deleted_at=None,
             last_accessed_at=None,
-            effective_importance=0.0,
-            )
+            effective_importance=0.0)
         insert_insight(db, ins)
         from memman.store.db import set_meta
         set_meta(db, 'embed_fingerprint',

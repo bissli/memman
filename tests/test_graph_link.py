@@ -51,8 +51,7 @@ class TestLinkPending:
         for i in range(MAX_LINK_BATCH + 5):
             _insert_pending(
                 tmp_db, f'batch-{i}',
-                f'batch content number {i}',
-                created_at=OLD + timedelta(seconds=i))
+                f'batch content number {i}')
 
         processed = link_pending(tmp_backend)
         assert processed == MAX_LINK_BATCH

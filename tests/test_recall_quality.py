@@ -26,8 +26,7 @@ def _insert_fillers(backend, count=8):
         backend.nodes.insert(make_insight(
             id=f'filler-{i}',
             content=f'unrelated filler content alpha bravo {i}',
-            importance=3,
-            created_at=RECENT - timedelta(seconds=i)))
+            importance=3))
 
 
 def _find_result(results, insight_id):
@@ -47,15 +46,15 @@ class TestKeywordSignal:
         backend.nodes.insert(make_insight(
             id='kw-match',
             content='Prometheus monitoring Grafana dashboards observability',
-            importance=3, created_at=OLD))
+            importance=3))
         backend.nodes.insert(make_insight(
             id='kw-miss-1',
             content='SQLite database schema migration patterns',
-            importance=3, created_at=OLD - timedelta(hours=1)))
+            importance=3))
         backend.nodes.insert(make_insight(
             id='kw-miss-2',
             content='Docker container orchestration strategy',
-            importance=3, created_at=OLD - timedelta(hours=2)))
+            importance=3))
 
         result = intent_aware_recall(
             backend,
@@ -83,17 +82,15 @@ class TestEntitySignal:
         backend.nodes.insert(make_insight(
             id='ent-docker-1',
             content='Docker container networking configuration',
-            entities=['Docker'], importance=3, created_at=OLD))
+            entities=['Docker'], importance=3))
         backend.nodes.insert(make_insight(
             id='ent-docker-2',
             content='Docker image optimization techniques',
-            entities=['Docker'], importance=3,
-            created_at=OLD - timedelta(hours=1)))
+            entities=['Docker'], importance=3))
         backend.nodes.insert(make_insight(
             id='ent-k8s',
             content='Kubernetes pod scheduling policies',
-            entities=['Kubernetes'], importance=3,
-            created_at=OLD - timedelta(hours=2)))
+            entities=['Kubernetes'], importance=3))
 
         result = intent_aware_recall(
             backend,
@@ -122,15 +119,15 @@ class TestGraphTraversal:
         backend.nodes.insert(make_insight(
             id='graph-1',
             content='FastAPI rate limiting design patterns',
-            entities=['FastAPI'], importance=3, created_at=OLD))
+            entities=['FastAPI'], importance=3))
         backend.nodes.insert(make_insight(
             id='graph-2',
             content='API throttling middleware implementation',
-            importance=3, created_at=OLD - timedelta(hours=1)))
+            importance=3))
         backend.nodes.insert(make_insight(
             id='graph-3',
             content='Redis cache eviction policy tuning',
-            importance=3, created_at=OLD - timedelta(days=30)))
+            importance=3))
 
         backend.edges.upsert(make_edge(
             source_id='graph-1', target_id='graph-2',
@@ -160,11 +157,11 @@ class TestWhyIntentCausalOrdering:
         backend.nodes.insert(make_insight(
             id='why-cause',
             content='Chose SQLite because embedded serverless database',
-            importance=4, created_at=OLD))
+            importance=4))
         backend.nodes.insert(make_insight(
             id='why-effect',
             content='SQLite chosen enables single-file deployment',
-            importance=4, created_at=OLD - timedelta(hours=1)))
+            importance=4))
 
         backend.edges.upsert(make_edge(
             source_id='why-cause', target_id='why-effect',
@@ -281,11 +278,11 @@ class TestWhyIntentGraphWeight:
         backend.nodes.insert(make_insight(
             id='wg-1',
             content='Chose SQLite because embedded serverless database',
-            importance=4, created_at=OLD))
+            importance=4))
         backend.nodes.insert(make_insight(
             id='wg-2',
             content='SQLite chosen enables single-file deployment',
-            importance=4, created_at=OLD - timedelta(hours=1)))
+            importance=4))
 
         backend.edges.upsert(make_edge(
             source_id='wg-1', target_id='wg-2',
@@ -322,7 +319,7 @@ class TestSingletonEntity:
         backend.nodes.insert(make_insight(
             id='singleton',
             content='Terraform infrastructure as code provisioning',
-            entities=['Terraform'], importance=3, created_at=OLD))
+            entities=['Terraform'], importance=3))
 
         result = intent_aware_recall(
             backend,
@@ -387,7 +384,7 @@ class TestEntityCaseInsensitive:
         backend.nodes.insert(make_insight(
             id='case-py',
             content='Python type hints and mypy configuration',
-            entities=['Python'], importance=3, created_at=OLD))
+            entities=['Python'], importance=3))
 
         result = intent_aware_recall(
             backend,

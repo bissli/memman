@@ -52,7 +52,7 @@ class TestEnrichWithLLM:
                 'async-first APIs, Django for full-stack with batteries '
                 'included, and Flask for minimal microframeworks. Each '
                 'targets different sweet spots in the deployment surface.'),
-            entities=['Python'], created_at=OLD)
+            entities=['Python'])
 
         mock_client = MagicMock()
         mock_client.complete.return_value = _make_enrichment_response(
@@ -74,7 +74,7 @@ class TestEnrichWithLLM:
     def test_llm_unavailable_returns_empty(self):
         """ConnectionError from LLM returns empty dict, no crash."""
         insight = make_insight(
-            id='ua-1', content='test content', created_at=OLD)
+            id='ua-1', content='test content')
 
         mock_client = MagicMock()
         mock_client.complete.side_effect = ConnectionError('unreachable')
@@ -85,7 +85,7 @@ class TestEnrichWithLLM:
     def test_malformed_json_returns_empty(self):
         """Unparseable LLM output returns empty dict."""
         insight = make_insight(
-            id='mj-1', content='test content', created_at=OLD)
+            id='mj-1', content='test content')
 
         mock_client = MagicMock()
         mock_client.complete.return_value = 'not json at all'
@@ -96,7 +96,7 @@ class TestEnrichWithLLM:
     def test_llm_client_none_skips(self, tmp_db, tmp_backend):
         """link_pending with llm_client=None skips enrichment."""
         insight = make_insight(
-            id='nc-1', content='test content', created_at=OLD)
+            id='nc-1', content='test content')
         insert_insight(tmp_db, insight)
 
         count = link_pending(tmp_backend, llm_client=None, max_batch=1)
@@ -110,7 +110,7 @@ class TestEnrichWithLLM:
         """LLM entities merge with existing without duplicates."""
         insight = make_insight(
             id='em-1', content='Python FastAPI web',
-            entities=['Python'], created_at=OLD)
+            entities=['Python'])
 
         mock_client = MagicMock()
         mock_client.complete.return_value = _make_enrichment_response(
@@ -126,7 +126,7 @@ class TestEnrichWithLLM:
         """Empty LLM entities preserve existing regex entities."""
         insight = make_insight(
             id='ee-1', content='test content',
-            entities=['Go'], created_at=OLD)
+            entities=['Go'])
 
         mock_client = MagicMock()
         mock_client.complete.return_value = _make_enrichment_response(
@@ -139,7 +139,7 @@ class TestEnrichWithLLM:
         """Malformed entities field does not clobber existing."""
         insight = make_insight(
             id='ef-1', content='test content',
-            entities=['Docker'], created_at=OLD)
+            entities=['Docker'])
 
         mock_client = MagicMock()
         mock_client.complete.return_value = json.dumps({
@@ -159,8 +159,7 @@ class TestReEmbed:
     def test_reembed_uses_keywords(self, tmp_db, tmp_backend):
         """embed_client.embed() called with keyword-appended text."""
         insight = make_insight(
-            id='re-1', content='Python web framework',
-            created_at=OLD)
+            id='re-1', content='Python web framework')
         insert_insight(tmp_db, insight)
 
         mock_llm = MagicMock()
@@ -186,7 +185,7 @@ class TestReEmbed:
     def test_reembed_skipped_when_no_embed_client(self, tmp_db, tmp_backend):
         """No embed_client means no re-embed attempt."""
         insight = make_insight(
-            id='rs-1', content='test content', created_at=OLD)
+            id='rs-1', content='test content')
         insert_insight(tmp_db, insight)
 
         mock_llm = MagicMock()
@@ -202,7 +201,7 @@ class TestReEmbed:
     def test_embed_failure_still_stamps_linked_at(self, tmp_db, tmp_backend):
         """Embed crash doesn't prevent linked_at stamp."""
         insight = make_insight(
-            id='ef-1', content='test content', created_at=OLD)
+            id='ef-1', content='test content')
         insert_insight(tmp_db, insight)
 
         mock_llm = MagicMock()
@@ -232,7 +231,7 @@ class TestEnrichmentPurity:
         """enrich_with_llm returns data without writing to DB."""
         insight = make_insight(
             id='pw-1', content='purity test content',
-            entities=['Python'], created_at=OLD)
+            entities=['Python'])
         insert_insight(tmp_db, insight)
 
         mock_client = MagicMock()
@@ -259,7 +258,7 @@ class TestEnrichmentPurity:
     def test_markdown_fence_json_parsed(self):
         """LLM response wrapped in ```json fence is parsed correctly."""
         insight = make_insight(
-            id='mf-1', content='fence test content', created_at=OLD)
+            id='mf-1', content='fence test content')
 
         fenced_json = '```json\n' + _make_enrichment_response(
             keywords=['fenced'], summary='fenced summary') + '\n```'

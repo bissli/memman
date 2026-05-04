@@ -37,11 +37,9 @@ class TestTemporalBackboneChain:
         """Insert two insights with same source; verify 2 backbone temporal edges."""
         now = datetime.now(timezone.utc)
         ins1 = make_insight(
-            id='t-1', content='first insight', source='proj-a',
-            created_at=now - timedelta(hours=1))
+            id='t-1', content='first insight', source='proj-a')
         ins2 = make_insight(
-            id='t-2', content='second insight', source='proj-a',
-            created_at=now)
+            id='t-2', content='second insight', source='proj-a')
         backend.nodes.insert(ins1)
         backend.nodes.insert(ins2)
 
@@ -71,8 +69,7 @@ class TestTemporalProximityDecay:
         far = make_insight(
             id='tp-2', content='far insight', source='other')
         current = make_insight(
-            id='tp-3', content='current insight', source='proj-b',
-            created_at=now)
+            id='tp-3', content='current insight', source='proj-b')
         backend.nodes.insert(close)
         backend.nodes.insert(far)
         backend.nodes.insert(current)
@@ -375,12 +372,10 @@ class TestFastEdgesEngine:
         now = datetime.now(timezone.utc)
         ins1 = make_insight(
             id='eng-1', content='Go uses SQLite for storage',
-            source='proj', entities=['Go', 'SQLite'],
-            created_at=now - timedelta(hours=1))
+            source='proj', entities=['Go', 'SQLite'])
         ins2 = make_insight(
             id='eng-2', content='Go concurrency patterns',
-            source='proj', entities=['Go'],
-            created_at=now)
+            source='proj', entities=['Go'])
         backend.nodes.insert(ins1)
         backend.nodes.insert(ins2)
 
@@ -482,8 +477,7 @@ class TestTemporalOutsideWindow:
         now = datetime.now(timezone.utc)
         old = make_insight(id='tw-1', content='old', source='p')
         new = make_insight(
-            id='tw-2', content='new', source='q',
-            created_at=now)
+            id='tw-2', content='new', source='q')
         backend.nodes.insert(old)
         backend.nodes.insert(new)
         set_created_at(backend, 'tw-1', now - timedelta(hours=5))

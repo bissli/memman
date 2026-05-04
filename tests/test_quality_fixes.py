@@ -165,16 +165,19 @@ class TestTemporalConstants:
         assert MAX_PROXIMITY_EDGES == 5
 
     def test_proximity_capped_at_5(self, tmp_db, tmp_backend):
-        """At most 5 proximity neighbors connected."""
-        now = datetime.now(timezone.utc)
+        """Exactly 5 proximity neighbors connected when 8 candidates qualify.
+
+        The cap is meaningful only if more than 5 eligible neighbors
+        exist; the assertion has to verify the cap *fires*, not just
+        that it isn't exceeded. With 8 same-window candidates and
+        MAX_PROXIMITY_EDGES=5, the function picks 5.
+        """
         for i in range(8):
             insert_insight(tmp_db, make_insight(
-                id=f'pc-{i}', content=f'insight {i}', source='other',
-                created_at=now - timedelta(minutes=10 * (i + 1))))
+                id=f'pc-{i}', content=f'insight {i}', source='other'))
 
         current = make_insight(
-            id='pc-current', content='current', source='proj-x',
-            created_at=now)
+            id='pc-current', content='current', source='proj-x')
         insert_insight(tmp_db, current)
 
         create_temporal_edge(tmp_backend, current)
@@ -188,4 +191,6 @@ class TestTemporalConstants:
         unique_neighbors = {
             e.target_id if e.source_id == 'pc-current' else e.source_id
             for e in proximity}
-        assert len(unique_neighbors) <= 5
+        assert len(unique_neighbors) == 5, (
+            f'expected exactly 5 capped neighbors out of 8 candidates;'
+            f' got {len(unique_neighbors)}: {unique_neighbors}')
