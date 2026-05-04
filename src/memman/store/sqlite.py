@@ -535,6 +535,8 @@ class SqliteBackend(Backend):
         return {'ok': result == 'ok', 'detail': result}
 
     def introspect_columns(self, table: str) -> set[str]:
+        from memman.store.backend import _check_identifier
+        _check_identifier(table)
         rows = self._db._query(
             f'PRAGMA table_info({table})').fetchall()
         return {row[1] for row in rows}

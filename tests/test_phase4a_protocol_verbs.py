@@ -14,6 +14,7 @@ over both backends via the existing `backend` fixture from Phase 3.
 
 import inspect
 
+import pytest
 from memman.store.backend import Backend
 
 
@@ -56,3 +57,15 @@ def test_introspect_columns_unknown_table_returns_empty(backend):
     """introspect_columns on an unknown table returns an empty set."""
     cols = backend.introspect_columns('definitely_not_a_real_table')
     assert cols == set()
+
+
+def test_introspect_columns_rejects_unsafe_identifier(backend):
+    """introspect_columns rejects names that are not valid SQL identifiers.
+
+    SQL injection guard: PRAGMA / DDL identifier slots cannot be
+    parameterized; both backends must validate the identifier before
+    interpolation.
+    """
+    from memman.store.errors import ConfigError
+    with pytest.raises(ConfigError):
+        backend.introspect_columns("insights); DROP TABLE insights; --")

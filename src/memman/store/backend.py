@@ -27,13 +27,30 @@ Distributed-shaping commitments baked into this Protocol surface:
    mode so reader threads see main-thread commits as they land.
 """
 
+import re
 from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager
 from typing import Any, Protocol, runtime_checkable
 
+from memman.store.errors import ConfigError
 from memman.store.model import Edge, Id, Insight, IntegrityReport, NodeStats
 from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
 from memman.store.model import QueueRow, QueueStats, ReembedRow, WorkerRun
+
+_VALID_IDENTIFIER_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
+
+
+def _check_identifier(name: str) -> None:
+    """Reject SQL identifiers that are not safe to interpolate.
+
+    Some SQL constructs (`PRAGMA table_info(<table>)` on SQLite, schema
+    and table names on Postgres) cannot be parameterized; the value is
+    interpolated as a literal. Reject anything that is not a plain
+    identifier so an unsanitized name cannot inject DDL. Shared by
+    both backends so the validation contract is one place.
+    """
+    if not _VALID_IDENTIFIER_RE.match(name):
+        raise ConfigError(f'invalid SQL identifier: {name!r}')
 
 
 @runtime_checkable

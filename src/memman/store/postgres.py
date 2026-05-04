@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any, Self
 
 from memman.store.backend import Backend, Cluster, EdgeStore, MetaStore
 from memman.store.backend import NodeStore, Oplog, RecallSession
+from memman.store.backend import _check_identifier
 from memman.store.errors import BackendError, ConfigError
 from memman.store.model import Edge, Id, Insight, IntegrityReport, NodeStats
 from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
@@ -64,20 +65,6 @@ for _ver, _sql in _PG_MIGRATIONS:
         raise AssertionError(
             f'_PG_MIGRATIONS[{_ver}] contains a non-additive operation;'
             ' the ladder is forward-only and additive-only')
-
-_VALID_SCHEMA_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
-
-
-def _check_identifier(name: str) -> None:
-    """Reject schema/identifier names that are not safe to interpolate.
-
-    Postgres identifiers cannot be parameterized in psycopg's `%s`
-    binding. Schema names come from operator config; reject anything
-    that is not a plain SQL identifier so an unsanitized name cannot
-    inject DDL.
-    """
-    if not _VALID_SCHEMA_RE.match(name):
-        raise ConfigError(f'invalid postgres identifier: {name!r}')
 
 
 def _store_schema(name: str) -> str:
