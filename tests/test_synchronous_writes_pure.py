@@ -35,7 +35,8 @@ def runner_with_seed(tmp_path):
     db = open_db(sdir)
     fp = active_fingerprint()
     from memman.embed.fingerprint import write_fingerprint
-    write_fingerprint(db, fp)
+    from memman.store.sqlite import SqliteBackend
+    write_fingerprint(SqliteBackend(db), fp)
 
     a = make_insight(id='aud-a', content='alpha', importance=3)
     b = make_insight(id='aud-b', content='beta', importance=3)

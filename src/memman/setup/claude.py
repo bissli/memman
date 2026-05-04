@@ -125,13 +125,14 @@ def _init_default_store(data_dir: str) -> None:
     from memman.embed.fingerprint import seed_if_fresh
     from memman.exceptions import ConfigError, EmbedFingerprintError
     from memman.store.db import open_db, store_dir, store_exists
+    from memman.store.sqlite import SqliteBackend
 
     if not store_exists(data_dir, 'default'):
         sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
         try:
             try:
-                seed_if_fresh(db)
+                seed_if_fresh(SqliteBackend(db))
             except (EmbedFingerprintError, ConfigError) as exc:
                 raise click.ClickException(str(exc)) from exc
         finally:

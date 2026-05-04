@@ -156,10 +156,11 @@ def _open_db(ctx: click.Context) -> 'DB':
     from memman.exceptions import ConfigError, EmbedFingerprintError
     from memman.graph.engine import reindex_if_constants_changed
     from memman.store.sqlite import SqliteBackend
-    reindex_if_constants_changed(SqliteBackend(db))
+    backend = SqliteBackend(db)
+    reindex_if_constants_changed(backend)
     try:
-        seed_if_fresh(db)
-        assert_consistent(db)
+        seed_if_fresh(backend)
+        assert_consistent(backend)
     except (EmbedFingerprintError, ConfigError) as exc:
         db.close()
         raise click.ClickException(str(exc)) from exc
@@ -835,8 +836,8 @@ class _StoreContext:
         self.store_data_dir = store_data_dir
         self.db = _open_store_db(store_data_dir)
         self.backend = SqliteBackend(self.db)
-        _fp_mod.seed_if_fresh(self.db)
-        _fp_mod.assert_consistent(self.db)
+        _fp_mod.seed_if_fresh(self.backend)
+        _fp_mod.assert_consistent(self.backend)
         self.ec = _get_ec()
         self.llm_client = get_llm_client('slow_canonical')
         self.embed_cache: dict[str, list[float]] = dict(
@@ -1628,8 +1629,9 @@ def store_create(ctx: click.Context, name: str) -> None:
     try:
         from memman.embed.fingerprint import seed_if_fresh
         from memman.exceptions import ConfigError, EmbedFingerprintError
+        from memman.store.sqlite import SqliteBackend
         try:
-            seed_if_fresh(db)
+            seed_if_fresh(SqliteBackend(db))
         except (EmbedFingerprintError, ConfigError) as exc:
             raise click.ClickException(str(exc)) from exc
     finally:
@@ -2270,10 +2272,12 @@ def embed_status(ctx: click.Context) -> None:
     """
     from memman.embed.fingerprint import active_fingerprint, stored_fingerprint
 
+    from memman.store.sqlite import SqliteBackend
+
     active = active_fingerprint()
     db = _open_db_unchecked(ctx)
     try:
-        stored = stored_fingerprint(db)
+        stored = stored_fingerprint(SqliteBackend(db))
     finally:
         db.close()
 
@@ -2394,7 +2398,7 @@ def _reembed_one_store(
                     }
 
             with backend.transaction():
-                write_fingerprint(db, target)
+                write_fingerprint(backend, target)
                 backend.meta.set('embed_reembed_cursor', '')
                 backend.meta.set('embed_reembed_state', 'idle')
 

@@ -627,7 +627,7 @@ def check_embed_probe() -> dict:
         return {'name': 'embed_probe', 'status': 'fail', 'detail': detail}
 
 
-def check_embed_fingerprint(db: 'DB') -> dict:
+def check_embed_fingerprint(backend: Backend) -> dict:
     """Compare active client fingerprint against `meta.embed_fingerprint`.
 
     Surfaces the same mismatch that `assert_consistent` enforces at
@@ -654,7 +654,7 @@ def check_embed_fingerprint(db: 'DB') -> dict:
             'name': 'embed_fingerprint', 'status': 'fail',
             'detail': detail}
 
-    stored = stored_fingerprint(db)
+    stored = stored_fingerprint(backend)
     if stored is not None:
         detail['stored'] = {
             'provider': stored.provider,
@@ -758,8 +758,8 @@ def run_all_checks(
     """Run all health checks and return results with overall status.
 
     Takes both `backend` (for the Backend-Protocol-routed checks) and
-    `db` (still needed by `check_embed_fingerprint` until
-    `stored_fingerprint` is refactored to take a Backend).
+    `db` (kept on the signature for callers passing the SqliteBackend's
+    underlying DB; not used directly any more).
     """
     total = backend.nodes.count_active()
     checks = []
@@ -771,14 +771,14 @@ def run_all_checks(
             check_orphan_insights(backend),
             check_dangling_edges(backend),
             check_embedding_consistency(backend),
-            check_embed_fingerprint(db),
+            check_embed_fingerprint(backend),
             check_provenance_drift(backend),
             check_edge_degree(backend),
             ])
     else:
         checks.extend([
             check_schema_columns(backend),
-            check_embed_fingerprint(db),
+            check_embed_fingerprint(backend),
             ])
     if data_dir:
         checks.extend((

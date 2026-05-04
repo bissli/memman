@@ -274,10 +274,11 @@ def _autoseed_fingerprint(request, monkeypatch):
     from memman.embed import fingerprint as fp_mod
     real_assert = fp_mod.assert_consistent
 
-    def seed_then_assert(db):
-        if fp_mod.stored_fingerprint(db) is None:
-            fp_mod.write_fingerprint(db, fp_mod.active_fingerprint())
-        real_assert(db)
+    def seed_then_assert(backend):
+        if fp_mod.stored_fingerprint(backend) is None:
+            fp_mod.write_fingerprint(
+                backend, fp_mod.active_fingerprint())
+        real_assert(backend)
 
     monkeypatch.setattr(fp_mod, 'assert_consistent', seed_then_assert)
 
@@ -528,11 +529,12 @@ def tmp_db(request, tmp_path):
     `no_autoseed_fingerprint` mark.
     """
     from memman.store.db import open_db
+    from memman.store.sqlite import SqliteBackend
     db = open_db(str(tmp_path))
     if 'no_autoseed_fingerprint' not in request.keywords:
         from memman.embed.fingerprint import active_fingerprint
         from memman.embed.fingerprint import write_fingerprint
-        write_fingerprint(db, active_fingerprint())
+        write_fingerprint(SqliteBackend(db), active_fingerprint())
     yield db
     db.close()
 

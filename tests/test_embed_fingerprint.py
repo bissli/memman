@@ -19,13 +19,13 @@ from memman.embed.vector import serialize_vector
 from memman.exceptions import ConfigError, EmbedFingerprintError
 from memman.store.db import get_meta, open_db
 from memman.store.node import insert_insight, update_embedding
+from memman.store.sqlite import SqliteBackend
 from tests.conftest import make_insight
 
 
 def _seed_voyage(db) -> None:
     """Helper: write the canonical voyage fingerprint to meta."""
-    write_fingerprint(
-        db, Fingerprint(
+    write_fingerprint(SqliteBackend(db), Fingerprint(
             provider='voyage', model='voyage-3-lite', dim=512))
 
 
@@ -83,7 +83,7 @@ def test_assert_consistent_passes_on_match(tmp_db):
     """Seeded matching fingerprint -> no error.
     """
     _seed_voyage(tmp_db)
-    assert_consistent(tmp_db)
+    assert_consistent(SqliteBackend(tmp_db))
 
 
 @pytest.mark.no_autoseed_fingerprint
@@ -91,7 +91,7 @@ def test_assert_consistent_raises_on_unseeded(tmp_db):
     """No meta.embed_fingerprint -> EmbedFingerprintError with hint.
     """
     with pytest.raises(EmbedFingerprintError) as excinfo:
-        assert_consistent(tmp_db)
+        assert_consistent(SqliteBackend(tmp_db))
     msg = str(excinfo.value)
     assert 'embed reembed' in msg
     assert 'initialize' in msg
@@ -101,10 +101,9 @@ def test_assert_consistent_raises_on_unseeded(tmp_db):
 def test_assert_consistent_raises_on_mismatch(tmp_db):
     """Seeded fingerprint != active -> EmbedFingerprintError with hint.
     """
-    write_fingerprint(
-        tmp_db, Fingerprint(provider='openai', model='m', dim=1024))
+    write_fingerprint(SqliteBackend(tmp_db), Fingerprint(provider='openai', model='m', dim=1024))
     with pytest.raises(EmbedFingerprintError) as excinfo:
-        assert_consistent(tmp_db)
+        assert_consistent(SqliteBackend(tmp_db))
     msg = str(excinfo.value)
     assert 'mismatch' in msg.lower()
     assert 'embed reembed' in msg
@@ -122,7 +121,7 @@ def test_init_default_store_seeds_fingerprint(tmp_path):
     _init_default_store(str(tmp_path))
     db = open_db(store_dir(str(tmp_path), 'default'))
     try:
-        stored = stored_fingerprint(db)
+        stored = stored_fingerprint(SqliteBackend(db))
     finally:
         db.close()
     assert stored is not None
@@ -171,7 +170,7 @@ def test_reembed_initializes_unseeded_db(tmp_path, _scheduler_stopped):
 
     db = open_db(sdir)
     try:
-        stored = stored_fingerprint(db)
+        stored = stored_fingerprint(SqliteBackend(db))
         assert stored is not None
         assert stored.provider == 'voyage'
         assert get_meta(db, 'embed_reembed_state') == 'idle'
@@ -201,7 +200,7 @@ def test_reembed_dry_run_writes_nothing(tmp_path):
 
     db = open_db(sdir)
     try:
-        assert stored_fingerprint(db) is None
+        assert stored_fingerprint(SqliteBackend(db)) is None
     finally:
         db.close()
 
@@ -253,7 +252,7 @@ def test_recall_on_fresh_store_returns_empty_not_error(tmp_path):
     sdir = store_dir(str(tmp_path), 'default')
     db = open_db(sdir)
     try:
-        assert stored_fingerprint(db) is not None
+        assert stored_fingerprint(SqliteBackend(db)) is not None
     finally:
         db.close()
 
@@ -291,7 +290,7 @@ def test_remember_on_fresh_store_seeds_and_drains(tmp_path):
     sdir = store_dir(str(tmp_path), 'default')
     db = open_db(sdir)
     try:
-        assert stored_fingerprint(db) is not None
+        assert stored_fingerprint(SqliteBackend(db)) is not None
     finally:
         db.close()
 
@@ -307,10 +306,10 @@ def test_seed_if_fresh_short_circuits_on_present_insights(tmp_path):
     db = open_db(sdir)
     try:
         _seed_row_with_embedding(db, id='r1', content='alpha')
-        assert stored_fingerprint(db) is None
-        wrote = seed_if_fresh(db)
+        assert stored_fingerprint(SqliteBackend(db)) is None
+        wrote = seed_if_fresh(SqliteBackend(db))
         assert wrote is False
-        assert stored_fingerprint(db) is None
+        assert stored_fingerprint(SqliteBackend(db)) is None
     finally:
         db.close()
 
@@ -398,7 +397,7 @@ def test_reembed_converges_after_provider_swap(
 
     db = open_db(sdir)
     try:
-        stored = stored_fingerprint(db)
+        stored = stored_fingerprint(SqliteBackend(db))
         assert stored.provider == 'stub'
         assert stored.dim == 1024
         rows = db._query(
@@ -424,8 +423,7 @@ def test_drain_blocks_on_mismatch(tmp_path, monkeypatch):
     sdir = store_dir(str(tmp_path), 'default')
     db = open_db(sdir)
     try:
-        write_fingerprint(
-            db, Fingerprint(
+        write_fingerprint(SqliteBackend(db), Fingerprint(
                 provider='openai', model='other', dim=1024))
     finally:
         db.close()
@@ -504,7 +502,7 @@ def test_doctor_reports_fingerprint_pass(tmp_path):
     db = open_db(sdir)
     try:
         _seed_voyage(db)
-        result = check_embed_fingerprint(db)
+        result = check_embed_fingerprint(SqliteBackend(db))
     finally:
         db.close()
     assert result['status'] == 'pass'
@@ -521,7 +519,7 @@ def test_doctor_reports_fingerprint_fail_unseeded(tmp_path):
     sdir = store_dir(str(tmp_path), 'default')
     db = open_db(sdir)
     try:
-        result = check_embed_fingerprint(db)
+        result = check_embed_fingerprint(SqliteBackend(db))
     finally:
         db.close()
     assert result['status'] == 'fail'
@@ -537,9 +535,8 @@ def test_doctor_reports_fingerprint_fail_mismatch(tmp_path):
     sdir = store_dir(str(tmp_path), 'default')
     db = open_db(sdir)
     try:
-        write_fingerprint(
-            db, Fingerprint(provider='openai', model='m', dim=1024))
-        result = check_embed_fingerprint(db)
+        write_fingerprint(SqliteBackend(db), Fingerprint(provider='openai', model='m', dim=1024))
+        result = check_embed_fingerprint(SqliteBackend(db))
     finally:
         db.close()
     assert result['status'] == 'fail'
@@ -557,8 +554,7 @@ def test_embed_status_reports_mismatch(tmp_path):
     sdir = store_dir(str(tmp_path), 'default')
     db = open_db(sdir)
     try:
-        write_fingerprint(
-            db, Fingerprint(provider='openai', model='m', dim=1024))
+        write_fingerprint(SqliteBackend(db), Fingerprint(provider='openai', model='m', dim=1024))
     finally:
         db.close()
 
@@ -701,8 +697,7 @@ def test_worker_blocks_on_mismatch(tmp_path, monkeypatch):
     sdir = store_dir(str(tmp_path), 'default')
     db = open_db(sdir)
     try:
-        write_fingerprint(
-            db, Fingerprint(provider='openai', model='m', dim=1024))
+        write_fingerprint(SqliteBackend(db), Fingerprint(provider='openai', model='m', dim=1024))
     finally:
         db.close()
 

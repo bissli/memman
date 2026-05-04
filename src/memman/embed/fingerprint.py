@@ -19,10 +19,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from memman.exceptions import EmbedFingerprintError
-from memman.store.db import DB, get_meta, set_meta
 
 if TYPE_CHECKING:
     from memman.embed import EmbeddingProvider
+    from memman.store.backend import Backend
 
 META_KEY = 'embed_fingerprint'
 
@@ -84,22 +84,22 @@ def active_fingerprint() -> Fingerprint:
     return Fingerprint.from_client(get_client())
 
 
-def stored_fingerprint(db: DB) -> Fingerprint | None:
+def stored_fingerprint(backend: 'Backend') -> Fingerprint | None:
     """Return the fingerprint stored in `meta.embed_fingerprint`.
     """
-    raw = get_meta(db, META_KEY)
+    raw = backend.meta.get(META_KEY)
     if raw is None:
         return None
     return Fingerprint.from_json(raw)
 
 
-def write_fingerprint(db: DB, fp: Fingerprint) -> None:
+def write_fingerprint(backend: 'Backend', fp: Fingerprint) -> None:
     """Atomically write the fingerprint into `meta.embed_fingerprint`.
     """
-    set_meta(db, META_KEY, fp.to_json())
+    backend.meta.set(META_KEY, fp.to_json())
 
 
-def seed_if_fresh(db: DB) -> bool:
+def seed_if_fresh(backend: 'Backend') -> bool:
     """Seed `meta.embed_fingerprint` when the store is genuinely fresh.
 
     Writes the active client's fingerprint when both: (a) no
@@ -113,11 +113,9 @@ def seed_if_fresh(db: DB) -> bool:
     no fingerprint is corruption and must surface the existing hard
     error from `assert_consistent`, not a misleading missing-key one.
     """
-    from memman.store.node import count_total_insights
-
-    if stored_fingerprint(db) is not None:
+    if stored_fingerprint(backend) is not None:
         return False
-    if count_total_insights(db) > 0:
+    if backend.nodes.count_total() > 0:
         return False
     from memman.embed import get_client
     ec = get_client()
@@ -128,22 +126,22 @@ def seed_if_fresh(db: DB) -> bool:
         raise EmbedFingerprintError(
             f'embed provider {target.provider} returned'
             f' dim={target.dim}; cannot seed fingerprint')
-    write_fingerprint(db, target)
+    write_fingerprint(backend, target)
     return True
 
 
-def assert_consistent(db: DB) -> None:
+def assert_consistent(backend: 'Backend') -> None:
     """Raise `EmbedFingerprintError` when the active client does not
     match the stored fingerprint, or when no fingerprint is stored.
 
-    Callers that open a DB through the CLI (`_open_db`,
+    Callers that open a backend through the CLI (`_open_db`,
     `_StoreContext`, `store_create`, `_init_default_store`) call
     `seed_if_fresh` first so that a missing fingerprint here means
     real corruption (data without provenance), not an uninitialized
     store.
     """
     active = active_fingerprint()
-    stored = stored_fingerprint(db)
+    stored = stored_fingerprint(backend)
     if stored is None:
         raise EmbedFingerprintError(
             f"DB has no embed fingerprint. Active is"
