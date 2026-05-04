@@ -192,7 +192,8 @@ def _import_insights(
             ' deleted_at, prompt_version, model_id, embedding_model)'
             ' VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s,'
             ' %s::jsonb, %s, %s::jsonb,'
-            ' %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
+            ' %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)'
+            ' ON CONFLICT (id) DO NOTHING',
             out)
     return len(out)
 
