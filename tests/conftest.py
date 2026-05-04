@@ -636,6 +636,33 @@ def _safe_store_name(test_id: str) -> str:
     return safe[:40] or 'p_test'
 
 
+def set_created_at(backend, insight_id: str, when: datetime) -> None:
+    """Test-only: directly UPDATE `created_at` on a stored insight.
+
+    The Backend Protocol's `nodes.insert` ignores caller-passed
+    `Insight.created_at` per Phase 1a Decision #1 (server-side
+    timestamps). Tests that exercise temporal logic against
+    pre-existing rows with controlled timestamps call this helper
+    after `backend.nodes.insert` to override the server-stamped
+    value. Bypasses the Protocol intentionally; do NOT use outside
+    test code.
+    """
+    from memman.store.model import format_timestamp
+    from memman.store.sqlite import SqliteBackend
+    when_str = format_timestamp(when)
+    if isinstance(backend, SqliteBackend):
+        backend._db._exec(
+            'UPDATE insights SET created_at = ? WHERE id = ?',
+            (when_str, insight_id))
+    else:
+        with backend._conn.cursor() as cur:
+            cur.execute(
+                f'UPDATE {backend._schema}.insights'
+                ' SET created_at = %s WHERE id = %s',
+                (when, insight_id))
+        backend._conn.commit()
+
+
 @pytest.fixture
 def populated_db(tmp_db):
     """DB pre-loaded with 5 insights for query/graph tests."""

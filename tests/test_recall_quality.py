@@ -13,15 +13,8 @@ is actually exercised.
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
 from memman.search.recall import intent_aware_recall
 from tests.conftest import make_edge, make_insight
-
-_CALLER_TIMESTAMP_SKIP_REASON = (
-    'Phase 1a Decision #1: Postgres stamps created_at server-side, so '
-    'caller-passed timestamps are ignored. SQLite still honours the '
-    'passed timestamp; this divergence is tracked for resolution after '
-    'Phase 3.')
 
 OLD = datetime(2024, 1, 1, tzinfo=timezone.utc)
 RECENT = datetime.now(timezone.utc)
@@ -200,23 +193,25 @@ class TestWhyIntentCausalOrdering:
 class TestWhenIntentChronologicalOrdering:
     """WHEN intent returns results newest-first by created_at."""
 
-    def test_when_intent_chronological_ordering(self, backend, backend_kind):
+    def test_when_intent_chronological_ordering(self, backend):
         """Newer insights appear before older ones under WHEN intent."""
-        if backend_kind == 'postgres':
-            pytest.skip(_CALLER_TIMESTAMP_SKIP_REASON)
+        from tests.conftest import set_created_at
         _insert_fillers(backend)
         backend.nodes.insert(make_insight(
             id='when-old',
             content='database migration completed for production deploy',
-            importance=4, created_at=OLD - timedelta(hours=2)))
+            importance=4))
         backend.nodes.insert(make_insight(
             id='when-mid',
             content='database schema updated production migration',
-            importance=4, created_at=OLD - timedelta(hours=1)))
+            importance=4))
         backend.nodes.insert(make_insight(
             id='when-new',
             content='database rollback production migration issue',
-            importance=4, created_at=OLD))
+            importance=4))
+        set_created_at(backend, 'when-old', OLD - timedelta(hours=2))
+        set_created_at(backend, 'when-mid', OLD - timedelta(hours=1))
+        set_created_at(backend, 'when-new', OLD)
 
         result = intent_aware_recall(
             backend,
@@ -244,16 +239,19 @@ class TestWhenIntentChronologicalOrdering:
 
     def test_when_intent_equal_timestamp_tiebreak(self, backend):
         """Same created_at: higher-scoring insight ranks first."""
+        from tests.conftest import set_created_at
         _insert_fillers(backend)
         ts = OLD
         backend.nodes.insert(make_insight(
             id='when-tie-hi',
             content='database production migration rollback strategy',
-            importance=5, created_at=ts))
+            importance=5))
         backend.nodes.insert(make_insight(
             id='when-tie-lo',
             content='database production migration backup strategy',
-            importance=2, created_at=ts))
+            importance=2))
+        set_created_at(backend, 'when-tie-hi', ts)
+        set_created_at(backend, 'when-tie-lo', ts)
 
         result = intent_aware_recall(
             backend,
@@ -346,16 +344,19 @@ class TestImportanceTiebreaker:
 
     def test_importance_tiebreaker(self, backend):
         """imp=5 ranks before imp=2 with identical content and timestamps."""
+        from tests.conftest import set_created_at
         _insert_fillers(backend)
         ts = OLD
         backend.nodes.insert(make_insight(
             id='tie-high',
             content='logging best practices structured output',
-            importance=5, created_at=ts))
+            importance=5))
         backend.nodes.insert(make_insight(
             id='tie-low',
             content='logging best practices structured output',
-            importance=2, created_at=ts))
+            importance=2))
+        set_created_at(backend, 'tie-high', ts)
+        set_created_at(backend, 'tie-low', ts)
 
         result = intent_aware_recall(
             backend,

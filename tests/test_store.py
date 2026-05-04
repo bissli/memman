@@ -236,23 +236,28 @@ class TestEdgeUpsert:
         assert edges[0].metadata['rationale'] == 'v2'
 
     def test_edge_upsert_preserves_created_at(self, tmp_db):
-        """Re-inserting does not change the original created_at timestamp."""
-        from datetime import datetime, timedelta, timezone
+        """Re-inserting does not change the original created_at timestamp.
+
+        Phase 1a Decision #1: `insert_edge` ignores caller `created_at`
+        and stamps server-side. The ON CONFLICT clause does NOT update
+        created_at, so the original server-stamped value survives the
+        re-insert. We use `time.sleep` to ensure two distinct stamps
+        and verify the first one is preserved.
+        """
+        import time
         insert_insight(tmp_db, make_insight(id='uc-1', content='a'))
         insert_insight(tmp_db, make_insight(id='uc-2', content='b'))
-        original_time = datetime(2024, 1, 1, tzinfo=timezone.utc)
         insert_edge(tmp_db, make_edge(
             source_id='uc-1', target_id='uc-2',
-            edge_type='temporal', weight=0.9,
-            created_at=original_time))
-        later_time = original_time + timedelta(hours=1)
+            edge_type='temporal', weight=0.9))
+        first_stamp = get_edges_by_node(tmp_db, 'uc-1')[0].created_at
+        time.sleep(0.05)
         insert_edge(tmp_db, make_edge(
             source_id='uc-1', target_id='uc-2',
-            edge_type='temporal', weight=0.5,
-            created_at=later_time))
+            edge_type='temporal', weight=0.5))
         edges = get_edges_by_node(tmp_db, 'uc-1')
         assert len(edges) == 1
-        assert edges[0].created_at == original_time
+        assert edges[0].created_at == first_stamp
 
     def test_edge_upsert_new_higher_replaces_weight(self, tmp_db):
         """Re-inserting with higher weight replaces the stored weight."""

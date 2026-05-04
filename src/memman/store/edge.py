@@ -14,11 +14,11 @@ def insert_edge(db: 'DB', e: Edge) -> None:
     Edges with created_by 'claude' or 'manual' are protected: their
     metadata is never overwritten by auto-generated edges.
 
-    Stamps `created_at` server-side when absent on the incoming Edge,
-    matching the Phase 1a Protocol commitment that backends own
-    boundary timestamps.
+    Stamps `created_at` server-side per Phase 1a Decision #1:
+    caller-passed `e.created_at` is IGNORED. Mirrors
+    `PostgresEdgeStore.upsert` which relies on `DEFAULT now()`.
     """
-    created_at = e.created_at or datetime.now(timezone.utc)
+    created_at = datetime.now(timezone.utc)
     db._exec(
         'INSERT INTO edges'
         ' (source_id, target_id, edge_type, weight, metadata, created_at)'

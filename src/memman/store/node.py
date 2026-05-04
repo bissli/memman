@@ -19,15 +19,14 @@ __all__ = ['MAX_INSIGHTS']
 def insert_insight(db: 'DB', i: Insight) -> None:
     """Insert a new insight into the database.
 
-    Stamps `created_at` / `updated_at` server-side when absent on the
-    incoming Insight. The dataclass carries no `default_factory` for
-    these fields per the Phase 1a Protocol commitment; pipeline code
-    builds Insights without timestamps and the backend fills them in
-    here.
+    Stamps `created_at` / `updated_at` server-side per Phase 1a
+    Decision #1: caller-passed `i.created_at` / `i.updated_at` are
+    IGNORED. Tests that need to control insertion time use the
+    `_set_created_at` helper in `tests/conftest.py` to issue a raw
+    UPDATE after insert. Mirrors `PostgresNodeStore.insert` which
+    relies on `DEFAULT now()`.
     """
-    now = datetime.now(timezone.utc)
-    created_at = i.created_at or now
-    updated_at = i.updated_at or now
+    now = format_timestamp(datetime.now(timezone.utc))
     db._exec(
         'INSERT INTO insights'
         ' (id, content, category, importance, entities,'
@@ -36,7 +35,7 @@ def insert_insight(db: 'DB', i: Insight) -> None:
         ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (i.id, i.content, i.category, i.importance,
          i.entities_json(), i.source, i.access_count,
-         format_timestamp(created_at), format_timestamp(updated_at),
+         now, now,
          i.prompt_version, i.model_id, i.embedding_model))
 
 

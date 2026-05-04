@@ -2,19 +2,14 @@
 
 These tests exercise temporal, entity, causal, semantic, BFS, and engine
 modules against the Backend Protocol; parametrized over
-`{sqlite, postgres}` per Phase 3.
-
-Some temporal tests below rely on caller-controlled `created_at` to
-exercise window / decay math. SQLite currently honours the caller's
-timestamp, but Postgres stamps server-side per Phase 1a Decision #1.
-Those tests carry an explicit skip on the postgres slot until SQLite
-also stamps server-side and the temporal logic gets a different
-test surface.
+`{sqlite, postgres}` per Phase 3. Tests that need controlled
+`created_at` values use the `set_created_at` test helper to issue a
+raw UPDATE after `backend.nodes.insert` (Phase 1a Decision #1: both
+backends stamp server-side and ignore caller-passed timestamps).
 """
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
 from memman.graph.bfs import BFSOptions, bfs
 from memman.graph.engine import fast_edges
 from memman.graph.entity import create_entity_edges
@@ -31,15 +26,6 @@ def _vec_512(*prefix: float) -> list[float]:
     preserves cosine similarity for the math the call sites assert on.
     """
     return list(prefix) + [0.0] * (512 - len(prefix))
-
-
-_CALLER_TIMESTAMP_SKIP_REASON = (
-    'Phase 1a Decision #1: Postgres stamps created_at server-side, so '
-    'caller-passed timestamps are ignored. SQLite still honours the '
-    'passed timestamp; this divergence is tracked for resolution after '
-    'Phase 3 (either teach SQLite to stamp server-side too, or move '
-    'temporal-window/decay tests to a function-level surface that does '
-    'not depend on inserted-row timestamps).')
 
 # --- Temporal ---
 
@@ -76,23 +62,22 @@ class TestTemporalBackboneChain:
 class TestTemporalProximityDecay:
     """Closer insights get higher temporal proximity weight."""
 
-    def test_temporal_proximity_decay(self, backend, backend_kind):
+    def test_temporal_proximity_decay(self, backend):
         """A close insight has higher weight than a far one."""
-        if backend_kind == 'postgres':
-            pytest.skip(_CALLER_TIMESTAMP_SKIP_REASON)
+        from tests.conftest import set_created_at
         now = datetime.now(timezone.utc)
         close = make_insight(
-            id='tp-1', content='close insight', source='other',
-            created_at=now - timedelta(minutes=30))
+            id='tp-1', content='close insight', source='other')
         far = make_insight(
-            id='tp-2', content='far insight', source='other',
-            created_at=now - timedelta(hours=12))
+            id='tp-2', content='far insight', source='other')
         current = make_insight(
             id='tp-3', content='current insight', source='proj-b',
             created_at=now)
         backend.nodes.insert(close)
         backend.nodes.insert(far)
         backend.nodes.insert(current)
+        set_created_at(backend, 'tp-1', now - timedelta(minutes=30))
+        set_created_at(backend, 'tp-2', now - timedelta(hours=12))
 
         create_temporal_edge(backend, current)
 
@@ -491,19 +476,17 @@ class TestEdgeWorthyFiltering:
 class TestTemporalOutsideWindow:
     """Insight outside the 4h window gets no proximity edges."""
 
-    def test_outside_window_no_proximity(self, backend, backend_kind):
+    def test_outside_window_no_proximity(self, backend):
         """5-hour-old insight produces 0 proximity edges."""
-        if backend_kind == 'postgres':
-            pytest.skip(_CALLER_TIMESTAMP_SKIP_REASON)
+        from tests.conftest import set_created_at
         now = datetime.now(timezone.utc)
-        old = make_insight(
-            id='tw-1', content='old', source='p',
-            created_at=now - timedelta(hours=5))
+        old = make_insight(id='tw-1', content='old', source='p')
         new = make_insight(
             id='tw-2', content='new', source='q',
             created_at=now)
         backend.nodes.insert(old)
         backend.nodes.insert(new)
+        set_created_at(backend, 'tw-1', now - timedelta(hours=5))
         create_temporal_edge(backend, new)
         proximity_edges = [
             e for e in backend.edges.by_node_and_type(
