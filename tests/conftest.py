@@ -53,6 +53,7 @@ def _isolate_env(tmp_path, monkeypatch, request):
     inherited environment.
     """
     if 'tests/e2e/' in str(request.node.fspath):
+        yield
         return
     from memman import config
     data_dir = tmp_path / 'memman'
