@@ -13,19 +13,24 @@ is actually exercised.
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from memman.search.recall import intent_aware_recall
-from memman.store.edge import insert_edge
-from memman.store.node import insert_insight
 from tests.conftest import make_edge, make_insight
+
+_CALLER_TIMESTAMP_SKIP_REASON = (
+    'Phase 1a Decision #1: Postgres stamps created_at server-side, so '
+    'caller-passed timestamps are ignored. SQLite still honours the '
+    'passed timestamp; this divergence is tracked for resolution after '
+    'Phase 3.')
 
 OLD = datetime(2024, 1, 1, tzinfo=timezone.utc)
 RECENT = datetime.now(timezone.utc)
 
 
-def _insert_fillers(db, count=8):
+def _insert_fillers(backend, count=8):
     """Insert recent filler insights with no keyword overlap to test queries."""
     for i in range(count):
-        insert_insight(db, make_insight(
+        backend.nodes.insert(make_insight(
             id=f'filler-{i}',
             content=f'unrelated filler content alpha bravo {i}',
             importance=3,
@@ -43,24 +48,24 @@ def _find_result(results, insight_id):
 class TestKeywordSignal:
     """Keyword-matching insight gets a positive keyword signal."""
 
-    def test_keyword_match_has_positive_keyword_signal(self, tmp_db, tmp_backend):
+    def test_keyword_match_has_positive_keyword_signal(self, backend):
         """Insight with query keywords scores high keyword signal; others do not."""
-        _insert_fillers(tmp_db)
-        insert_insight(tmp_db, make_insight(
+        _insert_fillers(backend)
+        backend.nodes.insert(make_insight(
             id='kw-match',
             content='Prometheus monitoring Grafana dashboards observability',
             importance=3, created_at=OLD))
-        insert_insight(tmp_db, make_insight(
+        backend.nodes.insert(make_insight(
             id='kw-miss-1',
             content='SQLite database schema migration patterns',
             importance=3, created_at=OLD - timedelta(hours=1)))
-        insert_insight(tmp_db, make_insight(
+        backend.nodes.insert(make_insight(
             id='kw-miss-2',
             content='Docker container orchestration strategy',
             importance=3, created_at=OLD - timedelta(hours=2)))
 
         result = intent_aware_recall(
-            tmp_backend,
+            backend,
             query='Prometheus monitoring Grafana dashboards',
             query_vec=None, query_entities=[], limit=20)
 
@@ -79,26 +84,26 @@ class TestKeywordSignal:
 class TestEntitySignal:
     """Entity-matching insights get positive entity signal."""
 
-    def test_entity_match_has_positive_entity_signal(self, tmp_db, tmp_backend):
+    def test_entity_match_has_positive_entity_signal(self, backend):
         """Docker insights score entity signal; Kubernetes-only does not."""
-        _insert_fillers(tmp_db)
-        insert_insight(tmp_db, make_insight(
+        _insert_fillers(backend)
+        backend.nodes.insert(make_insight(
             id='ent-docker-1',
             content='Docker container networking configuration',
             entities=['Docker'], importance=3, created_at=OLD))
-        insert_insight(tmp_db, make_insight(
+        backend.nodes.insert(make_insight(
             id='ent-docker-2',
             content='Docker image optimization techniques',
             entities=['Docker'], importance=3,
             created_at=OLD - timedelta(hours=1)))
-        insert_insight(tmp_db, make_insight(
+        backend.nodes.insert(make_insight(
             id='ent-k8s',
             content='Kubernetes pod scheduling policies',
             entities=['Kubernetes'], importance=3,
             created_at=OLD - timedelta(hours=2)))
 
         result = intent_aware_recall(
-            tmp_backend,
+            backend,
             query='Docker container',
             query_vec=None, query_entities=['Docker'],
             limit=20, intent_override='ENTITY')
@@ -118,31 +123,31 @@ class TestEntitySignal:
 class TestGraphTraversal:
     """Graph edges discover insights unreachable by keyword or recency."""
 
-    def test_graph_traversal_discovers_unreachable_insight(self, tmp_db, tmp_backend):
+    def test_graph_traversal_discovers_unreachable_insight(self, backend):
         """Insight with no keyword overlap found via graph edges only."""
-        _insert_fillers(tmp_db)
-        insert_insight(tmp_db, make_insight(
+        _insert_fillers(backend)
+        backend.nodes.insert(make_insight(
             id='graph-1',
             content='FastAPI rate limiting design patterns',
             entities=['FastAPI'], importance=3, created_at=OLD))
-        insert_insight(tmp_db, make_insight(
+        backend.nodes.insert(make_insight(
             id='graph-2',
             content='API throttling middleware implementation',
             importance=3, created_at=OLD - timedelta(hours=1)))
-        insert_insight(tmp_db, make_insight(
+        backend.nodes.insert(make_insight(
             id='graph-3',
             content='Redis cache eviction policy tuning',
             importance=3, created_at=OLD - timedelta(days=30)))
 
-        insert_edge(tmp_db, make_edge(
+        backend.edges.upsert(make_edge(
             source_id='graph-1', target_id='graph-2',
             edge_type='causal', weight=0.8))
-        insert_edge(tmp_db, make_edge(
+        backend.edges.upsert(make_edge(
             source_id='graph-2', target_id='graph-3',
             edge_type='semantic', weight=0.8))
 
         result = intent_aware_recall(
-            tmp_backend,
+            backend,
             query='API rate limiting design',
             query_vec=None, query_entities=['FastAPI'],
             limit=20)
@@ -156,24 +161,24 @@ class TestGraphTraversal:
 class TestWhyIntentCausalOrdering:
     """WHY intent places causes before effects via topological sort."""
 
-    def test_why_intent_causal_ordering(self, tmp_db, tmp_backend):
+    def test_why_intent_causal_ordering(self, backend):
         """Cause insight appears before effect in WHY results."""
-        _insert_fillers(tmp_db)
-        insert_insight(tmp_db, make_insight(
+        _insert_fillers(backend)
+        backend.nodes.insert(make_insight(
             id='why-cause',
             content='Chose SQLite because embedded serverless database',
             importance=4, created_at=OLD))
-        insert_insight(tmp_db, make_insight(
+        backend.nodes.insert(make_insight(
             id='why-effect',
             content='SQLite chosen enables single-file deployment',
             importance=4, created_at=OLD - timedelta(hours=1)))
 
-        insert_edge(tmp_db, make_edge(
+        backend.edges.upsert(make_edge(
             source_id='why-cause', target_id='why-effect',
             edge_type='causal', weight=0.9))
 
         result = intent_aware_recall(
-            tmp_backend,
+            backend,
             query='why SQLite chosen because embedded',
             query_vec=None, query_entities=[],
             limit=20, intent_override='WHY')
@@ -195,24 +200,26 @@ class TestWhyIntentCausalOrdering:
 class TestWhenIntentChronologicalOrdering:
     """WHEN intent returns results newest-first by created_at."""
 
-    def test_when_intent_chronological_ordering(self, tmp_db, tmp_backend):
+    def test_when_intent_chronological_ordering(self, backend, backend_kind):
         """Newer insights appear before older ones under WHEN intent."""
-        _insert_fillers(tmp_db)
-        insert_insight(tmp_db, make_insight(
+        if backend_kind == 'postgres':
+            pytest.skip(_CALLER_TIMESTAMP_SKIP_REASON)
+        _insert_fillers(backend)
+        backend.nodes.insert(make_insight(
             id='when-old',
             content='database migration completed for production deploy',
             importance=4, created_at=OLD - timedelta(hours=2)))
-        insert_insight(tmp_db, make_insight(
+        backend.nodes.insert(make_insight(
             id='when-mid',
             content='database schema updated production migration',
             importance=4, created_at=OLD - timedelta(hours=1)))
-        insert_insight(tmp_db, make_insight(
+        backend.nodes.insert(make_insight(
             id='when-new',
             content='database rollback production migration issue',
             importance=4, created_at=OLD))
 
         result = intent_aware_recall(
-            tmp_backend,
+            backend,
             query='database production migration',
             query_vec=None, query_entities=[],
             limit=20, intent_override='WHEN')
@@ -235,21 +242,21 @@ class TestWhenIntentChronologicalOrdering:
             if r['insight'].id == 'when-old')
         assert new_idx < mid_idx < old_idx
 
-    def test_when_intent_equal_timestamp_tiebreak(self, tmp_db, tmp_backend):
+    def test_when_intent_equal_timestamp_tiebreak(self, backend):
         """Same created_at: higher-scoring insight ranks first."""
-        _insert_fillers(tmp_db)
+        _insert_fillers(backend)
         ts = OLD
-        insert_insight(tmp_db, make_insight(
+        backend.nodes.insert(make_insight(
             id='when-tie-hi',
             content='database production migration rollback strategy',
             importance=5, created_at=ts))
-        insert_insight(tmp_db, make_insight(
+        backend.nodes.insert(make_insight(
             id='when-tie-lo',
             content='database production migration backup strategy',
             importance=2, created_at=ts))
 
         result = intent_aware_recall(
-            tmp_backend,
+            backend,
             query='database production migration',
             query_vec=None, query_entities=[],
             limit=20, intent_override='WHEN')
@@ -270,28 +277,28 @@ class TestWhenIntentChronologicalOrdering:
 class TestWhyIntentGraphWeight:
     """WHY intent weights graph signal higher than GENERAL in final score."""
 
-    def test_why_intent_weights_graph_higher_than_general(self, tmp_db, tmp_backend):
+    def test_why_intent_weights_graph_higher_than_general(self, backend):
         """Same query under WHY vs GENERAL: WHY graph contribution > GENERAL."""
-        _insert_fillers(tmp_db)
-        insert_insight(tmp_db, make_insight(
+        _insert_fillers(backend)
+        backend.nodes.insert(make_insight(
             id='wg-1',
             content='Chose SQLite because embedded serverless database',
             importance=4, created_at=OLD))
-        insert_insight(tmp_db, make_insight(
+        backend.nodes.insert(make_insight(
             id='wg-2',
             content='SQLite chosen enables single-file deployment',
             importance=4, created_at=OLD - timedelta(hours=1)))
 
-        insert_edge(tmp_db, make_edge(
+        backend.edges.upsert(make_edge(
             source_id='wg-1', target_id='wg-2',
             edge_type='causal', weight=0.9))
 
         query = 'why SQLite chosen because embedded'
         why_result = intent_aware_recall(
-            tmp_backend, query=query, query_vec=None,
+            backend, query=query, query_vec=None,
             query_entities=[], limit=20, intent_override='WHY')
         gen_result = intent_aware_recall(
-            tmp_backend, query=query, query_vec=None,
+            backend, query=query, query_vec=None,
             query_entities=[], limit=20, intent_override='GENERAL')
 
         why_r1 = _find_result(why_result['results'], 'wg-1')
@@ -311,16 +318,16 @@ class TestWhyIntentGraphWeight:
 class TestSingletonEntity:
     """Singleton entity still produces a positive entity signal."""
 
-    def test_singleton_entity_positive_signal(self, tmp_db, tmp_backend):
+    def test_singleton_entity_positive_signal(self, backend):
         """Unique entity matched by query gets entity signal > 0."""
-        _insert_fillers(tmp_db)
-        insert_insight(tmp_db, make_insight(
+        _insert_fillers(backend)
+        backend.nodes.insert(make_insight(
             id='singleton',
             content='Terraform infrastructure as code provisioning',
             entities=['Terraform'], importance=3, created_at=OLD))
 
         result = intent_aware_recall(
-            tmp_backend,
+            backend,
             query='Terraform infrastructure',
             query_vec=None, query_entities=['Terraform'],
             limit=20, intent_override='ENTITY')
@@ -337,21 +344,21 @@ class TestSingletonEntity:
 class TestImportanceTiebreaker:
     """Higher importance wins when scores are tied."""
 
-    def test_importance_tiebreaker(self, tmp_db, tmp_backend):
+    def test_importance_tiebreaker(self, backend):
         """imp=5 ranks before imp=2 with identical content and timestamps."""
-        _insert_fillers(tmp_db)
+        _insert_fillers(backend)
         ts = OLD
-        insert_insight(tmp_db, make_insight(
+        backend.nodes.insert(make_insight(
             id='tie-high',
             content='logging best practices structured output',
             importance=5, created_at=ts))
-        insert_insight(tmp_db, make_insight(
+        backend.nodes.insert(make_insight(
             id='tie-low',
             content='logging best practices structured output',
             importance=2, created_at=ts))
 
         result = intent_aware_recall(
-            tmp_backend,
+            backend,
             query='logging best practices',
             query_vec=None, query_entities=[],
             limit=20, intent_override='GENERAL')
@@ -373,16 +380,16 @@ class TestImportanceTiebreaker:
 class TestEntityCaseInsensitive:
     """Entity matching should be case-insensitive at the reranking layer."""
 
-    def test_entity_case_insensitive(self, tmp_db, tmp_backend):
+    def test_entity_case_insensitive(self, backend):
         """Lowercase query entity matches PascalCase stored entity."""
-        _insert_fillers(tmp_db)
-        insert_insight(tmp_db, make_insight(
+        _insert_fillers(backend)
+        backend.nodes.insert(make_insight(
             id='case-py',
             content='Python type hints and mypy configuration',
             entities=['Python'], importance=3, created_at=OLD))
 
         result = intent_aware_recall(
-            tmp_backend,
+            backend,
             query='python tips',
             query_vec=None, query_entities=['python'],
             limit=20, intent_override='ENTITY')
