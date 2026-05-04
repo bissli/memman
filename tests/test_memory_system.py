@@ -13,12 +13,15 @@ from memman.cli import cli
 
 
 @pytest.fixture
-def runner(tmp_path):
-    """CliRunner with --data-dir pointing to temp directory."""
-    r = CliRunner()
-    data_dir = str(tmp_path / 'memman_data')
-    pathlib.Path(data_dir).mkdir(exist_ok=True, parents=True)
-    return r, data_dir
+def runner(cross_backend_runner):
+    """CliRunner parametrized over `{sqlite, postgres}`.
+
+    Delegates to `cross_backend_runner` (Phase 4b slice 4) so each of
+    the 53 black-box CLI tests in this module runs against both
+    backends. Postgres invocations carry `pytest.mark.postgres` and
+    are gated on `psycopg + testcontainers` being importable.
+    """
+    return cross_backend_runner
 
 
 def invoke(runner_tuple, args):
