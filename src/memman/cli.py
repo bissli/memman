@@ -434,6 +434,49 @@ def _reset_heartbeat_state() -> None:
     _LAST_HEARTBEAT_AT.clear()
 
 
+def _start_postgres_heartbeat(record_run: bool):
+    """Start a postgres-side worker_runs row when MEMMAN_BACKEND=postgres.
+
+    Returns `(queue_backend, run_id)` tuple, both `None` on sqlite mode
+    or when something goes wrong (postgres heartbeat is best-effort
+    monitoring infrastructure, NOT correctness — failures are
+    logged but never abort the drain).
+    """
+    if not record_run:
+        return None, None
+    try:
+        from memman import config
+        backend_name = (config.get(config.BACKEND) or 'sqlite').lower()
+        if backend_name != 'postgres':
+            return None, None
+        dsn = config.get(config.PG_DSN)
+        if not dsn:
+            return None, None
+        from memman.store.postgres import PostgresQueueBackend
+        pg_queue = PostgresQueueBackend(dsn=dsn)
+        pg_run_id = pg_queue.start_run()
+        return pg_queue, pg_run_id
+    except Exception:
+        logger.exception('postgres heartbeat init failed; continuing')
+        return None, None
+
+
+def _beat_postgres_heartbeat(pg_queue, pg_run_id) -> None:
+    """Advance last_heartbeat_at on the postgres worker_runs row.
+
+    No-op when sqlite mode or when the postgres heartbeat init failed
+    (both yield `pg_queue=None`). Best-effort: failures are logged but
+    do not abort the drain row.
+    """
+    if pg_queue is None or pg_run_id is None:
+        return
+    try:
+        pg_queue.beat_run(pg_run_id)
+    except Exception:
+        logger.exception(
+            'postgres beat_run failed; continuing without heartbeat')
+
+
 @scheduler.command('drain', hidden=True)
 @click.option('--pending', is_flag=True, default=False,
               help='Drain the deferred-write queue')
@@ -626,6 +669,8 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
     record_run = (_time.monotonic() - last_hb) >= HEARTBEAT_MIN_INTERVAL_SECONDS
     run_id = start_worker_run(conn, worker_pid) if record_run else None
 
+    pg_queue, pg_run_id = _start_postgres_heartbeat(record_run)
+
     try:
         while processed + failed < limit:
             if _stop_requested() or read_state() == STATE_STOPPED:
@@ -681,6 +726,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 mark_done(conn, row.id)
                 processed += 1
                 touched_stores.add(row.store)
+                _beat_postgres_heartbeat(pg_queue, pg_run_id)
                 trace.event(
                     'queue_done',
                     row_id=row.id,
