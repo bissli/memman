@@ -15,11 +15,8 @@ from __future__ import annotations
 import psycopg
 import pytest
 from memman.store.errors import BackendError
-from memman.store.postgres import (
-    _assert_vector_dim_matches,
-    _ensure_baseline_schema,
-    _store_schema,
-)
+from memman.store.postgres import _assert_vector_dim_matches
+from memman.store.postgres import _ensure_baseline_schema, _store_schema
 
 pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
 

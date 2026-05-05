@@ -22,12 +22,12 @@ import threading
 
 import psycopg
 import pytest
-from pgvector.psycopg import register_vector
+from memman.store.errors import BackendError
 from memman.store.model import Insight
 from memman.store.postgres import EMBEDDING_DIM, PostgresCluster
 from memman.store.postgres import _ensure_baseline_schema, _ensure_hnsw_index
 from memman.store.postgres import _store_schema
-from memman.store.errors import BackendError
+from pgvector.psycopg import register_vector
 from tests.fixtures.postgres import SCHEMA, drain_connection_pair
 from tests.fixtures.postgres import simulate_drain_connection_drop, wait_for
 

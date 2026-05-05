@@ -5,10 +5,8 @@ module imports.
 """
 
 import json
-import pathlib
 
 import pytest
-from click.testing import CliRunner
 from memman.cli import cli
 
 

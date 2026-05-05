@@ -13,10 +13,10 @@ test-infrastructure-plus-SQL-extraction PR.
 from __future__ import annotations
 
 import os
+import sqlite3
 import struct
 import subprocess
 import sys
-import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,9 +24,8 @@ from pathlib import Path
 import numpy as np
 import psycopg
 import pytest
-from pgvector.psycopg import register_vector
-
 from memman.store.db import _BASELINE_SCHEMA
+from pgvector.psycopg import register_vector
 
 pytestmark = pytest.mark.postgres
 

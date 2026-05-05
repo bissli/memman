@@ -1,7 +1,6 @@
 """Tests for `memman.drain_lock` and `_drain_queue`'s flock guard."""
 
 import json
-import os
 import signal
 import subprocess
 import sys

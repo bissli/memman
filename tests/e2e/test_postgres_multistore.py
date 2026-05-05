@@ -94,12 +94,12 @@ def test_drop_store_a_does_not_affect_store_b(pg_dsn, request):
                 'SELECT count(*) FROM pg_namespace WHERE nspname = %s',
                 (_store_schema(store_a),))
             assert cur.fetchone()[0] == 0, (
-                f'store_a schema should be dropped')
+                'store_a schema should be dropped')
             cur.execute(
                 'SELECT count(*) FROM pg_namespace WHERE nspname = %s',
                 (_store_schema(store_b),))
             assert cur.fetchone()[0] == 1, (
-                f'store_b schema must survive drop of A')
+                'store_b schema must survive drop of A')
 
     b2 = cluster.open(store=store_b, data_dir='')
     try:
@@ -139,7 +139,8 @@ def test_cross_backend_parity_insert_and_get(pg_dsn, tmp_path, request):
 
         sq = sqlite_backend.nodes.get('parity-1')
         pg = pg_backend.nodes.get('parity-1')
-        assert sq is not None and pg is not None
+        assert sq is not None
+        assert pg is not None
         assert sq.content == pg.content == 'same content both ways'
         assert sq.importance == pg.importance == 4
         assert sq.source == pg.source == 'user'

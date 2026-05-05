@@ -1,4 +1,4 @@
-"""Import a memman SQLite store into a Postgres schema.
+r"""Import a memman SQLite store into a Postgres schema.
 
 Usage:
 
@@ -31,7 +31,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -166,9 +165,7 @@ def _import_insights(
         ' FROM insights').fetchall()
     if not rows:
         return 0
-    out = []
-    for r in rows:
-        out.append((
+    out = [(
             r[0], r[1], r[2], r[3],
             json.dumps(_parse_json_field(r[4], default_kind='array')),
             r[5], r[6],
@@ -181,7 +178,7 @@ def _import_insights(
             _decode_embedding(r[11]),
             r[12], _parse_ts(r[13]), _parse_ts(r[14]),
             _parse_ts(r[15]), _parse_ts(r[16]), _parse_ts(r[17]),
-            r[18], r[19], r[20]))
+            r[18], r[19], r[20]) for r in rows]
     with pg_conn.cursor() as cur:
         cur.executemany(
             f'INSERT INTO {schema}.insights ('
@@ -208,12 +205,10 @@ def _import_edges(
         ' metadata, created_at FROM edges').fetchall()
     if not rows:
         return 0
-    out = []
-    for r in rows:
-        out.append((
+    out = [(
             r[0], r[1], r[2], r[3],
             json.dumps(_parse_json_field(r[4], default_kind='object')),
-            _parse_ts(r[5])))
+            _parse_ts(r[5])) for r in rows]
     with pg_conn.cursor() as cur:
         cur.executemany(
             f'INSERT INTO {schema}.edges'
@@ -269,7 +264,7 @@ def _import_meta(
 def main(argv: list[str] | None = None) -> int:
     """Entry point.
 
-    Returns:
+    Returns
         0 on success, non-zero on validation failure.
     """
     parser = argparse.ArgumentParser(

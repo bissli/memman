@@ -2036,9 +2036,8 @@ def migrate(
     insert path so an interrupted run can be re-run safely.
     """
     from memman import config
-    from memman.migrate import (
-        MigrateError, held_drain_lock, migrate_store, preflight,
-    )
+    from memman.migrate import MigrateError, held_drain_lock, migrate_store
+    from memman.migrate import preflight
     from memman.store.db import list_stores, store_dir
 
     data_dir = ctx.obj['data_dir']
@@ -2098,8 +2097,8 @@ def migrate(
     if not dry_run:
         click.echo(
             'migrated successfully; verify with `memman doctor` then '
-            "set MEMMAN_BACKEND=postgres via `memman config set "
-            "MEMMAN_BACKEND postgres`")
+            'set MEMMAN_BACKEND=postgres via `memman config set '
+            'MEMMAN_BACKEND postgres`')
 
 
 def _emit_guide() -> None:
@@ -2271,7 +2270,6 @@ def embed_status(ctx: click.Context) -> None:
     """Show active client, stored fingerprint, consistency state.
     """
     from memman.embed.fingerprint import active_fingerprint, stored_fingerprint
-
     from memman.store.sqlite import SqliteBackend
 
     active = active_fingerprint()

@@ -420,7 +420,8 @@ def test_store_remove_purges_queue(runner):
     fix is `queue.purge_store(name)` before `shutil.rmtree(sdir)`.
     """
     import json as _json
-    from memman.queue import open_queue_db, enqueue, list_rows
+
+    from memman.queue import enqueue, list_rows, open_queue_db
     _, data_dir = runner
     invoke(runner, ['store', 'create', 'doomed'])
     qconn = open_queue_db(data_dir)

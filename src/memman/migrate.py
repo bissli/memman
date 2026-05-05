@@ -19,10 +19,10 @@ operator does that explicitly after verifying the migrate run with
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Iterator
 
 logger = logging.getLogger('memman.migrate')
 

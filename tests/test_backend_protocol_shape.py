@@ -187,4 +187,4 @@ class TestBackendIntrospection:
         """
         from memman.store.errors import ConfigError
         with pytest.raises(ConfigError):
-            backend.introspect_columns("insights); DROP TABLE insights; --")
+            backend.introspect_columns('insights); DROP TABLE insights; --')

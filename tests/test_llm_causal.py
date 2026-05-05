@@ -1,7 +1,7 @@
 """Tests for LLM causal inference with mock LLM client."""
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest

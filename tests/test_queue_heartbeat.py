@@ -180,11 +180,8 @@ def test_pg_migration_bumps_version_on_pre_v2_store(pg_dsn):
     store. The column-presence claim is covered transitively by the
     `start_run` / `beat_run` round-trip tests above.
     """
-    from memman.store.postgres import (
-        PostgresCluster,
-        _ensure_baseline_schema,
-        _store_schema,
-    )
+    from memman.store.postgres import PostgresCluster, _ensure_baseline_schema
+    from memman.store.postgres import _store_schema
 
     schema = _store_schema('hb_migrate')
     with psycopg.connect(pg_dsn, autocommit=True) as conn:

@@ -5,7 +5,6 @@ per-store atomic transaction, dry-run mode, and the
 `--i-have-a-backup` fail-closed gate.
 """
 
-import sqlite3
 from pathlib import Path
 
 import psycopg
@@ -21,9 +20,10 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
     sdir = store_dir(str(data_dir), store)
     db = open_db(sdir)
     try:
-        from memman.store.model import Insight, format_timestamp
-        from memman.store.node import insert_insight
         from datetime import datetime, timezone
+
+        from memman.store.model import Insight
+        from memman.store.node import insert_insight
         ins = Insight(
             id='m-1',
             content='migrate test insight',

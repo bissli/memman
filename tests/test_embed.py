@@ -12,7 +12,6 @@ from memman.embed.voyage import DEFAULT_ENDPOINT, DEFAULT_MODEL, EMBEDDING_DIM
 from memman.embed.voyage import Client as VoyageClient
 from memman.exceptions import ConfigError
 
-
 _original_voyage_embed = VoyageClient.embed
 _original_voyage_embed_batch = VoyageClient.embed_batch
 _original_voyage_available = VoyageClient.available

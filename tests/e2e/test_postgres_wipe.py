@@ -13,11 +13,8 @@ from __future__ import annotations
 import psycopg
 import pytest
 from memman.store.model import Insight
-from memman.store.postgres import (
-    PostgresCluster,
-    PostgresQueueBackend,
-    _store_schema,
-)
+from memman.store.postgres import PostgresCluster, PostgresQueueBackend
+from memman.store.postgres import _store_schema
 
 pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
 

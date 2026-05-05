@@ -1,6 +1,6 @@
 """Tests for database quality fixes: entity normalization, constants."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from memman.graph.enrichment import enrich_with_llm
 from memman.graph.entity import create_entity_edges, normalize_entity

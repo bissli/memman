@@ -256,7 +256,7 @@ class TestReembed:
 
     @pytest.mark.no_autoseed_fingerprint
     def test_remember_on_fresh_store_seeds_and_drains(self, tmp_path):
-        """remember on a fresh store seeds the fingerprint AND the
+        """Remember on a fresh store seeds the fingerprint AND the
         worker drain succeeds.
         """
         result = _invoke([

@@ -12,11 +12,8 @@ from __future__ import annotations
 import psycopg
 import pytest
 from memman.store.errors import BackendError
-from memman.store.postgres import (
-    _PG_SCHEMA_VERSION,
-    PostgresCluster,
-    _store_schema,
-)
+from memman.store.postgres import _PG_SCHEMA_VERSION, PostgresCluster
+from memman.store.postgres import _store_schema
 
 pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
 

@@ -8,7 +8,6 @@ fallback, and that recall consumes the snapshot when present.
 
 import json
 import pathlib
-from datetime import datetime, timezone
 
 from click.testing import CliRunner
 from memman.cli import cli

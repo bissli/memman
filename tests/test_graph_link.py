@@ -1,6 +1,6 @@
 """Tests for link_pending and linked_at lifecycle."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from memman.graph.engine import MAX_LINK_BATCH, link_pending
 from memman.graph.engine import reindex_auto_edges

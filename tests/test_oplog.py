@@ -5,13 +5,8 @@ from datetime import datetime, timedelta, timezone
 from memman.store.db import open_db
 from memman.store.model import format_timestamp
 from memman.store.node import insert_insight, soft_delete_insight
-from memman.store.oplog import (
-    MAX_OPLOG_ENTRIES,
-    OPLOG_RETENTION_DAYS,
-    get_oplog_stats,
-    log_op,
-    trim_oplog_by_age,
-    )
+from memman.store.oplog import MAX_OPLOG_ENTRIES, OPLOG_RETENTION_DAYS
+from memman.store.oplog import get_oplog_stats, log_op, trim_oplog_by_age
 from tests.conftest import make_insight
 
 

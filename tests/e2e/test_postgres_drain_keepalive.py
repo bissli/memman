@@ -24,12 +24,8 @@ from __future__ import annotations
 
 import psycopg
 import pytest
-from memman.store.postgres import (
-    PostgresCluster,
-    _advisory_lock_key,
-    _open_connection,
-    _store_schema,
-)
+from memman.store.postgres import PostgresCluster
+from memman.store.postgres import _open_connection, _store_schema
 from tests.fixtures.postgres import wait_for
 
 pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
@@ -123,9 +119,9 @@ def test_drain_lock_connection_has_keepalives_idle_30(pg_dsn, request):
                 dsn, autocommit=autocommit, keepalives=keepalives)
             if keepalives:
                 with conn.cursor() as cur:
-                    cur.execute("SHOW tcp_keepalives_idle")
+                    cur.execute('SHOW tcp_keepalives_idle')
                     sniffed['idle'] = cur.fetchone()[0]
-                    cur.execute("SHOW tcp_keepalives_interval")
+                    cur.execute('SHOW tcp_keepalives_interval')
                     sniffed['interval'] = cur.fetchone()[0]
             return conn
 

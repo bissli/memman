@@ -20,11 +20,8 @@ import json
 
 import pytest
 from memman.store.model import Insight
-from memman.store.postgres import (
-    EMBEDDING_DIM,
-    PostgresCluster,
-    PostgresQueueBackend,
-)
+from memman.store.postgres import EMBEDDING_DIM, PostgresCluster
+from memman.store.postgres import PostgresQueueBackend
 
 pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
 

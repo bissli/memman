@@ -10,15 +10,10 @@ import psycopg
 import pytest
 from click.testing import CliRunner
 from memman.cli import cli
-from memman.doctor import (
-    check_drain_heartbeat,
-    check_env_completeness,
-    check_env_permissions,
-    check_queue_schema,
-    check_schema_columns,
-    check_scheduler_heartbeat,
-    check_scheduler_state,
-    )
+from memman.doctor import check_drain_heartbeat, check_env_completeness
+from memman.doctor import check_env_permissions, check_queue_schema
+from memman.doctor import check_scheduler_heartbeat, check_scheduler_state
+from memman.doctor import check_schema_columns
 from memman.store.db import open_db
 from memman.store.edge import insert_edge
 from memman.store.node import insert_insight, update_embedding
@@ -309,9 +304,7 @@ class TestEnvCompleteness:
     def test_pass_when_all_present(self, write_env):
         """All INSTALLABLE_KEYS in the file -> status pass."""
         from memman import config
-        lines = []
-        for key in config.INSTALLABLE_KEYS:
-            lines.append(f'{key}=value-for-{key}')
+        lines = [f'{key}=value-for-{key}' for key in config.INSTALLABLE_KEYS]
         write_env('\n'.join(lines) + '\n')
         out = check_env_completeness()
         assert out['status'] == 'pass'
@@ -472,7 +465,8 @@ class TestHardening:
 
     def test_scheduler_heartbeat_pass_on_recent_drain(self, tmp_path, monkeypatch):
         """A drain within the interval window passes."""
-        from memman.queue import finish_worker_run, open_queue_db, start_worker_run
+        from memman.queue import finish_worker_run, open_queue_db
+        from memman.queue import start_worker_run
         from memman.setup import scheduler as sch
 
         monkeypatch.setattr(sch, 'status', _started_scheduler_status)
@@ -493,7 +487,8 @@ class TestHardening:
         sub-minute intervals -- the rate-limited heartbeat writes 1/min so
         a 180s window allows two-miss tolerance.
         """
-        from memman.queue import finish_worker_run, open_queue_db, start_worker_run
+        from memman.queue import finish_worker_run, open_queue_db
+        from memman.queue import start_worker_run
         from memman.setup import scheduler as sch
 
         monkeypatch.setattr(sch, 'status',
@@ -522,7 +517,8 @@ class TestHardening:
         interval=0 must reach the threshold comparison, not short-circuit
         to PASS.
         """
-        from memman.queue import finish_worker_run, open_queue_db, start_worker_run
+        from memman.queue import finish_worker_run, open_queue_db
+        from memman.queue import start_worker_run
         from memman.setup import scheduler as sch
 
         monkeypatch.setattr(sch, 'status',
@@ -544,7 +540,8 @@ class TestHardening:
 
     def test_scheduler_heartbeat_fail_on_recorded_error(self, tmp_path, monkeypatch):
         """A finished run with an error string flips the check to fail."""
-        from memman.queue import finish_worker_run, open_queue_db, start_worker_run
+        from memman.queue import finish_worker_run, open_queue_db
+        from memman.queue import start_worker_run
         from memman.setup import scheduler as sch
 
         monkeypatch.setattr(sch, 'status', _started_scheduler_status)

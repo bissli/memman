@@ -153,7 +153,7 @@ def test_threshold_zone_does_not_collapse_result_set(tmp_path, pg_dsn):
 
 def test_float32_float64_top5_intersection_geq_4_across_20_queries(
         tmp_path, pg_dsn):
-    """sqlite top-5 ∩ postgres top-5 >= 4 for each of 20 query vectors."""
+    """Sqlite top-5 ∩ postgres top-5 >= 4 for each of 20 query vectors."""
     from memman.store.postgres import PostgresCluster
     from memman.store.sqlite import SqliteCluster
 
