@@ -51,20 +51,39 @@ def memman_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
 @pytest.fixture(scope='session')
 def live_keys() -> dict[str, str]:
-    """Skip the test cleanly when real LLM/embedding keys are absent.
+    """Gate live-key tests; fail-loud under MEMMAN_E2E_REQUIRE_LIVE=1.
 
     Tests that exercise enrichment, causal inference, intent
     expansion, or any path that hits OpenRouter / Voyage take this
     fixture as a dependency. Returns the actual key values for
-    callers that need to pass them through into containers.
+    callers that need to pass them through into containers. With
+    `MEMMAN_E2E_REQUIRE_LIVE=1` set, missing keys raise instead of
+    skipping silently, so CI lanes that should run live tests fail
+    visibly when secrets are misconfigured.
     """
+    require = os.environ.get('MEMMAN_E2E_REQUIRE_LIVE') == '1'
     keys = {}
     for name in ('OPENROUTER_API_KEY', 'VOYAGE_API_KEY'):
         val = os.environ.get(name)
         if not val or val == 'mock-key-for-testing':
-            pytest.skip(f'{name} not set; skipping live e2e test')
+            msg = f'{name} not set; live e2e test cannot run'
+            if require:
+                pytest.fail(msg)
+            pytest.skip(msg)
         keys[name] = val
     return keys
+
+
+@pytest.fixture(scope='session')
+def node_available() -> None:
+    """Skip when `node` is not on PATH.
+
+    Used by tests that drive `assets/openclaw/hooks/.../handler.js`
+    via `node -e`. Skipping cleanly here keeps developer machines
+    without Node.js (and forked CI lanes) green.
+    """
+    if shutil.which('node') is None:
+        pytest.skip('node CLI not on PATH; skipping handler.js test')
 
 
 @pytest.fixture(scope='session')

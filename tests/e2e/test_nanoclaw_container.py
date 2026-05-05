@@ -28,15 +28,6 @@ import pytest
 pytestmark = [pytest.mark.e2e_container]
 
 
-def _have_keys() -> bool:
-    """Real LLM/embedding keys present (subprocess inherits)."""
-    for name in ('OPENROUTER_API_KEY', 'VOYAGE_API_KEY'):
-        v = os.environ.get(name)
-        if not v or v == 'mock-key-for-testing':
-            return False
-    return True
-
-
 def _exec(container_id: str, cmd: list[str], check: bool = True
           ) -> subprocess.CompletedProcess[str]:
     """Run a command inside the named container, returning the result.
@@ -147,9 +138,8 @@ class TestStatus:
 
 class TestPerGroupIsolation:
 
-    @pytest.mark.skipif(not _have_keys(),
-                        reason='no OPENROUTER/VOYAGE keys')
-    def test_two_groups_dont_cross_read(self, nanoclaw_run):
+    @pytest.mark.requires_live_keys
+    def test_two_groups_dont_cross_read(self, nanoclaw_run, live_keys):
         """Two containers with different bind mounts must isolate data.
         """
         cid_a, _ = nanoclaw_run(group='alpha')
@@ -223,5 +213,82 @@ class TestContainerSkill:
     def test_container_skill_present(self, nanoclaw_run):
         cid, _ = nanoclaw_run()
         out = _exec(cid, ['cat', '/app/skills/memman/SKILL.md'])
-        assert 'memman' in out.stdout.lower()
-        assert len(out.stdout) > 100, 'skill content should be substantive'
+        content = out.stdout
+        assert len(content) > 500, 'skill content should be substantive'
+        assert '## Storing what you learn' in content
+        assert '## Guardrails' in content
+
+
+# ---------------------------------------------------------------------
+# Reconciliation: write -> drain -> graph state
+# ---------------------------------------------------------------------
+
+class TestReconciliation:
+
+    @pytest.mark.requires_live_keys
+    def test_reconciliation_drains_and_creates_edges(
+            self, nanoclaw_run, live_keys):
+        """Two facts + one synchronous drain land insights and edges.
+
+        Uses `scheduler serve --once` (not `scheduler trigger`, which
+        raises in serve mode). Asserts the *global* edge_count from
+        `memman status` — recall results carry no per-result edge_count.
+        Temporal backbone edges between two facts on the same source
+        are guaranteed by graph/temporal.py.
+        """
+        cid, _ = nanoclaw_run()
+
+        unique = uuid.uuid4().hex[:8]
+        fact_a = f'Fact about alpha-{unique} subject for recall.'
+        fact_b = f'Fact about beta-{unique} subject for recall.'
+
+        _exec(cid, ['memman', 'remember', fact_a,
+                    '--cat', 'fact', '--imp', '3'])
+        _exec(cid, ['memman', 'remember', fact_b,
+                    '--cat', 'fact', '--imp', '3'])
+
+        drain = subprocess.run(
+            ['docker', 'exec', cid, 'memman', 'scheduler', 'serve',
+             '--once'],
+            capture_output=True, text=True, timeout=90, check=True)
+        assert drain.returncode == 0, drain.stderr
+
+        status = json.loads(
+            _exec(cid, ['memman', 'status']).stdout)
+        assert status['edge_count'] >= 2, (
+            f'expected >=2 edges after drain, got {status}')
+
+        queue = json.loads(_exec(cid, [
+            'memman', 'scheduler', 'queue', 'list']).stdout)
+        assert queue['stats']['pending'] == 0, (
+            f'queue not drained: {queue}')
+
+        recall = json.loads(_exec(cid, [
+            'memman', 'recall', f'alpha-{unique}', '--limit', '1']).stdout)
+        assert recall['results'], (
+            f'recall returned no rows for alpha-{unique}')
+
+
+# ---------------------------------------------------------------------
+# Error hygiene: corrupted on-disk state surfaces a clean error
+# ---------------------------------------------------------------------
+
+class TestCorruptDb:
+
+    def test_recall_returns_clean_error_on_corrupt_db(self, nanoclaw_run):
+        """Truncate the SQLite file; recall must not leak a traceback.
+        """
+        cid, _ = nanoclaw_run()
+        _exec(cid, ['memman', 'remember', '--no-reconcile',
+                    'sentinel fact for corruption test',
+                    '--cat', 'fact', '--imp', '2'])
+
+        db = '/home/node/.memman/data/default/memman.db'
+        _exec(cid, ['truncate', '-s', '0', db])
+
+        result = subprocess.run(
+            ['docker', 'exec', cid, 'memman', 'recall', 'sentinel'],
+            capture_output=True, text=True, check=False)
+        assert result.returncode != 0, 'recall should fail on empty db'
+        assert 'Traceback' not in result.stderr, (
+            f'leaked Python traceback in stderr: {result.stderr}')

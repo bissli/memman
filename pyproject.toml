@@ -47,6 +47,6 @@ markers = [
     "e2e_cli: end-to-end CLI tests run via subprocess against the installed memman; no Docker required",
     "e2e_container: end-to-end tests that build/run a Docker container via testcontainers",
     "systemd: tests that require systemd-as-PID-1 (privileged container); opt-in only",
-    "live_claude: tests that invoke a real Anthropic Claude Code session (requires ANTHROPIC_API_KEY)",
+    "requires_live_keys: tests requiring real OPENROUTER_API_KEY + VOYAGE_API_KEY; fail loud under MEMMAN_E2E_REQUIRE_LIVE=1",
     "postgres: tests requiring the pgvector testcontainer (install via memman[postgres])",
 ]

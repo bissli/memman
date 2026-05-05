@@ -3,7 +3,7 @@ DIAGRAMS   := docs/diagrams
 DRAWIO_SRC := $(wildcard $(DIAGRAMS)/*.drawio)
 DRAWIO_PNG := $(DRAWIO_SRC:.drawio=.drawio.png)
 
-.PHONY: test test-postgres typecheck e2e e2e-cli e2e-container e2e-claude clean dev diagrams
+.PHONY: test test-postgres typecheck e2e e2e-cli e2e-container clean dev diagrams
 
 dev:
 	poetry install
@@ -46,10 +46,7 @@ e2e-cli:
 	poetry run pytest tests/e2e/ -v -m e2e_cli
 
 e2e-container:
-	poetry run pytest tests/e2e/ -v -m "e2e_container and not live_claude and not systemd"
-
-e2e-claude:
-	poetry run pytest tests/e2e/ -v -m live_claude
+	poetry run pytest tests/e2e/ -v -m "e2e_container and not systemd"
 
 clean:
 	rm -rf build/ dist/ *.egg-info src/*.egg-info
