@@ -178,19 +178,19 @@ Deployment model:
 
 Key install options:
 
-| Command / Flag                        | Effect                                                                                    |
-| ------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `memman install --target claude-code` | Install into `~/.claude/` only                                                            |
-| `memman install --target openclaw`    | Install into `~/.openclaw/` only                                                          |
-| `memman install --target nanoclaw`    | Install into `~/.nanoclaw/` only                                                          |
-| `memman install --backend sqlite\     | postgres`                                                                                 | Pick the storage backend without prompting. |
-| `memman install --pg-dsn URL`         | Provide the Postgres DSN for non-interactive installs.                                    |
-| `memman install --no-wizard`          | Disable interactive prompts; flags + defaults only.                                       |
-| `memman config set KEY VALUE`         | Explicit override path (e.g., `MEMMAN_BACKEND postgres`); bypasses sticky-seed semantics. |
-| `memman uninstall`                    | Remove all memman integrations                                                            |
-| `memman uninstall --target <name>`    | Remove from a single environment                                                          |
+| Command / Flag                                           | Effect                                                                                       |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `memman install --target claude-code`                    | Install into `~/.claude/` only                                                               |
+| `memman install --target openclaw`                       | Install into `~/.openclaw/` only                                                             |
+| `memman install --target nanoclaw`                       | Install into `~/.nanoclaw/` only                                                             |
+| `memman install --backend sqlite` / `--backend postgres` | Pick the storage backend without prompting (postgres requires the `memman[postgres]` extra). |
+| `memman install --pg-dsn URL`                            | Provide the Postgres DSN for non-interactive installs.                                       |
+| `memman install --no-wizard`                             | Disable interactive prompts; flags + defaults only.                                          |
+| `memman config set KEY VALUE`                            | Explicit override path (e.g., `MEMMAN_BACKEND postgres`); bypasses sticky-seed semantics.    |
+| `memman uninstall`                                       | Remove all memman integrations                                                               |
+| `memman uninstall --target <name>`                       | Remove from a single environment                                                             |
 
-When run in a TTY without `OPENROUTER_API_KEY` / `VOYAGE_API_KEY` set, the install wizard prompts for each missing mandatory secret with masked input. The backend selector only appears once both `memman[postgres]` extras and the Phase 2 `memman.backend.postgres` module exist; until then sqlite is the only path and the wizard short-circuits the backend prompt entirely.
+When run in a TTY without `OPENROUTER_API_KEY` / `VOYAGE_API_KEY` set, the install wizard prompts for each missing mandatory secret with masked input. The backend selector appears when the `memman[postgres]` extra is installed (psycopg + pgvector importable); when only the default extras are present, sqlite is the only path and the wizard short-circuits the backend prompt entirely. When postgres is selected, the wizard prompts for `MEMMAN_PG_DSN`, probes the DSN with `psycopg.connect`, verifies the `pgvector` extension is present, and (for non-localhost DSNs) emits a hint about PgBouncer transaction pooling. Existing SQLite stores are not touched by `memman install` — to copy them into the new Postgres backend, run `memman migrate --store NAME --i-have-a-backup` (see [USAGE.md](../USAGE.md#migrating-from-sqlite-to-postgres)).
 
 Backend-switch semantics: `MEMMAN_BACKEND` is global per data dir (no per-store backend choice; switching is all-or-nothing across all stores in `~/.memman/data/`). Postgres -> SQLite is unsupported (forward-only migration). `~/.memman/active` continues to hold a store-name string regardless of backend. Conflicts between an `INSTALLABLE_KEYS` flag and an existing env-file value are rejected loudly with the exact `memman config set ...` command to run -- install never silently swallows a flag.
 

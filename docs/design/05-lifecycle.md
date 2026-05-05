@@ -88,22 +88,25 @@ memman insights show <id>
 
 ## 5.5 Embedding Support
 
-Voyage AI provides 512-dim embeddings for semantic search and graph connectivity.
+Embeddings power semantic search and graph connectivity. The provider is pluggable via `MEMMAN_EMBED_PROVIDER`; vector dimensionality is provider-defined and recorded in a per-store `embed_fingerprint` so a provider/model/dim change is detected and surfaced in `memman embed status` and `memman doctor`. Switching providers requires an explicit `memman embed reembed` step rather than a silent migration.
 
-### Voyage AI Integration
+### Supported providers
 
-```
-MemMan ──HTTP──→ Voyage AI (api.voyageai.com)
-                  └── voyage-3-lite
-                      512-dim vector
-```
-
-- **Required**: `VOYAGE_API_KEY` environment variable
-- Uses `httpx` (already a runtime dependency)
+| `MEMMAN_EMBED_PROVIDER` | Default model             | Notes                                                                                                                         |
+| ----------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `voyage` (default)      | `voyage-3-lite` (512-dim) | Requires `VOYAGE_API_KEY`. Default; tuned thresholds (e.g., `AUTO_SEMANTIC_THRESHOLD = 0.62`) target this model.              |
+| `openai`                | `text-embedding-3-small`  | Requires `MEMMAN_OPENAI_EMBED_API_KEY` + `MEMMAN_OPENAI_EMBED_ENDPOINT`. Any OpenAI-compatible endpoint (vLLM, LiteLLM, ...). |
+| `openrouter`            | `baai/bge-m3`             | Reuses `OPENROUTER_API_KEY` + `MEMMAN_OPENROUTER_ENDPOINT`; no separate secret needed.                                        |
+| `ollama`                | `nomic-embed-text`        | Local Ollama at `MEMMAN_OLLAMA_HOST` (default `http://localhost:11434`).                                                      |
 
 ### Vector Storage
 
-Vectors are serialized as little-endian float64 BLOBs stored in the `insights.embedding` column (512 x 8 = 4096 bytes/insight).
+Vector serialization depends on the active storage backend (`MEMMAN_BACKEND`):
+
+- **SQLite** — little-endian float64 BLOB stored in `insights.embedding` (e.g., 512 × 8 = 4096 bytes for `voyage-3-lite`).
+- **Postgres** — `pgvector` `vector(N)` typed column, persisted as float32 (HNSW-indexed). The migrate path (`scripts/import_sqlite_to_postgres.py`) explicitly casts SQLite float64 BLOBs to `numpy.float32` before binding to avoid silent rounding by psycopg.
+
+> **Threshold recalibration.** The semantic-edge auto-link threshold (`AUTO_SEMANTIC_THRESHOLD = 0.62`) is calibrated for `voyage-3-lite`. Different providers and dimensionalities produce different similarity distributions; if you switch provider, recalibrate from observed pairwise distributions.
 
 ### Embedding in the Pipeline
 

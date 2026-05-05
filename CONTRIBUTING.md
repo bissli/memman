@@ -1,6 +1,6 @@
 # Contributing to memman
 
-memman is a single-user CLI memory daemon backed by SQLite. This file covers the short list of conventions that aren't obvious from the code.
+memman is a single-user CLI memory daemon. The default storage backend is SQLite; Postgres is supported as an optional backend (`memman[postgres]` extra). This file covers the short list of conventions that aren't obvious from the code.
 
 ## Development setup
 
@@ -54,8 +54,10 @@ Set any of these in your shell before `memman install` and they land in the env 
 | `MEMMAN_OPENROUTER_EMBED_MODEL`   | Model id for the OpenRouter embed provider (`MEMMAN_EMBED_PROVIDER=openrouter`). Default `baai/bge-m3`. Reuses `OPENROUTER_API_KEY` and `MEMMAN_OPENROUTER_ENDPOINT`; no separate secret needed. |
 | `MEMMAN_OLLAMA_HOST`              | Ollama host URL (default `http://localhost:11434`).                                                                                                                                              |
 | `MEMMAN_OLLAMA_EMBED_MODEL`       | Ollama embedding model name (default `nomic-embed-text`).                                                                                                                                        |
-| `MEMMAN_BACKEND`                  | Storage backend (`sqlite` default, `postgres` once the `memman[postgres]` extra and Phase 2 backend land).                                                                                       |
+| `MEMMAN_BACKEND`                  | Storage backend (`sqlite` default, `postgres` requires the `memman[postgres]` extra).                                                                                                            |
 | `MEMMAN_PG_DSN`                   | Postgres DSN (`postgresql://...`); secret. Stripped from the env file on `memman uninstall`.                                                                                                     |
+| `MEMMAN_RERANK_PROVIDER`          | Cross-encoder rerank provider (default `voyage`). Used when callers pass `memman recall --rerank`.                                                                                               |
+| `MEMMAN_VOYAGE_RERANK_MODEL`      | Voyage rerank model id (default `rerank-2.5-lite`).                                                                                                                                              |
 
 ### Process-control vars (NOT persisted in the env file)
 
@@ -73,17 +75,36 @@ Run `memman doctor` to probe both providers with cheap calls (the `llm_probe` an
 
 ## Conventions
 
-### Canonical-schema-only migrations
+### Schema sources of truth
 
-memman is a single-user tool. There is no `PRAGMA user_version` ladder, no `_MIGRATIONS` registry, and no rolling migration code. `_BASELINE_SCHEMA` in `src/memman/store/db.py` and `src/memman/queue.py` is the single source of truth.
+memman has one schema source of truth per backend. Both are additive-only: column additions and new indexes only -- never `DROP COLUMN`, `RENAME`, `DROP TABLE`, `TRUNCATE`, or column-type/nullability changes.
+
+**SQLite** -- `_BASELINE_SCHEMA` in `src/memman/store/db.py` (per-store DB) and `src/memman/queue.py` (queue DB). There is no `PRAGMA user_version` ladder. Fresh databases are created via `CREATE TABLE IF NOT EXISTS`; existing stores get one-off `ALTER TABLE` invocations against `~/.memman/data/*/memman.db` and `~/.memman/queue.db` if the change is in queue schema.
+
+**Postgres** -- `_PG_BASELINE_SCHEMA` and `_PG_QUEUE_SCHEMA` in `src/memman/store/postgres.py` create per-store schemas (`store_<name>`) and a shared `queue` schema. A forward-only ladder `_PG_MIGRATIONS: list[tuple[int, str]]` ships additive migrations between schema versions; `_PG_SCHEMA_VERSION` is the head version. A regex (`_FORBIDDEN_MIGRATION_RE`) refuses any non-additive operation at module import time. The ladder runs against existing stores on next `open_db()`.
 
 When a schema change is needed:
 
-1. Update `_BASELINE_SCHEMA` (adds columns to fresh databases via `CREATE TABLE IF NOT EXISTS`).
-2. Perform a one-off `ALTER TABLE` against every existing store database (`~/.memman/data/*/memman.db`) and against `~/.memman/queue.db` if the change is in queue schema. A short Python snippet invoked with `poetry run python` is sufficient.
+1. Update the relevant baseline (`_BASELINE_SCHEMA` for SQLite, `_PG_BASELINE_SCHEMA` for Postgres). Fresh databases pick the change up automatically.
+2. For Postgres, append an `(version, additive_sql)` entry to `_PG_MIGRATIONS` and bump `_PG_SCHEMA_VERSION`. For SQLite, run a one-off `ALTER TABLE` against every existing `~/.memman/data/*/memman.db`.
 3. Commit the schema change and the migration evidence (test asserting the column is present) in the same change.
 
-Do not add new migration-ladder code.
+Do not add a SQLite migration ladder; do not add non-additive Postgres migrations.
+
+### SQLite -> Postgres migration
+
+`memman migrate` (in `src/memman/migrate.py`, wrapping `scripts/import_sqlite_to_postgres.py`) copies a store from SQLite into the configured Postgres backend. It is copy-only -- the SQLite source is never modified -- and idempotent (`ON CONFLICT (id) DO NOTHING` on the `insights` insert path so an interrupted run is safely re-runnable).
+
+Operationally:
+
+- A DSN preflight verifies `select 1`, the `pgvector` extension, and `CREATE` privilege.
+- The shared `~/.memman/drain.lock` is held for the duration so a scheduler-fired drain cannot race the SQLite reader.
+- Each store runs inside one Postgres transaction with `autocommit=False`; any failure rolls back.
+- `--i-have-a-backup` is a fail-closed gate; non-dry-run invocations raise `UsageError` without it.
+- `--overwrite-schema` issues `DROP SCHEMA CASCADE` before recreating; without it, migrate runs `INSERT ... ON CONFLICT DO NOTHING` against the existing schema.
+- `MEMMAN_BACKEND` is never flipped automatically. After `memman migrate`, run `memman doctor` against the new DSN, then `memman config set MEMMAN_BACKEND postgres`.
+
+Postgres -> SQLite is not implemented; restore from the preserved SQLite source if needed.
 
 ### Adding an LLM provider
 

@@ -64,7 +64,14 @@ The four edge types form the foundation of the MAGMA four-graph model, detailed 
 
 ## 2.3 Database Schema
 
-Each named store has its own SQLite file under `~/.memman/data/<store>/memman.db`, using WAL mode to support concurrent reads. The default store is `default`; additional stores can be created for data isolation (see [Store Management](../USAGE.md#store-management)).
+Each named store is physically isolated via the active storage backend (`MEMMAN_BACKEND`):
+
+- **SQLite (default)** — one `~/.memman/data/<store>/memman.db` file per store, in WAL mode (concurrent reads + serial writer). Schema source of truth: `_BASELINE_SCHEMA` in `src/memman/store/db.py`.
+- **Postgres** — one Postgres schema per store (`store_<name>`) sharing one database; `pgvector` provides the `vector(N)` column type. Schema source of truth: `_PG_BASELINE_SCHEMA` plus an additive forward-only `_PG_MIGRATIONS` ladder in `src/memman/store/postgres.py`. The backend is enabled with the `memman[postgres]` install extra.
+
+Switching backends is all-or-nothing across every store under `~/.memman/data/`; per-store backend choice is not supported. See [Migrating from SQLite to Postgres](../USAGE.md#migrating-from-sqlite-to-postgres) for the operator workflow.
+
+The logical column layout below is shared between backends; the type translations are SQLite `TEXT`/`BLOB` ↔ Postgres `TIMESTAMPTZ`/`JSONB`/`vector(N)`.
 
 ```sql
 -- Memory nodes
@@ -138,12 +145,15 @@ MemMan's architecture is divided into five layers:
 │                                openrouter_client,             │
 │                                openrouter_models)             │
 ├──────────────────────────────────────────────────────────────┤
-│  Storage Layer        store/   (db, node, edge, oplog,        │
-│                                snapshot)                      │
+│  Storage Layer        store/   (backend, factory, db, node,   │
+│                                edge, oplog, model, snapshot,  │
+│                                sqlite, postgres)              │
 │                       queue.py (deferred-write queue)         │
+│                       migrate.py (SQLite -> Postgres copy)    │
 ├──────────────────────────────────────────────────────────────┤
 │  External             OpenRouter (LLM, Anthropic Haiku/Sonnet)│
 │                       Voyage AI (embeddings, default)         │
+│                       Postgres + pgvector (optional backend)  │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -154,16 +164,26 @@ MemMan's architecture is divided into five layers:
 memman/
 ├── src/memman/
 │   ├── __init__.py
-│   ├── cli.py               # Click CLI (all commands)
-│   ├── model.py              # Data structures (Insight, Edge)
-│   ├── store/                # SQLite persistence
+│   ├── cli.py                # Click CLI (all commands)
+│   ├── config.py             # Env-file resolver (INSTALLABLE_KEYS)
+│   ├── doctor.py             # Health checks (memman doctor)
+│   ├── drain_lock.py         # Cross-process drain.lock
+│   ├── maintenance.py        # GC, auto-prune, EI recompute
+│   ├── migrate.py            # SQLite -> Postgres migration
+│   ├── queue.py              # Deferred-write queue
+│   ├── trace.py              # JSONL debug tracing
+│   ├── pipeline/             # remember (drain worker)
+│   ├── store/                # Storage backends (sqlite, postgres)
 │   ├── graph/                # MAGMA four-graph implementation
 │   ├── search/               # Retrieval algorithms
-│   ├── embed/                # Embedding support (Voyage AI)
+│   ├── embed/                # Pluggable embedding providers
+│   ├── rerank/               # Cross-encoder rerank (Voyage)
 │   ├── llm/                  # LLM client + extraction/reconciliation
-│   └── setup/                # LLM CLI integration setup
+│   └── setup/                # LLM CLI integration + install wizard
+├── scripts/
+│   └── import_sqlite_to_postgres.py   # Streaming reader used by migrate
 ├── tests/
-├── pyproject.toml            # Poetry package config
+├── pyproject.toml            # Poetry package config (memman[postgres] extra)
 └── Makefile
 ```
 
@@ -188,7 +208,9 @@ memman/
         └── memman.db
 ```
 
-**Isolation boundary**: Each store contains an independent `memman.db` — insights, edges, and oplog are fully isolated. Shipped assets (`guide.md`, `SKILL.md`) live inside the installed package and are read via `importlib.resources`; nothing memman deploys lives under `~/.memman/`. `~/.memman/` is strictly user state: memory data, API keys, caches, logs, queued work.
+**Isolation boundary**: Each store is fully independent — insights, edges, and oplog do not cross stores. On SQLite this is one `memman.db` per store; on Postgres it is one `store_<name>` schema per store inside one shared database. Shipped assets (`guide.md`, `SKILL.md`) live inside the installed package and are read via `importlib.resources`; nothing memman deploys lives under `~/.memman/`. `~/.memman/` is strictly user state: memory data, API keys, caches, logs, queued work.
+
+When `MEMMAN_BACKEND=postgres`, `~/.memman/queue.db` and the per-store `memman.db` files are not used at runtime — the queue lives in the shared `queue` Postgres schema and store rows live in `store_<name>`. The SQLite files remain on disk after `memman migrate` as a durable fallback; the operator removes them manually after verifying the new backend with `memman doctor`.
 
 ## 2.6 Store Isolation
 

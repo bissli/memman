@@ -35,6 +35,8 @@ See [Design & Architecture](docs/DESIGN.md) for details.
 
 ```bash
 pipx install git+https://github.com/bissli/memman.git
+# or, with the optional Postgres backend:
+# pipx install 'git+https://github.com/bissli/memman.git#egg=memman[postgres]'
 export OPENROUTER_API_KEY=...   # LLM provider key (current default)
 export VOYAGE_API_KEY=...       # embedding provider key (current default)
 memman install
@@ -204,6 +206,7 @@ The container's `queue.db` is intentionally outside the volume mount — pending
 - **LLM reconciliation** — each fact classified as ADD/UPDATE/DELETE/NONE against existing memories
 - **Retention lifecycle** — importance decay, access-count boosting, immunity rules, garbage collection
 - **Pluggable embeddings** — Voyage, any OpenAI-compatible endpoint (OpenAI, OpenRouter, vLLM, LiteLLM, ...), or Ollama; vector dim is provider-defined and recorded in a per-store fingerprint so switching providers is an explicit `memman embed reembed` step rather than a silent migration
+- **Pluggable storage backend** — SQLite by default (single-file, zero deps); Postgres + pgvector via the `memman[postgres]` extra. `memman migrate` copies a store from SQLite to Postgres in a single command (idempotent, drain-lock-guarded, dry-run support)
 
 ## FAQ
 

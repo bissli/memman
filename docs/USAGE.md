@@ -260,6 +260,8 @@ If you pass an `INSTALLABLE_KEYS` flag whose value conflicts with the env file, 
 | `MEMMAN_LLM_MODEL_SLOW_CANONICAL` | resolved at install (sonnet family via `/models`) | Worker model for canonical content (fact extraction, reconciliation).                                                 |
 | `MEMMAN_LLM_MODEL_SLOW_METADATA`  | resolved at install (sonnet family via `/models`) | Worker model for derived metadata (enrichment summaries/keywords, causal-edge inference).                             |
 | `MEMMAN_EMBED_PROVIDER`           | `voyage`                                          | Embedding provider: `voyage`, `openai`, `openrouter`, `ollama`.                                                       |
+| `MEMMAN_RERANK_PROVIDER`          | `voyage`                                          | Cross-encoder rerank provider used when callers pass `memman recall --rerank`.                                        |
+| `MEMMAN_VOYAGE_RERANK_MODEL`      | `rerank-2.5-lite`                                 | Voyage rerank model id.                                                                                               |
 | `MEMMAN_OPENAI_EMBED_API_KEY`     | —                                                 | API key for `openai` provider.                                                                                        |
 | `MEMMAN_OPENAI_EMBED_ENDPOINT`    | `https://api.openai.com`                          | Endpoint URL for `openai` provider.                                                                                   |
 | `MEMMAN_OPENAI_EMBED_MODEL`       | `text-embedding-3-small`                          | Model id for `openai` provider.                                                                                       |

@@ -124,14 +124,19 @@ Where MAGMA's reference implementation is a Python library with in-memory Networ
 
 MemMan retains MAGMA's **architectural skeleton** (four-graph separation, intent-adaptive retrieval, multi-signal fusion) while using Haiku for pipeline intelligence (fact extraction, reconciliation, query expansion, enrichment, causal inference) and the host LLM for high-level judgment.
 
-## 1.6 Future Direction
+## 1.6 Pluggability
 
-Any LLM CLI can interact with MemMan through the CLI protocol today (agent-side pluggability). The remaining work is on the storage side.
+Any LLM CLI can interact with MemMan through the CLI protocol today (agent-side pluggability). On the storage side, the engine is split behind a backend Protocol so the same beam-search / RRF / lifecycle code runs over either of two ACID-aware backends.
 
 ### Storage-Side Pluggability
 
-The storage engine is currently tightly built on SQLite — graph traversal, EI decay, and atomic transactions all depend on SQLite-specific features (WAL, single-file deployment, in-process access). This is the right choice for the current goal of zero-dependency single-package distribution, but it means the storage backend is not yet swappable.
+| Backend  | Install                          | Topology                                                              | Vector storage                               |
+| -------- | -------------------------------- | --------------------------------------------------------------------- | -------------------------------------------- |
+| SQLite   | default                          | One `memman.db` per store under `~/.memman/data/<store>/`             | float64 BLOB in `insights.embedding`         |
+| Postgres | `pip install 'memman[postgres]'` | One Postgres schema per store (`store_<name>`); shared `queue` schema | `pgvector` `vector(N)` (float32; HNSW index) |
 
-Abstracting the storage interface — so the protocol layer can sit on top of PostgreSQL, a dedicated graph database, or a remote service — is the next architectural milestone.
+`MEMMAN_BACKEND` (resolved from the env file at runtime) selects the backend; `MEMMAN_PG_DSN` provides the Postgres connection string. The backend is global per data dir -- switching is all-or-nothing across every store under `~/.memman/data/`.
 
-The key challenge is defining the right abstraction boundary: too high and you lose the storage engine's graph-aware optimizations; too low and every backend must reimplement beam search and RRF fusion.
+The graph-aware abstraction landed at the storage Protocol layer (`src/memman/store/backend.py`): node/edge access, drain-lock primitives, and queue verbs are virtualized so beam search and RRF fusion remain shared. SQLite-specific concerns (`PRAGMA`, `WAL`, BLOB serialization) and Postgres-specific concerns (pgvector adapters, schema-per-store, advisory locks, `_PG_MIGRATIONS` ladder) are encapsulated inside their respective implementations.
+
+`memman migrate` is the operator-facing path from SQLite to Postgres: copy-only, idempotent (`ON CONFLICT (id) DO NOTHING`), drain-lock-guarded, with `--dry-run` and a fail-closed `--i-have-a-backup` confirmation gate. Reverse migration is not implemented; the SQLite source is preserved as a durable fallback. See [USAGE.md](../USAGE.md#migrating-from-sqlite-to-postgres) for the operator workflow.

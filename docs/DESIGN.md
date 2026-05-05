@@ -1,6 +1,6 @@
 # MemMan — Design & Architecture
 
-MemMan is a persistent memory system designed for LLM agents. It adopts the **LLM-Supervised** pattern: the host LLM acts as external orchestrator of a standalone memory binary through symbolic CLI interfaces, while three internal LLM roles routed through OpenRouter handle pipeline intelligence — Haiku for the recall-time fast path (query expansion), Sonnet for canonical content (fact extraction, reconciliation), and Sonnet for derived metadata (enrichment, causal-edge inference; independently tunable). Memory is organized as a four-graph knowledge structure with temporal, entity, causal, and semantic edges. Writes are deferred to a scheduler-driven background worker so the host session never blocks on LLM calls. Implemented as a Python package + SQLite, requiring OpenRouter and Voyage AI API keys.
+MemMan is a persistent memory system designed for LLM agents. It adopts the **LLM-Supervised** pattern: the host LLM acts as external orchestrator of a standalone memory binary through symbolic CLI interfaces, while three internal LLM roles routed through OpenRouter handle pipeline intelligence — Haiku for the recall-time fast path (query expansion), Sonnet for canonical content (fact extraction, reconciliation), and Sonnet for derived metadata (enrichment, causal-edge inference; independently tunable). Memory is organized as a four-graph knowledge structure with temporal, entity, causal, and semantic edges. Writes are deferred to a scheduler-driven background worker so the host session never blocks on LLM calls. Implemented as a Python package with a pluggable storage backend (SQLite default; Postgres + pgvector via the `memman[postgres]` extra), requiring OpenRouter and Voyage AI API keys.
 
 ---
 
@@ -8,11 +8,11 @@ MemMan is a persistent memory system designed for LLM agents. It adopts the **LL
 
 ### [1. Background](design/01-background.md)
 
-The amnesia problem MemMan addresses, the LLM-Supervised pattern, theoretical foundations from MAGMA and RRF, and key design trade-offs (LLM-Supervised vs embedded, SQLite WAL vs graph DB, beam search vs BFS, soft delete) including deviations from the MAGMA paper and the storage-side pluggability roadmap.
+The amnesia problem MemMan addresses, the LLM-Supervised pattern, theoretical foundations from MAGMA and RRF, and key design trade-offs (LLM-Supervised vs embedded, SQLite WAL vs graph DB, beam search vs BFS, soft delete) including deviations from the MAGMA paper and the realized storage-side pluggability (SQLite default, Postgres + pgvector via `memman[postgres]`).
 
 ### [2. Core Concepts & Architecture](design/02-concepts.md)
 
-The Insight/Edge data model, database schema (SQLite WAL), system architecture (CLI layer → engine → storage), code structure, and store isolation via named stores.
+The Insight/Edge data model, database schema (SQLite WAL or Postgres + pgvector), system architecture (CLI layer → engine → storage), code structure, and store isolation via named stores.
 
 ### [3. Graph Model](design/03-graph-model.md)
 
@@ -24,7 +24,7 @@ The two-tier deferred write pipeline (`remember` is a queue-append; a scheduler-
 
 ### [5. Lifecycle & Embedding](design/05-lifecycle.md)
 
-Effective Importance (EI) decay formula, immunity rules, auto-pruning, GC commands, and Voyage AI embedding support.
+Effective Importance (EI) decay formula, immunity rules, auto-pruning, GC commands, and pluggable embedding support (Voyage default; OpenAI-compatible, OpenRouter, Ollama).
 
 ### [6. LLM CLI Integration](design/06-integration.md)
 
