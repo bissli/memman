@@ -1610,11 +1610,9 @@ class PostgresBackend(Backend):
         self._schema = _store_schema(store)
         self._owns_conn = owns_conn
         self._conn = conn if conn is not None else _open_connection(
-            dsn, autocommit=False)
+            dsn, autocommit=True)
         with self._conn.cursor() as cur:
             cur.execute(f'set search_path = {self._schema}, public')
-        if not self._conn.autocommit:
-            self._conn.commit()
         self.nodes = PostgresNodeStore(self._conn, self._schema)
         self.edges = PostgresEdgeStore(self._conn, self._schema)
         self.meta = PostgresMetaStore(self._conn, self._schema)

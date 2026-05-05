@@ -167,6 +167,34 @@ def _open_db(ctx: click.Context) -> 'DB':
     return db
 
 
+def _open_active_backend(ctx: click.Context):
+    """Open the active Backend, dispatching on `MEMMAN_BACKEND`.
+
+    Mirrors `_open_db`: resolves the active store name, runs the
+    constants-reindex pass, seeds and asserts the embedding
+    fingerprint, then returns the Backend. Backend.close() is the
+    caller's responsibility. Backend dispatch reads the env file
+    via `factory.open_cluster()`.
+    """
+    from memman.embed.fingerprint import assert_consistent, seed_if_fresh
+    from memman.exceptions import ConfigError, EmbedFingerprintError
+    from memman.graph.engine import reindex_if_constants_changed
+    from memman.store.factory import open_cluster
+
+    data_dir = ctx.obj['data_dir']
+    name = _resolve_store_name(data_dir, ctx.obj['store'])
+    cluster = open_cluster()
+    backend = cluster.open(store=name, data_dir=data_dir)
+    reindex_if_constants_changed(backend)
+    try:
+        seed_if_fresh(backend)
+        assert_consistent(backend)
+    except (EmbedFingerprintError, ConfigError) as exc:
+        backend.close()
+        raise click.ClickException(str(exc)) from exc
+    return backend
+
+
 def _parse_since(since: str) -> str:
     """Parse a relative time string (e.g. '7d', '24h') to ISO timestamp."""
     m = re.match(r'^(\d+)([dhm])$', since)
@@ -571,6 +599,7 @@ def scheduler_serve(ctx: click.Context, interval: int, once: bool) -> None:
         per_drain_timeout = max(10, interval - 10) if interval > 0 else 300
 
         while True:
+            config.reset_file_cache()
             if read_state() == STATE_STOPPED:
                 logger.info('scheduler serve: state=STOPPED, exiting')
                 break
@@ -703,7 +732,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
             ctx = store_contexts.get(row.store)
             if ctx is None:
                 try:
-                    ctx = _StoreContext(store_dir(data_dir_val, row.store))
+                    ctx = _StoreContext(row.store, data_dir_val)
                 except Exception as exc:
                     mark_failed(
                         conn, row.id, f'{type(exc).__name__}: {exc}')
@@ -826,16 +855,16 @@ class _StoreContext:
     setup amortize.
     """
 
-    def __init__(self, store_data_dir: str) -> None:
+    def __init__(self, store_name: str, data_dir: str) -> None:
         from memman.embed import fingerprint as _fp_mod
         from memman.embed import get_client as _get_ec
         from memman.llm.client import get_llm_client
-        from memman.store.db import open_db as _open_store_db
-        from memman.store.sqlite import SqliteBackend
+        from memman.store.factory import open_cluster
 
-        self.store_data_dir = store_data_dir
-        self.db = _open_store_db(store_data_dir)
-        self.backend = SqliteBackend(self.db)
+        self.store_name = store_name
+        self.data_dir = data_dir
+        cluster = open_cluster()
+        self.backend = cluster.open(store=store_name, data_dir=data_dir)
         _fp_mod.seed_if_fresh(self.backend)
         _fp_mod.assert_consistent(self.backend)
         self.ec = _get_ec()
@@ -857,12 +886,12 @@ class _StoreContext:
         self.insights_by_id.update(insights)
 
     def close(self) -> None:
-        """Close the store DB connection."""
+        """Close the active Backend's underlying connection."""
         try:
-            self.db.close()
+            self.backend.close()
         except Exception:
             logger.exception(
-                f'failed closing store DB at {self.store_data_dir}')
+                f'failed closing backend for store {self.store_name!r}')
 
 
 def _process_queue_row(
@@ -899,7 +928,7 @@ def _process_queue_row(
         'process_row',
         row_id=row.id,
         store=row.store,
-        store_dir=ctx.store_data_dir,
+        data_dir=ctx.data_dir,
         source=source,
         category=category,
         importance=importance)
@@ -965,20 +994,19 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
     from memman.search.intent import intent_from_string
     from memman.search.recall import intent_aware_recall
     from memman.store.node import increment_access_count, query_insights
-    from memman.store.oplog import log_op
-
     keyword_str = ' '.join(keyword)
-    db = _open_db(ctx)
+    backend = _open_active_backend(ctx)
     try:
         if basic:
-            results = query_insights(
-                db, keyword=keyword_str, category=cat,
+            results = backend.nodes.query(
+                keyword=keyword_str, category=cat,
                 source=source, limit=limit)
             for r in results:
-                increment_access_count(db, r.id)
+                backend.nodes.increment_access_count(r.id)
                 r.access_count += 1
-            log_op(db, 'recall:basic', '',
-                   f'q={keyword_str} hits={len(results)}')
+            backend.oplog.log(
+                operation='recall:basic', insight_id='',
+                detail=f'q={keyword_str} hits={len(results)}')
             _json_out({
                 'results': [_insight_to_dict(r) for r in results],
                 'meta': {'basic': True},
@@ -1014,9 +1042,8 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
         query_entities = list(expansion.get('entities', []))
 
         fetch_limit = limit * 3 if (cat or source) else limit
-        from memman.store.sqlite import SqliteBackend
         resp = intent_aware_recall(
-            SqliteBackend(db), keyword_str, query_vec, query_entities,
+            backend, keyword_str, query_vec, query_entities,
             fetch_limit, intent_override, rerank=rerank)
         if cat:
             resp['results'] = [
@@ -1028,7 +1055,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                 if r['insight'].source == source][:limit]
 
         for r in resp['results']:
-            increment_access_count(db, r['insight'].id)
+            backend.nodes.increment_access_count(r['insight'].id)
             r['insight'].access_count += 1
 
         hits = [{'id': r['insight'].id[:8], 'via': r.get('via', ''),
@@ -1038,9 +1065,10 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                  'gr': round(r['signals']['graph'], 3),
                  'ent': round(r['signals']['entity'], 3)}
                 for r in resp['results']]
-        log_op(db, 'recall-detail', '',
-               json.dumps({'intent': resp['meta']['intent'],
-                           'q': keyword_str[:80], 'hits': hits}))
+        backend.oplog.log(
+            operation='recall-detail', insight_id='',
+            detail=json.dumps({'intent': resp['meta']['intent'],
+                               'q': keyword_str[:80], 'hits': hits}))
 
         out = {
             'results': [
@@ -1057,7 +1085,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
             }
         _json_out(out)
     finally:
-        db.close()
+        backend.close()
 
 
 @cli.command()
@@ -1066,25 +1094,23 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
 def forget(ctx: click.Context, id: str) -> None:
     """Soft-delete an insight. Rejected when the scheduler is stopped."""
     _require_started('write')
-    from memman.store.node import soft_delete_insight
-    from memman.store.oplog import log_op
 
-    db = _open_db(ctx)
+    backend = _open_active_backend(ctx)
     try:
-        def do_forget() -> None:
-            soft_delete_insight(db, id)
-            log_op(db, 'forget', id, '')
-
-        db.in_transaction(do_forget)
+        with backend.transaction():
+            deleted = backend.nodes.soft_delete(id, tolerate_missing=True)
+            if not deleted:
+                raise click.ClickException(
+                    f'insight {id!r} not found')
+            backend.oplog.log(
+                operation='forget', insight_id=id, detail='')
         _json_out({
             'id': id,
             'status': 'deleted',
             'message': 'Insight soft-deleted successfully',
             })
-    except ValueError as e:
-        raise click.ClickException(str(e))
     finally:
-        db.close()
+        backend.close()
 
 
 @cli.command()
@@ -1126,12 +1152,11 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
     data_dir_val = ctx.obj['data_dir']
     name = _resolve_store_name(data_dir_val, ctx.obj['store'])
 
+    backend = _open_active_backend(ctx)
     try:
-        ro = open_ro_db(store_dir(data_dir_val, name))
-        old = get_insight_by_id(ro, id)
-        ro.close()
-    except FileNotFoundError:
-        old = None
+        old = backend.nodes.get(id)
+    finally:
+        backend.close()
     if old is None:
         raise click.ClickException(
             f'insight {id} not found or already deleted')
@@ -1213,35 +1238,33 @@ def graph_link(ctx: click.Context, source_id: str, target_id: str,
             'cannot link an insight to itself')
 
     now = datetime.now(timezone.utc)
-    db = _open_db(ctx)
+    backend = _open_active_backend(ctx)
     try:
-        if get_insight_by_id(db, source_id) is None:
+        if backend.nodes.get(source_id) is None:
             raise click.ClickException(
                 f'insight {source_id} not found')
-        if get_insight_by_id(db, target_id) is None:
+        if backend.nodes.get(target_id) is None:
             raise click.ClickException(
                 f'insight {target_id} not found')
 
-        from memman.store.edge import get_edge_weight
+        existing_weight = backend.edges.get_weight(
+            source_id, target_id, edge_type)
 
-        existing_weight = get_edge_weight(
-            db, source_id, target_id, edge_type)
-
-        def do_link() -> None:
-            insert_edge(db, Edge(
+        with backend.transaction():
+            backend.edges.upsert(Edge(
                 source_id=source_id, target_id=target_id,
                 edge_type=edge_type, weight=weight,
                 metadata=metadata, created_at=now))
-            insert_edge(db, Edge(
+            backend.edges.upsert(Edge(
                 source_id=target_id, target_id=source_id,
                 edge_type=edge_type, weight=weight,
                 metadata=metadata, created_at=now))
-            log_op(db, 'link', source_id,
-                   f'{source_id} <-> {target_id} ({edge_type})')
+            backend.oplog.log(
+                operation='link', insight_id=source_id,
+                detail=f'{source_id} <-> {target_id} ({edge_type})')
 
-        db.in_transaction(do_link)
         actual_weight = (
-            get_edge_weight(db, source_id, target_id, edge_type)
+            backend.edges.get_weight(source_id, target_id, edge_type)
             or weight)
         out = {
             'status': 'linked',
@@ -1257,7 +1280,7 @@ def graph_link(ctx: click.Context, source_id: str, target_id: str,
                 f' {weight}; kept higher')
         _json_out(out)
     finally:
-        db.close()
+        backend.close()
 
 
 @graph.command('related')
@@ -1270,10 +1293,9 @@ def graph_related(ctx: click.Context, id: str, edge: str,
     """Find connected insights via graph traversal."""
     from memman.graph.bfs import BFSOptions, bfs
 
-    db = _open_db(ctx)
+    backend = _open_active_backend(ctx)
     try:
-        from memman.store.sqlite import SqliteBackend
-        nodes = bfs(SqliteBackend(db), id, BFSOptions(
+        nodes = bfs(backend, id, BFSOptions(
             max_depth=depth, max_nodes=0, edge_filter=edge))
         out = []
         for n in nodes:
@@ -1289,7 +1311,7 @@ def graph_related(ctx: click.Context, id: str, edge: str,
             out.append(entry)
         _json_out(out)
     finally:
-        db.close()
+        backend.close()
 
 
 @queue.command('list')
@@ -1691,16 +1713,21 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
 @click.pass_context
 def status(ctx: click.Context) -> None:
     """Show database statistics."""
-    from memman.store.db import storage_summary
-    from memman.store.node import get_stats
-
-    db = _open_db(ctx)
+    backend = _open_active_backend(ctx)
     try:
-        stats = get_stats(db)
-        stats.update(storage_summary(db))
-        _json_out(stats)
+        node_stats = backend.nodes.stats()
+        out = {
+            'total_insights': node_stats.total_insights,
+            'deleted_insights': node_stats.deleted_insights,
+            'edge_count': node_stats.edge_count,
+            'oplog_count': node_stats.oplog_count,
+            'by_category': node_stats.by_category,
+            'top_entities': node_stats.top_entities,
+            'storage_path': backend.path,
+            }
+        _json_out(out)
     finally:
-        db.close()
+        backend.close()
 
 
 @cli.command()
@@ -1769,20 +1796,31 @@ def _doctor_text_report(result: dict) -> None:
 def log_list(ctx: click.Context, limit: int, since: str,
              stats: bool, text_output: bool) -> None:
     """Show the operation audit log (default JSON; --text for human view)."""
-    from memman.store.oplog import get_oplog, get_oplog_stats
-
     since_ts = ''
     if since:
         since_ts = _parse_since(since)
 
-    db = _open_db(ctx)
+    backend = _open_active_backend(ctx)
     try:
         if stats:
-            stats_data = get_oplog_stats(db, since_ts)
-            _json_out(stats_data)
+            stats_data = backend.oplog.stats(since=since_ts)
+            _json_out({
+                'operation_counts': stats_data.operation_counts,
+                'never_accessed': stats_data.never_accessed,
+                'total_active': stats_data.total_active,
+                })
             return
 
-        entries = get_oplog(db, limit, since_ts)
+        entry_objs = backend.oplog.recent(limit=limit, since=since_ts)
+        entries = [
+            {
+                'created_at': format_timestamp(e.created_at),
+                'operation': e.operation,
+                'insight_id': e.insight_id,
+                'detail': e.detail,
+                }
+            for e in entry_objs
+            ]
 
         if not text_output:
             _json_out({'entries': entries, 'meta': {'count': len(entries)}})
@@ -1817,7 +1855,7 @@ def log_list(ctx: click.Context, limit: int, since: str,
                 col.ljust(widths[i]) for i, col in enumerate(row))
             click.echo(line.rstrip())
     finally:
-        db.close()
+        backend.close()
 
 
 @log.command('worker')
@@ -1857,11 +1895,11 @@ def insights_candidates(ctx: click.Context, threshold: float,
     boost its retention.
     """
     from memman.store.model import MAX_INSIGHTS
-    from memman.store.node import get_retention_candidates
 
-    db = _open_db(ctx)
+    backend = _open_active_backend(ctx)
     try:
-        candidates, total = get_retention_candidates(db, threshold, limit)
+        candidates, total = backend.nodes.get_retention_candidates(
+            threshold=threshold, limit=limit)
         out_candidates = []
         for c in candidates:
             ins = c['insight']
@@ -1888,7 +1926,7 @@ def insights_candidates(ctx: click.Context, threshold: float,
                 },
             })
     finally:
-        db.close()
+        backend.close()
 
 
 @insights.command('review')
@@ -1900,11 +1938,18 @@ def insights_review(ctx: click.Context, limit: int) -> None:
     Different criteria than `candidates`: this checks content quality
     (transient phrasing, low signal) rather than retention score.
     """
-    from memman.store.node import review_content_quality
+    from memman.search.quality import check_content_quality
 
-    db = _open_db(ctx)
+    backend = _open_active_backend(ctx)
     try:
-        flagged = review_content_quality(db, limit)
+        all_active = backend.nodes.get_all_active()
+        flagged = []
+        for ins in all_active:
+            warnings = check_content_quality(ins.content)
+            if warnings:
+                flagged.append({'insight': ins, 'quality_warnings': warnings})
+            if len(flagged) >= limit:
+                break
         _json_out({
             'review_results': [{
                 'id': f['insight'].id,
@@ -1919,7 +1964,7 @@ def insights_review(ctx: click.Context, limit: int) -> None:
                 },
             })
     finally:
-        db.close()
+        backend.close()
 
 
 @insights.command('protect')
@@ -1932,20 +1977,19 @@ def insights_protect(ctx: click.Context, id: str) -> None:
     keeping the insight off retention-candidate lists.
     """
     _require_started('protect insights')
-    from memman.store.node import boost_retention, get_insight_by_id
-    from memman.store.node import refresh_effective_importance
-    from memman.store.oplog import log_op
 
-    db = _open_db(ctx)
+    backend = _open_active_backend(ctx)
     try:
-        ins = get_insight_by_id(db, id)
+        ins = backend.nodes.get(id)
         if ins is None:
             raise click.ClickException(
                 f'insight {id} not found or already deleted')
-        boost_retention(db, id)
-        ei = refresh_effective_importance(db, id)
+        backend.nodes.boost_retention(id)
+        ei = backend.nodes.refresh_effective_importance(id)
         new_access = ins.access_count + 3
-        log_op(db, 'protect', id, f'access+3, ei={ei:.4f}')
+        backend.oplog.log(
+            operation='protect', insight_id=id,
+            detail=f'access+3, ei={ei:.4f}')
         _json_out({
             'status': 'retained',
             'id': id,
@@ -1955,7 +1999,7 @@ def insights_protect(ctx: click.Context, id: str) -> None:
             'immune': is_immune(ins.importance, new_access),
             })
     finally:
-        db.close()
+        backend.close()
 
 
 @insights.command('show')
@@ -1963,17 +2007,15 @@ def insights_protect(ctx: click.Context, id: str) -> None:
 @click.pass_context
 def insights_show(ctx: click.Context, id: str) -> None:
     """Read a single insight by ID with full content and metadata."""
-    from memman.store.node import get_insight_by_id
-
-    db = _open_db(ctx)
+    backend = _open_active_backend(ctx)
     try:
-        ins = get_insight_by_id(db, id)
+        ins = backend.nodes.get(id)
         if ins is None:
             raise click.ClickException(
                 f'insight {id} not found or already deleted')
         _json_out(_insight_to_dict(ins))
     finally:
-        db.close()
+        backend.close()
 
 
 @cli.command()
@@ -2016,42 +2058,39 @@ def uninstall(ctx: click.Context, target: str) -> None:
 @click.option('--all', 'migrate_all', is_flag=True,
               help='Migrate every store under the data dir.')
 @click.option('--dry-run', is_flag=True,
-              help='Report what would be moved without writing.')
-@click.option('--i-have-a-backup', is_flag=True,
-              help='Confirmation gate; required for non-dry-run.')
-@click.option('--overwrite-schema', is_flag=True,
-              help='Drop and recreate the target schema if present.')
+              help='Report the plan without writing or prompting.')
+@click.option('--yes', is_flag=True, default=False,
+              help='Skip the confirmation prompt (for scripted use).')
 @click.pass_context
 def migrate(
         ctx: click.Context, store: str, migrate_all: bool,
-        dry_run: bool, i_have_a_backup: bool,
-        overwrite_schema: bool) -> None:
-    """Migrate a memman store from SQLite to Postgres.
+        dry_run: bool, yes: bool) -> None:
+    """Migrate memman stores from SQLite to Postgres.
 
-    Streams `insights`, `edges`, `oplog`, `meta` from
-    `<data_dir>/data/<store>/memman.db` into Postgres schema
-    `store_<name>` over `MEMMAN_PG_DSN`. Holds the shared drain.lock
-    for the duration so a scheduler-fired drain cannot race the
-    SQLite reader. ON CONFLICT (id) DO NOTHING on the insights
-    insert path so an interrupted run can be re-run safely.
+    Echoes a plan (source paths, redacted destination DSN, per-store
+    target schema state) and prompts for confirmation. Stores whose
+    target schema already exists on the remote are dropped and
+    recreated. Holds the shared drain.lock for the duration so a
+    scheduler-fired drain cannot race the SQLite reader. On success
+    flips `MEMMAN_BACKEND=postgres` in the env file so the next drain
+    routes to the new database.
     """
     from memman import config
-    from memman.migrate import MigrateError, held_drain_lock, migrate_store
-    from memman.migrate import preflight
+    from memman.migrate import (MigrateError, SchemaState,
+                                 held_drain_lock,
+                                 inspect_target_schemas,
+                                 migrate_store, preflight)
+    from memman.setup.scheduler import _write_env_keys
     from memman.store.db import list_stores, store_dir
+    from memman.trace import redact_dsn
 
     data_dir = ctx.obj['data_dir']
 
     if not migrate_all and not store:
-        raise click.UsageError(
-            'pass --store NAME or --all')
+        raise click.UsageError('pass --store NAME or --all')
     if migrate_all and store:
         raise click.UsageError(
             'pass either --store NAME or --all, not both')
-    if not dry_run and not i_have_a_backup:
-        raise click.UsageError(
-            '--i-have-a-backup is required for non-dry-run; '
-            'export your SQLite store first or pass --dry-run')
 
     dsn = config.get(config.PG_DSN)
     if not dsn:
@@ -2072,7 +2111,59 @@ def migrate(
         click.echo('no stores to migrate', err=True)
         return
 
-    results = []
+    try:
+        states = inspect_target_schemas(dsn, stores)
+    except MigrateError as exc:
+        raise click.ClickException(str(exc))
+
+    populated = [s for s in stores
+                 if states[s] == SchemaState.POPULATED]
+
+    click.echo('Migration plan:')
+    click.echo(f'  Source:      {data_dir}/data/')
+    click.echo(f'  Destination: {redact_dsn(dsn)}')
+    click.echo(f'  Stores ({len(stores)}):')
+    width = max((len(s) for s in stores), default=0)
+    for s in stores:
+        st = states[s]
+        if st == SchemaState.ABSENT:
+            note = 'will create'
+        elif st == SchemaState.EMPTY:
+            note = 'EMPTY, will recreate'
+        else:
+            note = 'POPULATED, will DROP CASCADE and recreate'
+        click.echo(
+            f'    {s.ljust(width)} -> store_{s}    [{note}]')
+    if populated:
+        click.echo('')
+        click.echo(
+            f'WARNING: {len(populated)} store(s) will be'
+            f' destructively overwritten.')
+    if not dry_run:
+        click.echo('')
+        click.echo(
+            "After successful migrate, MEMMAN_BACKEND will flip to"
+            " 'postgres' in the env file.")
+
+    if dry_run:
+        for s in stores:
+            source = store_dir(data_dir, s)
+            try:
+                res = migrate_store(
+                    source_dir=source, dsn=dsn, store=s,
+                    dry_run=True, state=states[s])
+                click.echo(
+                    f'{s}: insights={res.insights}'
+                    f' edges={res.edges} oplog={res.oplog}'
+                    f' meta={res.meta} (dry-run)')
+            except MigrateError as exc:
+                raise click.ClickException(f'{s}: {exc}')
+        return
+
+    if not yes:
+        click.echo('')
+        click.confirm('Proceed?', default=False, abort=True)
+
     try:
         with held_drain_lock(data_dir):
             for s in stores:
@@ -2080,25 +2171,29 @@ def migrate(
                 try:
                     res = migrate_store(
                         source_dir=source, dsn=dsn, store=s,
-                        dry_run=dry_run,
-                        overwrite_schema=overwrite_schema)
-                    results.append(res)
+                        dry_run=False, state=states[s])
                     click.echo(
-                        f'{s}: insights={res.insights} '
-                        f'edges={res.edges} oplog={res.oplog} '
-                        f'meta={res.meta}'
-                        f'{" (dry-run)" if res.dry_run else ""}')
+                        f'{s}: insights={res.insights}'
+                        f' edges={res.edges} oplog={res.oplog}'
+                        f' meta={res.meta}')
                 except MigrateError as exc:
-                    raise click.ClickException(
-                        f'{s}: {exc}')
+                    raise click.ClickException(f'{s}: {exc}')
+            _write_env_keys(
+                {config.BACKEND: 'postgres'}, data_dir=data_dir)
+            config.reset_file_cache()
     except MigrateError as exc:
         raise click.ClickException(str(exc))
 
-    if not dry_run:
-        click.echo(
-            'migrated successfully; verify with `memman doctor` then '
-            'set MEMMAN_BACKEND=postgres via `memman config set '
-            'MEMMAN_BACKEND postgres`')
+    click.echo('')
+    click.echo(
+        f'Migration complete: {len(stores)} store(s) copied to Postgres.')
+    click.echo("MEMMAN_BACKEND flipped to 'postgres'.")
+    click.echo('')
+    click.echo('Recommended next step:')
+    click.echo('  memman doctor    # verify the postgres backend health')
+    click.echo('')
+    click.echo('To revert:')
+    click.echo('  memman config set MEMMAN_BACKEND sqlite')
 
 
 def _emit_guide() -> None:

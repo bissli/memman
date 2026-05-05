@@ -190,27 +190,20 @@ Different agents or processes can use different stores via the `MEMMAN_STORE` en
 
 `memman migrate` copies a store's data from SQLite into the configured Postgres backend. The SQLite source is preserved (copy-only, never modified), so it remains a durable fallback until you choose to remove it.
 
+The command echoes a plan (source paths, redacted destination DSN, per-store target schema state — `ABSENT` / `EMPTY` / `POPULATED`) and prompts for confirmation. Stores whose target schema already exists are dropped and recreated. On success the command flips `MEMMAN_BACKEND=postgres` in the env file so the next drain routes to the new database.
+
 ```bash
-# Dry-run (no writes; reports row counts that would be moved)
+# Dry-run: print the plan only, no writes, no prompt
 memman migrate --store work --dry-run
 
-# Real write; --i-have-a-backup is a fail-closed gate
-memman migrate --store work --i-have-a-backup
+# Interactive: print plan, prompt, then migrate + flip backend
+memman migrate --store work
 
-# Migrate every store under the data dir
-memman migrate --all --i-have-a-backup
-
-# Re-running is idempotent (ON CONFLICT DO NOTHING on insights INSERT).
-# To clobber an existing target schema instead, add:
-memman migrate --store work --i-have-a-backup --overwrite-schema
+# Non-interactive (CI / scripts): skip the prompt
+memman migrate --all --yes
 ```
 
-The command holds the shared `drain.lock` for its duration so a scheduler-fired drain cannot race the SQLite reader. After migrate, flip the backend and verify with `memman doctor`:
-
-```bash
-memman config set MEMMAN_BACKEND postgres
-memman doctor
-```
+The command holds the shared `drain.lock` for its duration so a scheduler-fired drain cannot race the SQLite reader. To verify the cutover, run `memman doctor`. To revert, use `memman config set MEMMAN_BACKEND sqlite`.
 
 Reverse migration (Postgres → SQLite) is not implemented; restore from the preserved SQLite source if needed.
 

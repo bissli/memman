@@ -639,4 +639,4 @@ class TestReembed:
             db.close()
 
         with pytest.raises(EmbedFingerprintError):
-            _StoreContext(sdir)
+            _StoreContext('default', str(tmp_path))

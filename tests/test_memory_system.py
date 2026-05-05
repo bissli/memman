@@ -49,18 +49,40 @@ def parse_remember(result, runner_tuple=None):
     if queue_id is None:
         return raw
     _, data_dir = runner_tuple
-    from memman.store.db import open_read_only, read_active, store_dir
+    from memman import config
+    from memman.store.db import read_active
     name = raw.get('store') or read_active(data_dir) or 'default'
-    sdir = store_dir(data_dir, name)
-    db = open_read_only(sdir)
-    try:
-        rows = db._query(
-            'select id, content, category, importance from insights'
-            ' where source = ? and deleted_at is null'
-            ' order by created_at',
-            (f'queue:{queue_id}',)).fetchall()
-    finally:
-        db.close()
+    backend_kind = (config.get(config.BACKEND) or 'sqlite').lower()
+    if backend_kind == 'postgres':
+        import psycopg
+        from memman.store.postgres import _store_schema
+        schema = _store_schema(name)
+        sql = f"""
+select id, content, category, importance
+from {schema}.insights
+where source = %s
+  and deleted_at is null
+order by created_at
+"""
+        with psycopg.connect(config.require(config.PG_DSN)) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (f'queue:{queue_id}',))
+                rows = cur.fetchall()
+    else:
+        from memman.store.db import open_read_only, store_dir
+        sdir = store_dir(data_dir, name)
+        db = open_read_only(sdir)
+        sql = """
+select id, content, category, importance
+from insights
+where source = ?
+  and deleted_at is null
+order by created_at
+"""
+        try:
+            rows = db._query(sql, (f'queue:{queue_id}',)).fetchall()
+        finally:
+            db.close()
     if not rows:
         return raw
     action = 'replace' if raw.get('replaced_id') else 'add'

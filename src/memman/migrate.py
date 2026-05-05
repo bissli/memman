@@ -2,22 +2,27 @@
 
 Backs the `memman migrate` CLI command. Wraps the streaming logic in
 `scripts/import_sqlite_to_postgres.py` with CLI orchestration: DSN
-preflight, drain-lock guard, per-store transaction, dry-run mode, and
-a fail-closed confirmation gate.
+preflight, drain-lock guard, per-store transaction, dry-run mode,
+and an interactive confirmation flow.
 
-Migration is intentionally one-way: SQLite source is read-only;
-Postgres destination uses `ON CONFLICT (id) DO NOTHING` on the
-`insights` insert path so an interrupted run can be re-run safely.
-The shared drain.lock is held for the duration of the migrate
-command so a scheduler-fired drain cannot race the SQLite reader.
+Migration is one-way: the SQLite source is read-only. The Postgres
+destination uses `ON CONFLICT (id) DO NOTHING` on the `insights`
+insert path so an interrupted run can be re-run safely. When a
+target schema already exists the operator is shown its state
+(EMPTY / POPULATED) and explicit destructive overwrite happens only
+on confirmation. The shared drain.lock is held for the duration of
+the migrate command so a scheduler-fired drain cannot race the
+SQLite reader.
 
-This module does NOT flip `MEMMAN_BACKEND` in the env file; the
-operator does that explicitly after verifying the migrate run with
-`memman doctor`.
+On a successful migrate the CLI flips `MEMMAN_BACKEND=postgres` in
+the env file so the next drain routes to the new database. With B3
+the drain pipeline dispatches on `MEMMAN_BACKEND`, so this flip
+makes the cutover atomic.
 """
 
 from __future__ import annotations
 
+import enum
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -29,6 +34,14 @@ logger = logging.getLogger('memman.migrate')
 
 class MigrateError(Exception):
     """Migration aborted because a precondition or invariant failed."""
+
+
+class SchemaState(enum.Enum):
+    """Target Postgres schema state for a memman store."""
+
+    ABSENT = 'absent'
+    EMPTY = 'empty'
+    POPULATED = 'populated'
 
 
 @dataclass
@@ -66,8 +79,11 @@ def preflight(dsn: str) -> dict[str, bool]:
             cur.execute('select 1')
             checks['select_1'] = cur.fetchone()[0] == 1
 
-            cur.execute(
-                "select 1 from pg_extension where extname = 'vector'")
+            sql = """
+select 1 from pg_extension
+where extname = 'vector'
+"""
+            cur.execute(sql)
             row = cur.fetchone()
             if row is None:
                 raise MigrateError(
@@ -76,9 +92,10 @@ def preflight(dsn: str) -> dict[str, bool]:
                     'superuser first')
             checks['pgvector_installed'] = True
 
-            cur.execute(
-                "select has_database_privilege(current_user,"
-                " current_database(), 'CREATE')")
+            sql = """
+select has_database_privilege(current_user, current_database(), 'CREATE')
+"""
+            cur.execute(sql)
             checks['create_schema_privilege'] = bool(cur.fetchone()[0])
             if not checks['create_schema_privilege']:
                 raise MigrateError(
@@ -87,6 +104,54 @@ def preflight(dsn: str) -> dict[str, bool]:
     finally:
         conn.close()
     return checks
+
+
+def inspect_target_schemas(
+        dsn: str, stores: list[str]) -> dict[str, SchemaState]:
+    """Classify each `store_<name>` schema as ABSENT / EMPTY / POPULATED.
+
+    Single round-trip query joining `pg_namespace` with
+    `information_schema.tables` filtered to the four memman tables.
+    A schema absent from the result is ABSENT; present with no
+    memman tables is EMPTY (likely an aborted prior run); present
+    with one or more tables is POPULATED. Raises `MigrateError` on
+    connection or permission failures so preflight stays fail-closed.
+    """
+    import psycopg
+    from memman.store.postgres import _store_schema
+
+    schema_to_store = {_store_schema(s): s for s in stores}
+    schema_names = list(schema_to_store.keys())
+
+    sql = """
+select n.nspname, count(t.table_name)
+from pg_namespace n
+left join information_schema.tables t
+  on t.table_schema = n.nspname
+  and t.table_name in ('insights', 'edges', 'oplog', 'meta')
+where n.nspname = any(%s)
+group by n.nspname
+"""
+    try:
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (schema_names,))
+                rows = cur.fetchall()
+    except Exception as exc:
+        raise MigrateError(
+            f'failed to inspect target schemas: '
+            f'{type(exc).__name__}: {exc}') from exc
+
+    seen = {row[0]: int(row[1]) for row in rows}
+    result: dict[str, SchemaState] = {}
+    for schema, store in schema_to_store.items():
+        if schema not in seen:
+            result[store] = SchemaState.ABSENT
+        elif seen[schema] == 0:
+            result[store] = SchemaState.EMPTY
+        else:
+            result[store] = SchemaState.POPULATED
+    return result
 
 
 @contextmanager
@@ -108,15 +173,17 @@ def held_drain_lock(data_dir: str) -> Iterator[int]:
 def migrate_store(
         *, source_dir: str, dsn: str, store: str,
         dry_run: bool = False,
-        overwrite_schema: bool = False) -> MigrateResult:
+        state: SchemaState = SchemaState.ABSENT) -> MigrateResult:
     """Migrate a single SQLite store into Postgres schema `store_<store>`.
 
-    Returns counts of rows moved per table. On `dry_run=True`,
-    reports counts that would be moved without writing.
-
-    All inserts run inside one Postgres transaction; on any failure
-    the transaction rolls back and `MigrateError` is raised. The
-    caller is responsible for the outer drain.lock guard.
+    Returns counts of rows moved per table. On `dry_run=True`, reports
+    the counts that would be moved without writing. When `state` is
+    `EMPTY` or `POPULATED` the existing schema is dropped and
+    recreated; when `ABSENT` the schema is created fresh. All inserts
+    run inside one Postgres transaction; on any failure the
+    transaction rolls back and `MigrateError` is raised. The caller
+    is responsible for the outer drain.lock guard and the
+    confirmation prompt.
     """
     import sqlite3
 
@@ -160,7 +227,7 @@ def migrate_store(
             from pgvector.psycopg import register_vector
             register_vector(pg_conn)
 
-            if overwrite_schema:
+            if state in (SchemaState.EMPTY, SchemaState.POPULATED):
                 with pg_conn.cursor() as cur:
                     cur.execute(
                         f'drop schema if exists {schema} cascade')

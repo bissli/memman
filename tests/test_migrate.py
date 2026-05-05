@@ -1,8 +1,8 @@
 """`memman migrate` command tests.
 
 Verifies the migrate orchestration: DSN preflight, drain.lock guard,
-per-store atomic transaction, dry-run mode, and the
-`--i-have-a-backup` fail-closed gate.
+per-store atomic transaction, dry-run mode, the interactive
+confirmation flow, and the auto-flip of MEMMAN_BACKEND.
 """
 
 from pathlib import Path
@@ -75,7 +75,7 @@ def test_migrate_dry_run_reports_counts_without_writing(tmp_path, pg_dsn):
 
 def test_migrate_writes_rows_into_target_schema(tmp_path, pg_dsn):
     """Real migrate inserts rows; ON CONFLICT makes re-run idempotent."""
-    from memman.migrate import migrate_store
+    from memman.migrate import SchemaState, migrate_store
     from memman.store.postgres import _store_schema
 
     _seed_sqlite_store(tmp_path, 'mig_write')
@@ -87,7 +87,8 @@ def test_migrate_writes_rows_into_target_schema(tmp_path, pg_dsn):
     from memman.store.db import store_dir
     source = store_dir(str(tmp_path), 'mig_write')
     result = migrate_store(
-        source_dir=source, dsn=pg_dsn, store='mig_write')
+        source_dir=source, dsn=pg_dsn, store='mig_write',
+        state=SchemaState.ABSENT)
     assert not result.dry_run
     assert result.insights == 1
 
@@ -95,15 +96,6 @@ def test_migrate_writes_rows_into_target_schema(tmp_path, pg_dsn):
         with conn.cursor() as cur:
             cur.execute(f'SELECT COUNT(*) FROM {schema}.insights')
             assert cur.fetchone()[0] == 1
-
-    result2 = migrate_store(
-        source_dir=source, dsn=pg_dsn, store='mig_write',
-        overwrite_schema=False)
-    with psycopg.connect(pg_dsn, autocommit=True) as conn:
-        with conn.cursor() as cur:
-            cur.execute(f'SELECT COUNT(*) FROM {schema}.insights')
-            assert cur.fetchone()[0] == 1, (
-                'ON CONFLICT should make re-run a no-op')
 
     try:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
@@ -113,9 +105,9 @@ def test_migrate_writes_rows_into_target_schema(tmp_path, pg_dsn):
         pass
 
 
-def test_migrate_overwrite_schema_clobbers_existing(tmp_path, pg_dsn):
-    """`overwrite_schema=True` drops the existing schema first."""
-    from memman.migrate import migrate_store
+def test_migrate_populated_state_drops_and_recreates(tmp_path, pg_dsn):
+    """SchemaState.POPULATED triggers drop+recreate."""
+    from memman.migrate import SchemaState, migrate_store
     from memman.store.postgres import _store_schema
 
     _seed_sqlite_store(tmp_path, 'mig_overwrite')
@@ -134,7 +126,7 @@ def test_migrate_overwrite_schema_clobbers_existing(tmp_path, pg_dsn):
     try:
         migrate_store(
             source_dir=source, dsn=pg_dsn, store='mig_overwrite',
-            overwrite_schema=True)
+            state=SchemaState.POPULATED)
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -142,11 +134,43 @@ def test_migrate_overwrite_schema_clobbers_existing(tmp_path, pg_dsn):
                     ' WHERE table_schema = %s AND table_name = %s',
                     (schema, 'junk'))
                 assert cur.fetchone() is None, (
-                    '--overwrite-schema should have dropped junk table')
+                    'POPULATED state should have dropped junk table')
     finally:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+
+
+def test_inspect_target_schemas_classifies_states(tmp_path, pg_dsn):
+    """ABSENT / EMPTY / POPULATED detection per store."""
+    from memman.migrate import SchemaState, inspect_target_schemas
+    from memman.store.postgres import _store_schema
+
+    pop_schema = _store_schema('mig_inspect_pop')
+    empty_schema = _store_schema('mig_inspect_empty')
+    absent = 'mig_inspect_absent'
+    with psycopg.connect(pg_dsn, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP SCHEMA IF EXISTS {pop_schema} CASCADE')
+            cur.execute(f'DROP SCHEMA IF EXISTS {empty_schema} CASCADE')
+            cur.execute(
+                f'DROP SCHEMA IF EXISTS {_store_schema(absent)} CASCADE')
+            cur.execute(f'CREATE SCHEMA {pop_schema}')
+            cur.execute(
+                f'CREATE TABLE {pop_schema}.insights (id text)')
+            cur.execute(f'CREATE SCHEMA {empty_schema}')
+    try:
+        states = inspect_target_schemas(
+            pg_dsn, ['mig_inspect_pop', 'mig_inspect_empty', absent])
+        assert states['mig_inspect_pop'] is SchemaState.POPULATED
+        assert states['mig_inspect_empty'] is SchemaState.EMPTY
+        assert states[absent] is SchemaState.ABSENT
+    finally:
+        with psycopg.connect(pg_dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f'DROP SCHEMA IF EXISTS {pop_schema} CASCADE')
+                cur.execute(
+                    f'DROP SCHEMA IF EXISTS {empty_schema} CASCADE')
 
 
 def test_migrate_preflight_passes_on_pgvector_database(pg_dsn):
@@ -157,11 +181,16 @@ def test_migrate_preflight_passes_on_pgvector_database(pg_dsn):
     assert checks['pgvector_installed'] is True
 
 
-def test_migrate_cli_requires_i_have_a_backup_for_real_run(
+def test_migrate_cli_requires_confirmation_for_real_run(
         tmp_path, env_file, pg_dsn):
-    """CLI fails closed when --i-have-a-backup is missing on real run."""
+    """CLI aborts when no `--yes` and the prompt is not confirmed."""
     env_file('MEMMAN_PG_DSN', pg_dsn)
     _seed_sqlite_store(tmp_path / 'memman', 'mig_cli')
+    from memman.store.postgres import _store_schema
+    schema = _store_schema('mig_cli')
+    with psycopg.connect(pg_dsn, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
 
     from memman.cli import cli
     runner = CliRunner()
@@ -169,13 +198,43 @@ def test_migrate_cli_requires_i_have_a_backup_for_real_run(
         cli, [
             '--data-dir', str(tmp_path / 'memman'),
             'migrate', '--store', 'mig_cli'],
-        catch_exceptions=False)
+        input='n\n', catch_exceptions=False)
     assert result.exit_code != 0
-    assert '--i-have-a-backup' in result.output
+    assert 'Aborted' in result.output
+
+
+def test_migrate_cli_yes_flag_skips_prompt(
+        tmp_path, env_file, pg_dsn):
+    """`--yes` runs without prompting and flips MEMMAN_BACKEND."""
+    env_file('MEMMAN_PG_DSN', pg_dsn)
+    data_dir = tmp_path / 'memman'
+    _seed_sqlite_store(data_dir, 'mig_cli_yes')
+    from memman.store.postgres import _store_schema
+    schema = _store_schema('mig_cli_yes')
+    with psycopg.connect(pg_dsn, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+
+    from memman.cli import cli
+    runner = CliRunner()
+    try:
+        result = runner.invoke(
+            cli, [
+                '--data-dir', str(data_dir),
+                'migrate', '--store', 'mig_cli_yes', '--yes'],
+            catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+        assert 'MEMMAN_BACKEND' in result.output
+        env_text = (data_dir / 'env').read_text()
+        assert 'MEMMAN_BACKEND=postgres' in env_text
+    finally:
+        with psycopg.connect(pg_dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
 
 
 def test_migrate_cli_dry_run_succeeds(tmp_path, env_file, pg_dsn):
-    """CLI dry-run works without --i-have-a-backup."""
+    """CLI dry-run prints plan with redacted DSN, no prompt, no writes."""
     env_file('MEMMAN_PG_DSN', pg_dsn)
     _seed_sqlite_store(tmp_path / 'memman', 'mig_cli_dry')
 
@@ -193,5 +252,6 @@ def test_migrate_cli_dry_run_succeeds(tmp_path, env_file, pg_dsn):
             'migrate', '--store', 'mig_cli_dry', '--dry-run'],
         catch_exceptions=False)
     assert result.exit_code == 0, result.output
+    assert 'Migration plan' in result.output
     assert 'mig_cli_dry' in result.output
     assert 'dry-run' in result.output

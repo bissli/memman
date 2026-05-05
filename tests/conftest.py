@@ -503,16 +503,19 @@ def _mock_embed(self: object, text: str) -> list[float]:
 
     Produces a 512-dim unit vector seeded by content, so identical
     text gives identical vectors. Different text gives different
-    vectors with low cosine similarity.
+    vectors with low cosine similarity. Values are derived as
+    int32-mapped uniforms so the float32 cast (used by pgvector)
+    never produces NaN or Inf.
     """
     digest = hashlib.sha256(text.encode()).digest()
-    floats = list(struct.unpack(
-        f'<{len(digest) // 4}f', digest))
-    while len(floats) < EMBEDDING_DIM:
+    ints = list(struct.unpack(
+        f'<{len(digest) // 4}i', digest))
+    while len(ints) < EMBEDDING_DIM:
         extra = hashlib.sha256(
-            digest + len(floats).to_bytes(4, 'little')).digest()
-        floats.extend(struct.unpack(f'<{len(extra) // 4}f', extra))
-    floats = floats[:EMBEDDING_DIM]
+            digest + len(ints).to_bytes(4, 'little')).digest()
+        ints.extend(struct.unpack(f'<{len(extra) // 4}i', extra))
+    ints = ints[:EMBEDDING_DIM]
+    floats = [x / (1 << 31) for x in ints]
     norm = sum(x * x for x in floats) ** 0.5
     if norm > 0:
         floats = [x / norm for x in floats]
@@ -591,7 +594,7 @@ def runner_kind(request) -> str:
 
 
 @pytest.fixture
-def cross_backend_runner(request, runner_kind, tmp_path, env_file):
+def cross_backend_runner(request, runner_kind, tmp_path, env_file, monkeypatch):
     """CliRunner whose env writes `MEMMAN_BACKEND=<runner_kind>` first.
 
     For postgres mode also writes `MEMMAN_PG_DSN` from the session
@@ -610,7 +613,7 @@ def cross_backend_runner(request, runner_kind, tmp_path, env_file):
         pg_dsn = request.getfixturevalue('pg_dsn')
         env_file('MEMMAN_PG_DSN', pg_dsn)
         store_name = _safe_store_name(request.node.name)
-        env_file('MEMMAN_STORE', store_name)
+        monkeypatch.setenv('MEMMAN_STORE', store_name)
 
         def _drop_postgres_schema() -> None:
             try:

@@ -289,8 +289,8 @@ def _print_migration_hint(
         f' {", ".join(sorted(populated))}.', fg='yellow'))
     click.echo(click.style(
         '  To migrate them to postgres, run:'
-        ' memman migrate --all --i-have-a-backup',
+        ' memman migrate --all',
         dim=True))
     click.echo(click.style(
-        '  (or --dry-run first to see what would be moved)',
+        '  (or --dry-run first to see the plan; --yes to skip the prompt)',
         dim=True))
