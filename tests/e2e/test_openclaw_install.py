@@ -21,10 +21,12 @@ import shutil
 import subprocess
 import textwrap
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from memman.setup.openclaw import (
+    install_openclaw,
     openclaw_register_plugin,
     openclaw_uninstall,
     openclaw_write_hook,
@@ -37,10 +39,47 @@ pytestmark = [pytest.mark.e2e_cli]
 HANDLER_REL = (
     'src/memman/setup/assets/openclaw/hooks/memman-prime/handler.js')
 
+PLUGIN_INDEX_REL = (
+    'src/memman/setup/assets/openclaw/plugin/index.js')
+
 
 def _resolve_handler_path() -> Path:
     here = Path(__file__).resolve()
     return here.parent.parent.parent / HANDLER_REL
+
+
+def _resolve_plugin_index() -> Path:
+    here = Path(__file__).resolve()
+    return here.parent.parent.parent / PLUGIN_INDEX_REL
+
+
+def _run_plugin(config: dict) -> dict:
+    """Drive the OpenClaw plugin runtime under a mock host.
+
+    Imports the shipped index.js, calls register(api) with a stub
+    api exposing `pluginConfig` and `on(event, handler)`, fires the
+    registered before_prompt_build hook, and returns the parsed
+    JSON of `{registeredEvents, result}`.
+    """
+    plugin = _resolve_plugin_index()
+    driver = textwrap.dedent(f'''
+        const handlers = {{}};
+        const api = {{
+          pluginConfig: {json.dumps(config)},
+          on: (event, handler) => {{ handlers[event] = handler; }},
+        }};
+        const {{ default: register }} = await import('{plugin}');
+        register(api);
+        const result = await handlers.before_prompt_build();
+        process.stdout.write(JSON.stringify({{
+          registeredEvents: Object.keys(handlers),
+          result,
+        }}));
+        ''').strip()
+    out = subprocess.run(
+        ['node', '--no-warnings', '--input-type=module', '-e', driver],
+        capture_output=True, text=True, check=True)
+    return json.loads(out.stdout)
 
 
 # ---------------------------------------------------------------------
@@ -260,3 +299,64 @@ class TestHandlerJs:
         f = files[0]
         assert f['name'] == 'MEMMAN-GUIDE.md'
         assert f['content'] == '[memman] Memory active.'
+
+
+# ---------------------------------------------------------------------
+# Plugin runtime (index.js): register + before_prompt_build hook
+# ---------------------------------------------------------------------
+
+class TestPluginIndexJs:
+
+    def test_default_config_emits_skill_remind_nudge(
+            self, node_available):
+        """Default `{}` config: all three lines in prependContext."""
+        out = _run_plugin({})
+        assert out['registeredEvents'] == ['before_prompt_build']
+        ctx = out['result']['prependContext']
+        assert '[memman] load memman skill' in ctx
+        assert 'recall needed' in ctx
+        assert 'memman remember' in ctx
+
+    def test_both_flags_off_emits_only_skill(self, node_available):
+        """remind=false, nudge=false: only the load-skill line."""
+        out = _run_plugin({'remind': False, 'nudge': False})
+        ctx = out['result']['prependContext']
+        assert ctx == '[memman] load memman skill'
+
+
+# ---------------------------------------------------------------------
+# install_openclaw orchestrator (mocked _init_default_store)
+# ---------------------------------------------------------------------
+
+class TestInstallOrchestrator:
+
+    def test_install_orchestrator_composes_artifacts(
+            self, tmp_path: Path, capsys):
+        """The orchestrator composes all writers + plugin entry + seed.
+
+        `_init_default_store` is mocked so this test runs everywhere
+        without live keys; the seed function itself is covered by
+        the embed-fingerprint suite. Here we verify the orchestrator
+        calls the writers in order, registers the plugin entry, and
+        invokes the seed with the right data_dir.
+        """
+        config_dir = tmp_path / 'openclaw'
+        data_dir = tmp_path / 'memman_data'
+        data_dir.mkdir()
+        env = {'config_dir': str(config_dir)}
+
+        with patch('memman.setup.claude._init_default_store') as init_mock:
+            install_openclaw(env, str(data_dir))
+
+        init_mock.assert_called_once_with(str(data_dir))
+
+        for sub in ('skills/memman/SKILL.md',
+                    'hooks/memman-prime/handler.js',
+                    'extensions/memman/index.js'):
+            assert (config_dir / sub).is_symlink(), sub
+
+        cfg = json.loads((config_dir / 'openclaw.json').read_text())
+        assert cfg['plugins']['entries']['memman']['enabled'] is True
+
+        captured = capsys.readouterr()
+        assert 'Setup complete!' in captured.out

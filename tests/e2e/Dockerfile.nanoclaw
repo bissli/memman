@@ -20,6 +20,7 @@ RUN groupadd -g 1000 node \
 WORKDIR /memman
 COPY pyproject.toml poetry.lock README.md ./
 COPY src ./src
+COPY scripts ./scripts
 RUN pip install --no-cache-dir .
 
 # Drop the lifecycle hook scripts where the nanoclaw SKILL says.

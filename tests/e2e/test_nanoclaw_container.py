@@ -19,7 +19,6 @@ These tests catch:
 import json
 import os
 import subprocess
-import time
 import uuid
 from pathlib import Path
 
@@ -62,12 +61,77 @@ def _setup_mount(parent: Path, group: str) -> Path:
     """Create a host-side dir for the per-group bind mount.
 
     Mode 0o777 neutralizes the host-uid (often 1001 in CI) vs
-    container-uid (1000 = node) mismatch.
+    container-uid (1000 = node) mismatch. Pre-seeds the SQLite DB
+    with a fingerprint meta row so memman's first store open does
+    not trigger seed_if_fresh, which would otherwise probe the
+    Voyage API (requires a live key) on every fresh container.
     """
+    import sqlite3
+
     d = parent / 'data' / group
     d.mkdir(parents=True, exist_ok=True)
     d.chmod(0o777)
+    db_path = d / 'memman.db'
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            'create table if not exists meta '
+            '(key text primary key, value text not null)')
+        conn.execute(
+            "insert or replace into meta (key, value) values "
+            "('embed_fingerprint', "
+            '\'{"provider":"voyage","model":"voyage-3-lite","dim":512}\')')
+        conn.commit()
+    finally:
+        conn.close()
+    db_path.chmod(0o666)
     return d
+
+
+_BASE_ENV = (
+    'MEMMAN_LLM_PROVIDER=openrouter\n'
+    'MEMMAN_LLM_MODEL_FAST=anthropic/claude-haiku-4.5\n'
+    'MEMMAN_LLM_MODEL_SLOW_CANONICAL=anthropic/claude-sonnet-4.6\n'
+    'MEMMAN_LLM_MODEL_SLOW_METADATA=anthropic/claude-sonnet-4.6\n'
+    'MEMMAN_EMBED_PROVIDER=voyage\n'
+    'MEMMAN_RERANK_PROVIDER=voyage\n'
+    'MEMMAN_OPENROUTER_ENDPOINT=https://openrouter.ai/api/v1\n'
+    'MEMMAN_VOYAGE_RERANK_MODEL=rerank-2.5-lite\n'
+    'MEMMAN_BACKEND=sqlite\n'
+    'OPENROUTER_API_KEY=placeholder-for-non-live-tests\n'
+    'VOYAGE_API_KEY=placeholder-for-non-live-tests\n')
+
+
+def _write_env_file(container_id: str, body: str) -> None:
+    """Atomic-overwrite `/home/node/.memman/env` inside the container."""
+    subprocess.run(
+        ['docker', 'exec', '-i', container_id,
+         'sh', '-c', 'cat > /home/node/.memman/env'],
+        input=body, text=True, capture_output=True, check=True)
+
+
+def _seed_env_file(container_id: str,
+                   keys: dict[str, str] | None = None) -> None:
+    """Write the env file inside the container.
+
+    Modern memman requires the env file to declare providers,
+    endpoints, and API keys before any store open succeeds (status,
+    remember, etc. all trigger seed_if_fresh -> get_client). The
+    base env carries placeholder API keys so non-live tests open
+    cleanly; live-key tests pass `keys` to overwrite with real
+    OpenRouter + Voyage credentials before running the drain.
+    """
+    if keys:
+        body = _BASE_ENV.replace(
+            'OPENROUTER_API_KEY=placeholder-for-non-live-tests',
+            f'OPENROUTER_API_KEY={keys["OPENROUTER_API_KEY"]}',
+            ).replace(
+            'VOYAGE_API_KEY=placeholder-for-non-live-tests',
+            f'VOYAGE_API_KEY={keys["VOYAGE_API_KEY"]}',
+            )
+    else:
+        body = _BASE_ENV
+    _write_env_file(container_id, body)
 
 
 @pytest.fixture
@@ -92,6 +156,7 @@ def nanoclaw_run(nanoclaw_image: str, tmp_path: Path):
                 env.setdefault(k, v)
         cid = _start_container(nanoclaw_image, mounts, env)
         started.append(cid)
+        _seed_env_file(cid)
         return cid, host
 
     yield _run
@@ -111,7 +176,7 @@ class TestStatus:
         out = _exec(cid, ['memman', 'status'])
         data = json.loads(out.stdout)
         assert data['total_insights'] == 0
-        assert data['db_path'].endswith('memman.db')
+        assert data['storage_path'].endswith('memman.db')
 
     def test_memman_on_path(self, nanoclaw_run):
         cid, _ = nanoclaw_run()
@@ -144,6 +209,8 @@ class TestPerGroupIsolation:
         """
         cid_a, _ = nanoclaw_run(group='alpha')
         cid_b, _ = nanoclaw_run(group='beta')
+        _seed_env_file(cid_a, live_keys)
+        _seed_env_file(cid_b, live_keys)
 
         unique_a = f'unique-{uuid.uuid4().hex[:8]}-alpha'
         unique_b = f'unique-{uuid.uuid4().hex[:8]}-beta'
@@ -155,7 +222,8 @@ class TestPerGroupIsolation:
                       f'Beta private fact about {unique_b}',
                       '--cat', 'fact', '--imp', '3'])
 
-        time.sleep(0.5)
+        _exec(cid_a, ['memman', 'scheduler', 'serve', '--once'])
+        _exec(cid_b, ['memman', 'scheduler', 'serve', '--once'])
 
         out_a = _exec(cid_a, ['memman', 'recall', '--basic', unique_a])
         assert unique_a in out_a.stdout
@@ -237,10 +305,13 @@ class TestReconciliation:
         are guaranteed by graph/temporal.py.
         """
         cid, _ = nanoclaw_run()
+        _seed_env_file(cid, live_keys)
 
         unique = uuid.uuid4().hex[:8]
-        fact_a = f'Fact about alpha-{unique} subject for recall.'
-        fact_b = f'Fact about beta-{unique} subject for recall.'
+        fact_a = (f'The user prefers tabs over spaces in Python code '
+                  f'on project alpha-{unique}, per their style guide.')
+        fact_b = (f'The deployment for project beta-{unique} runs on '
+                  f'Kubernetes 1.29 with autoscaling enabled.')
 
         _exec(cid, ['memman', 'remember', fact_a,
                     '--cat', 'fact', '--imp', '3'])
@@ -292,3 +363,87 @@ class TestCorruptDb:
         assert result.returncode != 0, 'recall should fail on empty db'
         assert 'Traceback' not in result.stderr, (
             f'leaked Python traceback in stderr: {result.stderr}')
+
+
+# ---------------------------------------------------------------------
+# Session lifecycle: prime -> remember+remember -> drain -> recall
+# ---------------------------------------------------------------------
+
+class TestSessionLifecycle:
+
+    @pytest.mark.requires_live_keys
+    def test_session_accumulates_and_recalls(
+            self, nanoclaw_run, live_keys):
+        """One realistic session sequence accumulates state.
+
+        prime.sh boots, two `--no-reconcile` remembers queue facts,
+        `scheduler serve --once` drains synchronously (the embedding
+        call inside run_remember is why this needs live keys), then
+        status sees both insights and `recall --basic` finds the
+        stored content. Hook isolation is covered by TestLifecycleHooks;
+        the unique value here is end-to-end accumulation across writes.
+        """
+        cid, _ = nanoclaw_run()
+        _seed_env_file(cid, live_keys)
+
+        out = _exec(cid, ['/app/hooks/memman/prime.sh'])
+        assert '[memman] Memory active' in out.stdout
+
+        _exec(cid, ['memman', 'remember', '--no-reconcile',
+                    'Lifecycle fact A',
+                    '--cat', 'fact', '--imp', '3'])
+        _exec(cid, ['memman', 'remember', '--no-reconcile',
+                    'Lifecycle fact B',
+                    '--cat', 'fact', '--imp', '3'])
+        _exec(cid, ['memman', 'scheduler', 'serve', '--once'])
+
+        status = json.loads(_exec(cid, ['memman', 'status']).stdout)
+        assert status['total_insights'] == 2, status
+
+        recall = _exec(cid, ['memman', 'recall', '--basic', 'Lifecycle'])
+        assert 'Lifecycle fact A' in recall.stdout
+        assert 'Lifecycle fact B' in recall.stdout
+
+
+# ---------------------------------------------------------------------
+# Read-only global mount: documented in assets/nanoclaw/SKILL.md
+# ---------------------------------------------------------------------
+
+class TestGlobalMountReadOnly:
+
+    def test_global_mount_rejects_writes(self, nanoclaw_run, tmp_path):
+        """The /home/node/.memman/data/global/ mount honors :ro.
+
+        Positive cross-check via /proc/self/mountinfo (mirrors
+        TestStatus.test_scheduler_serve_pid1's /proc/1/cmdline check)
+        plus the EROFS error string distinguishes "ro mount enforced"
+        from any other write-failure mode.
+        """
+        global_host = tmp_path / 'global'
+        global_host.mkdir()
+        (global_host / 'sentinel').write_text('host-side write OK\n')
+        extra = [(global_host,
+                  '/home/node/.memman/data/global', 'ro')]
+
+        cid, _ = nanoclaw_run(extra_mounts=extra)
+
+        out = _exec(cid, ['cat',
+                          '/home/node/.memman/data/global/sentinel'])
+        assert 'host-side write OK' in out.stdout
+
+        mountinfo = _exec(cid, ['cat', '/proc/self/mountinfo']).stdout
+        global_lines = [ln for ln in mountinfo.splitlines()
+                        if '/home/node/.memman/data/global' in ln]
+        assert global_lines, 'global mount not present in mountinfo'
+        line = global_lines[0]
+        assert ' ro,' in line or ' ro ' in line, (
+            f'global mount not flagged ro: {line}')
+
+        write = _exec(
+            cid,
+            ['sh', '-c',
+             'echo bad > /home/node/.memman/data/global/leak'],
+            check=False)
+        assert write.returncode != 0
+        err = (write.stderr + write.stdout).lower()
+        assert 'read-only file system' in err, err
