@@ -55,8 +55,8 @@ EMBEDDING_DIM = 512
 _PG_SCHEMA_VERSION = 2
 _PG_MIGRATIONS: list[tuple[int, str]] = [
     (2,
-     'ALTER TABLE queue.worker_runs'
-     ' ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ'),
+     ('ALTER TABLE queue.worker_runs'
+      ' ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ')),
     ]
 
 _FORBIDDEN_MIGRATION_RE = re.compile(
@@ -226,6 +226,11 @@ def _open_connection(
     connection so a hung worker is detected by the kernel rather
     than holding the lock indefinitely (Phase 2.5 adds the
     application-level heartbeat warning on top).
+
+    Returns a bare connection; lock-holding paths (`drain_lock`,
+    `reembed_lock`) and long-lived backend connections own the
+    lifecycle directly. One-shot helpers should use `_connection()`
+    below for guaranteed close-on-exit semantics.
     """
     import psycopg
     from pgvector.psycopg import register_vector
@@ -236,6 +241,28 @@ def _open_connection(
     conn = psycopg.connect(dsn, **kwargs)
     register_vector(conn)
     return conn
+
+
+@contextmanager
+def _connection(
+        dsn: str, *, autocommit: bool = False,
+        keepalives: bool = False) -> Iterator[psycopg.Connection]:
+    """Context-manager wrapper around `_open_connection`.
+
+    Closes on exit (psycopg3's `with conn:` is transaction-scoped, not
+    close-scoped, so wrapping `_open_connection` is the way to get
+    deterministic close-on-exit semantics for one-shot helpers
+    without losing the `register_vector` adapter setup).
+    """
+    conn = _open_connection(
+        dsn, autocommit=autocommit, keepalives=keepalives)
+    try:
+        yield conn
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def _datetime_or_none(v: Any) -> datetime | None:
@@ -1724,17 +1751,13 @@ def _ensure_baseline_schema(
     open if the stored width differs from `dim`.
     """
     schema = _store_schema(store)
-    conn = _open_connection(dsn, autocommit=True)
-    try:
-        with conn.cursor() as cur:
-            cur.execute('CREATE EXTENSION IF NOT EXISTS vector')
-            cur.execute(f'CREATE SCHEMA IF NOT EXISTS {schema}')
-            cur.execute(_PG_QUEUE_SCHEMA)
-            cur.execute(
-                _PG_BASELINE_SCHEMA.format(
-                    schema=schema, dim=dim))
-    finally:
-        conn.close()
+    with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute('CREATE EXTENSION IF NOT EXISTS vector')
+        cur.execute(f'CREATE SCHEMA IF NOT EXISTS {schema}')
+        cur.execute(_PG_QUEUE_SCHEMA)
+        cur.execute(
+            _PG_BASELINE_SCHEMA.format(
+                schema=schema, dim=dim))
 
 
 def _assert_vector_dim_matches(
@@ -1753,21 +1776,17 @@ def _assert_vector_dim_matches(
     for embedding-dim skew.
     """
     schema = _store_schema(store)
-    conn = _open_connection(dsn, autocommit=True)
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                'SELECT atttypmod FROM pg_attribute'
-                " WHERE attrelid = (%s || '.insights')::regclass"
-                "   AND attname = 'embedding'"
-                "   AND NOT attisdropped",
-                (schema,))
-            row = cur.fetchone()
-            if row is None or row[0] is None or int(row[0]) <= 0:
-                return
-            stored_dim = int(row[0])
-    finally:
-        conn.close()
+    with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(
+            'SELECT atttypmod FROM pg_attribute'
+            " WHERE attrelid = (%s || '.insights')::regclass"
+            "   AND attname = 'embedding'"
+            "   AND NOT attisdropped",
+            (schema,))
+        row = cur.fetchone()
+        if row is None or row[0] is None or int(row[0]) <= 0:
+            return
+        stored_dim = int(row[0])
     if stored_dim != expected_dim:
         raise BackendError(
             f'store {store!r} has vector({stored_dim}) but the active'
@@ -1786,39 +1805,37 @@ def _apply_pending_migrations(dsn: str, store: str) -> None:
     with `BackendError`. Each SQL string interpolates `{schema}`.
     """
     schema = _store_schema(store)
-    conn = _open_connection(dsn, autocommit=False)
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"SELECT value FROM {schema}.meta"
-                " WHERE key = 'pg_schema_version'")
-            row = cur.fetchone()
-            stored = int(row[0]) if row else 0
-            if stored > _PG_SCHEMA_VERSION:
-                raise BackendError(
-                    f'store {store!r} is at schema version {stored};'
-                    f' this binary supports {_PG_SCHEMA_VERSION}.'
-                    ' Upgrade memman before opening this store.')
-            if stored == _PG_SCHEMA_VERSION:
-                return
-            for target_ver, sql in _PG_MIGRATIONS:
-                if target_ver <= stored:
-                    continue
-                if target_ver > _PG_SCHEMA_VERSION:
-                    break
-                cur.execute(sql.format(schema=schema))
-            cur.execute(
-                f'INSERT INTO {schema}.meta (key, value)'
-                " VALUES ('pg_schema_version', %s)"
-                ' ON CONFLICT (key) DO UPDATE'
-                ' SET value = EXCLUDED.value',
-                (str(_PG_SCHEMA_VERSION),))
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+    with _connection(dsn, autocommit=False) as conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT value FROM {schema}.meta"
+                    " WHERE key = 'pg_schema_version'")
+                row = cur.fetchone()
+                stored = int(row[0]) if row else 0
+                if stored > _PG_SCHEMA_VERSION:
+                    raise BackendError(
+                        f'store {store!r} is at schema version {stored};'
+                        f' this binary supports {_PG_SCHEMA_VERSION}.'
+                        ' Upgrade memman before opening this store.')
+                if stored == _PG_SCHEMA_VERSION:
+                    return
+                for target_ver, sql in _PG_MIGRATIONS:
+                    if target_ver <= stored:
+                        continue
+                    if target_ver > _PG_SCHEMA_VERSION:
+                        break
+                    cur.execute(sql.format(schema=schema))
+                cur.execute(
+                    f'INSERT INTO {schema}.meta (key, value)'
+                    " VALUES ('pg_schema_version', %s)"
+                    ' ON CONFLICT (key) DO UPDATE'
+                    ' SET value = EXCLUDED.value',
+                    (str(_PG_SCHEMA_VERSION),))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def _ensure_hnsw_index(dsn: str, schema: str) -> None:
@@ -1839,28 +1856,24 @@ def _ensure_hnsw_index(dsn: str, schema: str) -> None:
     _check_identifier(schema)
     index_name = f'idx_insights_hnsw_{schema}'
     timeout_s = int(os.environ.get('MEMMAN_REINDEX_TIMEOUT', '180'))
-    conn = _open_connection(dsn, autocommit=True)
-    try:
-        with conn.cursor() as cur:
-            cur.execute(f"SET statement_timeout = '{timeout_s}s'")
-            cur.execute(
-                'SELECT i.indexrelid::regclass::text, i.indisvalid'
-                ' FROM pg_index i'
-                ' JOIN pg_class c ON c.oid = i.indexrelid'
-                ' WHERE c.relname = %s',
-                (index_name,))
-            row = cur.fetchone()
-            if row and not row[1]:
-                logger.warning(
-                    f'dropping invalid HNSW index {row[0]}')
-                cur.execute(f'DROP INDEX IF EXISTS {row[0]} CASCADE')
-            cur.execute(
-                f'CREATE INDEX CONCURRENTLY IF NOT EXISTS'
-                f' {index_name} ON {schema}.insights'
-                f' USING hnsw (embedding vector_cosine_ops)'
-                f' WHERE deleted_at IS NULL')
-    finally:
-        conn.close()
+    with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(f"SET statement_timeout = '{timeout_s}s'")
+        cur.execute(
+            'SELECT i.indexrelid::regclass::text, i.indisvalid'
+            ' FROM pg_index i'
+            ' JOIN pg_class c ON c.oid = i.indexrelid'
+            ' WHERE c.relname = %s',
+            (index_name,))
+        row = cur.fetchone()
+        if row and not row[1]:
+            logger.warning(
+                f'dropping invalid HNSW index {row[0]}')
+            cur.execute(f'DROP INDEX IF EXISTS {row[0]} CASCADE')
+        cur.execute(
+            f'CREATE INDEX CONCURRENTLY IF NOT EXISTS'
+            f' {index_name} ON {schema}.insights'
+            f' USING hnsw (embedding vector_cosine_ops)'
+            f' WHERE deleted_at IS NULL')
 
 
 class PostgresQueueBackend:
@@ -2034,31 +2047,27 @@ class PostgresCluster(Cluster):
 
     def list_stores(self, *, data_dir: str) -> list[str]:
         try:
-            conn = _open_connection(self._dsn, autocommit=True)
+            with _connection(self._dsn, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        'SELECT nspname FROM pg_namespace'
+                        " WHERE nspname LIKE 'store_%'"
+                        ' ORDER BY nspname')
+                    return sorted(
+                        r[0][len('store_'):] for r in cur.fetchall())
+        except BackendError:
+            raise
         except Exception as exc:
             raise BackendError(f'cannot connect to postgres: {exc}')
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    'SELECT nspname FROM pg_namespace'
-                    " WHERE nspname LIKE 'store_%'"
-                    ' ORDER BY nspname')
-                return sorted(
-                    r[0][len('store_'):] for r in cur.fetchall())
-        finally:
-            conn.close()
 
     def drop_store(self, *, store: str, data_dir: str) -> None:
         schema = _store_schema(store)
-        conn = _open_connection(self._dsn, autocommit=True)
-        try:
+        with _connection(self._dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
                 cur.execute(
                     'DELETE FROM queue.queue WHERE store = %s',
                     (store,))
-        finally:
-            conn.close()
 
     def close(self) -> None:
         """Postgres clusters do not hold a pool in Phase 2."""
