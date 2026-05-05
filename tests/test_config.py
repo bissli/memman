@@ -1,11 +1,11 @@
-"""Tests for memman.config -- central env-var configuration module.
+"""Tests for memman.config -- variables, set command, and env-var resolver."""
 
-Verifies the canonical env var names, typed helpers (`get_bool`,
-`is_worker`), and effective-config enumeration with secret redaction.
-"""
+from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 from memman import config
+from memman.cli import cli
 
 ALL_EXPECTED_NAMES = {
     'MEMMAN_DATA_DIR',
@@ -183,3 +183,228 @@ def test_enumerate_empty_string_is_unset(env_file):
     env_file(config.LLM_MODEL_FAST, '')
     out = config.enumerate_effective_config()
     assert out[config.LLM_MODEL_FAST] is None
+
+
+class TestConfigSet:
+    """`memman config set` writes and validates env-file entries."""
+
+    def test_writes_env_file(self, tmp_path):
+        """`config set` writes the key into the env file at mode 0600."""
+        runner = CliRunner()
+        data_dir = str(tmp_path / 'memman')
+        result = runner.invoke(
+            cli, ['--data-dir', data_dir, 'config', 'set',
+                  config.BACKEND, 'postgres'])
+        assert result.exit_code == 0, result.output
+        parsed = config.parse_env_file(config.env_file_path(data_dir))
+        assert parsed[config.BACKEND] == 'postgres'
+
+    def test_rejects_unknown_key(self, tmp_path):
+        """`config set` exits non-zero when KEY is not in INSTALLABLE_KEYS."""
+        runner = CliRunner()
+        data_dir = str(tmp_path / 'memman')
+        result = runner.invoke(
+            cli, ['--data-dir', data_dir, 'config', 'set',
+                  'MEMMAN_BOGUS_KEY', 'value'])
+        assert result.exit_code != 0
+        assert 'INSTALLABLE_KEYS' in result.output
+
+    def test_overrides_existing_value(self, tmp_path):
+        """`config set` overrides an existing env-file value."""
+        data_dir = tmp_path / 'memman'
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / config.ENV_FILENAME).write_text(
+            f'{config.BACKEND}=sqlite\n')
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ['--data-dir', str(data_dir), 'config', 'set',
+                  config.BACKEND, 'postgres'])
+        assert result.exit_code == 0, result.output
+        parsed = config.parse_env_file(config.env_file_path(str(data_dir)))
+        assert parsed[config.BACKEND] == 'postgres'
+
+    def test_preserves_other_rows(self, tmp_path):
+        """`config set` merges -- other env-file rows are preserved verbatim."""
+        data_dir = tmp_path / 'memman'
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / config.ENV_FILENAME).write_text(
+            f'{config.LLM_PROVIDER}=openrouter\n'
+            f'{config.OPENROUTER_API_KEY}=keep-me\n'
+            f'{config.BACKEND}=sqlite\n')
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ['--data-dir', str(data_dir), 'config', 'set',
+                  config.BACKEND, 'postgres'])
+        assert result.exit_code == 0, result.output
+        parsed = config.parse_env_file(config.env_file_path(str(data_dir)))
+        assert parsed[config.BACKEND] == 'postgres'
+        assert parsed[config.LLM_PROVIDER] == 'openrouter'
+        assert parsed[config.OPENROUTER_API_KEY] == 'keep-me'
+
+
+def _write_env(path: Path, contents: str) -> None:
+    """Write contents to an env file and reset the config cache."""
+    path.write_text(contents)
+    config.reset_file_cache()
+
+
+class TestConfigResolver:
+    """Env-var resolver: file-canonical keys, parser edge cases, cache."""
+
+    @pytest.fixture
+    def env_path(self, tmp_path, monkeypatch):
+        """Pin MEMMAN_DATA_DIR to tmp and return the env-file path."""
+        monkeypatch.setenv(config.DATA_DIR, str(tmp_path))
+        config.reset_file_cache()
+        yield tmp_path / config.ENV_FILENAME
+        config.reset_file_cache()
+
+    def test_get_ignores_shell_env_for_installable_keys(self, env_path, monkeypatch):
+        """Installable keys are file-canonical; shell env never overrides."""
+        monkeypatch.setenv(config.LLM_MODEL_FAST, 'env-model')
+        _write_env(env_path, f'{config.LLM_MODEL_FAST}=file-model\n')
+        assert config.get(config.LLM_MODEL_FAST) == 'file-model'
+
+    def test_get_returns_file_value(self, env_path, monkeypatch):
+        """get() returns the value from the env file."""
+        monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
+        _write_env(env_path, f'{config.LLM_MODEL_FAST}=file-model\n')
+        assert config.get(config.LLM_MODEL_FAST) == 'file-model'
+
+    def test_get_returns_none_when_file_missing_key(self, env_path, monkeypatch):
+        """get() returns None when the key is absent from the file."""
+        monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
+        assert config.get(config.LLM_MODEL_FAST) is None
+
+    def test_get_returns_none_when_shell_env_set_but_file_missing(
+            self, env_path, monkeypatch):
+        """Shell-only value is invisible -- file is the only source."""
+        monkeypatch.setenv(config.LLM_MODEL_FAST, 'env-only')
+        assert config.get(config.LLM_MODEL_FAST) is None
+
+    def test_parser_skips_blank_lines_and_comments(self, env_path):
+        """Parser ignores blank lines and # comments."""
+        contents = '\n'.join([
+            '# This is a comment',
+            '',
+            f'{config.LLM_MODEL_FAST}=fast',
+            '   ',
+            '# Another comment',
+            f'{config.LLM_MODEL_SLOW_CANONICAL}=slow',
+            ])
+        _write_env(env_path, contents + '\n')
+        assert config.get(config.LLM_MODEL_FAST) == 'fast'
+        assert config.get(config.LLM_MODEL_SLOW_CANONICAL) == 'slow'
+
+    def test_parser_strips_quoted_values(self, env_path):
+        """Parser strips single and double quotes from values."""
+        contents = '\n'.join([
+            f'{config.LLM_MODEL_FAST}="quoted-fast"',
+            f"{config.LLM_MODEL_SLOW_CANONICAL}='quoted-slow'",
+            ])
+        _write_env(env_path, contents + '\n')
+        assert config.get(config.LLM_MODEL_FAST) == 'quoted-fast'
+        assert config.get(config.LLM_MODEL_SLOW_CANONICAL) == 'quoted-slow'
+
+    def test_parser_does_not_expand_variables(self, env_path):
+        """Parser does not expand shell variable syntax."""
+        contents = f'{config.LLM_MODEL_FAST}=${{HOME}}/models\n'
+        _write_env(env_path, contents)
+        assert config.get(config.LLM_MODEL_FAST) == '${HOME}/models'
+
+    def test_missing_file_returns_none(self, env_path, monkeypatch):
+        """Missing env file returns None without error."""
+        monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
+        assert not env_path.exists()
+        assert config.get(config.LLM_MODEL_FAST) is None
+
+    def test_data_dir_change_invalidates_cache(self, tmp_path, monkeypatch):
+        """Changing DATA_DIR causes the file cache to be invalidated."""
+        dir_a = tmp_path / 'a'
+        dir_b = tmp_path / 'b'
+        dir_a.mkdir()
+        dir_b.mkdir()
+        (dir_a / config.ENV_FILENAME).write_text(
+            f'{config.LLM_MODEL_FAST}=from-a\n')
+        (dir_b / config.ENV_FILENAME).write_text(
+            f'{config.LLM_MODEL_FAST}=from-b\n')
+
+        monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
+        monkeypatch.setenv(config.DATA_DIR, str(dir_a))
+        config.reset_file_cache()
+        assert config.get(config.LLM_MODEL_FAST) == 'from-a'
+
+        monkeypatch.setenv(config.DATA_DIR, str(dir_b))
+        assert config.get(config.LLM_MODEL_FAST) == 'from-b'
+
+    def test_get_bool_resolves_through_file(self, env_path, monkeypatch):
+        """get_bool() resolves installable keys through the file."""
+        monkeypatch.delenv(config.LOG_LEVEL, raising=False)
+        _write_env(env_path, f'{config.LOG_LEVEL}=on\n')
+        assert config.get_bool(config.LOG_LEVEL) is True
+
+    def test_get_bool_ignores_shell_env_for_installable_key(
+            self, env_path, monkeypatch):
+        """get_bool() reads file only for installable keys."""
+        monkeypatch.setenv(config.LOG_LEVEL, 'on')
+        _write_env(env_path, f'{config.LOG_LEVEL}=off\n')
+        assert config.get_bool(config.LOG_LEVEL) is False
+
+    def test_effective_source_reports_file_only_for_installable(
+            self, env_path, monkeypatch):
+        """Installable keys report 'file' or 'unset'; shell env is invisible."""
+        monkeypatch.setenv(config.LLM_MODEL_FAST, 'env-val')
+        assert config.effective_source(config.LLM_MODEL_FAST) == 'unset'
+
+        _write_env(env_path, f'{config.LLM_MODEL_FAST}=file-val\n')
+        assert config.effective_source(config.LLM_MODEL_FAST) == 'file'
+
+        _write_env(env_path, '')
+        assert config.effective_source(config.LLM_MODEL_FAST) == 'unset'
+
+    def test_effective_source_reports_env_for_process_control(
+            self, env_path, monkeypatch):
+        """Process-control vars (DEBUG, WORKER) read os.environ directly."""
+        monkeypatch.setenv(config.DEBUG, '1')
+        assert config.effective_source(config.DEBUG) == 'env'
+        monkeypatch.delenv(config.DEBUG, raising=False)
+        assert config.effective_source(config.DEBUG) == 'unset'
+
+    def test_enumerate_effective_config_redacts_secrets(self, env_path, monkeypatch):
+        """enumerate_effective_config redacts and exposes secrets correctly."""
+        _write_env(env_path, f'{config.OPENROUTER_API_KEY}=super-secret\n')
+        out = config.enumerate_effective_config(redact=True)
+        assert out[config.OPENROUTER_API_KEY] == '***REDACTED***'
+
+        out_unredacted = config.enumerate_effective_config(redact=False)
+        assert out_unredacted[config.OPENROUTER_API_KEY] == 'super-secret'
+
+    def test_enumerate_resolves_through_file(self, env_path, monkeypatch):
+        """enumerate_effective_config returns file-only values."""
+        monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
+        _write_env(env_path, f'{config.LLM_MODEL_FAST}=file-only\n')
+        out = config.enumerate_effective_config(redact=False)
+        assert out[config.LLM_MODEL_FAST] == 'file-only'
+
+    def test_process_control_vars_bypass_file(self, env_path, monkeypatch):
+        """Process-control vars written to file are invisible to enumerate."""
+        monkeypatch.delenv(config.WORKER, raising=False)
+        _write_env(env_path, f'{config.WORKER}=1\n')
+        out = config.enumerate_effective_config()
+        assert out[config.WORKER] is None
+
+    def test_installable_keys_excludes_process_control(self):
+        """Process-control vars are not in INSTALLABLE_KEYS."""
+        process_control = {
+            config.DATA_DIR,
+            config.STORE,
+            config.WORKER,
+            config.DEBUG,
+            }
+        for var in process_control:
+            assert var not in config.INSTALLABLE_KEYS
+
+    def test_installable_keys_covers_secrets(self):
+        """Every secret is in INSTALLABLE_KEYS so install can write it."""
+        for secret in config.SECRET_VARS:
+            assert secret in config.INSTALLABLE_KEYS
