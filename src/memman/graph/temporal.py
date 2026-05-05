@@ -15,7 +15,7 @@ def create_temporal_edge(backend: Backend, insight: Insight) -> int:
     weight comparison uses the server-stamped value, not whatever was
     on the in-memory dataclass when the caller built it. This makes
     proximity edges deterministic across writers in the presence of
-    clock skew (Phase 1a Decision #1: backends own time).
+    clock skew (backends own time).
     """
     stored = backend.nodes.get(insight.id)
     if stored is not None and stored.created_at is not None:

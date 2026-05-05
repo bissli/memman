@@ -6,7 +6,7 @@ ProvenanceCount, IntegrityReport, QueueRow, QueueHints, QueueStats,
 WorkerRun, ReembedRow). Includes the timestamp helper and importance
 helpers used across the package.
 
-Phase 1a Protocol commitment: `Insight.created_at`, `Insight.updated_at`,
+Protocol commitment: `Insight.created_at`, `Insight.updated_at`,
 and `Edge.created_at` carry no `default_factory` -- backends stamp
 these server-side at the verb boundary. In-memory construction without
 a value yields `None`; backends fill them in on insert and reads
@@ -182,13 +182,7 @@ class EnrichmentCoverage:
 
 @dataclass
 class QueueRow:
-    """One claimable row from the per-host queue.
-
-    Phase 1a: defined for shape; the queue Protocol surface is
-    not yet wired through `Backend`. Phase 2 lifts queue.db into
-    the Postgres backend; until then queue rows continue to flow
-    through `memman.queue.*`.
-    """
+    """One claimable row from the per-host queue."""
 
     id: int
     store: str

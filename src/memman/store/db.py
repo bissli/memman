@@ -5,8 +5,8 @@ import os
 import re
 import sqlite3
 from collections.abc import Callable
-from typing import Any
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger('memman')
 
@@ -103,12 +103,12 @@ class DB:
             raise RuntimeError('nested transactions not supported')
         self._in_tx = True
         try:
-            self._conn.execute('BEGIN IMMEDIATE')
+            self._conn.execute('begin immediate')
             result = fn()
-            self._conn.execute('COMMIT')
+            self._conn.execute('commit')
             return result
         except Exception:
-            self._conn.execute('ROLLBACK')
+            self._conn.execute('rollback')
             raise
         finally:
             self._in_tx = False
@@ -117,17 +117,15 @@ class DB:
 def get_meta(db: 'DB', key: str) -> str | None:
     """Read a value from the meta key-value table."""
     row = db._query(
-        'SELECT value FROM meta WHERE key = ?', (key,)).fetchone()
+        'select value from meta where key = ?', (key,)).fetchone()
     return row[0] if row else None
 
 
 def storage_summary(db: 'DB') -> dict[str, Any]:
     """Return backend-specific storage information for the active DB.
 
-    SQLite: {'db_path': <file path>, 'db_size_bytes': <int>}.
-    A future Postgres backend returns relation_size data or an empty
-    dict; the SQLite-specific keys are inappropriate. Used by the
-    `memman status` command.
+    SQLite-specific: {'db_path': <file path>, 'db_size_bytes': <int>}.
+    Used by the `memman status` command.
     """
     summary: dict[str, Any] = {'db_path': db.path}
     try:
@@ -140,7 +138,7 @@ def storage_summary(db: 'DB') -> dict[str, Any]:
 def set_meta(db: 'DB', key: str, value: str) -> None:
     """Write a value to the meta key-value table."""
     db._exec(
-        'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)',
+        'insert or replace into meta (key, value) values (?, ?)',
         (key, value))
 
 
@@ -158,10 +156,10 @@ def open_db(data_dir: str) -> DB:
     is_new_db = not Path(db_path).exists()
     conn = sqlite3.connect(db_path, isolation_level=None)
     if is_new_db:
-        conn.execute('PRAGMA auto_vacuum=INCREMENTAL')
-    conn.execute('PRAGMA journal_mode=WAL')
-    conn.execute('PRAGMA foreign_keys=ON')
-    conn.execute('PRAGMA busy_timeout=5000')
+        conn.execute('pragma auto_vacuum=incremental')
+    conn.execute('pragma journal_mode=wal')
+    conn.execute('pragma foreign_keys=on')
+    conn.execute('pragma busy_timeout=5000')
     db = DB(conn, db_path)
     _migrate(db)
     return db
@@ -174,76 +172,76 @@ def open_read_only(data_dir: str) -> DB:
         raise FileNotFoundError(f'database not found: {db_path}')
     uri = f'file:{db_path}?mode=ro'
     conn = sqlite3.connect(uri, uri=True, isolation_level=None)
-    conn.execute('PRAGMA journal_mode=WAL')
-    conn.execute('PRAGMA foreign_keys=ON')
+    conn.execute('pragma journal_mode=wal')
+    conn.execute('pragma foreign_keys=on')
     return DB(conn, db_path)
 
 
 _BASELINE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS insights (
-    id          TEXT PRIMARY KEY,
-    content     TEXT NOT NULL,
-    category    TEXT DEFAULT 'general',
-    importance  INTEGER DEFAULT 3,
-    entities    TEXT DEFAULT '[]',
-    source      TEXT DEFAULT 'user',
-    access_count INTEGER DEFAULT 0,
-    keywords    TEXT,
-    summary     TEXT,
-    semantic_facts TEXT,
-    last_accessed_at TEXT,
-    embedding   BLOB,
-    effective_importance REAL DEFAULT 0.5,
-    linked_at   TEXT,
-    enriched_at TEXT,
-    created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL,
-    deleted_at  TEXT,
-    prompt_version TEXT,
-    model_id    TEXT,
-    embedding_model TEXT
+create table if not exists insights (
+    id          text primary key,
+    content     text not null,
+    category    text default 'general',
+    importance  integer default 3,
+    entities    text default '[]',
+    source      text default 'user',
+    access_count integer default 0,
+    keywords    text,
+    summary     text,
+    semantic_facts text,
+    last_accessed_at text,
+    embedding   blob,
+    effective_importance real default 0.5,
+    linked_at   text,
+    enriched_at text,
+    created_at  text not null,
+    updated_at  text not null,
+    deleted_at  text,
+    prompt_version text,
+    model_id    text,
+    embedding_model text
 );
 
-CREATE TABLE IF NOT EXISTS edges (
-    source_id   TEXT NOT NULL,
-    target_id   TEXT NOT NULL,
-    edge_type   TEXT NOT NULL CHECK(edge_type IN ('temporal','semantic','causal','entity')),
-    weight      REAL DEFAULT 1.0,
-    metadata    TEXT DEFAULT '{}',
-    created_at  TEXT NOT NULL,
-    PRIMARY KEY (source_id, target_id, edge_type),
-    FOREIGN KEY (source_id) REFERENCES insights(id) ON DELETE CASCADE,
-    FOREIGN KEY (target_id) REFERENCES insights(id) ON DELETE CASCADE
+create table if not exists edges (
+    source_id   text not null,
+    target_id   text not null,
+    edge_type   text not null check(edge_type in ('temporal','semantic','causal','entity')),
+    weight      real default 1.0,
+    metadata    text default '{}',
+    created_at  text not null,
+    primary key (source_id, target_id, edge_type),
+    foreign key (source_id) references insights(id) on delete cascade,
+    foreign key (target_id) references insights(id) on delete cascade
 );
 
-CREATE INDEX IF NOT EXISTS idx_insights_category ON insights(category);
-CREATE INDEX IF NOT EXISTS idx_insights_importance ON insights(importance);
-CREATE INDEX IF NOT EXISTS idx_insights_created ON insights(created_at);
-CREATE INDEX IF NOT EXISTS idx_insights_deleted ON insights(deleted_at);
-CREATE INDEX IF NOT EXISTS idx_insights_source ON insights(source);
-CREATE INDEX IF NOT EXISTS idx_insights_effective_imp ON insights(effective_importance);
-CREATE INDEX IF NOT EXISTS idx_prune_candidates ON insights(deleted_at, importance, access_count, effective_importance);
-CREATE INDEX IF NOT EXISTS idx_insights_pending_link
-    ON insights(linked_at)
-    WHERE linked_at IS NULL AND deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
-CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
-CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(edge_type);
-CREATE INDEX IF NOT EXISTS idx_edges_source_type ON edges(source_id, edge_type);
-CREATE INDEX IF NOT EXISTS idx_edges_target_type ON edges(target_id, edge_type);
+create index if not exists idx_insights_category on insights(category);
+create index if not exists idx_insights_importance on insights(importance);
+create index if not exists idx_insights_created on insights(created_at);
+create index if not exists idx_insights_deleted on insights(deleted_at);
+create index if not exists idx_insights_source on insights(source);
+create index if not exists idx_insights_effective_imp on insights(effective_importance);
+create index if not exists idx_prune_candidates on insights(deleted_at, importance, access_count, effective_importance);
+create index if not exists idx_insights_pending_link
+    on insights(linked_at)
+    where linked_at is null and deleted_at is null;
+create index if not exists idx_edges_source on edges(source_id);
+create index if not exists idx_edges_target on edges(target_id);
+create index if not exists idx_edges_type on edges(edge_type);
+create index if not exists idx_edges_source_type on edges(source_id, edge_type);
+create index if not exists idx_edges_target_type on edges(target_id, edge_type);
 
-CREATE TABLE IF NOT EXISTS oplog (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    operation   TEXT NOT NULL,
-    insight_id  TEXT,
-    detail      TEXT DEFAULT '',
-    created_at  TEXT NOT NULL
+create table if not exists oplog (
+    id          integer primary key autoincrement,
+    operation   text not null,
+    insight_id  text,
+    detail      text default '',
+    created_at  text not null
 );
-CREATE INDEX IF NOT EXISTS idx_oplog_created ON oplog(created_at);
+create index if not exists idx_oplog_created on oplog(created_at);
 
-CREATE TABLE IF NOT EXISTS meta (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
+create table if not exists meta (
+    key   text primary key,
+    value text not null
 );
 """
 
@@ -252,9 +250,9 @@ def _migrate(db: DB) -> None:
     """Apply the canonical schema to the database.
 
     Single-user tool: one authoritative schema (`_BASELINE_SCHEMA`),
-    always the latest. `CREATE TABLE IF NOT EXISTS` creates a fresh
+    always the latest. `create table if not exists` creates a fresh
     database; pre-existing databases must already match the canonical
-    shape — wipe and recreate on schema change rather than carrying
-    ALTER migrations.
+    shape -- wipe and recreate on schema change rather than carrying
+    `alter` migrations.
     """
     db._conn.executescript(_BASELINE_SCHEMA)

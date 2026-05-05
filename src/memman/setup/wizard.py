@@ -11,10 +11,10 @@ features today:
 
 2. Backend selection (sqlite | postgres). Postgres is hidden until
    the `memman[postgres]` extras are importable AND the
-   `memman.store.postgres` module exists (shipped in Phase 2).
-   Until both checks pass, only sqlite is selectable -- the wizard
-   skips the prompt entirely and passes `MEMMAN_BACKEND=sqlite`
-   straight through, avoiding a one-option confirmation prompt.
+   `memman.store.postgres` module exists. Until both checks pass,
+   only sqlite is selectable -- the wizard skips the prompt entirely
+   and passes `MEMMAN_BACKEND=sqlite` straight through, avoiding a
+   one-option confirmation prompt.
 
 Non-TTY mode (`sys.stdin.isatty()` False or `--no-wizard`) skips all
 prompts and uses flag values + defaults. The wizard never silently
@@ -160,8 +160,7 @@ def _selectable_backends() -> list[str]:
 
     Sqlite is always available. Postgres is included only when both
     `memman[postgres]` extras are importable AND the runtime
-    `memman.store.postgres` module exists (shipped in Phase 2 of
-    DB-MIGRATION.md).
+    `memman.store.postgres` module exists.
     """
     out = ['sqlite']
     if extras.is_available('postgres') and _backend_module_exists():
@@ -228,10 +227,9 @@ def _probe_dsn_or_die(dsn: str) -> None:
 def _probe_dsn(dsn: str) -> None:
     """Open + verify pgvector + emit PgBouncer hint on remote DSN.
 
-    Per Phase 4 gate item 5: install-time probe asserts `SELECT 1`
-    and `pg_extension WHERE extname = 'vector'`; non-localhost URLs
-    emit a PgBouncer recommendation. Raises on hard failure (cannot
-    connect, pgvector missing).
+    Asserts `select 1` and `pg_extension where extname = 'vector'`;
+    non-localhost URLs emit a PgBouncer recommendation. Raises on
+    hard failure (cannot connect, pgvector missing).
 
     Lazy-imports `psycopg` so users without `memman[postgres]` are
     not blocked from importing the wizard module itself.
@@ -240,14 +238,14 @@ def _probe_dsn(dsn: str) -> None:
     with psycopg.connect(
             dsn, connect_timeout=DSN_PROBE_TIMEOUT_SEC) as conn:
         with conn.cursor() as cur:
-            cur.execute('SELECT 1')
+            cur.execute('select 1')
             cur.execute(
-                "SELECT 1 FROM pg_extension WHERE extname = 'vector'")
+                "select 1 from pg_extension where extname = 'vector'")
             if cur.fetchone() is None:
                 raise RuntimeError(
-                    "pgvector extension is not installed in the target "
-                    "database; run `CREATE EXTENSION vector;` as a "
-                    "superuser, then retry")
+                    'pgvector extension is not installed in the target '
+                    'database; run `create extension vector;` as a '
+                    'superuser, then retry')
     if _is_remote_dsn(dsn):
         click.echo(click.style(
             '  hint: non-localhost Postgres detected; consider'
@@ -268,9 +266,7 @@ def _is_remote_dsn(dsn: str) -> bool:
     for marker in ('host=localhost', 'host=127.0.0.1', '@localhost', '@127.0.0.1'):
         if marker in lowered:
             return False
-    if 'host=' in lowered or '://' in lowered:
-        return True
-    return False
+    return bool('host=' in lowered or '://' in lowered)
 
 
 def _print_migration_hint(

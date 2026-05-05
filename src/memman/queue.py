@@ -4,7 +4,7 @@ The synchronous write path appends to this queue; a background worker
 (`memman scheduler drain --pending`, hidden) drains it and runs the
 full remember pipeline.
 Single SQLite file at <data_dir>/queue.db with WAL mode. Atomic claim
-via UPDATE-RETURNING; stale claims are reclaimable after the timeout.
+via update-returning; stale claims are reclaimable after the timeout.
 """
 
 import logging
@@ -55,55 +55,55 @@ def open_queue_db(base_dir: str) -> sqlite3.Connection:
     Path(base_dir).mkdir(mode=0o755, exist_ok=True, parents=True)
     path = queue_db_path(base_dir)
     conn = sqlite3.connect(path, isolation_level=None)
-    conn.execute('PRAGMA journal_mode=WAL')
-    conn.execute('PRAGMA busy_timeout=5000')
+    conn.execute('pragma journal_mode=wal')
+    conn.execute('pragma busy_timeout=5000')
     _migrate(conn)
     return conn
 
 
 _BASELINE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS queue (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    store         TEXT NOT NULL,
-    content       TEXT NOT NULL,
-    hint_cat      TEXT,
-    hint_imp      INTEGER,
-    hint_source   TEXT,
-    hint_entities TEXT,
-    hint_replaced_id TEXT,
-    hint_no_reconcile INTEGER NOT NULL DEFAULT 0,
-    priority      INTEGER NOT NULL DEFAULT 0,
-    queued_at     INTEGER NOT NULL,
-    claimed_at    INTEGER,
-    worker_pid    INTEGER,
-    attempts      INTEGER NOT NULL DEFAULT 0,
-    status        TEXT NOT NULL DEFAULT 'pending'
-                  CHECK(status IN ('pending','done','failed','stale')),
-    last_error    TEXT,
-    processed_at  INTEGER
+create table if not exists queue (
+    id            integer primary key autoincrement,
+    store         text not null,
+    content       text not null,
+    hint_cat      text,
+    hint_imp      integer,
+    hint_source   text,
+    hint_entities text,
+    hint_replaced_id text,
+    hint_no_reconcile integer not null default 0,
+    priority      integer not null default 0,
+    queued_at     integer not null,
+    claimed_at    integer,
+    worker_pid    integer,
+    attempts      integer not null default 0,
+    status        text not null default 'pending'
+                  check(status in ('pending','done','failed','stale')),
+    last_error    text,
+    processed_at  integer
 );
 
-CREATE INDEX IF NOT EXISTS idx_queue_ready
-    ON queue(status, priority DESC, queued_at ASC)
-    WHERE status = 'pending';
+create index if not exists idx_queue_ready
+    on queue(status, priority desc, queued_at asc)
+    where status = 'pending';
 
-CREATE INDEX IF NOT EXISTS idx_queue_store
-    ON queue(store);
+create index if not exists idx_queue_store
+    on queue(store);
 
-CREATE TABLE IF NOT EXISTS worker_runs (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    started_at    INTEGER NOT NULL,
-    finished_at   INTEGER,
-    worker_pid    INTEGER,
-    rows_claimed  INTEGER NOT NULL DEFAULT 0,
-    rows_done     INTEGER NOT NULL DEFAULT 0,
-    rows_failed   INTEGER NOT NULL DEFAULT 0,
-    duration_ms   INTEGER,
-    error         TEXT
+create table if not exists worker_runs (
+    id            integer primary key autoincrement,
+    started_at    integer not null,
+    finished_at   integer,
+    worker_pid    integer,
+    rows_claimed  integer not null default 0,
+    rows_done     integer not null default 0,
+    rows_failed   integer not null default 0,
+    duration_ms   integer,
+    error         text
 );
 
-CREATE INDEX IF NOT EXISTS idx_worker_runs_started
-    ON worker_runs(started_at DESC);
+create index if not exists idx_worker_runs_started
+    on worker_runs(started_at desc);
 """
 
 
@@ -111,10 +111,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """Apply the canonical queue schema.
 
     Single-user tool: one authoritative schema (`_BASELINE_SCHEMA`),
-    always the latest. `CREATE TABLE IF NOT EXISTS` creates a fresh
+    always the latest. `create table if not exists` creates a fresh
     queue database; pre-existing databases must already match the
-    canonical shape — wipe and recreate on schema change rather than
-    carrying ALTER migrations.
+    canonical shape -- wipe and recreate on schema change rather than
+    carrying `alter` migrations.
     """
     conn.executescript(_BASELINE_SCHEMA)
 
@@ -139,14 +139,18 @@ def enqueue(
     deterministic stores (`remember --no-reconcile`).
     """
     now = int(time.time())
-    cur = conn.execute(
-        'INSERT INTO queue (store, content, hint_cat, hint_imp,'
-        ' hint_source, hint_entities, hint_replaced_id,'
-        ' hint_no_reconcile, priority, queued_at)'
-        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        (store, content, hint_cat, hint_imp, hint_source,
-         hint_entities, hint_replaced_id,
-         1 if hint_no_reconcile else 0, priority, now))
+    sql = """
+insert into queue (
+    store, content, hint_cat, hint_imp,
+    hint_source, hint_entities, hint_replaced_id,
+    hint_no_reconcile, priority, queued_at
+)
+values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+    cur = conn.execute(sql, (
+        store, content, hint_cat, hint_imp, hint_source,
+        hint_entities, hint_replaced_id,
+        1 if hint_no_reconcile else 0, priority, now))
     row_id = cur.lastrowid
     logger.debug(f'queued blob {row_id} for store {store}')
     return row_id
@@ -168,27 +172,26 @@ def claim(
     store_params: list = []
     if stores:
         placeholders = ','.join('?' * len(stores))
-        store_filter = f' AND store IN ({placeholders})'
+        store_filter = f' and store in ({placeholders})'
         store_params = list(stores)
 
-    sql = (
-        'UPDATE queue'
-        '   SET claimed_at = ?,'
-        '       worker_pid = ?,'
-        '       attempts   = attempts + 1'
-        ' WHERE id = ('
-        '   SELECT id FROM queue'
-        "    WHERE status = 'pending'"
-        '      AND (claimed_at IS NULL'
-        '           OR claimed_at <= ? - ?)'
-        f'{store_filter}'
-        '    ORDER BY priority DESC, queued_at ASC'
-        '    LIMIT 1'
-        ' )'
-        ' RETURNING id, store, content, hint_cat, hint_imp,'
-        '           hint_source, hint_entities, hint_replaced_id,'
-        '           hint_no_reconcile, priority, queued_at, attempts')
-
+    sql = f"""
+update queue
+set claimed_at = ?,
+    worker_pid = ?,
+    attempts   = attempts + 1
+where id = (
+    select id from queue
+    where status = 'pending'
+      and (claimed_at is null or claimed_at <= ? - ?)
+      {store_filter}
+    order by priority desc, queued_at asc
+    limit 1
+)
+returning id, store, content, hint_cat, hint_imp,
+          hint_source, hint_entities, hint_replaced_id,
+          hint_no_reconcile, priority, queued_at, attempts
+"""
     params = [now, worker_pid, now, stale_after_seconds, *store_params]
     row = conn.execute(sql, params).fetchone()
     if row is None:
@@ -205,11 +208,15 @@ def claim(
 def mark_done(conn: sqlite3.Connection, row_id: int) -> None:
     """Mark a claimed row as successfully processed."""
     now = int(time.time())
-    cur = conn.execute(
-        'UPDATE queue SET status = ?, processed_at = ?,'
-        ' claimed_at = NULL, worker_pid = NULL'
-        ' WHERE id = ?',
-        (STATUS_DONE, now, row_id))
+    sql = """
+update queue
+set status = ?,
+    processed_at = ?,
+    claimed_at = null,
+    worker_pid = null
+where id = ?
+"""
+    cur = conn.execute(sql, (STATUS_DONE, now, row_id))
     if cur.rowcount == 0:
         logger.warning(f'mark_done: queue row {row_id} not found')
     else:
@@ -228,7 +235,7 @@ def mark_failed(
     otherwise releases the claim so the next worker can retry.
     """
     row = conn.execute(
-        'SELECT attempts FROM queue WHERE id = ?',
+        'select attempts from queue where id = ?',
         (row_id,)).fetchone()
     if row is None:
         logger.warning(f'mark_failed: queue row {row_id} not found')
@@ -236,17 +243,22 @@ def mark_failed(
     attempts = row[0]
     if attempts >= max_attempts:
         now = int(time.time())
+        fail_sql = """
+update queue
+set status = ?,
+    last_error = ?,
+    processed_at = ?,
+    claimed_at = null,
+    worker_pid = null
+where id = ?
+"""
         conn.execute(
-            'UPDATE queue SET status = ?, last_error = ?,'
-            ' processed_at = ?, claimed_at = NULL, worker_pid = NULL'
-            ' WHERE id = ?',
-            (STATUS_FAILED, error[:1000], now, row_id))
+            fail_sql, (STATUS_FAILED, error[:1000], now, row_id))
         logger.warning(
             f'queue row {row_id} failed after {attempts} attempts: {error[:200]}')
     else:
         conn.execute(
-            'UPDATE queue SET last_error = ?'
-            ' WHERE id = ?',
+            'update queue set last_error = ? where id = ?',
             (error[:1000], row_id))
         logger.debug(
             f'queue row {row_id} deferred for retry (attempt {attempts});'
@@ -262,14 +274,14 @@ def stats(conn: sqlite3.Connection) -> dict:
         'oldest_pending_age_seconds': None,
         }
     rows = conn.execute(
-        'SELECT status, COUNT(*) FROM queue GROUP BY status').fetchall()
+        'select status, count(*) from queue group by status').fetchall()
     for status, count in rows:
         if status in result:
             result[status] = count
 
     oldest = conn.execute(
-        "SELECT queued_at FROM queue WHERE status = 'pending'"
-        ' ORDER BY queued_at ASC LIMIT 1').fetchone()
+        "select queued_at from queue where status = 'pending'"
+        ' order by queued_at asc limit 1').fetchone()
     if oldest is not None:
         result['oldest_pending_age_seconds'] = (
             int(time.time()) - oldest[0])
@@ -282,16 +294,17 @@ def list_rows(
         limit: int = 50,
         ) -> list[dict]:
     """Return queue rows as dicts, newest first."""
-    sql = (
-        'SELECT id, store, priority, queued_at, claimed_at,'
-        ' attempts, status, processed_at, substr(content, 1, 80),'
-        ' last_error'
-        ' FROM queue')
+    sql = """
+select id, store, priority, queued_at, claimed_at,
+       attempts, status, processed_at, substr(content, 1, 80),
+       last_error
+from queue
+"""
     params: tuple = ()
     if status:
-        sql += ' WHERE status = ?'
+        sql += ' where status = ?'
         params = (status,)
-    sql += ' ORDER BY queued_at DESC LIMIT ?'
+    sql += ' order by queued_at desc limit ?'
     params = (*params, limit)
     rows = conn.execute(sql, params).fetchall()
     out = [{
@@ -314,12 +327,14 @@ def get_row(
         row_id: int,
         ) -> dict | None:
     """Return full row (including content) as a dict."""
-    row = conn.execute(
-        'SELECT id, store, content, hint_cat, hint_imp,'
-        ' hint_source, hint_entities, priority, queued_at, claimed_at,'
-        ' worker_pid, attempts, status, last_error, processed_at'
-        ' FROM queue WHERE id = ?',
-        (row_id,)).fetchone()
+    sql = """
+select id, store, content, hint_cat, hint_imp,
+       hint_source, hint_entities, priority, queued_at, claimed_at,
+       worker_pid, attempts, status, last_error, processed_at
+from queue
+where id = ?
+"""
+    row = conn.execute(sql, (row_id,)).fetchone()
     if row is None:
         return None
     return {
@@ -335,12 +350,17 @@ def get_row(
 
 def retry_row(conn: sqlite3.Connection, row_id: int) -> bool:
     """Re-queue a failed row. Returns True if a row was updated."""
-    cur = conn.execute(
-        "UPDATE queue SET status = 'pending', attempts = 0,"
-        ' last_error = NULL, claimed_at = NULL, worker_pid = NULL,'
-        ' processed_at = NULL'
-        ' WHERE id = ? AND status = ?',
-        (row_id, STATUS_FAILED))
+    sql = """
+update queue
+set status = 'pending',
+    attempts = 0,
+    last_error = null,
+    claimed_at = null,
+    worker_pid = null,
+    processed_at = null
+where id = ? and status = ?
+"""
+    cur = conn.execute(sql, (row_id, STATUS_FAILED))
     return cur.rowcount > 0
 
 
@@ -357,7 +377,7 @@ def purge_done(
     """
     cutoff = int(time.time()) - keep_seconds
     cur = conn.execute(
-        "DELETE FROM queue WHERE status = 'done' AND processed_at <= ?",
+        "delete from queue where status = 'done' and processed_at <= ?",
         (cutoff,))
     return cur.rowcount
 
@@ -370,7 +390,7 @@ def purge_store(conn: sqlite3.Connection, store: str) -> int:
     rmtree and the worker re-attempts them against a missing data dir.
     """
     cur = conn.execute(
-        'DELETE FROM queue WHERE store = ?', (store,))
+        'delete from queue where store = ?', (store,))
     return cur.rowcount
 
 
@@ -379,12 +399,12 @@ def purge_worker_runs(
     """Drop worker_runs rows older than `keep_days`. Returns deleted count.
 
     The serve loop writes a heartbeat row every iteration (including
-    empty drains) — at 60 s cadence that is ~525 k rows/year without
+    empty drains) -- at 60 s cadence that is ~525 k rows/year without
     pruning. The maintenance phase calls this once per drain.
     """
     cutoff = int(time.time()) - keep_days * 86400
     cur = conn.execute(
-        'DELETE FROM worker_runs WHERE started_at < ?', (cutoff,))
+        'delete from worker_runs where started_at < ?', (cutoff,))
     return cur.rowcount
 
 
@@ -393,34 +413,41 @@ def mark_stale_on_resume(
         age_seconds: int = STALE_RESUME_AGE_SECONDS) -> int:
     """Move pending never-attempted rows older than age_seconds to stale.
 
-    Called when a paused scheduler is resumed — content queued many days
+    Called when a paused scheduler is resumed -- content queued many days
     ago is unlikely to reconcile cleanly against the current store state,
     so surface it explicitly rather than silently re-enriching.
     """
     cutoff = int(time.time()) - age_seconds
-    cur = conn.execute(
-        "UPDATE queue SET status = 'stale'"
-        " WHERE status = 'pending'"
-        ' AND attempts = 0'
-        ' AND queued_at < ?',
-        (cutoff,))
+    sql = """
+update queue
+set status = 'stale'
+where status = 'pending'
+  and attempts = 0
+  and queued_at < ?
+"""
+    cur = conn.execute(sql, (cutoff,))
     return cur.rowcount
 
 
 def retry_stale(conn: sqlite3.Connection) -> int:
     """Re-queue all stale rows. Returns number of rows updated."""
-    cur = conn.execute(
-        "UPDATE queue SET status = 'pending', attempts = 0,"
-        ' last_error = NULL, claimed_at = NULL, worker_pid = NULL,'
-        ' processed_at = NULL'
-        ' WHERE status = ?',
-        (STATUS_STALE,))
+    sql = """
+update queue
+set status = 'pending',
+    attempts = 0,
+    last_error = null,
+    claimed_at = null,
+    worker_pid = null,
+    processed_at = null
+where status = ?
+"""
+    cur = conn.execute(sql, (STATUS_STALE,))
     return cur.rowcount
 
 
 def purge_stale(conn: sqlite3.Connection) -> int:
     """Delete all stale rows. Returns deleted count."""
-    cur = conn.execute("DELETE FROM queue WHERE status = 'stale'")
+    cur = conn.execute("delete from queue where status = 'stale'")
     return cur.rowcount
 
 
@@ -430,8 +457,8 @@ def start_worker_run(
     """
     now = int(time.time())
     cur = conn.execute(
-        'INSERT INTO worker_runs (started_at, worker_pid)'
-        ' VALUES (?, ?)',
+        'insert into worker_runs (started_at, worker_pid)'
+        ' values (?, ?)',
         (now, worker_pid))
     return cur.lastrowid
 
@@ -446,18 +473,25 @@ def finish_worker_run(
     """Stamp finish time, row counts, and duration onto a worker_runs row.
     """
     cur = conn.execute(
-        'SELECT started_at FROM worker_runs WHERE id = ?',
+        'select started_at from worker_runs where id = ?',
         (run_id,)).fetchone()
     now = int(time.time())
     duration_ms: int | None = None
     if cur is not None:
         duration_ms = int((now - cur[0]) * 1000)
-    conn.execute(
-        'UPDATE worker_runs SET finished_at = ?, duration_ms = ?,'
-        ' rows_claimed = ?, rows_done = ?, rows_failed = ?, error = ?'
-        ' WHERE id = ?',
-        (now, duration_ms, rows_claimed, rows_done, rows_failed,
-         error, run_id))
+    update_sql = """
+update worker_runs
+set finished_at = ?,
+    duration_ms = ?,
+    rows_claimed = ?,
+    rows_done = ?,
+    rows_failed = ?,
+    error = ?
+where id = ?
+"""
+    conn.execute(update_sql, (
+        now, duration_ms, rows_claimed, rows_done, rows_failed,
+        error, run_id))
 
 
 def last_worker_run(conn: sqlite3.Connection) -> dict | None:
@@ -472,11 +506,14 @@ def last_worker_run(conn: sqlite3.Connection) -> dict | None:
     import os as _os
     import time as _time
 
-    row = conn.execute(
-        'SELECT id, started_at, finished_at, worker_pid, rows_claimed,'
-        ' rows_done, rows_failed, duration_ms, error'
-        ' FROM worker_runs ORDER BY started_at DESC LIMIT 1'
-        ).fetchone()
+    sql = """
+select id, started_at, finished_at, worker_pid, rows_claimed,
+       rows_done, rows_failed, duration_ms, error
+from worker_runs
+order by started_at desc
+limit 1
+"""
+    row = conn.execute(sql).fetchone()
     if row is None:
         return None
 

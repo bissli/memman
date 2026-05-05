@@ -6,22 +6,16 @@ holding the four per-store tables (insights, edges, oplog, meta).
 Queue tables live in a global `queue` schema, shared across all
 stores in the cluster.
 
-Phase 2 ships single-process safe operation. Multi-process safety
-(write_lock wiring into call sites, application-version skew guard,
-runtime migration ladder, drain heartbeat) lands in Phase 2.5.
-
 Vector storage:
 - `embedding vector(512)` (pgvector); pgvector adapter binds
   `list[float]` directly with no per-call serialization.
-- HNSW index built `CREATE INDEX CONCURRENTLY ... vector_cosine_ops
-  WHERE deleted_at IS NULL`. Built outside any transaction; reindex
+- HNSW index built `create index concurrently ... vector_cosine_ops
+  where deleted_at is null`. Built outside any transaction; reindex
   drops invalid remnants (`pg_index.indisvalid`) before retrying.
 - Similarity returned as `1 - (embedding <=> :q)` (cosine in
   [-1, 1]; higher better).
 
-Recall strategy: 5 round-trips at Phase 2 (one verb per anchor
-subset). CTE batching is a Phase 2.5 optimization based on
-measured RTT to operator deployments.
+Recall issues one round-trip per anchor subset.
 """
 
 from __future__ import annotations
@@ -55,14 +49,14 @@ EMBEDDING_DIM = 512
 _PG_SCHEMA_VERSION = 2
 _PG_MIGRATIONS: list[tuple[int, str]] = [
     (2,
-     ('ALTER TABLE queue.worker_runs'
-      ' ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ')),
+     ('alter table queue.worker_runs'
+      ' add column if not exists last_heartbeat_at timestamptz')),
     ]
 
 _FORBIDDEN_MIGRATION_RE = re.compile(
-    r'(?im)\b(?:'
-    r'DROP\s+COLUMN|RENAME|DROP\s+TABLE|TRUNCATE'
-    r'|ALTER\s+COLUMN\b.*\b(?:NOT\s+NULL|TYPE)\b'
+    r'(?i)\b(?:'
+    r'drop\s+column|rename|drop\s+table|truncate'
+    r'|alter\s+column\b.*\b(?:not\s+null|type)\b'
     r')')
 
 for _ver, _sql in _PG_MIGRATIONS:
@@ -84,112 +78,112 @@ def _advisory_lock_key(schema: str, name: str) -> int:
 
 
 _PG_BASELINE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS {schema}.insights (
-    id          TEXT PRIMARY KEY,
-    content     TEXT NOT NULL,
-    category    TEXT DEFAULT 'general',
-    importance  INTEGER DEFAULT 3,
-    entities    JSONB DEFAULT '[]'::jsonb,
-    source      TEXT DEFAULT 'user',
-    access_count INTEGER DEFAULT 0,
-    keywords    JSONB,
-    summary     TEXT,
-    semantic_facts JSONB,
-    last_accessed_at TIMESTAMPTZ,
+create table if not exists {schema}.insights (
+    id          text primary key,
+    content     text not null,
+    category    text default 'general',
+    importance  integer default 3,
+    entities    jsonb default '[]'::jsonb,
+    source      text default 'user',
+    access_count integer default 0,
+    keywords    jsonb,
+    summary     text,
+    semantic_facts jsonb,
+    last_accessed_at timestamptz,
     embedding   vector({dim}),
-    effective_importance DOUBLE PRECISION DEFAULT 0.5,
-    linked_at   TIMESTAMPTZ,
-    enriched_at TIMESTAMPTZ,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    deleted_at  TIMESTAMPTZ,
-    prompt_version TEXT,
-    model_id    TEXT,
-    embedding_model TEXT
+    effective_importance double precision default 0.5,
+    linked_at   timestamptz,
+    enriched_at timestamptz,
+    created_at  timestamptz not null default now(),
+    updated_at  timestamptz not null default now(),
+    deleted_at  timestamptz,
+    prompt_version text,
+    model_id    text,
+    embedding_model text
 );
 
-CREATE TABLE IF NOT EXISTS {schema}.edges (
-    source_id   TEXT NOT NULL,
-    target_id   TEXT NOT NULL,
-    edge_type   TEXT NOT NULL,
-    weight      DOUBLE PRECISION DEFAULT 1.0,
-    metadata    JSONB DEFAULT '{{}}'::jsonb,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (source_id, target_id, edge_type),
-    FOREIGN KEY (source_id) REFERENCES {schema}.insights(id) ON DELETE CASCADE,
-    FOREIGN KEY (target_id) REFERENCES {schema}.insights(id) ON DELETE CASCADE
+create table if not exists {schema}.edges (
+    source_id   text not null,
+    target_id   text not null,
+    edge_type   text not null,
+    weight      double precision default 1.0,
+    metadata    jsonb default '{{}}'::jsonb,
+    created_at  timestamptz not null default now(),
+    primary key (source_id, target_id, edge_type),
+    foreign key (source_id) references {schema}.insights(id) on delete cascade,
+    foreign key (target_id) references {schema}.insights(id) on delete cascade
 );
 
-CREATE TABLE IF NOT EXISTS {schema}.oplog (
-    id          BIGSERIAL PRIMARY KEY,
-    operation   TEXT NOT NULL,
-    insight_id  TEXT,
-    detail      TEXT DEFAULT '',
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+create table if not exists {schema}.oplog (
+    id          bigserial primary key,
+    operation   text not null,
+    insight_id  text,
+    detail      text default '',
+    created_at  timestamptz not null default now()
 );
 
-CREATE TABLE IF NOT EXISTS {schema}.meta (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
+create table if not exists {schema}.meta (
+    key   text primary key,
+    value text not null
 );
 
-CREATE INDEX IF NOT EXISTS idx_insights_category_{schema}
-    ON {schema}.insights(category);
-CREATE INDEX IF NOT EXISTS idx_insights_importance_{schema}
-    ON {schema}.insights(importance);
-CREATE INDEX IF NOT EXISTS idx_insights_created_{schema}
-    ON {schema}.insights(created_at);
-CREATE INDEX IF NOT EXISTS idx_insights_deleted_{schema}
-    ON {schema}.insights(deleted_at);
-CREATE INDEX IF NOT EXISTS idx_insights_source_{schema}
-    ON {schema}.insights(source);
-CREATE INDEX IF NOT EXISTS idx_insights_eff_imp_{schema}
-    ON {schema}.insights(effective_importance);
-CREATE INDEX IF NOT EXISTS idx_insights_pending_link_{schema}
-    ON {schema}.insights(linked_at)
-    WHERE linked_at IS NULL AND deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_edges_source_{schema}
-    ON {schema}.edges(source_id);
-CREATE INDEX IF NOT EXISTS idx_edges_target_{schema}
-    ON {schema}.edges(target_id);
-CREATE INDEX IF NOT EXISTS idx_edges_type_{schema}
-    ON {schema}.edges(edge_type);
-CREATE INDEX IF NOT EXISTS idx_edges_source_type_{schema}
-    ON {schema}.edges(source_id, edge_type);
-CREATE INDEX IF NOT EXISTS idx_edges_target_type_{schema}
-    ON {schema}.edges(target_id, edge_type);
-CREATE INDEX IF NOT EXISTS idx_oplog_created_{schema}
-    ON {schema}.oplog(created_at);
+create index if not exists idx_insights_category_{schema}
+    on {schema}.insights(category);
+create index if not exists idx_insights_importance_{schema}
+    on {schema}.insights(importance);
+create index if not exists idx_insights_created_{schema}
+    on {schema}.insights(created_at);
+create index if not exists idx_insights_deleted_{schema}
+    on {schema}.insights(deleted_at);
+create index if not exists idx_insights_source_{schema}
+    on {schema}.insights(source);
+create index if not exists idx_insights_eff_imp_{schema}
+    on {schema}.insights(effective_importance);
+create index if not exists idx_insights_pending_link_{schema}
+    on {schema}.insights(linked_at)
+    where linked_at is null and deleted_at is null;
+create index if not exists idx_edges_source_{schema}
+    on {schema}.edges(source_id);
+create index if not exists idx_edges_target_{schema}
+    on {schema}.edges(target_id);
+create index if not exists idx_edges_type_{schema}
+    on {schema}.edges(edge_type);
+create index if not exists idx_edges_source_type_{schema}
+    on {schema}.edges(source_id, edge_type);
+create index if not exists idx_edges_target_type_{schema}
+    on {schema}.edges(target_id, edge_type);
+create index if not exists idx_oplog_created_{schema}
+    on {schema}.oplog(created_at);
 """
 
 _PG_QUEUE_SCHEMA = """
-CREATE SCHEMA IF NOT EXISTS queue;
+create schema if not exists queue;
 
-CREATE TABLE IF NOT EXISTS queue.queue (
-    id          BIGSERIAL PRIMARY KEY,
-    store       TEXT NOT NULL,
-    op          TEXT NOT NULL,
-    payload     TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'pending',
-    attempts    INTEGER NOT NULL DEFAULT 0,
-    error       TEXT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    claimed_at  TIMESTAMPTZ,
-    finished_at TIMESTAMPTZ
+create table if not exists queue.queue (
+    id          bigserial primary key,
+    store       text not null,
+    op          text not null,
+    payload     text not null,
+    status      text not null default 'pending',
+    attempts    integer not null default 0,
+    error       text,
+    created_at  timestamptz not null default now(),
+    claimed_at  timestamptz,
+    finished_at timestamptz
 );
 
-CREATE INDEX IF NOT EXISTS idx_queue_status_id
-    ON queue.queue(status, id);
-CREATE INDEX IF NOT EXISTS idx_queue_store
-    ON queue.queue(store);
+create index if not exists idx_queue_status_id
+    on queue.queue(status, id);
+create index if not exists idx_queue_store
+    on queue.queue(store);
 
-CREATE TABLE IF NOT EXISTS queue.worker_runs (
-    id            BIGSERIAL PRIMARY KEY,
-    started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    ended_at      TIMESTAMPTZ,
-    rows_processed INTEGER NOT NULL DEFAULT 0,
-    error         TEXT NOT NULL DEFAULT '',
-    last_heartbeat_at TIMESTAMPTZ
+create table if not exists queue.worker_runs (
+    id            bigserial primary key,
+    started_at    timestamptz not null default now(),
+    ended_at      timestamptz,
+    rows_processed integer not null default 0,
+    error         text not null default '',
+    last_heartbeat_at timestamptz
 );
 """
 
@@ -199,20 +193,20 @@ _MAX_OPLOG_ENTRIES = 5000
 
 _REINDEX_CREATED_BY_FILTER = {
     'semantic': "metadata->>'created_by' = 'auto'",
-    'entity': ("(metadata->>'created_by' IS NULL"
-               " OR metadata->>'created_by'"
-               " NOT IN ('claude', 'manual'))"),
-    'causal': ("(metadata->>'created_by' IS NULL"
-               " OR metadata->>'created_by'"
-               " NOT IN ('llm', 'claude', 'manual'))"),
+    'entity': ("(metadata->>'created_by' is null"
+               " or metadata->>'created_by'"
+               " not in ('claude', 'manual'))"),
+    'causal': ("(metadata->>'created_by' is null"
+               " or metadata->>'created_by'"
+               " not in ('llm', 'claude', 'manual'))"),
     }
 
 _PER_NODE_CREATED_BY_FILTER = {
-    'entity': ("(metadata->>'created_by' IS NULL"
-               " OR metadata->>'created_by'"
-               " NOT IN ('claude', 'manual'))"),
-    'semantic': ("(metadata->>'created_by' IS NULL"
-                 " OR metadata->>'created_by' = 'auto')"),
+    'entity': ("(metadata->>'created_by' is null"
+               " or metadata->>'created_by'"
+               " not in ('claude', 'manual'))"),
+    'semantic': ("(metadata->>'created_by' is null"
+                 " or metadata->>'created_by' = 'auto')"),
     'causal': "metadata->>'created_by' = 'llm'",
     }
 
@@ -224,8 +218,7 @@ def _open_connection(
 
     `keepalives=True` adds `keepalives_idle=30` for the drain-lock
     connection so a hung worker is detected by the kernel rather
-    than holding the lock indefinitely (Phase 2.5 adds the
-    application-level heartbeat warning on top).
+    than holding the lock indefinitely.
 
     Returns a bare connection; lock-holding paths (`drain_lock`,
     `reembed_lock`) and long-lived backend connections own the
@@ -287,7 +280,7 @@ def _datetime_or_none(v: Any) -> datetime | None:
 
 
 def _row_to_insight(row: tuple[Any, ...]) -> Insight:
-    """Map a SELECT row into an Insight dataclass."""
+    """Map a select row into an Insight dataclass."""
     i = Insight()
     i.id = row[0]
     i.content = row[1]
@@ -311,7 +304,7 @@ def _row_to_insight(row: tuple[Any, ...]) -> Insight:
 
 
 def _row_to_edge(row: tuple[Any, ...]) -> Edge:
-    """Map a SELECT row into an Edge dataclass."""
+    """Map a select row into an Edge dataclass."""
     e = Edge()
     e.source_id = row[0]
     e.target_id = row[1]
@@ -357,52 +350,54 @@ class PostgresNodeStore(NodeStore):
         """
         key = _advisory_lock_key(self._schema, name)
         with self._conn.cursor() as cur:
-            cur.execute('SELECT pg_advisory_xact_lock(%s)', (key,))
+            cur.execute('select pg_advisory_xact_lock(%s)', (key,))
         yield
 
     def insert(self, ins: Insight) -> None:
+        sql = self._q("""
+insert into {s}.insights
+    (id, content, category, importance, entities,
+     source, access_count, prompt_version, model_id, embedding_model)
+values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'INSERT INTO {s}.insights'
-                    ' (id, content, category, importance, entities,'
-                    '  source, access_count, prompt_version, model_id,'
-                    '  embedding_model)'
-                    ' VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s,'
-                    '         %s, %s)'),
-                (ins.id, ins.content, ins.category, ins.importance,
-                 ins.entities_json(), ins.source, ins.access_count,
-                 ins.prompt_version, ins.model_id, ins.embedding_model))
+            cur.execute(sql, (
+                ins.id, ins.content, ins.category, ins.importance,
+                ins.entities_json(), ins.source, ins.access_count,
+                ins.prompt_version, ins.model_id, ins.embedding_model))
 
     def get(self, id: Id) -> Insight | None:
+        sql = self._q(f"""
+select {_INSIGHT_COLS}
+from {{s}}.insights
+where id = %s and deleted_at is null
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    f'SELECT {_INSIGHT_COLS} FROM {{s}}.insights'
-                    ' WHERE id = %s AND deleted_at IS NULL'),
-                (id,))
+            cur.execute(sql, (id,))
             row = cur.fetchone()
             return _row_to_insight(row) if row else None
 
     def get_include_deleted(self, id: Id) -> Insight | None:
+        sql = self._q(f"""
+select {_INSIGHT_COLS}
+from {{s}}.insights
+where id = %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    f'SELECT {_INSIGHT_COLS} FROM {{s}}.insights'
-                    ' WHERE id = %s'),
-                (id,))
+            cur.execute(sql, (id,))
             row = cur.fetchone()
             return _row_to_insight(row) if row else None
 
     def get_many(self, ids: Sequence[Id]) -> list[Insight]:
         if not ids:
             return []
+        sql = self._q(f"""
+select {_INSIGHT_COLS}
+from {{s}}.insights
+where id = any(%s) and deleted_at is null
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    f'SELECT {_INSIGHT_COLS} FROM {{s}}.insights'
-                    ' WHERE id = ANY(%s) AND deleted_at IS NULL'),
-                (list(ids),))
+            cur.execute(sql, (list(ids),))
             rows = cur.fetchall()
         by_id = {r[0]: _row_to_insight(r) for r in rows}
         return [by_id[i] for i in ids if i in by_id]
@@ -411,13 +406,13 @@ class PostgresNodeStore(NodeStore):
             self, *, keyword: str = '', category: str = '',
             min_importance: int = 0, source: str = '',
             limit: int = 20) -> list[Insight]:
-        conditions = ['deleted_at IS NULL']
+        conditions = ['deleted_at is null']
         args: list[Any] = []
         if keyword:
             for word in keyword.split():
                 conditions.append(
-                    '(content ILIKE %s OR entities::text ILIKE %s'
-                    ' OR keywords::text ILIKE %s)')
+                    '(content ilike %s or entities::text ilike %s'
+                    ' or keywords::text ilike %s)')
                 pat = f'%{word}%'
                 args.extend([pat, pat, pat])
         if category:
@@ -432,33 +427,37 @@ class PostgresNodeStore(NodeStore):
         if limit <= 0:
             limit = 20
         args.append(limit)
-        sql = self._q(
-            f'SELECT {_INSIGHT_COLS} FROM {{s}}.insights'
-            ' WHERE ' + ' AND '.join(conditions)
-            + ' ORDER BY importance DESC, created_at DESC LIMIT %s')
+        where_clause = ' and '.join(conditions)
+        sql = self._q(f"""
+select {_INSIGHT_COLS}
+from {{s}}.insights
+where {where_clause}
+order by importance desc, created_at desc
+limit %s
+""")
         with self._conn.cursor() as cur:
             cur.execute(sql, tuple(args))
             return [_row_to_insight(r) for r in cur.fetchall()]
 
     def soft_delete(
             self, id: Id, *, tolerate_missing: bool = False) -> bool:
+        update_sql = self._q("""
+update {s}.insights
+set deleted_at = now(), updated_at = now()
+where id = %s and deleted_at is null
+""")
+        delete_sql = self._q("""
+delete from {s}.edges
+where source_id = %s or target_id = %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'UPDATE {s}.insights'
-                    ' SET deleted_at = now(), updated_at = now()'
-                    ' WHERE id = %s AND deleted_at IS NULL'),
-                (id,))
+            cur.execute(update_sql, (id,))
             if cur.rowcount == 0:
                 if tolerate_missing:
                     return False
                 raise ValueError(
                     f'insight {id} not found or already deleted')
-            cur.execute(
-                self._q(
-                    'DELETE FROM {s}.edges'
-                    ' WHERE source_id = %s OR target_id = %s'),
-                (id, id))
+            cur.execute(delete_sql, (id, id))
         return True
 
     def update_entities(self, id: Id, entities: list[str]) -> None:
@@ -469,47 +468,58 @@ class PostgresNodeStore(NodeStore):
             if key not in seen:
                 seen.add(key)
                 deduped.append(e)
+        sql = self._q("""
+update {s}.insights
+set entities = %s::jsonb, updated_at = now()
+where id = %s
+""")
         with self._conn.cursor() as cur:
             cur.execute(
-                self._q(
-                    'UPDATE {s}.insights'
-                    ' SET entities = %s::jsonb, updated_at = now()'
-                    ' WHERE id = %s'),
-                (Insight(entities=deduped).entities_json(), id))
+                sql, (Insight(entities=deduped).entities_json(), id))
 
     def update_enrichment(
             self, id: Id, *, keywords: list[str], summary: str,
             semantic_facts: list[str]) -> None:
         import json as _json
+        sql = self._q("""
+update {s}.insights
+set keywords = %s::jsonb,
+    summary = %s,
+    semantic_facts = %s::jsonb,
+    updated_at = now()
+where id = %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'UPDATE {s}.insights'
-                    ' SET keywords = %s::jsonb, summary = %s,'
-                    '     semantic_facts = %s::jsonb,'
-                    '     updated_at = now()'
-                    ' WHERE id = %s'),
-                (_json.dumps(keywords), summary,
-                 _json.dumps(semantic_facts), id))
+            cur.execute(sql, (
+                _json.dumps(keywords), summary,
+                _json.dumps(semantic_facts), id))
 
     def increment_access_count(self, id: Id) -> None:
+        sql = self._q("""
+update {s}.insights
+set access_count = access_count + 1, last_accessed_at = now()
+where id = %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'UPDATE {s}.insights'
-                    ' SET access_count = access_count + 1,'
-                    '     last_accessed_at = now()'
-                    ' WHERE id = %s'),
-                (id,))
+            cur.execute(sql, (id,))
 
     def refresh_effective_importance(self, id: Id) -> float:
+        select_sql = self._q("""
+select importance, access_count, created_at, last_accessed_at
+from {s}.insights
+where id = %s and deleted_at is null
+""")
+        edge_sql = self._q("""
+select (select count(*) from {s}.edges where source_id = %s)
+     + (select count(*) from {s}.edges where target_id = %s)
+""")
+        update_sql = self._q("""
+update {s}.insights
+set effective_importance = %s
+where id = %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'SELECT importance, access_count, created_at,'
-                    ' last_accessed_at FROM {s}.insights'
-                    ' WHERE id = %s AND deleted_at IS NULL'),
-                (id,))
+            cur.execute(select_sql, (id,))
             row = cur.fetchone()
             if row is None:
                 raise ValueError(f'insight {id} not found')
@@ -518,13 +528,7 @@ class PostgresNodeStore(NodeStore):
             created_at = _datetime_or_none(row[2]) or datetime.now(
                 timezone.utc)
             last_access = _datetime_or_none(row[3]) or created_at
-            cur.execute(
-                self._q(
-                    'SELECT (SELECT COUNT(*) FROM {s}.edges'
-                    '         WHERE source_id = %s)'
-                    '      + (SELECT COUNT(*) FROM {s}.edges'
-                    '         WHERE target_id = %s)'),
-                (id, id))
+            cur.execute(edge_sql, (id, id))
             edge_row = cur.fetchone()
             edge_count = edge_row[0] if edge_row else 0
 
@@ -534,11 +538,7 @@ class PostgresNodeStore(NodeStore):
         ei = compute_effective_importance(
             importance, access_count, days_since, edge_count)
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'UPDATE {s}.insights'
-                    ' SET effective_importance = %s WHERE id = %s'),
-                (ei, id))
+            cur.execute(update_sql, (ei, id))
         return ei
 
     def get_retention_candidates(
@@ -546,26 +546,32 @@ class PostgresNodeStore(NodeStore):
             limit: int) -> tuple[list[dict[str, Any]], int]:
         from memman.store.model import is_immune
         from memman.store.node import compute_effective_importance
+        rows_sql = self._q(f"""
+select {_INSIGHT_COLS}, last_accessed_at
+from {{s}}.insights
+where deleted_at is null
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    f'SELECT {_INSIGHT_COLS}, last_accessed_at'
-                    ' FROM {s}.insights WHERE deleted_at IS NULL'))
+            cur.execute(rows_sql)
             rows = cur.fetchall()
         if not rows:
             return [], 0
 
         edge_counts: dict[str, int] = {}
+        edge_sql = self._q("""
+select id, sum(cnt) from (
+    select source_id as id, count(*) as cnt
+    from {s}.edges
+    group by source_id
+    union all
+    select target_id as id, count(*) as cnt
+    from {s}.edges
+    group by target_id
+) t
+group by id
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'SELECT id, SUM(cnt) FROM ('
-                    '  SELECT source_id AS id, COUNT(*) AS cnt'
-                    '  FROM {s}.edges GROUP BY source_id'
-                    '  UNION ALL'
-                    '  SELECT target_id AS id, COUNT(*) AS cnt'
-                    '  FROM {s}.edges GROUP BY target_id'
-                    ') t GROUP BY id'))
+            cur.execute(edge_sql)
             for rid, cnt in cur.fetchall():
                 edge_counts[rid] = int(cnt)
 
@@ -592,52 +598,55 @@ class PostgresNodeStore(NodeStore):
                     })
 
         if updates:
+            update_many_sql = self._q("""
+update {s}.insights
+set effective_importance = %s
+where id = %s
+""")
             with self._conn.cursor() as cur:
-                cur.executemany(
-                    self._q(
-                        'UPDATE {s}.insights'
-                        ' SET effective_importance = %s WHERE id = %s'),
-                    updates)
+                cur.executemany(update_many_sql, updates)
         candidates.sort(key=lambda c: c['effective_importance'])
         if limit > 0:
             candidates = candidates[:limit]
         return candidates, len(rows)
 
     def count_active(self) -> int:
+        sql = self._q("""
+select count(*) from {s}.insights where deleted_at is null
+""")
         with self._conn.cursor() as cur:
-            cur.execute(self._q(
-                'SELECT COUNT(*) FROM {s}.insights'
-                ' WHERE deleted_at IS NULL'))
+            cur.execute(sql)
             row = cur.fetchone()
             return int(row[0]) if row else 0
 
     def count_total(self) -> int:
         with self._conn.cursor() as cur:
-            cur.execute(self._q('SELECT COUNT(*) FROM {s}.insights'))
+            cur.execute(self._q('select count(*) from {s}.insights'))
             row = cur.fetchone()
             return int(row[0]) if row else 0
 
     def has_active_with_source(self, source: str) -> bool:
+        sql = self._q("""
+select 1 from {s}.insights
+where source = %s and deleted_at is null
+limit 1
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'SELECT 1 FROM {s}.insights'
-                    ' WHERE source = %s AND deleted_at IS NULL LIMIT 1'),
-                (source,))
+            cur.execute(sql, (source,))
             return cur.fetchone() is not None
 
     def iter_for_reembed(
             self, cursor: Id, batch: int) -> list[ReembedRow]:
+        sql = self._q("""
+select id, content, embedding_model,
+       case when embedding is null then null else %s end
+from {s}.insights
+where deleted_at is null and id > %s
+order by id
+limit %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'SELECT id, content, embedding_model,'
-                    ' CASE WHEN embedding IS NULL THEN NULL'
-                    '      ELSE %s END'
-                    ' FROM {s}.insights'
-                    ' WHERE deleted_at IS NULL AND id > %s'
-                    ' ORDER BY id LIMIT %s'),
-                (EMBEDDING_DIM * 4, cursor, batch))
+            cur.execute(sql, (EMBEDDING_DIM * 4, cursor, batch))
             return [
                 ReembedRow(
                     id=r[0], content=r[1], embedding_model=r[2],
@@ -646,27 +655,34 @@ class PostgresNodeStore(NodeStore):
                 ]
 
     def count_orphans(self) -> tuple[int, int]:
+        total_sql = self._q("""
+select count(*) from {s}.insights where deleted_at is null
+""")
+        orphan_sql = self._q("""
+select count(*) from {s}.insights i
+where i.deleted_at is null
+  and not exists (
+      select 1 from {s}.edges e
+      where e.source_id = i.id or e.target_id = i.id
+  )
+""")
         with self._conn.cursor() as cur:
-            cur.execute(self._q(
-                'SELECT COUNT(*) FROM {s}.insights'
-                ' WHERE deleted_at IS NULL'))
+            cur.execute(total_sql)
             total = int(cur.fetchone()[0])
-            cur.execute(self._q(
-                'SELECT COUNT(*) FROM {s}.insights i'
-                ' WHERE i.deleted_at IS NULL'
-                ' AND NOT EXISTS ('
-                '   SELECT 1 FROM {s}.edges e'
-                '   WHERE e.source_id = i.id OR e.target_id = i.id)'))
+            cur.execute(orphan_sql)
             orphans = int(cur.fetchone()[0])
         return orphans, total
 
     def provenance_distribution(self) -> list[ProvenanceCount]:
+        sql = self._q("""
+select prompt_version, model_id, count(*)
+from {s}.insights
+where deleted_at is null
+group by prompt_version, model_id
+order by count(*) desc
+""")
         with self._conn.cursor() as cur:
-            cur.execute(self._q(
-                'SELECT prompt_version, model_id, COUNT(*)'
-                ' FROM {s}.insights WHERE deleted_at IS NULL'
-                ' GROUP BY prompt_version, model_id'
-                ' ORDER BY COUNT(*) DESC'))
+            cur.execute(sql)
             return [
                 ProvenanceCount(
                     prompt_version=r[0], model_id=r[1], count=int(r[2]))
@@ -684,14 +700,17 @@ class PostgresNodeStore(NodeStore):
                 return 0
             excess = min(total - max_insights, PRUNE_BATCH_SIZE)
 
-            cand_sql = self._q(
-                'SELECT id FROM {s}.insights'
-                ' WHERE deleted_at IS NULL AND importance < 4'
-                ' AND access_count < 3'
-                ' AND NOT (id = ANY(%s))'
-                ' ORDER BY effective_importance ASC LIMIT %s')
+            select_sql = self._q("""
+select id from {s}.insights
+where deleted_at is null
+  and importance < 4
+  and access_count < 3
+  and not (id = any(%s))
+order by effective_importance asc
+limit %s
+""")
             with self._conn.cursor() as cur:
-                cur.execute(cand_sql, (excludes, PRUNE_BATCH_SIZE))
+                cur.execute(select_sql, (excludes, PRUNE_BATCH_SIZE))
                 cand_rows = cur.fetchall()
             for (cid,) in cand_rows:
                 try:
@@ -699,42 +718,36 @@ class PostgresNodeStore(NodeStore):
                 except ValueError:
                     pass
 
+            update_sql = self._q("""
+update {s}.insights
+set deleted_at = now(), updated_at = now()
+where id = %s and deleted_at is null
+""")
+            delete_edges_sql = self._q("""
+delete from {s}.edges
+where source_id = %s or target_id = %s
+""")
             with self._conn.cursor() as cur:
-                cur.execute(
-                    self._q(
-                        'SELECT id FROM {s}.insights'
-                        ' WHERE deleted_at IS NULL AND importance < 4'
-                        ' AND access_count < 3'
-                        ' AND NOT (id = ANY(%s))'
-                        ' ORDER BY effective_importance ASC LIMIT %s'),
-                    (excludes, excess))
+                cur.execute(select_sql, (excludes, excess))
                 target_rows = cur.fetchall()
                 pruned = 0
                 for (cid,) in target_rows:
-                    cur.execute(
-                        self._q(
-                            'UPDATE {s}.insights'
-                            ' SET deleted_at = now(), updated_at = now()'
-                            ' WHERE id = %s AND deleted_at IS NULL'),
-                        (cid,))
+                    cur.execute(update_sql, (cid,))
                     if cur.rowcount > 0:
-                        cur.execute(
-                            self._q(
-                                'DELETE FROM {s}.edges'
-                                ' WHERE source_id = %s OR target_id = %s'),
-                            (cid, cid))
+                        cur.execute(delete_edges_sql, (cid, cid))
                         pruned += 1
             return pruned
 
     def boost_retention(self, id: Id) -> None:
+        sql = self._q("""
+update {s}.insights
+set access_count = access_count + 3,
+    last_accessed_at = now(),
+    updated_at = now()
+where id = %s and deleted_at is null
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'UPDATE {s}.insights'
-                    ' SET access_count = access_count + 3,'
-                    '     last_accessed_at = now(), updated_at = now()'
-                    ' WHERE id = %s AND deleted_at IS NULL'),
-                (id,))
+            cur.execute(sql, (id,))
             if cur.rowcount == 0:
                 raise ValueError(
                     f'insight {id} not found or already deleted')
@@ -742,74 +755,92 @@ class PostgresNodeStore(NodeStore):
     def get_recent_in_window(
             self, *, exclude_id: Id, window_hours: float,
             limit: int) -> list[Insight]:
+        sql = self._q(f"""
+select {_INSIGHT_COLS}
+from {{s}}.insights
+where id <> %s
+  and deleted_at is null
+  and created_at >= now() - (%s * interval '1 hour')
+order by created_at desc
+limit %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    f'SELECT {_INSIGHT_COLS} FROM {{s}}.insights'
-                    ' WHERE id <> %s AND deleted_at IS NULL'
-                    " AND created_at >= now() - (%s * INTERVAL '1 hour')"
-                    ' ORDER BY created_at DESC LIMIT %s'),
-                (exclude_id, window_hours, limit))
+            cur.execute(sql, (exclude_id, window_hours, limit))
             return [_row_to_insight(r) for r in cur.fetchall()]
 
     def get_latest_by_source(
             self, *, source: str, exclude_id: Id) -> Insight | None:
+        sql = self._q(f"""
+select {_INSIGHT_COLS}
+from {{s}}.insights
+where source = %s and id <> %s and deleted_at is null
+order by created_at desc
+limit 1
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    f'SELECT {_INSIGHT_COLS} FROM {{s}}.insights'
-                    ' WHERE source = %s AND id <> %s'
-                    ' AND deleted_at IS NULL'
-                    ' ORDER BY created_at DESC LIMIT 1'),
-                (source, exclude_id))
+            cur.execute(sql, (source, exclude_id))
             row = cur.fetchone()
             return _row_to_insight(row) if row else None
 
     def get_recent_active(
             self, *, exclude_id: Id, limit: int) -> list[Insight]:
+        sql = self._q(f"""
+select {_INSIGHT_COLS}
+from {{s}}.insights
+where id <> %s and deleted_at is null
+order by created_at desc
+limit %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    f'SELECT {_INSIGHT_COLS} FROM {{s}}.insights'
-                    ' WHERE id <> %s AND deleted_at IS NULL'
-                    ' ORDER BY created_at DESC LIMIT %s'),
-                (exclude_id, limit))
+            cur.execute(sql, (exclude_id, limit))
             return [_row_to_insight(r) for r in cur.fetchall()]
 
     def get_all_active(self) -> list[Insight]:
+        sql = self._q(f"""
+select {_INSIGHT_COLS}
+from {{s}}.insights
+where deleted_at is null
+order by created_at desc
+""")
         with self._conn.cursor() as cur:
-            cur.execute(self._q(
-                f'SELECT {_INSIGHT_COLS} FROM {{s}}.insights'
-                ' WHERE deleted_at IS NULL'
-                ' ORDER BY created_at DESC'))
+            cur.execute(sql)
             return [_row_to_insight(r) for r in cur.fetchall()]
 
     def stats(self) -> NodeStats:
+        active_sql = self._q("""
+select count(*) from {s}.insights where deleted_at is null
+""")
+        deleted_sql = self._q("""
+select count(*) from {s}.insights where deleted_at is not null
+""")
+        cat_sql = self._q("""
+select category, count(*)
+from {s}.insights
+where deleted_at is null
+group by category
+""")
+        ent_sql = self._q("""
+select je, count(distinct i.id) cnt
+from {s}.insights i, jsonb_array_elements_text(i.entities) je
+where i.deleted_at is null
+group by je
+order by cnt desc
+limit 20
+""")
         with self._conn.cursor() as cur:
-            cur.execute(self._q(
-                'SELECT COUNT(*) FROM {s}.insights'
-                ' WHERE deleted_at IS NULL'))
+            cur.execute(active_sql)
             total = int(cur.fetchone()[0])
-            cur.execute(self._q(
-                'SELECT COUNT(*) FROM {s}.insights'
-                ' WHERE deleted_at IS NOT NULL'))
+            cur.execute(deleted_sql)
             deleted = int(cur.fetchone()[0])
-            cur.execute(self._q(
-                'SELECT category, COUNT(*) FROM {s}.insights'
-                ' WHERE deleted_at IS NULL GROUP BY category'))
+            cur.execute(cat_sql)
             by_category = {r[0]: int(r[1]) for r in cur.fetchall()}
-            cur.execute(self._q('SELECT COUNT(*) FROM {s}.edges'))
+            cur.execute(self._q('select count(*) from {s}.edges'))
             edges = int(cur.fetchone()[0])
-            cur.execute(self._q('SELECT COUNT(*) FROM {s}.oplog'))
+            cur.execute(self._q('select count(*) from {s}.oplog'))
             oplog = int(cur.fetchone()[0])
             top_entities: list[dict[str, Any]] = []
             try:
-                cur.execute(self._q(
-                    'SELECT je, COUNT(DISTINCT i.id) cnt'
-                    ' FROM {s}.insights i,'
-                    '      jsonb_array_elements_text(i.entities) je'
-                    ' WHERE i.deleted_at IS NULL'
-                    ' GROUP BY je ORDER BY cnt DESC LIMIT 20'))
+                cur.execute(ent_sql)
                 for entity, cnt in cur.fetchall():
                     top_entities.append(
                         {'entity': entity, 'count': int(cnt)})
@@ -822,22 +853,23 @@ class PostgresNodeStore(NodeStore):
 
     def update_embedding(
             self, id: Id, vec: list[float], model: str) -> None:
+        sql = self._q("""
+update {s}.insights
+set embedding = %s::vector,
+    embedding_model = %s,
+    updated_at = now()
+where id = %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'UPDATE {s}.insights'
-                    ' SET embedding = %s::vector, embedding_model = %s,'
-                    '     updated_at = now()'
-                    ' WHERE id = %s'),
-                (vec, model, id))
+            cur.execute(sql, (vec, model, id))
 
     def get_embedding(self, id: Id) -> bytes | None:
+        sql = self._q("""
+select embedding from {s}.insights
+where id = %s and deleted_at is null
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'SELECT embedding FROM {s}.insights'
-                    ' WHERE id = %s AND deleted_at IS NULL'),
-                (id,))
+            cur.execute(sql, (id,))
             row = cur.fetchone()
         if row is None or row[0] is None:
             return None
@@ -846,10 +878,13 @@ class PostgresNodeStore(NodeStore):
 
     def get_all_embeddings(self) -> list[tuple[Id, str, bytes]]:
         from memman.embed.vector import serialize_vector
+        sql = self._q("""
+select id, content, embedding
+from {s}.insights
+where deleted_at is null and embedding is not null
+""")
         with self._conn.cursor() as cur:
-            cur.execute(self._q(
-                'SELECT id, content, embedding FROM {s}.insights'
-                ' WHERE deleted_at IS NULL AND embedding IS NOT NULL'))
+            cur.execute(sql)
             results: list[tuple[Id, str, bytes]] = []
             for rid, content, vec in cur.fetchall():
                 if vec is None:
@@ -859,39 +894,52 @@ class PostgresNodeStore(NodeStore):
 
     def iter_embeddings_as_vecs(
             self) -> Iterator[tuple[Id, list[float]]]:
+        sql = self._q("""
+select id, embedding
+from {s}.insights
+where deleted_at is null and embedding is not null
+""")
         with self._conn.cursor() as cur:
-            cur.execute(self._q(
-                'SELECT id, embedding FROM {s}.insights'
-                ' WHERE deleted_at IS NULL AND embedding IS NOT NULL'))
+            cur.execute(sql)
             for rid, vec in cur.fetchall():
                 if vec is None:
                     continue
                 yield rid, list(vec)
 
     def embedding_stats(self) -> tuple[int, int]:
+        sql = self._q("""
+select count(*),
+       count(*) filter (where embedding is not null)
+from {s}.insights
+where deleted_at is null
+""")
         with self._conn.cursor() as cur:
-            cur.execute(self._q(
-                'SELECT COUNT(*),'
-                ' COUNT(*) FILTER (WHERE embedding IS NOT NULL)'
-                ' FROM {s}.insights WHERE deleted_at IS NULL'))
+            cur.execute(sql)
             row = cur.fetchone()
         return (int(row[0]), int(row[1])) if row else (0, 0)
 
     def enrichment_coverage(self) -> EnrichmentCoverage:
+        sql = self._q("""
+select count(*),
+       count(*) filter (where embedding is null),
+       count(*) filter (
+           where keywords is null
+              or keywords::text = '[]'
+              or jsonb_typeof(keywords) is null
+       ),
+       count(*) filter (
+           where summary is null or summary = ''
+       ),
+       count(*) filter (
+           where semantic_facts is null
+              or semantic_facts::text = '[]'
+              or jsonb_typeof(semantic_facts) is null
+       )
+from {s}.insights
+where deleted_at is null
+""")
         with self._conn.cursor() as cur:
-            cur.execute(self._q(
-                'SELECT COUNT(*),'
-                ' COUNT(*) FILTER (WHERE embedding IS NULL),'
-                ' COUNT(*) FILTER ('
-                "   WHERE keywords IS NULL OR keywords::text = '[]'"
-                '         OR jsonb_typeof(keywords) IS NULL),'
-                ' COUNT(*) FILTER ('
-                "   WHERE summary IS NULL OR summary = ''),"
-                ' COUNT(*) FILTER ('
-                '   WHERE semantic_facts IS NULL'
-                "         OR semantic_facts::text = '[]'"
-                '         OR jsonb_typeof(semantic_facts) IS NULL)'
-                ' FROM {s}.insights WHERE deleted_at IS NULL'))
+            cur.execute(sql)
             row = cur.fetchone()
         if row is None:
             return EnrichmentCoverage()
@@ -903,12 +951,14 @@ class PostgresNodeStore(NodeStore):
             missing_semantic_facts=int(row[4] or 0))
 
     def embedding_size_distribution(self) -> dict[int, int]:
+        sql = self._q("""
+select vector_dims(embedding), count(*)
+from {s}.insights
+where deleted_at is null and embedding is not null
+group by vector_dims(embedding)
+""")
         with self._conn.cursor() as cur:
-            cur.execute(self._q(
-                'SELECT vector_dims(embedding), COUNT(*)'
-                ' FROM {s}.insights'
-                ' WHERE deleted_at IS NULL AND embedding IS NOT NULL'
-                ' GROUP BY vector_dims(embedding)'))
+            cur.execute(sql)
             return {
                 int(size): int(count) for size, count in cur.fetchall()}
 
@@ -916,74 +966,79 @@ class PostgresNodeStore(NodeStore):
             self, *, limit: int = 100) -> list[Insight]:
         if limit <= 0:
             limit = 100
+        sql = self._q(f"""
+select {_INSIGHT_COLS}
+from {{s}}.insights
+where deleted_at is null and embedding is null
+order by importance desc, created_at desc
+limit %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    f'SELECT {_INSIGHT_COLS} FROM {{s}}.insights'
-                    ' WHERE deleted_at IS NULL AND embedding IS NULL'
-                    ' ORDER BY importance DESC, created_at DESC'
-                    ' LIMIT %s'),
-                (limit,))
+            cur.execute(sql, (limit,))
             return [_row_to_insight(r) for r in cur.fetchall()]
 
     def stamp_linked(self, id: Id) -> None:
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'UPDATE {s}.insights SET linked_at = now()'
-                    ' WHERE id = %s'),
+            cur.execute(self._q(
+                'update {s}.insights set linked_at = now() where id = %s'),
                 (id,))
 
     def stamp_enriched(self, id: Id) -> None:
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'UPDATE {s}.insights SET enriched_at = now()'
-                    ' WHERE id = %s'),
+            cur.execute(self._q(
+                'update {s}.insights set enriched_at = now() where id = %s'),
                 (id,))
 
     def get_pending_link_ids(self, *, limit: int) -> list[Id]:
+        sql = self._q("""
+select id from {s}.insights
+where linked_at is null and deleted_at is null
+order by created_at asc
+limit %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'SELECT id FROM {s}.insights'
-                    ' WHERE linked_at IS NULL AND deleted_at IS NULL'
-                    ' ORDER BY created_at ASC LIMIT %s'),
-                (limit,))
+            cur.execute(sql, (limit,))
             return [r[0] for r in cur.fetchall()]
 
     def get_active_ids(self) -> list[Id]:
+        sql = self._q("""
+select id from {s}.insights
+where deleted_at is null
+order by created_at asc
+""")
         with self._conn.cursor() as cur:
-            cur.execute(self._q(
-                'SELECT id FROM {s}.insights'
-                ' WHERE deleted_at IS NULL'
-                ' ORDER BY created_at ASC'))
+            cur.execute(sql)
             return [r[0] for r in cur.fetchall()]
 
     def count_pending_links(self) -> int:
+        sql = self._q("""
+select count(*) from {s}.insights
+where linked_at is null and deleted_at is null
+""")
         with self._conn.cursor() as cur:
-            cur.execute(self._q(
-                'SELECT COUNT(*) FROM {s}.insights'
-                ' WHERE linked_at IS NULL AND deleted_at IS NULL'))
+            cur.execute(sql)
             row = cur.fetchone()
             return int(row[0]) if row else 0
 
     def reset_for_rebuild(self, ids: list[Id]) -> None:
         if not ids:
             return
+        sql = self._q("""
+update {s}.insights
+set enriched_at = null, linked_at = null
+where id = any(%s)
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'UPDATE {s}.insights'
-                    ' SET enriched_at = NULL, linked_at = NULL'
-                    ' WHERE id = ANY(%s)'),
-                (ids,))
+            cur.execute(sql, (ids,))
 
     def clear_linked_at(self) -> None:
+        sql = self._q("""
+update {s}.insights
+set linked_at = null
+where deleted_at is null
+""")
         with self._conn.cursor() as cur:
-            cur.execute(self._q(
-                'UPDATE {s}.insights SET linked_at = NULL'
-                ' WHERE deleted_at IS NULL'))
+            cur.execute(sql)
 
     def review_content_quality(
             self, *, limit: int = 50) -> list[dict[str, Any]]:
@@ -1008,17 +1063,19 @@ class PostgresNodeStore(NodeStore):
         """
         if not rows:
             return
+        sql = self._q("""
+update {s}.insights
+set embedding = %s::vector,
+    embedding_model = %s,
+    updated_at = now()
+where id = %s
+""")
         chunk = 1000
         for start in range(0, len(rows), chunk):
             batch = rows[start:start + chunk]
             with self._conn.cursor() as cur:
                 cur.executemany(
-                    self._q(
-                        'UPDATE {s}.insights'
-                        ' SET embedding = %s::vector,'
-                        '     embedding_model = %s,'
-                        '     updated_at = now()'
-                        ' WHERE id = %s'),
+                    sql,
                     [(vec, model, eid) for eid, vec, model in batch])
             if not self._conn.autocommit:
                 self._conn.commit()
@@ -1037,207 +1094,224 @@ class PostgresEdgeStore(EdgeStore):
 
     def upsert(self, edge: Edge) -> None:
         import json as _json
+        sql = self._q("""
+insert into {s}.edges
+    (source_id, target_id, edge_type, weight, metadata)
+values (%s, %s, %s, %s, %s::jsonb)
+on conflict (source_id, target_id, edge_type) do update set
+    metadata = case
+        when {s}.edges.metadata->>'created_by' in ('claude', 'manual')
+            then {s}.edges.metadata
+        when excluded.weight >= {s}.edges.weight
+            then excluded.metadata
+        else {s}.edges.metadata
+    end,
+    weight = greatest({s}.edges.weight, excluded.weight)
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'INSERT INTO {s}.edges'
-                    ' (source_id, target_id, edge_type, weight, metadata)'
-                    ' VALUES (%s, %s, %s, %s, %s::jsonb)'
-                    ' ON CONFLICT (source_id, target_id, edge_type)'
-                    ' DO UPDATE SET'
-                    "  metadata = CASE"
-                    "    WHEN {s}.edges.metadata->>'created_by'"
-                    "         IN ('claude', 'manual')"
-                    "    THEN {s}.edges.metadata"
-                    "    WHEN EXCLUDED.weight >= {s}.edges.weight"
-                    "    THEN EXCLUDED.metadata"
-                    "    ELSE {s}.edges.metadata END,"
-                    '  weight = GREATEST({s}.edges.weight,'
-                    '                    EXCLUDED.weight)'),
-                (edge.source_id, edge.target_id, edge.edge_type,
-                 edge.weight, _json.dumps(edge.metadata or {})))
+            cur.execute(sql, (
+                edge.source_id, edge.target_id, edge.edge_type,
+                edge.weight, _json.dumps(edge.metadata or {})))
 
     def by_node(self, node_id: Id) -> list[Edge]:
+        sql = self._q("""
+select source_id, target_id, edge_type, weight, metadata, created_at
+from {s}.edges
+where source_id = %s
+union all
+select source_id, target_id, edge_type, weight, metadata, created_at
+from {s}.edges
+where target_id = %s and source_id <> %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'SELECT source_id, target_id, edge_type, weight,'
-                    ' metadata, created_at FROM {s}.edges'
-                    ' WHERE source_id = %s'
-                    ' UNION ALL'
-                    ' SELECT source_id, target_id, edge_type, weight,'
-                    ' metadata, created_at FROM {s}.edges'
-                    ' WHERE target_id = %s AND source_id <> %s'),
-                (node_id, node_id, node_id))
+            cur.execute(sql, (node_id, node_id, node_id))
             return [_row_to_edge(r) for r in cur.fetchall()]
 
     def by_node_and_type(
             self, node_id: Id, edge_type: str) -> list[Edge]:
+        sql = self._q("""
+select source_id, target_id, edge_type, weight, metadata, created_at
+from {s}.edges
+where source_id = %s and edge_type = %s
+union all
+select source_id, target_id, edge_type, weight, metadata, created_at
+from {s}.edges
+where target_id = %s and edge_type = %s and source_id <> %s
+""")
         with self._conn.cursor() as cur:
             cur.execute(
-                self._q(
-                    'SELECT source_id, target_id, edge_type, weight,'
-                    ' metadata, created_at FROM {s}.edges'
-                    ' WHERE source_id = %s AND edge_type = %s'
-                    ' UNION ALL'
-                    ' SELECT source_id, target_id, edge_type, weight,'
-                    ' metadata, created_at FROM {s}.edges'
-                    ' WHERE target_id = %s AND edge_type = %s'
-                    ' AND source_id <> %s'),
-                (node_id, edge_type, node_id, edge_type, node_id))
+                sql, (node_id, edge_type, node_id, edge_type, node_id))
             return [_row_to_edge(r) for r in cur.fetchall()]
 
     def by_source_and_type(
             self, source_id: Id, edge_type: str) -> list[Edge]:
+        sql = self._q("""
+select source_id, target_id, edge_type, weight, metadata, created_at
+from {s}.edges
+where source_id = %s and edge_type = %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'SELECT source_id, target_id, edge_type, weight,'
-                    ' metadata, created_at FROM {s}.edges'
-                    ' WHERE source_id = %s AND edge_type = %s'),
-                (source_id, edge_type))
+            cur.execute(sql, (source_id, edge_type))
             return [_row_to_edge(r) for r in cur.fetchall()]
 
     def find_with_entity(
             self, entity: str, *, exclude_id: Id,
             limit: int) -> list[Id]:
         ent = entity.strip().lower()
+        sql = self._q("""
+select distinct i.id
+from {s}.insights i, jsonb_array_elements_text(i.entities) je
+where i.deleted_at is null
+  and i.id <> %s
+  and lower(trim(je)) = %s
+order by i.id
+limit %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'SELECT DISTINCT i.id FROM {s}.insights i,'
-                    ' jsonb_array_elements_text(i.entities) je'
-                    ' WHERE i.deleted_at IS NULL AND i.id <> %s'
-                    ' AND LOWER(TRIM(je)) = %s'
-                    ' ORDER BY i.id LIMIT %s'),
-                (exclude_id, ent, limit))
+            cur.execute(sql, (exclude_id, ent, limit))
             return [r[0] for r in cur.fetchall()]
 
     def count_with_entity(
             self, entity: str, *, exclude_id: Id) -> int:
         ent = entity.strip().lower()
+        sql = self._q("""
+select count(distinct i.id)
+from {s}.insights i, jsonb_array_elements_text(i.entities) je
+where i.deleted_at is null
+  and i.id <> %s
+  and lower(trim(je)) = %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'SELECT COUNT(DISTINCT i.id) FROM {s}.insights i,'
-                    ' jsonb_array_elements_text(i.entities) je'
-                    ' WHERE i.deleted_at IS NULL AND i.id <> %s'
-                    ' AND LOWER(TRIM(je)) = %s'),
-                (exclude_id, ent))
+            cur.execute(sql, (exclude_id, ent))
             row = cur.fetchone()
             return int(row[0]) if row else 0
 
     def all(self) -> list[Edge]:
+        sql = self._q("""
+select source_id, target_id, edge_type, weight, metadata, created_at
+from {s}.edges
+""")
         with self._conn.cursor() as cur:
-            cur.execute(self._q(
-                'SELECT source_id, target_id, edge_type, weight,'
-                ' metadata, created_at FROM {s}.edges'))
+            cur.execute(sql)
             return [_row_to_edge(r) for r in cur.fetchall()]
 
     def delete_by_node(self, node_id: Id) -> None:
+        sql = self._q("""
+delete from {s}.edges
+where source_id = %s or target_id = %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'DELETE FROM {s}.edges'
-                    ' WHERE source_id = %s OR target_id = %s'),
-                (node_id, node_id))
+            cur.execute(sql, (node_id, node_id))
 
     def delete_auto_for_node(
             self, node_id: Id, edge_type: str) -> None:
         filt = _PER_NODE_CREATED_BY_FILTER[edge_type]
+        sql = self._q(f"""
+delete from {{s}}.edges
+where (source_id = %s or target_id = %s)
+  and edge_type = %s
+  and {filt}
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    f'DELETE FROM {{s}}.edges'
-                    f' WHERE (source_id = %s OR target_id = %s)'
-                    f' AND edge_type = %s AND {filt}'),
-                (node_id, node_id, edge_type))
+            cur.execute(sql, (node_id, node_id, edge_type))
 
     def delete_auto_by_type(self, edge_type: str) -> None:
         filt = _REINDEX_CREATED_BY_FILTER[edge_type]
+        sql = self._q(f"""
+delete from {{s}}.edges
+where edge_type = %s and {filt}
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    f'DELETE FROM {{s}}.edges'
-                    f' WHERE edge_type = %s AND {filt}'),
-                (edge_type,))
+            cur.execute(sql, (edge_type,))
 
     def count_auto_by_type(self, edge_type: str) -> int:
         filt = _REINDEX_CREATED_BY_FILTER[edge_type]
+        sql = self._q(f"""
+select count(*) from {{s}}.edges
+where edge_type = %s and {filt}
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    f'SELECT COUNT(*) FROM {{s}}.edges'
-                    f' WHERE edge_type = %s AND {filt}'),
-                (edge_type,))
+            cur.execute(sql, (edge_type,))
             row = cur.fetchone()
             return int(row[0]) if row else 0
 
     def delete_low_weight_temporal_proximity(
             self, *, min_weight: float) -> None:
+        sql = self._q("""
+delete from {s}.edges
+where edge_type = 'temporal'
+  and metadata->>'sub_type' = 'proximity'
+  and weight < %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    "DELETE FROM {s}.edges WHERE edge_type = 'temporal'"
-                    " AND metadata->>'sub_type' = 'proximity'"
-                    ' AND weight < %s'),
-                (min_weight,))
+            cur.execute(sql, (min_weight,))
 
     def count_low_weight_temporal_proximity(
             self, *, min_weight: float) -> int:
+        sql = self._q("""
+select count(*) from {s}.edges
+where edge_type = 'temporal'
+  and metadata->>'sub_type' = 'proximity'
+  and weight < %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    "SELECT COUNT(*) FROM {s}.edges"
-                    " WHERE edge_type = 'temporal'"
-                    " AND metadata->>'sub_type' = 'proximity'"
-                    ' AND weight < %s'),
-                (min_weight,))
+            cur.execute(sql, (min_weight,))
             row = cur.fetchone()
             return int(row[0]) if row else 0
 
     def get_weight(
             self, source_id: Id, target_id: Id,
             edge_type: str) -> float | None:
+        sql = self._q("""
+select weight from {s}.edges
+where source_id = %s and target_id = %s and edge_type = %s
+""")
         with self._conn.cursor() as cur:
-            cur.execute(
-                self._q(
-                    'SELECT weight FROM {s}.edges'
-                    ' WHERE source_id = %s AND target_id = %s'
-                    ' AND edge_type = %s'),
-                (source_id, target_id, edge_type))
+            cur.execute(sql, (source_id, target_id, edge_type))
             row = cur.fetchone()
             return float(row[0]) if row else None
 
     def count_dangling_by_type(self) -> dict[str, int]:
+        sql = self._q("""
+select e.edge_type, count(*)
+from {s}.edges e
+where not exists (
+    select 1 from {s}.insights i
+    where i.id = e.source_id and i.deleted_at is null
+)
+   or not exists (
+    select 1 from {s}.insights i
+    where i.id = e.target_id and i.deleted_at is null
+)
+group by e.edge_type
+""")
         with self._conn.cursor() as cur:
-            cur.execute(self._q(
-                'SELECT e.edge_type, COUNT(*) FROM {s}.edges e'
-                ' WHERE NOT EXISTS ('
-                '  SELECT 1 FROM {s}.insights i'
-                '   WHERE i.id = e.source_id AND i.deleted_at IS NULL)'
-                ' OR NOT EXISTS ('
-                '  SELECT 1 FROM {s}.insights i'
-                '   WHERE i.id = e.target_id AND i.deleted_at IS NULL)'
-                ' GROUP BY e.edge_type'))
+            cur.execute(sql)
             return {r[0]: int(r[1]) for r in cur.fetchall()}
 
     def degree_distribution(self) -> dict[Id, int]:
+        ids_sql = self._q("""
+select id from {s}.insights
+where deleted_at is null
+""")
+        degree_sql = self._q("""
+select id, sum(cnt) from (
+    select source_id as id, count(*) as cnt
+    from {s}.edges
+    group by source_id
+    union all
+    select target_id as id, count(*) as cnt
+    from {s}.edges
+    group by target_id
+) t
+group by id
+""")
         with self._conn.cursor() as cur:
-            cur.execute(self._q(
-                'SELECT id FROM {s}.insights'
-                ' WHERE deleted_at IS NULL'))
+            cur.execute(ids_sql)
             ids = [r[0] for r in cur.fetchall()]
             if not ids:
                 return {}
-            cur.execute(self._q(
-                'SELECT id, SUM(cnt) FROM ('
-                '  SELECT source_id AS id, COUNT(*) AS cnt'
-                '   FROM {s}.edges GROUP BY source_id'
-                '  UNION ALL'
-                '  SELECT target_id AS id, COUNT(*) AS cnt'
-                '   FROM {s}.edges GROUP BY target_id'
-                ') t GROUP BY id'))
+            cur.execute(degree_sql)
             by_id = {r[0]: int(r[1]) for r in cur.fetchall()}
         return {iid: by_id.get(iid, 0) for iid in ids}
 
@@ -1249,32 +1323,35 @@ class PostgresEdgeStore(EdgeStore):
         Postgres-native equivalent of the Python deque BFS in
         SqliteEdgeStore. The recursive CTE emits only the bounded
         subgraph (depth <= `depth`); active-node filtering is applied
-        in the outer SELECT so deleted nodes do not seed traversal.
+        in the outer select so deleted nodes do not seed traversal.
         """
         if depth <= 0:
             return []
         edge_filter_join = (
-            ' AND e.edge_type = %s' if edge_filter else '')
-        sql = self._q(
-            'WITH RECURSIVE walk(node_id, hop, via_edge) AS ('
-            '  SELECT %s::text, 0::int, NULL::text'
-            '  UNION'
-            '  SELECT'
-            '    CASE WHEN e.source_id = w.node_id'
-            '         THEN e.target_id ELSE e.source_id END,'
-            '    w.hop + 1, e.edge_type'
-            '  FROM walk w JOIN {s}.edges e'
-            '       ON (e.source_id = w.node_id'
-            '           OR e.target_id = w.node_id)'
-            f'      {edge_filter_join}'
-            '  WHERE w.hop < %s'
-            ')'
-            ' SELECT DISTINCT ON (w.node_id)'
-            '   w.node_id, w.hop, w.via_edge'
-            ' FROM walk w JOIN {s}.insights i ON i.id = w.node_id'
-            ' WHERE w.hop > 0 AND w.node_id <> %s'
-            ' AND i.deleted_at IS NULL'
-            ' ORDER BY w.node_id, w.hop ASC')
+            ' and e.edge_type = %s' if edge_filter else '')
+        sql = self._q(f"""
+with recursive walk(node_id, hop, via_edge) as (
+    select %s::text, 0::int, null::text
+    union
+    select
+        case when e.source_id = w.node_id
+             then e.target_id else e.source_id end,
+        w.hop + 1,
+        e.edge_type
+    from walk w
+    join {{s}}.edges e
+        on (e.source_id = w.node_id or e.target_id = w.node_id)
+        {edge_filter_join}
+    where w.hop < %s
+)
+select distinct on (w.node_id) w.node_id, w.hop, w.via_edge
+from walk w
+join {{s}}.insights i on i.id = w.node_id
+where w.hop > 0
+  and w.node_id <> %s
+  and i.deleted_at is null
+order by w.node_id, w.hop asc
+""")
         params: list[Any] = [seed_id]
         if edge_filter:
             params.append(edge_filter)
@@ -1298,23 +1375,23 @@ class PostgresMetaStore(MetaStore):
     def get(self, key: str) -> str | None:
         with self._conn.cursor() as cur:
             cur.execute(
-                f'SELECT value FROM {self._schema}.meta WHERE key = %s',
+                f'select value from {self._schema}.meta where key = %s',
                 (key,))
             row = cur.fetchone()
             return row[0] if row else None
 
     def set(self, key: str, value: str) -> None:
+        sql = f"""
+insert into {self._schema}.meta (key, value)
+values (%s, %s)
+on conflict (key) do update set value = excluded.value
+"""
         with self._conn.cursor() as cur:
-            cur.execute(
-                f'INSERT INTO {self._schema}.meta (key, value)'
-                ' VALUES (%s, %s)'
-                ' ON CONFLICT (key)'
-                ' DO UPDATE SET value = EXCLUDED.value',
-                (key, value))
+            cur.execute(sql, (key, value))
 
 
 class PostgresOplog(Oplog):
-    """Oplog implementation: INSERT-only writes; trim in maintenance."""
+    """Oplog implementation: insert-only writes; trim in maintenance."""
 
     def __init__(
             self, conn: psycopg.Connection, schema: str) -> None:
@@ -1324,33 +1401,35 @@ class PostgresOplog(Oplog):
     def log(
             self, *, operation: str, insight_id: Id,
             detail: str) -> None:
+        sql = f"""
+insert into {self._schema}.oplog (operation, insight_id, detail)
+values (%s, %s, %s)
+"""
         try:
             with self._conn.cursor() as cur:
-                cur.execute(
-                    f'INSERT INTO {self._schema}.oplog'
-                    ' (operation, insight_id, detail) VALUES (%s, %s, %s)',
-                    (operation, insight_id, detail))
+                cur.execute(sql, (operation, insight_id, detail))
         except Exception as exc:
             logger.warning(f'oplog insert failed: {exc}')
 
     def maintenance_step(self) -> None:
+        sql = f"""
+delete from {self._schema}.oplog
+where id <= (select max(id) from {self._schema}.oplog) - %s
+"""
         try:
             with self._conn.cursor() as cur:
-                cur.execute(
-                    f'DELETE FROM {self._schema}.oplog'
-                    ' WHERE id <= ('
-                    f'  SELECT MAX(id) FROM {self._schema}.oplog) - %s',
-                    (_MAX_OPLOG_ENTRIES,))
+                cur.execute(sql, (_MAX_OPLOG_ENTRIES,))
         except Exception as exc:
             logger.warning(f'oplog cap trim failed: {exc}')
 
     def trim_by_age(self, *, retention_days: int = 180) -> int:
+        sql = f"""
+delete from {self._schema}.oplog
+where created_at < now() - (%s * interval '1 day')
+"""
         try:
             with self._conn.cursor() as cur:
-                cur.execute(
-                    f'DELETE FROM {self._schema}.oplog'
-                    " WHERE created_at < now() - (%s * INTERVAL '1 day')",
-                    (retention_days,))
+                cur.execute(sql, (retention_days,))
                 return int(cur.rowcount or 0)
         except Exception as exc:
             logger.warning(f'oplog age trim failed: {exc}')
@@ -1363,21 +1442,25 @@ class PostgresOplog(Oplog):
             limit = 20
         if since:
             since_dt = parse_timestamp(since)
+            sql = f"""
+select id, operation, insight_id, detail, created_at
+from {self._schema}.oplog
+where created_at >= %s
+order by id desc
+limit %s
+"""
             with self._conn.cursor() as cur:
-                cur.execute(
-                    'SELECT id, operation, insight_id, detail,'
-                    ' created_at FROM ' + self._schema + '.oplog'
-                    ' WHERE created_at >= %s'
-                    ' ORDER BY id DESC LIMIT %s',
-                    (since_dt, limit))
+                cur.execute(sql, (since_dt, limit))
                 rows = cur.fetchall()
         else:
+            sql = f"""
+select id, operation, insight_id, detail, created_at
+from {self._schema}.oplog
+order by id desc
+limit %s
+"""
             with self._conn.cursor() as cur:
-                cur.execute(
-                    'SELECT id, operation, insight_id, detail,'
-                    ' created_at FROM ' + self._schema + '.oplog'
-                    ' ORDER BY id DESC LIMIT %s',
-                    (limit,))
+                cur.execute(sql, (limit,))
                 rows = cur.fetchall()
         return [
             OpLogEntry(
@@ -1393,26 +1476,35 @@ class PostgresOplog(Oplog):
         with self._conn.cursor() as cur:
             if since:
                 since_dt = parse_timestamp(since)
-                cur.execute(
-                    f'SELECT operation, COUNT(*)'
-                    f' FROM {self._schema}.oplog'
-                    ' WHERE created_at >= %s GROUP BY operation'
-                    ' ORDER BY COUNT(*) DESC',
-                    (since_dt,))
+                sql = f"""
+select operation, count(*)
+from {self._schema}.oplog
+where created_at >= %s
+group by operation
+order by count(*) desc
+"""
+                cur.execute(sql, (since_dt,))
             else:
-                cur.execute(
-                    f'SELECT operation, COUNT(*)'
-                    f' FROM {self._schema}.oplog GROUP BY operation'
-                    ' ORDER BY COUNT(*) DESC')
+                sql = f"""
+select operation, count(*)
+from {self._schema}.oplog
+group by operation
+order by count(*) desc
+"""
+                cur.execute(sql)
             for op, cnt in cur.fetchall():
                 op_counts[op] = int(cnt)
-            cur.execute(
-                f'SELECT COUNT(*) FROM {self._schema}.insights'
-                ' WHERE deleted_at IS NULL AND access_count = 0')
+            never_sql = f"""
+select count(*) from {self._schema}.insights
+where deleted_at is null and access_count = 0
+"""
+            cur.execute(never_sql)
             never = int(cur.fetchone()[0])
-            cur.execute(
-                f'SELECT COUNT(*) FROM {self._schema}.insights'
-                ' WHERE deleted_at IS NULL')
+            total_sql = f"""
+select count(*) from {self._schema}.insights
+where deleted_at is null
+"""
+            cur.execute(total_sql)
             total = int(cur.fetchone()[0])
         return OpLogStats(
             operation_counts=op_counts, never_accessed=never,
@@ -1425,12 +1517,11 @@ class PostgresRecallSession(RecallSession):
     Owns its own connection (separate from the parent Backend's
     connection) so the session's `search_path` does not leak into
     write traffic, and so the connection can be borrowed from a pool
-    in Phase 2.5 without collision.
+    without collision.
 
     On `__exit__` the session resets `search_path` to the default
-    (`"$user", public`) before the connection is closed -- per the
-    Phase 2 gate's merge-blocker contract that no session leaks
-    state when the connection is returned to a pool.
+    (`"$user", public`) before the connection is closed -- so no
+    session state leaks when the connection is returned to a pool.
 
     `snapshot` mirrors `SqliteRecallSession.snapshot` as a sentinel:
     Postgres has no in-memory snapshot (HNSW + pgvector serve that
@@ -1452,14 +1543,14 @@ class PostgresRecallSession(RecallSession):
         self._conn = _open_connection(self._dsn, autocommit=True)
         with self._conn.cursor() as cur:
             cur.execute(
-                f'SET search_path = {self._schema}, public')
+                f'set search_path = {self._schema}, public')
         return self
 
     def __exit__(self, *exc: object) -> None:
         if self._conn is not None:
             try:
                 with self._conn.cursor() as cur:
-                    cur.execute('SET search_path = "$user", public')
+                    cur.execute('set search_path = "$user", public')
             except Exception as e:
                 logger.warning(f'search_path reset failed: {e}')
             if self._owns_conn:
@@ -1478,16 +1569,18 @@ class PostgresRecallSession(RecallSession):
         """Return top-k (id, similarity) matches via HNSW.
 
         Similarity is `1 - (embedding <=> :q)` (cosine in [-1, 1],
-        higher is better; the Phase 2 score-direction contract).
+        higher is better).
         """
         assert self._conn is not None
+        sql = f"""
+select id, 1 - (embedding <=> %s::vector) as sim
+from {self._schema}.insights
+where deleted_at is null and embedding is not null
+order by embedding <=> %s::vector
+limit %s
+"""
         with self._conn.cursor() as cur:
-            cur.execute(
-                f'SELECT id, 1 - (embedding <=> %s::vector) AS sim'
-                f' FROM {self._schema}.insights'
-                ' WHERE deleted_at IS NULL AND embedding IS NOT NULL'
-                ' ORDER BY embedding <=> %s::vector LIMIT %s',
-                (query_vec, query_vec, k))
+            cur.execute(sql, (query_vec, query_vec, k))
             return [
                 (r[0], float(r[1])) for r in cur.fetchall()
                 if r[1] is not None and float(r[1]) >= min_sim
@@ -1519,7 +1612,7 @@ class PostgresBackend(Backend):
         self._conn = conn if conn is not None else _open_connection(
             dsn, autocommit=False)
         with self._conn.cursor() as cur:
-            cur.execute(f'SET search_path = {self._schema}, public')
+            cur.execute(f'set search_path = {self._schema}, public')
         if not self._conn.autocommit:
             self._conn.commit()
         self.nodes = PostgresNodeStore(self._conn, self._schema)
@@ -1557,7 +1650,7 @@ class PostgresBackend(Backend):
         key = _advisory_lock_key(self._schema, name)
         with self._conn.transaction():
             with self._conn.cursor() as cur:
-                cur.execute('SELECT pg_advisory_xact_lock(%s)', (key,))
+                cur.execute('select pg_advisory_xact_lock(%s)', (key,))
             yield
 
     @contextmanager
@@ -1605,7 +1698,7 @@ class PostgresBackend(Backend):
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    'SELECT pg_try_advisory_lock(%s)', (key,))
+                    'select pg_try_advisory_lock(%s)', (key,))
                 row = cur.fetchone()
                 acquired = bool(row[0]) if row else False
             yield acquired
@@ -1614,7 +1707,7 @@ class PostgresBackend(Backend):
                 if acquired:
                     with conn.cursor() as cur:
                         cur.execute(
-                            'SELECT pg_advisory_unlock(%s)', (key,))
+                            'select pg_advisory_unlock(%s)', (key,))
             except Exception:
                 pass
             try:
@@ -1643,7 +1736,7 @@ class PostgresBackend(Backend):
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    'SELECT pg_try_advisory_lock(%s)', (key,))
+                    'select pg_try_advisory_lock(%s)', (key,))
                 row = cur.fetchone()
                 acquired = bool(row[0]) if row else False
             yield acquired
@@ -1652,7 +1745,7 @@ class PostgresBackend(Backend):
                 if acquired:
                     with conn.cursor() as cur:
                         cur.execute(
-                            'SELECT pg_advisory_unlock(%s)', (key,))
+                            'select pg_advisory_unlock(%s)', (key,))
             except Exception:
                 pass
             try:
@@ -1666,7 +1759,7 @@ class PostgresBackend(Backend):
             with self._conn.cursor() as cur:
                 for table in ('insights', 'edges', 'oplog', 'meta'):
                     cur.execute(
-                        'SELECT pg_relation_size(%s::regclass)',
+                        'select pg_relation_size(%s::regclass)',
                         (f'{self._schema}.{table}',))
                     row = cur.fetchone()
                     sizes[f'{table}_bytes'] = (
@@ -1677,8 +1770,9 @@ class PostgresBackend(Backend):
         return sizes
 
     def maintenance_step(self) -> None:
-        """Run per-store maintenance: trim oplog cap (autovacuum
-        handles vacuuming on Postgres; no PRAGMA needed).
+        """Run per-store maintenance: trim oplog cap.
+
+        Autovacuum handles vacuuming on Postgres; no pragma needed.
         """
         self.oplog.maintenance_step()
 
@@ -1686,7 +1780,7 @@ class PostgresBackend(Backend):
         """Idempotently ensure the HNSW index is current.
 
         Drops any invalid remnant first (per `pg_index.indisvalid`),
-        then issues `CREATE INDEX CONCURRENTLY IF NOT EXISTS`. Cannot
+        then issues `create index concurrently if not exists`. Cannot
         run inside a transaction; opens a dedicated autocommit
         connection.
         """
@@ -1695,17 +1789,18 @@ class PostgresBackend(Backend):
     def integrity_check(self) -> dict[str, Any]:
         with self._conn.cursor() as cur:
             cur.execute(
-                f'SELECT 1 FROM {self._schema}.insights LIMIT 1')
+                f'select 1 from {self._schema}.insights limit 1')
             cur.fetchone()
         return {'ok': True, 'detail': 'schema reachable'}
 
     def introspect_columns(self, table: str) -> set[str]:
         _check_identifier(table)
+        sql = """
+select column_name from information_schema.columns
+where table_schema = %s and table_name = %s
+"""
         with self._conn.cursor() as cur:
-            cur.execute(
-                'SELECT column_name FROM information_schema.columns'
-                ' WHERE table_schema = %s AND table_name = %s',
-                (self._schema, table))
+            cur.execute(sql, (self._schema, table))
             return {row[0] for row in cur.fetchall()}
 
     def close(self) -> None:
@@ -1745,15 +1840,15 @@ def _ensure_baseline_schema(
     new schemas. Resolved from `active_fingerprint().dim` by
     `PostgresCluster.open()` so a non-Voyage operator (e.g. openai
     1536) gets a correctly-sized column on first deploy. For
-    existing schemas the call is idempotent: `CREATE TABLE IF NOT
-    EXISTS` does not alter the existing column width, and the
+    existing schemas the call is idempotent: `create table if not
+    exists` does not alter the existing column width, and the
     open-time guard at `_assert_vector_dim_matches` refuses the
     open if the stored width differs from `dim`.
     """
     schema = _store_schema(store)
     with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
-        cur.execute('CREATE EXTENSION IF NOT EXISTS vector')
-        cur.execute(f'CREATE SCHEMA IF NOT EXISTS {schema}')
+        cur.execute('create extension if not exists vector')
+        cur.execute(f'create schema if not exists {schema}')
         cur.execute(_PG_QUEUE_SCHEMA)
         cur.execute(
             _PG_BASELINE_SCHEMA.format(
@@ -1776,13 +1871,14 @@ def _assert_vector_dim_matches(
     for embedding-dim skew.
     """
     schema = _store_schema(store)
+    sql = """
+select atttypmod from pg_attribute
+where attrelid = (%s || '.insights')::regclass
+  and attname = 'embedding'
+  and not attisdropped
+"""
     with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
-        cur.execute(
-            'SELECT atttypmod FROM pg_attribute'
-            " WHERE attrelid = (%s || '.insights')::regclass"
-            "   AND attname = 'embedding'"
-            "   AND NOT attisdropped",
-            (schema,))
+        cur.execute(sql, (schema,))
         row = cur.fetchone()
         if row is None or row[0] is None or int(row[0]) <= 0:
             return
@@ -1805,12 +1901,19 @@ def _apply_pending_migrations(dsn: str, store: str) -> None:
     with `BackendError`. Each SQL string interpolates `{schema}`.
     """
     schema = _store_schema(store)
+    select_sql = f"""
+select value from {schema}.meta
+where key = 'pg_schema_version'
+"""
+    upsert_sql = f"""
+insert into {schema}.meta (key, value)
+values ('pg_schema_version', %s)
+on conflict (key) do update set value = excluded.value
+"""
     with _connection(dsn, autocommit=False) as conn:
         try:
             with conn.cursor() as cur:
-                cur.execute(
-                    f"SELECT value FROM {schema}.meta"
-                    " WHERE key = 'pg_schema_version'")
+                cur.execute(select_sql)
                 row = cur.fetchone()
                 stored = int(row[0]) if row else 0
                 if stored > _PG_SCHEMA_VERSION:
@@ -1826,12 +1929,7 @@ def _apply_pending_migrations(dsn: str, store: str) -> None:
                     if target_ver > _PG_SCHEMA_VERSION:
                         break
                     cur.execute(sql.format(schema=schema))
-                cur.execute(
-                    f'INSERT INTO {schema}.meta (key, value)'
-                    " VALUES ('pg_schema_version', %s)"
-                    ' ON CONFLICT (key) DO UPDATE'
-                    ' SET value = EXCLUDED.value',
-                    (str(_PG_SCHEMA_VERSION),))
+                cur.execute(upsert_sql, (str(_PG_SCHEMA_VERSION),))
             conn.commit()
         except Exception:
             conn.rollback()
@@ -1844,11 +1942,11 @@ def _ensure_hnsw_index(dsn: str, schema: str) -> None:
     1. Query `pg_index.indisvalid` for any prior HNSW index on this
        column; drop it if invalid (an aborted CONCURRENTLY build
        leaves an invalid remnant).
-    2. `CREATE INDEX CONCURRENTLY IF NOT EXISTS` with
-       `vector_cosine_ops WHERE deleted_at IS NULL`.
+    2. `create index concurrently if not exists` with
+       `vector_cosine_ops where deleted_at is null`.
 
     Runs on a dedicated autocommit connection because
-    `CREATE INDEX CONCURRENTLY` cannot run inside a transaction.
+    `create index concurrently` cannot run inside a transaction.
     `statement_timeout` is set from `MEMMAN_REINDEX_TIMEOUT` (default
     180 seconds) so a stuck build aborts and the next call's
     invalid-remnant cleanup can recover.
@@ -1856,37 +1954,36 @@ def _ensure_hnsw_index(dsn: str, schema: str) -> None:
     _check_identifier(schema)
     index_name = f'idx_insights_hnsw_{schema}'
     timeout_s = int(os.environ.get('MEMMAN_REINDEX_TIMEOUT', '180'))
+    inspect_sql = """
+select i.indexrelid::regclass::text, i.indisvalid
+from pg_index i
+join pg_class c on c.oid = i.indexrelid
+where c.relname = %s
+"""
+    create_sql = f"""
+create index concurrently if not exists {index_name}
+on {schema}.insights
+using hnsw (embedding vector_cosine_ops)
+where deleted_at is null
+"""
     with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
-        cur.execute(f"SET statement_timeout = '{timeout_s}s'")
-        cur.execute(
-            'SELECT i.indexrelid::regclass::text, i.indisvalid'
-            ' FROM pg_index i'
-            ' JOIN pg_class c ON c.oid = i.indexrelid'
-            ' WHERE c.relname = %s',
-            (index_name,))
+        cur.execute(f"set statement_timeout = '{timeout_s}s'")
+        cur.execute(inspect_sql, (index_name,))
         row = cur.fetchone()
         if row and not row[1]:
             logger.warning(
                 f'dropping invalid HNSW index {row[0]}')
-            cur.execute(f'DROP INDEX IF EXISTS {row[0]} CASCADE')
-        cur.execute(
-            f'CREATE INDEX CONCURRENTLY IF NOT EXISTS'
-            f' {index_name} ON {schema}.insights'
-            f' USING hnsw (embedding vector_cosine_ops)'
-            f' WHERE deleted_at IS NULL')
+            cur.execute(f'drop index if exists {row[0]} cascade')
+        cur.execute(create_sql)
 
 
 class PostgresQueueBackend:
     """Cluster-global work queue using `queue.queue` schema.
 
-    Uses `FOR UPDATE SKIP LOCKED` claim semantics so multiple workers
+    Uses `for update skip locked` claim semantics so multiple workers
     can claim disjoint rows safely. Queue tables live in a single
     `queue` schema (not per-store) so cross-store ordering is
     preserved.
-
-    Phase 2 implements the QueueBackend Protocol shape but does not
-    replace `memman.queue.*` operationally -- the SQLite queue stays
-    canonical until Phase 4's migrate command lifts it.
     """
 
     def __init__(self, dsn: str) -> None:
@@ -1896,28 +1993,33 @@ class PostgresQueueBackend:
         return _open_connection(self._dsn, autocommit=True)
 
     def enqueue(self, *, store: str, op: str, payload: str) -> int:
+        sql = """
+insert into queue.queue (store, op, payload)
+values (%s, %s, %s)
+returning id
+"""
         with self._conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                'INSERT INTO queue.queue (store, op, payload)'
-                ' VALUES (%s, %s, %s) RETURNING id',
-                (store, op, payload))
+            cur.execute(sql, (store, op, payload))
             return int(cur.fetchone()[0])
 
     def claim_batch(self, *, limit: int) -> list[QueueRow]:
+        sql = """
+update queue.queue q
+set status = 'claimed',
+    claimed_at = now(),
+    attempts = q.attempts + 1
+from (
+    select id from queue.queue
+    where status = 'pending'
+    order by id asc
+    for update skip locked
+    limit %s
+) sel
+where q.id = sel.id
+returning q.id, q.store, q.op, q.payload, q.attempts, q.created_at
+"""
         with self._conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                'UPDATE queue.queue q'
-                " SET status = 'claimed', claimed_at = now(),"
-                '     attempts = q.attempts + 1'
-                ' FROM ('
-                '   SELECT id FROM queue.queue'
-                "    WHERE status = 'pending'"
-                '    ORDER BY id ASC'
-                '    FOR UPDATE SKIP LOCKED LIMIT %s) sel'
-                ' WHERE q.id = sel.id'
-                ' RETURNING q.id, q.store, q.op, q.payload,'
-                ' q.attempts, q.created_at',
-                (limit,))
+            cur.execute(sql, (limit,))
             rows = cur.fetchall()
         return [
             QueueRow(
@@ -1931,48 +2033,51 @@ class PostgresQueueBackend:
     def mark_done(self, ids: Sequence[int]) -> None:
         if not ids:
             return
+        sql = """
+update queue.queue
+set status = 'done', finished_at = now()
+where id = any(%s)
+"""
         with self._conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                'UPDATE queue.queue'
-                " SET status = 'done', finished_at = now()"
-                ' WHERE id = ANY(%s)',
-                (list(ids),))
+            cur.execute(sql, (list(ids),))
 
     def mark_failed(
             self, ids: Sequence[int], *, error: str) -> None:
         if not ids:
             return
+        sql = """
+update queue.queue
+set status = 'failed', finished_at = now(), error = %s
+where id = any(%s)
+"""
         with self._conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                'UPDATE queue.queue'
-                " SET status = 'failed', finished_at = now(),"
-                ' error = %s WHERE id = ANY(%s)',
-                (error, list(ids)))
+            cur.execute(sql, (error, list(ids)))
 
     def purge_store(self, store: str) -> int:
         with self._conn() as conn, conn.cursor() as cur:
             cur.execute(
-                'DELETE FROM queue.queue WHERE store = %s', (store,))
+                'delete from queue.queue where store = %s', (store,))
             return int(cur.rowcount or 0)
 
     def stats(self) -> QueueStats:
         with self._conn() as conn, conn.cursor() as cur:
-            cur.execute('SELECT COUNT(*) FROM queue.queue')
+            cur.execute('select count(*) from queue.queue')
             total = int(cur.fetchone()[0])
             cur.execute(
-                'SELECT store, COUNT(*) FROM queue.queue'
-                ' GROUP BY store')
+                'select store, count(*) from queue.queue group by store')
             by_store = {r[0]: int(r[1]) for r in cur.fetchall()}
         return QueueStats(total=total, by_store=by_store)
 
     def recent_runs(self, *, limit: int) -> list[WorkerRun]:
+        sql = """
+select id, started_at, ended_at, rows_processed, error,
+       last_heartbeat_at
+from queue.worker_runs
+order by id desc
+limit %s
+"""
         with self._conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                'SELECT id, started_at, ended_at, rows_processed, error,'
-                ' last_heartbeat_at'
-                ' FROM queue.worker_runs'
-                ' ORDER BY id DESC LIMIT %s',
-                (limit,))
+            cur.execute(sql, (limit,))
             rows = cur.fetchall()
         return [
             WorkerRun(
@@ -1987,20 +2092,25 @@ class PostgresQueueBackend:
             ]
 
     def start_run(self) -> int:
+        sql = """
+insert into queue.worker_runs (last_heartbeat_at)
+values (now())
+returning id
+"""
         with self._conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                'INSERT INTO queue.worker_runs (last_heartbeat_at)'
-                ' VALUES (now()) RETURNING id')
+            cur.execute(sql)
             row = cur.fetchone()
             conn.commit()
         return int(row[0]) if row else 0
 
     def beat_run(self, run_id: int) -> None:
+        sql = """
+update queue.worker_runs
+set last_heartbeat_at = now()
+where id = %s
+"""
         with self._conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                'UPDATE queue.worker_runs SET last_heartbeat_at = now()'
-                ' WHERE id = %s',
-                (run_id,))
+            cur.execute(sql, (run_id,))
             conn.commit()
 
     def integrity_report(self) -> IntegrityReport:
@@ -2046,13 +2156,15 @@ class PostgresCluster(Cluster):
             self._dsn, store, conn=ro_conn, owns_conn=True)
 
     def list_stores(self, *, data_dir: str) -> list[str]:
+        sql = """
+select nspname from pg_namespace
+where nspname like 'store_%'
+order by nspname
+"""
         try:
             with _connection(self._dsn, autocommit=True) as conn:
                 with conn.cursor() as cur:
-                    cur.execute(
-                        'SELECT nspname FROM pg_namespace'
-                        " WHERE nspname LIKE 'store_%'"
-                        ' ORDER BY nspname')
+                    cur.execute(sql)
                     return sorted(
                         r[0][len('store_'):] for r in cur.fetchall())
         except BackendError:
@@ -2064,13 +2176,13 @@ class PostgresCluster(Cluster):
         schema = _store_schema(store)
         with _connection(self._dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
-                cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+                cur.execute(f'drop schema if exists {schema} cascade')
                 cur.execute(
-                    'DELETE FROM queue.queue WHERE store = %s',
+                    'delete from queue.queue where store = %s',
                     (store,))
 
     def close(self) -> None:
-        """Postgres clusters do not hold a pool in Phase 2."""
+        """Postgres clusters do not hold a pool."""
 
 
 def _bfs_python_fallback(

@@ -2,8 +2,8 @@
 
 Wraps `EdgeStore.get_neighborhood` so callers can keep the
 existing dict-shaped result and `BFSOptions` ergonomics. The
-underlying traversal lives on the Backend Protocol so Postgres can
-implement it as a recursive CTE in Phase 2.
+underlying traversal lives on the Backend Protocol; Postgres
+implements it as a recursive CTE.
 """
 
 from dataclasses import dataclass

@@ -23,34 +23,41 @@ __all__ = ['MAX_INSIGHTS']
 def insert_insight(db: 'DB', i: Insight) -> None:
     """Insert a new insight into the database.
 
-    Stamps `created_at` / `updated_at` server-side per Phase 1a
-    Decision #1: caller-passed `i.created_at` / `i.updated_at` are
-    IGNORED. Tests that need to control insertion time use the
-    `_set_created_at` helper in `tests/conftest.py` to issue a raw
-    UPDATE after insert. Mirrors `PostgresNodeStore.insert` which
-    relies on `DEFAULT now()`.
+    Stamps `created_at` / `updated_at` server-side: caller-passed
+    `i.created_at` / `i.updated_at` are IGNORED. Tests that need to
+    control insertion time use the `_set_created_at` helper in
+    `tests/conftest.py` to issue a raw update after insert. Mirrors
+    `PostgresNodeStore.insert` which relies on `DEFAULT now()`.
     """
     now = format_timestamp(datetime.now(timezone.utc))
-    db._exec(
-        'INSERT INTO insights'
-        ' (id, content, category, importance, entities,'
-        '  source, access_count, created_at, updated_at,'
-        '  prompt_version, model_id, embedding_model)'
-        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        (i.id, i.content, i.category, i.importance,
-         i.entities_json(), i.source, i.access_count,
-         now, now,
-         i.prompt_version, i.model_id, i.embedding_model))
+    sql = """
+insert into insights
+    (id, content, category, importance, entities,
+     source, access_count, created_at, updated_at,
+     prompt_version, model_id, embedding_model)
+values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+    db._exec(sql, (
+        i.id, i.content, i.category, i.importance,
+        i.entities_json(), i.source, i.access_count,
+        now, now,
+        i.prompt_version, i.model_id, i.embedding_model))
+
+
+_INSIGHT_COLUMNS = (
+    'id, content, category, importance, entities,'
+    ' source, access_count, created_at, updated_at, deleted_at,'
+    ' summary')
 
 
 def get_insight_by_id(db: 'DB', id: str) -> Insight | None:
     """Return a single insight by ID (excludes soft-deleted)."""
-    row = db._query(
-        'SELECT id, content, category, importance, entities,'
-        ' source, access_count, created_at, updated_at, deleted_at,'
-        ' summary'
-        ' FROM insights WHERE id = ? AND deleted_at IS NULL',
-        (id,)).fetchone()
+    sql = f"""
+select {_INSIGHT_COLUMNS}
+from insights
+where id = ? and deleted_at is null
+"""
+    row = db._query(sql, (id,)).fetchone()
     if row is None:
         return None
     return _scan_insight(row)
@@ -58,12 +65,12 @@ def get_insight_by_id(db: 'DB', id: str) -> Insight | None:
 
 def get_insight_by_id_include_deleted(db: 'DB', id: str) -> Insight | None:
     """Return a single insight by ID, including soft-deleted."""
-    row = db._query(
-        'SELECT id, content, category, importance, entities,'
-        ' source, access_count, created_at, updated_at, deleted_at,'
-        ' summary'
-        ' FROM insights WHERE id = ?',
-        (id,)).fetchone()
+    sql = f"""
+select {_INSIGHT_COLUMNS}
+from insights
+where id = ?
+"""
+    row = db._query(sql, (id,)).fetchone()
     if row is None:
         return None
     return _scan_insight(row)
@@ -72,8 +79,8 @@ def get_insight_by_id_include_deleted(db: 'DB', id: str) -> Insight | None:
 def query_insights(db: 'DB', keyword: str = '', category: str = '',
                    min_importance: int = 0, source: str = '',
                    limit: int = 20) -> list[Insight]:
-    """Return insights matching filters, ordered by importance DESC, created_at DESC."""
-    conditions = ['deleted_at IS NULL']
+    """Return insights matching filters, ordered by importance desc, created_at desc."""
+    conditions = ['deleted_at is null']
     args: list[Any] = []
 
     if keyword:
@@ -81,9 +88,9 @@ def query_insights(db: 'DB', keyword: str = '', category: str = '',
             escaped = word.replace(
                 '\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
             conditions.append(
-                "(content LIKE ? ESCAPE '\\'"
-                " OR entities LIKE ? ESCAPE '\\'"
-                " OR keywords LIKE ? ESCAPE '\\')")
+                "(content like ? escape '\\'"
+                " or entities like ? escape '\\'"
+                " or keywords like ? escape '\\')")
             args.extend([f'%{escaped}%'] * 3)
     if category:
         conditions.append('category = ?')
@@ -99,13 +106,14 @@ def query_insights(db: 'DB', keyword: str = '', category: str = '',
         limit = 20
     args.append(limit)
 
-    sql = (
-        'SELECT id, content, category, importance, entities,'
-        ' source, access_count, created_at, updated_at, deleted_at,'
-        ' summary'
-        ' FROM insights WHERE ' + ' AND '.join(conditions)
-        + ' ORDER BY importance DESC, created_at DESC LIMIT ?')
-
+    where_clause = ' and '.join(conditions)
+    sql = f"""
+select {_INSIGHT_COLUMNS}
+from insights
+where {where_clause}
+order by importance desc, created_at desc
+limit ?
+"""
     rows = db._query(sql, tuple(args)).fetchall()
     return [_scan_insight(r) for r in rows]
 
@@ -125,10 +133,12 @@ def soft_delete_insight(
     plain add instead of crashing the row's transaction.
     """
     now = format_timestamp(datetime.now(timezone.utc))
-    cursor = db._exec(
-        'UPDATE insights SET deleted_at = ?, updated_at = ?'
-        ' WHERE id = ? AND deleted_at IS NULL',
-        (now, now, id))
+    sql = """
+update insights
+set deleted_at = ?, updated_at = ?
+where id = ? and deleted_at is null
+"""
+    cursor = db._exec(sql, (now, now, id))
     if cursor.rowcount == 0:
         if tolerate_missing:
             return False
@@ -149,7 +159,7 @@ def update_entities(db: 'DB', id: str, entities: list[str]) -> None:
             deduped.append(e)
     now = format_timestamp(datetime.now(timezone.utc))
     db._exec(
-        'UPDATE insights SET entities = ?, updated_at = ? WHERE id = ?',
+        'update insights set entities = ?, updated_at = ? where id = ?',
         (json.dumps(deduped, sort_keys=True), now, id))
 
 
@@ -157,19 +167,24 @@ def update_enrichment(
         db: 'DB', id: str, keywords: list[str],
         summary: str, semantic_facts: list[str]) -> None:
     """Update LLM enrichment columns for an insight."""
-    db._exec(
-        'UPDATE insights SET keywords = ?, summary = ?,'
-        ' semantic_facts = ? WHERE id = ?',
-        (json.dumps(keywords), summary, json.dumps(semantic_facts), id))
+    sql = """
+update insights
+set keywords = ?, summary = ?, semantic_facts = ?
+where id = ?
+"""
+    db._exec(sql, (
+        json.dumps(keywords), summary, json.dumps(semantic_facts), id))
 
 
 def increment_access_count(db: 'DB', id: str) -> None:
     """Bump the access count and refresh last_accessed_at."""
     now = format_timestamp(datetime.now(timezone.utc))
-    db._exec(
-        'UPDATE insights SET access_count = access_count + 1,'
-        ' last_accessed_at = ? WHERE id = ?',
-        (now, id))
+    sql = """
+update insights
+set access_count = access_count + 1, last_accessed_at = ?
+where id = ?
+"""
+    db._exec(sql, (now, id))
 
 
 def compute_effective_importance(
@@ -187,10 +202,12 @@ def compute_effective_importance(
 
 def refresh_effective_importance(db: 'DB', id: str) -> float:
     """Recompute and store effective_importance for one insight."""
-    row = db._query(
-        'SELECT importance, access_count, created_at, last_accessed_at'
-        ' FROM insights WHERE id = ? AND deleted_at IS NULL',
-        (id,)).fetchone()
+    sql = """
+select importance, access_count, created_at, last_accessed_at
+from insights
+where id = ? and deleted_at is null
+"""
+    row = db._query(sql, (id,)).fetchone()
     if row is None:
         raise ValueError(f'insight {id} not found')
 
@@ -205,17 +222,18 @@ def refresh_effective_importance(db: 'DB', id: str) -> float:
     now = datetime.now(timezone.utc)
     days_since = (now - last_access).total_seconds() / 86400.0
 
-    edge_row = db._query(
-        'SELECT (SELECT COUNT(*) FROM edges WHERE source_id = ?) +'
-        '       (SELECT COUNT(*) FROM edges WHERE target_id = ?)',
-        (id, id)).fetchone()
+    edge_sql = """
+select (select count(*) from edges where source_id = ?)
+     + (select count(*) from edges where target_id = ?)
+"""
+    edge_row = db._query(edge_sql, (id, id)).fetchone()
     edge_count = edge_row[0] if edge_row else 0
 
     ei = compute_effective_importance(
         importance, access_count, days_since, edge_count)
 
     db._exec(
-        'UPDATE insights SET effective_importance = ? WHERE id = ?',
+        'update insights set effective_importance = ? where id = ?',
         (ei, id))
     return ei
 
@@ -224,11 +242,12 @@ def get_retention_candidates(
         db: 'DB', threshold: float,
         limit: int) -> tuple[list[dict[str, Any]], int]:
     """Return non-immune insights sorted by effective_importance ascending."""
-    rows = db._query(
-        'SELECT id, content, category, importance, entities,'
-        ' source, access_count, created_at, updated_at, deleted_at,'
-        ' summary, last_accessed_at'
-        ' FROM insights WHERE deleted_at IS NULL').fetchall()
+    sql = f"""
+select {_INSIGHT_COLUMNS}, last_accessed_at
+from insights
+where deleted_at is null
+"""
+    rows = db._query(sql).fetchall()
 
     insight_rows: list[tuple[Insight, datetime]] = []
     for r in rows:
@@ -242,14 +261,19 @@ def get_retention_candidates(
                 pass
         insight_rows.append((ins, last_access))
 
-    ec_rows = db._query(
-        'SELECT id, SUM(cnt) FROM ('
-        '  SELECT source_id AS id, COUNT(*) AS cnt'
-        '   FROM edges GROUP BY source_id'
-        '  UNION ALL'
-        '  SELECT target_id AS id, COUNT(*) AS cnt'
-        '   FROM edges GROUP BY target_id'
-        ') GROUP BY id').fetchall()
+    ec_sql = """
+select id, sum(cnt) from (
+    select source_id as id, count(*) as cnt
+    from edges
+    group by source_id
+    union all
+    select target_id as id, count(*) as cnt
+    from edges
+    group by target_id
+)
+group by id
+"""
+    ec_rows = db._query(ec_sql).fetchall()
     edge_counts: dict[str, int] = dict(ec_rows)
 
     now = datetime.now(timezone.utc)
@@ -276,8 +300,8 @@ def get_retention_candidates(
         def apply_ei_updates() -> None:
             for ei_val, uid in updates:
                 db._exec(
-                    'UPDATE insights SET effective_importance = ?'
-                    ' WHERE id = ?', (ei_val, uid))
+                    'update insights set effective_importance = ?'
+                    ' where id = ?', (ei_val, uid))
         try:
             db.in_transaction(apply_ei_updates)
         except Exception as e:
@@ -294,7 +318,7 @@ def get_retention_candidates(
 def count_active_insights(db: 'DB') -> int:
     """Return the number of non-deleted insights."""
     row = db._query(
-        'SELECT COUNT(*) FROM insights WHERE deleted_at IS NULL'
+        'select count(*) from insights where deleted_at is null'
         ).fetchone()
     return int(row[0])
 
@@ -307,15 +331,15 @@ def count_total_insights(db: 'DB') -> int:
     store. A soft-deleted row is still data with provenance, so the
     fingerprint must not be re-seeded against it.
     """
-    row = db._query('SELECT COUNT(*) FROM insights').fetchone()
+    row = db._query('select count(*) from insights').fetchone()
     return int(row[0])
 
 
 def has_active_with_source(db: 'DB', source: str) -> bool:
     """Return True if any active insight exists with the given source."""
     row = db._query(
-        'SELECT 1 FROM insights WHERE source = ?'
-        ' AND deleted_at IS NULL LIMIT 1',
+        'select 1 from insights where source = ?'
+        ' and deleted_at is null limit 1',
         (source,)).fetchone()
     return row is not None
 
@@ -326,17 +350,17 @@ def iter_for_reembed(
     """Return a batch of insights for the reembed sweep.
 
     Returns rows of (id, content, embedding_model, blob_length).
-    The blob length is SQLite-specific (LENGTH(BLOB)); on Postgres
-    the dimension is invariant from the column type and a future
-    Backend-aware version can omit it.
+    The blob length is SQLite-specific (`length(blob)`); on Postgres
+    the dimension is invariant from the column type.
     """
-    rows = db._query(
-        'SELECT id, content, embedding_model,'
-        ' LENGTH(embedding)'
-        ' FROM insights'
-        ' WHERE deleted_at IS NULL AND id > ?'
-        ' ORDER BY id LIMIT ?',
-        (cursor, batch)).fetchall()
+    sql = """
+select id, content, embedding_model, length(embedding)
+from insights
+where deleted_at is null and id > ?
+order by id
+limit ?
+"""
+    rows = db._query(sql, (cursor, batch)).fetchall()
     return list(rows)
 
 
@@ -350,15 +374,18 @@ def count_orphans(db: 'DB') -> tuple[int, int]:
     set-difference inside the database.
     """
     total = db._query(
-        'SELECT COUNT(*) FROM insights WHERE deleted_at IS NULL'
+        'select count(*) from insights where deleted_at is null'
         ).fetchone()[0]
-    orphan_count = db._query(
-        'SELECT COUNT(*) FROM insights i'
-        ' WHERE i.deleted_at IS NULL'
-        ' AND NOT EXISTS ('
-        '  SELECT 1 FROM edges e'
-        '  WHERE e.source_id = i.id OR e.target_id = i.id'
-        ')').fetchone()[0]
+    orphan_sql = """
+select count(*)
+from insights i
+where i.deleted_at is null
+  and not exists (
+      select 1 from edges e
+      where e.source_id = i.id or e.target_id = i.id
+  )
+"""
+    orphan_count = db._query(orphan_sql).fetchone()[0]
     return orphan_count, total
 
 
@@ -369,11 +396,14 @@ def provenance_distribution(
     Used by `doctor.check_provenance_drift` to detect rows enriched
     by older prompt versions or models. Sorted by count descending.
     """
-    rows = db._query(
-        'SELECT prompt_version, model_id, COUNT(*) AS n'
-        ' FROM insights WHERE deleted_at IS NULL'
-        ' GROUP BY prompt_version, model_id'
-        ' ORDER BY n DESC').fetchall()
+    sql = """
+select prompt_version, model_id, count(*) as n
+from insights
+where deleted_at is null
+group by prompt_version, model_id
+order by n desc
+"""
+    rows = db._query(sql).fetchall()
     return [(r[0], r[1], r[2]) for r in rows]
 
 
@@ -393,15 +423,18 @@ def auto_prune(db: 'DB', max_insights: int,
     exclude_clause = ''
     if exclude_ids:
         placeholders = ','.join('?' for _ in exclude_ids)
-        exclude_clause = f'AND id NOT IN ({placeholders})'
+        exclude_clause = f'and id not in ({placeholders})'
 
-    candidate_rows = db._query(
-        f'SELECT id FROM insights'
-        f' WHERE deleted_at IS NULL AND importance < 4'
-        f' AND access_count < 3 {exclude_clause}'
-        f' ORDER BY effective_importance ASC'
-        f' LIMIT {PRUNE_BATCH_SIZE}',
-        tuple(args)).fetchall()
+    candidate_sql = f"""
+select id from insights
+where deleted_at is null
+  and importance < 4
+  and access_count < 3
+  {exclude_clause}
+order by effective_importance asc
+limit {PRUNE_BATCH_SIZE}
+"""
+    candidate_rows = db._query(candidate_sql, tuple(args)).fetchall()
     for (cid,) in candidate_rows:
         try:
             refresh_effective_importance(db, cid)
@@ -409,20 +442,26 @@ def auto_prune(db: 'DB', max_insights: int,
             pass
 
     args.append(excess)
-    rows = db._query(
-        f'SELECT id FROM insights'
-        f' WHERE deleted_at IS NULL AND importance < 4'
-        f' AND access_count < 3 {exclude_clause}'
-        f' ORDER BY effective_importance ASC LIMIT ?',
-        tuple(args)).fetchall()
+    rows_sql = f"""
+select id from insights
+where deleted_at is null
+  and importance < 4
+  and access_count < 3
+  {exclude_clause}
+order by effective_importance asc
+limit ?
+"""
+    rows = db._query(rows_sql, tuple(args)).fetchall()
 
     now = format_timestamp(datetime.now(timezone.utc))
     pruned = 0
+    update_sql = """
+update insights
+set deleted_at = ?, updated_at = ?
+where id = ? and deleted_at is null
+"""
     for (cid,) in rows:
-        cursor = db._exec(
-            'UPDATE insights SET deleted_at = ?, updated_at = ?'
-            ' WHERE id = ? AND deleted_at IS NULL',
-            (now, now, cid))
+        cursor = db._exec(update_sql, (now, now, cid))
         if cursor.rowcount > 0:
             from memman.store.edge import delete_edges_by_node
             delete_edges_by_node(db, cid)
@@ -453,11 +492,14 @@ def review_content_quality(
 def boost_retention(db: 'DB', id: str) -> None:
     """Boost an insight's retention: access_count +3, refreshes last_accessed_at."""
     now = format_timestamp(datetime.now(timezone.utc))
-    cursor = db._exec(
-        'UPDATE insights SET access_count = access_count + 3,'
-        ' last_accessed_at = ?, updated_at = ?'
-        ' WHERE id = ? AND deleted_at IS NULL',
-        (now, now, id))
+    sql = """
+update insights
+set access_count = access_count + 3,
+    last_accessed_at = ?,
+    updated_at = ?
+where id = ? and deleted_at is null
+"""
+    cursor = db._exec(sql, (now, now, id))
     if cursor.rowcount == 0:
         raise ValueError(f'insight {id} not found or already deleted')
 
@@ -469,28 +511,28 @@ def get_recent_insights_in_window(
     cutoff = datetime.now(timezone.utc).timestamp() - window_hours * 3600
     cutoff_dt = datetime.fromtimestamp(cutoff, tz=timezone.utc)
     cutoff_str = format_timestamp(cutoff_dt)
-    rows = db._query(
-        'SELECT id, content, category, importance, entities,'
-        ' source, access_count, created_at, updated_at, deleted_at,'
-        ' summary'
-        ' FROM insights WHERE id != ? AND deleted_at IS NULL'
-        ' AND created_at >= ?'
-        ' ORDER BY created_at DESC LIMIT ?',
-        (exclude_id, cutoff_str, limit)).fetchall()
+    sql = f"""
+select {_INSIGHT_COLUMNS}
+from insights
+where id != ? and deleted_at is null and created_at >= ?
+order by created_at desc
+limit ?
+"""
+    rows = db._query(sql, (exclude_id, cutoff_str, limit)).fetchall()
     return [_scan_insight(r) for r in rows]
 
 
 def get_latest_insight_by_source(
         db: 'DB', source: str, exclude_id: str) -> Insight | None:
     """Return the most recent non-deleted insight for a given source."""
-    row = db._query(
-        'SELECT id, content, category, importance, entities,'
-        ' source, access_count, created_at, updated_at, deleted_at,'
-        ' summary'
-        ' FROM insights WHERE source = ? AND id != ?'
-        ' AND deleted_at IS NULL'
-        ' ORDER BY created_at DESC, rowid DESC LIMIT 1',
-        (source, exclude_id)).fetchone()
+    sql = f"""
+select {_INSIGHT_COLUMNS}
+from insights
+where source = ? and id != ? and deleted_at is null
+order by created_at desc, rowid desc
+limit 1
+"""
+    row = db._query(sql, (source, exclude_id)).fetchone()
     if row is None:
         return None
     return _scan_insight(row)
@@ -500,24 +542,26 @@ def get_recent_active_insights(
         db: 'DB', exclude_id: str,
         limit: int) -> list[Insight]:
     """Return the N most recent non-deleted insights regardless of source."""
-    rows = db._query(
-        'SELECT id, content, category, importance, entities,'
-        ' source, access_count, created_at, updated_at, deleted_at,'
-        ' summary'
-        ' FROM insights WHERE id != ? AND deleted_at IS NULL'
-        ' ORDER BY created_at DESC LIMIT ?',
-        (exclude_id, limit)).fetchall()
+    sql = f"""
+select {_INSIGHT_COLUMNS}
+from insights
+where id != ? and deleted_at is null
+order by created_at desc
+limit ?
+"""
+    rows = db._query(sql, (exclude_id, limit)).fetchall()
     return [_scan_insight(r) for r in rows]
 
 
 def get_all_active_insights(db: 'DB') -> list[Insight]:
     """Return all non-deleted insights."""
-    rows = db._query(
-        'SELECT id, content, category, importance, entities,'
-        ' source, access_count, created_at, updated_at, deleted_at,'
-        ' summary'
-        ' FROM insights WHERE deleted_at IS NULL'
-        ' ORDER BY created_at DESC').fetchall()
+    sql = f"""
+select {_INSIGHT_COLUMNS}
+from insights
+where deleted_at is null
+order by created_at desc
+"""
+    rows = db._query(sql).fetchall()
     return [_scan_insight(r) for r in rows]
 
 
@@ -526,35 +570,42 @@ def get_stats(db: 'DB') -> dict[str, Any]:
     stats: dict[str, Any] = {'by_category': {}}
 
     row = db._query(
-        'SELECT COUNT(*) FROM insights WHERE deleted_at IS NULL'
+        'select count(*) from insights where deleted_at is null'
         ).fetchone()
     stats['total_insights'] = row[0]
 
     row = db._query(
-        'SELECT COUNT(*) FROM insights WHERE deleted_at IS NOT NULL'
+        'select count(*) from insights where deleted_at is not null'
         ).fetchone()
     stats['deleted_insights'] = row[0]
 
-    rows = db._query(
-        'SELECT category, COUNT(*) FROM insights'
-        ' WHERE deleted_at IS NULL GROUP BY category').fetchall()
+    cat_sql = """
+select category, count(*)
+from insights
+where deleted_at is null
+group by category
+"""
+    rows = db._query(cat_sql).fetchall()
     for cat, count in rows:
         stats['by_category'][cat] = count
 
-    row = db._query('SELECT COUNT(*) FROM edges').fetchone()
+    row = db._query('select count(*) from edges').fetchone()
     stats['edge_count'] = row[0]
 
-    row = db._query('SELECT COUNT(*) FROM oplog').fetchone()
+    row = db._query('select count(*) from oplog').fetchone()
     stats['oplog_count'] = row[0]
 
     top_entities = []
     try:
-        erows = db._query(
-            'SELECT je.value, COUNT(DISTINCT i.id) as cnt'
-            ' FROM insights i, json_each(i.entities) je'
-            ' WHERE i.deleted_at IS NULL'
-            ' GROUP BY je.value'
-            ' ORDER BY cnt DESC LIMIT 20').fetchall()
+        ent_sql = """
+select je.value, count(distinct i.id) as cnt
+from insights i, json_each(i.entities) je
+where i.deleted_at is null
+group by je.value
+order by cnt desc
+limit 20
+"""
+        erows = db._query(ent_sql).fetchall()
         for entity, count in erows:
             top_entities.append({'entity': entity, 'count': count})
     except Exception:
@@ -574,17 +625,19 @@ def update_embedding(db: 'DB', id: str, blob: bytes,
     being current.
     """
     now = format_timestamp(datetime.now(timezone.utc))
-    db._exec(
-        'UPDATE insights SET embedding = ?, embedding_model = ?,'
-        ' updated_at = ? WHERE id = ?',
-        (blob, model, now, id))
+    sql = """
+update insights
+set embedding = ?, embedding_model = ?, updated_at = ?
+where id = ?
+"""
+    db._exec(sql, (blob, model, now, id))
 
 
 def get_embedding(db: 'DB', id: str) -> bytes | None:
     """Return the raw embedding blob for an insight."""
     row = db._query(
-        'SELECT embedding FROM insights'
-        ' WHERE id = ? AND deleted_at IS NULL',
+        'select embedding from insights'
+        ' where id = ? and deleted_at is null',
         (id,)).fetchone()
     if row is None or row[0] is None:
         return None
@@ -594,10 +647,12 @@ def get_embedding(db: 'DB', id: str) -> bytes | None:
 
 def get_all_embeddings(db: 'DB') -> list[tuple[str, str, bytes]]:
     """Return all active insights that have embeddings as (id, content, blob)."""
-    rows = db._query(
-        'SELECT id, content, embedding FROM insights'
-        ' WHERE deleted_at IS NULL AND embedding IS NOT NULL'
-        ).fetchall()
+    sql = """
+select id, content, embedding
+from insights
+where deleted_at is null and embedding is not null
+"""
+    rows = db._query(sql).fetchall()
     results = []
     for id, content, blob in rows:
         if blob and len(blob) > 0:
@@ -608,11 +663,11 @@ def get_all_embeddings(db: 'DB') -> list[tuple[str, str, bytes]]:
 def embedding_stats(db: 'DB') -> tuple[int, int]:
     """Return (total_active, embedded_count)."""
     total = db._query(
-        'SELECT COUNT(*) FROM insights WHERE deleted_at IS NULL'
+        'select count(*) from insights where deleted_at is null'
         ).fetchone()[0]
     embedded = db._query(
-        'SELECT COUNT(*) FROM insights'
-        ' WHERE deleted_at IS NULL AND embedding IS NOT NULL'
+        'select count(*) from insights'
+        ' where deleted_at is null and embedding is not null'
         ).fetchone()[0]
     return total, embedded
 
@@ -622,54 +677,59 @@ def get_insights_without_embedding(
     """Return active insights that lack embeddings."""
     if limit <= 0:
         limit = 100
-    rows = db._query(
-        'SELECT id, content, category, importance, entities,'
-        ' source, access_count, created_at, updated_at, deleted_at,'
-        ' summary'
-        ' FROM insights WHERE deleted_at IS NULL AND embedding IS NULL'
-        ' ORDER BY importance DESC, created_at DESC LIMIT ?',
-        (limit,)).fetchall()
+    sql = f"""
+select {_INSIGHT_COLUMNS}
+from insights
+where deleted_at is null and embedding is null
+order by importance desc, created_at desc
+limit ?
+"""
+    rows = db._query(sql, (limit,)).fetchall()
     return [_scan_insight(r) for r in rows]
 
 
 def stamp_linked(db: 'DB', insight_id: str, ts: str) -> None:
     """Set linked_at timestamp for an insight."""
     db._exec(
-        'UPDATE insights SET linked_at = ? WHERE id = ?',
+        'update insights set linked_at = ? where id = ?',
         (ts, insight_id))
 
 
 def stamp_enriched(db: 'DB', insight_id: str, ts: str) -> None:
     """Set enriched_at timestamp for an insight."""
     db._exec(
-        'UPDATE insights SET enriched_at = ? WHERE id = ?',
+        'update insights set enriched_at = ? where id = ?',
         (ts, insight_id))
 
 
 def get_pending_link_ids(db: 'DB', limit: int) -> list[str]:
     """Return IDs of insights with NULL linked_at, ordered by created_at."""
-    rows = db._query(
-        'SELECT id FROM insights'
-        ' WHERE linked_at IS NULL AND deleted_at IS NULL'
-        ' ORDER BY created_at ASC'
-        ' LIMIT ?',
-        (limit,)).fetchall()
+    sql = """
+select id from insights
+where linked_at is null and deleted_at is null
+order by created_at asc
+limit ?
+"""
+    rows = db._query(sql, (limit,)).fetchall()
     return [r[0] for r in rows]
 
 
 def get_active_insight_ids(db: 'DB') -> list[str]:
     """Return all active insight IDs in creation order."""
-    rows = db._query(
-        'SELECT id FROM insights WHERE deleted_at IS NULL'
-        ' ORDER BY created_at ASC').fetchall()
+    sql = """
+select id from insights
+where deleted_at is null
+order by created_at asc
+"""
+    rows = db._query(sql).fetchall()
     return [r[0] for r in rows]
 
 
 def count_pending_links(db: 'DB') -> int:
     """Count insights with NULL linked_at that are not deleted."""
     row = db._query(
-        'SELECT COUNT(*) FROM insights'
-        ' WHERE linked_at IS NULL AND deleted_at IS NULL').fetchone()
+        'select count(*) from insights'
+        ' where linked_at is null and deleted_at is null').fetchone()
     return row[0] if row else 0
 
 
@@ -679,17 +739,19 @@ def reset_for_rebuild(
     if not insight_ids:
         return
     placeholders = ','.join('?' for _ in insight_ids)
-    db._exec(
-        f'UPDATE insights SET enriched_at = NULL, linked_at = NULL'
-        f' WHERE id IN ({placeholders})',
-        tuple(insight_ids))
+    sql = f"""
+update insights
+set enriched_at = null, linked_at = null
+where id in ({placeholders})
+"""
+    db._exec(sql, tuple(insight_ids))
 
 
 def clear_linked_at(db: 'DB') -> None:
     """Set linked_at to NULL for all active insights."""
     db._exec(
-        'UPDATE insights SET linked_at = NULL'
-        ' WHERE deleted_at IS NULL')
+        'update insights set linked_at = null'
+        ' where deleted_at is null')
 
 
 def _scan_insight(row: tuple[Any, ...]) -> Insight:

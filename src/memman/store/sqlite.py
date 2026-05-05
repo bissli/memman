@@ -1,18 +1,14 @@
 """SQLite implementation of the Backend Protocol surface.
 
-Phase 1a: thin facade. Each Protocol verb binds 1:1 to an existing
-free function in `store/{node,edge,oplog,db,snapshot}.py`. The legacy
-function call sites (cli.py, maintenance.py, doctor.py) keep working
-unchanged through Phase 4; pipeline call sites flip to `Backend`
-verbs as part of Phase 1a's rewire step.
+Thin facade. Each Protocol verb binds 1:1 to an existing free
+function in `store/{node,edge,oplog,db,snapshot}.py`.
 
 This module is the only file allowed to import
 `memman.store.snapshot` outside of `store/`. The recall path goes
 through `Backend.recall_session()` which yields a
 `SqliteRecallSession`; pipeline code reads `session.snapshot` for
-its current SQL-or-snapshot branching logic and falls through to
-the active backend's verbs when the snapshot is absent. Phase 1b
-moves that logic into `SqliteRecallSession` methods.
+its SQL-or-snapshot branching logic and falls through to the
+active backend's verbs when the snapshot is absent.
 """
 
 import logging
@@ -192,16 +188,18 @@ class SqliteNodeStore(NodeStore):
         return _node.embedding_stats(self._db)
 
     def enrichment_coverage(self) -> EnrichmentCoverage:
-        row = self._db._query(
-            'SELECT COUNT(*),'
-            ' SUM(CASE WHEN embedding IS NULL THEN 1 ELSE 0 END),'
-            " SUM(CASE WHEN keywords IS NULL OR keywords = '' THEN 1"
-            ' ELSE 0 END),'
-            " SUM(CASE WHEN summary IS NULL OR summary = '' THEN 1"
-            ' ELSE 0 END),'
-            " SUM(CASE WHEN semantic_facts IS NULL"
-            "        OR semantic_facts = '' THEN 1 ELSE 0 END)"
-            ' FROM insights WHERE deleted_at IS NULL').fetchone()
+        sql = """
+select count(*),
+       sum(case when embedding is null then 1 else 0 end),
+       sum(case when keywords is null or keywords = '' then 1 else 0 end),
+       sum(case when summary is null or summary = '' then 1 else 0 end),
+       sum(case when semantic_facts is null
+                 or semantic_facts = ''
+                then 1 else 0 end)
+from insights
+where deleted_at is null
+"""
+        row = self._db._query(sql).fetchone()
         if row is None:
             return EnrichmentCoverage()
         total, miss_emb, miss_kw, miss_sum, miss_sf = row
@@ -213,10 +211,13 @@ class SqliteNodeStore(NodeStore):
             missing_semantic_facts=int(miss_sf or 0))
 
     def embedding_size_distribution(self) -> dict[int, int]:
-        rows = self._db._query(
-            'SELECT LENGTH(embedding), COUNT(*) FROM insights'
-            ' WHERE deleted_at IS NULL AND embedding IS NOT NULL'
-            ' GROUP BY LENGTH(embedding)').fetchall()
+        sql = """
+select length(embedding), count(*)
+from insights
+where deleted_at is null and embedding is not null
+group by length(embedding)
+"""
+        rows = self._db._query(sql).fetchall()
         return {int(size): int(count) for size, count in rows}
 
     def get_without_embedding(self, *, limit: int = 100) -> list[Insight]:
@@ -413,10 +414,9 @@ class SqliteOplog(Oplog):
 class SqliteRecallSession(RecallSession):
     """Read-side session for the recall pipeline.
 
-    Phase 1a: exposes `snapshot` directly. Recall pipeline code reads
-    it to take the snapshot-or-SQL branching decision that lives in
-    `search.recall.intent_aware_recall`. Phase 1b moves that branching
-    into Protocol-typed verbs on `RecallSession`.
+    Exposes `snapshot` directly so recall pipeline code can take the
+    snapshot-or-SQL branching decision that lives in
+    `search.recall.intent_aware_recall`.
 
     Construction reads the snapshot eagerly so the lifecycle is clear:
     enter the context, read the snapshot once, fall through to SQL on
@@ -429,11 +429,7 @@ class SqliteRecallSession(RecallSession):
     _embed_cache: dict[Id, list[float]] | None = None
 
     def close(self) -> None:
-        """No-op for SQLite (snapshot is in-memory, file-backed).
-
-        Postgres' RecallSession in Phase 2 will close the connection
-        here.
-        """
+        """No-op for SQLite (snapshot is in-memory, file-backed)."""
 
     def vector_anchors(
             self, query_vec: list[float], *, k: int = 10,
@@ -470,10 +466,6 @@ class SqliteBackend(Backend):
     calls `_db.open_db(...)` and wraps the result; tests / cli code
     that already have a `DB` can wrap it directly:
     `SqliteBackend(db)`.
-
-    This keeps the Phase 1a non-goal "no backend dispatch in cli"
-    intact: cli's `open_db` -> `SqliteBackend(db)` insertion is the
-    cheapest possible threading of `Backend` through pipeline calls.
     """
 
     nodes: SqliteNodeStore
@@ -499,28 +491,27 @@ class SqliteBackend(Backend):
     def transaction(self) -> Iterator[None]:
         """Run a block in a write transaction.
 
-        Phase 1a delegates to `db.in_transaction` for parity with the
-        existing `BEGIN IMMEDIATE` semantics. Nested entry currently
-        raises (see `db.DB.in_transaction`). Phase 1b lifts the
-        nested-call SAVEPOINT contract per the Protocol docstring.
+        Delegates to `db.in_transaction` for `begin immediate`
+        semantics. Nested entry currently raises (see
+        `db.DB.in_transaction`).
         """
         if self._db._in_tx:
             yield
             return
         self._db._in_tx = True
         try:
-            self._db._conn.execute('BEGIN IMMEDIATE')
+            self._db._conn.execute('begin immediate')
             yield
-            self._db._conn.execute('COMMIT')
+            self._db._conn.execute('commit')
         except Exception:
-            self._db._conn.execute('ROLLBACK')
+            self._db._conn.execute('rollback')
             raise
         finally:
             self._db._in_tx = False
 
     @contextmanager
     def write_lock(self, name: str) -> Iterator[None]:
-        """No-op on SQLite -- `BEGIN IMMEDIATE` already serializes
+        """No-op on SQLite -- `begin immediate` already serializes
         per-process. Postgres uses `pg_advisory_xact_lock`.
         """
         yield
@@ -588,10 +579,10 @@ class SqliteBackend(Backend):
     def write_snapshot(self, fingerprint: Any) -> bool:
         """Materialize the recall snapshot.
 
-        Phase 1a: this is the SQLite-specific snapshot writer. Not on
-        the Backend Protocol surface (snapshots are SQLite-only). cli
-        and worker callers reach this via `backend.write_snapshot(...)`
-        rather than importing `store.snapshot.write_snapshot`.
+        SQLite-specific writer. Not on the Backend Protocol surface
+        (snapshots are SQLite-only); cli and worker callers reach this
+        via `backend.write_snapshot(...)` rather than importing
+        `store.snapshot.write_snapshot`.
         """
         return _snapshot.write_snapshot(
             self._db, str(Path(self._db.path).parent), fingerprint)
@@ -600,7 +591,7 @@ class SqliteBackend(Backend):
         return _db.storage_summary(self._db)
 
     def integrity_check(self) -> dict[str, Any]:
-        row = self._db._query('PRAGMA integrity_check').fetchone()
+        row = self._db._query('pragma integrity_check').fetchone()
         result = row[0] if row else 'unknown'
         return {'ok': result == 'ok', 'detail': result}
 
@@ -608,7 +599,7 @@ class SqliteBackend(Backend):
         from memman.store.backend import _check_identifier
         _check_identifier(table)
         rows = self._db._query(
-            f'PRAGMA table_info({table})').fetchall()
+            f'pragma table_info({table})').fetchall()
         return {row[1] for row in rows}
 
     def close(self) -> None:
@@ -620,10 +611,8 @@ def open_ro_db(sdir: str) -> DB:
 
     cli-internal helper that puts the only `open_read_only` literal
     inside the SQLite backend module. Callers that need a raw DB
-    handle (because they do not yet take a Backend) reach this
-    instead of importing `store.db.open_read_only` directly. The
-    helper disappears when cli.py is rewired through Protocol verbs
-    in Phase 4.
+    handle reach this instead of importing
+    `store.db.open_read_only` directly.
     """
     return _db.open_read_only(sdir)
 

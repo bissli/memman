@@ -1,8 +1,8 @@
-"""Backend Protocol surface (frozen at Phase 1a merge).
+"""Backend Protocol surface.
 
 Defines `Cluster`, `Backend`, the four sub-store Protocols (`NodeStore`,
 `EdgeStore`, `MetaStore`, `Oplog`), `RecallSession`, and `QueueBackend`.
-SQLite implements them in `store/sqlite.py`; Postgres lands in Phase 2.
+SQLite implements them in `store/sqlite.py`; Postgres in `store/postgres.py`.
 
 Distributed-shaping commitments baked into this Protocol surface:
 
@@ -15,8 +15,7 @@ Distributed-shaping commitments baked into this Protocol surface:
 
 2. **`Backend.write_lock(name)` is a Protocol verb.** SQLite's
    implementation is a no-op (`BEGIN IMMEDIATE` already serializes
-   per-process). Postgres uses `pg_advisory_xact_lock`. Wiring into
-   read-then-write call sites lands in Phase 2.5.
+   per-process). Postgres uses `pg_advisory_xact_lock`.
 
 3. **`Backend.transaction()` nesting contract.** Nested calls reuse
    the outer transaction (SAVEPOINT-like or no-op). Required by the
@@ -44,7 +43,7 @@ _VALID_IDENTIFIER_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 def _check_identifier(name: str) -> None:
     """Reject SQL identifiers that are not safe to interpolate.
 
-    Some SQL constructs (`PRAGMA table_info(<table>)` on SQLite, schema
+    Some SQL constructs (`pragma table_info(<table>)` on SQLite, schema
     and table names on Postgres) cannot be parameterized; the value is
     interpolated as a literal. Reject anything that is not a plain
     identifier so an unsanitized name cannot inject DDL. Shared by
@@ -185,9 +184,8 @@ class NodeStore(Protocol):
 
         Backends bind the vector to their native storage type
         (BLOB on SQLite via `serialize_vector`; pgvector(512) on
-        Postgres). The Phase 1b cutover from `bytes` to
-        `list[float]` keeps `serialize_vector` /
-        `deserialize_vector` confined to the SqliteBackend.
+        Postgres). `serialize_vector` / `deserialize_vector` stay
+        confined to the SqliteBackend.
         """
         ...
 
@@ -211,7 +209,7 @@ class NodeStore(Protocol):
 
         SQLite implementation deserializes the blob inside the
         backend so callers see only `list[float]`. Postgres implements
-        this as a server-side cursor over `SELECT id, embedding ...`,
+        this as a server-side cursor over `select id, embedding ...`,
         binding pgvector(512) directly.
 
         Use `dict(backend.nodes.iter_embeddings_as_vecs())` when a
@@ -400,9 +398,8 @@ class Oplog(Protocol):
     def log(self, *, operation: str, insight_id: Id, detail: str) -> None:
         """Record one operation. Backend stamps `created_at` now.
 
-        Phase 1a preserves the per-call trim cadence inside the SQLite
-        adapter. Phase 1b moves trimming into `maintenance_step` so
-        Postgres `oplog.log` can be insert-only.
+        Insert-only on both backends; trimming is performed by
+        `maintenance_step`.
         """
         ...
 
@@ -434,15 +431,14 @@ class RecallSession(Protocol):
     or a postgres connection in autocommit mode) for the duration of
     a single recall request. Closes deterministically on context exit.
 
-    `vector_anchors` is the Phase 1b high-level verb the pipeline
-    consumes inside the `with recall_session()` block. SQLite serves
-    it from the snapshot's pre-loaded `embeddings` (or a lazily-
-    populated `_embed_cache` on the snapshot-miss fallback path).
-    Postgres serves it via HNSW with `embedding <=>`. The other
-    Phase 1a-promised verbs (keyword_anchors, neighbors, hydrate,
-    similarity, causal_neighbors) remain implementation-side; the
-    pipeline still reads `session.snapshot` directly when present
-    for the broader recall flow.
+    `vector_anchors` is the high-level verb the pipeline consumes
+    inside the `with recall_session()` block. SQLite serves it from
+    the snapshot's pre-loaded `embeddings` (or a lazily-populated
+    `_embed_cache` on the snapshot-miss fallback path). Postgres
+    serves it via HNSW with `embedding <=>`. The pipeline still
+    reads `session.snapshot` directly when present for the broader
+    recall flow (keyword_anchors, neighbors, hydrate, similarity,
+    causal_neighbors).
     """
 
     snapshot: Any
@@ -555,7 +551,7 @@ class Backend(Protocol):
     def integrity_check(self) -> dict[str, Any]:
         """Run a backend-specific integrity probe for `memman doctor`.
 
-        SQLite: `PRAGMA integrity_check`. Postgres: connectivity
+        SQLite: `pragma integrity_check`. Postgres: connectivity
         probe + schema-presence verification (HNSW index validity is
         checked separately at reindex time).
 
@@ -568,7 +564,7 @@ class Backend(Protocol):
     def introspect_columns(self, table: str) -> set[str]:
         """Return the column names on a named table in this store.
 
-        SQLite: `PRAGMA table_info(<table>)`. Postgres:
+        SQLite: `pragma table_info(<table>)`. Postgres:
         `information_schema.columns` filtered by the store's schema.
         Returns an empty set when the table does not exist (rather
         than raising) so doctor's schema-columns check can compute a
@@ -614,12 +610,7 @@ class Cluster(Protocol):
 
 @runtime_checkable
 class QueueBackend(Protocol):
-    """Cross-store work queue.
-
-    Phase 1a defines the shape; the queue is not yet wired through
-    `Cluster`. Phase 2 lifts queue.db into the Postgres backend. Until
-    then memman.queue.* remains the canonical implementation.
-    """
+    """Cross-store work queue."""
 
     def enqueue(
             self, *, store: str, op: str, payload: str) -> int:
@@ -666,9 +657,7 @@ class QueueBackend(Protocol):
 
         Called inline from the drain loop (one update per row
         processed) so that a worker stuck mid-row is detectable
-        within a few enrichment cycles. The Phase 4a swarm review
-        chose inline updates over a separate `threading.Timer`
-        thread to keep cleanup hygiene simple.
+        within a few enrichment cycles.
         """
         ...
 

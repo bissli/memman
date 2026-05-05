@@ -1,9 +1,9 @@
 """SQLite -> Postgres store migration.
 
-Phase 4b deliverable: `memman migrate` command. Wraps the existing
-`scripts/import_sqlite_to_postgres.py` streaming logic with CLI
-orchestration: DSN preflight, drain-lock guard, per-store
-transaction, dry-run mode, and a fail-closed confirmation gate.
+Backs the `memman migrate` CLI command. Wraps the streaming logic in
+`scripts/import_sqlite_to_postgres.py` with CLI orchestration: DSN
+preflight, drain-lock guard, per-store transaction, dry-run mode, and
+a fail-closed confirmation gate.
 
 Migration is intentionally one-way: SQLite source is read-only;
 Postgres destination uses `ON CONFLICT (id) DO NOTHING` on the
@@ -22,7 +22,7 @@ import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from collections.abc import Iterator
 
 logger = logging.getLogger('memman.migrate')
 
@@ -63,26 +63,26 @@ def preflight(dsn: str) -> dict[str, bool]:
     checks: dict[str, bool] = {}
     try:
         with conn.cursor() as cur:
-            cur.execute('SELECT 1')
+            cur.execute('select 1')
             checks['select_1'] = cur.fetchone()[0] == 1
 
             cur.execute(
-                "SELECT 1 FROM pg_extension WHERE extname = 'vector'")
+                "select 1 from pg_extension where extname = 'vector'")
             row = cur.fetchone()
             if row is None:
                 raise MigrateError(
                     'pgvector extension is not installed in the target '
-                    'database; run `CREATE EXTENSION vector;` as a '
+                    'database; run `create extension vector;` as a '
                     'superuser first')
             checks['pgvector_installed'] = True
 
             cur.execute(
-                "SELECT has_database_privilege(current_user,"
+                "select has_database_privilege(current_user,"
                 " current_database(), 'CREATE')")
             checks['create_schema_privilege'] = bool(cur.fetchone()[0])
             if not checks['create_schema_privilege']:
                 raise MigrateError(
-                    'current postgres role lacks CREATE SCHEMA '
+                    'current postgres role lacks create schema '
                     'privilege on the target database')
     finally:
         conn.close()
@@ -121,7 +121,6 @@ def migrate_store(
     import sqlite3
 
     import psycopg
-
     from memman.store.postgres import _check_identifier, _store_schema
 
     _check_identifier(store)
@@ -136,13 +135,13 @@ def migrate_store(
     sqlite_conn.row_factory = None
     try:
         n_insights = sqlite_conn.execute(
-            'SELECT COUNT(*) FROM insights').fetchone()[0]
+            'select count(*) from insights').fetchone()[0]
         n_edges = sqlite_conn.execute(
-            'SELECT COUNT(*) FROM edges').fetchone()[0]
+            'select count(*) from edges').fetchone()[0]
         n_oplog = sqlite_conn.execute(
-            'SELECT COUNT(*) FROM oplog').fetchone()[0]
+            'select count(*) from oplog').fetchone()[0]
         n_meta = sqlite_conn.execute(
-            'SELECT COUNT(*) FROM meta').fetchone()[0]
+            'select count(*) from meta').fetchone()[0]
         if dry_run:
             sqlite_conn.close()
             return MigrateResult(
@@ -150,10 +149,11 @@ def migrate_store(
                 insights=n_insights, edges=n_edges,
                 oplog=n_oplog, meta=n_meta, dry_run=True)
 
-        from scripts.import_sqlite_to_postgres import (
-            _ensure_schema, _import_edges, _import_insights,
-            _import_meta, _import_oplog,
-        )
+        from scripts.import_sqlite_to_postgres import _ensure_schema
+        from scripts.import_sqlite_to_postgres import _import_edges
+        from scripts.import_sqlite_to_postgres import _import_insights
+        from scripts.import_sqlite_to_postgres import _import_meta
+        from scripts.import_sqlite_to_postgres import _import_oplog
 
         pg_conn = psycopg.connect(dsn, autocommit=False)
         try:
@@ -163,7 +163,7 @@ def migrate_store(
             if overwrite_schema:
                 with pg_conn.cursor() as cur:
                     cur.execute(
-                        f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+                        f'drop schema if exists {schema} cascade')
             _ensure_schema(pg_conn, schema)
             ins_count = _import_insights(sqlite_conn, pg_conn, schema)
             edge_count = _import_edges(sqlite_conn, pg_conn, schema)

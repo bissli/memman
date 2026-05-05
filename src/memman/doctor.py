@@ -99,7 +99,8 @@ def check_dangling_edges(backend: Backend) -> dict[str, Any]:
 
 def check_embedding_consistency(backend: Backend) -> dict[str, Any]:
     """Verify all embeddings have the same size (byte length on SQLite,
-    pgvector dimension on Postgres)."""
+    pgvector dimension on Postgres).
+    """
     dist = backend.nodes.embedding_size_distribution()
     sizes = {str(size): cnt for size, cnt in dist.items()}
     status = 'pass' if len(sizes) <= 1 else 'fail'
@@ -201,7 +202,7 @@ def check_schema_columns(backend: Backend) -> dict[str, Any]:
     """Verify the insights table has the canonical provenance columns.
 
     Single-user canonical-schema policy: missing columns mean the DB
-    predates a schema change; the fix is a one-off ALTER TABLE.
+    predates a schema change; the fix is a one-off `alter table`.
     """
     present = backend.introspect_columns('insights')
     missing = sorted(EXPECTED_INSIGHT_COLUMNS - present)
@@ -221,7 +222,7 @@ def check_queue_schema(data_dir: str) -> dict[str, Any]:
     conn = open_queue_db(data_dir)
     try:
         rows = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
+            "select name from sqlite_master where type='table'"
             ).fetchall()
     finally:
         conn.close()
@@ -485,11 +486,6 @@ def check_drain_heartbeat() -> dict[str, Any]:
     flags any whose `last_heartbeat_at` is older than 5 minutes (the
     documented threshold). No-op on SQLite (single-process; drain
     hangs are visible to the operator at the foreground prompt).
-
-    Phase 4a installs the schema + Protocol verbs. Phase 4b's
-    drain-loop dispatch will start populating live rows; until then
-    a healthy Postgres deployment returns 'pass' with no in-progress
-    rows.
     """
     from datetime import datetime, timezone
 
@@ -748,8 +744,8 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
             'detail': detail}
     detail['remediation'] = (
         "Run 'memman graph rebuild' to re-enrich every stale row,"
-        " or scope: UPDATE insights SET linked_at=NULL,"
-        " enriched_at=NULL WHERE prompt_version=<old> OR model_id=<old>;"
+        " or scope: update insights set linked_at=null,"
+        " enriched_at=null where prompt_version=<old> or model_id=<old>;"
         " then drain the scheduler.")
     return {
         'name': 'provenance_drift', 'status': 'warn',

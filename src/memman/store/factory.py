@@ -1,10 +1,7 @@
 """Cluster factory dispatch on `MEMMAN_BACKEND`.
 
 Mirrors `embed/__init__.py`'s registry shape: a name -> factory
-mapping plus a single `open_cluster()` entry point. SQLite is always
-registered. Postgres registers in Phase 2 by adding `_postgres_factory`
-to `BACKENDS`; the install wizard's `find_spec` gate flips visible at
-the same time.
+mapping plus a single `open_cluster()` entry point.
 """
 
 from collections.abc import Callable

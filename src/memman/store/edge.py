@@ -18,66 +18,75 @@ def insert_edge(db: 'DB', e: Edge) -> None:
     Edges with created_by 'claude' or 'manual' are protected: their
     metadata is never overwritten by auto-generated edges.
 
-    Stamps `created_at` server-side per Phase 1a Decision #1:
-    caller-passed `e.created_at` is IGNORED. Mirrors
-    `PostgresEdgeStore.upsert` which relies on `DEFAULT now()`.
+    Stamps `created_at` server-side: caller-passed `e.created_at`
+    is IGNORED. Mirrors `PostgresEdgeStore.upsert` which relies on
+    `DEFAULT now()`.
     """
     created_at = datetime.now(timezone.utc)
-    db._exec(
-        'INSERT INTO edges'
-        ' (source_id, target_id, edge_type, weight, metadata, created_at)'
-        ' VALUES (?, ?, ?, ?, ?, ?)'
-        ' ON CONFLICT(source_id, target_id, edge_type)'
-        ' DO UPDATE SET metadata = CASE'
-        "                  WHEN json_extract(metadata, '$.created_by')"
-        "                       IN ('claude', 'manual')"
-        '                  THEN metadata'
-        '                  WHEN excluded.weight >= weight'
-        '                  THEN excluded.metadata'
-        '                  ELSE metadata END,'
-        '              weight = MAX(weight, excluded.weight)',
-        (e.source_id, e.target_id, e.edge_type, e.weight,
-         e.metadata_json(), format_timestamp(created_at)))
+    sql = """
+insert into edges
+    (source_id, target_id, edge_type, weight, metadata, created_at)
+values (?, ?, ?, ?, ?, ?)
+on conflict(source_id, target_id, edge_type) do update set
+    metadata = case
+        when json_extract(metadata, '$.created_by') in ('claude', 'manual')
+            then metadata
+        when excluded.weight >= weight
+            then excluded.metadata
+        else metadata
+    end,
+    weight = max(weight, excluded.weight)
+"""
+    db._exec(sql, (
+        e.source_id, e.target_id, e.edge_type, e.weight,
+        e.metadata_json(), format_timestamp(created_at)))
+
+
+_EDGE_COLUMNS = 'source_id, target_id, edge_type, weight, metadata, created_at'
 
 
 def get_edges_by_node(db: 'DB', node_id: str) -> list[Edge]:
     """Return all edges where the given node is source or target."""
-    rows = db._query(
-        'SELECT source_id, target_id, edge_type, weight,'
-        ' metadata, created_at'
-        ' FROM edges WHERE source_id = ?'
-        ' UNION ALL'
-        ' SELECT source_id, target_id, edge_type, weight,'
-        ' metadata, created_at'
-        ' FROM edges WHERE target_id = ? AND source_id != ?',
-        (node_id, node_id, node_id)).fetchall()
+    sql = f"""
+select {_EDGE_COLUMNS}
+from edges
+where source_id = ?
+union all
+select {_EDGE_COLUMNS}
+from edges
+where target_id = ? and source_id != ?
+"""
+    rows = db._query(sql, (node_id, node_id, node_id)).fetchall()
     return [_scan_edge(r) for r in rows]
 
 
 def get_edges_by_node_and_type(
         db: 'DB', node_id: str, edge_type: str) -> list[Edge]:
     """Return edges for a node filtered by edge type."""
+    sql = f"""
+select {_EDGE_COLUMNS}
+from edges
+where source_id = ? and edge_type = ?
+union all
+select {_EDGE_COLUMNS}
+from edges
+where target_id = ? and edge_type = ? and source_id != ?
+"""
     rows = db._query(
-        'SELECT source_id, target_id, edge_type, weight,'
-        ' metadata, created_at'
-        ' FROM edges WHERE source_id = ? AND edge_type = ?'
-        ' UNION ALL'
-        ' SELECT source_id, target_id, edge_type, weight,'
-        ' metadata, created_at'
-        ' FROM edges WHERE target_id = ? AND edge_type = ?'
-        ' AND source_id != ?',
-        (node_id, edge_type, node_id, edge_type, node_id)).fetchall()
+        sql, (node_id, edge_type, node_id, edge_type, node_id)
+        ).fetchall()
     return [_scan_edge(r) for r in rows]
 
 
 def get_edges_by_source_and_type(
         db: 'DB', source_id: str, edge_type: str) -> list[Edge]:
     """Return edges where the given node is source, filtered by type."""
-    rows = db._query(
-        'SELECT source_id, target_id, edge_type, weight,'
-        ' metadata, created_at'
-        ' FROM edges WHERE source_id = ? AND edge_type = ?',
-        (source_id, edge_type)).fetchall()
+    sql = f"""
+select {_EDGE_COLUMNS}
+from edges
+where source_id = ? and edge_type = ?
+"""
+    rows = db._query(sql, (source_id, edge_type)).fetchall()
     return [_scan_edge(r) for r in rows]
 
 
@@ -85,59 +94,65 @@ def find_insights_with_entity(
         db: 'DB', entity: str, exclude_id: str,
         limit: int) -> list[str]:
     """Return insight IDs that have the given entity."""
+    sql = """
+select distinct i.id
+from insights i, json_each(i.entities) je
+where i.deleted_at is null
+  and i.id != ?
+  and lower(trim(je.value)) = ?
+order by i.created_at desc
+limit ?
+"""
     rows = db._query(
-        'SELECT DISTINCT i.id FROM insights i, json_each(i.entities) je'
-        ' WHERE i.deleted_at IS NULL AND i.id != ?'
-        ' AND LOWER(TRIM(je.value)) = ?'
-        ' ORDER BY i.created_at DESC LIMIT ?',
-        (exclude_id, entity.strip().lower(), limit)).fetchall()
+        sql, (exclude_id, entity.strip().lower(), limit)).fetchall()
     return [r[0] for r in rows]
 
 
 def count_insights_with_entity(
         db: 'DB', entity: str, exclude_id: str) -> int:
     """Count distinct insights that contain the given entity."""
-    row = db._query(
-        'SELECT COUNT(DISTINCT i.id)'
-        ' FROM insights i, json_each(i.entities) je'
-        ' WHERE i.deleted_at IS NULL AND i.id != ?'
-        ' AND LOWER(TRIM(je.value)) = ?',
-        (exclude_id, entity.strip().lower())).fetchone()
+    sql = """
+select count(distinct i.id)
+from insights i, json_each(i.entities) je
+where i.deleted_at is null
+  and i.id != ?
+  and lower(trim(je.value)) = ?
+"""
+    row = db._query(sql, (exclude_id, entity.strip().lower())).fetchone()
     return row[0] if row else 0
 
 
 def get_all_edges(db: 'DB') -> list[Edge]:
     """Return all edges in the graph."""
-    rows = db._query(
-        'SELECT source_id, target_id, edge_type, weight,'
-        ' metadata, created_at FROM edges').fetchall()
+    sql = f'select {_EDGE_COLUMNS} from edges'
+    rows = db._query(sql).fetchall()
     return [_scan_edge(r) for r in rows]
 
 
 def delete_edges_by_node(db: 'DB', node_id: str) -> None:
     """Remove all edges referencing a node."""
     db._exec(
-        'DELETE FROM edges WHERE source_id = ? OR target_id = ?',
+        'delete from edges where source_id = ? or target_id = ?',
         (node_id, node_id))
 
 
 _PER_NODE_CREATED_BY_FILTER = {
-    'entity': ("(json_extract(metadata, '$.created_by') IS NULL"
-               " OR json_extract(metadata, '$.created_by')"
-               " NOT IN ('claude', 'manual'))"),
-    'semantic': ("(json_extract(metadata, '$.created_by') IS NULL"
-                 " OR json_extract(metadata, '$.created_by') = 'auto')"),
+    'entity': ("(json_extract(metadata, '$.created_by') is null"
+               " or json_extract(metadata, '$.created_by')"
+               " not in ('claude', 'manual'))"),
+    'semantic': ("(json_extract(metadata, '$.created_by') is null"
+                 " or json_extract(metadata, '$.created_by') = 'auto')"),
     'causal': "json_extract(metadata, '$.created_by') = 'llm'",
     }
 
 _REINDEX_CREATED_BY_FILTER = {
     'semantic': "json_extract(metadata, '$.created_by') = 'auto'",
-    'entity': ("(json_extract(metadata, '$.created_by') IS NULL"
-               " OR json_extract(metadata, '$.created_by')"
-               " NOT IN ('claude', 'manual'))"),
-    'causal': ("(json_extract(metadata, '$.created_by') IS NULL"
-               " OR json_extract(metadata, '$.created_by')"
-               " NOT IN ('llm', 'claude', 'manual'))"),
+    'entity': ("(json_extract(metadata, '$.created_by') is null"
+               " or json_extract(metadata, '$.created_by')"
+               " not in ('claude', 'manual'))"),
+    'causal': ("(json_extract(metadata, '$.created_by') is null"
+               " or json_extract(metadata, '$.created_by')"
+               " not in ('llm', 'claude', 'manual'))"),
     }
 
 
@@ -151,10 +166,13 @@ def delete_auto_edges_for_node(
     - causal: deletes llm only
     """
     filt = _PER_NODE_CREATED_BY_FILTER[edge_type]
-    db._exec(
-        f'DELETE FROM edges WHERE (source_id = ? OR target_id = ?)'
-        f' AND edge_type = ? AND {filt}',
-        (node_id, node_id, edge_type))
+    sql = f"""
+delete from edges
+where (source_id = ? or target_id = ?)
+  and edge_type = ?
+  and {filt}
+"""
+    db._exec(sql, (node_id, node_id, edge_type))
 
 
 def delete_auto_edges_by_type(db: 'DB', edge_type: str) -> None:
@@ -167,7 +185,7 @@ def delete_auto_edges_by_type(db: 'DB', edge_type: str) -> None:
     """
     filt = _REINDEX_CREATED_BY_FILTER[edge_type]
     db._exec(
-        f'DELETE FROM edges WHERE edge_type = ? AND {filt}',
+        f'delete from edges where edge_type = ? and {filt}',
         (edge_type,))
 
 
@@ -175,7 +193,7 @@ def count_auto_edges_by_type(db: 'DB', edge_type: str) -> int:
     """Count auto-generated edges by type using reindex filters."""
     filt = _REINDEX_CREATED_BY_FILTER[edge_type]
     row = db._query(
-        f'SELECT COUNT(*) FROM edges WHERE edge_type = ? AND {filt}',
+        f'select count(*) from edges where edge_type = ? and {filt}',
         (edge_type,)).fetchone()
     return row[0] if row else 0
 
@@ -183,21 +201,25 @@ def count_auto_edges_by_type(db: 'DB', edge_type: str) -> int:
 def delete_low_weight_temporal_proximity(
         db: 'DB', min_weight: float) -> None:
     """Delete temporal proximity edges below min_weight threshold."""
-    db._exec(
-        "DELETE FROM edges WHERE edge_type = 'temporal'"
-        " AND json_extract(metadata, '$.sub_type') = 'proximity'"
-        ' AND weight < ?',
-        (min_weight,))
+    sql = """
+delete from edges
+where edge_type = 'temporal'
+  and json_extract(metadata, '$.sub_type') = 'proximity'
+  and weight < ?
+"""
+    db._exec(sql, (min_weight,))
 
 
 def count_low_weight_temporal_proximity(
         db: 'DB', min_weight: float) -> int:
     """Count temporal proximity edges below min_weight threshold."""
-    row = db._query(
-        "SELECT COUNT(*) FROM edges WHERE edge_type = 'temporal'"
-        " AND json_extract(metadata, '$.sub_type') = 'proximity'"
-        ' AND weight < ?',
-        (min_weight,)).fetchone()
+    sql = """
+select count(*) from edges
+where edge_type = 'temporal'
+  and json_extract(metadata, '$.sub_type') = 'proximity'
+  and weight < ?
+"""
+    row = db._query(sql, (min_weight,)).fetchone()
     return row[0] if row else 0
 
 
@@ -209,30 +231,34 @@ def get_edge_weight(
     Used by the `memman link` CLI command for the
     "what was the existing weight before / after my upsert" probe.
     """
-    row = db._query(
-        'SELECT weight FROM edges'
-        ' WHERE source_id = ? AND target_id = ? AND edge_type = ?',
-        (source_id, target_id, edge_type)).fetchone()
+    sql = """
+select weight from edges
+where source_id = ? and target_id = ? and edge_type = ?
+"""
+    row = db._query(sql, (source_id, target_id, edge_type)).fetchone()
     return row[0] if row else None
 
 
 def count_dangling_by_type(db: 'DB') -> dict[str, int]:
     """Return {edge_type: count} for edges referencing missing or deleted nodes.
 
-    Used by `doctor.check_dangling_edges`. Composing this from
-    `get_all_edges` + `get_active_insight_ids` is O(N) Python work on
-    SQLite and O(N) network round-trips on Postgres; the `NOT EXISTS`
-    subquery keeps the work inside the database.
+    Used by `doctor.check_dangling_edges`. Keeps the set-difference
+    inside the database via a `not exists` subquery.
     """
-    rows = db._query(
-        'SELECT e.edge_type, COUNT(*) FROM edges e'
-        ' WHERE NOT EXISTS ('
-        '  SELECT 1 FROM insights i'
-        '  WHERE i.id = e.source_id AND i.deleted_at IS NULL'
-        ') OR NOT EXISTS ('
-        '  SELECT 1 FROM insights i'
-        '  WHERE i.id = e.target_id AND i.deleted_at IS NULL'
-        ') GROUP BY e.edge_type').fetchall()
+    sql = """
+select e.edge_type, count(*)
+from edges e
+where not exists (
+    select 1 from insights i
+    where i.id = e.source_id and i.deleted_at is null
+)
+   or not exists (
+    select 1 from insights i
+    where i.id = e.target_id and i.deleted_at is null
+)
+group by e.edge_type
+"""
+    rows = db._query(sql).fetchall()
     return {r[0]: r[1] for r in rows}
 
 
@@ -243,17 +269,23 @@ def degree_distribution(db: 'DB') -> dict[str, int]:
     Used by `doctor.check_edge_degree`.
     """
     id_rows = db._query(
-        'SELECT id FROM insights WHERE deleted_at IS NULL').fetchall()
+        'select id from insights where deleted_at is null').fetchall()
     if not id_rows:
         return {}
-    degree_rows = db._query(
-        'SELECT id, SUM(cnt) AS degree FROM ('
-        '  SELECT source_id AS id, COUNT(*) AS cnt'
-        '  FROM edges GROUP BY source_id'
-        '  UNION ALL'
-        '  SELECT target_id AS id, COUNT(*) AS cnt'
-        '  FROM edges GROUP BY target_id'
-        ') GROUP BY id').fetchall()
+    degree_sql = """
+select id, sum(cnt) as degree
+from (
+    select source_id as id, count(*) as cnt
+    from edges
+    group by source_id
+    union all
+    select target_id as id, count(*) as cnt
+    from edges
+    group by target_id
+)
+group by id
+"""
+    degree_rows = db._query(degree_sql).fetchall()
     by_id = {r[0]: r[1] for r in degree_rows}
     return {r[0]: by_id.get(r[0], 0) for r in id_rows}
 
