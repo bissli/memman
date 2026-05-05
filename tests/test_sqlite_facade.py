@@ -1,8 +1,8 @@
-"""Phase 1a SqliteBackend facade smoke tests.
+"""SqliteBackend facade smoke tests.
 
-Verifies the thin facade actually delegates to the legacy free
-functions and produces identical results. Runs against a fresh
-SQLite store created by the test fixture.
+Verifies the thin facade delegates to the legacy free functions and
+produces identical results. Runs against a fresh SQLite store created
+by the test fixture.
 """
 
 import pathlib

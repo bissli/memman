@@ -1,18 +1,9 @@
-"""Phase 3.6 -- HNSW-uses-pgvector smoke test.
+"""HNSW index smoke test against a live pgvector container.
 
 Asserts that a Postgres `intent_aware_recall` invocation issues at
 least one SQL statement containing the pgvector distance operator
-`<=>`. If true, the production recall path is using the HNSW index
-backed by pgvector. If false, the recall path is falling through to
-`backend.nodes.iter_embeddings_as_vecs()` + Python-side cosine
-(`vector_search_from_cache`) and the pgvector index is dead code.
-
-The Phase 1b RecallSession verbs (`vector_anchors` on both Sqlite
-and Postgres sessions) were finally wired in the cleanup-carryovers
-slice; `intent_aware_recall` calls `session.vector_anchors(qvec)`
-inside the `recall_session` context, which fires `embedding <=>` on
-Postgres via HNSW. This test guards against regressions back to the
-dead-strand state.
+`<=>`, confirming the production recall path uses the HNSW index
+rather than falling through to Python-side cosine.
 """
 
 import random

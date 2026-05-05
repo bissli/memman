@@ -1,4 +1,4 @@
-"""Phase 4b slice 2 -- `memman migrate` command.
+"""`memman migrate` command tests.
 
 Verifies the migrate orchestration: DSN preflight, drain.lock guard,
 per-store atomic transaction, dry-run mode, and the

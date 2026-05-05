@@ -1,26 +1,15 @@
-"""Phase 4a slice 2 -- heartbeat schema + QueueBackend verbs.
+"""Heartbeat schema + QueueBackend verb tests.
 
-Adds `queue.worker_runs.last_heartbeat_at TIMESTAMPTZ` (in baseline
-DDL + `_PG_MIGRATIONS` v2 entry for backward upgrade), plus two
-QueueBackend Protocol verbs:
+Covers `queue.worker_runs.last_heartbeat_at`, two QueueBackend verbs:
 
 - `start_run() -> int` -- inserts a fresh worker_runs row with
-  `started_at = now()` and `last_heartbeat_at = now()`, returns
-  the row id.
-- `beat_run(run_id: int) -> None` -- advances `last_heartbeat_at`
-  for a specific run. Called inline from the drain loop (slice 3).
+  `started_at = now()` and `last_heartbeat_at = now()`, returns id.
+- `beat_run(run_id: int) -> None` -- advances `last_heartbeat_at`.
 
-The doctor 5-minute-no-heartbeat warning (slice 5) reads
-`last_heartbeat_at` to detect hung workers.
-
-Test design note: the migration-applies test simulates a
-pre-version-2 store by setting `meta.pg_schema_version = 1` on a
-fresh per-store schema and asserting `_apply_pending_migrations`
-bumps it to 2. It deliberately does NOT mutate the shared
-`queue.worker_runs` schema (the per-Phase-4a-checkpoint-swarm-review
-recommendation against shared-state mutation in tests). The
-column-was-added behaviour is proven transitively by the
-`start_run` / `beat_run` round-trip tests on the same schema.
+The migration test simulates a pre-version-2 store by setting
+`meta.pg_schema_version = 1` and asserting `_apply_pending_migrations`
+bumps it to 2. Column presence is proven transitively by the
+`start_run` / `beat_run` round-trip tests.
 """
 
 import inspect

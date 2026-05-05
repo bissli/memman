@@ -1,4 +1,4 @@
-"""Phase 1b: EdgeStore.get_neighborhood Protocol verb.
+"""EdgeStore.get_neighborhood Protocol verb tests.
 
 Verifies the bounded BFS verb returns the expected (id, hop, etype)
 triples on a small fixture graph, and that depth + edge_filter both

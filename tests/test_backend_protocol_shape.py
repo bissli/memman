@@ -1,21 +1,20 @@
-"""Phase 1a Protocol-shape regression guard.
+"""Backend Protocol-shape regression guard.
 
 Asserts the four distributed-shaping decisions baked into the
-`Backend` Protocol surface at Phase 1a merge:
+`Backend` Protocol surface:
 
 1. Timestamp ownership at the boundary -- `NodeStore.insert`,
    `EdgeStore.upsert`, `Oplog.log`, `NodeStore.stamp_linked`,
    `NodeStore.stamp_enriched` accept no timestamp argument.
-2. `Backend.write_lock` is a Protocol verb (the Phase 2.5 hook).
+2. `Backend.write_lock` is a Protocol verb.
 3. `Backend.transaction()` and `Backend.readonly_context()` are
    Protocol verbs returning context managers.
 4. `Insight.created_at`, `Insight.updated_at`, `Edge.created_at`
    carry no `default_factory` -- backends stamp these server-side.
 
-This file exists so a future PR cannot quietly retrofit a
-`created_at` parameter onto the verb signatures (which would defeat
-the Postgres `now()` boundary and silently force the pipeline back
-into timestamp-ownership).
+Guards against a future PR quietly retrofitting a `created_at`
+parameter onto the verb signatures (which would defeat the Postgres
+`now()` boundary).
 """
 
 import dataclasses

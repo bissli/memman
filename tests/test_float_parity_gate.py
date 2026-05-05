@@ -1,19 +1,14 @@
-"""Phase 3 -- float32-vs-float64 ranking parity gate.
+"""Float32-vs-float64 ranking parity gate.
 
-For each of 20 query vectors against a 60-insight synthetic corpus,
-the top-5 set on Postgres (float32 via pgvector) must intersect the
-top-5 set on SQLite (float64 numpy) at >= 4/5. This validates the
-DB-MIGRATION.md Risks-and-open-notes claim that float-precision
-differences below the noise floor on real embeddings do not visibly
-perturb retrieval rank.
+For each of 20 query vectors against a synthetic corpus, the top-5
+set on Postgres (float32 via pgvector) must intersect the top-5 set
+on SQLite (float64 numpy) at >= 4/5. Validates that float-precision
+differences do not visibly perturb retrieval rank.
 
-Gate spec at DB-MIGRATION.md:1560.
-
-The corpus is structured (20 topic centers x 3 insights per topic)
-not random-against-random, so cosines for the matching topic clear
-`VECTOR_SEARCH_MIN_SIM=0.10`. A random corpus would produce cosines
-near 0 in 512-dim space, which the bi-encoder threshold filters out
-and starves the parity check of signal.
+The corpus is structured (topic centers x insights per topic) rather
+than random, so cosines for the matching topic clear
+`VECTOR_SEARCH_MIN_SIM=0.10`. A random corpus produces cosines near
+0 in 512-dim space, which the threshold filters out.
 """
 
 import random
