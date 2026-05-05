@@ -10,12 +10,9 @@ import os
 import stat
 import statistics
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from memman.store.backend import Backend
-
-if TYPE_CHECKING:
-    from memman.store.db import DB
 
 
 def check_integrity(backend: Backend) -> dict[str, Any]:
@@ -753,13 +750,12 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
 
 
 def run_all_checks(
-        backend: Backend, db: 'DB',
+        backend: Backend,
         data_dir: str | None = None) -> dict[str, Any]:
     """Run all health checks and return results with overall status.
 
-    Takes both `backend` (for the Backend-Protocol-routed checks) and
-    `db` (kept on the signature for callers passing the SqliteBackend's
-    underlying DB; not used directly any more).
+    Routes every check through the Backend Protocol so SQLite and
+    Postgres are both supported.
     """
     total = backend.nodes.count_active()
     checks = []

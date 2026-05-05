@@ -81,6 +81,33 @@ def test_lock_releases_on_subprocess_exit(tmp_path):
         pytest.fail('lock not released after subprocess exit')
 
 
+def test_drain_lock_released_on_setup_failure(tmp_path, monkeypatch):
+    """If setup raises after the lock is acquired, lock_fd is released.
+
+    Pre-fix: the lock was acquired before the try/finally that releases
+    it, so a failure in `open_queue_db` / `ThreadPoolExecutor` /
+    `start_worker_run` would leak the fd for the process lifetime.
+    Post-fix: a defensive try/except around setup releases on failure.
+    """
+    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
+    (tmp_path / 'home').mkdir()
+    data_dir = str(tmp_path / 'data')
+    Path(data_dir).mkdir()
+
+    def _boom(*_a, **_kw):
+        raise RuntimeError('synthetic setup failure')
+
+    monkeypatch.setattr('memman.queue.open_queue_db', _boom)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ['--data-dir', data_dir, 'scheduler', 'drain', '--pending'])
+    assert result.exit_code != 0
+
+    fd = drain_lock.acquire(data_dir)
+    drain_lock.release(fd)
+
+
 def test_drain_skips_when_locked(tmp_path, monkeypatch):
     """If the lock is held, `_drain_queue` returns the skip JSON.
 

@@ -253,7 +253,7 @@ class TestRunAllChecks:
         """Verify output shape: status, checks list, total_active."""
         from memman.doctor import run_all_checks
         _insert_healthy_insight(tmp_db, 'all-1')
-        result = run_all_checks(tmp_backend, tmp_db)
+        result = run_all_checks(tmp_backend)
         assert 'status' in result
         assert 'checks' in result
         assert 'total_active' in result
@@ -263,7 +263,7 @@ class TestRunAllChecks:
     def test_empty_db(self, tmp_db, tmp_backend):
         """Empty store returns status 'empty' with no checks."""
         from memman.doctor import run_all_checks
-        result = run_all_checks(tmp_backend, tmp_db)
+        result = run_all_checks(tmp_backend)
         assert result['status'] == 'empty'
         assert result['total_active'] == 0
         assert result['checks'] == []
@@ -277,7 +277,7 @@ class TestRunAllChecks:
         for i, id_a in enumerate(ids):
             for id_b in ids[i + 1:]:
                 _insert_edge_pair(tmp_db, id_a, id_b)
-        result = run_all_checks(tmp_backend, tmp_db)
+        result = run_all_checks(tmp_backend)
         assert result['status'] == 'pass', [
             (c['name'], c['status'], c.get('detail'))
             for c in result['checks'] if c['status'] != 'pass']
@@ -731,3 +731,39 @@ class TestDrainHeartbeat:
                         'UPDATE queue.worker_runs SET ended_at = now()'
                         ' WHERE id = %s',
                         (fresh_id,))
+
+
+class TestDoctorBackendDispatch:
+    """`memman doctor` runs against the active backend, not always SQLite."""
+
+    pytestmark = pytest.mark.postgres
+
+    def test_doctor_dispatches_to_postgres(
+            self, tmp_path, env_file, pg_dsn, monkeypatch):
+        """`db_path` reports the redacted DSN, not a filesystem path."""
+        env_file('MEMMAN_BACKEND', 'postgres')
+        env_file('MEMMAN_PG_DSN', pg_dsn)
+        store = 'doctor_dispatch'
+        monkeypatch.setenv('MEMMAN_STORE', store)
+
+        from memman.store.postgres import PostgresCluster
+        cluster = PostgresCluster(dsn=pg_dsn)
+        try:
+            cluster.drop_store(store=store, data_dir='')
+        except Exception:
+            pass
+        b = cluster.open(store=store, data_dir='')
+        b.close()
+
+        try:
+            runner = CliRunner()
+            result = runner.invoke(
+                cli, ['--data-dir', str(tmp_path / 'memman'), 'doctor'])
+            assert result.exit_code in {0, 1}, result.output
+            data = json.loads(result.output)
+            assert '#store_doctor_dispatch' in data['db_path']
+        finally:
+            try:
+                cluster.drop_store(store=store, data_dir='')
+            except Exception:
+                pass

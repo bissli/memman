@@ -868,6 +868,28 @@ class TestOperationLog:
         assert 'replace' in result.output
 
 
+class TestInsightsShow:
+    """`insights show <id>` returns the insight via the active backend."""
+
+    def test_show_returns_stored_insight(self, runner):
+        """Show roundtrips a remember-d insight by id across both backends."""
+        fact = remember(
+            runner,
+            'Loki log aggregator runs in single-binary monolithic mode',
+            no_reconcile=True)
+        result = invoke(runner, ['insights', 'show', fact['id']])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data['id'] == fact['id']
+        assert 'Loki' in data['content']
+
+    def test_show_unknown_id_fails_cleanly(self, runner):
+        """Unknown id exits non-zero with an actionable message."""
+        result = invoke(runner, ['insights', 'show', 'no-such-id'])
+        assert result.exit_code != 0
+        assert 'not found' in result.output.lower()
+
+
 class TestStatusConsistency:
     """Status counts reflect actual state after mutations."""
 

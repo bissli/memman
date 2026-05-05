@@ -1057,9 +1057,10 @@ where deleted_at is null
             self, rows: list[tuple[Id, list[float], str]]) -> None:
         """Update embeddings in chunks of <= 1000 rows.
 
-        Each chunk commits before the next begins, keeping WAL bloat
-        bounded and preventing a single long-running statement from
-        holding row-level locks for unrelated readers.
+        Under autocommit=True each `executemany` is its own implicit
+        transaction, keeping WAL bloat bounded and preventing a single
+        long-running statement from holding row-level locks for
+        unrelated readers.
         """
         if not rows:
             return
@@ -1077,8 +1078,6 @@ where id = %s
                 cur.executemany(
                     sql,
                     [(vec, model, eid) for eid, vec, model in batch])
-            if not self._conn.autocommit:
-                self._conn.commit()
 
 
 class PostgresEdgeStore(EdgeStore):

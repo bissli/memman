@@ -100,9 +100,8 @@ Operationally:
 - A DSN preflight verifies `select 1`, the `pgvector` extension, and `CREATE` privilege.
 - The shared `~/.memman/drain.lock` is held for the duration so a scheduler-fired drain cannot race the SQLite reader.
 - Each store runs inside one Postgres transaction with `autocommit=False`; any failure rolls back.
-- `--i-have-a-backup` is a fail-closed gate; non-dry-run invocations raise `UsageError` without it.
-- `--overwrite-schema` issues `DROP SCHEMA CASCADE` before recreating; without it, migrate runs `INSERT ... ON CONFLICT DO NOTHING` against the existing schema.
-- `MEMMAN_BACKEND` is never flipped automatically. After `memman migrate`, run `memman doctor` against the new DSN, then `memman config set MEMMAN_BACKEND postgres`.
+- Per-store schemas are inspected up front and classified ABSENT / EMPTY / POPULATED. The plan is echoed (with the DSN password redacted) and the user must confirm; `--yes` skips the prompt. EMPTY and POPULATED schemas are dropped and recreated; ABSENT schemas are created.
+- On success `MEMMAN_BACKEND` is flipped to `postgres` in the env file so the next drain routes to the new database. Revert with `memman config set MEMMAN_BACKEND sqlite` if needed.
 
 Postgres -> SQLite is not implemented; restore from the preserved SQLite source if needed.
 
