@@ -713,30 +713,6 @@ def set_created_at(backend, insight_id: str, when: datetime) -> None:
         backend._conn.commit()
 
 
-@pytest.fixture
-def populated_db(tmp_db):
-    """DB pre-loaded with 5 insights for query/graph tests."""
-    from memman.store.node import insert_insight
-    insights = [
-        make_insight(id='pop-1', content='Go uses SQLite for storage',
-                     importance=3,
-                     entities=['Go', 'SQLite']),
-        make_insight(id='pop-2', content='Python web framework comparison',
-                     importance=2, category='decision'),
-        make_insight(id='pop-3', content='Graph traversal algorithm for knowledge',
-                     importance=4,
-                     entities=['MAGMA']),
-        make_insight(id='pop-4', content='Docker deployment strategy',
-                     importance=5, category='preference',
-                     entities=['Docker']),
-        make_insight(id='pop-5', content='Go concurrency patterns',
-                     importance=3, entities=['Go']),
-        ]
-    for ins in insights:
-        insert_insight(tmp_db, ins)
-    return tmp_db
-
-
 def make_insight(**overrides) -> Insight:
     """Factory for test Insight instances."""
     now = datetime.now(timezone.utc)

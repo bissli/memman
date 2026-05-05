@@ -505,10 +505,10 @@ def test_memman_reindex_timeout_caps_hnsw_build(
 
     set_idx = next(
         (i for i, s in enumerate(captured)
-         if "SET statement_timeout = '7s'" in s), None)
+         if "statement_timeout = '7s'" in s.lower()), None)
     create_idx = next(
         (i for i, s in enumerate(captured)
-         if 'CREATE INDEX CONCURRENTLY' in s), None)
+         if 'create index concurrently' in s.lower()), None)
     assert set_idx is not None, (
         f'expected SET statement_timeout in: {captured}')
     assert create_idx is not None, (
