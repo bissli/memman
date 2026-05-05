@@ -246,7 +246,29 @@ Run `memman install` in a TTY to get the interactive wizard. It prompts (with ma
 
 If you pass an `INSTALLABLE_KEYS` flag whose value conflicts with the env file, install exits with a clear message pointing at `memman config set` -- the explicit override path. Use `memman config set KEY VALUE` to change a setting after the initial install (e.g., `memman config set MEMMAN_BACKEND postgres`).
 
-> **Security note.** `MEMMAN_PG_DSN` is stored plaintext in `~/.memman/env` at mode 0600. Root and any process running as your user can read it. For shared hosts, prefer `~/.pgpass` (mode 0600) and pass a passwordless DSN such as `postgresql://user@host:5432/db` -- psycopg3 will source the password from `~/.pgpass` automatically.
+**`MEMMAN_PG_DSN` syntax.** Standard PostgreSQL libpq URI per psycopg3:
+
+```
+postgresql://[user[:password]@][host][:port]/[dbname][?param=value&...]
+```
+
+Worked examples:
+
+```bash
+# Local dev (defaults: localhost:5432, no password)
+memman config set MEMMAN_PG_DSN 'postgresql://memman@localhost/memman'
+
+# Inline credentials (URL-encode special chars in the password: ':' -> %3A, '@' -> %40, '/' -> %2F)
+memman config set MEMMAN_PG_DSN 'postgresql://memman:s3cret@db.internal:5432/memman'
+
+# Passwordless DSN sourcing the password from ~/.pgpass (recommended on shared hosts)
+memman config set MEMMAN_PG_DSN 'postgresql://memman@db.internal:5432/memman'
+
+# Production: TLS-required, custom application_name (any libpq parameter is accepted)
+memman config set MEMMAN_PG_DSN 'postgresql://memman@db.internal:5432/memman?sslmode=require&application_name=memman'
+```
+
+> **Security note.** `MEMMAN_PG_DSN` is stored plaintext in `~/.memman/env` at mode 0600. Root and any process running as your user can read it. For shared hosts, prefer `~/.pgpass` (mode 0600) and pass a passwordless DSN -- psycopg3 will source the password from `~/.pgpass`, `PGSERVICE`, or `PGPASSWORD` automatically.
 
 | Variable                          | Install-time default                              | Description                                                                                                           |
 | --------------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
