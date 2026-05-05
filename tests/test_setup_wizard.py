@@ -207,3 +207,37 @@ def test_existing_stores_hint_only_when_switching_to_postgres(
     out = capsys.readouterr().out
     assert 'memman migrate' in out
     assert 'default' in out
+
+
+@pytest.mark.postgres
+class TestProbeDsn:
+    """DSN probe correctness against a live pgvector container."""
+
+    def test_probe_dsn_raises_when_pgvector_missing(self, pg_dsn):
+        """Drop pgvector and verify the probe complains; restore after."""
+        import psycopg
+        from memman.setup.wizard import _probe_dsn
+
+        with psycopg.connect(pg_dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute('DROP EXTENSION IF EXISTS vector CASCADE')
+        try:
+            with pytest.raises(RuntimeError, match='pgvector'):
+                _probe_dsn(pg_dsn)
+        finally:
+            with psycopg.connect(pg_dsn, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute('CREATE EXTENSION IF NOT EXISTS vector')
+
+    def test_probe_dsn_emits_pgbouncer_hint_on_remote_dsn(
+            self, pg_dsn, capsys, monkeypatch):
+        """Probe of a remote-shaped DSN emits the PgBouncer hint.
+
+        Monkeypatches `_is_remote_dsn` to return True for the test
+        container's DSN and checks that the hint appears in stdout.
+        """
+        from memman.setup import wizard as wiz_mod
+        monkeypatch.setattr(wiz_mod, '_is_remote_dsn', lambda _dsn: True)
+        wiz_mod._probe_dsn(pg_dsn)
+        captured = capsys.readouterr()
+        assert 'PgBouncer' in captured.out

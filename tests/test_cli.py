@@ -11,7 +11,11 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 from memman.cli import cli
+from memman.embed.fingerprint import active_fingerprint
+from memman.embed.vector import serialize_vector
 from memman.store.db import store_exists
+from memman.store.node import insert_insight, update_embedding
+from tests.conftest import make_insight
 
 
 @pytest.fixture
@@ -1523,3 +1527,90 @@ class TestIntraBatchDedup:
         assert doctor_result['status'] == 'pass', (
             f'dangling edges found: {doctor_result["detail"]}')
         assert doctor_result['detail']['count'] == 0
+
+
+class TestHotPathPurity:
+    """Synchronous write commands must be LLM/embed-free.
+
+    `forget`, `graph link`, and `insights protect` mutate the store DB
+    synchronously and must make zero LLM or embed calls. Any future change
+    that adds such calls to these paths will fail one of these tests loudly.
+    """
+
+    @pytest.fixture
+    def runner_with_seed(self, tmp_path):
+        """CliRunner over an isolated data dir with two seeded insights.
+
+        Direct DB seeding avoids invoking the LLM for setup, so the
+        assertion that the test target makes no LLM calls is meaningful.
+        """
+        from memman.embed.fingerprint import write_fingerprint
+        from memman.store.db import open_db, store_dir, write_active
+        from memman.store.sqlite import SqliteBackend
+
+        data_dir = str(tmp_path)
+        name = 'default'
+        write_active(data_dir, name)
+        sdir = store_dir(data_dir, name)
+        db = open_db(sdir)
+        fp = active_fingerprint()
+        write_fingerprint(SqliteBackend(db), fp)
+
+        a = make_insight(id='aud-a', content='alpha', importance=3)
+        b = make_insight(id='aud-b', content='beta', importance=3)
+        insert_insight(db, a)
+        insert_insight(db, b)
+        update_embedding(db, 'aud-a',
+                         serialize_vector([0.1] * fp.dim), fp.model)
+        db.close()
+
+        return CliRunner(), data_dir
+
+    def _make_failing_complete(self, *_args, **_kwargs):
+        raise AssertionError(
+            'synchronous write must not invoke the LLM')
+
+    def _make_failing_embed(self, *_args, **_kwargs):
+        raise AssertionError(
+            'synchronous write must not invoke the embed client')
+
+    def test_forget_makes_no_llm_or_embed_calls(
+            self, runner_with_seed, monkeypatch):
+        """`forget` is pure SQL: no LLM, no embed."""
+        monkeypatch.setattr(
+            'memman.llm.openrouter_client.OpenRouterClient.complete',
+            self._make_failing_complete)
+        monkeypatch.setattr(
+            'memman.embed.voyage.Client.embed', self._make_failing_embed)
+
+        r, data_dir = runner_with_seed
+        out = r.invoke(cli, ['--data-dir', data_dir, 'forget', 'aud-a'])
+        assert out.exit_code == 0, out.output
+
+    def test_graph_link_makes_no_llm_or_embed_calls(
+            self, runner_with_seed, monkeypatch):
+        """`graph link` is pure SQL."""
+        monkeypatch.setattr(
+            'memman.llm.openrouter_client.OpenRouterClient.complete',
+            self._make_failing_complete)
+        monkeypatch.setattr(
+            'memman.embed.voyage.Client.embed', self._make_failing_embed)
+
+        r, data_dir = runner_with_seed
+        out = r.invoke(cli, ['--data-dir', data_dir,
+                             'graph', 'link', 'aud-a', 'aud-b'])
+        assert out.exit_code == 0, out.output
+
+    def test_insights_protect_makes_no_llm_or_embed_calls(
+            self, runner_with_seed, monkeypatch):
+        """`insights protect` is pure SQL."""
+        monkeypatch.setattr(
+            'memman.llm.openrouter_client.OpenRouterClient.complete',
+            self._make_failing_complete)
+        monkeypatch.setattr(
+            'memman.embed.voyage.Client.embed', self._make_failing_embed)
+
+        r, data_dir = runner_with_seed
+        out = r.invoke(cli, ['--data-dir', data_dir,
+                             'insights', 'protect', 'aud-a'])
+        assert out.exit_code == 0, out.output

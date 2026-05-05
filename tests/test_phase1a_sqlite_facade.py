@@ -8,7 +8,10 @@ SQLite store created by the test fixture.
 import pathlib
 
 import pytest
+from memman import config
 from memman.store.db import open_db
+from memman.store.errors import ConfigError
+from memman.store.factory import open_cluster
 from memman.store.model import Edge, Insight
 from memman.store.sqlite import SqliteBackend, SqliteCluster
 
@@ -143,3 +146,11 @@ def test_cluster_drop_store(tmp_path):
     cluster.drop_store(store='gone', data_dir=str(tmp_path))
     assert (
         not pathlib.Path(tmp_path / 'data' / 'gone').exists())
+
+
+def test_open_cluster_unknown_backend_raises_configerror(monkeypatch):
+    """Unknown MEMMAN_BACKEND value yields ConfigError with hint."""
+    monkeypatch.setattr(config, 'get', lambda key: (
+        'plutonium' if key == config.BACKEND else None))
+    with pytest.raises(ConfigError, match='unknown'):
+        open_cluster()
