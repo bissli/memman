@@ -32,6 +32,8 @@ def run_cli(args: list[str], home: Path, data_dir: Path | None = None,
     cmd += args
     env = os.environ.copy()
     env['HOME'] = str(home)
+    for k in ('MEMMAN_STORE', 'MEMMAN_DATA_DIR'):
+        env.pop(k, None)
     if extra_env:
         env.update(extra_env)
     return subprocess.run(cmd, capture_output=True, text=True,
@@ -104,13 +106,46 @@ def assert_not_contains(text: str, needle: str, label: str = '') -> None:
         f'{label}: {needle!r} should not be in: {text!r}')
 
 
-def extract_id(data: dict) -> str:
-    """Extract `.facts[0].id` or fallback `.id` like the bash helper.
+def extract_id_from_facts(data: dict) -> str:
+    """Extract `.facts[0].id` or fallback `.id`.
+
+    Legacy shape — used by a few CLI commands that still return a
+    `{facts: [...]}` envelope (e.g., `graph rebuild --dry-run`). Most
+    write paths now go through the queue and return `{queue_id: N}`
+    instead; use `extract_queue_id` for those.
     """
     facts = data.get('facts')
     if facts:
         return facts[0]['id']
     return data['id']
+
+
+def extract_queue_id(data: dict) -> int:
+    """Return `queue_id` from a queued `remember` response."""
+    return int(data['queue_id'])
+
+
+def find_insight_by_recall(home: Path, data_dir: Path,
+                           keyword: str) -> str:
+    """Recall the most recent insight matching `keyword`; return its id.
+
+    Used after a drain pass to translate a write back to its insight
+    without a queue-side back-reference (the queue table has no
+    `insight_id` column). The keyword must be unique within the data
+    dir so the top-1 result is the intended insight.
+
+    `recall --basic` returns insight rows directly (not wrapped under
+    `{insight: ...}`); this helper reads `results[0]['id']`.
+    """
+    out = run_cli(['recall', '--basic', keyword, '--limit', '1'],
+                  home, data_dir)
+    data = json_out(out)
+    results = data.get('results', [])
+    if not results:
+        raise AssertionError(
+            f'recall found no insight for keyword {keyword!r}; '
+            f'drain may not have run')
+    return str(results[0]['id'])
 
 
 def find_result(results: list[dict], insight_id: str) -> dict | None:
