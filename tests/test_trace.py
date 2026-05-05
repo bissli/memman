@@ -155,48 +155,77 @@ def test_setup_is_idempotent(fake_home, debug_on):
     assert len(trace_handlers) == 1
 
 
-def test_redact_headers_strips_authorization():
-    """redact_headers() replaces Authorization values with ***REDACTED***.
-    """
-    out = trace.redact_headers({
-        'Authorization': 'Bearer sk-very-secret',
-        'Content-Type': 'application/json',
-        })
-    assert out['Authorization'] == '***REDACTED***'
-    assert out['Content-Type'] == 'application/json'
+class TestRedaction:
+    """redact_headers and redact_dsn strip secrets from trace output."""
 
+    def test_redact_headers_strips_authorization(self):
+        """redact_headers() replaces Authorization values with ***REDACTED***.
+        """
+        out = trace.redact_headers({
+            'Authorization': 'Bearer sk-very-secret',
+            'Content-Type': 'application/json',
+            })
+        assert out['Authorization'] == '***REDACTED***'
+        assert out['Content-Type'] == 'application/json'
 
-def test_redact_headers_strips_x_api_key():
-    """redact_headers() replaces x-api-key values.
-    """
-    out = trace.redact_headers({
-        'x-api-key': 'sk-ant-secret',
-        'User-Agent': 'memman',
-        })
-    assert out['x-api-key'] == '***REDACTED***'
-    assert out['User-Agent'] == 'memman'
+    def test_redact_headers_strips_x_api_key(self):
+        """redact_headers() replaces x-api-key values."""
+        out = trace.redact_headers({
+            'x-api-key': 'sk-ant-secret',
+            'User-Agent': 'memman',
+            })
+        assert out['x-api-key'] == '***REDACTED***'
+        assert out['User-Agent'] == 'memman'
 
+    def test_redact_headers_is_case_insensitive(self):
+        """redact_headers() matches header names case-insensitively."""
+        out = trace.redact_headers({
+            'AUTHORIZATION': 'Bearer x',
+            'X-API-KEY': 'y',
+            'Api-Key': 'z',
+            })
+        assert out['AUTHORIZATION'] == '***REDACTED***'
+        assert out['X-API-KEY'] == '***REDACTED***'
+        assert out['Api-Key'] == '***REDACTED***'
 
-def test_redact_headers_is_case_insensitive():
-    """redact_headers() matches header names case-insensitively.
-    """
-    out = trace.redact_headers({
-        'AUTHORIZATION': 'Bearer x',
-        'X-API-KEY': 'y',
-        'Api-Key': 'z',
-        })
-    assert out['AUTHORIZATION'] == '***REDACTED***'
-    assert out['X-API-KEY'] == '***REDACTED***'
-    assert out['Api-Key'] == '***REDACTED***'
+    def test_redact_headers_does_not_mutate_input(self):
+        """redact_headers() returns a new dict; input dict is unchanged."""
+        original = {'Authorization': 'Bearer secret'}
+        out = trace.redact_headers(original)
+        assert original['Authorization'] == 'Bearer secret'
+        assert out is not original
 
+    def test_masks_inline_password(self):
+        """user:password@host gets the password replaced with ***."""
+        assert trace.redact_dsn(
+            'postgresql://alice:s3cret@db.example.com:5432/memman'
+            ) == 'postgresql://alice:***@db.example.com:5432/memman'
 
-def test_redact_headers_does_not_mutate_input():
-    """redact_headers() returns a new dict; input dict is unchanged.
-    """
-    original = {'Authorization': 'Bearer secret'}
-    out = trace.redact_headers(original)
-    assert original['Authorization'] == 'Bearer secret'
-    assert out is not original
+    def test_passthrough_when_no_password(self):
+        """A passwordless DSN is returned unchanged."""
+        assert trace.redact_dsn(
+            'postgresql://alice@db.example.com:5432/memman'
+            ) == 'postgresql://alice@db.example.com:5432/memman'
+
+    def test_passthrough_for_non_dsn_string(self):
+        """Strings that don't match the DSN shape are returned unchanged."""
+        assert trace.redact_dsn('not a connection string') == 'not a connection string'
+        assert trace.redact_dsn('') == ''
+
+    def test_handles_alternate_schemes(self):
+        """Any `scheme://user:pass@host` shape is masked, not just postgresql."""
+        assert trace.redact_dsn(
+            'postgres://u:p@h/db') == 'postgres://u:***@h/db'
+
+    def test_does_not_mask_when_password_contains_at_sign(self):
+        """Defensive case: ambiguous strings should not over-redact.
+
+        The regex requires a colon between user and password; URLs with
+        embedded `@` in unexpected positions leave the original intact.
+        """
+        assert trace.redact_dsn(
+            'http://example.com/path?q=foo'
+            ) == 'http://example.com/path?q=foo'
 
 
 @pytest.mark.no_mock_llm
