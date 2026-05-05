@@ -1,4 +1,4 @@
-"""Backend Protocol-shape regression guard.
+"""Backend Protocol-shape and introspection regression guard.
 
 Asserts the four distributed-shaping decisions baked into the
 `Backend` Protocol surface:
@@ -20,6 +20,7 @@ parameter onto the verb signatures (which would defeat the Postgres
 import dataclasses
 import inspect
 
+import pytest
 from memman.store.backend import Backend, EdgeStore, NodeStore, Oplog
 from memman.store.model import Edge, Insight, OpLogEntry
 
@@ -132,8 +133,58 @@ def test_edge_get_neighborhood_exists():
 
 
 def test_node_update_embedding_takes_vec_not_blob():
-    """Phase 1b: update_embedding signature flipped from bytes to list[float].
-    """
+    """update_embedding signature uses vec, not blob (list[float])."""
     sig = inspect.signature(NodeStore.update_embedding)
     assert 'vec' in sig.parameters
     assert 'blob' not in sig.parameters
+
+
+class TestBackendIntrospection:
+    """Backend.integrity_check and Backend.introspect_columns Protocol verbs."""
+
+    def test_integrity_check_protocol_signature(self):
+        """Backend.integrity_check is a Protocol verb with no arguments."""
+        assert hasattr(Backend, 'integrity_check')
+        sig = inspect.signature(Backend.integrity_check)
+        assert list(sig.parameters) == ['self']
+
+    def test_introspect_columns_protocol_signature(self):
+        """Backend.introspect_columns takes a `table` argument."""
+        assert hasattr(Backend, 'introspect_columns')
+        sig = inspect.signature(Backend.introspect_columns)
+        assert 'table' in sig.parameters
+
+    def test_integrity_check_returns_ok_on_fresh_store(self, backend):
+        """integrity_check returns {'ok': True, ...} on a healthy fresh store."""
+        result = backend.integrity_check()
+        assert isinstance(result, dict)
+        assert result.get('ok') is True
+        assert 'detail' in result
+
+    def test_introspect_columns_returns_insights_schema(self, backend):
+        """introspect_columns('insights') returns the expected core columns."""
+        cols = backend.introspect_columns('insights')
+        assert isinstance(cols, set)
+        expected_core = {
+            'id', 'content', 'category', 'importance',
+            'entities', 'source', 'created_at', 'updated_at',
+            'embedding'}
+        assert expected_core.issubset(cols), (
+            f'missing core columns: {sorted(expected_core - cols)}; '
+            f'got: {sorted(cols)}')
+
+    def test_introspect_columns_unknown_table_returns_empty(self, backend):
+        """introspect_columns on an unknown table returns an empty set."""
+        cols = backend.introspect_columns('definitely_not_a_real_table')
+        assert cols == set()
+
+    def test_introspect_columns_rejects_unsafe_identifier(self, backend):
+        """introspect_columns rejects names that are not valid SQL identifiers.
+
+        SQL injection guard: PRAGMA / DDL identifier slots cannot be
+        parameterized; both backends must validate the identifier before
+        interpolation.
+        """
+        from memman.store.errors import ConfigError
+        with pytest.raises(ConfigError):
+            backend.introspect_columns("insights); DROP TABLE insights; --")
