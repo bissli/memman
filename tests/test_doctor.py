@@ -1,7 +1,25 @@
 """Tests for memman.doctor health-check module."""
 
+import json
+import stat
 import struct
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+import psycopg
+import pytest
+from click.testing import CliRunner
+from memman.cli import cli
+from memman.doctor import (
+    check_drain_heartbeat,
+    check_env_completeness,
+    check_env_permissions,
+    check_queue_schema,
+    check_schema_columns,
+    check_scheduler_heartbeat,
+    check_scheduler_state,
+    )
+from memman.store.db import open_db
 from memman.store.edge import insert_edge
 from memman.store.node import insert_insight, update_embedding
 from memman.store.node import update_enrichment
@@ -269,3 +287,450 @@ class TestRunAllChecks:
             (c['name'], c['status'], c.get('detail'))
             for c in result['checks'] if c['status'] != 'pass']
         assert all(c['status'] == 'pass' for c in result['checks'])
+
+
+class TestEnvCompleteness:
+    """check_env_completeness against INSTALLABLE_KEYS."""
+
+    @pytest.fixture
+    def write_env(self, tmp_path, monkeypatch):
+        """Write a custom env file under a fresh data dir."""
+        from memman import config
+        data_dir = tmp_path / 'memman'
+        data_dir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv(config.DATA_DIR, str(data_dir))
+
+        def _write(contents: str) -> None:
+            (data_dir / config.ENV_FILENAME).write_text(contents)
+            config.reset_file_cache()
+
+        return _write
+
+    def test_pass_when_all_present(self, write_env):
+        """All INSTALLABLE_KEYS in the file -> status pass."""
+        from memman import config
+        lines = []
+        for key in config.INSTALLABLE_KEYS:
+            lines.append(f'{key}=value-for-{key}')
+        write_env('\n'.join(lines) + '\n')
+        out = check_env_completeness()
+        assert out['status'] == 'pass'
+
+    def test_warns_when_non_secret_missing(self, write_env):
+        """Missing non-secret key -> warn with key in detail.missing."""
+        from memman import config
+        lines = [
+            f'{key}=v' for key in config.INSTALLABLE_KEYS
+            if key != config.LLM_MODEL_FAST
+            ]
+        write_env('\n'.join(lines) + '\n')
+        out = check_env_completeness()
+        assert out['status'] == 'warn'
+        assert config.LLM_MODEL_FAST in out['detail']['missing']
+        assert 'memman install' in out['detail']['fix']
+
+    def test_ignores_optional_secret(self, write_env):
+        """Missing OPENAI_EMBED_API_KEY (optional secret) does not fail."""
+        from memman import config
+        lines = [
+            f'{key}=v' for key in config.INSTALLABLE_KEYS
+            if key != config.OPENAI_EMBED_API_KEY
+            ]
+        write_env('\n'.join(lines) + '\n')
+        out = check_env_completeness()
+        assert out['status'] == 'pass'
+        assert config.OPENAI_EMBED_API_KEY not in out.get('detail', {}).get(
+            'missing', [])
+
+
+def _started_scheduler_status(interval=900):
+    """Test helper: pretend the scheduler is installed + started."""
+    return {
+        'interval_seconds': interval,
+        'state': 'started',
+        'installed': True,
+        }
+
+
+class TestHardening:
+    """B12 doctor checks: schema, env perms, scheduler, worker runs."""
+
+    def test_schema_columns_passes_on_current_schema(self, tmp_path):
+        """Fresh DB has all expected provenance columns."""
+        db = open_db(str(tmp_path))
+        try:
+            from memman.store.sqlite import SqliteBackend
+            result = check_schema_columns(SqliteBackend(db))
+            assert result['status'] == 'pass'
+            assert result['detail']['missing'] == []
+        finally:
+            db.close()
+
+    def test_schema_columns_fails_when_column_missing(self, tmp_path):
+        """A DB without provenance columns should fail the schema check.
+        """
+        db = open_db(str(tmp_path))
+        try:
+            db._conn.executescript(
+                'CREATE TABLE insights_minimal (id TEXT PRIMARY KEY);'
+                'DROP TABLE insights;'
+                'ALTER TABLE insights_minimal RENAME TO insights;')
+            from memman.store.sqlite import SqliteBackend
+            result = check_schema_columns(SqliteBackend(db))
+            assert result['status'] == 'fail'
+            assert 'prompt_version' in result['detail']['missing']
+            assert 'model_id' in result['detail']['missing']
+            assert 'embedding_model' in result['detail']['missing']
+        finally:
+            db.close()
+
+    def test_queue_schema_passes_with_worker_runs(self, tmp_path):
+        """A fresh queue.db has the worker_runs table."""
+        result = check_queue_schema(str(tmp_path))
+        assert result['status'] == 'pass'
+        assert result['detail']['missing'] == []
+
+    def test_env_permissions_pass_when_no_home_memman(self, tmp_path, monkeypatch):
+        """Missing ~/.memman returns pass (nothing to secure)."""
+        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        result = check_env_permissions()
+        assert result['status'] == 'pass'
+
+    def test_env_permissions_fail_on_world_readable_env(self, tmp_path, monkeypatch):
+        """0644 env file trips the check."""
+        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        mm = tmp_path / '.memman'
+        mm.mkdir(mode=0o700)
+        env = mm / 'env'
+        env.write_text('OPENROUTER_API_KEY=fake\n')
+        env.chmod(0o644)
+        result = check_env_permissions()
+        assert result['status'] == 'fail'
+        assert any('env file' in issue
+                   for issue in result['detail']['issues'])
+
+    def test_env_permissions_pass_on_0600_env(self, tmp_path, monkeypatch):
+        """0600 env file + 0700 dir passes cleanly."""
+        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        mm = tmp_path / '.memman'
+        mm.mkdir(mode=0o700)
+        env = mm / 'env'
+        env.write_text('OPENROUTER_API_KEY=fake\n')
+        env.chmod(0o600)
+        result = check_env_permissions()
+        assert result['status'] == 'pass'
+        assert stat.S_IMODE(env.stat().st_mode) == 0o600
+
+    def test_scheduler_state_warn_when_uninstalled(self, monkeypatch):
+        """Scheduler-not-installed is a warn, not a fail."""
+        from memman.setup import scheduler as sch
+        monkeypatch.setattr(
+            sch, 'status',
+            lambda: {'installed': False, 'active': False, 'drift': False,
+                     'state': 'off', 'interval_seconds': None})
+        result = check_scheduler_state()
+        assert result['status'] == 'warn'
+
+    def test_scheduler_state_fail_on_drift(self, monkeypatch):
+        """Drift between state file and OS truth is a fail."""
+        from memman.setup import scheduler as sch
+        monkeypatch.setattr(
+            sch, 'status',
+            lambda: {'installed': True, 'active': False, 'drift': True,
+                     'state': 'active', 'interval_seconds': 900})
+        result = check_scheduler_state()
+        assert result['status'] == 'fail'
+
+    def test_scheduler_heartbeat_fail_when_no_drains_and_started(self, tmp_path, monkeypatch):
+        """Scheduler started + installed but no worker_runs row yet -> fail."""
+        from memman.setup import scheduler as sch
+        monkeypatch.setattr(sch, 'status', _started_scheduler_status)
+        result = check_scheduler_heartbeat(str(tmp_path))
+        assert result['status'] == 'fail'
+        assert 'no drains recorded' in result['detail']['reason']
+
+    def test_scheduler_heartbeat_pass_when_stopped(self, tmp_path, monkeypatch):
+        """Scheduler stopped -> pass (no drain expected; recall-only mode)."""
+        from memman.setup import scheduler as sch
+        monkeypatch.setattr(
+            sch, 'status', lambda: {
+                'interval_seconds': 900, 'state': 'stopped',
+                'installed': True})
+        result = check_scheduler_heartbeat(str(tmp_path))
+        assert result['status'] == 'pass'
+        assert "'stopped'" in result['detail']['reason']
+
+    def test_scheduler_heartbeat_pass_when_uninstalled(self, tmp_path, monkeypatch):
+        """Scheduler uninstalled -> pass (not relevant)."""
+        from memman.setup import scheduler as sch
+        monkeypatch.setattr(
+            sch, 'status', lambda: {
+                'interval_seconds': None, 'state': 'stopped',
+                'installed': False})
+        result = check_scheduler_heartbeat(str(tmp_path))
+        assert result['status'] == 'pass'
+
+    def test_scheduler_heartbeat_pass_on_recent_drain(self, tmp_path, monkeypatch):
+        """A drain within the interval window passes."""
+        from memman.queue import finish_worker_run, open_queue_db, start_worker_run
+        from memman.setup import scheduler as sch
+
+        monkeypatch.setattr(sch, 'status', _started_scheduler_status)
+        conn = open_queue_db(str(tmp_path))
+        try:
+            run_id = start_worker_run(conn, worker_pid=1)
+            finish_worker_run(conn, run_id, 0, 0, 0)
+        finally:
+            conn.close()
+        result = check_scheduler_heartbeat(str(tmp_path))
+        assert result['status'] == 'pass'
+
+    def test_scheduler_heartbeat_threshold_floors_at_180s(self, tmp_path, monkeypatch):
+        """At interval=0 (serve continuous), the threshold floors at 180s.
+
+        Without the floor, `3 * 0 = 0` would fail every heartbeat check.
+        With the floor (max(3*interval, 180s)), serve mode is robust to
+        sub-minute intervals -- the rate-limited heartbeat writes 1/min so
+        a 180s window allows two-miss tolerance.
+        """
+        from memman.queue import finish_worker_run, open_queue_db, start_worker_run
+        from memman.setup import scheduler as sch
+
+        monkeypatch.setattr(sch, 'status',
+                            lambda: _started_scheduler_status(interval=0))
+        conn = open_queue_db(str(tmp_path))
+        try:
+            run_id = start_worker_run(conn, worker_pid=1)
+            finish_worker_run(conn, run_id, 0, 0, 0)
+            conn.execute(
+                'UPDATE worker_runs SET started_at = started_at - 90'
+                ' WHERE id = ?', (run_id,))
+            conn.commit()
+        finally:
+            conn.close()
+        result = check_scheduler_heartbeat(str(tmp_path))
+        assert result['status'] == 'pass', (
+            f'90s old heartbeat at interval=0 should PASS under 180s floor;'
+            f' got {result}')
+        assert result['detail']['threshold_fail_seconds'] == 180
+
+    def test_scheduler_heartbeat_fails_at_interval_zero_when_stale(
+            self, tmp_path, monkeypatch):
+        """At interval=0, a heartbeat older than 180s fails.
+
+        Validates that the `interval and` truthiness guard is removed --
+        interval=0 must reach the threshold comparison, not short-circuit
+        to PASS.
+        """
+        from memman.queue import finish_worker_run, open_queue_db, start_worker_run
+        from memman.setup import scheduler as sch
+
+        monkeypatch.setattr(sch, 'status',
+                            lambda: _started_scheduler_status(interval=0))
+        conn = open_queue_db(str(tmp_path))
+        try:
+            run_id = start_worker_run(conn, worker_pid=1)
+            finish_worker_run(conn, run_id, 0, 0, 0)
+            conn.execute(
+                'UPDATE worker_runs SET started_at = started_at - 200'
+                ' WHERE id = ?', (run_id,))
+            conn.commit()
+        finally:
+            conn.close()
+        result = check_scheduler_heartbeat(str(tmp_path))
+        assert result['status'] == 'fail', (
+            f'200s old heartbeat at interval=0 should FAIL (180s floor);'
+            f' got {result}')
+
+    def test_scheduler_heartbeat_fail_on_recorded_error(self, tmp_path, monkeypatch):
+        """A finished run with an error string flips the check to fail."""
+        from memman.queue import finish_worker_run, open_queue_db, start_worker_run
+        from memman.setup import scheduler as sch
+
+        monkeypatch.setattr(sch, 'status', _started_scheduler_status)
+        conn = open_queue_db(str(tmp_path))
+        try:
+            run_id = start_worker_run(conn, worker_pid=1)
+            finish_worker_run(
+                conn, run_id, 1, 0, 1, error='RuntimeError: boom')
+        finally:
+            conn.close()
+        result = check_scheduler_heartbeat(str(tmp_path))
+        assert result['status'] == 'fail'
+
+    @pytest.fixture
+    def runner(self, tmp_path):
+        """CliRunner with --data-dir pointing to a fresh temp directory."""
+        r = CliRunner()
+        data_dir = str(tmp_path / 'mm')
+        Path(data_dir).mkdir(parents=True, exist_ok=True)
+        return r, data_dir
+
+    def test_doctor_text_mode_emits_colored_summary(self, runner):
+        """`memman doctor --text` produces a human-readable report.
+
+        Exit code may be 0 (pass/warn) or 1 (fail) depending on environment.
+        """
+        r, data_dir = runner
+        result = r.invoke(cli, ['--data-dir', data_dir, 'doctor', '--text'])
+        assert result.exit_code in {0, 1}, result.output
+        assert 'memman doctor' in result.output
+        assert ('sqlite_integrity' in result.output
+                or 'env_permissions' in result.output)
+
+    def test_doctor_json_default(self, runner):
+        """`memman doctor` emits JSON by default.
+
+        Exit code may be 0 (pass/warn) or 1 (fail) depending on environment.
+        """
+        r, data_dir = runner
+        result = r.invoke(cli, ['--data-dir', data_dir, 'doctor'])
+        assert result.exit_code in {0, 1}, result.output
+        payload = json.loads(result.output)
+        assert 'checks' in payload
+        assert 'status' in payload
+
+    def test_doctor_reports_llm_probe_failure(self, runner, monkeypatch):
+        """`memman doctor` surfaces an LLM ConfigError and exits non-zero.
+
+        Replaces the prior `keys test` surface; doctor's check_llm_probe
+        is now the canonical key-validity gate.
+        """
+        from memman.exceptions import ConfigError
+
+        r, data_dir = runner
+        monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
+
+        def _raise(role):
+            raise ConfigError('OPENROUTER_API_KEY must be set')
+        monkeypatch.setattr(
+            'memman.llm.client.get_llm_client', _raise)
+
+        result = r.invoke(cli, ['--data-dir', data_dir, 'doctor'])
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload['status'] == 'fail'
+        llm_check = next(
+            (c for c in payload['checks'] if c['name'] == 'llm_probe'),
+            None)
+        assert llm_check is not None
+        assert llm_check['status'] == 'fail'
+        assert 'OPENROUTER_API_KEY' in llm_check['detail']['error']
+
+    def test_doctor_reports_probes_pass_under_mocks(self, runner):
+        """With the autouse mocks both LLM and embed probes pass."""
+        r, data_dir = runner
+        result = r.invoke(cli, ['--data-dir', data_dir, 'doctor'])
+        payload = json.loads(result.output)
+        llm_check = next(
+            c for c in payload['checks'] if c['name'] == 'llm_probe')
+        embed_check = next(
+            c for c in payload['checks'] if c['name'] == 'embed_probe')
+        assert llm_check['status'] == 'pass'
+        assert embed_check['status'] == 'pass'
+
+
+class TestDrainHeartbeat:
+    """check_drain_heartbeat: postgres drain-heartbeat consumer."""
+
+    pytestmark = pytest.mark.postgres
+
+    def test_skips_on_sqlite(self):
+        """SQLite mode: drain_heartbeat returns pass with skipped_reason."""
+        result = check_drain_heartbeat()
+        assert result['name'] == 'drain_heartbeat'
+        assert result['status'] == 'pass'
+        assert 'skipped_reason' in result['detail']
+
+    def test_passes_when_no_in_progress_runs(self, env_file, pg_dsn):
+        """Postgres mode with no in-progress runs: status pass."""
+        env_file('MEMMAN_BACKEND', 'postgres')
+        env_file('MEMMAN_PG_DSN', pg_dsn)
+        from memman.store.postgres import PostgresCluster
+        cluster = PostgresCluster(dsn=pg_dsn)
+        try:
+            cluster.drop_store(store='hb_doctor_setup', data_dir='')
+        except Exception:
+            pass
+        backend = cluster.open(store='hb_doctor_setup', data_dir='')
+        try:
+            backend.close()
+        finally:
+            try:
+                cluster.drop_store(store='hb_doctor_setup', data_dir='')
+            except Exception:
+                pass
+
+        with psycopg.connect(pg_dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    'UPDATE queue.worker_runs SET ended_at = now()'
+                    ' WHERE ended_at IS NULL')
+
+        result = check_drain_heartbeat()
+        assert result['status'] == 'pass'
+        assert result['detail']['in_progress'] == 0
+        assert result['detail']['stale_runs'] == []
+
+    def test_warns_no_drain_heartbeat_in_5m(self, env_file, pg_dsn):
+        """Postgres mode: in-progress run with stale heartbeat -> warn."""
+        env_file('MEMMAN_BACKEND', 'postgres')
+        env_file('MEMMAN_PG_DSN', pg_dsn)
+
+        stale = datetime.now(timezone.utc) - timedelta(minutes=10)
+        with psycopg.connect(pg_dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    'UPDATE queue.worker_runs SET ended_at = now()'
+                    ' WHERE ended_at IS NULL')
+                cur.execute(
+                    'INSERT INTO queue.worker_runs'
+                    ' (started_at, ended_at, last_heartbeat_at)'
+                    ' VALUES (%s, NULL, %s) RETURNING id',
+                    (stale, stale))
+                stale_id = cur.fetchone()[0]
+        try:
+            result = check_drain_heartbeat()
+            assert result['status'] == 'warn'
+            stale_runs = result['detail']['stale_runs']
+            assert any(s['run_id'] == stale_id for s in stale_runs)
+            match = next(
+                s for s in stale_runs if s['run_id'] == stale_id)
+            assert match['age_seconds'] >= 5 * 60
+        finally:
+            with psycopg.connect(pg_dsn, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        'UPDATE queue.worker_runs SET ended_at = now()'
+                        ' WHERE id = %s',
+                        (stale_id,))
+
+    def test_no_warn_for_fresh_heartbeat(self, env_file, pg_dsn):
+        """In-progress run with recent heartbeat does NOT warn."""
+        env_file('MEMMAN_BACKEND', 'postgres')
+        env_file('MEMMAN_PG_DSN', pg_dsn)
+
+        fresh = datetime.now(timezone.utc) - timedelta(seconds=30)
+        with psycopg.connect(pg_dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    'UPDATE queue.worker_runs SET ended_at = now()'
+                    ' WHERE ended_at IS NULL')
+                cur.execute(
+                    'INSERT INTO queue.worker_runs'
+                    ' (started_at, ended_at, last_heartbeat_at)'
+                    ' VALUES (%s, NULL, %s) RETURNING id',
+                    (fresh, fresh))
+                fresh_id = cur.fetchone()[0]
+        try:
+            result = check_drain_heartbeat()
+            assert result['status'] == 'pass'
+            assert result['detail']['stale_runs'] == []
+            assert result['detail']['in_progress'] >= 1
+        finally:
+            with psycopg.connect(pg_dsn, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        'UPDATE queue.worker_runs SET ended_at = now()'
+                        ' WHERE id = %s',
+                        (fresh_id,))
