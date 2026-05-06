@@ -48,6 +48,10 @@ class TestStoreContextBinding:
             def __init__(self):
                 self.model = 'stub-default'
                 self.dim = 0
+                self._availability_cache = None
+
+            def prepare(self):
+                return
 
             def available(self):
                 return True

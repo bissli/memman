@@ -196,10 +196,9 @@ class NodeStore(Protocol):
     def get_all_embeddings(self) -> list[tuple[Id, str, bytes]]:
         """Return all (id, content, blob) triples for active insights.
 
-        Backwards-compat shape used by snapshot writes. Pipeline /
-        recall code prefers `iter_embeddings_as_vecs` -- the verb
-        below -- which yields native vectors and bypasses
-        SQLite-specific blob deserialization.
+        Used by snapshot writes and the `BaseNodeStore` defaults for
+        `get_without_embedding` / `iter_embeddings_as_vecs`. Pipeline
+        and recall paths prefer `iter_embeddings_as_vecs` directly.
         """
         ...
 
@@ -275,7 +274,7 @@ class NodeStore(Protocol):
         ...
 
     def review_content_quality(
-            self, *, limit: int = 50) -> list[dict[str, Any]]:
+            self, *, limit: int) -> list[dict[str, Any]]:
         """Return active insights flagged by content-quality checks."""
         ...
 

@@ -1,30 +1,11 @@
 """Tests for the (provider, model)-keyed embedder registry.
 
-The registry shifts runtime authority from the env-resolved global
-provider to per-(provider, model) lookup. Used by `_StoreContext`
-to bind a per-store embedder from the store's stored fingerprint.
-
-Behaviors covered:
-- `get_for(provider, model)` returns a client whose model matches
-- `get_active()` matches the env-resolved client
-- Lazy credentialing: missing creds yield a placeholder; only
-  `embed()` / `embed_batch()` raise `EmbedCredentialError`
-- Unknown provider raises `ConfigError`
+`get_for` returns a client bound to the requested pair, surfaces an
+unknown-provider `ConfigError`, and falls back to a placeholder
+when credentials are missing.
 """
 
 import pytest
-
-
-class TestGetActive:
-    """`get_active()` mirrors the env-resolved active client."""
-
-    def test_returns_voyage_by_default(self):
-        """Default env points at voyage; get_active() returns voyage."""
-        from memman.embed.registry import get_active
-        ec = get_active()
-        assert ec.name == 'voyage'
-        assert ec.model == 'voyage-3-lite'
-        assert ec.dim == 512
 
 
 class TestGetFor:

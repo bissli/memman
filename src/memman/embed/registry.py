@@ -1,30 +1,13 @@
 """Per-(provider, model) embedder registry.
 
-Shifts runtime authority from the env-resolved global provider to
-per-store binding. `get_for(provider, model)` constructs an embedder
-bound to the requested pair; the caller (typically `_StoreContext`)
-reads the store's stored fingerprint and asks for the matching
-client.
-
-Lazy credentialing: if the underlying provider's `__init__` raises
-`ConfigError` because credentials are missing, `get_for` returns a
-`_PlaceholderEmbedder` that satisfies the structural Protocol but
-raises `EmbedCredentialError` on `embed()` / `embed_batch()`. This
-lets a process open multiple stores -- including ones bound to
-provider X without X's creds -- without crashing at open time.
+`get_for(provider, model)` constructs an embedder bound to the
+requested pair. If the provider constructor raises `ConfigError`
+(missing creds), returns a `_PlaceholderEmbedder` so processes can
+open multiple stores even when one provider's creds are absent.
 """
 
-from memman.embed import PROVIDERS, EmbeddingProvider, get_client
+from memman.embed import PROVIDERS, EmbeddingProvider
 from memman.exceptions import ConfigError, EmbedCredentialError
-
-
-def get_active() -> EmbeddingProvider:
-    """Return the env-resolved active client.
-
-    Backwards-compatible path for call sites that don't have a
-    per-store fingerprint to bind from.
-    """
-    return get_client()
 
 
 def get_for(provider: str, model: str) -> EmbeddingProvider:
@@ -46,16 +29,11 @@ def get_for(provider: str, model: str) -> EmbeddingProvider:
         client = factory()
     except ConfigError as exc:
         return _PlaceholderEmbedder(provider, model, str(exc))
-    if getattr(client, 'model', None) != model:
+    if client.model != model:
         client.model = model
         client.dim = 0
-        if hasattr(client, '_availability_cache'):
-            client._availability_cache = None
-    if hasattr(client, 'prepare'):
-        try:
-            client.prepare()
-        except Exception:
-            pass
+        client._availability_cache = None
+    client.prepare()
     return client
 
 

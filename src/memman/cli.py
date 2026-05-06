@@ -152,6 +152,7 @@ def _open_db(ctx: click.Context) -> 'DB':
         return open_ro_db(sdir)
 
     db = open_db(sdir)
+    from memman.embed import get_client
     from memman.embed.fingerprint import assert_consistent, seed_if_fresh
     from memman.exceptions import ConfigError, EmbedFingerprintError
     from memman.graph.engine import reindex_if_constants_changed
@@ -159,8 +160,9 @@ def _open_db(ctx: click.Context) -> 'DB':
     backend = SqliteBackend(db)
     reindex_if_constants_changed(backend)
     try:
-        seed_if_fresh(backend)
-        assert_consistent(backend)
+        ec = get_client()
+        seed_if_fresh(backend, ec)
+        assert_consistent(backend, ec)
     except (EmbedFingerprintError, ConfigError) as exc:
         db.close()
         raise click.ClickException(str(exc)) from exc
@@ -873,9 +875,10 @@ class _StoreContext:
 
         self.store_name = store_name
         self.data_dir = data_dir
+        from memman.embed import get_client
         cluster = open_cluster()
         self.backend = cluster.open(store=store_name, data_dir=data_dir)
-        _fp_mod.seed_if_fresh(self.backend)
+        _fp_mod.seed_if_fresh(self.backend, get_client())
         stored = _fp_mod.stored_fingerprint(self.backend)
         if stored is None:
             raise EmbedFingerprintError(

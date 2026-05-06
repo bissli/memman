@@ -21,7 +21,6 @@ import threading
 
 import psycopg
 import pytest
-from memman.store.errors import BackendError
 from memman.store.model import Insight
 from memman.store.postgres import EMBEDDING_DIM, PostgresCluster
 from memman.store.postgres import _ensure_baseline_schema, _ensure_hnsw_index

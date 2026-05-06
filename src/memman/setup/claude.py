@@ -122,6 +122,7 @@ def _init_default_store(data_dir: str) -> None:
     first-open paths share a single seed implementation, including
     the unavailable-client and dim>0 validation.
     """
+    from memman.embed import get_client
     from memman.embed.fingerprint import seed_if_fresh
     from memman.exceptions import ConfigError, EmbedFingerprintError
     from memman.store.db import open_db, store_dir, store_exists
@@ -132,7 +133,7 @@ def _init_default_store(data_dir: str) -> None:
         db = open_db(sdir)
         try:
             try:
-                seed_if_fresh(SqliteBackend(db))
+                seed_if_fresh(SqliteBackend(db), get_client())
             except (EmbedFingerprintError, ConfigError) as exc:
                 raise click.ClickException(str(exc)) from exc
         finally:

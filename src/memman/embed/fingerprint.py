@@ -1,17 +1,10 @@
-"""Embed-fingerprint canonical state for the DB.
+"""Embed-fingerprint canonical state for a store.
 
-A `Fingerprint` records which provider/model/dim produced the
-vectors stored in a memman DB. The canonical value lives in
-`meta.embed_fingerprint`. On every code path that reads or writes
-embeddings, the active client's fingerprint is compared to the
-stored one; mismatch (or missing) raises `EmbedFingerprintError`
-with a remediation message.
-
-`seed_if_fresh` writes the meta row on first contact when the DB
-has no fingerprint AND no insights, so any DB created lazily by a
-CLI command behaves as if `memman install` had pre-seeded it. The
-existing `memman embed reembed` and `setup.claude._init_default_store`
-paths route through `seed_if_fresh` for a single seed implementation.
+`Fingerprint` records which provider/model/dim produced the vectors
+stored in a memman DB. The canonical value lives in
+`meta.embed_fingerprint`; reads and writes compare the active
+client's fingerprint to the stored one and raise
+`EmbedFingerprintError` on drift.
 """
 
 import json
@@ -101,26 +94,17 @@ def write_fingerprint(backend: 'Backend', fp: Fingerprint) -> None:
 
 def seed_if_fresh(
         backend: 'Backend',
-        ec: 'EmbeddingProvider | None' = None) -> bool:
+        ec: 'EmbeddingProvider') -> bool:
     """Seed `meta.embed_fingerprint` when the store is genuinely fresh.
 
-    Writes the embedder's fingerprint when both: (a) no fingerprint
-    is stored, and (b) the `insights` table is empty. Idempotent.
+    Writes `ec`'s fingerprint when both: (a) no fingerprint is
+    stored, and (b) the `insights` table is empty. Idempotent.
     Returns True if a seed was written.
-
-    `ec` is the embedder whose fingerprint will be written; defaults
-    to the env-resolved active client. Per-store callers (e.g.
-    `_StoreContext`) pass an explicit `ec` so the seed reflects the
-    binding that will be used for subsequent reads/writes against
-    this store.
     """
     if stored_fingerprint(backend) is not None:
         return False
     if backend.nodes.count_total() > 0:
         return False
-    if ec is None:
-        from memman.embed import get_client
-        ec = get_client()
     if not ec.available():
         raise EmbedFingerprintError(ec.unavailable_message())
     target = Fingerprint.from_client(ec)
@@ -134,21 +118,11 @@ def seed_if_fresh(
 
 def assert_consistent(
         backend: 'Backend',
-        ec: 'EmbeddingProvider | None' = None) -> None:
+        ec: 'EmbeddingProvider') -> None:
     """Raise `EmbedFingerprintError` when `ec` does not match the
     stored fingerprint, or when no fingerprint is stored.
-
-    `ec` defaults to the env-resolved active client (preserving
-    existing behavior for callers that don't bind per-store).
-    Callers that open a backend through the CLI route through
-    `seed_if_fresh` first so that a missing fingerprint here means
-    real corruption (data without provenance), not an uninitialized
-    store.
     """
-    if ec is None:
-        active = active_fingerprint()
-    else:
-        active = Fingerprint.from_client(ec)
+    active = Fingerprint.from_client(ec)
     stored = stored_fingerprint(backend)
     if stored is None:
         raise EmbedFingerprintError(

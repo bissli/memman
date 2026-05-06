@@ -6,9 +6,9 @@ import math
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from memman.store.model import MAX_INSIGHTS, Insight, base_weight
-from memman.store.model import format_timestamp, insight_to_delta_dict
-from memman.store.model import is_immune, parse_timestamp
+from memman.store.model import Insight, base_weight, format_timestamp
+from memman.store.model import insight_to_delta_dict, is_immune
+from memman.store.model import parse_timestamp
 
 if TYPE_CHECKING:
     from memman.store.db import DB
@@ -17,8 +17,6 @@ logger = logging.getLogger('memman')
 
 HALF_LIFE_DAYS = 30.0
 PRUNE_BATCH_SIZE = 10
-
-__all__ = ['MAX_INSIGHTS']
 
 
 def insert_insight(db: 'DB', i: Insight) -> None:

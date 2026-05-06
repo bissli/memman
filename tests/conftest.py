@@ -274,11 +274,11 @@ def _autoseed_fingerprint(request, monkeypatch):
     from memman.embed import fingerprint as fp_mod
     real_assert = fp_mod.assert_consistent
 
-    def seed_then_assert(backend):
+    def seed_then_assert(backend, ec):
         if fp_mod.stored_fingerprint(backend) is None:
             fp_mod.write_fingerprint(
-                backend, fp_mod.active_fingerprint())
-        real_assert(backend)
+                backend, fp_mod.Fingerprint.from_client(ec))
+        real_assert(backend, ec)
 
     monkeypatch.setattr(fp_mod, 'assert_consistent', seed_then_assert)
 

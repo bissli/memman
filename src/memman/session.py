@@ -62,6 +62,7 @@ def active_store(
             unchanged.
     """
     from memman.embed import fingerprint as fp_mod
+    from memman.embed import get_client
     from memman.exceptions import ConfigError, EmbedFingerprintError
     from memman.graph.engine import reindex_if_constants_changed
     from memman.store.factory import open_cluster
@@ -72,8 +73,9 @@ def active_store(
         if not unchecked:
             reindex_if_constants_changed(backend)
             try:
-                fp_mod.seed_if_fresh(backend)
-                fp_mod.assert_consistent(backend)
+                ec = get_client()
+                fp_mod.seed_if_fresh(backend, ec)
+                fp_mod.assert_consistent(backend, ec)
             except (EmbedFingerprintError, ConfigError) as exc:
                 raise click.ClickException(str(exc)) from exc
         yield backend

@@ -99,14 +99,16 @@ class TestFingerprintConsistency:
     @pytest.mark.no_autoseed_fingerprint
     def test_passes_on_match(self, tmp_db):
         """Seeded matching fingerprint -> no error."""
+        from memman.embed import get_client
         _seed_voyage(tmp_db)
-        assert_consistent(SqliteBackend(tmp_db))
+        assert_consistent(SqliteBackend(tmp_db), get_client())
 
     @pytest.mark.no_autoseed_fingerprint
     def test_raises_on_unseeded(self, tmp_db):
         """No meta.embed_fingerprint -> EmbedFingerprintError with hint."""
+        from memman.embed import get_client
         with pytest.raises(EmbedFingerprintError) as excinfo:
-            assert_consistent(SqliteBackend(tmp_db))
+            assert_consistent(SqliteBackend(tmp_db), get_client())
         msg = str(excinfo.value)
         assert 'embed reembed' in msg
         assert 'initialize' in msg
@@ -114,9 +116,10 @@ class TestFingerprintConsistency:
     @pytest.mark.no_autoseed_fingerprint
     def test_raises_on_mismatch(self, tmp_db):
         """Seeded fingerprint != active -> EmbedFingerprintError with hint."""
+        from memman.embed import get_client
         write_fingerprint(SqliteBackend(tmp_db), Fingerprint(provider='openai', model='m', dim=1024))
         with pytest.raises(EmbedFingerprintError) as excinfo:
-            assert_consistent(SqliteBackend(tmp_db))
+            assert_consistent(SqliteBackend(tmp_db), get_client())
         msg = str(excinfo.value)
         assert 'mismatch' in msg.lower()
         assert 'embed reembed' in msg
@@ -281,6 +284,7 @@ class TestReembed:
         """seed_if_fresh declines to seed when insights are non-empty and
         fingerprint is missing -- corruption, not fresh state.
         """
+        from memman.embed import get_client
         from memman.embed.fingerprint import seed_if_fresh
         from memman.store.db import store_dir
         sdir = store_dir(str(tmp_path), 'default')
@@ -288,7 +292,7 @@ class TestReembed:
         try:
             _seed_row_with_embedding(db, id='r1', content='alpha')
             assert stored_fingerprint(SqliteBackend(db)) is None
-            wrote = seed_if_fresh(SqliteBackend(db))
+            wrote = seed_if_fresh(SqliteBackend(db), get_client())
             assert wrote is False
             assert stored_fingerprint(SqliteBackend(db)) is None
         finally:
