@@ -771,6 +771,15 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                     store=row.store,
                     error_class=type(exc).__name__,
                     error_message=str(exc)[:500])
+                from memman.exceptions import EmbedCredentialError
+                if isinstance(exc, EmbedCredentialError):
+                    trace.event(
+                        'embedder_credential_missing',
+                        row_id=row.id,
+                        store=row.store,
+                        provider=getattr(ctx.ec, 'name', None),
+                        model=getattr(ctx.ec, 'model', None),
+                        reason=str(exc)[:500])
                 if verbose:
                     click.echo(
                         f'[enrich] fail id={row.id} store={row.store}'
@@ -857,7 +866,8 @@ class _StoreContext:
 
     def __init__(self, store_name: str, data_dir: str) -> None:
         from memman.embed import fingerprint as _fp_mod
-        from memman.embed import get_client as _get_ec
+        from memman.embed import registry as _ec_registry
+        from memman.exceptions import EmbedFingerprintError
         from memman.llm.client import get_llm_client
         from memman.store.factory import open_cluster
 
@@ -866,13 +876,40 @@ class _StoreContext:
         cluster = open_cluster()
         self.backend = cluster.open(store=store_name, data_dir=data_dir)
         _fp_mod.seed_if_fresh(self.backend)
-        _fp_mod.assert_consistent(self.backend)
-        self.ec = _get_ec()
+        stored = _fp_mod.stored_fingerprint(self.backend)
+        if stored is None:
+            raise EmbedFingerprintError(
+                f"store {store_name!r} has no embed fingerprint and"
+                " contains data; run 'memman embed reembed' to converge.")
+        self.ec = _ec_registry.get_for(stored.provider, stored.model)
+        self._stored_fp = stored
         self.llm_client = get_llm_client('slow_canonical')
         self.embed_cache: dict[str, list[float]] = dict(
             self.backend.nodes.iter_embeddings_as_vecs())
         self.insights_by_id = {
             i.id: i for i in self.backend.nodes.get_all_active()}
+
+    def assert_fingerprint_unchanged(self) -> None:
+        """Raise EmbedFingerprintError if the store's stored fingerprint
+        diverged from the value captured at context construction.
+
+        Per-row heartbeat: a swap that completes mid-drain would
+        otherwise let the cached `ec` write vectors of the wrong dim.
+        Callers must invoke this before every embed call inside a
+        long-running drain loop.
+        """
+        from memman.embed import fingerprint as _fp_mod
+        from memman.exceptions import EmbedFingerprintError
+        current = _fp_mod.stored_fingerprint(self.backend)
+        if current != self._stored_fp:
+            raise EmbedFingerprintError(
+                f'store {self.store_name!r} fingerprint changed during'
+                f' drain: was {self._stored_fp.provider}:'
+                f'{self._stored_fp.model}:{self._stored_fp.dim},'
+                f' now {current.provider if current else None}:'
+                f'{current.model if current else None}:'
+                f'{current.dim if current else None};'
+                ' row released for retry.')
 
     def snapshot_caches(self) -> tuple[dict, dict]:
         """Return shallow copies of the caches for rollback."""
@@ -911,6 +948,8 @@ def _process_queue_row(
     so a transaction failure can't pollute the next row's planning.
     """
     from memman import trace as _trace
+
+    ctx.assert_fingerprint_unchanged()
 
     entity_list = _parse_entities(row.hint_entities or '')
     category = row.hint_cat or 'general'

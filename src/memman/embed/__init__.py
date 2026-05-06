@@ -29,6 +29,17 @@ class EmbeddingProvider(Protocol):
     model: str
     dim: int
 
+    def prepare(self) -> None:
+        """Eagerly populate `dim` so callers can read it directly.
+
+        For providers that know their dim at construction (Voyage),
+        this is a no-op. For probe-only providers (`openai_compat`,
+        `openrouter`, `ollama`), `prepare()` performs a one-token
+        embed and caches the resulting dim on the client. Idempotent
+        once dim is populated.
+        """
+        ...
+
     def available(self) -> bool:
         """Return True when the provider's API is reachable.
         """

@@ -37,6 +37,20 @@ class Client:
         self.dim = 0
         self._availability_cache: bool | None = None
 
+    def prepare(self) -> None:
+        """Probe the host with a 1-token embed and cache `dim`.
+
+        Idempotent. Failures are swallowed; the next embed() call
+        will surface the actual error.
+        """
+        if self.dim:
+            return
+        try:
+            vec = self.embed('test')
+            self.dim = len(vec)
+        except Exception:
+            return
+
     def available(self) -> bool:
         """Probe the host with a 1-token embed and cache the dim.
         """

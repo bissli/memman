@@ -25,3 +25,15 @@ class EmbedFingerprintError(Exception):
     env vars) without re-embedding existing data, or the DB has
     never been initialized. Caller must run `memman embed reembed`.
     """
+
+
+class EmbedCredentialError(Exception):
+    """Raised when an embedder client cannot run because credentials
+    or required configuration for the underlying provider are absent.
+
+    Distinct from `ConfigError`: this surfaces *at embed time* when a
+    store is fingerprinted to a provider whose creds are missing in
+    the current process. Lets the drain mark the row failed with a
+    clean operator-facing error rather than swallowing a generic
+    Exception.
+    """

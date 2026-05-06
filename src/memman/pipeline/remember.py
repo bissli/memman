@@ -27,6 +27,7 @@ from typing import Any
 
 from memman.embed import get_client
 from memman.embed.vector import cosine_similarity
+from memman.exceptions import EmbedCredentialError
 from memman.graph.causal import infer_llm_causal_edges
 from memman.graph.engine import fast_edges
 from memman.graph.enrichment import build_enriched_text, enrich_with_llm
@@ -267,6 +268,8 @@ def _batch_enriched_embeds(
     texts = [t for _p, t in pending]
     try:
         vectors = ec.embed_batch(texts)
+    except EmbedCredentialError:
+        raise
     except Exception as exc:
         logger.warning(f'enriched-text embed_batch failed: {exc}')
         return
@@ -313,6 +316,8 @@ def _plan_fact(
     fact_vec = None
     try:
         fact_vec = ec.embed(fact_text)
+    except EmbedCredentialError:
+        raise
     except Exception:
         pass
 
@@ -394,6 +399,8 @@ def _plan_fact(
     if merged_text:
         try:
             embed_vec = ec.embed(effective_text)
+        except EmbedCredentialError:
+            raise
         except Exception:
             pass
 

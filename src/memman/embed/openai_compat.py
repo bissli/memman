@@ -41,6 +41,22 @@ class Client:
         self._api_key = config.get(config.OPENAI_EMBED_API_KEY) or ''
         self._availability_cache: bool | None = None
 
+    def prepare(self) -> None:
+        """Probe the endpoint with a 1-token embed and cache `dim`.
+
+        Idempotent: if `dim` is already non-zero, returns immediately.
+        Failures are swallowed so a missing api_key or unreachable
+        endpoint leaves `dim=0` rather than raising; the next embed()
+        will surface the actual error.
+        """
+        if self.dim:
+            return
+        try:
+            vec = self.embed('test')
+            self.dim = len(vec)
+        except Exception:
+            return
+
     def _headers(self) -> dict[str, str]:
         """Build request headers with auth."""
         return {

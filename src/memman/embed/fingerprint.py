@@ -99,26 +99,28 @@ def write_fingerprint(backend: 'Backend', fp: Fingerprint) -> None:
     backend.meta.set(META_KEY, fp.to_json())
 
 
-def seed_if_fresh(backend: 'Backend') -> bool:
+def seed_if_fresh(
+        backend: 'Backend',
+        ec: 'EmbeddingProvider | None' = None) -> bool:
     """Seed `meta.embed_fingerprint` when the store is genuinely fresh.
 
-    Writes the active client's fingerprint when both: (a) no
-    fingerprint is stored, and (b) the `insights` table is empty.
-    Idempotent. Returns True if a seed was written.
+    Writes the embedder's fingerprint when both: (a) no fingerprint
+    is stored, and (b) the `insights` table is empty. Idempotent.
+    Returns True if a seed was written.
 
-    Establishes the invariant that any DB containing data also has a
-    fingerprint, so `assert_consistent` can rely on `stored is None`
-    meaning fresh, not corrupted. The insights count must be checked
-    BEFORE the embed client is constructed -- a DB with insights but
-    no fingerprint is corruption and must surface the existing hard
-    error from `assert_consistent`, not a misleading missing-key one.
+    `ec` is the embedder whose fingerprint will be written; defaults
+    to the env-resolved active client. Per-store callers (e.g.
+    `_StoreContext`) pass an explicit `ec` so the seed reflects the
+    binding that will be used for subsequent reads/writes against
+    this store.
     """
     if stored_fingerprint(backend) is not None:
         return False
     if backend.nodes.count_total() > 0:
         return False
-    from memman.embed import get_client
-    ec = get_client()
+    if ec is None:
+        from memman.embed import get_client
+        ec = get_client()
     if not ec.available():
         raise EmbedFingerprintError(ec.unavailable_message())
     target = Fingerprint.from_client(ec)
@@ -130,17 +132,23 @@ def seed_if_fresh(backend: 'Backend') -> bool:
     return True
 
 
-def assert_consistent(backend: 'Backend') -> None:
-    """Raise `EmbedFingerprintError` when the active client does not
-    match the stored fingerprint, or when no fingerprint is stored.
+def assert_consistent(
+        backend: 'Backend',
+        ec: 'EmbeddingProvider | None' = None) -> None:
+    """Raise `EmbedFingerprintError` when `ec` does not match the
+    stored fingerprint, or when no fingerprint is stored.
 
-    Callers that open a backend through the CLI (`_open_db`,
-    `_StoreContext`, `store_create`, `_init_default_store`) call
+    `ec` defaults to the env-resolved active client (preserving
+    existing behavior for callers that don't bind per-store).
+    Callers that open a backend through the CLI route through
     `seed_if_fresh` first so that a missing fingerprint here means
     real corruption (data without provenance), not an uninitialized
     store.
     """
-    active = active_fingerprint()
+    if ec is None:
+        active = active_fingerprint()
+    else:
+        active = Fingerprint.from_client(ec)
     stored = stored_fingerprint(backend)
     if stored is None:
         raise EmbedFingerprintError(

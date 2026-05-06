@@ -31,6 +31,10 @@ class Client:
         self._api_key = config.require(config.VOYAGE_API_KEY)
         self._availability_cache: bool | None = None
 
+    def prepare(self) -> None:
+        """No-op: Voyage's dim is fixed at construction."""
+        return
+
     def _headers(self) -> dict[str, str]:
         """Build request headers with auth."""
         return {
