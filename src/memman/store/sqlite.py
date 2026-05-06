@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from memman.embed.fingerprint import Fingerprint
 from memman.embed.vector import deserialize_vector, serialize_vector
 from memman.store import db as _db
 from memman.store import edge as _edge
@@ -525,6 +526,37 @@ class SqliteBackend(Backend):
         racing.
         """
         yield True
+
+    def swap_prepare(self, target_dim: int) -> None:
+        """No-op on SQLite; `embedding_pending` blob is in the baseline
+        schema (added via `_migrate` patch loop on existing DBs).
+        Dim is not enforced at the column level on SQLite.
+        """
+        return
+
+    def iter_for_swap(
+            self, cursor: str, batch: int) -> list[tuple[str, str]]:
+        """Return rows still needing `embedding_pending`."""
+        return _node.iter_for_swap(self._db, cursor, batch)
+
+    def write_swap_batch(
+            self, items: list[tuple[str, list[float]]]) -> None:
+        """Bulk-update `embedding_pending` for the given (id, vec) items."""
+        blobs = [(rid, serialize_vector(vec)) for (rid, vec) in items]
+        _node.write_swap_batch(self._db, blobs)
+
+    def swap_cutover(self, target: Fingerprint) -> None:
+        """Copy `embedding_pending` into `embedding`, set model, null shadow.
+        Runs in its own transaction; orchestrator records cutover state
+        before invoking and writes the fingerprint after.
+        """
+        with self.transaction():
+            _node.swap_cutover_sqlite(self._db, target.model)
+
+    def swap_abort(self) -> None:
+        """Null `embedding_pending` on every row."""
+        with self.transaction():
+            _node.swap_abort_sqlite(self._db)
 
     @contextmanager
     def drain_lock(

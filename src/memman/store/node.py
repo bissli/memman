@@ -615,6 +615,62 @@ limit 20
     return stats
 
 
+def iter_for_swap(
+        db: 'DB', cursor: str, batch: int) -> list[tuple[str, str]]:
+    """Return rows still needing embedding_pending under the swap.
+
+    Picks active rows where `embedding_pending is null`, ordered by id
+    after `cursor`. Self-healing predicate -- a crash mid-backfill
+    skips the cursor and the next call still finds whatever rows
+    haven't yet been filled.
+    """
+    sql = """
+select id, content
+from insights
+where deleted_at is null
+  and embedding_pending is null
+  and id > ?
+order by id
+limit ?
+"""
+    rows = db._query(sql, (cursor, batch)).fetchall()
+    return [(r[0], r[1]) for r in rows]
+
+
+def write_swap_batch(
+        db: 'DB', items: list[tuple[str, bytes]]) -> None:
+    """Bulk-update `embedding_pending` for each (id, blob) item.
+    """
+    sql = 'update insights set embedding_pending = ? where id = ?'
+    db._conn.executemany(sql, [(blob, rid) for (rid, blob) in items])
+
+
+def swap_cutover_sqlite(db: 'DB', model: str) -> None:
+    """Copy `embedding_pending` into `embedding`, set model, null shadow.
+
+    Runs as a single statement covering every row whose
+    `embedding_pending` is populated. Caller must hold a transaction.
+    """
+    now = format_timestamp(datetime.now(timezone.utc))
+    sql = """
+update insights
+set embedding = embedding_pending,
+    embedding_model = ?,
+    embedding_pending = null,
+    updated_at = ?
+where embedding_pending is not null
+"""
+    db._exec(sql, (model, now))
+
+
+def swap_abort_sqlite(db: 'DB') -> None:
+    """Null `embedding_pending` on every row. Discards in-flight backfill.
+    """
+    db._exec(
+        'update insights set embedding_pending = null'
+        ' where embedding_pending is not null')
+
+
 def update_embedding(db: 'DB', id: str, blob: bytes,
                      model: str) -> None:
     """Store an embedding vector and its model name for an insight.

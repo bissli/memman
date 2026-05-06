@@ -2579,3 +2579,147 @@ def embed_reembed(ctx: click.Context, dry_run: bool) -> None:
     else:
         out['total_reembedded'] = total_reembedded
     _json_out(out)
+
+
+@embed_grp.command('swap')
+@click.option(
+    '--to', 'to_model', default='',
+    help="Target embed model (e.g. 'voyage-3-large'). Resolved with"
+         " the active provider unless --provider is given.")
+@click.option(
+    '--provider', 'to_provider', default='',
+    help='Target embed provider (default: active provider from env).')
+@click.option(
+    '--resume', 'resume', is_flag=True, default=False,
+    help='Continue an in-flight swap from the recorded cursor.')
+@click.option(
+    '--abort', 'abort', is_flag=True, default=False,
+    help='Discard the in-flight swap. Drops embedding_pending and'
+         ' clears all swap meta. After cutover, this is one-way: the'
+         ' old embeddings are gone, so reverting requires running swap'
+         ' again with the old model (full re-embed cost).')
+@click.pass_context
+def embed_swap(
+        ctx: click.Context, to_model: str, to_provider: str,
+        resume: bool, abort: bool) -> None:
+    """Online per-store swap to a new embed model.
+
+    Postgres: shadow `embedding_pending vector(N)` column with HNSW
+    built CONCURRENTLY, backfilled `WHERE embedding_pending IS NULL`,
+    cut over in one transaction (drop + rename). SQLite: shadow
+    `embedding_pending BLOB` column populated under
+    `write_lock("embed_swap")`, cutover is `update insights set
+    embedding=embedding_pending, embedding_pending=null`. Recall
+    keeps reading `embedding` throughout.
+
+    Rollback note: cutover is one-way -- old embeddings are dropped.
+    Reverting requires running swap again with the old model (full
+    re-embed cost). Use `--abort` BEFORE cutover to discard the
+    in-flight backfill safely.
+
+    `MEMMAN_EMBED_SWAP_BATCH_SIZE` (default 200) tunes the HTTP
+    batch size; `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT` (default 0 =
+    unlimited) caps the Postgres HNSW build.
+    """
+    from memman.embed import registry as _ec_registry
+    from memman.embed.fingerprint import (
+        Fingerprint, stored_fingerprint, write_fingerprint)
+    from memman.embed.swap import (
+        SwapPlan, abort_swap as _abort_swap, read_progress, run_swap)
+    from memman.store.factory import open_cluster
+
+    if abort and resume:
+        raise click.ClickException(
+            '--abort and --resume are mutually exclusive')
+
+    data_dir = ctx.obj['data_dir']
+    name = _resolve_store_name(data_dir, ctx.obj['store'])
+    cluster = open_cluster()
+    backend = cluster.open(store=name, data_dir=data_dir)
+    try:
+        if abort:
+            _abort_swap(backend)
+            _json_out({'store': name, 'state': 'aborted'})
+            return
+
+        progress = read_progress(backend)
+        if resume:
+            if progress.state == '':
+                raise click.ClickException(
+                    f'no in-flight swap on store {name!r}')
+            target_provider = progress.target_provider
+            target_model = progress.target_model
+            target_dim = progress.target_dim
+        else:
+            if progress.state and progress.state not in ('', 'done'):
+                raise click.ClickException(
+                    f'store {name!r} has an in-flight swap'
+                    f' (state={progress.state}); use --resume or'
+                    ' --abort')
+            if not to_model:
+                raise click.ClickException(
+                    '--to <model> is required to start a new swap')
+            if not to_provider:
+                to_provider = (
+                    config.get(config.EMBED_PROVIDER) or 'voyage')
+            target_provider = to_provider
+            target_model = to_model
+            target_dim = 0
+
+        ec_new = _ec_registry.get_for(target_provider, target_model)
+        if not ec_new.available():
+            raise click.ClickException(ec_new.unavailable_message())
+        if target_dim == 0:
+            target_dim = int(getattr(ec_new, 'dim', 0))
+        if target_dim <= 0:
+            raise click.ClickException(
+                f'failed to discover dim for {target_provider}:'
+                f'{target_model}; provider should expose dim after'
+                ' prepare()')
+
+        plan = SwapPlan(
+            target_provider=target_provider,
+            target_model=target_model,
+            target_dim=target_dim)
+
+        backend_name = (
+            config.get(config.BACKEND) or 'sqlite').lower()
+        if backend_name == 'postgres':
+            with backend.swap_lock() as held:
+                if not held:
+                    raise click.ClickException(
+                        f'another swap is in progress on'
+                        f' store {name!r}')
+                _require_stopped('swap')
+                progress = run_swap(backend, ec_new, plan)
+        else:
+            _require_stopped('swap')
+            progress = run_swap(backend, ec_new, plan)
+
+        fp = stored_fingerprint(backend) or Fingerprint(
+            provider=plan.target_provider,
+            model=plan.target_model,
+            dim=plan.target_dim)
+        if fp.provider != plan.target_provider:
+            write_fingerprint(
+                backend,
+                Fingerprint(
+                    provider=plan.target_provider,
+                    model=plan.target_model,
+                    dim=plan.target_dim))
+            fp = Fingerprint(
+                provider=plan.target_provider,
+                model=plan.target_model,
+                dim=plan.target_dim)
+
+        _json_out({
+            'store': name,
+            'state': progress.state,
+            'fingerprint': {
+                'provider': fp.provider,
+                'model': fp.model,
+                'dim': fp.dim,
+                },
+            })
+    finally:
+        backend.close()

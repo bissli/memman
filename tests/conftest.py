@@ -501,25 +501,38 @@ def _mock_embed_batch(
 def _mock_embed(self: object, text: str) -> list[float]:
     """Deterministic embedding from content hash.
 
-    Produces a 512-dim unit vector seeded by content, so identical
-    text gives identical vectors. Different text gives different
-    vectors with low cosine similarity. Values are derived as
-    int32-mapped uniforms so the float32 cast (used by pgvector)
+    Reads target dimension from `self.dim` when available, falling
+    back to `EMBEDDING_DIM`. Produces a unit vector seeded by content,
+    so identical text gives identical vectors. Different text gives
+    different vectors with low cosine similarity. Values are derived
+    as int32-mapped uniforms so the float32 cast (used by pgvector)
     never produces NaN or Inf.
     """
+    dim = getattr(self, 'dim', 0) or EMBEDDING_DIM
     digest = hashlib.sha256(text.encode()).digest()
     ints = list(struct.unpack(
         f'<{len(digest) // 4}i', digest))
-    while len(ints) < EMBEDDING_DIM:
+    while len(ints) < dim:
         extra = hashlib.sha256(
             digest + len(ints).to_bytes(4, 'little')).digest()
         ints.extend(struct.unpack(f'<{len(extra) // 4}i', extra))
-    ints = ints[:EMBEDDING_DIM]
+    ints = ints[:dim]
     floats = [x / (1 << 31) for x in ints]
     norm = sum(x * x for x in floats) ** 0.5
     if norm > 0:
         floats = [x / norm for x in floats]
     return floats
+
+
+def _vec(*prefix: float, dim: int = EMBEDDING_DIM) -> list[float]:
+    """Build a fixed-dim vector for cross-backend embedding tests.
+
+    SQLite stores embeddings as BLOB and accepts any dimension;
+    Postgres uses `vector(dim)` and rejects shorter vectors. Padding
+    with zeros preserves cosine similarity for the math the call
+    sites assert on.
+    """
+    return list(prefix) + [0.0] * (dim - len(prefix))
 
 
 @pytest.fixture

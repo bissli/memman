@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from collections import deque
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -41,6 +42,8 @@ from memman.store.model import parse_timestamp
 
 if TYPE_CHECKING:
     import psycopg
+
+    from memman.embed.fingerprint import Fingerprint
 
 logger = logging.getLogger('memman')
 
@@ -1713,6 +1716,77 @@ class PostgresBackend(Backend):
                 pass
 
     @contextmanager
+    def swap_lock(self, name: str = '') -> Iterator[bool]:
+        """Acquire a per-store session-scoped advisory swap lock.
+
+        Mirrors `reembed_lock` but with the dedicated key
+        `embed_swap:<schema>` so swaps and reembeds do not contend
+        for the same lock. Held continuously across multi-step
+        orchestration (swap_prepare -> backfill -> cutover) since
+        a swap may span minutes-to-hours and crosses CLI invocations
+        on resume. Auto-releases on connection close, surviving
+        process crash.
+        """
+        key = _advisory_lock_key(self._schema, 'embed_swap')
+        conn = _open_connection(
+            self._dsn, autocommit=True, keepalives=True)
+        acquired = False
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    'select pg_try_advisory_lock(%s)', (key,))
+                row = cur.fetchone()
+                acquired = bool(row[0]) if row else False
+            yield acquired
+        finally:
+            try:
+                if acquired:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            'select pg_advisory_unlock(%s)', (key,))
+            except Exception:
+                pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def swap_prepare(self, target_dim: int) -> None:
+        """Add the pending vector column and its HNSW index."""
+        _check_pg_version(self._dsn)
+        _swap_prepare_pg(self._dsn, self._schema, int(target_dim))
+
+    def iter_for_swap(
+            self, cursor: str, batch: int) -> list[tuple[str, str]]:
+        sql = (
+            f'select id, content from {self._schema}.insights'
+            f' where deleted_at is null'
+            f'   and embedding_pending is null'
+            f'   and id > %s'
+            f' order by id limit %s')
+        with self._conn.cursor() as cur:
+            cur.execute(sql, (cursor, int(batch)))
+            return [(r[0], r[1]) for r in cur.fetchall()]
+
+    def write_swap_batch(
+            self, items: list[tuple[str, list[float]]]) -> None:
+        if not items:
+            return
+        sql = (
+            f'update {self._schema}.insights'
+            f' set embedding_pending = %s::vector'
+            f' where id = %s')
+        with self._conn.cursor() as cur:
+            cur.executemany(
+                sql, [(vec, rid) for (rid, vec) in items])
+
+    def swap_cutover(self, target: 'Fingerprint') -> None:
+        _swap_cutover_pg(self._dsn, self._schema)
+
+    def swap_abort(self) -> None:
+        _swap_abort_pg(self._dsn, self._schema)
+
+    @contextmanager
     def drain_lock(
             self, store: str | None = None) -> Iterator[bool]:
         """Acquire a per-store advisory drain lock on a dedicated conn.
@@ -1866,26 +1940,47 @@ def _assert_vector_dim_matches(
     active embedding fingerprint dim differs from the stored column
     width. This is the parallel of the schema-version skew refusal
     for embedding-dim skew.
+
+    Swap-aware: if `meta.embed_swap_state` is `backfilling` or
+    `cutover`, also accepts the dim of the in-flight
+    `embedding_pending` column. This lets a process open the store
+    mid-swap without crashing while the backfill completes.
     """
     schema = _store_schema(store)
-    sql = """
-select atttypmod from pg_attribute
+    dim_sql = """
+select attname, atttypmod from pg_attribute
 where attrelid = (%s || '.insights')::regclass
-  and attname = 'embedding'
+  and attname in ('embedding', 'embedding_pending')
   and not attisdropped
 """
+    state_sql = (
+        f"select value from {schema}.meta"
+        f" where key = 'embed_swap_state'")
     with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
-        cur.execute(sql, (schema,))
-        row = cur.fetchone()
-        if row is None or row[0] is None or int(row[0]) <= 0:
-            return
-        stored_dim = int(row[0])
-    if stored_dim != expected_dim:
-        raise BackendError(
-            f'store {store!r} has vector({stored_dim}) but the active'
-            f' embedding client produces dim={expected_dim}.'
-            f" Run 'memman embed reembed' against a fresh store, or"
-            f' switch back to a {stored_dim}-dim provider.')
+        cur.execute(dim_sql, (schema,))
+        rows = cur.fetchall()
+        try:
+            cur.execute(state_sql)
+            state_row = cur.fetchone()
+        except Exception:
+            state_row = None
+    dims = {r[0]: int(r[1]) for r in rows if r[1] is not None
+            and int(r[1]) > 0}
+    if not dims:
+        return
+    swap_state = (state_row[0] if state_row else '') or ''
+    swap_active = swap_state in ('backfilling', 'cutover')
+    accepted = {dims['embedding']} if 'embedding' in dims else set()
+    if swap_active and 'embedding_pending' in dims:
+        accepted.add(dims['embedding_pending'])
+    if expected_dim in accepted:
+        return
+    stored_dim = dims.get('embedding') or next(iter(dims.values()))
+    raise BackendError(
+        f'store {store!r} has vector({stored_dim}) but the active'
+        f' embedding client produces dim={expected_dim}.'
+        f" Run 'memman embed swap --to <model>' to migrate, or"
+        f' switch back to a {stored_dim}-dim provider.')
 
 
 def _apply_pending_migrations(dsn: str, store: str) -> None:
@@ -1931,6 +2026,159 @@ on conflict (key) do update set value = excluded.value
         except Exception:
             conn.rollback()
             raise
+
+
+def _check_pg_version(dsn: str) -> None:
+    """Refuse if the server is older than Postgres 12.
+
+    `embed swap` relies on `ADD COLUMN vector(N)` being metadata-only
+    (PG 11+) and on `CREATE INDEX CONCURRENTLY` semantics that PG 12
+    cleaned up. Operators on older versions are pointed at the offline
+    `memman embed reembed` fallback.
+    """
+    with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute('show server_version_num')
+        row = cur.fetchone()
+        if row is None:
+            return
+        version_num = int(row[0])
+    if version_num < 120000:
+        raise BackendError(
+            f'Postgres {version_num // 10000} is below the swap'
+            ' minimum (12). Use `memman embed reembed` for offline'
+            ' rebuild instead.')
+
+
+def _swap_index_timeout_s() -> int:
+    """Read `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT` (default 0 = unlimited).
+    """
+    raw = os.environ.get('MEMMAN_EMBED_SWAP_INDEX_TIMEOUT')
+    if not raw:
+        return 0
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
+def _swap_pending_index_name(schema: str) -> str:
+    """Per-schema name for the in-flight HNSW index on the pending
+    column. Renamed to the canonical `idx_insights_hnsw_<schema>`
+    during cutover.
+    """
+    return f'idx_insights_hnsw_pending_{schema}'
+
+
+def _swap_prepare_pg(
+        dsn: str, schema: str, target_dim: int,
+        retries: int = 3, retry_sleep_s: float = 1.0) -> None:
+    """Add `embedding_pending vector(N)` and build a new HNSW.
+
+    `ADD COLUMN ... IF NOT EXISTS` and `CREATE INDEX CONCURRENTLY ...
+    IF NOT EXISTS` make this idempotent on resume. The ADD COLUMN runs
+    under `lock_timeout='5s'` with retry to avoid wedging behind
+    long-running queries; the index build uses
+    `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT` (default 0 = unlimited).
+    """
+    _check_identifier(schema)
+    add_sql = (
+        f'alter table {schema}.insights add column if not exists'
+        f' embedding_pending vector({int(target_dim)})')
+    last_exc: Exception | None = None
+    for attempt in range(retries):
+        try:
+            with _connection(dsn, autocommit=True) as conn, \
+                    conn.cursor() as cur:
+                cur.execute("set lock_timeout = '5s'")
+                cur.execute(add_sql)
+            last_exc = None
+            break
+        except Exception as exc:
+            last_exc = exc
+            if attempt + 1 == retries:
+                break
+            time.sleep(retry_sleep_s)
+    if last_exc is not None:
+        raise BackendError(
+            f'failed to add embedding_pending column on'
+            f' {schema}: {last_exc}')
+
+    index_name = _swap_pending_index_name(schema)
+    timeout_s = _swap_index_timeout_s()
+    create_idx_sql = (
+        f'create index concurrently if not exists {index_name}'
+        f' on {schema}.insights using hnsw'
+        f' (embedding_pending vector_cosine_ops)'
+        f' where deleted_at is null')
+    with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(f"set statement_timeout = '{timeout_s}s'")
+        cur.execute(create_idx_sql)
+
+
+def _swap_cutover_pg(
+        dsn: str, schema: str) -> None:
+    """Atomic switch from `embedding` to `embedding_pending`.
+
+    Single transaction with `statement_timeout=0`:
+      1. Verify count(embedding_pending) >= count(embedding)
+         where deleted_at is null.
+      2. Drop old HNSW index.
+      3. Drop column embedding.
+      4. Rename embedding_pending -> embedding.
+      5. Rename pending HNSW index -> canonical name.
+
+    The orchestrator records cutover state and writes the fingerprint
+    around this call.
+    """
+    _check_identifier(schema)
+    canonical_idx = f'idx_insights_hnsw_{schema}'
+    pending_idx = _swap_pending_index_name(schema)
+    verify_sql = (
+        f'select count(*) filter (where embedding is not null),'
+        f' count(*) filter (where embedding_pending is not null)'
+        f' from {schema}.insights where deleted_at is null')
+    with _connection(dsn, autocommit=False) as conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("set local statement_timeout = '0'")
+                cur.execute(verify_sql)
+                row = cur.fetchone()
+                old_count = int(row[0]) if row else 0
+                new_count = int(row[1]) if row else 0
+                if new_count < old_count:
+                    raise BackendError(
+                        f'cutover refused: embedding_pending has'
+                        f' {new_count} rows but embedding has'
+                        f' {old_count}; backfill is incomplete')
+                cur.execute(
+                    f'drop index if exists'
+                    f' {schema}.{canonical_idx} cascade')
+                cur.execute(
+                    f'alter table {schema}.insights'
+                    f' drop column embedding')
+                cur.execute(
+                    f'alter table {schema}.insights'
+                    f' rename column embedding_pending to embedding')
+                cur.execute(
+                    f'alter index if exists {schema}.{pending_idx}'
+                    f' rename to {canonical_idx}')
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def _swap_abort_pg(dsn: str, schema: str) -> None:
+    """Drop the pending column and any pending HNSW remnant.
+    """
+    _check_identifier(schema)
+    pending_idx = _swap_pending_index_name(schema)
+    with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(
+            f'drop index if exists {schema}.{pending_idx}')
+        cur.execute(
+            f'alter table {schema}.insights'
+            f' drop column if exists embedding_pending')
 
 
 def _ensure_hnsw_index(dsn: str, schema: str) -> None:

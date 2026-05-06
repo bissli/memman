@@ -191,6 +191,7 @@ create table if not exists insights (
     semantic_facts text,
     last_accessed_at text,
     embedding   blob,
+    embedding_pending blob,
     effective_importance real default 0.5,
     linked_at   text,
     enriched_at text,
