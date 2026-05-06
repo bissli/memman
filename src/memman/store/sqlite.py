@@ -361,6 +361,13 @@ class SqliteMetaStore(MetaStore):
     def set(self, key: str, value: str) -> None:
         _db.set_meta(self._db, key, value)
 
+    def delete(self, key: str) -> None:
+        self._db._exec('delete from meta where key = ?', (key,))
+
+    def keys(self) -> list[str]:
+        rows = self._db._query('select key from meta').fetchall()
+        return [r[0] for r in rows]
+
 
 class SqliteOplog(Oplog):
     """Bindings from Oplog Protocol verbs to `store.oplog` functions."""

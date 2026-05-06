@@ -715,6 +715,24 @@ def check_embed_fingerprint(backend: Backend) -> dict[str, Any]:
         'detail': detail}
 
 
+def check_no_stale_swap_meta(backend: Backend) -> dict[str, Any]:
+    """Warn when `embed_swap_*` meta keys persist on a non-swapping store.
+
+    Cutover and abort delete the swap meta keys. Any leftover key
+    indicates a regression in the cleanup path and is reported as a
+    warning so the operator can investigate.
+    """
+    leftover = sorted(
+        k for k in backend.meta.keys() if k.startswith('embed_swap_'))
+    if not leftover:
+        return {
+            'name': 'no_stale_swap_meta', 'status': 'pass',
+            'detail': {'leftover_keys': []}}
+    return {
+        'name': 'no_stale_swap_meta', 'status': 'warn',
+        'detail': {'leftover_keys': leftover}}
+
+
 def check_provenance_drift(backend: Backend) -> dict[str, Any]:
     """Surface rows whose prompt_version or model_id no longer matches active.
 
@@ -805,6 +823,7 @@ def run_all_checks(
             check_dangling_edges(backend),
             check_embedding_consistency(backend),
             check_embed_fingerprint(backend),
+            check_no_stale_swap_meta(backend),
             check_provenance_drift(backend),
             check_edge_degree(backend),
             ])
@@ -812,6 +831,7 @@ def run_all_checks(
         checks.extend([
             check_schema_columns(backend),
             check_embed_fingerprint(backend),
+            check_no_stale_swap_meta(backend),
             ])
     if data_dir:
         checks.extend((

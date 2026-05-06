@@ -1376,6 +1376,17 @@ on conflict (key) do update set value = excluded.value
         with self._conn.cursor() as cur:
             cur.execute(sql, (key, value))
 
+    def delete(self, key: str) -> None:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                f'delete from {self._schema}.meta where key = %s',
+                (key,))
+
+    def keys(self) -> list[str]:
+        with self._conn.cursor() as cur:
+            cur.execute(f'select key from {self._schema}.meta')
+            return [r[0] for r in cur.fetchall()]
+
 
 class PostgresOplog(Oplog):
     """Oplog implementation: insert-only writes; trim in maintenance."""

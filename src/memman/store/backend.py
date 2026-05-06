@@ -389,6 +389,14 @@ class MetaStore(Protocol):
         """Write a meta value."""
         ...
 
+    def delete(self, key: str) -> None:
+        """Remove a meta key entirely. No-op when absent."""
+        ...
+
+    def keys(self) -> list[str]:
+        """Return all meta keys in arbitrary order."""
+        ...
+
 
 @runtime_checkable
 class Oplog(Protocol):

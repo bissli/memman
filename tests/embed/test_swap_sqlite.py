@@ -126,7 +126,12 @@ def test_swap_writes_fingerprint(swap_backend):
 
 
 def test_swap_clears_meta_after_done(swap_backend):
-    """All swap meta keys are cleared after a successful cutover."""
+    """All embed_swap_* meta keys are deleted after a successful cutover.
+
+    Absence of the keys is the canonical "no swap in flight" signal;
+    `read_progress` reports `state=''` and the doctor check
+    `check_no_stale_swap_meta` passes.
+    """
     _seed_insights(swap_backend, 2)
     ec = _StubEmbedder(dim=768)
     plan = SwapPlan(
@@ -136,13 +141,10 @@ def test_swap_clears_meta_after_done(swap_backend):
 
     run_swap(swap_backend, ec, plan)
 
-    for key in (
-            'embed_swap_cursor',
-            'embed_swap_target_provider',
-            'embed_swap_target_model',
-            'embed_swap_target_dim'):
-        assert (swap_backend.meta.get(key) or '') == ''
-    assert swap_backend.meta.get(META_STATE) == STATE_DONE
+    leftover = [
+        k for k in swap_backend.meta.keys()
+        if k.startswith('embed_swap_')]
+    assert leftover == []
 
 
 def test_swap_resume_skips_already_filled_rows(swap_backend):

@@ -134,7 +134,7 @@ def _backfill_step(
 
 
 def _commit_cutover(backend: Any, plan: SwapPlan) -> None:
-    """Mark cutover-in-progress, run backend swap_cutover, mark done.
+    """Mark cutover-in-progress, run backend swap_cutover, drop swap meta.
     """
     with backend.transaction():
         backend.meta.set(META_STATE, STATE_CUTOVER)
@@ -146,8 +146,7 @@ def _commit_cutover(backend: Any, plan: SwapPlan) -> None:
     with backend.transaction():
         write_fingerprint(backend, target)
         for key in _META_KEYS:
-            backend.meta.set(key, '')
-        backend.meta.set(META_STATE, STATE_DONE)
+            backend.meta.delete(key)
 
 
 def abort_swap(backend: Any) -> None:
@@ -156,7 +155,7 @@ def abort_swap(backend: Any) -> None:
     backend.swap_abort()
     with backend.transaction():
         for key in _META_KEYS:
-            backend.meta.set(key, '')
+            backend.meta.delete(key)
 
 
 def run_swap(
@@ -172,9 +171,20 @@ def run_swap(
     if batch_size is None:
         batch_size = batch_size_from_env()
     progress = read_progress(backend)
-    if progress.state == STATE_DONE:
-        return progress
     if progress.state == '':
+        from memman.embed.fingerprint import stored_fingerprint
+        stored = stored_fingerprint(backend)
+        target = Fingerprint(
+            provider=plan.target_provider,
+            model=plan.target_model,
+            dim=plan.target_dim)
+        if stored == target:
+            return SwapProgress(
+                state=STATE_DONE,
+                cursor='',
+                target_provider=plan.target_provider,
+                target_model=plan.target_model,
+                target_dim=plan.target_dim)
         _begin_swap(backend, plan)
     elif progress.state == STATE_BACKFILLING:
         if (progress.target_provider != plan.target_provider
@@ -206,4 +216,9 @@ def run_swap(
                 break
 
     _commit_cutover(backend, plan)
-    return read_progress(backend)
+    return SwapProgress(
+        state=STATE_DONE,
+        cursor='',
+        target_provider=plan.target_provider,
+        target_model=plan.target_model,
+        target_dim=plan.target_dim)
