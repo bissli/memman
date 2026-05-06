@@ -608,3 +608,63 @@ def test_detect_raises_when_no_scheduler(monkeypatch):
     monkeypatch.setattr(sch.shutil, 'which', lambda _: None)
     with pytest.raises(RuntimeError, match='no scheduler available'):
         sch.detect_scheduler()
+
+
+class TestSchedulerLogs:
+    """`memman log worker` and the install-time logs/ directory."""
+
+    def test_install_creates_logs_directory(self, tmp_path, monkeypatch):
+        """_install_claude_code creates ~/.memman/logs/ with mode 755."""
+        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        monkeypatch.setattr(
+            'memman.setup.claude.claude_register_hooks',
+            lambda cd, **kw: '/dev/null')
+        monkeypatch.setattr(
+            'memman.setup.claude._init_default_store', lambda dd: None)
+        from memman.setup.claude import _install_claude_code
+        env = {'name': 'claude-code', 'config_dir': str(tmp_path / 'claude')}
+        _install_claude_code(env, data_dir=str(tmp_path / 'data'))
+        logs_dir = tmp_path / '.memman' / 'logs'
+        assert logs_dir.is_dir()
+        assert (logs_dir.stat().st_mode & 0o777) == 0o755
+
+    def test_log_worker_reads_log_file(self, tmp_path, monkeypatch):
+        """`memman log worker` prints the tail of enrich.log."""
+        from click.testing import CliRunner
+        from memman.cli import cli
+        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        logs_dir = tmp_path / '.memman' / 'logs'
+        logs_dir.mkdir(parents=True)
+        (logs_dir / 'enrich.log').write_text(
+            'line1\nline2\nline3\nLOG-MARKER\n')
+        runner = CliRunner()
+        result = runner.invoke(cli, ['log', 'worker', '--lines', '2'])
+        assert result.exit_code == 0
+        assert 'LOG-MARKER' in result.output
+        assert 'line1' not in result.output
+
+    def test_log_worker_errors_flag(self, tmp_path, monkeypatch):
+        """`memman log worker --errors` reads enrich.err."""
+        from click.testing import CliRunner
+        from memman.cli import cli
+        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        logs_dir = tmp_path / '.memman' / 'logs'
+        logs_dir.mkdir(parents=True)
+        (logs_dir / 'enrich.err').write_text('ERR-MARKER\n')
+        (logs_dir / 'enrich.log').write_text('LOG-NOT-THIS\n')
+        runner = CliRunner()
+        result = runner.invoke(cli, ['log', 'worker', '--errors'])
+        assert result.exit_code == 0
+        assert 'ERR-MARKER' in result.output
+        assert 'LOG-NOT-THIS' not in result.output
+
+    def test_log_worker_missing_file(self, tmp_path, monkeypatch):
+        """Missing log file emits a friendly message, not an error."""
+        from click.testing import CliRunner
+        from memman.cli import cli
+        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(cli, ['log', 'worker'])
+        assert result.exit_code == 0
+        assert 'no log file yet' in result.output.lower() \
+            or 'no log file yet' in (result.stderr or '').lower()
