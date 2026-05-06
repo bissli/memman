@@ -39,6 +39,7 @@ from memman.search.keyword import keyword_search
 from memman.search.quality import check_content_quality
 from memman.store.backend import Backend
 from memman.store.model import MAX_INSIGHTS, Edge, Insight, format_timestamp
+from memman.store.model import insight_to_delta_dict
 
 logger = logging.getLogger('memman')
 
@@ -488,13 +489,18 @@ def _apply_plan(
     fi = plan.fact_insight
 
     if plan.action == 'delete' and plan.target_id:
+        before_target = backend.nodes.get_include_deleted(plan.target_id)
+        before_delta = (
+            insight_to_delta_dict(before_target)
+            if before_target is not None else None)
         deleted_now = backend.nodes.soft_delete(
             plan.target_id, tolerate_missing=True)
         if deleted_now:
             backend.oplog.log(
                 operation='reconcile-delete',
                 insight_id=plan.target_id,
-                detail=f'contradicted by: {plan.fact_text[:200]}')
+                detail=f'contradicted by: {plan.fact_text[:200]}',
+                before=before_delta)
         else:
             logger.warning(
                 f'reconcile-delete target {plan.target_id} already gone;'
@@ -507,15 +513,22 @@ def _apply_plan(
             }
 
     target_already_gone = False
+    update_before_delta: dict[str, Any] | None = None
     if plan.action in {'update', 'replace'} and plan.target_id:
         op_name = ('replace' if plan.action == 'replace'
                    else 'reconcile-update')
+        before_target = backend.nodes.get_include_deleted(plan.target_id)
+        update_before_delta = (
+            insight_to_delta_dict(before_target)
+            if before_target is not None else None)
         deleted_now = backend.nodes.soft_delete(
             plan.target_id, tolerate_missing=True)
         if deleted_now:
             backend.oplog.log(
                 operation=op_name, insight_id=plan.target_id,
-                detail=f'replaced by {fi.id}')
+                detail=f'replaced by {fi.id}',
+                before=update_before_delta,
+                after=insight_to_delta_dict(fi))
         else:
             target_already_gone = True
             logger.warning(
@@ -537,7 +550,8 @@ def _apply_plan(
         backend.nodes.update_entities(fi.id, fi.entities)
 
     backend.oplog.log(
-        operation='remember', insight_id=fi.id, detail=fi.content)
+        operation='remember', insight_id=fi.id, detail=fi.content,
+        after=insight_to_delta_dict(fi))
 
     edge_stats = fast_edges(backend, fi)
     edge_stats['entity'] = create_entity_edges(backend, fi)

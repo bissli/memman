@@ -370,8 +370,12 @@ class SqliteOplog(Oplog):
 
     def log(
             self, *, operation: str, insight_id: Id,
-            detail: str) -> None:
-        _oplog.log_op(self._db, operation, insight_id, detail)
+            detail: str,
+            before: dict[str, Any] | None = None,
+            after: dict[str, Any] | None = None) -> None:
+        _oplog.log_op(
+            self._db, operation, insight_id, detail,
+            before=before, after=after)
 
     def maintenance_step(self) -> None:
         _oplog.maintenance_step(self._db)
@@ -389,7 +393,9 @@ class SqliteOplog(Oplog):
             OpLogEntry(
                 id=r['id'], operation=r['operation'],
                 insight_id=r['insight_id'], detail=r['detail'],
-                created_at=parse_timestamp(r['created_at']))
+                created_at=parse_timestamp(r['created_at']),
+                before=r.get('before'),
+                after=r.get('after'))
             for r in rows
             ]
 
@@ -399,6 +405,19 @@ class SqliteOplog(Oplog):
             operation_counts=d.get('operation_counts', {}),
             never_accessed=d.get('never_accessed', 0),
             total_active=d.get('total_active', 0))
+
+    def delta_coverage(self) -> tuple[int, int]:
+        sql = """
+select count(*),
+       sum(case when before is not null
+                 or after is not null
+                then 1 else 0 end)
+from oplog
+"""
+        row = self._db._query(sql).fetchone()
+        if row is None:
+            return (0, 0)
+        return (int(row[0] or 0), int(row[1] or 0))
 
 
 @dataclass

@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from memman.store.model import MAX_INSIGHTS, Insight, base_weight
-from memman.store.model import format_timestamp, is_immune, parse_timestamp
+from memman.store.model import format_timestamp, insight_to_delta_dict
+from memman.store.model import is_immune, parse_timestamp
 
 if TYPE_CHECKING:
     from memman.store.db import DB
@@ -460,12 +461,18 @@ update insights
 set deleted_at = ?, updated_at = ?
 where id = ? and deleted_at is null
 """
+    from memman.store.edge import delete_edges_by_node
+    from memman.store.oplog import log_op
     for (cid,) in rows:
+        before_ins = get_insight_by_id_include_deleted(db, cid)
         cursor = db._exec(update_sql, (now, now, cid))
         if cursor.rowcount > 0:
-            from memman.store.edge import delete_edges_by_node
             delete_edges_by_node(db, cid)
             pruned += 1
+            if before_ins is not None:
+                log_op(
+                    db, 'auto_prune', cid, '',
+                    before=insight_to_delta_dict(before_ins))
     return pruned
 
 

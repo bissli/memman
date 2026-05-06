@@ -113,13 +113,38 @@ class ScoredId:
 
 @dataclass
 class OpLogEntry:
-    """One row from the oplog table."""
+    """One row from the oplog table.
+
+    `before` and `after` capture the insight content before and
+    after the logged operation. Populated by reconcile, replace,
+    forget, and auto_prune so forensic questions can be answered
+    from the oplog alone. Pre-Slice-D rows have both as None.
+    """
 
     id: int
     operation: str
     insight_id: str
     detail: str
     created_at: datetime
+    before: dict[str, Any] | None = None
+    after: dict[str, Any] | None = None
+
+
+def insight_to_delta_dict(ins: 'Insight') -> dict[str, Any]:
+    """Return the content fields of an insight for oplog deltas.
+
+    Excludes embedding (it is not on the dataclass anyway), the
+    surrogate `id`, and timestamps -- the surrounding oplog row
+    already carries `insight_id` and `created_at`.
+    """
+    return {
+        'content': ins.content,
+        'category': ins.category,
+        'importance': ins.importance,
+        'entities': list(ins.entities or []),
+        'source': ins.source,
+        'summary': ins.summary,
+        }
 
 
 @dataclass

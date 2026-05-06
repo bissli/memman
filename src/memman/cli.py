@@ -1124,6 +1124,23 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
         _json_out(out)
 
 
+def _forget_insight(backend, id: str) -> None:
+    """Soft-delete `id` and write a forget oplog row carrying `before`.
+    """
+    from memman.store.model import insight_to_delta_dict
+    with backend.transaction():
+        before_ins = backend.nodes.get_include_deleted(id)
+        before_delta = (
+            insight_to_delta_dict(before_ins)
+            if before_ins is not None else None)
+        deleted = backend.nodes.soft_delete(id, tolerate_missing=True)
+        if not deleted:
+            raise click.ClickException(f'insight {id!r} not found')
+        backend.oplog.log(
+            operation='forget', insight_id=id, detail='',
+            before=before_delta)
+
+
 @cli.command()
 @click.argument('id')
 @click.pass_context
@@ -1132,13 +1149,7 @@ def forget(ctx: click.Context, id: str) -> None:
     _require_started('write')
 
     with _active_backend(ctx) as backend:
-        with backend.transaction():
-            deleted = backend.nodes.soft_delete(id, tolerate_missing=True)
-            if not deleted:
-                raise click.ClickException(
-                    f'insight {id!r} not found')
-            backend.oplog.log(
-                operation='forget', insight_id=id, detail='')
+        _forget_insight(backend, id)
         _json_out({
             'id': id,
             'status': 'deleted',

@@ -168,9 +168,10 @@ def test_pg_migration_bumps_version_on_pre_v2_store(pg_dsn):
                     f"SELECT value FROM {schema}.meta"
                     "  WHERE key = 'pg_schema_version'")
                 stored_version = int(cur.fetchone()[0])
-                assert stored_version == 2, (
-                    f'pg_schema_version did not bump to 2; got '
-                    f'{stored_version}')
+                from memman.store.postgres import _PG_SCHEMA_VERSION
+                assert stored_version == _PG_SCHEMA_VERSION, (
+                    f'pg_schema_version did not bump to'
+                    f' {_PG_SCHEMA_VERSION}; got {stored_version}')
     finally:
         try:
             backend.close()

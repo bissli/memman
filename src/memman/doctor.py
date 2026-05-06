@@ -57,6 +57,43 @@ def check_enrichment_coverage(backend: Backend) -> dict[str, Any]:
         }
 
 
+def check_oplog_delta_coverage(backend: Backend) -> dict[str, Any]:
+    """Check the share of oplog rows that carry before/after deltas.
+
+    Pre-Slice-D oplog rows have null `before` / `after`. Post-slice
+    coverage approaches 100% on stores that see frequent write
+    traffic; new stores with no writes report 100% (vacuously
+    covered).
+    """
+    total, with_delta = backend.oplog.delta_coverage()
+    if total == 0:
+        return {
+            'name': 'oplog_delta_coverage',
+            'status': 'pass',
+            'detail': {
+                'total_oplog_rows': 0,
+                'rows_with_delta': 0,
+                'coverage_pct': 100.0,
+                },
+            }
+    coverage_pct = round(with_delta / total * 100, 1)
+    if coverage_pct >= 90:
+        status = 'pass'
+    elif coverage_pct >= 50:
+        status = 'warn'
+    else:
+        status = 'warn'
+    return {
+        'name': 'oplog_delta_coverage',
+        'status': status,
+        'detail': {
+            'total_oplog_rows': total,
+            'rows_with_delta': with_delta,
+            'coverage_pct': coverage_pct,
+            },
+        }
+
+
 def check_orphan_insights(backend: Backend) -> dict[str, Any]:
     """Find active insights with zero edges."""
     orphan_count, total = backend.nodes.count_orphans()
@@ -764,6 +801,7 @@ def run_all_checks(
             check_integrity(backend),
             check_schema_columns(backend),
             check_enrichment_coverage(backend),
+            check_oplog_delta_coverage(backend),
             check_orphan_insights(backend),
             check_dangling_edges(backend),
             check_embedding_consistency(backend),

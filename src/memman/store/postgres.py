@@ -20,6 +20,7 @@ Recall issues one round-trip per anchor subset.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -43,18 +44,22 @@ from memman.store.model import parse_timestamp
 
 if TYPE_CHECKING:
     import psycopg
-
     from memman.embed.fingerprint import Fingerprint
 
 logger = logging.getLogger('memman')
 
 EMBEDDING_DIM = 512
 
-_PG_SCHEMA_VERSION = 2
+_PG_SCHEMA_VERSION = 3
 _PG_MIGRATIONS: list[tuple[int, str]] = [
     (2,
      ('alter table queue.worker_runs'
       ' add column if not exists last_heartbeat_at timestamptz')),
+    (3,
+     ('alter table {schema}.oplog'
+      ' add column if not exists before jsonb;'
+      ' alter table {schema}.oplog'
+      ' add column if not exists after jsonb')),
     ]
 
 _FORBIDDEN_MIGRATION_RE = re.compile(
@@ -123,7 +128,9 @@ create table if not exists {schema}.oplog (
     operation   text not null,
     insight_id  text,
     detail      text default '',
-    created_at  timestamptz not null default now()
+    created_at  timestamptz not null default now(),
+    before      jsonb,
+    after       jsonb
 );
 
 create table if not exists {schema}.meta (
@@ -722,6 +729,7 @@ limit %s
                 except ValueError:
                     pass
 
+            from memman.store.model import insight_to_delta_dict
             update_sql = self._q("""
 update {s}.insights
 set deleted_at = now(), updated_at = now()
@@ -731,15 +739,28 @@ where id = %s and deleted_at is null
 delete from {s}.edges
 where source_id = %s or target_id = %s
 """)
+            oplog_sql = self._q("""
+insert into {s}.oplog
+       (operation, insight_id, detail, before)
+values ('auto_prune', %s, '', %s::jsonb)
+""")
             with self._conn.cursor() as cur:
                 cur.execute(select_sql, (excludes, excess))
                 target_rows = cur.fetchall()
                 pruned = 0
                 for (cid,) in target_rows:
+                    before_ins = self.get_include_deleted(cid)
                     cur.execute(update_sql, (cid,))
                     if cur.rowcount > 0:
                         cur.execute(delete_edges_sql, (cid, cid))
                         pruned += 1
+                        if before_ins is not None:
+                            cur.execute(
+                                oplog_sql,
+                                (cid,
+                                 json.dumps(
+                                     insight_to_delta_dict(
+                                         before_ins))))
             return pruned
 
     def boost_retention(self, id: Id) -> None:
@@ -1390,14 +1411,22 @@ class PostgresOplog(Oplog):
 
     def log(
             self, *, operation: str, insight_id: Id,
-            detail: str) -> None:
+            detail: str,
+            before: dict[str, Any] | None = None,
+            after: dict[str, Any] | None = None) -> None:
+        before_s = json.dumps(before) if before is not None else None
+        after_s = json.dumps(after) if after is not None else None
         sql = f"""
-insert into {self._schema}.oplog (operation, insight_id, detail)
-values (%s, %s, %s)
+insert into {self._schema}.oplog
+       (operation, insight_id, detail, before, after)
+values (%s, %s, %s, %s::jsonb, %s::jsonb)
 """
         try:
             with self._conn.cursor() as cur:
-                cur.execute(sql, (operation, insight_id, detail))
+                cur.execute(
+                    sql,
+                    (operation, insight_id, detail,
+                     before_s, after_s))
         except Exception as exc:
             logger.warning(f'oplog insert failed: {exc}')
 
@@ -1433,7 +1462,8 @@ where created_at < now() - (%s * interval '1 day')
         if since:
             since_dt = parse_timestamp(since)
             sql = f"""
-select id, operation, insight_id, detail, created_at
+select id, operation, insight_id, detail, created_at,
+       before, after
 from {self._schema}.oplog
 where created_at >= %s
 order by id desc
@@ -1444,7 +1474,8 @@ limit %s
                 rows = cur.fetchall()
         else:
             sql = f"""
-select id, operation, insight_id, detail, created_at
+select id, operation, insight_id, detail, created_at,
+       before, after
 from {self._schema}.oplog
 order by id desc
 limit %s
@@ -1457,7 +1488,8 @@ limit %s
                 id=int(r[0]), operation=r[1],
                 insight_id=r[2] or '', detail=r[3] or '',
                 created_at=_datetime_or_none(r[4])
-                or datetime.now(timezone.utc))
+                or datetime.now(timezone.utc),
+                before=r[5], after=r[6])
             for r in rows
             ]
 
@@ -1499,6 +1531,20 @@ where deleted_at is null
         return OpLogStats(
             operation_counts=op_counts, never_accessed=never,
             total_active=total)
+
+    def delta_coverage(self) -> tuple[int, int]:
+        sql = f"""
+select count(*),
+       count(*) filter (where before is not null
+                          or after is not null)
+from {self._schema}.oplog
+"""
+        with self._conn.cursor() as cur:
+            cur.execute(sql)
+            row = cur.fetchone()
+        if row is None:
+            return (0, 0)
+        return (int(row[0] or 0), int(row[1] or 0))
 
 
 class PostgresRecallSession(RecallSession):
@@ -1768,7 +1814,7 @@ class PostgresBackend(Backend):
             cur.executemany(
                 sql, [(vec, rid) for (rid, vec) in items])
 
-    def swap_cutover(self, target: 'Fingerprint') -> None:
+    def swap_cutover(self, target: Fingerprint) -> None:
         _swap_cutover_pg(self._dsn, self._schema)
 
     def swap_abort(self) -> None:
@@ -1957,7 +2003,7 @@ where attrelid = (%s || '.insights')::regclass
     if not dims:
         return
     swap_state = (state_row[0] if state_row else '') or ''
-    swap_active = swap_state in ('backfilling', 'cutover')
+    swap_active = swap_state in {'backfilling', 'cutover'}
     accepted = {dims['embedding']} if 'embedding' in dims else set()
     if swap_active and 'embedding_pending' in dims:
         accepted.add(dims['embedding_pending'])

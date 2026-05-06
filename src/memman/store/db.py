@@ -236,7 +236,9 @@ create table if not exists oplog (
     operation   text not null,
     insight_id  text,
     detail      text default '',
-    created_at  text not null
+    created_at  text not null,
+    before      text,
+    after       text
 );
 create index if not exists idx_oplog_created on oplog(created_at);
 

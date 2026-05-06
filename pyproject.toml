@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "memman"
-version = "0.12.2"
+version = "0.12.3"
 description = "Persistent memory for LLM agents"
 authors = ["bissli"]
 license = "MIT"

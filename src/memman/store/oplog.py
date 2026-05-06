@@ -1,5 +1,6 @@
 """Operation logging with auto-trim."""
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
@@ -16,20 +17,29 @@ OPLOG_RETENTION_DAYS = 180
 
 
 def log_op(db: 'DB', operation: str, insight_id: str,
-           detail: str) -> None:
+           detail: str,
+           before: dict[str, Any] | None = None,
+           after: dict[str, Any] | None = None) -> None:
     """Record an operation to the oplog (insert-only).
 
     Bounded growth is enforced by `maintenance_step` once per drain,
     not on every write. This keeps the hot path insert-only so
     Postgres `oplog.log` can be a single statement with no delete.
+    `before` / `after` carry pre/post insight content for reconcile,
+    replace, forget, and auto_prune.
     """
     now = format_timestamp(datetime.now(timezone.utc))
+    before_s = json.dumps(before) if before is not None else None
+    after_s = json.dumps(after) if after is not None else None
     sql = """
-insert into oplog (operation, insight_id, detail, created_at)
-values (?, ?, ?, ?)
+insert into oplog (operation, insight_id, detail, created_at,
+                   before, after)
+values (?, ?, ?, ?, ?, ?)
 """
     try:
-        db._exec(sql, (operation, insight_id, detail, now))
+        db._exec(
+            sql, (operation, insight_id, detail, now,
+                  before_s, after_s))
     except Exception as e:
         logger.warning('oplog insert failed: %s', e)
 
@@ -80,7 +90,7 @@ def get_oplog(db: 'DB', limit: int = 20,
         limit = 20
     if since:
         sql = """
-select id, operation, insight_id, detail, created_at
+select id, operation, insight_id, detail, created_at, before, after
 from oplog
 where created_at >= ?
 order by id desc
@@ -89,7 +99,7 @@ limit ?
         rows = db._query(sql, (since, limit)).fetchall()
     else:
         sql = """
-select id, operation, insight_id, detail, created_at
+select id, operation, insight_id, detail, created_at, before, after
 from oplog
 order by id desc
 limit ?
@@ -101,6 +111,8 @@ limit ?
             'insight_id': row[2] or '',
             'detail': row[3] or '',
             'created_at': row[4],
+            'before': json.loads(row[5]) if row[5] else None,
+            'after': json.loads(row[6]) if row[6] else None,
             } for row in rows]
     return entries
 

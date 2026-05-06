@@ -395,11 +395,16 @@ class MetaStore(Protocol):
 class Oplog(Protocol):
     """Operation log."""
 
-    def log(self, *, operation: str, insight_id: Id, detail: str) -> None:
+    def log(
+            self, *, operation: str, insight_id: Id, detail: str,
+            before: dict[str, Any] | None = None,
+            after: dict[str, Any] | None = None) -> None:
         """Record one operation. Backend stamps `created_at` now.
 
         Insert-only on both backends; trimming is performed by
-        `maintenance_step`.
+        `maintenance_step`. `before` / `after` carry pre/post
+        insight content for reconcile / replace / forget /
+        auto_prune so the oplog alone is forensic-complete.
         """
         ...
 
@@ -415,6 +420,10 @@ class Oplog(Protocol):
             self, *, limit: int = 20,
             since: str = '') -> list[OpLogEntry]:
         """Return the most-recent N oplog entries."""
+        ...
+
+    def delta_coverage(self) -> tuple[int, int]:
+        """Return (total_rows, rows_with_before_or_after)."""
         ...
 
     def stats(self, *, since: str = '') -> OpLogStats:
