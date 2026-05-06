@@ -697,109 +697,133 @@ class TestHardening:
 
 
 class TestDrainHeartbeat:
-    """check_drain_heartbeat: postgres drain-heartbeat consumer."""
+    """check_drain_heartbeat: per-store drain-heartbeat consumer."""
 
     pytestmark = pytest.mark.postgres
 
-    def test_skips_on_sqlite(self):
-        """SQLite mode: drain_heartbeat returns pass with skipped_reason."""
-        result = check_drain_heartbeat()
+    def test_skips_when_no_postgres_stores(self, tmp_path):
+        """No postgres-backed stores -> pass with skipped_reason."""
+        result = check_drain_heartbeat(str(tmp_path))
         assert result['name'] == 'drain_heartbeat'
         assert result['status'] == 'pass'
         assert 'skipped_reason' in result['detail']
 
     def test_passes_when_no_in_progress_runs(self, env_file, pg_dsn):
-        """Postgres mode with no in-progress runs: status pass."""
-        env_file('MEMMAN_DEFAULT_BACKEND', 'postgres')
-        env_file('MEMMAN_DEFAULT_PG_DSN', pg_dsn)
-        from memman.store.postgres import drop_postgres_store
+        """Postgres-backed store with no in-progress runs: status pass."""
+        import os
+        from memman.store.postgres import _store_schema, drop_postgres_store
         from memman.store.postgres import open_postgres_backend
+
+        store = 'hb_doctor_setup'
+        env_file(f'MEMMAN_BACKEND_{store}', 'postgres')
+        env_file(f'MEMMAN_PG_DSN_{store}', pg_dsn)
         try:
-            drop_postgres_store('hb_doctor_setup', pg_dsn)
+            drop_postgres_store(store, pg_dsn)
         except Exception:
             pass
-        backend = open_postgres_backend('hb_doctor_setup', pg_dsn)
+        backend = open_postgres_backend(store, pg_dsn)
+        backend.close()
+
         try:
-            backend.close()
+            data_dir = os.environ['MEMMAN_DATA_DIR']
+            schema = _store_schema(store)
+            with psycopg.connect(pg_dsn, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f'update {schema}.worker_runs set ended_at = now()'
+                        f' where ended_at is null')
+
+            result = check_drain_heartbeat(data_dir)
+            assert result['status'] == 'pass'
+            assert result['detail']['in_progress'] == 0
+            assert result['detail']['stale_runs'] == []
+            assert store in result['detail']['stores_checked']
         finally:
             try:
-                drop_postgres_store('hb_doctor_setup', pg_dsn)
+                drop_postgres_store(store, pg_dsn)
             except Exception:
                 pass
 
-        with psycopg.connect(pg_dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    'UPDATE queue.worker_runs SET ended_at = now()'
-                    ' WHERE ended_at IS NULL')
-
-        result = check_drain_heartbeat()
-        assert result['status'] == 'pass'
-        assert result['detail']['in_progress'] == 0
-        assert result['detail']['stale_runs'] == []
-
     def test_warns_no_drain_heartbeat_in_5m(self, env_file, pg_dsn):
-        """Postgres mode: in-progress run with stale heartbeat -> warn."""
-        env_file('MEMMAN_DEFAULT_BACKEND', 'postgres')
-        env_file('MEMMAN_DEFAULT_PG_DSN', pg_dsn)
+        """In-progress per-store run with stale heartbeat -> warn."""
+        import os
+        from memman.store.postgres import _store_schema, drop_postgres_store
+        from memman.store.postgres import open_postgres_backend
 
-        stale = datetime.now(timezone.utc) - timedelta(minutes=10)
-        with psycopg.connect(pg_dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    'UPDATE queue.worker_runs SET ended_at = now()'
-                    ' WHERE ended_at IS NULL')
-                cur.execute(
-                    'INSERT INTO queue.worker_runs'
-                    ' (started_at, ended_at, last_heartbeat_at)'
-                    ' VALUES (%s, NULL, %s) RETURNING id',
-                    (stale, stale))
-                stale_id = cur.fetchone()[0]
+        store = 'hb_doctor_stale'
+        env_file(f'MEMMAN_BACKEND_{store}', 'postgres')
+        env_file(f'MEMMAN_PG_DSN_{store}', pg_dsn)
         try:
-            result = check_drain_heartbeat()
+            drop_postgres_store(store, pg_dsn)
+        except Exception:
+            pass
+        backend = open_postgres_backend(store, pg_dsn)
+        backend.close()
+
+        try:
+            data_dir = os.environ['MEMMAN_DATA_DIR']
+            schema = _store_schema(store)
+            stale = datetime.now(timezone.utc) - timedelta(minutes=10)
+            with psycopg.connect(pg_dsn, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f'insert into {schema}.worker_runs'
+                        f' (started_at, ended_at, last_heartbeat_at)'
+                        f' values (%s, null, %s) returning id',
+                        (stale, stale))
+                    stale_id = cur.fetchone()[0]
+
+            result = check_drain_heartbeat(data_dir)
             assert result['status'] == 'warn'
             stale_runs = result['detail']['stale_runs']
             assert any(s['run_id'] == stale_id for s in stale_runs)
             match = next(
                 s for s in stale_runs if s['run_id'] == stale_id)
             assert match['age_seconds'] >= 5 * 60
+            assert match['store'] == store
         finally:
+            try:
+                drop_postgres_store(store, pg_dsn)
+            except Exception:
+                pass
+
+    def test_no_warn_for_fresh_heartbeat(self, env_file, pg_dsn):
+        """Per-store in-progress run with recent heartbeat does NOT warn."""
+        import os
+        from memman.store.postgres import _store_schema, drop_postgres_store
+        from memman.store.postgres import open_postgres_backend
+
+        store = 'hb_doctor_fresh'
+        env_file(f'MEMMAN_BACKEND_{store}', 'postgres')
+        env_file(f'MEMMAN_PG_DSN_{store}', pg_dsn)
+        try:
+            drop_postgres_store(store, pg_dsn)
+        except Exception:
+            pass
+        backend = open_postgres_backend(store, pg_dsn)
+        backend.close()
+
+        try:
+            data_dir = os.environ['MEMMAN_DATA_DIR']
+            schema = _store_schema(store)
+            fresh = datetime.now(timezone.utc) - timedelta(seconds=30)
             with psycopg.connect(pg_dsn, autocommit=True) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        'UPDATE queue.worker_runs SET ended_at = now()'
-                        ' WHERE id = %s',
-                        (stale_id,))
+                        f'insert into {schema}.worker_runs'
+                        f' (started_at, ended_at, last_heartbeat_at)'
+                        f' values (%s, null, %s) returning id',
+                        (fresh, fresh))
 
-    def test_no_warn_for_fresh_heartbeat(self, env_file, pg_dsn):
-        """In-progress run with recent heartbeat does NOT warn."""
-        env_file('MEMMAN_DEFAULT_BACKEND', 'postgres')
-        env_file('MEMMAN_DEFAULT_PG_DSN', pg_dsn)
-
-        fresh = datetime.now(timezone.utc) - timedelta(seconds=30)
-        with psycopg.connect(pg_dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    'UPDATE queue.worker_runs SET ended_at = now()'
-                    ' WHERE ended_at IS NULL')
-                cur.execute(
-                    'INSERT INTO queue.worker_runs'
-                    ' (started_at, ended_at, last_heartbeat_at)'
-                    ' VALUES (%s, NULL, %s) RETURNING id',
-                    (fresh, fresh))
-                fresh_id = cur.fetchone()[0]
-        try:
-            result = check_drain_heartbeat()
+            result = check_drain_heartbeat(data_dir)
             assert result['status'] == 'pass'
             assert result['detail']['stale_runs'] == []
             assert result['detail']['in_progress'] >= 1
         finally:
-            with psycopg.connect(pg_dsn, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        'UPDATE queue.worker_runs SET ended_at = now()'
-                        ' WHERE id = %s',
-                        (fresh_id,))
+            try:
+                drop_postgres_store(store, pg_dsn)
+            except Exception:
+                pass
 
 
 class TestDoctorBackendDispatch:

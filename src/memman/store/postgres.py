@@ -31,9 +31,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Self
 
-from memman.store.backend import Backend, EdgeStore, MetaStore
-from memman.store.backend import NodeStore, Oplog, RecallSession
-from memman.store.backend import _check_identifier
+from memman.store.backend import Backend, EdgeStore, MetaStore, NodeStore
+from memman.store.backend import Oplog, RecallSession, _check_identifier
 from memman.store.base import BaseNodeStore
 from memman.store.errors import BackendError, ConfigError
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
@@ -127,6 +126,15 @@ create table if not exists {schema}.meta (
     value text not null
 );
 
+create table if not exists {schema}.worker_runs (
+    id            bigserial primary key,
+    started_at    timestamptz not null default now(),
+    ended_at      timestamptz,
+    rows_processed integer not null default 0,
+    error         text not null default '',
+    last_heartbeat_at timestamptz
+);
+
 create index if not exists idx_insights_category_{schema}
     on {schema}.insights(category);
 create index if not exists idx_insights_importance_{schema}
@@ -176,15 +184,6 @@ create index if not exists idx_queue_status_id
     on queue.queue(status, id);
 create index if not exists idx_queue_store
     on queue.queue(store);
-
-create table if not exists queue.worker_runs (
-    id            bigserial primary key,
-    started_at    timestamptz not null default now(),
-    ended_at      timestamptz,
-    rows_processed integer not null default 0,
-    error         text not null default '',
-    last_heartbeat_at timestamptz
-);
 """
 
 
@@ -1938,6 +1937,51 @@ where table_schema = %s and table_name = %s
             cur.execute(sql, (self._schema, table))
             return {row[0] for row in cur.fetchall()}
 
+    def start_run(self) -> int | None:
+        """Insert a per-store `worker_runs` row, return its id."""
+        sql = (
+            f'insert into {self._schema}.worker_runs'
+            f' (last_heartbeat_at) values (now()) returning id')
+        with self._conn.cursor() as cur:
+            cur.execute(sql)
+            row = cur.fetchone()
+            self._conn.commit()
+        return int(row[0]) if row else None
+
+    def beat_run(self, run_id: int | None) -> None:
+        """Advance `last_heartbeat_at = now()` on the per-store run row.
+        """
+        if run_id is None:
+            return
+        sql = (
+            f'update {self._schema}.worker_runs'
+            f' set last_heartbeat_at = now() where id = %s')
+        with self._conn.cursor() as cur:
+            cur.execute(sql, (run_id,))
+            self._conn.commit()
+
+    def recent_runs(self, *, limit: int) -> list[WorkerRun]:
+        """Return the per-store recent `worker_runs` rows (newest first)."""
+        sql = (
+            f'select id, started_at, ended_at, rows_processed, error,'
+            f' last_heartbeat_at'
+            f' from {self._schema}.worker_runs'
+            f' order by id desc limit %s')
+        with self._conn.cursor() as cur:
+            cur.execute(sql, (limit,))
+            rows = cur.fetchall()
+        return [
+            WorkerRun(
+                id=int(r[0]),
+                started_at=_datetime_or_none(r[1])
+                or datetime.now(timezone.utc),
+                ended_at=_datetime_or_none(r[2]),
+                rows_processed=int(r[3] or 0),
+                error=r[4] or '',
+                last_heartbeat_at=_datetime_or_none(r[5]))
+            for r in rows
+            ]
+
     def close(self) -> None:
         if self._owns_conn and self._conn is not None:
             import psycopg as _psycopg
@@ -2416,51 +2460,6 @@ where id = any(%s)
                 'select store, count(*) from queue.queue group by store')
             by_store = {r[0]: int(r[1]) for r in cur.fetchall()}
         return QueueStats(total=total, by_store=by_store)
-
-    def recent_runs(self, *, limit: int) -> list[WorkerRun]:
-        sql = """
-select id, started_at, ended_at, rows_processed, error,
-       last_heartbeat_at
-from queue.worker_runs
-order by id desc
-limit %s
-"""
-        with self._conn() as conn, conn.cursor() as cur:
-            cur.execute(sql, (limit,))
-            rows = cur.fetchall()
-        return [
-            WorkerRun(
-                id=int(r[0]),
-                started_at=_datetime_or_none(r[1])
-                or datetime.now(timezone.utc),
-                ended_at=_datetime_or_none(r[2]),
-                rows_processed=int(r[3]),
-                error=r[4] or '',
-                last_heartbeat_at=_datetime_or_none(r[5]))
-            for r in rows
-            ]
-
-    def start_run(self) -> int:
-        sql = """
-insert into queue.worker_runs (last_heartbeat_at)
-values (now())
-returning id
-"""
-        with self._conn() as conn, conn.cursor() as cur:
-            cur.execute(sql)
-            row = cur.fetchone()
-            conn.commit()
-        return int(row[0]) if row else 0
-
-    def beat_run(self, run_id: int) -> None:
-        sql = """
-update queue.worker_runs
-set last_heartbeat_at = now()
-where id = %s
-"""
-        with self._conn() as conn, conn.cursor() as cur:
-            cur.execute(sql, (run_id,))
-            conn.commit()
 
     def integrity_report(self) -> IntegrityReport:
         return IntegrityReport()

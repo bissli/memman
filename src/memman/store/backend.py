@@ -600,6 +600,37 @@ class Backend(Protocol):
         """Close the backend on context exit."""
         ...
 
+    def start_run(self) -> int | None:
+        """Open a new drain `worker_runs` row, return its id.
+
+        SQLite returns None (single-process; drain hangs are
+        observable at the foreground prompt). Postgres inserts into
+        the per-store `worker_runs` table with `started_at = now()`
+        and `last_heartbeat_at = now()` server-side and returns the
+        new row id. `memman doctor` consumes the heartbeat field for
+        hung-worker detection.
+        """
+        ...
+
+    def beat_run(self, run_id: int | None) -> None:
+        """Advance `last_heartbeat_at = now()` on a specific run.
+
+        Called inline from the drain loop (one update per row
+        processed) so a worker stuck mid-row is detectable within a
+        few enrichment cycles. SQLite is a no-op; Postgres updates
+        the per-store `worker_runs` row. `run_id=None` is a no-op
+        for drains opened in SQLite mode.
+        """
+        ...
+
+    def recent_runs(self, *, limit: int) -> list[WorkerRun]:
+        """Return recent worker drain runs (most recent first).
+
+        SQLite returns an empty list. Postgres queries the per-store
+        `worker_runs` table.
+        """
+        ...
+
 
 @runtime_checkable
 class QueueBackend(Protocol):
@@ -629,29 +660,6 @@ class QueueBackend(Protocol):
 
     def stats(self) -> QueueStats:
         """Aggregate queue statistics."""
-        ...
-
-    def recent_runs(self, *, limit: int) -> list[WorkerRun]:
-        """Return recent worker drain runs."""
-        ...
-
-    def start_run(self) -> int:
-        """Insert a new in-progress `worker_runs` row and return its id.
-
-        The row is stamped with `started_at = now()` and
-        `last_heartbeat_at = now()` server-side; `ended_at` stays
-        NULL until the drain completes. Used by the drain loop and
-        consumed by `memman doctor` for hung-worker detection.
-        """
-        ...
-
-    def beat_run(self, run_id: int) -> None:
-        """Advance `last_heartbeat_at = now()` on a specific run.
-
-        Called inline from the drain loop (one update per row
-        processed) so that a worker stuck mid-row is detectable
-        within a few enrichment cycles.
-        """
         ...
 
     def integrity_report(self) -> IntegrityReport:

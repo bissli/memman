@@ -637,39 +637,23 @@ def check_scheduler_heartbeat(data_dir: str) -> dict[str, Any]:
 DRAIN_HEARTBEAT_STALE_SECONDS = 5 * 60
 
 
-def check_drain_heartbeat() -> dict[str, Any]:
-    """Postgres-only: warn if any in-progress drain run is past 5 minutes
-    without a heartbeat.
+def check_drain_heartbeat(data_dir: str) -> dict[str, Any]:
+    """Warn when any in-progress drain run is past 5 minutes without a beat.
 
-    Reads `queue.worker_runs` for rows with `ended_at IS NULL` and
-    flags any whose `last_heartbeat_at` is older than 5 minutes (the
-    documented threshold). No-op on SQLite (single-process; drain
-    hangs are visible to the operator at the foreground prompt).
+    Iterates `list_stores(data_dir)` and queries each Postgres-backed
+    store's per-store `worker_runs` table for rows with `ended_at IS
+    NULL` whose `last_heartbeat_at` is older than 5 minutes. SQLite-
+    backed stores return an empty list (single-process; drain hangs
+    are visible at the foreground prompt). The aggregate status warns
+    when any store has stale runs.
     """
     from datetime import datetime, timezone
 
-    from memman import config
-
-    backend_name = (
-        config.get(config.DEFAULT_BACKEND) or 'sqlite').lower()
-    if backend_name != 'postgres':
-        return {
-            'name': 'drain_heartbeat',
-            'status': 'pass',
-            'detail': {'skipped_reason': 'default backend is sqlite'},
-            }
-    dsn = config.get(config.DEFAULT_PG_DSN)
-    if not dsn:
-        return {
-            'name': 'drain_heartbeat',
-            'status': 'warn',
-            'detail': {'error': 'MEMMAN_DEFAULT_PG_DSN not set'},
-            }
+    from memman.store.factory import _resolve_store_backend, list_stores
+    from memman.store.factory import open_backend
 
     try:
-        from memman.store.postgres import PostgresQueueBackend
-        queue = PostgresQueueBackend(dsn=dsn)
-        runs = queue.recent_runs(limit=50)
+        stores = list_stores(data_dir)
     except Exception as exc:
         return {
             'name': 'drain_heartbeat',
@@ -677,28 +661,74 @@ def check_drain_heartbeat() -> dict[str, Any]:
             'detail': {'error': f'{type(exc).__name__}: {exc}'},
             }
 
+    pg_stores = [
+        s for s in stores
+        if _resolve_store_backend(s, data_dir) == 'postgres']
+    if not pg_stores:
+        return {
+            'name': 'drain_heartbeat',
+            'status': 'pass',
+            'detail': {
+                'skipped_reason': 'no postgres-backed stores',
+                'stores_checked': stores,
+                },
+            }
+
     now = datetime.now(timezone.utc)
     stale: list[dict[str, Any]] = []
     in_progress = 0
-    for r in runs:
-        if r.ended_at is not None:
-            continue
-        in_progress += 1
-        if r.last_heartbeat_at is None:
-            continue
-        age = (now - r.last_heartbeat_at).total_seconds()
-        if age > DRAIN_HEARTBEAT_STALE_SECONDS:
-            stale.append({
-                'run_id': r.id,
-                'age_seconds': int(age),
-                'last_heartbeat_at': r.last_heartbeat_at.isoformat(),
+    failures: list[dict[str, str]] = []
+    for store in pg_stores:
+        try:
+            backend = open_backend(store, data_dir, read_only=True)
+        except Exception as exc:
+            failures.append({
+                'store': store,
+                'error': f'{type(exc).__name__}: {exc}',
                 })
+            continue
+        try:
+            runs = backend.recent_runs(limit=50)
+        except Exception as exc:
+            failures.append({
+                'store': store,
+                'error': f'{type(exc).__name__}: {exc}',
+                })
+            continue
+        finally:
+            try:
+                backend.close()
+            except Exception:
+                pass
+        for r in runs:
+            if r.ended_at is not None:
+                continue
+            in_progress += 1
+            if r.last_heartbeat_at is None:
+                continue
+            age = (now - r.last_heartbeat_at).total_seconds()
+            if age > DRAIN_HEARTBEAT_STALE_SECONDS:
+                stale.append({
+                    'store': store,
+                    'run_id': r.id,
+                    'age_seconds': int(age),
+                    'last_heartbeat_at': r.last_heartbeat_at.isoformat(),
+                    })
 
-    detail = {
+    detail: dict[str, Any] = {
+        'stores_checked': pg_stores,
         'in_progress': in_progress,
         'stale_runs': stale,
         'threshold_seconds': DRAIN_HEARTBEAT_STALE_SECONDS,
         }
+    if failures:
+        detail['failures'] = failures
+    if failures and not stale:
+        return {
+            'name': 'drain_heartbeat',
+            'status': 'fail',
+            'detail': detail,
+            }
     if stale:
         return {
             'name': 'drain_heartbeat',
@@ -966,7 +996,7 @@ def run_all_checks(
             check_queue_schema(data_dir),
             check_queue_backlog(data_dir),
             check_scheduler_heartbeat(data_dir),
-            check_drain_heartbeat(),
+            check_drain_heartbeat(data_dir),
             check_env_completeness(),
             check_per_store_keys(data_dir),
             check_env_permissions(),

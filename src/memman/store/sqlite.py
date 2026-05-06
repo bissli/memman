@@ -28,8 +28,8 @@ from memman.store import edge as _edge
 from memman.store import node as _node
 from memman.store import oplog as _oplog
 from memman.store import snapshot as _snapshot
-from memman.store.backend import Backend, EdgeStore, MetaStore
-from memman.store.backend import NodeStore, Oplog, RecallSession
+from memman.store.backend import Backend, EdgeStore, MetaStore, NodeStore
+from memman.store.backend import Oplog, RecallSession
 from memman.store.base import BaseNodeStore
 from memman.store.db import DB
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
@@ -649,6 +649,19 @@ class SqliteBackend(Backend):
         rows = self._db._query(
             f'pragma table_info({table})').fetchall()
         return {row[1] for row in rows}
+
+    def start_run(self) -> int | None:
+        """No-op: drain hangs are observable at the foreground prompt.
+        """
+        return None
+
+    def beat_run(self, run_id: int | None) -> None:
+        """No-op for SQLite mode."""
+        return
+
+    def recent_runs(self, *, limit: int) -> list:
+        """No-op: SQLite drain has no per-store worker_runs table."""
+        return []
 
     def close(self) -> None:
         self._db.close()
