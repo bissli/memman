@@ -330,6 +330,120 @@ class TestEnvCompleteness:
         assert config.OPENAI_EMBED_API_KEY not in out.get('detail', {}).get(
             'missing', [])
 
+    def test_legacy_backend_keys_are_optional(self, write_env):
+        """`MEMMAN_BACKEND` / `MEMMAN_PG_DSN` are slated for removal in 2.6.
+
+        Per-store keys carry the dispatch contract now; the legacy
+        globals must not be flagged as missing on installs that have
+        already migrated.
+        """
+        from memman import config
+        legacy = {config.BACKEND, config.PG_DSN}
+        lines = [
+            f'{key}=v' for key in config.INSTALLABLE_KEYS
+            if key not in legacy
+            ]
+        write_env('\n'.join(lines) + '\n')
+        out = check_env_completeness()
+        assert out['status'] == 'pass'
+        missing = out.get('detail', {}).get('missing', [])
+        assert config.BACKEND not in missing
+        assert config.PG_DSN not in missing
+
+
+class TestCheckPerStoreKeys:
+    """`check_per_store_keys` validates `MEMMAN_BACKEND_<store>` shape."""
+
+    def test_pass_when_no_stores(self, tmp_path):
+        """Empty data dir -> pass with empty stores list."""
+        from memman.doctor import check_per_store_keys
+        out = check_per_store_keys(str(tmp_path / 'memman'))
+        assert out['name'] == 'per_store_keys'
+        assert out['status'] == 'pass'
+        assert out['detail']['stores'] == []
+
+    def test_pass_when_per_store_key_resolves(self, tmp_path, env_file):
+        """SQLite store with explicit per-store key -> pass."""
+        from memman import config
+        from memman.doctor import check_per_store_keys
+
+        data_dir = str(tmp_path / 'memman')
+        Path(data_dir, 'data', 'one').mkdir(parents=True, exist_ok=True)
+        Path(data_dir, 'data', 'one', 'memman.db').write_bytes(b'')
+        env_file(config.BACKEND_FOR('one'), 'sqlite')
+
+        out = check_per_store_keys(data_dir)
+        assert out['status'] == 'pass'
+        names = [s['store'] for s in out['detail']['stores']]
+        assert 'one' in names
+
+    def test_pass_when_falling_back_to_default(self, tmp_path, env_file):
+        """No per-store key, default sqlite -> pass with fallback flag."""
+        from memman import config
+        from memman.doctor import check_per_store_keys
+
+        data_dir = str(tmp_path / 'memman')
+        Path(data_dir, 'data', 'fallback').mkdir(parents=True, exist_ok=True)
+        Path(data_dir, 'data', 'fallback', 'memman.db').write_bytes(b'')
+        env_file(config.DEFAULT_BACKEND, 'sqlite')
+
+        out = check_per_store_keys(data_dir)
+        assert out['status'] == 'pass'
+        match = next(s for s in out['detail']['stores']
+                     if s['store'] == 'fallback')
+        assert match['backend'] == 'sqlite'
+        assert match['source'] == 'default'
+
+    def test_fails_on_unknown_backend_value(self, tmp_path, env_file):
+        """`MEMMAN_BACKEND_<store>=mongo` -> fail (unknown backend)."""
+        from memman import config
+        from memman.doctor import check_per_store_keys
+
+        data_dir = str(tmp_path / 'memman')
+        Path(data_dir, 'data', 'bad').mkdir(parents=True, exist_ok=True)
+        Path(data_dir, 'data', 'bad', 'memman.db').write_bytes(b'')
+        env_file(config.BACKEND_FOR('bad'), 'mongo')
+
+        out = check_per_store_keys(data_dir)
+        assert out['status'] == 'fail'
+        bad = next(s for s in out['detail']['stores']
+                   if s['store'] == 'bad')
+        assert 'unknown backend' in bad.get('error', '').lower()
+
+    def test_warns_when_postgres_dsn_missing(self, tmp_path, env_file):
+        """`MEMMAN_BACKEND_<store>=postgres` without DSN -> fail."""
+        from memman import config
+        from memman.doctor import check_per_store_keys
+
+        data_dir = str(tmp_path / 'memman')
+        Path(data_dir, 'data', 'pg_one').mkdir(parents=True, exist_ok=True)
+        Path(data_dir, 'data', 'pg_one', 'memman.db').write_bytes(b'')
+        env_file(config.BACKEND_FOR('pg_one'), 'postgres')
+
+        out = check_per_store_keys(data_dir)
+        assert out['status'] == 'fail'
+        pg = next(s for s in out['detail']['stores']
+                  if s['store'] == 'pg_one')
+        assert 'dsn' in pg.get('error', '').lower()
+
+    def test_postgres_default_dsn_satisfies(self, tmp_path, env_file):
+        """`MEMMAN_DEFAULT_PG_DSN` covers a postgres store without a per-store DSN.
+        """
+        from memman import config
+        from memman.doctor import check_per_store_keys
+
+        data_dir = str(tmp_path / 'memman')
+        Path(data_dir, 'data', 'pg_two').mkdir(parents=True, exist_ok=True)
+        Path(data_dir, 'data', 'pg_two', 'memman.db').write_bytes(b'')
+        env_file(config.BACKEND_FOR('pg_two'), 'postgres')
+        env_file(config.DEFAULT_PG_DSN, 'postgresql://x@y/z')
+
+        out = check_per_store_keys(data_dir)
+        pg = next(s for s in out['detail']['stores']
+                  if s['store'] == 'pg_two')
+        assert pg.get('error') is None
+        assert pg['backend'] == 'postgres'
+
 
 def _started_scheduler_status(interval=900):
     """Test helper: pretend the scheduler is installed + started."""

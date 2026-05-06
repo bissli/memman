@@ -124,6 +124,54 @@ def test_hot_path_writes_per_store_key_on_first_open(tmp_path, env_file):
     assert written.get(config.BACKEND_FOR('autostore')) == 'sqlite'
 
 
+def test_status_reports_per_store_backend_and_summary(tmp_path, env_file):
+    """`memman status` reports the per-store kind + a `backends_in_use` set.
+    """
+    from click.testing import CliRunner
+
+    from memman.cli import cli
+
+    data_dir = os.environ[config.DATA_DIR]
+    _seed_sqlite_dir(data_dir, 'local')
+    env_file(config.BACKEND_FOR('local'), 'sqlite')
+    env_file(config.BACKEND_FOR('shared'), 'postgres')
+    env_file(config.PG_DSN_FOR('shared'), 'postgresql://x@y/z')
+
+    r = CliRunner()
+    out = r.invoke(
+        cli,
+        ['--data-dir', data_dir, '--store', 'local', 'status'])
+    assert out.exit_code == 0, out.output
+    import json
+    data = json.loads(out.output)
+    assert data['backend'] == 'sqlite'
+    assert set(data['backends_in_use']) >= {'sqlite', 'postgres'}
+
+
+def test_config_show_redacts_per_store_dsn(tmp_path, env_file):
+    """`memman config show` redacts every `MEMMAN_PG_DSN_<store>` value.
+    """
+    from click.testing import CliRunner
+
+    from memman.cli import cli
+
+    data_dir = os.environ[config.DATA_DIR]
+    env_file(config.BACKEND_FOR('shared'), 'postgres')
+    env_file(config.PG_DSN_FOR('shared'), 'postgresql://secret@host/db')
+    env_file(config.DEFAULT_PG_DSN, 'postgresql://default-secret@host/db')
+
+    r = CliRunner()
+    out = r.invoke(cli, ['--data-dir', data_dir, 'config', 'show'])
+    assert out.exit_code == 0, out.output
+    assert 'secret' not in out.output
+    import json
+    data = json.loads(out.output)
+    per_store = data.get('per_store') or data['env']
+    pg_key = config.PG_DSN_FOR('shared')
+    assert per_store.get(pg_key) == '***REDACTED***'
+    assert data['env'].get(config.DEFAULT_PG_DSN) == '***REDACTED***'
+
+
 @pytest.mark.postgres
 def test_drain_processes_mixed_backends_in_one_batch(
         tmp_path, env_file, pg_dsn, monkeypatch):

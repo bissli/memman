@@ -369,9 +369,23 @@ def config_show(ctx: click.Context) -> None:
     """Dump effective config: env vars + on-disk files + scheduler state."""
     effective = config.enumerate_effective_config()
     data_dir = ctx.obj['data_dir']
+    parsed = config.parse_env_file(config.env_file_path(data_dir))
+    if parsed.get(config.DEFAULT_BACKEND):
+        effective[config.DEFAULT_BACKEND] = parsed[config.DEFAULT_BACKEND]
+    if parsed.get(config.DEFAULT_PG_DSN):
+        effective[config.DEFAULT_PG_DSN] = '***REDACTED***'
+    per_store: dict[str, str] = {}
+    for key, value in sorted(parsed.items()):
+        if not value:
+            continue
+        if key.startswith('MEMMAN_BACKEND_'):
+            per_store[key] = value
+        elif key.startswith('MEMMAN_PG_DSN_'):
+            per_store[key] = '***REDACTED***'
     out: dict = {
         'data_dir': data_dir,
         'env': effective,
+        'per_store': per_store,
         'files': {},
         'active_store': _resolve_store_name(data_dir, ctx.obj['store']),
         }
@@ -1779,10 +1793,25 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
 @click.pass_context
 def status(ctx: click.Context) -> None:
     """Show database statistics."""
+    from memman.store.factory import _resolve_store_backend, list_stores
+
+    data_dir = ctx.obj['data_dir']
+    store_name = _resolve_store_name(data_dir, ctx.obj['store'])
     with _active_backend(ctx) as backend:
         node_stats = backend.nodes.stats()
+        declared = {
+            key[len('MEMMAN_BACKEND_'):]
+            for key in config.parse_env_file(config.env_file_path(data_dir))
+            if key.startswith('MEMMAN_BACKEND_')
+            }
+        all_stores = set(list_stores(data_dir)) | declared
+        backends_in_use = sorted({
+            _resolve_store_backend(s, data_dir) for s in all_stores
+            })
         out = {
-            'backend': (config.get(config.BACKEND) or 'sqlite').lower(),
+            'store': store_name,
+            'backend': _resolve_store_backend(store_name, data_dir),
+            'backends_in_use': backends_in_use,
             'total_insights': node_stats.total_insights,
             'deleted_insights': node_stats.deleted_insights,
             'edge_count': node_stats.edge_count,

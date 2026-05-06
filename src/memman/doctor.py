@@ -344,15 +344,22 @@ def check_env_completeness() -> dict[str, Any]:
     existing file lacks. Reports the missing keys so the user can run
     `memman install` to repopulate. Optional secrets are not flagged
     when absent (the user may not have configured an alternate provider).
+
+    `MEMMAN_BACKEND` / `MEMMAN_PG_DSN` are no longer required: per-store
+    `MEMMAN_BACKEND_<store>` keys carry the dispatch contract. They are
+    treated as optional here and removed from `INSTALLABLE_KEYS` in the
+    next slice. `check_per_store_keys` is the per-store consumer.
     """
     from memman import config
 
     path = config.env_file_path()
     parsed = config.parse_env_file(path)
 
-    optional_secrets = {config.OPENAI_EMBED_API_KEY}
-    if parsed.get(config.BACKEND, 'sqlite') != 'postgres':
-        optional_secrets |= {config.PG_DSN}
+    optional_secrets = {
+        config.OPENAI_EMBED_API_KEY,
+        config.BACKEND,
+        config.PG_DSN,
+        }
     missing = [
         key for key in config.INSTALLABLE_KEYS
         if not parsed.get(key) and key not in optional_secrets
@@ -374,6 +381,75 @@ def check_env_completeness() -> dict[str, Any]:
             'fix': ('run `memman install` to populate the env file with'
                     ' the latest INSTALLABLE_KEYS values'),
             },
+        }
+
+
+_KNOWN_BACKENDS = frozenset({'sqlite', 'postgres'})
+
+
+def check_per_store_keys(data_dir: str) -> dict[str, Any]:
+    """Validate per-store backend dispatch keys for every known store.
+
+    For each store enumerated by `list_stores`:
+    - resolve `MEMMAN_BACKEND_<store>` (per-store key first, then
+      `MEMMAN_DEFAULT_BACKEND`, then 'sqlite');
+    - fail when the resolved value is not a registered backend;
+    - fail when the resolved kind is `postgres` and no DSN is reachable
+      via `MEMMAN_PG_DSN_<store>` or `MEMMAN_DEFAULT_PG_DSN`.
+
+    Empty data dirs (no stores at all) pass with an empty list.
+    """
+    from memman import config
+    from memman.store.factory import list_stores
+
+    file_values = config.parse_env_file(config.env_file_path(data_dir))
+    try:
+        stores = list_stores(data_dir)
+    except Exception as exc:
+        return {
+            'name': 'per_store_keys',
+            'status': 'fail',
+            'detail': {'error': f'list_stores: {exc}'},
+            }
+
+    entries: list[dict[str, Any]] = []
+    worst = 'pass'
+    for store in stores:
+        per_key = config.BACKEND_FOR(store)
+        per_value = (file_values.get(per_key) or '').strip()
+        if per_value:
+            kind = per_value.lower()
+            source = 'per_store'
+        else:
+            kind = (file_values.get(config.DEFAULT_BACKEND)
+                    or 'sqlite').lower()
+            source = 'default'
+        entry: dict[str, Any] = {
+            'store': store,
+            'backend': kind,
+            'source': source,
+            'error': None,
+            }
+        if kind not in _KNOWN_BACKENDS:
+            entry['error'] = (
+                f'unknown backend {kind!r}; registered:'
+                f' {", ".join(sorted(_KNOWN_BACKENDS))}')
+            worst = 'fail'
+        elif kind == 'postgres':
+            dsn = (
+                file_values.get(config.PG_DSN_FOR(store))
+                or file_values.get(config.DEFAULT_PG_DSN))
+            if not dsn:
+                entry['error'] = (
+                    f'no DSN: set {config.PG_DSN_FOR(store)} or'
+                    f' {config.DEFAULT_PG_DSN}')
+                worst = 'fail'
+        entries.append(entry)
+
+    return {
+        'name': 'per_store_keys',
+        'status': worst,
+        'detail': {'stores': entries},
         }
 
 
@@ -893,6 +969,7 @@ def run_all_checks(
             check_scheduler_heartbeat(data_dir),
             check_drain_heartbeat(),
             check_env_completeness(),
+            check_per_store_keys(data_dir),
             check_env_permissions(),
             check_scheduler_state(),
             check_llm_probe(),
