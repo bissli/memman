@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import psycopg
 import pytest
-from memman.store.postgres import PostgresCluster, _open_connection
-from memman.store.postgres import _store_schema
+from memman.store.postgres import _open_connection, _store_schema
+from memman.store.postgres import drop_postgres_store, open_postgres_backend
 from tests.e2e.conftest import _safe
 from tests.fixtures.postgres import wait_for
 
@@ -42,12 +42,11 @@ def test_hung_worker_releases_lock_within_keepalive_window(
     `tcp_keepalives_idle + tcp_keepalives_interval` ceiling.
     """
     store = _safe(request.node.name)
-    cluster = PostgresCluster(dsn=pg_dsn)
     try:
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)
     except Exception:
         pass
-    backend_seed = cluster.open(store=store, data_dir='')
+    backend_seed = open_postgres_backend(store, pg_dsn)
     backend_seed.close()
 
     schema = _store_schema(store)
@@ -67,7 +66,7 @@ def test_hung_worker_releases_lock_within_keepalive_window(
 
     holder.close()
 
-    contender = cluster.open(store=store, data_dir='')
+    contender = open_postgres_backend(store, pg_dsn)
     try:
         def _can_acquire() -> bool:
             with contender.drain_lock(store) as got:
@@ -78,7 +77,7 @@ def test_hung_worker_releases_lock_within_keepalive_window(
             ' holder connection drop')
     finally:
         contender.close()
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)
 
 
 def test_drain_lock_connection_has_keepalives_idle_30(pg_dsn, request):
@@ -90,12 +89,11 @@ def test_drain_lock_connection_has_keepalives_idle_30(pg_dsn, request):
     live connection's settings via `SHOW`.
     """
     store = _safe(request.node.name)
-    cluster = PostgresCluster(dsn=pg_dsn)
     try:
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)
     except Exception:
         pass
-    backend = cluster.open(store=store, data_dir='')
+    backend = open_postgres_backend(store, pg_dsn)
 
     sniffed: dict[str, str] = {}
 
@@ -123,7 +121,7 @@ def test_drain_lock_connection_has_keepalives_idle_30(pg_dsn, request):
             pg_mod._open_connection = original_attr
     finally:
         backend.close()
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)
 
     assert sniffed.get('idle'), (
         'drain_lock did not call _open_connection with keepalives=True')

@@ -11,9 +11,10 @@ import pytest
 from memman import config
 from memman.store.db import open_db
 from memman.store.errors import ConfigError
-from memman.store.factory import open_cluster
+from memman.store.factory import drop_store, list_stores, open_backend
 from memman.store.model import Edge, Insight
-from memman.store.sqlite import SqliteBackend, SqliteCluster
+from memman.store.sqlite import SqliteBackend, drop_sqlite_store
+from memman.store.sqlite import open_sqlite_backend
 
 
 @pytest.fixture
@@ -110,39 +111,45 @@ def test_readonly_context_yields_separate_backend(backend):
         assert ro.nodes.get('ro').content == 'read me'
 
 
-def test_cluster_open_returns_sqlite_backend(tmp_path):
-    """SqliteCluster.open(store=, data_dir=) returns a SqliteBackend.
+def test_open_sqlite_backend_returns_sqlite_backend(tmp_path):
+    """open_sqlite_backend(store, data_dir) returns a SqliteBackend.
     """
-    cluster = SqliteCluster()
-    bk = cluster.open(store='default', data_dir=str(tmp_path))
+    bk = open_sqlite_backend('default', str(tmp_path))
     assert isinstance(bk, SqliteBackend)
     bk.close()
 
 
-def test_cluster_list_stores(tmp_path):
-    """SqliteCluster.list_stores returns sorted store names."""
-    cluster = SqliteCluster()
-    bk = cluster.open(store='alpha', data_dir=str(tmp_path))
+def test_list_stores_sqlite(tmp_path):
+    """`list_stores` returns sorted SQLite store names."""
+    bk = open_sqlite_backend('alpha', str(tmp_path))
     bk.close()
-    bk = cluster.open(store='beta', data_dir=str(tmp_path))
+    bk = open_sqlite_backend('beta', str(tmp_path))
     bk.close()
-    stores = cluster.list_stores(data_dir=str(tmp_path))
-    assert stores == ['alpha', 'beta']
+    assert list_stores(str(tmp_path)) == ['alpha', 'beta']
 
 
-def test_cluster_drop_store(tmp_path):
-    """SqliteCluster.drop_store removes the store directory."""
-    cluster = SqliteCluster()
-    bk = cluster.open(store='gone', data_dir=str(tmp_path))
+def test_drop_sqlite_store_removes_dir(tmp_path):
+    """drop_sqlite_store removes the store directory."""
+    bk = open_sqlite_backend('gone', str(tmp_path))
     bk.close()
-    cluster.drop_store(store='gone', data_dir=str(tmp_path))
+    drop_sqlite_store('gone', str(tmp_path))
     assert (
         not pathlib.Path(tmp_path / 'data' / 'gone').exists())
 
 
-def test_open_cluster_unknown_backend_raises_configerror(monkeypatch):
-    """Unknown MEMMAN_BACKEND value yields ConfigError with hint."""
-    monkeypatch.setattr(config, 'get', lambda key: (
-        'plutonium' if key == config.BACKEND else None))
-    with pytest.raises(ConfigError, match='unknown'):
-        open_cluster()
+def test_open_backend_unknown_kind_raises_configerror(env_file, tmp_path):
+    """Unknown per-store backend value yields ConfigError with hint."""
+    import os
+    data_dir = os.environ[config.DATA_DIR]
+    env_file(config.BACKEND_FOR('weird'), 'plutonium')
+    with pytest.raises(ConfigError, match='unknown backend'):
+        open_backend('weird', data_dir)
+
+
+def test_drop_store_dispatches_to_sqlite(tmp_path):
+    """factory.drop_store removes a SQLite store dir."""
+    bk = open_sqlite_backend('gone2', str(tmp_path))
+    bk.close()
+    drop_store('gone2', str(tmp_path))
+    assert (
+        not pathlib.Path(tmp_path / 'data' / 'gone2').exists())

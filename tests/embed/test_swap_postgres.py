@@ -24,8 +24,8 @@ from memman.embed.swap import (
     )
 from memman.store.postgres import (
     EMBEDDING_DIM,
-    PostgresCluster,
     _store_schema,
+    open_postgres_backend,
     )
 
 pytestmark = pytest.mark.postgres
@@ -86,8 +86,7 @@ def _seed(backend, n: int) -> list[str]:
 def swap_backend(pg_dsn):
     store_name = 'pg_swap'
     _drop_schema(pg_dsn, store_name)
-    backend = PostgresCluster(dsn=pg_dsn).open(
-        store=store_name, data_dir='/unused')
+    backend = open_postgres_backend(store_name, pg_dsn)
     write_fingerprint(
         backend,
         Fingerprint(
@@ -192,8 +191,7 @@ def test_assert_dim_accepts_pending_during_swap(swap_backend):
 def test_swap_lock_blocks_concurrent_swap(swap_backend):
     """The session-scoped embed_swap lock blocks a second swap."""
     backend, pg_dsn, store_name = swap_backend
-    other = PostgresCluster(dsn=pg_dsn).open(
-        store=store_name, data_dir='/unused')
+    other = open_postgres_backend(store_name, pg_dsn)
     try:
         with backend.swap_lock() as held_a:
             assert held_a is True

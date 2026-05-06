@@ -38,7 +38,7 @@ _BASE_ENV_LINES = (
     'MEMMAN_RERANK_PROVIDER=voyage',
     'MEMMAN_OPENROUTER_ENDPOINT=https://openrouter.ai/api/v1',
     'MEMMAN_VOYAGE_RERANK_MODEL=rerank-2.5-lite',
-    'MEMMAN_BACKEND=sqlite',
+    'MEMMAN_DEFAULT_BACKEND=sqlite',
     )
 
 

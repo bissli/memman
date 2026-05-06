@@ -74,50 +74,56 @@ def test_migrate_deletes_source_artifacts(pg_dsn, tmp_path):
 
 
 def test_doctor_flags_orphan_after_partial_cleanup(
-        tmp_path, monkeypatch):
+        tmp_path, env_file):
     """If `memman.db` survives a postgres-backed store, doctor flags it.
 
     Simulates the crash-between-commit-and-cleanup window by leaving
-    a memman.db file in place while MEMMAN_BACKEND=postgres.
+    a memman.db file in place while MEMMAN_DEFAULT_BACKEND=postgres.
     """
     from memman.doctor import check_orphan_storage
 
-    data_dir = tmp_path / 'data_root'
-    sdir = data_dir / 'data' / 'orphan_store'
+    import os
+
+    data_dir = os.environ['MEMMAN_DATA_DIR']
+    sdir = Path(data_dir) / 'data' / 'orphan_store'
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / 'memman.db').write_bytes(b'')
 
-    monkeypatch.setenv('MEMMAN_BACKEND', 'postgres')
-    result = check_orphan_storage(str(data_dir))
+    env_file('MEMMAN_DEFAULT_BACKEND', 'postgres')
+    result = check_orphan_storage(data_dir)
     assert result['status'] == 'fail'
     assert 'orphan_store' in result.get('detail', '')
 
 
 def test_doctor_passes_when_postgres_store_is_clean(
-        tmp_path, monkeypatch):
+        tmp_path, env_file):
     """A store dir with no SQLite artifacts under postgres backend passes.
     """
     from memman.doctor import check_orphan_storage
 
-    data_dir = tmp_path / 'data_clean'
-    sdir = data_dir / 'data' / 'clean_store'
+    import os
+
+    data_dir = os.environ['MEMMAN_DATA_DIR']
+    sdir = Path(data_dir) / 'data' / 'clean_store'
     sdir.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setenv('MEMMAN_BACKEND', 'postgres')
-    result = check_orphan_storage(str(data_dir))
+    env_file('MEMMAN_DEFAULT_BACKEND', 'postgres')
+    result = check_orphan_storage(data_dir)
     assert result['status'] == 'pass'
 
 
-def test_doctor_skips_when_backend_is_sqlite(tmp_path, monkeypatch):
+def test_doctor_skips_when_backend_is_sqlite(tmp_path, env_file):
     """SQLite backend keeps memman.db legitimately; doctor must not flag.
     """
     from memman.doctor import check_orphan_storage
 
-    data_dir = tmp_path / 'data_sqlite'
-    sdir = data_dir / 'data' / 'sqlite_store'
+    import os
+
+    data_dir = os.environ['MEMMAN_DATA_DIR']
+    sdir = Path(data_dir) / 'data' / 'sqlite_store'
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / 'memman.db').write_bytes(b'')
 
-    monkeypatch.setenv('MEMMAN_BACKEND', 'sqlite')
-    result = check_orphan_storage(str(data_dir))
+    env_file('MEMMAN_DEFAULT_BACKEND', 'sqlite')
+    result = check_orphan_storage(data_dir)
     assert result['status'] == 'pass'

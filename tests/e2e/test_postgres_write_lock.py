@@ -18,7 +18,7 @@ import time
 
 import pytest
 from memman.store.model import Edge, Insight
-from memman.store.postgres import PostgresCluster
+from memman.store.postgres import drop_postgres_store, open_postgres_backend
 from tests.e2e.conftest import _safe
 
 pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
@@ -35,13 +35,12 @@ def test_concurrent_remember_during_reindex_preserves_edge(
     fresh connection and matches.
     """
     store = _safe(request.node.name)
-    cluster = PostgresCluster(dsn=pg_dsn)
     try:
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)
     except Exception:
         pass
 
-    backend_seed = cluster.open(store=store, data_dir='')
+    backend_seed = open_postgres_backend(store, pg_dsn)
     try:
         backend_seed.nodes.insert(Insight(
             id='wl-src', content='source node',
@@ -60,7 +59,7 @@ def test_concurrent_remember_during_reindex_preserves_edge(
 
     def agent_a_holds_write_lock() -> None:
         try:
-            backend = cluster.open(store=store, data_dir='')
+            backend = open_postgres_backend(store, pg_dsn)
             try:
                 with backend.transaction():
                     with backend.write_lock('reindex'):
@@ -75,7 +74,7 @@ def test_concurrent_remember_during_reindex_preserves_edge(
         try:
             assert a_acquired.wait(timeout=5), (
                 'agent A did not acquire write_lock')
-            backend = cluster.open(store=store, data_dir='')
+            backend = open_postgres_backend(store, pg_dsn)
             try:
                 backend.edges.upsert(Edge(
                     source_id='wl-src',
@@ -105,7 +104,7 @@ def test_concurrent_remember_during_reindex_preserves_edge(
 
     assert not errors, f'thread errors: {errors}'
 
-    verify = cluster.open(store=store, data_dir='')
+    verify = open_postgres_backend(store, pg_dsn)
     try:
         edges = verify.edges.get_neighborhood(
             seed_id='wl-src', depth=1, edge_filter='manual')
@@ -115,7 +114,7 @@ def test_concurrent_remember_during_reindex_preserves_edge(
             f' got {target_ids}')
     finally:
         verify.close()
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)
 
 
 def test_two_reindex_holders_serialize_via_write_lock(pg_dsn, request):
@@ -127,12 +126,11 @@ def test_two_reindex_holders_serialize_via_write_lock(pg_dsn, request):
     and completes promptly after A releases.
     """
     store = _safe(request.node.name)
-    cluster = PostgresCluster(dsn=pg_dsn)
     try:
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)
     except Exception:
         pass
-    backend_seed = cluster.open(store=store, data_dir='')
+    backend_seed = open_postgres_backend(store, pg_dsn)
     backend_seed.close()
 
     a_acquired = threading.Event()
@@ -142,7 +140,7 @@ def test_two_reindex_holders_serialize_via_write_lock(pg_dsn, request):
 
     def agent_a() -> None:
         try:
-            backend = cluster.open(store=store, data_dir='')
+            backend = open_postgres_backend(store, pg_dsn)
             try:
                 with backend.transaction():
                     with backend.write_lock('reindex'):
@@ -156,7 +154,7 @@ def test_two_reindex_holders_serialize_via_write_lock(pg_dsn, request):
     def agent_b() -> None:
         try:
             assert a_acquired.wait(timeout=5)
-            backend = cluster.open(store=store, data_dir='')
+            backend = open_postgres_backend(store, pg_dsn)
             try:
                 with backend.transaction():
                     with backend.write_lock('reindex'):
@@ -186,4 +184,4 @@ def test_two_reindex_holders_serialize_via_write_lock(pg_dsn, request):
     try:
         assert not errors, f'thread errors: {errors}'
     finally:
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)

@@ -98,23 +98,20 @@ def test_threshold_zone_does_not_collapse_result_set(tmp_path, pg_dsn):
     result set to empty when the other still finds hits, and any hits
     returned all clear the cutoff.
     """
-    from memman.store.postgres import PostgresCluster
-    from memman.store.sqlite import SqliteCluster
+    from memman.store.postgres import drop_postgres_store, open_postgres_backend
+    from memman.store.sqlite import drop_sqlite_store, open_sqlite_backend
 
     topic_centers = [_gaussian_unit(seed=i) for i in range(N_TOPICS)]
-    sqlite_cluster = SqliteCluster()
-    sqlite_backend = sqlite_cluster.open(
-        store='parity_thresh', data_dir=str(tmp_path / 'memman'))
+    sqlite_data_dir = str(tmp_path / 'memman')
+    sqlite_backend = open_sqlite_backend('parity_thresh', sqlite_data_dir)
     sqlite_backend.meta.set(META_KEY, active_fingerprint().to_json())
     _populate(sqlite_backend, topic_centers)
 
-    postgres_cluster = PostgresCluster(dsn=pg_dsn)
     try:
-        postgres_cluster.drop_store(store='parity_thresh', data_dir='')
+        drop_postgres_store('parity_thresh', pg_dsn)
     except Exception:
         pass
-    postgres_backend = postgres_cluster.open(
-        store='parity_thresh', data_dir='')
+    postgres_backend = open_postgres_backend('parity_thresh', pg_dsn)
     postgres_backend.meta.set(META_KEY, active_fingerprint().to_json())
     _populate(postgres_backend, topic_centers)
 
@@ -138,40 +135,38 @@ def test_threshold_zone_does_not_collapse_result_set(tmp_path, pg_dsn):
             sqlite_backend.close()
         except Exception:
             pass
-        sqlite_cluster.close()
+        try:
+            drop_sqlite_store('parity_thresh', sqlite_data_dir)
+        except Exception:
+            pass
         try:
             postgres_backend.close()
         except Exception:
             pass
         try:
-            postgres_cluster.drop_store(
-                store='parity_thresh', data_dir='')
+            drop_postgres_store('parity_thresh', pg_dsn)
         except Exception:
             pass
-        postgres_cluster.close()
 
 
 def test_float32_float64_top5_intersection_geq_4_across_20_queries(
         tmp_path, pg_dsn):
     """Sqlite top-5 ∩ postgres top-5 >= 4 for each of 20 query vectors."""
-    from memman.store.postgres import PostgresCluster
-    from memman.store.sqlite import SqliteCluster
+    from memman.store.postgres import drop_postgres_store, open_postgres_backend
+    from memman.store.sqlite import drop_sqlite_store, open_sqlite_backend
 
     topic_centers = [_gaussian_unit(seed=i) for i in range(N_TOPICS)]
 
-    sqlite_cluster = SqliteCluster()
-    sqlite_backend = sqlite_cluster.open(
-        store='parity', data_dir=str(tmp_path / 'memman'))
+    sqlite_data_dir = str(tmp_path / 'memman')
+    sqlite_backend = open_sqlite_backend('parity', sqlite_data_dir)
     sqlite_backend.meta.set(META_KEY, active_fingerprint().to_json())
     _populate(sqlite_backend, topic_centers)
 
-    postgres_cluster = PostgresCluster(dsn=pg_dsn)
     try:
-        postgres_cluster.drop_store(store='parity_test', data_dir='')
+        drop_postgres_store('parity_test', pg_dsn)
     except Exception:
         pass
-    postgres_backend = postgres_cluster.open(
-        store='parity_test', data_dir='')
+    postgres_backend = open_postgres_backend('parity_test', pg_dsn)
     postgres_backend.meta.set(META_KEY, active_fingerprint().to_json())
     _populate(postgres_backend, topic_centers)
 
@@ -197,14 +192,15 @@ def test_float32_float64_top5_intersection_geq_4_across_20_queries(
             sqlite_backend.close()
         except Exception:
             pass
-        sqlite_cluster.close()
+        try:
+            drop_sqlite_store('parity', sqlite_data_dir)
+        except Exception:
+            pass
         try:
             postgres_backend.close()
         except Exception:
             pass
         try:
-            postgres_cluster.drop_store(
-                store='parity_test', data_dir='')
+            drop_postgres_store('parity_test', pg_dsn)
         except Exception:
             pass
-        postgres_cluster.close()

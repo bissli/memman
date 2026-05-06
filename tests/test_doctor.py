@@ -330,27 +330,6 @@ class TestEnvCompleteness:
         assert config.OPENAI_EMBED_API_KEY not in out.get('detail', {}).get(
             'missing', [])
 
-    def test_legacy_backend_keys_are_optional(self, write_env):
-        """`MEMMAN_BACKEND` / `MEMMAN_PG_DSN` are slated for removal in 2.6.
-
-        Per-store keys carry the dispatch contract now; the legacy
-        globals must not be flagged as missing on installs that have
-        already migrated.
-        """
-        from memman import config
-        legacy = {config.BACKEND, config.PG_DSN}
-        lines = [
-            f'{key}=v' for key in config.INSTALLABLE_KEYS
-            if key not in legacy
-            ]
-        write_env('\n'.join(lines) + '\n')
-        out = check_env_completeness()
-        assert out['status'] == 'pass'
-        missing = out.get('detail', {}).get('missing', [])
-        assert config.BACKEND not in missing
-        assert config.PG_DSN not in missing
-
-
 class TestCheckPerStoreKeys:
     """`check_per_store_keys` validates `MEMMAN_BACKEND_<store>` shape."""
 
@@ -731,20 +710,20 @@ class TestDrainHeartbeat:
 
     def test_passes_when_no_in_progress_runs(self, env_file, pg_dsn):
         """Postgres mode with no in-progress runs: status pass."""
-        env_file('MEMMAN_BACKEND', 'postgres')
-        env_file('MEMMAN_PG_DSN', pg_dsn)
-        from memman.store.postgres import PostgresCluster
-        cluster = PostgresCluster(dsn=pg_dsn)
+        env_file('MEMMAN_DEFAULT_BACKEND', 'postgres')
+        env_file('MEMMAN_DEFAULT_PG_DSN', pg_dsn)
+        from memman.store.postgres import drop_postgres_store
+        from memman.store.postgres import open_postgres_backend
         try:
-            cluster.drop_store(store='hb_doctor_setup', data_dir='')
+            drop_postgres_store('hb_doctor_setup', pg_dsn)
         except Exception:
             pass
-        backend = cluster.open(store='hb_doctor_setup', data_dir='')
+        backend = open_postgres_backend('hb_doctor_setup', pg_dsn)
         try:
             backend.close()
         finally:
             try:
-                cluster.drop_store(store='hb_doctor_setup', data_dir='')
+                drop_postgres_store('hb_doctor_setup', pg_dsn)
             except Exception:
                 pass
 
@@ -761,8 +740,8 @@ class TestDrainHeartbeat:
 
     def test_warns_no_drain_heartbeat_in_5m(self, env_file, pg_dsn):
         """Postgres mode: in-progress run with stale heartbeat -> warn."""
-        env_file('MEMMAN_BACKEND', 'postgres')
-        env_file('MEMMAN_PG_DSN', pg_dsn)
+        env_file('MEMMAN_DEFAULT_BACKEND', 'postgres')
+        env_file('MEMMAN_DEFAULT_PG_DSN', pg_dsn)
 
         stale = datetime.now(timezone.utc) - timedelta(minutes=10)
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
@@ -794,8 +773,8 @@ class TestDrainHeartbeat:
 
     def test_no_warn_for_fresh_heartbeat(self, env_file, pg_dsn):
         """In-progress run with recent heartbeat does NOT warn."""
-        env_file('MEMMAN_BACKEND', 'postgres')
-        env_file('MEMMAN_PG_DSN', pg_dsn)
+        env_file('MEMMAN_DEFAULT_BACKEND', 'postgres')
+        env_file('MEMMAN_DEFAULT_PG_DSN', pg_dsn)
 
         fresh = datetime.now(timezone.utc) - timedelta(seconds=30)
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
@@ -836,13 +815,13 @@ class TestDoctorBackendDispatch:
         env_file(f'MEMMAN_PG_DSN_{store}', pg_dsn)
         monkeypatch.setenv('MEMMAN_STORE', store)
 
-        from memman.store.postgres import PostgresCluster
-        cluster = PostgresCluster(dsn=pg_dsn)
+        from memman.store.postgres import drop_postgres_store
+        from memman.store.postgres import open_postgres_backend
         try:
-            cluster.drop_store(store=store, data_dir='')
+            drop_postgres_store(store, pg_dsn)
         except Exception:
             pass
-        b = cluster.open(store=store, data_dir='')
+        b = open_postgres_backend(store, pg_dsn)
         b.close()
 
         try:
@@ -854,6 +833,6 @@ class TestDoctorBackendDispatch:
             assert '#store_doctor_dispatch' in data['db_path']
         finally:
             try:
-                cluster.drop_store(store=store, data_dir='')
+                drop_postgres_store(store, pg_dsn)
             except Exception:
                 pass

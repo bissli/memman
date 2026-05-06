@@ -23,8 +23,9 @@ type translations:
   values that arrive without offset).
 
 Doubles as the operator-facing migration path for users who decide
-to switch a store from SQLite to Postgres after the
-`MEMMAN_BACKEND=postgres` mode lands.
+to switch a store from SQLite to Postgres. The CLI surface is the
+`memman migrate` command, which writes per-store
+`MEMMAN_BACKEND_<store>=postgres` keys after a verified copy.
 """
 
 from __future__ import annotations

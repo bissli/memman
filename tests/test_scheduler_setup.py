@@ -729,8 +729,8 @@ def _install_env_full(data_dir):
             config.OPENROUTER_API_KEY: 'sk-or-installed',
             config.VOYAGE_API_KEY: 'pa-installed',
             config.OPENAI_EMBED_API_KEY: 'sk-oa-installed',
-            config.BACKEND: 'postgres',
-            config.PG_DSN: 'postgresql://user:pw@host/db',
+            config.DEFAULT_BACKEND: 'postgres',
+            config.DEFAULT_PG_DSN: 'postgresql://user:pw@host/db',
             })
 
 
@@ -752,11 +752,11 @@ class TestUninstall:
         assert config.OPENROUTER_API_KEY not in contents
         assert config.VOYAGE_API_KEY not in contents
         assert config.OPENAI_EMBED_API_KEY not in contents
-        assert config.PG_DSN not in contents
+        assert config.DEFAULT_PG_DSN not in contents
         assert f'{config.LLM_PROVIDER}=openrouter' in contents
         assert config.LLM_MODEL_FAST in contents
         assert config.EMBED_PROVIDER in contents
-        assert f'{config.BACKEND}=postgres' in contents
+        assert f'{config.DEFAULT_BACKEND}=postgres' in contents
 
     @pytest.mark.no_default_env
     def test_uninstall_no_op_when_no_env_file(

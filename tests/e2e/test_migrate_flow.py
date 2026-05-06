@@ -3,7 +3,8 @@
 The unit suite at `tests/test_migrate.py` covers the migrate functions
 directly. This test exercises the CLI orchestration end-to-end:
 plan-echo, --yes confirmation flow, drain.lock guard, target schema
-population, and the `MEMMAN_BACKEND=postgres` env flip on success.
+population, and the per-store `MEMMAN_BACKEND_<store>=postgres` env
+write on success.
 """
 
 from __future__ import annotations
@@ -58,7 +59,7 @@ def test_migrate_cli_round_trip_to_postgres(tmp_path: Path, pg_dsn: str):
     home.mkdir()
     data_dir = home / '.memman'
     data_dir.mkdir()
-    (data_dir / 'env').write_text(f'MEMMAN_PG_DSN={pg_dsn}\n')
+    (data_dir / 'env').write_text(f'MEMMAN_DEFAULT_PG_DSN={pg_dsn}\n')
     store = 'mig_cli'
 
     _seed_sqlite_store(data_dir, store)
@@ -94,8 +95,8 @@ def test_migrate_cli_round_trip_to_postgres(tmp_path: Path, pg_dsn: str):
         env_file = home / '.memman' / 'env'
         if env_file.exists():
             content = env_file.read_text()
-            assert 'MEMMAN_BACKEND=postgres' in content, (
-                f'env file did not flip backend: {content!r}')
+            assert f'MEMMAN_BACKEND_{store}=postgres' in content, (
+                f'env file did not write per-store backend key: {content!r}')
     finally:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:

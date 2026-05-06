@@ -345,24 +345,6 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
     click.echo(f'set {key} in {config.env_file_path(data_dir)}')
 
 
-@config_cmd.command('migrate-keys', hidden=True)
-@click.pass_context
-def config_migrate_keys(ctx: click.Context) -> None:
-    """Convert legacy `MEMMAN_BACKEND` / `MEMMAN_PG_DSN` to per-store keys.
-
-    Idempotent. Re-running on a fully-converted install is a no-op.
-    Operator-edited per-store keys are not overwritten.
-    """
-    from memman.setup.per_store_bootstrap import bootstrap_per_store_keys
-    data_dir = ctx.obj['data_dir']
-    actions = bootstrap_per_store_keys(data_dir)
-    if not actions:
-        click.echo('no legacy keys found; already on per-store shape')
-        return
-    for line in actions:
-        click.echo(line)
-
-
 @config_cmd.command('show')
 @click.pass_context
 def config_show(ctx: click.Context) -> None:
@@ -511,21 +493,24 @@ def _reset_heartbeat_state() -> None:
 
 
 def _start_postgres_heartbeat(record_run: bool):
-    """Start a postgres-side worker_runs row when MEMMAN_BACKEND=postgres.
+    """Start a postgres-side worker_runs row when the default backend is postgres.
 
     Returns `(queue_backend, run_id)` tuple, both `None` on sqlite mode
-    or when something goes wrong (postgres heartbeat is best-effort
-    monitoring infrastructure, NOT correctness — failures are
-    logged but never abort the drain).
+    or when no default postgres DSN is configured (postgres heartbeat
+    is best-effort monitoring infrastructure, NOT correctness — failures
+    are logged but never abort the drain). Slice 2.7 will move
+    `worker_runs` per-store and key heartbeat off the active backend
+    instance instead of the cluster default.
     """
     if not record_run:
         return None, None
     try:
         from memman import config
-        backend_name = (config.get(config.BACKEND) or 'sqlite').lower()
+        backend_name = (
+            config.get(config.DEFAULT_BACKEND) or 'sqlite').lower()
         if backend_name != 'postgres':
             return None, None
-        dsn = config.get(config.PG_DSN)
+        dsn = config.get(config.DEFAULT_PG_DSN)
         if not dsn:
             return None, None
         from memman.store.postgres import PostgresQueueBackend
@@ -2145,8 +2130,9 @@ def migrate(
     target schema already exists on the remote are dropped and
     recreated. Holds the shared drain.lock for the duration so a
     scheduler-fired drain cannot race the SQLite reader. On success
-    flips `MEMMAN_BACKEND=postgres` in the env file so the next drain
-    routes to the new database.
+    writes per-store `MEMMAN_BACKEND_<store>=postgres` and
+    `MEMMAN_PG_DSN_<store>=<dsn>` keys to the env file so the next
+    drain routes the migrated store to Postgres.
     """
     from memman import config
     from memman.migrate import MigrateError, SchemaState, held_drain_lock
@@ -2164,11 +2150,11 @@ def migrate(
         raise click.UsageError(
             'pass either --store NAME or --all, not both')
 
-    dsn = config.get(config.PG_DSN)
+    dsn = config.get(config.DEFAULT_PG_DSN)
     if not dsn:
         raise click.UsageError(
-            'MEMMAN_PG_DSN is not set; configure with '
-            '`memman config set MEMMAN_PG_DSN <url>` first')
+            'MEMMAN_DEFAULT_PG_DSN is not set; configure with '
+            '`memman config set MEMMAN_DEFAULT_PG_DSN <url>` first')
 
     try:
         preflight(dsn)
@@ -2214,8 +2200,9 @@ def migrate(
     if not dry_run:
         click.echo('')
         click.echo(
-            "After successful migrate, MEMMAN_BACKEND will flip to"
-            " 'postgres' in the env file.")
+            'After successful migrate, MEMMAN_BACKEND_<store>=postgres'
+            ' and MEMMAN_PG_DSN_<store>=<dsn> will be written to'
+            ' the env file for each migrated store.')
 
     if dry_run:
         for s in stores:
@@ -2248,23 +2235,24 @@ def migrate(
                         f'{s}: insights={res.insights}'
                         f' edges={res.edges} oplog={res.oplog}'
                         f' meta={res.meta} (verified, source cleaned)')
+                    _write_env_keys({
+                        config.BACKEND_FOR(s): 'postgres',
+                        config.PG_DSN_FOR(s): dsn,
+                        }, data_dir=data_dir)
+                    click.echo(
+                        f'  Wrote {config.BACKEND_FOR(s)}=postgres'
+                        f' to {data_dir}/env.')
                 except MigrateError as exc:
                     raise click.ClickException(f'{s}: {exc}')
-            _write_env_keys(
-                {config.BACKEND: 'postgres'}, data_dir=data_dir)
     except MigrateError as exc:
         raise click.ClickException(str(exc))
 
     click.echo('')
     click.echo(
         f'Migration complete: {len(stores)} store(s) copied to Postgres.')
-    click.echo("MEMMAN_BACKEND flipped to 'postgres'.")
     click.echo('')
     click.echo('Recommended next step:')
     click.echo('  memman doctor    # verify the postgres backend health')
-    click.echo('')
-    click.echo('To revert:')
-    click.echo('  memman config set MEMMAN_BACKEND sqlite')
 
 
 def _emit_guide() -> None:

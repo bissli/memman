@@ -249,8 +249,6 @@ def run_install(data_dir: str, target: str = '',
     if wizard_out:
         _write_env_keys(wizard_out, data_dir=data_dir)
         config.reset_file_cache()
-    from memman.setup.per_store_bootstrap import bootstrap_per_store_keys
-    bootstrap_per_store_keys(data_dir)
     knobs = check_prereqs(data_dir)
     _run_install_flow(envs, target=target, data_dir=data_dir, knobs=knobs)
 
@@ -269,8 +267,8 @@ def _reject_flag_file_conflicts(
     """
     file_values = config.parse_env_file(config.env_file_path(data_dir))
     pairs: list[tuple[str, str | None]] = [
-        (config.BACKEND, backend),
-        (config.PG_DSN, pg_dsn),
+        (config.DEFAULT_BACKEND, backend),
+        (config.DEFAULT_PG_DSN, pg_dsn),
         ]
     for key, flag_value in pairs:
         if flag_value is None:

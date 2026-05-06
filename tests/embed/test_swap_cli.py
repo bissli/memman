@@ -86,7 +86,8 @@ def cli_env(
     db.close()
     monkeypatch.setitem(PROVIDERS, 'fake-target', _FakeTargetProvider)
     (data_dir / 'env').write_text(
-        f'{config.BACKEND}=sqlite\n'
+        f'{config.DEFAULT_BACKEND}=sqlite\n'
+        f'{config.BACKEND_FOR("main")}=sqlite\n'
         f'{config.EMBED_PROVIDER}=voyage\n')
     return str(data_dir)
 

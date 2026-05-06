@@ -34,7 +34,13 @@ class TestWizardFlow:
 
     @pytest.mark.parametrize('mode', ['no_tty', 'no_wizard_in_tty'])
     def test_no_prompts_returns_empty(self, monkeypatch, tmp_path, mode):
-        """Headless mode and `--no-wizard` both short-circuit to empty."""
+        """Headless / --no-wizard short-circuit to empty when no flags given.
+
+        The default-store dispatch falls through `MEMMAN_DEFAULT_BACKEND`
+        (written later by `INSTALL_DEFAULTS`) so the wizard need not touch
+        the env file in this path. Keeping it empty preserves the
+        "prereq failure leaves filesystem untouched" invariant.
+        """
         if mode == 'no_tty':
             monkeypatch.setattr('sys.stdin.isatty', lambda: False)
             out = wizard.run_wizard(str(tmp_path / 'memman'))
@@ -47,7 +53,8 @@ class TestWizardFlow:
     def test_explicit_backend_flag_bypasses_prompt(self, no_tty, tmp_path):
         """`--backend sqlite` is honored without any prompting."""
         out = wizard.run_wizard(str(tmp_path / 'memman'), backend='sqlite')
-        assert out[config.BACKEND] == 'sqlite'
+        assert out[config.DEFAULT_BACKEND] == 'sqlite'
+        assert out[config.BACKEND_FOR('default')] == 'sqlite'
 
     def test_postgres_hidden_when_extras_unavailable(
             self, tty, tmp_path, monkeypatch):
@@ -55,7 +62,8 @@ class TestWizardFlow:
         monkeypatch.setattr(
             'memman.setup.wizard.extras.is_available', lambda extra: False)
         out = wizard.run_wizard(str(tmp_path / 'memman'))
-        assert config.BACKEND not in out
+        assert config.DEFAULT_BACKEND not in out
+        assert config.BACKEND_FOR('default') not in out
 
     def test_postgres_hidden_when_backend_module_missing(
             self, tty, tmp_path, monkeypatch):
@@ -65,7 +73,8 @@ class TestWizardFlow:
         monkeypatch.setattr(
             'memman.setup.wizard._backend_module_exists', lambda: False)
         out = wizard.run_wizard(str(tmp_path / 'memman'))
-        assert config.BACKEND not in out
+        assert config.DEFAULT_BACKEND not in out
+        assert config.BACKEND_FOR('default') not in out
 
 
 class TestSecretPrompts:
@@ -148,8 +157,10 @@ class TestDsn:
             str(tmp_path / 'memman'), backend='postgres',
             pg_dsn='postgresql://u@h/db')
         assert probe_calls == ['postgresql://u@h/db']
-        assert out[config.BACKEND] == 'postgres'
-        assert out[config.PG_DSN] == 'postgresql://u@h/db'
+        assert out[config.DEFAULT_BACKEND] == 'postgres'
+        assert out[config.DEFAULT_PG_DSN] == 'postgresql://u@h/db'
+        assert out[config.BACKEND_FOR('default')] == 'postgres'
+        assert out[config.PG_DSN_FOR('default')] == 'postgresql://u@h/db'
 
     def test_pg_dsn_probe_failure_raises(
             self, monkeypatch, no_tty, tmp_path):
@@ -173,7 +184,7 @@ def test_run_install_rejects_flag_vs_file_conflict(tmp_path, monkeypatch):
     data_dir = tmp_path / 'memman'
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / config.ENV_FILENAME).write_text(
-        f'{config.BACKEND}=sqlite\n'
+        f'{config.DEFAULT_BACKEND}=sqlite\n'
         f'{config.OPENROUTER_API_KEY}=k\n'
         f'{config.VOYAGE_API_KEY}=v\n')
     config.reset_file_cache()
@@ -186,31 +197,6 @@ def test_run_install_rejects_flag_vs_file_conflict(tmp_path, monkeypatch):
     with pytest.raises(_click.ClickException, match='memman config set'):
         setup_claude.run_install(
             str(data_dir), backend='postgres', no_wizard=True)
-
-
-def test_existing_stores_hint_only_when_switching_to_postgres(
-        monkeypatch, no_tty, tmp_path, capsys):
-    """The migration hint prints only when populated SQLite stores exist
-    AND the file's current backend is not already postgres.
-    """
-    data_dir = tmp_path / 'memman'
-    data_dir.mkdir(parents=True, exist_ok=True)
-    (data_dir / config.ENV_FILENAME).write_text(
-        f'{config.OPENROUTER_API_KEY}=k\n'
-        f'{config.VOYAGE_API_KEY}=v\n')
-    stores_dir = data_dir / 'data'
-    stores_dir.mkdir(parents=True, exist_ok=True)
-    (stores_dir / 'default').mkdir()
-    (stores_dir / 'default' / 'memman.db').write_text('fake')
-    monkeypatch.setattr(
-        'memman.setup.wizard._probe_dsn', lambda dsn: None)
-    config.reset_file_cache()
-    wizard.run_wizard(
-        str(data_dir), backend='postgres',
-        pg_dsn='postgresql://u@h/db')
-    out = capsys.readouterr().out
-    assert 'memman migrate' in out
-    assert 'default' in out
 
 
 @pytest.mark.postgres

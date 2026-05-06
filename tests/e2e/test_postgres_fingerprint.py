@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 from memman.embed.fingerprint import META_KEY, Fingerprint
-from memman.store.postgres import PostgresCluster
+from memman.store.postgres import drop_postgres_store, open_postgres_backend
 from tests.e2e.conftest import _safe
 
 pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
@@ -24,12 +24,11 @@ def test_stored_fingerprint_round_trips_through_backend_meta(
         pg_dsn, request):
     """Backend.meta.set + .get round-trips a Fingerprint JSON value."""
     store = _safe(request.node.name)
-    cluster = PostgresCluster(dsn=pg_dsn)
     try:
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)
     except Exception:
         pass
-    backend = cluster.open(store=store, data_dir='')
+    backend = open_postgres_backend(store, pg_dsn)
     try:
         target = Fingerprint(
             provider='voyage', model='voyage-3-lite', dim=512)
@@ -42,7 +41,7 @@ def test_stored_fingerprint_round_trips_through_backend_meta(
         assert recovered == target
     finally:
         backend.close()
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)
 
 
 def test_active_vs_stored_fingerprint_mismatch_is_observable(
@@ -55,12 +54,11 @@ def test_active_vs_stored_fingerprint_mismatch_is_observable(
     `assert_consistent` returns False and a refusal is warranted.
     """
     store = _safe(request.node.name)
-    cluster = PostgresCluster(dsn=pg_dsn)
     try:
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)
     except Exception:
         pass
-    backend = cluster.open(store=store, data_dir='')
+    backend = open_postgres_backend(store, pg_dsn)
     try:
         seeded = Fingerprint(
             provider='voyage', model='voyage-3-lite', dim=512)
@@ -79,7 +77,7 @@ def test_active_vs_stored_fingerprint_mismatch_is_observable(
         assert active.model == 'voyage-large'
     finally:
         backend.close()
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)
 
 
 def test_corrupt_fingerprint_json_raises(pg_dsn, request):
@@ -93,12 +91,11 @@ def test_corrupt_fingerprint_json_raises(pg_dsn, request):
     from memman.embed.fingerprint import EmbedFingerprintError
 
     store = _safe(request.node.name)
-    cluster = PostgresCluster(dsn=pg_dsn)
     try:
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)
     except Exception:
         pass
-    backend = cluster.open(store=store, data_dir='')
+    backend = open_postgres_backend(store, pg_dsn)
     try:
         backend.meta.set(META_KEY, '{not valid json')
         backend._conn.commit()
@@ -108,4 +105,4 @@ def test_corrupt_fingerprint_json_raises(pg_dsn, request):
             Fingerprint.from_json(raw)
     finally:
         backend.close()
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)

@@ -20,7 +20,7 @@ import json
 
 import pytest
 from memman.store.model import Insight
-from memman.store.postgres import PostgresCluster
+from memman.store.postgres import drop_postgres_store, open_postgres_backend
 from memman.store.postgres import PostgresQueueBackend
 from tests.e2e.conftest import _pg_vec as _vec
 from tests.e2e.conftest import _safe
@@ -36,13 +36,12 @@ def test_enqueue_drain_recall_round_trip(pg_dsn, request):
     `vector_anchors`, and that the score is finite cosine.
     """
     store = _safe(request.node.name)
-    cluster = PostgresCluster(dsn=pg_dsn)
     try:
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)
     except Exception:
         pass
 
-    backend = cluster.open(store=store, data_dir='')
+    backend = open_postgres_backend(store, pg_dsn)
     queue = PostgresQueueBackend(dsn=pg_dsn)
 
     try:
@@ -80,4 +79,4 @@ def test_enqueue_drain_recall_round_trip(pg_dsn, request):
         assert -1.0 - 1e-6 <= score <= 1.0 + 1e-6
     finally:
         backend.close()
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)

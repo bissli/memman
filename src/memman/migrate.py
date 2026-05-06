@@ -14,10 +14,12 @@ on confirmation. The shared drain.lock is held for the duration of
 the migrate command so a scheduler-fired drain cannot race the
 SQLite reader.
 
-On a successful migrate the CLI flips `MEMMAN_BACKEND=postgres` in
-the env file so the next drain routes to the new database. With B3
-the drain pipeline dispatches on `MEMMAN_BACKEND`, so this flip
-makes the cutover atomic.
+On a successful migrate the CLI writes per-store
+`MEMMAN_BACKEND_<store>=postgres` and `MEMMAN_PG_DSN_<store>=<dsn>`
+keys to the env file so the next drain routes the migrated store to
+the new database. The drain pipeline dispatches per-store via
+`open_backend`, so this write makes the cutover atomic for the
+migrated store while leaving sibling stores untouched.
 """
 
 from __future__ import annotations

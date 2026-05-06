@@ -2,7 +2,8 @@
 
 Verifies the migrate orchestration: DSN preflight, drain.lock guard,
 per-store atomic transaction, dry-run mode, the interactive
-confirmation flow, and the auto-flip of MEMMAN_BACKEND.
+confirmation flow, and the per-store env-key write
+(`MEMMAN_BACKEND_<store>=postgres`) after a successful migrate.
 """
 
 from pathlib import Path
@@ -184,7 +185,7 @@ def test_migrate_preflight_passes_on_pgvector_database(pg_dsn):
 def test_migrate_cli_requires_confirmation_for_real_run(
         tmp_path, env_file, pg_dsn):
     """CLI aborts when no `--yes` and the prompt is not confirmed."""
-    env_file('MEMMAN_PG_DSN', pg_dsn)
+    env_file('MEMMAN_DEFAULT_PG_DSN', pg_dsn)
     _seed_sqlite_store(tmp_path / 'memman', 'mig_cli')
     from memman.store.postgres import _store_schema
     schema = _store_schema('mig_cli')
@@ -205,8 +206,8 @@ def test_migrate_cli_requires_confirmation_for_real_run(
 
 def test_migrate_cli_yes_flag_skips_prompt(
         tmp_path, env_file, pg_dsn):
-    """`--yes` runs without prompting and flips MEMMAN_BACKEND."""
-    env_file('MEMMAN_PG_DSN', pg_dsn)
+    """`--yes` runs without prompting and writes per-store backend keys."""
+    env_file('MEMMAN_DEFAULT_PG_DSN', pg_dsn)
     data_dir = tmp_path / 'memman'
     _seed_sqlite_store(data_dir, 'mig_cli_yes')
     from memman.store.postgres import _store_schema
@@ -224,9 +225,10 @@ def test_migrate_cli_yes_flag_skips_prompt(
                 'migrate', '--store', 'mig_cli_yes', '--yes'],
             catch_exceptions=False)
         assert result.exit_code == 0, result.output
-        assert 'MEMMAN_BACKEND' in result.output
+        assert 'MEMMAN_BACKEND_mig_cli_yes' in result.output
         env_text = (data_dir / 'env').read_text()
-        assert 'MEMMAN_BACKEND=postgres' in env_text
+        assert 'MEMMAN_BACKEND_mig_cli_yes=postgres' in env_text
+        assert f'MEMMAN_PG_DSN_mig_cli_yes={pg_dsn}' in env_text
     finally:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
@@ -235,7 +237,7 @@ def test_migrate_cli_yes_flag_skips_prompt(
 
 def test_migrate_cli_dry_run_succeeds(tmp_path, env_file, pg_dsn):
     """CLI dry-run prints plan with redacted DSN, no prompt, no writes."""
-    env_file('MEMMAN_PG_DSN', pg_dsn)
+    env_file('MEMMAN_DEFAULT_PG_DSN', pg_dsn)
     _seed_sqlite_store(tmp_path / 'memman', 'mig_cli_dry')
 
     from memman.cli import cli

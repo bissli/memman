@@ -31,7 +31,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Self
 
-from memman.store.backend import Backend, Cluster, EdgeStore, MetaStore
+from memman.store.backend import Backend, EdgeStore, MetaStore
 from memman.store.backend import NodeStore, Oplog, RecallSession
 from memman.store.backend import _check_identifier
 from memman.store.base import BaseNodeStore
@@ -2007,7 +2007,7 @@ def _read_stored_dim(dsn: str, store: str) -> int | None:
 def open_postgres_backend(
         store: str, dsn: str, *,
         read_only: bool = False) -> PostgresBackend:
-    """Free-function open: bypass the PostgresCluster scaffold.
+    """Open or create the per-store Postgres backend at `dsn`.
 
     Reads the store's stored fingerprint dim (if any) before
     `_ensure_baseline_schema`, so a freshly discovered Postgres-backed
@@ -2030,10 +2030,11 @@ def open_postgres_backend(
 
 
 def drop_postgres_store(store: str, dsn: str) -> None:
-    """Free-function drop: removes the per-store schema.
+    """Drop the per-store schema at `dsn`.
 
-    Mirrors `PostgresCluster.drop_store` minus the queue purge (the
-    queue stays SQLite under the per-store routing model).
+    Queue rows are not purged here: the queue is SQLite under the
+    per-store routing model and `factory.drop_store` calls
+    `queue.purge_store` separately.
     """
     schema = _store_schema(store)
     with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
@@ -2046,7 +2047,7 @@ def _ensure_baseline_schema(
 
     `dim` is the embedding dimension to bake into `vector(N)` for
     new schemas. Resolved from `active_fingerprint().dim` by
-    `PostgresCluster.open()` so a non-Voyage operator (e.g. openai
+    `open_postgres_backend` so a non-Voyage operator (e.g. openai
     1536) gets a correctly-sized column on first deploy. For
     existing schemas the call is idempotent: `create table if not
     exists` does not alter the existing column width, and the
@@ -2463,73 +2464,6 @@ where id = %s
 
     def integrity_report(self) -> IntegrityReport:
         return IntegrityReport()
-
-
-class PostgresCluster(Cluster):
-    """Cluster implementation for Postgres: schema-per-store.
-
-    Reads `MEMMAN_PG_DSN` from config to find the connection target.
-    `data_dir` is unused for the Postgres backend (every store maps
-    to a schema in one database) but kept on the verb signature so
-    the Cluster Protocol stays shared.
-    """
-
-    def __init__(self, dsn: str | None = None) -> None:
-        if dsn is None:
-            from memman import config
-            dsn = config.get(config.PG_DSN)
-        if not dsn:
-            raise ConfigError(
-                'MEMMAN_PG_DSN is not set; cannot open Postgres cluster')
-        self._dsn = dsn
-
-    def open(self, *, store: str, data_dir: str) -> PostgresBackend:
-        active_dim = _resolve_active_dim()
-        _ensure_baseline_schema(self._dsn, store, dim=active_dim)
-        _assert_vector_dim_matches(self._dsn, store, active_dim)
-        backend = PostgresBackend(self._dsn, store)
-        try:
-            _ensure_hnsw_index(self._dsn, _store_schema(store))
-        except Exception as exc:
-            logger.warning(f'HNSW index ensure failed: {exc}')
-        return backend
-
-    def open_read_only(
-            self, *, store: str, data_dir: str) -> PostgresBackend:
-        """Postgres read-only: fresh autocommit connection."""
-        _check_identifier(store)
-        ro_conn = _open_connection(self._dsn, autocommit=True)
-        return PostgresBackend(
-            self._dsn, store, conn=ro_conn, owns_conn=True)
-
-    def list_stores(self, *, data_dir: str) -> list[str]:
-        sql = """
-select nspname from pg_namespace
-where nspname like 'store_%'
-order by nspname
-"""
-        try:
-            with _connection(self._dsn, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(sql)
-                    return sorted(
-                        r[0][len('store_'):] for r in cur.fetchall())
-        except BackendError:
-            raise
-        except Exception as exc:
-            raise BackendError(f'cannot connect to postgres: {exc}')
-
-    def drop_store(self, *, store: str, data_dir: str) -> None:
-        schema = _store_schema(store)
-        with _connection(self._dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(f'drop schema if exists {schema} cascade')
-                cur.execute(
-                    'delete from queue.queue where store = %s',
-                    (store,))
-
-    def close(self) -> None:
-        """Postgres clusters do not hold a pool."""
 
 
 def _bfs_python_fallback(

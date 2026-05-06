@@ -20,14 +20,13 @@ pytestmark = pytest.mark.postgres
 
 def test_start_run_inserts_worker_run_with_heartbeat(pg_dsn):
     """start_run on Postgres inserts a row with last_heartbeat_at set."""
-    from memman.store.postgres import PostgresCluster
+    from memman.store.postgres import drop_postgres_store, open_postgres_backend
 
-    cluster = PostgresCluster(dsn=pg_dsn)
     try:
-        cluster.drop_store(store='hb_test', data_dir='')
+        drop_postgres_store('hb_test', pg_dsn)
     except Exception:
         pass
-    backend = cluster.open(store='hb_test', data_dir='')
+    backend = open_postgres_backend('hb_test', pg_dsn)
     from memman.store.postgres import PostgresQueueBackend
     queue = PostgresQueueBackend(pg_dsn)
     try:
@@ -52,21 +51,20 @@ def test_start_run_inserts_worker_run_with_heartbeat(pg_dsn):
         except Exception:
             pass
         try:
-            cluster.drop_store(store='hb_test', data_dir='')
+            drop_postgres_store('hb_test', pg_dsn)
         except Exception:
             pass
 
 
 def test_beat_run_updates_heartbeat_timestamp(pg_dsn):
     """beat_run advances last_heartbeat_at on the named run."""
-    from memman.store.postgres import PostgresCluster
+    from memman.store.postgres import drop_postgres_store, open_postgres_backend
 
-    cluster = PostgresCluster(dsn=pg_dsn)
     try:
-        cluster.drop_store(store='hb_beat', data_dir='')
+        drop_postgres_store('hb_beat', pg_dsn)
     except Exception:
         pass
-    backend = cluster.open(store='hb_beat', data_dir='')
+    backend = open_postgres_backend('hb_beat', pg_dsn)
     from memman.store.postgres import PostgresQueueBackend
     queue = PostgresQueueBackend(pg_dsn)
     try:
@@ -94,21 +92,20 @@ def test_beat_run_updates_heartbeat_timestamp(pg_dsn):
         except Exception:
             pass
         try:
-            cluster.drop_store(store='hb_beat', data_dir='')
+            drop_postgres_store('hb_beat', pg_dsn)
         except Exception:
             pass
 
 
 def test_recent_runs_includes_last_heartbeat_at(pg_dsn):
     """recent_runs populates the WorkerRun.last_heartbeat_at field."""
-    from memman.store.postgres import PostgresCluster
+    from memman.store.postgres import drop_postgres_store, open_postgres_backend
 
-    cluster = PostgresCluster(dsn=pg_dsn)
     try:
-        cluster.drop_store(store='hb_recent', data_dir='')
+        drop_postgres_store('hb_recent', pg_dsn)
     except Exception:
         pass
-    backend = cluster.open(store='hb_recent', data_dir='')
+    backend = open_postgres_backend('hb_recent', pg_dsn)
     from memman.store.postgres import PostgresQueueBackend
     queue = PostgresQueueBackend(pg_dsn)
     try:
@@ -123,6 +120,6 @@ def test_recent_runs_includes_last_heartbeat_at(pg_dsn):
         except Exception:
             pass
         try:
-            cluster.drop_store(store='hb_recent', data_dir='')
+            drop_postgres_store('hb_recent', pg_dsn)
         except Exception:
             pass

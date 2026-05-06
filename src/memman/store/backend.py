@@ -1,6 +1,6 @@
 """Backend Protocol surface.
 
-Defines `Cluster`, `Backend`, the four sub-store Protocols (`NodeStore`,
+Defines `Backend`, the four sub-store Protocols (`NodeStore`,
 `EdgeStore`, `MetaStore`, `Oplog`), `RecallSession`, and `QueueBackend`.
 SQLite implements them in `store/sqlite.py`; Postgres in `store/postgres.py`.
 
@@ -470,8 +470,8 @@ class RecallSession(Protocol):
 class Backend(Protocol):
     """Per-store handle exposing the verb surface.
 
-    Yielded by `Cluster.open(name)`. Owns its own connection (SQLite
-    file / Postgres connection from a pool). Sub-stores
+    Yielded by `factory.open_backend(store, data_dir)`. Owns its own
+    connection (SQLite file / Postgres connection from a pool). Sub-stores
     (`nodes`/`edges`/`meta`/`oplog`) are bound to the same connection
     so they share the active transaction and read-after-write
     visibility.
@@ -593,42 +593,11 @@ class Backend(Protocol):
         ...
 
     def __enter__(self) -> Self:
-        """Return self so `with cluster.open(...) as backend:` works."""
+        """Return self so `with open_backend(...) as backend:` works."""
         ...
 
     def __exit__(self, exc_type, exc, tb) -> None:
         """Close the backend on context exit."""
-        ...
-
-
-@runtime_checkable
-class Cluster(Protocol):
-    """Per-data-dir entry point.
-
-    `open_cluster()` returns one of these. Cluster opens / creates
-    per-store backends, lists stores, and is the natural home for
-    multi-store coordination (drop, list).
-    """
-
-    def open(self, *, store: str, data_dir: str) -> Backend:
-        """Open or create the named store and return its Backend."""
-        ...
-
-    def open_read_only(
-            self, *, store: str, data_dir: str) -> Backend:
-        """Open the named store in read-only mode (no migration)."""
-        ...
-
-    def list_stores(self, *, data_dir: str) -> list[str]:
-        """Return sorted store names under data_dir."""
-        ...
-
-    def drop_store(self, *, store: str, data_dir: str) -> None:
-        """Drop a named store (delete files / drop schema)."""
-        ...
-
-    def close(self) -> None:
-        """Release any cluster-level resources (connection pool)."""
         ...
 
 

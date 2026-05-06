@@ -13,31 +13,28 @@ features today:
    the `memman[postgres]` extras are importable AND the
    `memman.store.postgres` module exists. Until both checks pass,
    only sqlite is selectable -- the wizard skips the prompt entirely
-   and passes `MEMMAN_BACKEND=sqlite` straight through, avoiding a
-   one-option confirmation prompt.
+   and writes `MEMMAN_DEFAULT_BACKEND=sqlite` straight through,
+   avoiding a one-option confirmation prompt.
+
+The wizard writes per-store dispatch keys: `MEMMAN_DEFAULT_BACKEND`
+(and `MEMMAN_DEFAULT_PG_DSN` for postgres) plus
+`MEMMAN_BACKEND_default` (and `MEMMAN_PG_DSN_default` for postgres)
+for the freshly-created `default` store.
 
 Non-TTY mode (`sys.stdin.isatty()` False or `--no-wizard`) skips all
 prompts and uses flag values + defaults. The wizard never silently
 overrides an existing env-file value; flag-vs-file conflicts are
 handled by the caller in `setup.claude.run_install` before the wizard
 is invoked, with a clear message pointing at `memman config set`.
-
-Migration of existing SQLite stores is deliberately NOT performed
-here -- the wizard prints a hint pointing at the future `memman
-migrate` command instead. Migration has too many sharp edges
-(no idempotency, no schema sanitization, no preflight) to bundle
-into install.
 """
 
 from __future__ import annotations
 
 import sys
 from importlib.util import find_spec
-from pathlib import Path
 
 import click
 from memman import config, extras
-from memman.store.db import list_stores
 
 DSN_MAX_ATTEMPTS = 3
 DSN_PROBE_TIMEOUT_SEC = 5
@@ -64,8 +61,8 @@ def run_wizard(
 
     Returns
         Dict of env-file rows the wizard collected, e.g.
-        `{MEMMAN_BACKEND: 'sqlite'}` or `{MEMMAN_BACKEND: 'postgres',
-        MEMMAN_PG_DSN: 'postgresql://...', OPENROUTER_API_KEY: '...'}`.
+        `{MEMMAN_DEFAULT_BACKEND: 'sqlite',
+        MEMMAN_BACKEND_default: 'sqlite'}`.
     """
     interactive = sys.stdin.isatty() and not no_wizard
     file_values = config.parse_env_file(config.env_file_path(data_dir))
@@ -76,15 +73,16 @@ def run_wizard(
     chosen_backend, backend_was_user_supplied = _select_backend(
         backend=backend, file_values=file_values, interactive=interactive)
     if backend_was_user_supplied:
-        out[config.BACKEND] = chosen_backend
+        out[config.DEFAULT_BACKEND] = chosen_backend
+        out[config.BACKEND_FOR('default')] = chosen_backend
 
     if chosen_backend == 'postgres':
         dsn = _collect_dsn(
             pg_dsn=pg_dsn, file_values=file_values,
             interactive=interactive)
         if dsn:
-            out[config.PG_DSN] = dsn
-        _print_migration_hint(data_dir, file_values)
+            out[config.DEFAULT_PG_DSN] = dsn
+            out[config.PG_DSN_FOR('default')] = dsn
 
     if interactive and not out:
         click.echo(click.style(
@@ -131,14 +129,13 @@ def _select_backend(
     Returns `(chosen_backend, user_supplied)`. `user_supplied` is True
     when the value came from a flag, an existing file row, or an
     interactive prompt -- i.e., something the wizard should persist back
-    to the env file. False when the wizard is just naming the default
-    (`'sqlite'`) and `INSTALL_DEFAULTS` will write it later in the install
-    flow. This keeps the wizard from materializing a default-only env
-    file write before `check_prereqs` runs.
+    to the env file as `MEMMAN_DEFAULT_BACKEND`. False when the wizard
+    is just naming the default (`'sqlite'`) and `INSTALL_DEFAULTS` will
+    write it later in the install flow.
     """
     if backend:
         return backend, True
-    file_backend = file_values.get(config.BACKEND, '').strip()
+    file_backend = file_values.get(config.DEFAULT_BACKEND, '').strip()
     if file_backend:
         return file_backend, False
     options = _selectable_backends()
@@ -191,7 +188,7 @@ def _collect_dsn(
     if pg_dsn:
         _probe_dsn_or_die(pg_dsn)
         return pg_dsn
-    if file_values.get(config.PG_DSN, '').strip():
+    if file_values.get(config.DEFAULT_PG_DSN, '').strip():
         return None
     if not interactive:
         raise click.ClickException(
@@ -267,30 +264,3 @@ def _is_remote_dsn(dsn: str) -> bool:
         if marker in lowered:
             return False
     return bool('host=' in lowered or '://' in lowered)
-
-
-def _print_migration_hint(
-        data_dir: str, file_values: dict[str, str]) -> None:
-    """Print a discoverability hint when populated SQLite stores exist.
-
-    Suppressed when the file's current backend is already postgres
-    (no-op fast path -- migration has presumably already happened).
-    """
-    if file_values.get(config.BACKEND, '').strip() == 'postgres':
-        return
-    populated = [
-        name for name in list_stores(data_dir)
-        if any(Path(data_dir, 'data', name).glob('*.db'))]
-    if not populated:
-        return
-    click.echo('')
-    click.echo(click.style(
-        f'Found {len(populated)} existing SQLite store(s):'
-        f' {", ".join(sorted(populated))}.', fg='yellow'))
-    click.echo(click.style(
-        '  To migrate them to postgres, run:'
-        ' memman migrate --all',
-        dim=True))
-    click.echo(click.style(
-        '  (or --dry-run first to see the plan; --yes to skip the prompt)',
-        dim=True))

@@ -28,7 +28,7 @@ from memman.store import edge as _edge
 from memman.store import node as _node
 from memman.store import oplog as _oplog
 from memman.store import snapshot as _snapshot
-from memman.store.backend import Backend, Cluster, EdgeStore, MetaStore
+from memman.store.backend import Backend, EdgeStore, MetaStore
 from memman.store.backend import NodeStore, Oplog, RecallSession
 from memman.store.base import BaseNodeStore
 from memman.store.db import DB
@@ -479,7 +479,7 @@ class SqliteRecallSession(RecallSession):
 class SqliteBackend(Backend):
     """Per-store backend wrapping a SQLite `DB`.
 
-    Construction takes an already-open `DB`. `SqliteCluster.open()`
+    Construction takes an already-open `DB`. `open_sqlite_backend`
     calls `_db.open_db(...)` and wraps the result; tests / cli code
     that already have a `DB` can wrap it directly:
     `SqliteBackend(db)`.
@@ -674,11 +674,11 @@ def open_ro_db(sdir: str) -> DB:
 def open_sqlite_backend(
         store: str, data_dir: str, *,
         read_only: bool = False) -> 'SqliteBackend':
-    """Free-function open: bypass the Cluster scaffold.
+    """Open or create the per-store SQLite backend.
 
-    Mirrors `SqliteCluster.open` / `open_read_only` so callers that
-    have already resolved the per-store backend kind can skip the
-    cluster intermediary.
+    Materializes `<data_dir>/data/<store>/memman.db` on demand;
+    `read_only=True` opens the existing DB in `mode=ro` without
+    creating it.
     """
     sdir = _db.store_dir(data_dir, store)
     if read_only:
@@ -686,29 +686,8 @@ def open_sqlite_backend(
     return SqliteBackend(_db.open_db(sdir))
 
 
-class SqliteCluster(Cluster):
-    """Cluster implementation for the SQLite backend.
-
-    Stateless: `open()` opens or creates the per-store DB on demand;
-    nothing is cached at the cluster level.
-    """
-
-    def open(self, *, store: str, data_dir: str) -> SqliteBackend:
-        sdir = _db.store_dir(data_dir, store)
-        return SqliteBackend(_db.open_db(sdir))
-
-    def open_read_only(
-            self, *, store: str, data_dir: str) -> SqliteBackend:
-        sdir = _db.store_dir(data_dir, store)
-        return SqliteBackend(_db.open_read_only(sdir))
-
-    def list_stores(self, *, data_dir: str) -> list[str]:
-        return _db.list_stores(data_dir)
-
-    def drop_store(self, *, store: str, data_dir: str) -> None:
-        sdir = _db.store_dir(data_dir, store)
-        if Path(sdir).is_dir():
-            shutil.rmtree(sdir)
-
-    def close(self) -> None:
-        return None
+def drop_sqlite_store(store: str, data_dir: str) -> None:
+    """Remove the SQLite store directory for `store` if it exists."""
+    sdir = _db.store_dir(data_dir, store)
+    if Path(sdir).is_dir():
+        shutil.rmtree(sdir)

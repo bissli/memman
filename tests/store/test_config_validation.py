@@ -1,13 +1,14 @@
 """Backend-namespaced env key validation.
 
-Validates that `factory.open_cluster()` rejects typo'd keys that
+Validates that `factory.open_backend()` rejects typo'd keys that
 fall in the active backend's namespace (`MEMMAN_PG_*` for postgres,
 `MEMMAN_SQLITE_*` for sqlite) before any connection attempt, with
 a `did you mean` hint when one is close. Cross-backend keys
-(`OPENROUTER_API_KEY`, `MEMMAN_BACKEND`, `MEMMAN_EMBED_PROVIDER`)
-are never scanned by either validator. Inactive-backend keys are
-tolerated -- a sqlite-active install may carry `MEMMAN_PG_DSN`
-from a prior postgres trial without erroring.
+(`OPENROUTER_API_KEY`, `MEMMAN_DEFAULT_BACKEND`,
+`MEMMAN_EMBED_PROVIDER`) are never scanned by either validator.
+Inactive-backend keys are tolerated -- a sqlite-active install
+may carry `MEMMAN_PG_DSN_<store>` from a prior postgres trial
+without erroring.
 """
 
 import pytest
@@ -52,7 +53,7 @@ class TestPostgresValidation:
         """
         env = {
             'OPENROUTER_API_KEY': 'k',
-            'MEMMAN_BACKEND': 'postgres',
+            'MEMMAN_DEFAULT_BACKEND': 'postgres',
             'MEMMAN_EMBED_PROVIDER': 'voyage',
             'MEMMAN_DATA_DIR': '/tmp/x',
             }
@@ -87,10 +88,10 @@ class TestSqliteValidation:
         assert 'MEMMAN_SQLITE_FOO' in str(exc.value)
 
 
-class TestOpenClusterIntegration:
-    """`factory.open_cluster` calls the active backend's _validate."""
+class TestOpenBackendIntegration:
+    """`factory.open_backend` calls the active backend's _validate."""
 
-    def test_open_cluster_rejects_postgres_typo(
+    def test_open_backend_rejects_postgres_typo(
             self, monkeypatch, tmp_path):
         """A MEMMAN_PG_DSL typo with backend=postgres errors before
         the connection attempt.
@@ -102,31 +103,13 @@ class TestOpenClusterIntegration:
         data_dir.mkdir(exist_ok=True)
         env_path = data_dir / 'env'
         env_path.write_text(
-            'MEMMAN_BACKEND=postgres\n'
+            'MEMMAN_BACKEND_default=postgres\n'
+            'MEMMAN_PG_DSN_default=postgresql://localhost/x\n'
             'MEMMAN_PG_DSL=postgresql://localhost/x\n')
         monkeypatch.setenv('MEMMAN_DATA_DIR', str(data_dir))
         config.reset_file_cache()
 
         with pytest.raises(ConfigError) as exc:
-            factory.open_cluster()
+            factory.open_backend('default', str(data_dir))
         assert 'MEMMAN_PG_DSL' in str(exc.value)
         assert 'MEMMAN_PG_DSN' in str(exc.value)
-
-    def test_open_cluster_tolerates_inactive_pg_keys(
-            self, monkeypatch, tmp_path):
-        """Sqlite-active install tolerates MEMMAN_PG_* leftovers.
-        """
-        from memman import config
-        from memman.store import factory
-
-        data_dir = tmp_path / 'memman'
-        data_dir.mkdir(exist_ok=True)
-        env_path = data_dir / 'env'
-        env_path.write_text(
-            'MEMMAN_BACKEND=sqlite\n'
-            'MEMMAN_PG_DSN=postgresql://localhost/x\n')
-        monkeypatch.setenv('MEMMAN_DATA_DIR', str(data_dir))
-        config.reset_file_cache()
-
-        cluster = factory.open_cluster()
-        assert cluster is not None

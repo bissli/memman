@@ -441,24 +441,23 @@ class TestRecallAt10Gate:
     def test_cross_backend_recall_at_10_gate(self, tmp_path, pg_dsn):
         """Both backends recall >= 0.95 of ground truth, agreeing within 0.05.
         """
-        from memman.store.postgres import PostgresCluster
-        from memman.store.sqlite import SqliteCluster
+        from memman.store.postgres import drop_postgres_store
+        from memman.store.postgres import open_postgres_backend
+        from memman.store.sqlite import drop_sqlite_store
+        from memman.store.sqlite import open_sqlite_backend
 
         topic_centers = [_gaussian_unit(seed=i) for i in range(_N_TOPICS)]
 
-        sqlite_cluster = SqliteCluster()
-        sqlite_backend = sqlite_cluster.open(
-            store='r10', data_dir=str(tmp_path / 'memman'))
+        sqlite_data_dir = str(tmp_path / 'memman')
+        sqlite_backend = open_sqlite_backend('r10', sqlite_data_dir)
         sqlite_backend.meta.set(META_KEY, active_fingerprint().to_json())
         _populate_recall(sqlite_backend, topic_centers)
 
-        postgres_cluster = PostgresCluster(dsn=pg_dsn)
         try:
-            postgres_cluster.drop_store(store='r10_test', data_dir='')
+            drop_postgres_store('r10_test', pg_dsn)
         except Exception:
             pass
-        postgres_backend = postgres_cluster.open(
-            store='r10_test', data_dir='')
+        postgres_backend = open_postgres_backend('r10_test', pg_dsn)
         postgres_backend.meta.set(META_KEY, active_fingerprint().to_json())
         _populate_recall(postgres_backend, topic_centers)
 
@@ -481,13 +480,15 @@ class TestRecallAt10Gate:
                 sqlite_backend.close()
             except Exception:
                 pass
-            sqlite_cluster.close()
+            try:
+                drop_sqlite_store('r10', sqlite_data_dir)
+            except Exception:
+                pass
             try:
                 postgres_backend.close()
             except Exception:
                 pass
             try:
-                postgres_cluster.drop_store(store='r10_test', data_dir='')
+                drop_postgres_store('r10_test', pg_dsn)
             except Exception:
                 pass
-            postgres_cluster.close()

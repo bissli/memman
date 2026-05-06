@@ -6,7 +6,7 @@ the input dict for keys that fall in the backend's namespace and
 raises `ConfigError` on any unknown key, with a `did you mean`
 hint when one is close.
 
-Cross-backend keys (`OPENROUTER_API_KEY`, `MEMMAN_BACKEND`,
+Cross-backend keys (`OPENROUTER_API_KEY`, `MEMMAN_DEFAULT_BACKEND`,
 `MEMMAN_EMBED_PROVIDER`, etc.) belong to neither dataclass and are
 never scanned by either validator. They remain governed by the
 flat `INSTALLABLE_KEYS` membership check at `config set`.
@@ -23,12 +23,12 @@ from memman.store.errors import ConfigError
 class PostgresBackendConfig:
     """Owns the `MEMMAN_PG_*` namespace.
 
-    Today: `MEMMAN_PG_DSN`. Add new keys here as the postgres
-    backend grows them.
+    Today: `MEMMAN_PG_DSN_<store>` (per-store DSN). Add new keys
+    here as the postgres backend grows them.
     """
 
     NAMESPACE_PREFIX = 'MEMMAN_PG_'
-    OWNED_KEYS = frozenset({config.PG_DSN})
+    OWNED_KEYS = frozenset({'MEMMAN_PG_DSN'})
 
     @classmethod
     def _validate(cls, env: dict) -> None:
@@ -121,7 +121,7 @@ _REGISTRY: dict[str, type] = {
 def validate_for(backend: str, env: dict) -> None:
     """Validate `env` against the named backend's config dataclass.
 
-    Unknown backends are tolerated -- `factory.open_cluster` will
+    Unknown backends are tolerated -- `factory.open_backend` will
     surface that itself. This function only validates the namespace
     when the backend is registered.
     """

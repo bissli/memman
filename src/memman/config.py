@@ -51,8 +51,6 @@ OPENROUTER_ENDPOINT = 'MEMMAN_OPENROUTER_ENDPOINT'
 DEBUG = 'MEMMAN_DEBUG'
 WORKER = 'MEMMAN_WORKER'
 LOG_LEVEL = 'MEMMAN_LOG_LEVEL'
-BACKEND = 'MEMMAN_BACKEND'
-PG_DSN = 'MEMMAN_PG_DSN'
 DEFAULT_BACKEND = 'MEMMAN_DEFAULT_BACKEND'
 DEFAULT_PG_DSN = 'MEMMAN_DEFAULT_PG_DSN'
 
@@ -86,7 +84,7 @@ SECRET_VARS = frozenset({
     OPENROUTER_API_KEY,
     VOYAGE_API_KEY,
     OPENAI_EMBED_API_KEY,
-    PG_DSN,
+    DEFAULT_PG_DSN,
     })
 
 INSTALLABLE_KEYS = (
@@ -107,8 +105,8 @@ INSTALLABLE_KEYS = (
     VOYAGE_RERANK_MODEL,
     OPENROUTER_API_KEY,
     VOYAGE_API_KEY,
-    BACKEND,
-    PG_DSN,
+    DEFAULT_BACKEND,
+    DEFAULT_PG_DSN,
     )
 
 MANDATORY_INSTALL_KEYS = (
@@ -131,7 +129,7 @@ INSTALL_DEFAULTS: dict[str, str] = {
     OLLAMA_EMBED_MODEL: 'nomic-embed-text',
     OPENROUTER_EMBED_MODEL: 'baai/bge-m3',
     VOYAGE_RERANK_MODEL: 'rerank-2.5-lite',
-    BACKEND: 'sqlite',
+    DEFAULT_BACKEND: 'sqlite',
     }
 
 _PROCESS_CONTROL_VARS = (DATA_DIR, STORE, WORKER, DEBUG)
@@ -244,10 +242,10 @@ def get_store_backend(
         store: str, data_dir: str | None = None) -> str | None:
     """Read `MEMMAN_BACKEND_<store>` from the env file; None if absent.
 
-    Read-only helper -- no fallback to the global `MEMMAN_BACKEND` or
-    to `MEMMAN_DEFAULT_BACKEND`. Callers that want default-fallback
-    behavior compose `get_store_backend(store) or
-    get(DEFAULT_BACKEND)` explicitly so the data flow stays visible.
+    Read-only helper -- no fallback to `MEMMAN_DEFAULT_BACKEND`.
+    Callers that want default-fallback behavior compose
+    `get_store_backend(store) or get(DEFAULT_BACKEND)` explicitly so
+    the data flow stays visible.
     """
     if data_dir is None:
         return get(BACKEND_FOR(store))

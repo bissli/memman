@@ -22,9 +22,9 @@ import threading
 import psycopg
 import pytest
 from memman.store.model import Insight
-from memman.store.postgres import EMBEDDING_DIM, PostgresCluster
+from memman.store.postgres import EMBEDDING_DIM, drop_postgres_store
 from memman.store.postgres import _ensure_baseline_schema, _ensure_hnsw_index
-from memman.store.postgres import _store_schema
+from memman.store.postgres import _store_schema, open_postgres_backend
 from pgvector.psycopg import register_vector
 from tests.fixtures.postgres import SCHEMA, drain_connection_pair
 from tests.fixtures.postgres import simulate_drain_connection_drop, wait_for
@@ -215,8 +215,7 @@ def _pg_store_backend(pg_dsn):
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
-    backend = PostgresCluster(dsn=pg_dsn).open(
-        store=store_name, data_dir='/unused')
+    backend = open_postgres_backend(store_name, pg_dsn)
     try:
         yield backend, pg_dsn, store_name
     finally:
@@ -334,12 +333,11 @@ def test_postgres_recall_issues_pgvector_distance_operator(
     from memman.search.recall import intent_aware_recall
     from memman.store.model import Insight
 
-    cluster = PostgresCluster(dsn=pg_dsn)
     try:
-        cluster.drop_store(store='hnsw_smoke', data_dir='')
+        drop_postgres_store('hnsw_smoke', pg_dsn)
     except Exception:
         pass
-    backend = cluster.open(store='hnsw_smoke', data_dir='')
+    backend = open_postgres_backend('hnsw_smoke', pg_dsn)
     backend.meta.set(META_KEY, active_fingerprint().to_json())
 
     n_insights = 10
@@ -376,10 +374,9 @@ def test_postgres_recall_issues_pgvector_distance_operator(
         except Exception:
             pass
         try:
-            cluster.drop_store(store='hnsw_smoke', data_dir='')
+            drop_postgres_store('hnsw_smoke', pg_dsn)
         except Exception:
             pass
-        cluster.close()
 
     pgvector_ops = [s for s in captured_sql if '<=>' in s]
     assert pgvector_ops, (
@@ -398,9 +395,8 @@ def test_reembed_lock_session_scoped_and_releases_on_close(
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
-    cluster = PostgresCluster(dsn=pg_dsn)
-    a = cluster.open(store=store_name, data_dir='/unused')
-    b = cluster.open(store=store_name, data_dir='/unused')
+    a = open_postgres_backend(store_name, pg_dsn)
+    b = open_postgres_backend(store_name, pg_dsn)
     try:
         with a.reembed_lock('reembed') as got_a:
             assert got_a is True
@@ -430,8 +426,7 @@ def test_reindex_concurrent_writers_no_edges_lost(pg_dsn):
         with conn.cursor() as cur:
             cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
 
-    cluster = PostgresCluster(dsn=pg_dsn)
-    seed = cluster.open(store=store_name, data_dir='/unused')
+    seed = open_postgres_backend(store_name, pg_dsn)
     try:
         with seed.transaction():
             for i in range(3):
@@ -448,7 +443,7 @@ def test_reindex_concurrent_writers_no_edges_lost(pg_dsn):
     errors: list[Exception] = []
 
     def thread_a() -> None:
-        backend = cluster.open(store=store_name, data_dir='/unused')
+        backend = open_postgres_backend(store_name, pg_dsn)
         try:
             barrier.wait()
             with backend.transaction():
@@ -471,7 +466,7 @@ def test_reindex_concurrent_writers_no_edges_lost(pg_dsn):
             backend.close()
 
     def thread_b() -> None:
-        backend = cluster.open(store=store_name, data_dir='/unused')
+        backend = open_postgres_backend(store_name, pg_dsn)
         try:
             barrier.wait()
             reindex_auto_edges(backend)
@@ -489,7 +484,7 @@ def test_reindex_concurrent_writers_no_edges_lost(pg_dsn):
 
     assert not errors, f'thread errors: {errors}'
 
-    check = cluster.open(store=store_name, data_dir='/unused')
+    check = open_postgres_backend(store_name, pg_dsn)
     try:
         with check._conn.cursor() as cur:
             cur.execute(

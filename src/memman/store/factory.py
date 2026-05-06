@@ -1,56 +1,19 @@
-"""Cluster factory dispatch on `MEMMAN_BACKEND`.
+"""Per-store backend factory dispatch.
 
-Mirrors `embed/__init__.py`'s registry shape: a name -> factory
-mapping plus a single `open_cluster()` entry point.
+`open_backend(store, data_dir)` reads `MEMMAN_BACKEND_<store>` (with
+fallback to `MEMMAN_DEFAULT_BACKEND`) and dispatches to the matching
+free function. `list_stores` and `drop_store` apply the same
+resolution so dispatch is one place.
 """
 
 import os
-from collections.abc import Callable
 
 from memman import config
-from memman.store.backend import Backend, Cluster
+from memman.store.backend import Backend
 from memman.store.config import validate_for
 from memman.store.errors import ConfigError
 
-
-def _sqlite_factory() -> Cluster:
-    """Lazy import to avoid pulling sqlite3 wiring at module load."""
-    from memman.store.sqlite import SqliteCluster
-    return SqliteCluster()
-
-
-def _postgres_factory() -> Cluster:
-    """Lazy import: psycopg + pgvector are an optional dependency."""
-    from memman.store.postgres import PostgresCluster
-    return PostgresCluster()
-
-
-BACKENDS: dict[str, Callable[[], Cluster]] = {
-    'sqlite': _sqlite_factory,
-    'postgres': _postgres_factory,
-    }
-
-
-def open_cluster() -> Cluster:
-    """Return the Cluster instance for `MEMMAN_BACKEND`.
-
-    Defaults to 'sqlite' when unset (matches install wizard default).
-    Validates the active backend's `MEMMAN_<NS>_*` namespace before
-    instantiation so a typo'd key (e.g. `MEMMAN_PG_DSL`) surfaces
-    with a `did you mean` hint instead of a connection error.
-    """
-    raw = config.get(config.BACKEND) or 'sqlite'
-    name = raw.lower()
-    factory = BACKENDS.get(name)
-    if factory is None:
-        known = ', '.join(sorted(BACKENDS))
-        raise ConfigError(
-            f'unknown {config.BACKEND}={name!r}; registered: {known}')
-    merged = dict(os.environ)
-    merged.update(
-        config.parse_env_file(config.env_file_path()))
-    validate_for(name, merged)
-    return factory()
+KNOWN_BACKENDS = frozenset({'sqlite', 'postgres'})
 
 
 def _resolve_store_backend(store: str, data_dir: str) -> str:
@@ -78,7 +41,6 @@ def _resolve_store_pg_dsn(store: str, data_dir: str) -> str | None:
     return (
         file_values.get(config.PG_DSN_FOR(store))
         or file_values.get(config.DEFAULT_PG_DSN)
-        or file_values.get(config.PG_DSN)
         or None)
 
 
@@ -93,8 +55,8 @@ def open_backend(
     function. Two stores in one process can pick distinct backends.
     """
     name = _resolve_store_backend(store, data_dir)
-    if name not in BACKENDS:
-        known = ', '.join(sorted(BACKENDS))
+    if name not in KNOWN_BACKENDS:
+        known = ', '.join(sorted(KNOWN_BACKENDS))
         raise ConfigError(
             f'unknown backend {name!r} for store {store!r};'
             f' registered: {known}')
@@ -134,7 +96,7 @@ def list_stores(data_dir: str) -> list[str]:
     for key, value in file_values.items():
         if not value:
             continue
-        if key in {config.DEFAULT_PG_DSN, config.PG_DSN}:
+        if key == config.DEFAULT_PG_DSN:
             dsns.add(value)
         elif key.startswith('MEMMAN_PG_DSN_'):
             dsns.add(value)
@@ -166,8 +128,8 @@ def drop_store(store: str, data_dir: str) -> None:
 
     name = _resolve_store_backend(store, data_dir)
     if name == 'sqlite':
-        from memman.store.sqlite import SqliteCluster
-        SqliteCluster().drop_store(store=store, data_dir=data_dir)
+        from memman.store.sqlite import drop_sqlite_store
+        drop_sqlite_store(store, data_dir)
     elif name == 'postgres':
         from memman.store.postgres import drop_postgres_store
         dsn = _resolve_store_pg_dsn(store, data_dir)

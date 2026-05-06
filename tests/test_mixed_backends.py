@@ -1,13 +1,11 @@
 """Mixed-backend dispatch tests for the per-store routing cutover.
 
 Each test creates two stores in one process: one resolves to sqlite,
-the other to postgres (per-store env keys). The cutover from
-`open_cluster()` to `open_backend(store, data_dir)` is the slice 2.4
-load-bearing change; these tests pin the dispatch contract.
+the other to postgres (per-store env keys). `open_backend(store,
+data_dir)` is the dispatch entry point; these tests pin the contract.
 
-Tests that require slice 2.5 (`memman status` / store-list backend
-column) or slice 2.7 (per-store heartbeat) are intentionally omitted
-and tracked in the slice plan.
+Tests that depend on slice 2.7 (per-store heartbeat) are intentionally
+omitted and tracked in the slice plan.
 """
 
 import os

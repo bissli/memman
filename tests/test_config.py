@@ -21,8 +21,8 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_DEBUG',
     'MEMMAN_WORKER',
     'MEMMAN_LOG_LEVEL',
-    'MEMMAN_BACKEND',
-    'MEMMAN_PG_DSN',
+    'MEMMAN_DEFAULT_BACKEND',
+    'MEMMAN_DEFAULT_PG_DSN',
     'OPENROUTER_API_KEY',
     'VOYAGE_API_KEY',
     'MEMMAN_OPENAI_EMBED_API_KEY',
@@ -88,8 +88,8 @@ def test_constants_match_expected_names():
         config.OLLAMA_HOST,
         config.OLLAMA_EMBED_MODEL,
         config.OPENROUTER_EMBED_MODEL,
-        config.BACKEND,
-        config.PG_DSN,
+        config.DEFAULT_BACKEND,
+        config.DEFAULT_PG_DSN,
         }
     assert actual == ALL_EXPECTED_NAMES
 
@@ -194,10 +194,10 @@ class TestConfigSet:
         data_dir = str(tmp_path / 'memman')
         result = runner.invoke(
             cli, ['--data-dir', data_dir, 'config', 'set',
-                  config.BACKEND, 'postgres'])
+                  config.DEFAULT_BACKEND, 'postgres'])
         assert result.exit_code == 0, result.output
         parsed = config.parse_env_file(config.env_file_path(data_dir))
-        assert parsed[config.BACKEND] == 'postgres'
+        assert parsed[config.DEFAULT_BACKEND] == 'postgres'
 
     def test_rejects_unknown_key(self, tmp_path):
         """`config set` exits non-zero when KEY is not in INSTALLABLE_KEYS."""
@@ -214,14 +214,14 @@ class TestConfigSet:
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(
-            f'{config.BACKEND}=sqlite\n')
+            f'{config.DEFAULT_BACKEND}=sqlite\n')
         runner = CliRunner()
         result = runner.invoke(
             cli, ['--data-dir', str(data_dir), 'config', 'set',
-                  config.BACKEND, 'postgres'])
+                  config.DEFAULT_BACKEND, 'postgres'])
         assert result.exit_code == 0, result.output
         parsed = config.parse_env_file(config.env_file_path(str(data_dir)))
-        assert parsed[config.BACKEND] == 'postgres'
+        assert parsed[config.DEFAULT_BACKEND] == 'postgres'
 
     def test_preserves_other_rows(self, tmp_path):
         """`config set` merges -- other env-file rows are preserved verbatim."""
@@ -230,14 +230,14 @@ class TestConfigSet:
         (data_dir / config.ENV_FILENAME).write_text(
             f'{config.LLM_PROVIDER}=openrouter\n'
             f'{config.OPENROUTER_API_KEY}=keep-me\n'
-            f'{config.BACKEND}=sqlite\n')
+            f'{config.DEFAULT_BACKEND}=sqlite\n')
         runner = CliRunner()
         result = runner.invoke(
             cli, ['--data-dir', str(data_dir), 'config', 'set',
-                  config.BACKEND, 'postgres'])
+                  config.DEFAULT_BACKEND, 'postgres'])
         assert result.exit_code == 0, result.output
         parsed = config.parse_env_file(config.env_file_path(str(data_dir)))
-        assert parsed[config.BACKEND] == 'postgres'
+        assert parsed[config.DEFAULT_BACKEND] == 'postgres'
         assert parsed[config.LLM_PROVIDER] == 'openrouter'
         assert parsed[config.OPENROUTER_API_KEY] == 'keep-me'
 

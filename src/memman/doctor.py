@@ -194,7 +194,9 @@ def check_orphan_storage(data_dir: str) -> dict[str, Any]:
     every store directory under `<data_dir>/data/` and reports any
     survivor when the resolved backend for the process is `postgres`.
     """
-    backend = (os.environ.get('MEMMAN_BACKEND') or 'sqlite').lower()
+    from memman import config
+    backend = (
+        config.get(config.DEFAULT_BACKEND) or 'sqlite').lower()
     if backend != 'postgres':
         return {
             'name': 'orphan_storage', 'status': 'pass',
@@ -325,7 +327,7 @@ def check_optional_extras() -> dict[str, Any]:
     """Report which `memman[extras]` install groups resolve at runtime.
 
     Always passes; the result is informational. Lets users verify their
-    install matches their `MEMMAN_BACKEND` choice (e.g., backend=postgres
+    install matches their backend choice (e.g., backend=postgres
     requires the `postgres` extra to be active).
     """
     from memman import extras
@@ -345,10 +347,8 @@ def check_env_completeness() -> dict[str, Any]:
     `memman install` to repopulate. Optional secrets are not flagged
     when absent (the user may not have configured an alternate provider).
 
-    `MEMMAN_BACKEND` / `MEMMAN_PG_DSN` are no longer required: per-store
-    `MEMMAN_BACKEND_<store>` keys carry the dispatch contract. They are
-    treated as optional here and removed from `INSTALLABLE_KEYS` in the
-    next slice. `check_per_store_keys` is the per-store consumer.
+    Per-store dispatch is validated separately by `check_per_store_keys`;
+    this check covers cluster-global installable knobs only.
     """
     from memman import config
 
@@ -357,8 +357,6 @@ def check_env_completeness() -> dict[str, Any]:
 
     optional_secrets = {
         config.OPENAI_EMBED_API_KEY,
-        config.BACKEND,
-        config.PG_DSN,
         }
     missing = [
         key for key in config.INSTALLABLE_KEYS
@@ -652,19 +650,20 @@ def check_drain_heartbeat() -> dict[str, Any]:
 
     from memman import config
 
-    backend_name = (config.get(config.BACKEND) or 'sqlite').lower()
+    backend_name = (
+        config.get(config.DEFAULT_BACKEND) or 'sqlite').lower()
     if backend_name != 'postgres':
         return {
             'name': 'drain_heartbeat',
             'status': 'pass',
-            'detail': {'skipped_reason': 'backend is sqlite'},
+            'detail': {'skipped_reason': 'default backend is sqlite'},
             }
-    dsn = config.get(config.PG_DSN)
+    dsn = config.get(config.DEFAULT_PG_DSN)
     if not dsn:
         return {
             'name': 'drain_heartbeat',
             'status': 'warn',
-            'detail': {'error': 'MEMMAN_PG_DSN not set'},
+            'detail': {'error': 'MEMMAN_DEFAULT_PG_DSN not set'},
             }
 
     try:

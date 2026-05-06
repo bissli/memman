@@ -14,7 +14,7 @@ from __future__ import annotations
 import threading
 
 import pytest
-from memman.store.postgres import PostgresCluster
+from memman.store.postgres import drop_postgres_store, open_postgres_backend
 from tests.e2e.conftest import _safe
 
 pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
@@ -29,13 +29,12 @@ def test_only_one_drain_wins_per_store(pg_dsn, request):
     must observe `acquired=False`.
     """
     store = _safe(request.node.name)
-    cluster = PostgresCluster(dsn=pg_dsn)
     try:
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)
     except Exception:
         pass
 
-    setup = cluster.open(store=store, data_dir='')
+    setup = open_postgres_backend(store, pg_dsn)
     setup.close()
 
     barrier = threading.Barrier(2)
@@ -44,7 +43,7 @@ def test_only_one_drain_wins_per_store(pg_dsn, request):
     results: dict[str, bool] = {}
 
     def holder() -> None:
-        backend = cluster.open(store=store, data_dir='')
+        backend = open_postgres_backend(store, pg_dsn)
         try:
             barrier.wait(timeout=5)
             with backend.drain_lock(store) as got:
@@ -56,7 +55,7 @@ def test_only_one_drain_wins_per_store(pg_dsn, request):
             backend.close()
 
     def contender() -> None:
-        backend = cluster.open(store=store, data_dir='')
+        backend = open_postgres_backend(store, pg_dsn)
         try:
             barrier.wait(timeout=5)
             assert holder_acquired.wait(timeout=5), (
@@ -80,7 +79,7 @@ def test_only_one_drain_wins_per_store(pg_dsn, request):
         assert results == {'holder': True, 'contender': False}, (
             f'expected exactly one winner; got {results}')
     finally:
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)
 
 
 def test_lock_reacquirable_after_holder_exits(pg_dsn, request):
@@ -90,12 +89,11 @@ def test_lock_reacquirable_after_holder_exits(pg_dsn, request):
     connection close) leaves the lock available for the next acquirer.
     """
     store = _safe(request.node.name)
-    cluster = PostgresCluster(dsn=pg_dsn)
     try:
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)
     except Exception:
         pass
-    backend = cluster.open(store=store, data_dir='')
+    backend = open_postgres_backend(store, pg_dsn)
     try:
         with backend.drain_lock(store) as first:
             assert first is True
@@ -103,4 +101,4 @@ def test_lock_reacquirable_after_holder_exits(pg_dsn, request):
             assert second is True
     finally:
         backend.close()
-        cluster.drop_store(store=store, data_dir='')
+        drop_postgres_store(store, pg_dsn)

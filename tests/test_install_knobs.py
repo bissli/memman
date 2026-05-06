@@ -133,7 +133,7 @@ class TestCollectInstallKnobs:
 
     def test_backend_default_is_sqlite(
             self, tmp_path, monkeypatch, stub_resolver):
-        """`MEMMAN_BACKEND` resolves to 'sqlite' from INSTALL_DEFAULTS."""
+        """`MEMMAN_DEFAULT_BACKEND` resolves to 'sqlite' from INSTALL_DEFAULTS."""
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(
@@ -142,18 +142,18 @@ class TestCollectInstallKnobs:
         monkeypatch.setenv(config.DATA_DIR, str(data_dir))
         config.reset_file_cache()
         knobs = config.collect_install_knobs(str(data_dir))
-        assert knobs[config.BACKEND] == 'sqlite'
+        assert knobs[config.DEFAULT_BACKEND] == 'sqlite'
 
     def test_backend_value_round_trips_from_file(
             self, tmp_path, monkeypatch, stub_resolver):
-        """Existing `MEMMAN_BACKEND=postgres` in the file is preserved."""
+        """Existing `MEMMAN_DEFAULT_BACKEND=postgres` in the file is preserved."""
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(
             f'{config.OPENROUTER_API_KEY}=or-key\n'
             f'{config.VOYAGE_API_KEY}=vy-key\n'
-            f'{config.BACKEND}=postgres\n')
+            f'{config.DEFAULT_BACKEND}=postgres\n')
         monkeypatch.setenv(config.DATA_DIR, str(data_dir))
         config.reset_file_cache()
         knobs = config.collect_install_knobs(str(data_dir))
-        assert knobs[config.BACKEND] == 'postgres'
+        assert knobs[config.DEFAULT_BACKEND] == 'postgres'

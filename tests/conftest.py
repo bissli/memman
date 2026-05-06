@@ -597,9 +597,9 @@ def backend_kind(request) -> str:
 def runner_kind(request) -> str:
     """Backend identifier for CliRunner-driven cross-backend tests.
 
-    Pairs with the `cross_backend_runner` fixture to flip
-    `MEMMAN_BACKEND` between sqlite and postgres for each test
-    invocation.
+    Pairs with the `cross_backend_runner` fixture to flip the
+    per-store `MEMMAN_BACKEND_<store>` between sqlite and postgres
+    for each test invocation.
     """
     return request.param
 
@@ -658,22 +658,23 @@ def backend(request, backend_kind, tmp_path):
     of `tmp_backend` to gain Postgres parity.
     """
     from memman.embed.fingerprint import META_KEY, active_fingerprint
+    pg_dsn = None
     if backend_kind == 'sqlite':
-        from memman.store.sqlite import SqliteCluster
-        cluster = SqliteCluster()
+        from memman.store.sqlite import drop_sqlite_store
+        from memman.store.sqlite import open_sqlite_backend
         data_dir = str(tmp_path / 'memman')
-        b = cluster.open(store='test', data_dir=data_dir)
         store_name = 'test'
+        b = open_sqlite_backend(store_name, data_dir)
     else:
         pg_dsn = request.getfixturevalue('pg_dsn')
-        from memman.store.postgres import PostgresCluster
-        cluster = PostgresCluster(dsn=pg_dsn)
+        from memman.store.postgres import drop_postgres_store
+        from memman.store.postgres import open_postgres_backend
         store_name = _safe_store_name(request.node.name)
         try:
-            cluster.drop_store(store=store_name, data_dir='')
+            drop_postgres_store(store_name, pg_dsn)
         except Exception:
             pass
-        b = cluster.open(store=store_name, data_dir='')
+        b = open_postgres_backend(store_name, pg_dsn)
     b.meta.set(META_KEY, active_fingerprint().to_json())
     try:
         yield b
@@ -684,13 +685,14 @@ def backend(request, backend_kind, tmp_path):
             pass
         if backend_kind == 'postgres':
             try:
-                cluster.drop_store(store=store_name, data_dir='')
+                drop_postgres_store(store_name, pg_dsn)
             except Exception:
                 pass
-        try:
-            cluster.close()
-        except Exception:
-            pass
+        else:
+            try:
+                drop_sqlite_store(store_name, str(tmp_path / 'memman'))
+            except Exception:
+                pass
 
 
 def _safe_store_name(test_id: str) -> str:
@@ -917,8 +919,8 @@ def parse_remember(result, runner_tuple=None):
     invocation, so the new insight lives in the store DB tagged with
     `source = queue:<queue_id>`. This helper looks it up so tests
     that read `id`/`content`/`category`/`importance` after a remember
-    keep working. Postgres-aware: switches the lookup query when
-    `MEMMAN_BACKEND=postgres` is in the active env.
+    keep working. Postgres-aware: switches the lookup query when the
+    per-store `MEMMAN_BACKEND_<store>=postgres` resolves.
     """
     raw = json.loads(result.output)
     if 'facts' in raw and raw['facts']:
