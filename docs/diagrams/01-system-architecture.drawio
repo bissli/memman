@@ -121,17 +121,17 @@
         <mxCell id="a_l4" value="&lt;b&gt;Storage Layer&lt;/b&gt;  store/" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;verticalAlign=top;fontSize=11;align=left;spacingLeft=10;" vertex="1" parent="1">
           <mxGeometry x="40" y="550" width="1120" height="120" as="geometry" />
         </mxCell>
-        <mxCell id="a_db" value="&lt;b&gt;db.py&lt;/b&gt;&lt;br&gt;SQLite via stdlib sqlite3&lt;br&gt;in_transaction()&lt;br&gt;schema migration" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#fce5cd;strokeColor=#d6b656;align=left;spacingLeft=5;" vertex="1" parent="1">
-          <mxGeometry x="60" y="580" width="170" height="70" as="geometry" />
+        <mxCell id="a_db" value="&lt;b&gt;backend.py + sqlite.py + postgres.py&lt;/b&gt;&lt;br&gt;Backend Protocol (context-managed)&lt;br&gt;SQLite (default) | Postgres + pgvector&lt;br&gt;factory.py: backend selection&lt;br&gt;migrate.py: SQLite -&amp;gt; Postgres copy" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#fce5cd;strokeColor=#d6b656;align=left;spacingLeft=5;" vertex="1" parent="1">
+          <mxGeometry x="60" y="575" width="180" height="85" as="geometry" />
         </mxCell>
-        <mxCell id="a_node" value="&lt;b&gt;node.py&lt;/b&gt;&lt;br&gt;insert_insight / get_all_active_insights&lt;br&gt;get_all_embeddings / scan_embeddings&lt;br&gt;auto_prune / refresh_effective_importance&lt;br&gt;boost_retention" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#fce5cd;strokeColor=#d6b656;align=left;spacingLeft=5;" vertex="1" parent="1">
+        <mxCell id="a_node" value="&lt;b&gt;node.py / base.py&lt;/b&gt;&lt;br&gt;insert_insight / get_all_active_insights&lt;br&gt;get_all_embeddings / iter_embeddings_as_vecs&lt;br&gt;auto_prune / refresh_effective_importance&lt;br&gt;boost_retention" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#fce5cd;strokeColor=#d6b656;align=left;spacingLeft=5;" vertex="1" parent="1">
           <mxGeometry x="250" y="580" width="200" height="75" as="geometry" />
         </mxCell>
         <mxCell id="a_edge" value="&lt;b&gt;edge.py&lt;/b&gt;&lt;br&gt;insert_edge&lt;br&gt;get_edges_by_node&lt;br&gt;get_recent_insights_in_window" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#fce5cd;strokeColor=#d6b656;align=left;spacingLeft=5;" vertex="1" parent="1">
           <mxGeometry x="470" y="580" width="150" height="65" as="geometry" />
         </mxCell>
-        <mxCell id="a_tables" value="&lt;b&gt;SQLite Tables&lt;/b&gt;&lt;br&gt;insights (id, content, category,&lt;br&gt;  importance, entities, embedding,&lt;br&gt;  access_count, effective_importance)&lt;br&gt;edges (source_id, target_id, type, weight)&lt;br&gt;oplog (timestamp, op, detail)" style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#999999;align=left;spacingLeft=5;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="700" y="575" width="280" height="85" as="geometry" />
+        <mxCell id="a_tables" value="&lt;b&gt;Tables (SQLite + Postgres via Backend Protocol)&lt;/b&gt;&lt;br&gt;insights (id, content, category, importance,&lt;br&gt;  entities, source, embedding, embedding_model,&lt;br&gt;  access_count, effective_importance, ...)&lt;br&gt;edges (source_id, target_id, edge_type, weight, metadata)&lt;br&gt;oplog (id, operation, insight_id, detail, before, after, created_at)&lt;br&gt;meta (key, value)  -- embed_fingerprint, embed_swap_*, ..." style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#999999;align=left;spacingLeft=5;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="700" y="565" width="290" height="100" as="geometry" />
         </mxCell>
         <mxCell id="a_cap" value="&lt;b&gt;MAX_INSIGHTS = 1000&lt;/b&gt;&lt;br&gt;auto-prune trigger" style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f8cecc;strokeColor=#b85450;fontColor=#b85450;" vertex="1" parent="1">
           <mxGeometry x="1000" y="580" width="150" height="40" as="geometry" />
@@ -142,8 +142,8 @@
         <mxCell id="a_ollama_s" value="&lt;b&gt;OpenRouter&lt;/b&gt; (LLM, Anthropic Haiku/Sonnet) &amp;nbsp;|&amp;nbsp; &lt;b&gt;Voyage AI&lt;/b&gt; (embeddings, default)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="60" y="725" width="320" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="a_fs" value="&lt;b&gt;File System&lt;/b&gt;&lt;br&gt;~/.memman/data/&amp;lt;store&amp;gt;/memman.db" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="400" y="725" width="280" height="40" as="geometry" />
+        <mxCell id="a_fs" value="&lt;b&gt;Persistence&lt;/b&gt;&lt;br&gt;SQLite: ~/.memman/data/&amp;lt;store&amp;gt;/memman.db + ~/.memman/queue.db&lt;br&gt;Postgres: store_&amp;lt;name&amp;gt; schema + shared queue.queue" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="715" width="380" height="50" as="geometry" />
         </mxCell>
         <mxCell id="a_e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#999999;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" edge="1" parent="1" source="a_claude" target="a_cmd_rem">
           <mxGeometry relative="1" as="geometry" />

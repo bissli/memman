@@ -33,8 +33,8 @@ Never write to the global store — the mount is read-only.
 - No knowledge dependency beyond the current conversation
 
 ```bash
-memman recall "<query>" --limit 5
-memman --store global --readonly recall "<query>" --limit 5
+memman recall "<query>" --limit 5 --rerank
+memman --store global --readonly recall "<query>" --limit 5 --rerank
 ```
 
 Note: `--store` and `--readonly` are root-group flags and must come **before** the subcommand name (e.g. `recall`).
@@ -68,7 +68,7 @@ Run this decision tree after every substantive response:
 ## Storing what you learn
 
 ```bash
-memman remember "<fact>" --cat <category> --imp <1-5> --tags "t1,t2" --entities "e1,e2" --source agent
+memman remember "<fact>" --cat <category> --imp <1-5> --entities "e1,e2" --source agent
 ```
 
 Categories: `preference` · `decision` · `fact` · `insight` · `context` · `general`.
@@ -86,7 +86,7 @@ memman replace <id> "<new content>"
 ## Recalling and inspecting
 
 ```bash
-memman recall "<query>" --limit 10                    # smart recall
+memman recall "<query>" --limit 10 --rerank           # smart recall + cross-encoder rerank
 memman recall "<keyword>" --basic                      # fast token-only
 memman insights show <id>                              # read by ID
 ```

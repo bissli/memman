@@ -67,7 +67,7 @@ The four edge types form the foundation of the MAGMA four-graph model, detailed 
 Each named store is physically isolated via the active storage backend (`MEMMAN_BACKEND`):
 
 - **SQLite (default)** — one `~/.memman/data/<store>/memman.db` file per store, in WAL mode (concurrent reads + serial writer). Schema source of truth: `_BASELINE_SCHEMA` in `src/memman/store/db.py`.
-- **Postgres** — one Postgres schema per store (`store_<name>`) sharing one database; `pgvector` provides the `vector(N)` column type. Schema source of truth: `_PG_BASELINE_SCHEMA` plus an additive forward-only `_PG_MIGRATIONS` ladder in `src/memman/store/postgres.py`. The backend is enabled with the `memman[postgres]` install extra.
+- **Postgres** — one Postgres schema per store (`store_<name>`) sharing one database; `pgvector` provides the `vector(N)` column type. Schema source of truth: `_PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py`. The backend is enabled with the `memman[postgres]` install extra.
 
 Switching backends is all-or-nothing across every store under `~/.memman/data/`; per-store backend choice is not supported. See [Migrating from SQLite to Postgres](../USAGE.md#migrating-from-sqlite-to-postgres) for the operator workflow.
 
@@ -145,9 +145,9 @@ MemMan's architecture is divided into five layers:
 │                                openrouter_client,             │
 │                                openrouter_models)             │
 ├──────────────────────────────────────────────────────────────┤
-│  Storage Layer        store/   (backend, factory, db, node,   │
-│                                edge, oplog, model, snapshot,  │
-│                                sqlite, postgres)              │
+│  Storage Layer        store/   (backend, base, factory, db,   │
+│                                node, edge, oplog, model,      │
+│                                snapshot, sqlite, postgres)    │
 │                       queue.py (deferred-write queue)         │
 │                       migrate.py (SQLite -> Postgres copy)    │
 ├──────────────────────────────────────────────────────────────┤
@@ -209,6 +209,8 @@ memman/
 ```
 
 **Isolation boundary**: Each store is fully independent — insights, edges, and oplog do not cross stores. On SQLite this is one `memman.db` per store; on Postgres it is one `store_<name>` schema per store inside one shared database. Shipped assets (`guide.md`, `SKILL.md`) live inside the installed package and are read via `importlib.resources`; nothing memman deploys lives under `~/.memman/`. `~/.memman/` is strictly user state: memory data, API keys, caches, logs, queued work.
+
+**Backend lifecycle**: `Backend` is a context manager (`__enter__`/`__exit__`); CLI and pipeline call sites open it via `with cluster.open(store=...) as backend:` so the underlying connection (SQLite handle or Postgres pool checkout) is released deterministically. The `BaseNodeStore` mixin in `src/memman/store/base.py` holds default Python-side computations (effective-importance recomputation, low-retention candidate scoring) shared by both `SqliteNodeStore` and `PostgresNodeStore`.
 
 When `MEMMAN_BACKEND=postgres`, `~/.memman/queue.db` and the per-store `memman.db` files are not used at runtime — the queue lives in the shared `queue` Postgres schema and store rows live in `store_<name>`. The SQLite files remain on disk after `memman migrate` as a durable fallback; the operator removes them manually after verifying the new backend with `memman doctor`.
 

@@ -723,7 +723,8 @@ def check_no_stale_swap_meta(backend: Backend) -> dict[str, Any]:
     warning so the operator can investigate.
     """
     leftover = sorted(
-        k for k in backend.meta.keys() if k.startswith('embed_swap_'))
+        k for k in backend.meta.keys()  # noqa: SIM118
+        if k.startswith('embed_swap_'))
     if not leftover:
         return {
             'name': 'no_stale_swap_meta', 'status': 'pass',

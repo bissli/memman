@@ -135,7 +135,7 @@ def test_swap_clears_meta_after_done(swap_backend):
     run_swap(swap_backend, ec, plan)
 
     leftover = [
-        k for k in swap_backend.meta
+        k for k in swap_backend.meta.keys()  # noqa: SIM118
         if k.startswith('embed_swap_')]
     assert leftover == []
 

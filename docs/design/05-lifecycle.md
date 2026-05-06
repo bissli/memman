@@ -88,7 +88,7 @@ memman insights show <id>
 
 ## 5.5 Embedding Support
 
-Embeddings power semantic search and graph connectivity. The provider is pluggable via `MEMMAN_EMBED_PROVIDER`; vector dimensionality is provider-defined and recorded in a per-store `embed_fingerprint` so a provider/model/dim change is detected and surfaced in `memman embed status` and `memman doctor`. Switching providers requires an explicit `memman embed reembed` step rather than a silent migration.
+Embeddings power semantic search and graph connectivity. The provider is pluggable via `MEMMAN_EMBED_PROVIDER`; vector dimensionality is provider-defined and recorded in a per-store `embed_fingerprint` so a provider/model/dim change is detected and surfaced in `memman embed status` and `memman doctor`. Switching providers happens explicitly -- either online via `memman embed swap` (resumable shadow-column backfill) or offline via `memman embed reembed`. There is never a silent migration.
 
 ### Supported providers
 
@@ -119,3 +119,25 @@ Vector serialization depends on the active storage backend (`MEMMAN_BACKEND`):
 ### Recovery
 
 `memman graph rebuild` re-enriches all insights through the full LLM pipeline and updates embeddings. There is no separate operator command for embedding maintenance — the worker owns the embedding lifecycle (initial, merged, enriched, rebuild).
+
+### Online Embedding Swap
+
+`memman embed swap` performs a per-store provider/model change without going recall-only. The orchestrator (`src/memman/embed/swap.py`) drives a small state machine recorded in per-store meta keys:
+
+```
+(idle)  ──swap──▶  backfilling  ──last batch──▶  cutover  ──commit──▶  (idle)
+                       ▲   │                          │
+                       │   └── --resume               │
+                       │                              ▼
+                       └────── (continues)         (--abort)
+```
+
+| State         | Meaning                                                                                                                                                                                                                                                                                                                                                           |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backfilling` | Each batch embeds the next `MEMMAN_EMBED_SWAP_BATCH_SIZE` rows under the new provider into a shadow column (`embedding_pending` on SQLite, side column on Postgres). Recall keeps using the live column. The cursor advances per-batch so a crash resumes from where it stopped.                                                                                  |
+| `cutover`     | Set immediately before the atomic cutover transaction. Postgres uses `CREATE INDEX CONCURRENTLY` (timeout `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT`, default unlimited); SQLite copies the shadow column over the live column. The new fingerprint is written and the swap meta keys are **deleted** (not zeroed -- absence is the canonical "no swap in flight" signal). |
+| (cleared)     | All `embed_swap_*` meta keys absent; `embed status` shows the new fingerprint.                                                                                                                                                                                                                                                                                    |
+
+`--abort` drops `embedding_pending` (and any uncommitted side column) and clears the swap meta. `memman doctor`'s `no_stale_swap_meta` check warns if any `embed_swap_*` key remains on a store that is not actively swapping -- this guards against future cutover regressions leaking sentinel rows into the meta table.
+
+`embed reembed` is the offline alternative: it rewrites every store in place with the active provider, requires `memman scheduler stop` first, and is intended for one-shot rewrites (not provider migrations).

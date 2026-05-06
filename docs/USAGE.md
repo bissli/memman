@@ -13,6 +13,8 @@ These flags are available on every command:
 | `--store <name>`    | (auto)      | Named memory store (overrides `MEMMAN_STORE` and active file) |
 | `--data-dir <path>` | `~/.memman` | Base data directory                                           |
 | `--readonly`        | `false`     | Open database in read-only mode                               |
+| `--verbose` / `-v`  | `false`     | INFO-level logging to stderr                                  |
+| `--debug`           | `false`     | DEBUG-level logging to stderr (overrides `--verbose`)         |
 | `--version`         |             | Print version and exit                                        |
 
 ---
@@ -97,13 +99,15 @@ memman forget <id>
 
 **Recall flags:**
 
-| Flag       | Default       | Description                                          |
-| ---------- | ------------- | ---------------------------------------------------- |
-| `--limit`  | `10`          | Max results                                          |
-| `--intent` | (auto-detect) | Override intent: `WHY`, `WHEN`, `ENTITY`, `GENERAL`  |
-| `--cat`    |               | Filter by category                                   |
-| `--source` |               | Filter by source                                     |
-| `--basic`  | `false`       | Use simple SQL LIKE matching instead of smart recall |
+| Flag       | Default       | Description                                                                                       |
+| ---------- | ------------- | ------------------------------------------------------------------------------------------------- |
+| `--limit`  | `10`          | Max results                                                                                       |
+| `--intent` | (auto-detect) | Override intent: `WHY`, `WHEN`, `ENTITY`, `GENERAL`                                               |
+| `--cat`    |               | Filter by category                                                                                |
+| `--source` |               | Filter by source                                                                                  |
+| `--basic`  | `false`       | Use simple SQL LIKE matching instead of smart recall                                              |
+| `--expand` | `false`       | Opt-in LLM query expansion (synonyms + entity hints)                                              |
+| `--rerank` | `false`       | Cross-encoder rerank stage (Voyage `rerank-2.5-lite` by default; auto-skips on 1-2 token queries) |
 
 ### Graph Operations
 
@@ -149,15 +153,23 @@ To actually delete an insight, use `memman forget <id>`.
 # Show current embedding provider, model, and per-store fingerprint
 memman embed status
 
-# Re-embed all insights with the current provider (e.g., after switching
-# from Voyage to OpenAI-compatible). Rejected when scheduler is stopped.
+# Online provider/model swap (resumable shadow-column backfill, atomic cutover)
+memman embed swap --to voyage-3-large
+memman embed swap --to text-embedding-3-small --provider openai
+memman embed swap --resume                     # continue an in-flight swap
+memman embed swap --abort                      # discard an in-flight swap
+
+# Offline full re-embed under the current provider (rejected when scheduler is running)
 memman embed reembed
-memman embed reembed --dry-run    # preview count without modifying DB
+memman embed reembed --dry-run                 # preview count without modifying DB
 ```
 
-Switching embedding providers (`MEMMAN_EMBED_PROVIDER`) requires an
-explicit `embed reembed` step. The per-store fingerprint detects
-provider/model drift and surfaces it in `embed status`.
+Two switching paths:
+
+- **`embed swap`** is the online path. It populates `embedding_pending` (shadow column on SQLite, side column on Postgres) under the active provider while the existing column keeps serving recall, then commits an atomic cutover transaction. State machine: `backfilling → cutover → done`. Resumable via `--resume`; abortable via `--abort`. Per-store; the in-flight target is recorded in `meta.embed_swap_*` keys (deleted on completion).
+- **`embed reembed`** is the offline path: every store is rewritten in place with the current `MEMMAN_EMBED_PROVIDER`. Requires the scheduler to be **stopped** (`memman scheduler stop`) so a drain cannot race the rewrite.
+
+The per-store fingerprint (`meta.embed_fingerprint`) detects provider/model drift and surfaces it in `embed status`.
 
 ### Store Management
 
@@ -211,7 +223,8 @@ Reverse migration (Postgres → SQLite) is not implemented; restore from the pre
 
 ```bash
 memman status                                       # memory statistics
-memman doctor                                       # health checks (integrity, schema, enrichment, embeddings, fingerprint, queue, scheduler, drain heartbeat, env)
+memman doctor                                       # health checks (integrity, schema, enrichment, embeddings, fingerprint, queue, scheduler, drain heartbeat, env, no_stale_swap_meta, provenance_drift)
+memman doctor --text                                # human-readable colored table
 memman config show                                  # effective configuration (env + on-disk)
 
 memman log list                                     # operation audit log (default JSON, last 20)
@@ -222,6 +235,28 @@ memman log list --text                              # human-readable text table
 
 memman log worker [--errors] [--lines N]            # tail worker output (~/.memman/logs/enrich.{log,err})
 ```
+
+### Scheduler
+
+```bash
+memman scheduler status                  # platform, interval, state, next run, last heartbeat
+memman scheduler start                   # flip persistent state to STARTED (resume drains + writes)
+memman scheduler stop                    # flip persistent state to STOPPED (pause drains + reject writes)
+memman scheduler trigger                 # run a drain now (systemd/launchd; not applicable in serve mode)
+memman scheduler interval --seconds N    # change cadence (60s minimum on systemd/launchd)
+memman scheduler install                 # install the scheduler unit (idempotent)
+memman scheduler uninstall               # remove the scheduler unit; preserves persistent state
+memman scheduler serve --interval N      # long-running drain loop (used as PID 1 in containers)
+memman scheduler debug on|off|status     # toggle the verbose worker trace log
+
+memman scheduler queue list [--limit N]  # peek pending rows
+memman scheduler queue failed [--limit N]# rows in 'failed' state
+memman scheduler queue show <row_id>     # full payload + trace events for one row
+memman scheduler queue retry <row_id>    # requeue a single failed row
+memman scheduler queue purge --done      # delete rows where status='done'
+```
+
+When the scheduler is **stopped**, memman is recall-only: every write exits 1 with `Scheduler is stopped; cannot <verb>`. The `serve` loop polls the state file every iteration, so pause is observed within seconds even mid-drain.
 
 ---
 
@@ -289,6 +324,8 @@ memman config set MEMMAN_PG_DSN 'postgresql://memman@db.internal:5432/memman?ssl
 | `MEMMAN_BACKEND`                  | `sqlite`                                          | Storage backend (`sqlite` or `postgres`). Postgres requires the `memman[postgres]` extra.                             |
 | `MEMMAN_PG_DSN`                   | —                                                 | Postgres DSN (`postgresql://...`). Secret. Stripped on `memman uninstall`.                                            |
 | `MEMMAN_REINDEX_TIMEOUT`          | `180`                                             | Seconds Postgres reindex (HNSW) is allowed to run before `statement_timeout` aborts; reraised idempotently next call. |
+| `MEMMAN_EMBED_SWAP_BATCH_SIZE`    | `200`                                             | Rows per backfill batch in `memman embed swap`.                                                                       |
+| `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT` | `0` (unlimited)                                   | Seconds Postgres `CREATE INDEX CONCURRENTLY` may run during cutover; `0` disables `statement_timeout`.                |
 
 ---
 

@@ -14,7 +14,7 @@ are queued and enriched in the background; reads are intent-aware.
 Store one self-contained fact per call. Pick the most accurate `--cat`.
 
 ```bash
-memman remember "<fact>" --cat <category> --imp <1-5> --tags "t1,t2" --entities "e1,e2" --source agent
+memman remember "<fact>" --cat <category> --imp <1-5> --entities "e1,e2" --source agent
 ```
 
 Categories: `preference` · `decision` · `fact` · `insight` · `context` · `general`.
