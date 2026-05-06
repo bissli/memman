@@ -7,10 +7,8 @@ integration.
 
 import json
 import time
-from pathlib import Path
 
 import pytest
-from click.testing import CliRunner
 from memman.cli import cli
 from memman.queue import finish_worker_run, last_worker_run, open_queue_db
 from memman.queue import start_worker_run

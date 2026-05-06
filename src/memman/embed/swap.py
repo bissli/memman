@@ -26,7 +26,8 @@ resuming.
 
 import os
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 from memman.embed.fingerprint import Fingerprint, write_fingerprint
 
@@ -205,7 +206,7 @@ def run_swap(
             f'unknown swap state {progress.state!r}; manual cleanup'
             ' required')
 
-    if progress.state in ('', STATE_BACKFILLING):
+    if progress.state in {'', STATE_BACKFILLING}:
         total_filled = 0
         while True:
             n = _backfill_step(backend, ec_new, batch_size)

@@ -9,9 +9,8 @@ import json
 from pathlib import Path
 
 import pytest
-from memman.cli import cli
 from memman.setup import scheduler as sch
-from tests.conftest import invoke, mm_runner
+from tests.conftest import invoke
 
 
 @pytest.fixture

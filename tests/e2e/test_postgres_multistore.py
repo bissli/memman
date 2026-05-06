@@ -20,7 +20,6 @@ import pytest
 from memman.store.model import Insight
 from memman.store.postgres import PostgresCluster, _store_schema
 from memman.store.sqlite import SqliteCluster
-from tests.e2e.conftest import _pg_vec as _vec
 from tests.e2e.conftest import _safe
 
 pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]

@@ -24,15 +24,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
-from memman.setup.openclaw import (
-    install_openclaw,
-    openclaw_register_plugin,
-    openclaw_uninstall,
-    openclaw_write_hook,
-    openclaw_write_plugin,
-    openclaw_write_skill,
-)
+from memman.setup.openclaw import install_openclaw, openclaw_register_plugin
+from memman.setup.openclaw import openclaw_uninstall, openclaw_write_hook
+from memman.setup.openclaw import openclaw_write_plugin, openclaw_write_skill
 
 pytestmark = [pytest.mark.e2e_cli]
 
@@ -62,7 +56,7 @@ def _run_plugin(config: dict) -> dict:
     JSON of `{registeredEvents, result}`.
     """
     plugin = _resolve_plugin_index()
-    driver = textwrap.dedent(f'''
+    driver = textwrap.dedent(f"""
         const handlers = {{}};
         const api = {{
           pluginConfig: {json.dumps(config)},
@@ -75,7 +69,7 @@ def _run_plugin(config: dict) -> dict:
           registeredEvents: Object.keys(handlers),
           result,
         }}));
-        ''').strip()
+        """).strip()
     out = subprocess.run(
         ['node', '--no-warnings', '--input-type=module', '-e', driver],
         capture_output=True, text=True, check=True)

@@ -15,10 +15,11 @@ import threading
 
 import pytest
 from memman.store.postgres import PostgresCluster
-
 from tests.e2e.conftest import _safe
 
 pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
+
+
 def test_only_one_drain_wins_per_store(pg_dsn, request):
     """Two threads racing on `drain_lock`: exactly one acquires.
 

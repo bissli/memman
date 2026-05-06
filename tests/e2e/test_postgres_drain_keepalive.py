@@ -18,13 +18,14 @@ from __future__ import annotations
 
 import psycopg
 import pytest
-from memman.store.postgres import PostgresCluster
-from memman.store.postgres import _open_connection, _store_schema
+from memman.store.postgres import PostgresCluster, _open_connection
+from memman.store.postgres import _store_schema
+from tests.e2e.conftest import _safe
 from tests.fixtures.postgres import wait_for
 
-from tests.e2e.conftest import _safe
-
 pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
+
+
 def test_hung_worker_releases_lock_within_keepalive_window(
         pg_dsn, request):
     """A dropped drain-lock connection releases the lock to a contender.

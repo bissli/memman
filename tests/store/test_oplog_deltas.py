@@ -8,8 +8,7 @@ can be answered from the oplog instead of requiring a backup.
 import json
 
 import pytest
-
-from memman.store.model import OpLogEntry, insight_to_delta_dict
+from memman.store.model import insight_to_delta_dict
 from tests.conftest import make_insight
 
 

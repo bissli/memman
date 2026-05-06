@@ -20,7 +20,7 @@ import json
 
 import pytest
 from memman.store.model import Insight
-from memman.store.postgres import EMBEDDING_DIM, PostgresCluster
+from memman.store.postgres import PostgresCluster
 from memman.store.postgres import PostgresQueueBackend
 from tests.e2e.conftest import _pg_vec as _vec
 from tests.e2e.conftest import _safe

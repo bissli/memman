@@ -227,7 +227,7 @@ def migrate_store(
             from pgvector.psycopg import register_vector
             register_vector(pg_conn)
 
-            if state in (SchemaState.EMPTY, SchemaState.POPULATED):
+            if state in {SchemaState.EMPTY, SchemaState.POPULATED}:
                 with pg_conn.cursor() as cur:
                     cur.execute(
                         f'drop schema if exists {schema} cascade')

@@ -88,7 +88,8 @@ def test_migrate_cli_round_trip_to_postgres(tmp_path: Path, pg_dsn: str):
                     f'SELECT content FROM {schema}.insights '
                     f"WHERE id = 'mig-cli-1'")
                 row = cur.fetchone()
-                assert row and row[0] == 'migrate cli round-trip insight'
+                assert row
+                assert row[0] == 'migrate cli round-trip insight'
 
         env_file = home / '.memman' / 'env'
         if env_file.exists():

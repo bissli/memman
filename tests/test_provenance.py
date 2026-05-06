@@ -10,8 +10,6 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-from click.testing import CliRunner
 from memman.cli import cli
 from memman.pipeline.remember import compute_prompt_version
 from memman.store.db import open_db

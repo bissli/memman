@@ -3,8 +3,8 @@
 import pytest
 from memman.search.intent import detect_intent, get_weights, intent_from_string
 from memman.search.keyword import keyword_search, tokenize
-from memman.search.recall import RERANK_WEIGHTS
-from memman.search.recall import get_traversal_params, intent_aware_recall
+from memman.search.recall import RERANK_WEIGHTS, get_traversal_params
+from memman.search.recall import intent_aware_recall
 from memman.store.model import Insight
 from tests.conftest import make_insight
 

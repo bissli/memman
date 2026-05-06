@@ -1,7 +1,6 @@
 """Tests for memman.doctor health-check module."""
 
 import json
-import stat
 import struct
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -174,7 +173,7 @@ class TestProvenanceDrift:
         assert result['status'] == 'pass'
         assert result['detail']['stale_rows'] == 0
 
-    @pytest.mark.parametrize('stale_col,stale_value,stale_count', [
+    @pytest.mark.parametrize(('stale_col', 'stale_value', 'stale_count'), [
         ('prompt_version', 'deadbeefdeadbeef', 2),
         ('model_id', 'anthropic/claude-haiku-1.0', 1),
     ])
@@ -379,7 +378,7 @@ class TestHardening:
         assert result['status'] == 'pass'
         assert result['detail']['missing'] == []
 
-    @pytest.mark.parametrize('mode,expected_status,assert_issue', [
+    @pytest.mark.parametrize(('mode', 'expected_status', 'assert_issue'), [
         (None, 'pass', False),
         (0o644, 'fail', True),
         (0o600, 'pass', False),
@@ -428,7 +427,7 @@ class TestHardening:
         assert result['status'] == 'fail'
         assert 'no drains recorded' in result['detail']['reason']
 
-    @pytest.mark.parametrize('status,reason_snippet', [
+    @pytest.mark.parametrize(('status', 'reason_snippet'), [
         ({'interval_seconds': 900, 'state': 'stopped',
           'installed': True}, "'stopped'"),
         ({'interval_seconds': None, 'state': 'stopped',

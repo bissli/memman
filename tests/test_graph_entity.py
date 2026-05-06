@@ -4,7 +4,7 @@ import pytest
 from memman.graph.entity import entity_idf_weight
 
 
-@pytest.mark.parametrize('doc_freq,total_docs,bound,op', [
+@pytest.mark.parametrize(('doc_freq', 'total_docs', 'bound', 'op'), [
     (0, 100, 0.9, '>'),
     (90, 100, 0.1, '>='),
 ])

@@ -15,10 +15,11 @@ from __future__ import annotations
 import pytest
 from memman.embed.fingerprint import META_KEY, Fingerprint
 from memman.store.postgres import PostgresCluster
-
 from tests.e2e.conftest import _safe
 
 pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
+
+
 def test_stored_fingerprint_round_trips_through_backend_meta(
         pg_dsn, request):
     """Backend.meta.set + .get round-trips a Fingerprint JSON value."""

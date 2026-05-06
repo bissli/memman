@@ -46,7 +46,7 @@ class TestPrereqs:
         with pytest.raises(click.ClickException, match='memman binary'):
             setup_claude.run_install(data_dir=str(tmp_path))
 
-    @pytest.mark.parametrize('present_key,missing_key', [
+    @pytest.mark.parametrize(('present_key', 'missing_key'), [
         ('voyage', 'OPENROUTER_API_KEY'),
         ('openrouter', 'VOYAGE_API_KEY'),
     ])

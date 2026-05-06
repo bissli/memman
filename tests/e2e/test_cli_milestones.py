@@ -23,10 +23,8 @@ from pathlib import Path
 
 import pytest
 
-from .helpers import (
-    assert_contains, assert_jq, assert_jq_gte,
-    find_insight_by_recall, json_out, run_cli,
-    )
+from .helpers import assert_contains, assert_jq, assert_jq_gte
+from .helpers import find_insight_by_recall, json_out, run_cli
 
 pytestmark = pytest.mark.e2e_cli
 

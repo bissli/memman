@@ -19,10 +19,11 @@ import time
 import pytest
 from memman.store.model import Edge, Insight
 from memman.store.postgres import PostgresCluster
-
 from tests.e2e.conftest import _safe
 
 pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
+
+
 def test_concurrent_remember_during_reindex_preserves_edge(
         pg_dsn, request):
     """A plain edge insert during reindex window survives commit.

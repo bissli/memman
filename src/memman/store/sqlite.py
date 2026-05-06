@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 from memman.embed.fingerprint import Fingerprint
 from memman.embed.vector import serialize_vector
@@ -653,7 +653,7 @@ class SqliteBackend(Backend):
     def close(self) -> None:
         self._db.close()
 
-    def __enter__(self) -> 'SqliteBackend':
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:

@@ -92,8 +92,8 @@ def _record_subprocess(monkeypatch, *, returncode: int = 0,
 class TestInstall:
     """systemd / launchd install: file generation, env file merge."""
 
-    def test_install_systemd_writes_timer_and_service(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_install_systemd_writes_timer_and_service(self,
+                                                      fake_home, fake_binary, monkeypatch):
         """Systemd install creates timer + service files with correct content.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
@@ -114,8 +114,8 @@ class TestInstall:
         assert 'MEMMAN_DATA_DIR=' in service
         assert 'EnvironmentFile=' in service
 
-    def test_install_launchd_writes_plist_and_wrapper(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_install_launchd_writes_plist_and_wrapper(self,
+                                                      fake_home, fake_binary, monkeypatch):
         """Launchd install creates plist + wrapper script with correct content.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
@@ -134,8 +134,8 @@ class TestInstall:
         assert 'scheduler drain --pending' in wrapper
         assert os.access(result['wrapper_path'], os.X_OK)
 
-    def test_install_writes_both_keys_to_env_file(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_install_writes_both_keys_to_env_file(self,
+                                                  fake_home, fake_binary, monkeypatch):
         """Both OPENROUTER_API_KEY and VOYAGE_API_KEY are written at mode 600.
         """
         import stat
@@ -153,8 +153,8 @@ class TestInstall:
         mode = stat.S_IMODE(os.stat(env_path).st_mode)
         assert mode == 0o600
 
-    def test_install_merges_existing_env_file(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_install_merges_existing_env_file(self,
+                                              fake_home, fake_binary, monkeypatch):
         """Existing env keys are preserved across installs.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
@@ -172,8 +172,8 @@ class TestInstall:
         assert 'OPENROUTER_API_KEY=sk-or-new' in contents
         assert 'VOYAGE_API_KEY=vk-new' in contents
 
-    def test_install_without_interval_uses_60s_default(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_install_without_interval_uses_60s_default(self,
+                                                       fake_home, fake_binary, monkeypatch):
         """install() with no interval_seconds writes a 60s timer.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
@@ -234,8 +234,8 @@ class TestDebugState:
 class TestChangeInterval:
     """`sch.change_interval` validation and unit rewrite."""
 
-    def test_change_interval_rewrites_unit_without_touching_env(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_change_interval_rewrites_unit_without_touching_env(self,
+                                                                fake_home, fake_binary, monkeypatch):
         """change_interval updates the unit file but leaves ~/.memman/env alone.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
@@ -253,8 +253,8 @@ class TestChangeInterval:
         env_after = (fake_home / '.memman' / 'env').read_text()
         assert env_before == env_after
 
-    def test_change_interval_rejects_too_short(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_change_interval_rejects_too_short(self,
+                                               fake_home, fake_binary, monkeypatch):
         """change_interval refuses values below the 60s floor on systemd.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
@@ -262,8 +262,8 @@ class TestChangeInterval:
         with pytest.raises(RuntimeError, match='too short for systemd'):
             sch.change_interval(str(fake_home), 30)
 
-    def test_change_interval_rejects_below_60_for_launchd(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_change_interval_rejects_below_60_for_launchd(self,
+                                                          fake_home, fake_binary, monkeypatch):
         """change_interval refuses values below the 60s floor on launchd.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
@@ -271,8 +271,8 @@ class TestChangeInterval:
         with pytest.raises(RuntimeError, match='too short for launchd'):
             sch.change_interval(str(fake_home), 30)
 
-    def test_change_interval_accepts_zero_for_serve(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_change_interval_accepts_zero_for_serve(self,
+                                                    fake_home, fake_binary, monkeypatch):
         """change_interval accepts 0 in serve mode (continuous loop).
         """
         monkeypatch.setattr(sch, 'detect_scheduler',
@@ -284,8 +284,8 @@ class TestChangeInterval:
         assert result['interval_seconds'] == 0
         assert sch.read_serve_interval() == 0
 
-    def test_change_interval_rejects_negative(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_change_interval_rejects_negative(self,
+                                              fake_home, fake_binary, monkeypatch):
         """change_interval refuses negative values regardless of kind.
         """
         monkeypatch.setattr(sch, 'detect_scheduler',
@@ -294,8 +294,8 @@ class TestChangeInterval:
         with pytest.raises(RuntimeError, match='negative'):
             sch.change_interval(str(fake_home), -1)
 
-    def test_change_interval_warns_on_mixed_mode(self, 
-            fake_home, fake_binary, monkeypatch, caplog):
+    def test_change_interval_warns_on_mixed_mode(self,
+                                                 fake_home, fake_binary, monkeypatch, caplog):
         """change_interval logs a warning when serve coexists with systemd.
         """
         import logging
@@ -338,8 +338,8 @@ class TestStatusParsing:
         assert result['installed'] is False
         assert result['interval_seconds'] is None
 
-    def test_status_installed_parses_interval(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_status_installed_parses_interval(self,
+                                              fake_home, fake_binary, monkeypatch):
         """status() parses OnUnitActiveSec from the installed timer.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
@@ -351,8 +351,8 @@ class TestStatusParsing:
         assert result['installed'] is True
         assert result['interval_seconds'] == 1800
 
-    def test_status_launchd_parses_interval(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_status_launchd_parses_interval(self,
+                                            fake_home, fake_binary, monkeypatch):
         """Launchd status parses StartInterval from the plist.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
@@ -373,8 +373,8 @@ class TestStatusParsing:
             '[Timer]\nOnUnitActiveSec=15min\nPersistent=true\n')
         assert sch._parse_interval_from_systemd_timer(timer_path) is None
 
-    def test_systemd_status_computes_next_run(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_systemd_status_computes_next_run(self,
+                                              fake_home, fake_binary, monkeypatch):
         """status() reports next_run = LastTriggerUSec + interval.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
@@ -394,8 +394,8 @@ class TestStatusParsing:
         assert result['next_run'] is not None
         assert result['next_run'].startswith('2026-04-24T18:33:58')
 
-    def test_systemd_status_next_run_when_never_fired(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_systemd_status_next_run_when_never_fired(self,
+                                                      fake_home, fake_binary, monkeypatch):
         """status() returns next_run=None when the timer has never fired.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
@@ -410,8 +410,8 @@ class TestStatusParsing:
         result = sch.status()
         assert result['next_run'] is None
 
-    def test_launchd_status_computes_next_run(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_launchd_status_computes_next_run(self,
+                                              fake_home, fake_binary, monkeypatch):
         """status() reports next_run = log_mtime + interval on launchd.
         """
         import os
@@ -435,8 +435,8 @@ class TestStatusParsing:
             fixed_mtime + 900, tz=timezone.utc).isoformat()
         assert result['next_run'] == expected
 
-    def test_launchd_status_next_run_without_log(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_launchd_status_next_run_without_log(self,
+                                                 fake_home, fake_binary, monkeypatch):
         """status() returns next_run=None on launchd with no enrich.log yet.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
@@ -449,8 +449,8 @@ class TestStatusParsing:
         assert result['platform'] == 'launchd'
         assert result['next_run'] is None
 
-    def test_systemd_status_next_run_when_malformed(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_systemd_status_next_run_when_malformed(self,
+                                                    fake_home, fake_binary, monkeypatch):
         """status() returns next_run=None on an unparseable timestamp.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
@@ -470,8 +470,8 @@ class TestStatusParsing:
 class TestActivation:
     """`uninstall`, `start`, `stop`, `trigger` semantics."""
 
-    def test_uninstall_systemd_removes_unit_files(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_uninstall_systemd_removes_unit_files(self,
+                                                  fake_home, fake_binary, monkeypatch):
         """uninstall() removes systemd timer and service files.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
@@ -502,8 +502,7 @@ class TestActivation:
         with pytest.raises(FileNotFoundError, match='not installed'):
             sch.stop()
 
-
-    def _record_subprocess(monkeypatch, *, returncode: int = 0,
+    def _record_subprocess(self, *, returncode: int = 0,
                            stderr: str = '', stdout: str = 'active',
                            responses: dict | None = None):
         """Stub subprocess.run, record argvs, and (optionally) route by argv.
@@ -538,11 +537,11 @@ class TestActivation:
             'run': staticmethod(_fake_run),
             'TimeoutExpired': TimeoutError,
             })()
-        monkeypatch.setattr(sch, 'subprocess', fake)
+        self.setattr(sch, 'subprocess', fake)
         return calls
 
-    def test_trigger_systemd_uses_no_block(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_trigger_systemd_uses_no_block(self,
+                                           fake_home, fake_binary, monkeypatch):
         """trigger() on systemd runs `systemctl --user start --no-block`.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
@@ -558,8 +557,8 @@ class TestActivation:
             'memman-enrich.service',
             ]]
 
-    def test_trigger_systemd_handles_already_running(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_trigger_systemd_handles_already_running(self,
+                                                     fake_home, fake_binary, monkeypatch):
         """trigger() returns informational note when a run is already active.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
@@ -574,8 +573,8 @@ class TestActivation:
         assert result['platform'] == 'systemd'
         assert 'already' in result.get('note', '').lower()
 
-    def test_trigger_launchd_runs_job(self, 
-            fake_home, fake_binary, monkeypatch):
+    def test_trigger_launchd_runs_job(self,
+                                      fake_home, fake_binary, monkeypatch):
         """trigger() on launchd runs `launchctl start com.memman.enrich`.
         """
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')

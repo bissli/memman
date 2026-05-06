@@ -8,7 +8,7 @@ from memman.embed import voyage
 from memman.embed.openrouter import Client as OpenRouterClient
 from memman.embed.vector import cosine_similarity, deserialize_vector
 from memman.embed.vector import serialize_vector
-from memman.embed.voyage import DEFAULT_ENDPOINT, DEFAULT_MODEL, EMBEDDING_DIM
+from memman.embed.voyage import EMBEDDING_DIM
 from memman.embed.voyage import Client as VoyageClient
 from memman.exceptions import ConfigError
 
@@ -37,7 +37,7 @@ class TestEmbedUtils:
         b = [-1.0, -2.0, -3.0]
         assert abs(cosine_similarity(a, b) - (-1.0)) < 1e-9
 
-    @pytest.mark.parametrize('a,b', [
+    @pytest.mark.parametrize(('a', 'b'), [
         ([1.0, 2.0], [1.0, 2.0, 3.0]),
         ([], []),
         (None, None),
@@ -227,7 +227,7 @@ class TestOpenRouterClient:
         assert client._api_key == 'sk-or-test'
 
     @pytest.mark.no_default_env
-    @pytest.mark.parametrize('missing_attr,match', [
+    @pytest.mark.parametrize(('missing_attr', 'match'), [
         ('OPENROUTER_ENDPOINT', 'OPENROUTER_ENDPOINT'),
         ('OPENROUTER_EMBED_MODEL', 'OPENROUTER_EMBED_MODEL'),
     ])

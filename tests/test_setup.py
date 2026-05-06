@@ -494,14 +494,12 @@ class TestPrimeAndCompactHooks:
         flag_dir = tmp_path / '.memman' / 'exit_plan'
         assert not flag_dir.exists()
 
-
     def _stop_script():
         """Return path to stop.sh asset."""
         from importlib.resources import files as pkg_files
         return str(
             pkg_files('memman.setup.assets')
             .joinpath('claude/stop.sh'))
-
 
     def _prompt_script():
         """Return path to user_prompt.sh asset."""
@@ -510,12 +508,11 @@ class TestPrimeAndCompactHooks:
             pkg_files('memman.setup.assets')
             .joinpath('claude/user_prompt.sh'))
 
-
-    def _run_hook(script: str, input_json: str,
+    def _run_hook(self: str, input_json: str,
                   tmp_home: pathlib.Path) -> subprocess.CompletedProcess:
         """Run a hook script with HOME overridden."""
         return subprocess.run(
-            ['bash', script],
+            ['bash', self],
             check=False, input=input_json,
             capture_output=True, text=True,
             env={**os.environ, 'HOME': str(tmp_home)})
