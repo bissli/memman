@@ -85,7 +85,9 @@ CREATE TABLE IF NOT EXISTS {schema}.oplog (
     operation   TEXT NOT NULL,
     insight_id  TEXT,
     detail      TEXT DEFAULT '',
-    created_at  TIMESTAMPTZ NOT NULL
+    created_at  TIMESTAMPTZ NOT NULL,
+    before      JSONB,
+    after       JSONB
 );
 
 CREATE TABLE IF NOT EXISTS {schema}.meta (
@@ -227,19 +229,21 @@ def _import_oplog(
         schema: str) -> int:
     """Stream the oplog table. Returns row count imported."""
     rows = sqlite_conn.execute(
-        'SELECT operation, insight_id, detail, created_at'
+        'SELECT operation, insight_id, detail, created_at,'
+        '       before, after'
         ' FROM oplog').fetchall()
     if not rows:
         return 0
     out = [
-        (r[0], r[1], r[2], _parse_ts(r[3]))
+        (r[0], r[1], r[2], _parse_ts(r[3]), r[4], r[5])
         for r in rows
         ]
     with pg_conn.cursor() as cur:
         cur.executemany(
             f'INSERT INTO {schema}.oplog'
-            ' (operation, insight_id, detail, created_at)'
-            ' VALUES (%s, %s, %s, %s)',
+            ' (operation, insight_id, detail, created_at,'
+            '  before, after)'
+            ' VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb)',
             out)
     return len(out)
 

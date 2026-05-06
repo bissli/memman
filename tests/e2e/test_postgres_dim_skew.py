@@ -75,7 +75,7 @@ def test_dim_mismatch_refused_on_reopen(pg_dsn, request):
         msg = str(excinfo.value)
         assert 'vector(512)' in msg
         assert 'dim=1024' in msg
-        assert 'memman embed reembed' in msg
+        assert 'memman embed swap' in msg
     finally:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:

@@ -2362,13 +2362,15 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
 @embed_grp.command('status')
 @click.pass_context
 def embed_status(ctx: click.Context) -> None:
-    """Show active client, stored fingerprint, consistency state.
+    """Show active client, stored fingerprint, consistency, swap state.
     """
     from memman.embed.fingerprint import active_fingerprint, stored_fingerprint
+    from memman.embed.swap import read_progress
 
     active = active_fingerprint()
     with _active_backend(ctx, unchecked=True) as backend:
         stored = stored_fingerprint(backend)
+        progress = read_progress(backend)
 
     out: dict = {
         'active': {
@@ -2382,6 +2384,14 @@ def embed_status(ctx: click.Context) -> None:
             'dim': stored.dim,
             },
         }
+    if progress.state:
+        out['swap'] = {
+            'state': progress.state,
+            'cursor': progress.cursor,
+            'target_provider': progress.target_provider,
+            'target_model': progress.target_model,
+            'target_dim': progress.target_dim,
+            }
     if stored is None:
         out['consistent'] = False
         out['hint'] = (
@@ -2633,10 +2643,11 @@ def embed_swap(
     unlimited) caps the Postgres HNSW build.
     """
     from memman.embed import registry as _ec_registry
-    from memman.embed.fingerprint import (
-        Fingerprint, stored_fingerprint, write_fingerprint)
-    from memman.embed.swap import (
-        SwapPlan, abort_swap as _abort_swap, read_progress, run_swap)
+    from memman.embed.fingerprint import Fingerprint, stored_fingerprint
+    from memman.embed.fingerprint import write_fingerprint
+    from memman.embed.swap import SwapPlan
+    from memman.embed.swap import abort_swap as _abort_swap
+    from memman.embed.swap import read_progress, run_swap
     from memman.store.factory import open_cluster
 
     if abort and resume:
@@ -2662,7 +2673,7 @@ def embed_swap(
             target_model = progress.target_model
             target_dim = progress.target_dim
         else:
-            if progress.state and progress.state not in ('', 'done'):
+            if progress.state and progress.state not in {'', 'done'}:
                 raise click.ClickException(
                     f'store {name!r} has an in-flight swap'
                     f' (state={progress.state}); use --resume or'
