@@ -1,14 +1,73 @@
-"""Tests for link_pending and linked_at lifecycle."""
+"""Tests for link_pending and the constants-hash / reindex orchestrator."""
 
 from datetime import datetime, timezone
 
-from memman.graph.engine import MAX_LINK_BATCH, link_pending
-from memman.graph.engine import reindex_auto_edges
+from memman.graph.engine import MAX_LINK_BATCH, compute_constants_hash
+from memman.graph.engine import link_pending, reindex_auto_edges
 from memman.store.node import insert_insight
 from tests.conftest import insert_pending as _insert_pending
-from tests.conftest import make_insight
+from tests.conftest import make_edge, make_insight
 
 OLD = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+
+class TestConstantsHash:
+    """compute_constants_hash detects mutation of graph constants."""
+
+    def test_changes_on_entity_limit(self, monkeypatch):
+        """Changing MAX_ENTITY_LINKS produces a different hash."""
+        original = compute_constants_hash()
+        from memman.graph import engine
+        monkeypatch.setattr(engine, 'MAX_ENTITY_LINKS', 999)
+        assert compute_constants_hash() != original
+
+    def test_changes_on_proximity_limit(self, monkeypatch):
+        """Changing MAX_PROXIMITY_EDGES produces a different hash."""
+        original = compute_constants_hash()
+        from memman.graph import engine
+        monkeypatch.setattr(engine, 'MAX_PROXIMITY_EDGES', 999)
+        assert compute_constants_hash() != original
+
+
+class TestReindexAutoEdges:
+    """reindex_auto_edges does not corrupt link_pending or manual edges."""
+
+    def test_relink_does_not_block_linking(self, backend):
+        """After relink, link_pending can still process insights."""
+        backend.nodes.insert(make_insight(
+            id='rbc-1', content='relink then link test'))
+        backend.nodes.insert(make_insight(
+            id='rbc-2', content='second insight for linking'))
+
+        reindex_auto_edges(backend)
+        assert link_pending(backend) > 0
+
+    def test_relink_preserves_manual_edge_metadata(self, backend):
+        """Manual claude entity edge metadata survives relink."""
+        ins1 = make_insight(
+            id='hw-1', content='Python web framework',
+            entities=['Python'])
+        ins2 = make_insight(
+            id='hw-2', content='Python data analysis',
+            entities=['Python'])
+        backend.nodes.insert(ins1)
+        backend.nodes.insert(ins2)
+
+        manual_edge = make_edge(
+            source_id='hw-1', target_id='hw-2',
+            edge_type='entity', weight=0.5,
+            metadata={'entity': 'Python', 'created_by': 'claude'})
+        backend.edges.upsert(manual_edge)
+
+        reindex_auto_edges(backend)
+
+        edges = backend.edges.all()
+        match = [e for e in edges
+                 if e.source_id == 'hw-1' and e.target_id == 'hw-2'
+                 and e.edge_type == 'entity']
+        assert len(match) == 1
+        assert match[0].metadata.get('created_by') == 'claude'
+        assert match[0].weight >= 0.5
 
 
 class TestLinkPending:

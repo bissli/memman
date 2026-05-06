@@ -325,6 +325,70 @@ def test_reindex_drops_invalid_hnsw_remnant(pg_dsn):
     assert row[0] is True
 
 
+def test_postgres_recall_issues_pgvector_distance_operator(
+        tmp_path, pg_dsn, monkeypatch):
+    """Postgres `intent_aware_recall` issues SQL with the pgvector `<=>`
+    distance operator -- HNSW is on the production recall path, not
+    dead code.
+    """
+    from memman.embed.fingerprint import META_KEY, active_fingerprint
+    from memman.search.recall import intent_aware_recall
+    from memman.store.model import Insight
+
+    cluster = PostgresCluster(dsn=pg_dsn)
+    try:
+        cluster.drop_store(store='hnsw_smoke', data_dir='')
+    except Exception:
+        pass
+    backend = cluster.open(store='hnsw_smoke', data_dir='')
+    backend.meta.set(META_KEY, active_fingerprint().to_json())
+
+    n_insights = 10
+    for i in range(n_insights):
+        ins = Insight(
+            id=f'hs-{i:02d}',
+            content=f'document {i} alpha bravo charlie',
+            category='fact', importance=3, entities=[],
+            source='hnsw-smoke', access_count=0,
+            created_at=None, updated_at=None,
+            deleted_at=None, last_accessed_at=None,
+            effective_importance=0.0)
+        backend.nodes.insert(ins)
+        backend.nodes.update_embedding(
+            ins.id, _voyage_shape_vector(seed=i), 'voyage-3-lite')
+
+    captured_sql: list[str] = []
+    real_execute = psycopg.Cursor.execute
+
+    def spy(self, query, *args, **kwargs):
+        captured_sql.append(str(query))
+        return real_execute(self, query, *args, **kwargs)
+
+    monkeypatch.setattr(psycopg.Cursor, 'execute', spy)
+
+    try:
+        intent_aware_recall(
+            backend, query='document alpha',
+            query_vec=_voyage_shape_vector(seed=999),
+            query_entities=[], limit=5, intent_override='GENERAL')
+    finally:
+        try:
+            backend.close()
+        except Exception:
+            pass
+        try:
+            cluster.drop_store(store='hnsw_smoke', data_dir='')
+        except Exception:
+            pass
+        cluster.close()
+
+    pgvector_ops = [s for s in captured_sql if '<=>' in s]
+    assert pgvector_ops, (
+        f'pgvector distance operator <=> never appeared in '
+        f'{len(captured_sql)} SQL statements during Postgres recall. '
+        f'HNSW is dead code. Sample SQL: {captured_sql[:5]}')
+
+
 def test_reembed_lock_session_scoped_and_releases_on_close(
         pg_dsn):
     """Two PostgresBackends compete for `reembed_lock`. The second

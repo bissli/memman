@@ -539,6 +539,29 @@ class TestAutoPrune:
         assert get_insight_by_id(tmp_db, 'fresh-1') is not None
         assert get_insight_by_id(tmp_db, 'stale-1') is None
 
+    def test_old_unaccessed_pruned_before_fresh_unaccessed(self, tmp_db):
+        """Recency tiebreak: older row prunes first when access_count ties."""
+        from datetime import datetime, timedelta, timezone
+
+        from memman.store.model import format_timestamp
+
+        insert_insight(tmp_db, make_insight(
+            id='old-row', content='old content', importance=2))
+        insert_insight(tmp_db, make_insight(
+            id='fresh-row', content='fresh content', importance=2))
+
+        when = format_timestamp(
+            datetime.now(timezone.utc) - timedelta(days=30))
+        tmp_db._exec(
+            'UPDATE insights SET created_at = ?, updated_at = ?'
+            ' WHERE id = ?',
+            (when, when, 'old-row'))
+
+        pruned = auto_prune(tmp_db, 1)
+        assert pruned == 1
+        assert get_insight_by_id(tmp_db, 'fresh-row') is not None
+        assert get_insight_by_id(tmp_db, 'old-row') is None
+
 
 # --- Oplog ---
 
