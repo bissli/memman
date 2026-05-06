@@ -671,6 +671,21 @@ def open_ro_db(sdir: str) -> DB:
     return _db.open_read_only(sdir)
 
 
+def open_sqlite_backend(
+        store: str, data_dir: str, *,
+        read_only: bool = False) -> 'SqliteBackend':
+    """Free-function open: bypass the Cluster scaffold.
+
+    Mirrors `SqliteCluster.open` / `open_read_only` so callers that
+    have already resolved the per-store backend kind can skip the
+    cluster intermediary.
+    """
+    sdir = _db.store_dir(data_dir, store)
+    if read_only:
+        return SqliteBackend(_db.open_read_only(sdir))
+    return SqliteBackend(_db.open_db(sdir))
+
+
 class SqliteCluster(Cluster):
     """Cluster implementation for the SQLite backend.
 

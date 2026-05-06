@@ -53,6 +53,18 @@ WORKER = 'MEMMAN_WORKER'
 LOG_LEVEL = 'MEMMAN_LOG_LEVEL'
 BACKEND = 'MEMMAN_BACKEND'
 PG_DSN = 'MEMMAN_PG_DSN'
+DEFAULT_BACKEND = 'MEMMAN_DEFAULT_BACKEND'
+DEFAULT_PG_DSN = 'MEMMAN_DEFAULT_PG_DSN'
+
+
+def BACKEND_FOR(store: str) -> str:
+    """Per-store backend env-key name: `MEMMAN_BACKEND_<store>`."""
+    return f'MEMMAN_BACKEND_{store}'
+
+
+def PG_DSN_FOR(store: str) -> str:
+    """Per-store DSN env-key name: `MEMMAN_PG_DSN_<store>`."""
+    return f'MEMMAN_PG_DSN_{store}'
 
 OPENROUTER_API_KEY = 'OPENROUTER_API_KEY'
 VOYAGE_API_KEY = 'VOYAGE_API_KEY'
@@ -225,6 +237,33 @@ def require(name: str) -> str:
             f'{name} is not set in {env_file_path()};'
             ' run `memman install` to populate the env file')
     return value
+
+
+def get_store_backend(
+        store: str, data_dir: str | None = None) -> str | None:
+    """Read `MEMMAN_BACKEND_<store>` from the env file; None if absent.
+
+    Read-only helper -- no fallback to the global `MEMMAN_BACKEND` or
+    to `MEMMAN_DEFAULT_BACKEND`. Callers that want default-fallback
+    behavior compose `get_store_backend(store) or
+    get(DEFAULT_BACKEND)` explicitly so the data flow stays visible.
+    """
+    if data_dir is None:
+        return get(BACKEND_FOR(store))
+    file_values = parse_env_file(env_file_path(data_dir))
+    raw = file_values.get(BACKEND_FOR(store))
+    return raw if raw else None
+
+
+def get_store_pg_dsn(
+        store: str, data_dir: str | None = None) -> str | None:
+    """Read `MEMMAN_PG_DSN_<store>` from the env file; None if absent.
+    """
+    if data_dir is None:
+        return get(PG_DSN_FOR(store))
+    file_values = parse_env_file(env_file_path(data_dir))
+    raw = file_values.get(PG_DSN_FOR(store))
+    return raw if raw else None
 
 
 def get_bool(name: str, default: bool = False) -> bool:

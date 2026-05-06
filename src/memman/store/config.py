@@ -67,12 +67,27 @@ def _validate_namespace(
     """Common namespace scan.
 
     Iterates `env` keys with the namespace prefix; any key not in
-    `owned` raises `ConfigError`. The error message includes a
-    `did you mean` hint pulled from `difflib.get_close_matches`.
+    `owned` raises `ConfigError`. Per-store-suffixed keys (e.g.
+    `MEMMAN_PG_DSN_<store>`) are accepted when the canonical
+    `<owned-key>_<suffix>` form decomposes to (a) a known canonical
+    key and (b) a syntactically valid store-name suffix.
+
+    The error message includes a `did you mean` hint pulled from
+    `difflib.get_close_matches` when one is sufficiently close.
     """
+    from memman.store.db import valid_store_name
+
     candidates = [k for k in env if k.startswith(prefix)]
     for key in candidates:
         if key in owned:
+            continue
+        canonical = _strip_store_suffix(key, owned)
+        if canonical is not None:
+            suffix = key[len(canonical) + 1:]
+            if not valid_store_name(suffix):
+                raise ConfigError(
+                    f'invalid store-name suffix in {key!r};'
+                    f' suffix {suffix!r} is not a valid store name')
             continue
         suggestions = difflib.get_close_matches(
             key, owned, n=1, cutoff=0.6)
@@ -82,6 +97,19 @@ def _validate_namespace(
                 f' did you mean {suggestions[0]!r}?')
         raise ConfigError(
             f'unknown {prefix} key {key!r}')
+
+
+def _strip_store_suffix(key: str, owned: frozenset) -> str | None:
+    """Return the canonical owned key when `key == '<owned>_<suffix>'`.
+
+    Returns None when no owned key prefixes `key` with a trailing
+    underscore. The suffix syntactic check is the caller's
+    responsibility -- this helper only handles the canonical lookup.
+    """
+    for canonical in owned:
+        if key.startswith(canonical + '_'):
+            return canonical
+    return None
 
 
 _REGISTRY: dict[str, type] = {
