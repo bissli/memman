@@ -4,6 +4,7 @@ Covers delete_auto_edges_for_node, delete_auto_edges_by_type,
 count_auto_edges_by_type, and temporal proximity helpers.
 """
 
+import pytest
 from memman.store.edge import count_auto_edges_by_type
 from memman.store.edge import count_low_weight_temporal_proximity
 from memman.store.edge import delete_auto_edges_by_type
@@ -14,112 +15,48 @@ from memman.store.node import insert_insight
 from tests.conftest import make_edge, make_insight
 
 
+_EDGE_KW = {
+    'entity': {'weight': 0.5, 'extra': {'entity': 'Go'}},
+    'semantic': {'weight': 0.7, 'extra': {'cosine': '0.70'}},
+    'causal': {'weight': 0.9, 'extra': {}},
+}
+
+
 def _setup_node_pair(db, id_a='n-1', id_b='n-2'):
     """Insert two insights for edge tests."""
     insert_insight(db, make_insight(id=id_a, content=f'node {id_a}'))
     insert_insight(db, make_insight(id=id_b, content=f'node {id_b}'))
 
 
-class TestDeleteAutoEdgesForNodeEntity:
-    """Per-node entity edge deletion preserves claude/manual."""
+@pytest.mark.parametrize('edge_type,created_by,expected_remaining', [
+    ('entity', 'claude', 1),
+    ('entity', 'manual', 1),
+    ('entity', 'auto', 0),
+    ('entity', None, 0),
+    ('semantic', 'claude', 1),
+    ('semantic', 'auto', 0),
+    ('semantic', None, 0),
+    ('causal', 'claude', 1),
+    ('causal', 'llm', 0),
+])
+def test_delete_auto_edges_for_node_by_type(
+        tmp_db, edge_type, created_by, expected_remaining):
+    """`delete_auto_edges_for_node` preserves manual edges, drops auto/llm.
 
-    def test_preserves_claude(self, tmp_db):
-        """Entity edge with created_by='claude' survives deletion."""
-        _setup_node_pair(tmp_db)
-        insert_edge(tmp_db, make_edge(
-            source_id='n-1', target_id='n-2',
-            edge_type='entity', weight=0.5,
-            metadata={'created_by': 'claude', 'entity': 'Go'}))
-        delete_auto_edges_for_node(tmp_db, 'n-1', 'entity')
-        assert len(get_all_edges(tmp_db)) == 1
-
-    def test_preserves_manual(self, tmp_db):
-        """Entity edge with created_by='manual' survives deletion."""
-        _setup_node_pair(tmp_db)
-        insert_edge(tmp_db, make_edge(
-            source_id='n-1', target_id='n-2',
-            edge_type='entity', weight=0.5,
-            metadata={'created_by': 'manual', 'entity': 'Go'}))
-        delete_auto_edges_for_node(tmp_db, 'n-1', 'entity')
-        assert len(get_all_edges(tmp_db)) == 1
-
-    def test_removes_auto(self, tmp_db):
-        """Entity edge with created_by='auto' is deleted."""
-        _setup_node_pair(tmp_db)
-        insert_edge(tmp_db, make_edge(
-            source_id='n-1', target_id='n-2',
-            edge_type='entity', weight=0.5,
-            metadata={'created_by': 'auto', 'entity': 'Go'}))
-        delete_auto_edges_for_node(tmp_db, 'n-1', 'entity')
-        assert len(get_all_edges(tmp_db)) == 0
-
-    def test_removes_null_creator(self, tmp_db):
-        """Entity edge with no created_by is deleted."""
-        _setup_node_pair(tmp_db)
-        insert_edge(tmp_db, make_edge(
-            source_id='n-1', target_id='n-2',
-            edge_type='entity', weight=0.5,
-            metadata={'entity': 'Go'}))
-        delete_auto_edges_for_node(tmp_db, 'n-1', 'entity')
-        assert len(get_all_edges(tmp_db)) == 0
-
-
-class TestDeleteAutoEdgesForNodeSemantic:
-    """Per-node semantic edge deletion removes auto and null."""
-
-    def test_preserves_claude(self, tmp_db):
-        """Semantic edge with created_by='claude' survives."""
-        _setup_node_pair(tmp_db)
-        insert_edge(tmp_db, make_edge(
-            source_id='n-1', target_id='n-2',
-            edge_type='semantic', weight=0.7,
-            metadata={'created_by': 'claude', 'cosine': '0.70'}))
-        delete_auto_edges_for_node(tmp_db, 'n-1', 'semantic')
-        assert len(get_all_edges(tmp_db)) == 1
-
-    def test_removes_auto(self, tmp_db):
-        """Semantic edge with created_by='auto' is deleted."""
-        _setup_node_pair(tmp_db)
-        insert_edge(tmp_db, make_edge(
-            source_id='n-1', target_id='n-2',
-            edge_type='semantic', weight=0.7,
-            metadata={'created_by': 'auto', 'cosine': '0.70'}))
-        delete_auto_edges_for_node(tmp_db, 'n-1', 'semantic')
-        assert len(get_all_edges(tmp_db)) == 0
-
-    def test_removes_null_creator(self, tmp_db):
-        """Semantic edge with no created_by is deleted."""
-        _setup_node_pair(tmp_db)
-        insert_edge(tmp_db, make_edge(
-            source_id='n-1', target_id='n-2',
-            edge_type='semantic', weight=0.7,
-            metadata={'cosine': '0.70'}))
-        delete_auto_edges_for_node(tmp_db, 'n-1', 'semantic')
-        assert len(get_all_edges(tmp_db)) == 0
-
-
-class TestDeleteAutoEdgesForNodeCausal:
-    """Per-node causal edge deletion removes only llm."""
-
-    def test_preserves_claude(self, tmp_db):
-        """Causal edge with created_by='claude' survives."""
-        _setup_node_pair(tmp_db)
-        insert_edge(tmp_db, make_edge(
-            source_id='n-1', target_id='n-2',
-            edge_type='causal', weight=0.9,
-            metadata={'created_by': 'claude'}))
-        delete_auto_edges_for_node(tmp_db, 'n-1', 'causal')
-        assert len(get_all_edges(tmp_db)) == 1
-
-    def test_removes_llm(self, tmp_db):
-        """Causal edge with created_by='llm' is deleted."""
-        _setup_node_pair(tmp_db)
-        insert_edge(tmp_db, make_edge(
-            source_id='n-1', target_id='n-2',
-            edge_type='causal', weight=0.9,
-            metadata={'created_by': 'llm', 'confidence': '0.85'}))
-        delete_auto_edges_for_node(tmp_db, 'n-1', 'causal')
-        assert len(get_all_edges(tmp_db)) == 0
+    Per-edge-type contract: only edges WITHOUT a recognized human
+    `created_by` (or with the type-specific auto markers) are deleted.
+    """
+    _setup_node_pair(tmp_db)
+    spec = _EDGE_KW[edge_type]
+    metadata = dict(spec['extra'])
+    if created_by is not None:
+        metadata['created_by'] = created_by
+    insert_edge(tmp_db, make_edge(
+        source_id='n-1', target_id='n-2',
+        edge_type=edge_type, weight=spec['weight'],
+        metadata=metadata))
+    delete_auto_edges_for_node(tmp_db, 'n-1', edge_type)
+    assert len(get_all_edges(tmp_db)) == expected_remaining
 
 
 class TestDeleteAutoEdgesForNodeScoping:

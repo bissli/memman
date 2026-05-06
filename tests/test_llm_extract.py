@@ -7,67 +7,27 @@ with real/mocked LLM is covered by test_cli.py and test_memory_system.py.
 
 import json
 
+import pytest
 from memman.llm.extract import _strip_line_refs, expand_query, extract_facts
 from memman.llm.extract import reconcile_memories
 from memman.llm.shared import parse_json_response
 
 
-class TestStripLineRefs:
-    """The post-extraction regex must strip file:line refs only.
-
-    Hostnames, IP:port, timestamps, version pins, and HTTP codes share
-    the surface shape `word:digits` but are NOT line references and
-    must be preserved.
-    """
-
-    def test_strips_module_py_line(self):
-        assert _strip_line_refs(
-            'See cli.py:182 for the fix') == 'See for the fix'
-
-    def test_strips_path_module_py_line(self):
-        assert _strip_line_refs(
-            'src/pkg/module/file.py:590 has the bug'
-            ) == 'has the bug'
-
-    def test_strips_explicit_line_n(self):
-        assert _strip_line_refs(
-            'Error on line 42 of the module'
-            ) == 'Error on of the module'
-
-    def test_preserves_localhost_port(self):
-        assert _strip_line_refs(
-            'Bind to localhost:8080'
-            ) == 'Bind to localhost:8080'
-
-    def test_preserves_ip_port(self):
-        assert _strip_line_refs(
-            'Reach 10.10.1.247:8000 over VPN'
-            ) == 'Reach 10.10.1.247:8000 over VPN'
-
-    def test_preserves_timestamp(self):
-        assert _strip_line_refs(
-            'Worker fires daily at 14:18'
-            ) == 'Worker fires daily at 14:18'
-
-    def test_preserves_http_code_word(self):
-        assert _strip_line_refs(
-            'Returns code:404 on miss'
-            ) == 'Returns code:404 on miss'
-
-    def test_preserves_version_pin(self):
-        assert _strip_line_refs(
-            'Use python:3.11 base image'
-            ) == 'Use python:3.11 base image'
-
-    def test_preserves_redis_port(self):
-        assert _strip_line_refs(
-            'redis:6379 is the cache'
-            ) == 'redis:6379 is the cache'
-
-    def test_strips_html_extension_line(self):
-        assert _strip_line_refs(
-            'See app/page.html:106 for the diff'
-            ) == 'See for the diff'
+@pytest.mark.parametrize('text,expected', [
+    ('See cli.py:182 for the fix', 'See for the fix'),
+    ('src/pkg/module/file.py:590 has the bug', 'has the bug'),
+    ('Error on line 42 of the module', 'Error on of the module'),
+    ('See app/page.html:106 for the diff', 'See for the diff'),
+    ('Bind to localhost:8080', 'Bind to localhost:8080'),
+    ('Reach 10.10.1.247:8000 over VPN', 'Reach 10.10.1.247:8000 over VPN'),
+    ('Worker fires daily at 14:18', 'Worker fires daily at 14:18'),
+    ('Returns code:404 on miss', 'Returns code:404 on miss'),
+    ('Use python:3.11 base image', 'Use python:3.11 base image'),
+    ('redis:6379 is the cache', 'redis:6379 is the cache'),
+])
+def test_strip_line_refs(text, expected):
+    """Strip file:line refs but preserve hostnames, ports, timestamps, versions."""
+    assert _strip_line_refs(text) == expected
 
 
 class TestSlowRoleSplit:
@@ -338,22 +298,12 @@ class TestExpandQuery:
         assert result['intent'] is None
 
 
-class TestParseJsonResponse:
-    """JSON response parsing with code block handling."""
-
-    def test_plain_json(self):
-        """Plain JSON dict is parsed."""
-        assert parse_json_response('{"key": "val"}') == {'key': 'val'}
-
-    def test_code_block_json(self):
-        """JSON in markdown code block is parsed."""
-        raw = '```json\n{"key": "val"}\n```'
-        assert parse_json_response(raw) == {'key': 'val'}
-
-    def test_invalid_json_returns_none(self):
-        """Non-JSON returns None."""
-        assert parse_json_response('not json') is None
-
-    def test_list_returns_none(self):
-        """JSON list (not dict) returns None."""
-        assert parse_json_response('[1, 2, 3]') is None
+@pytest.mark.parametrize('raw,expected', [
+    ('{"key": "val"}', {'key': 'val'}),
+    ('```json\n{"key": "val"}\n```', {'key': 'val'}),
+    ('not json', None),
+    ('[1, 2, 3]', None),
+])
+def test_parse_json_response(raw, expected):
+    """JSON response parsing strips code-block fences, rejects non-dicts."""
+    assert parse_json_response(raw) == expected

@@ -174,8 +174,14 @@ class TestProvenanceDrift:
         assert result['status'] == 'pass'
         assert result['detail']['stale_rows'] == 0
 
-    def test_stale_prompt_version_warns(self, tmp_db, tmp_backend):
-        """Rows with non-current prompt_version surface as a warning."""
+    @pytest.mark.parametrize('stale_col,stale_value,stale_count', [
+        ('prompt_version', 'deadbeefdeadbeef', 2),
+        ('model_id', 'anthropic/claude-haiku-1.0', 1),
+    ])
+    def test_drift_warns(
+            self, tmp_db, tmp_backend,
+            stale_col, stale_value, stale_count):
+        """Rows with non-current prompt_version or model_id surface as warn."""
         from memman import config
         from memman.doctor import check_provenance_drift
         from memman.pipeline.remember import compute_prompt_version
@@ -183,43 +189,33 @@ class TestProvenanceDrift:
         active_pv = compute_prompt_version()
         active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
 
-        _insert_healthy_insight(tmp_db, 'p-stale-1')
-        _insert_healthy_insight(tmp_db, 'p-stale-2')
-        _insert_healthy_insight(tmp_db, 'p-fresh')
+        for i in range(stale_count):
+            _insert_healthy_insight(tmp_db, f'p-stale-{i}')
+        if stale_count == 2:
+            _insert_healthy_insight(tmp_db, 'p-fresh')
 
-        tmp_db._exec(
-            'UPDATE insights SET prompt_version = ?, model_id = ?'
-            " WHERE id IN ('p-stale-1', 'p-stale-2')",
-            ('deadbeefdeadbeef', active_model))
-        tmp_db._exec(
-            'UPDATE insights SET prompt_version = ?, model_id = ?'
-            " WHERE id = 'p-fresh'",
-            (active_pv, active_model))
-
-        result = check_provenance_drift(tmp_backend)
-        assert result['status'] == 'warn'
-        assert result['detail']['stale_rows'] == 2
-        assert 'remediation' in result['detail']
-
-    def test_stale_model_id_warns(self, tmp_db, tmp_backend):
-        """Rows with non-current model_id surface as a warning."""
-        from memman import config
-        from memman.doctor import check_provenance_drift
-        from memman.pipeline.remember import compute_prompt_version
-
-        active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
-
-        _insert_healthy_insight(tmp_db, 'm-old')
-        tmp_db._exec(
-            'UPDATE insights SET prompt_version = ?, model_id = ?'
-            " WHERE id = 'm-old'",
-            (active_pv, 'anthropic/claude-haiku-1.0'))
-        assert active_model != 'anthropic/claude-haiku-1.0'
+        stale_ids = ', '.join(f"'p-stale-{i}'" for i in range(stale_count))
+        if stale_col == 'prompt_version':
+            tmp_db._exec(
+                f'UPDATE insights SET prompt_version = ?, model_id = ?'
+                f' WHERE id IN ({stale_ids})',
+                (stale_value, active_model))
+        else:
+            tmp_db._exec(
+                f'UPDATE insights SET prompt_version = ?, model_id = ?'
+                f' WHERE id IN ({stale_ids})',
+                (active_pv, stale_value))
+        if stale_count == 2:
+            tmp_db._exec(
+                'UPDATE insights SET prompt_version = ?, model_id = ?'
+                " WHERE id = 'p-fresh'",
+                (active_pv, active_model))
 
         result = check_provenance_drift(tmp_backend)
         assert result['status'] == 'warn'
-        assert result['detail']['stale_rows'] == 1
+        assert result['detail']['stale_rows'] == stale_count
+        if stale_col == 'prompt_version':
+            assert 'remediation' in result['detail']
 
 
 class TestEdgeDegree:
@@ -383,36 +379,26 @@ class TestHardening:
         assert result['status'] == 'pass'
         assert result['detail']['missing'] == []
 
-    def test_env_permissions_pass_when_no_home_memman(self, tmp_path, monkeypatch):
-        """Missing ~/.memman returns pass (nothing to secure)."""
+    @pytest.mark.parametrize('mode,expected_status,assert_issue', [
+        (None, 'pass', False),
+        (0o644, 'fail', True),
+        (0o600, 'pass', False),
+    ])
+    def test_env_permissions(
+            self, tmp_path, monkeypatch, mode, expected_status, assert_issue):
+        """Permissions check passes for missing or 0600, fails for 0644."""
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        if mode is not None:
+            mm = tmp_path / '.memman'
+            mm.mkdir(mode=0o700)
+            env = mm / 'env'
+            env.write_text('OPENROUTER_API_KEY=fake\n')
+            env.chmod(mode)
         result = check_env_permissions()
-        assert result['status'] == 'pass'
-
-    def test_env_permissions_fail_on_world_readable_env(self, tmp_path, monkeypatch):
-        """0644 env file trips the check."""
-        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
-        mm = tmp_path / '.memman'
-        mm.mkdir(mode=0o700)
-        env = mm / 'env'
-        env.write_text('OPENROUTER_API_KEY=fake\n')
-        env.chmod(0o644)
-        result = check_env_permissions()
-        assert result['status'] == 'fail'
-        assert any('env file' in issue
-                   for issue in result['detail']['issues'])
-
-    def test_env_permissions_pass_on_0600_env(self, tmp_path, monkeypatch):
-        """0600 env file + 0700 dir passes cleanly."""
-        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
-        mm = tmp_path / '.memman'
-        mm.mkdir(mode=0o700)
-        env = mm / 'env'
-        env.write_text('OPENROUTER_API_KEY=fake\n')
-        env.chmod(0o600)
-        result = check_env_permissions()
-        assert result['status'] == 'pass'
-        assert stat.S_IMODE(env.stat().st_mode) == 0o600
+        assert result['status'] == expected_status
+        if assert_issue:
+            assert any('env file' in issue
+                       for issue in result['detail']['issues'])
 
     def test_scheduler_state_warn_when_uninstalled(self, monkeypatch):
         """Scheduler-not-installed is a warn, not a fail."""
@@ -442,26 +428,21 @@ class TestHardening:
         assert result['status'] == 'fail'
         assert 'no drains recorded' in result['detail']['reason']
 
-    def test_scheduler_heartbeat_pass_when_stopped(self, tmp_path, monkeypatch):
-        """Scheduler stopped -> pass (no drain expected; recall-only mode)."""
+    @pytest.mark.parametrize('status,reason_snippet', [
+        ({'interval_seconds': 900, 'state': 'stopped',
+          'installed': True}, "'stopped'"),
+        ({'interval_seconds': None, 'state': 'stopped',
+          'installed': False}, None),
+    ])
+    def test_scheduler_heartbeat_pass_when_inactive(
+            self, tmp_path, monkeypatch, status, reason_snippet):
+        """Scheduler stopped or uninstalled -> pass (no drain expected)."""
         from memman.setup import scheduler as sch
-        monkeypatch.setattr(
-            sch, 'status', lambda: {
-                'interval_seconds': 900, 'state': 'stopped',
-                'installed': True})
+        monkeypatch.setattr(sch, 'status', lambda: status)
         result = check_scheduler_heartbeat(str(tmp_path))
         assert result['status'] == 'pass'
-        assert "'stopped'" in result['detail']['reason']
-
-    def test_scheduler_heartbeat_pass_when_uninstalled(self, tmp_path, monkeypatch):
-        """Scheduler uninstalled -> pass (not relevant)."""
-        from memman.setup import scheduler as sch
-        monkeypatch.setattr(
-            sch, 'status', lambda: {
-                'interval_seconds': None, 'state': 'stopped',
-                'installed': False})
-        result = check_scheduler_heartbeat(str(tmp_path))
-        assert result['status'] == 'pass'
+        if reason_snippet is not None:
+            assert reason_snippet in result['detail']['reason']
 
     def test_scheduler_heartbeat_pass_on_recent_drain(self, tmp_path, monkeypatch):
         """A drain within the interval window passes."""

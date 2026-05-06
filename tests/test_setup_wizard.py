@@ -29,137 +29,141 @@ def _strip_default_secrets(monkeypatch, data_dir):
     config.reset_file_cache()
 
 
-def test_no_tty_skips_all_prompts_and_returns_empty(no_tty, tmp_path):
-    """Headless mode never prompts and leaves backend to INSTALL_DEFAULTS."""
-    out = wizard.run_wizard(str(tmp_path / 'memman'))
-    assert out == {}
+class TestWizardFlow:
+    """Top-level run_wizard return shape under headless / tty conditions."""
+
+    @pytest.mark.parametrize('mode', ['no_tty', 'no_wizard_in_tty'])
+    def test_no_prompts_returns_empty(self, monkeypatch, tmp_path, mode):
+        """Headless mode and `--no-wizard` both short-circuit to empty."""
+        if mode == 'no_tty':
+            monkeypatch.setattr('sys.stdin.isatty', lambda: False)
+            out = wizard.run_wizard(str(tmp_path / 'memman'))
+        else:
+            monkeypatch.setattr('sys.stdin.isatty', lambda: True)
+            out = wizard.run_wizard(
+                str(tmp_path / 'memman'), no_wizard=True)
+        assert out == {}
+
+    def test_explicit_backend_flag_bypasses_prompt(self, no_tty, tmp_path):
+        """`--backend sqlite` is honored without any prompting."""
+        out = wizard.run_wizard(str(tmp_path / 'memman'), backend='sqlite')
+        assert out[config.BACKEND] == 'sqlite'
+
+    def test_postgres_hidden_when_extras_unavailable(
+            self, tty, tmp_path, monkeypatch):
+        """Sqlite-only menu is the no-prompt fast path; wizard returns empty."""
+        monkeypatch.setattr(
+            'memman.setup.wizard.extras.is_available', lambda extra: False)
+        out = wizard.run_wizard(str(tmp_path / 'memman'))
+        assert config.BACKEND not in out
+
+    def test_postgres_hidden_when_backend_module_missing(
+            self, tty, tmp_path, monkeypatch):
+        """Even with extras present, the postgres backend module gates visibility."""
+        monkeypatch.setattr(
+            'memman.setup.wizard.extras.is_available', lambda extra: True)
+        monkeypatch.setattr(
+            'memman.setup.wizard._backend_module_exists', lambda: False)
+        out = wizard.run_wizard(str(tmp_path / 'memman'))
+        assert config.BACKEND not in out
 
 
-def test_no_wizard_flag_is_equivalent_to_no_tty(monkeypatch, tmp_path):
-    """`--no-wizard` short-circuits prompts even in a TTY."""
-    monkeypatch.setattr('sys.stdin.isatty', lambda: True)
-    out = wizard.run_wizard(str(tmp_path / 'memman'), no_wizard=True)
-    assert out == {}
+class TestSecretPrompts:
+    """Secret-prompt logic for OPENROUTER_API_KEY / VOYAGE_API_KEY."""
+
+    def test_secrets_prompt_fires_when_missing_in_tty(
+            self, tty, tmp_path, monkeypatch):
+        """Wizard prompts (masked) when mandatory secrets are absent in TTY mode."""
+        _strip_default_secrets(monkeypatch, tmp_path / 'memman')
+        monkeypatch.setattr('sys.stdin.isatty', lambda: True)
+        monkeypatch.setenv(config.DATA_DIR, str(tmp_path / 'memman'))
+        monkeypatch.delenv(config.OPENROUTER_API_KEY, raising=False)
+        monkeypatch.delenv(config.VOYAGE_API_KEY, raising=False)
+
+        inputs = iter(['fresh-or-key', 'fresh-vy-key'])
+        monkeypatch.setattr(
+            'memman.setup.wizard.click.prompt',
+            lambda *a, **kw: next(inputs))
+        out = wizard.run_wizard(str(tmp_path / 'memman'))
+        assert out[config.OPENROUTER_API_KEY] == 'fresh-or-key'
+        assert out[config.VOYAGE_API_KEY] == 'fresh-vy-key'
+
+    def test_secrets_prompt_skipped_when_present_in_file(
+            self, tty, tmp_path):
+        """Wizard does not prompt when both secrets are already in the file.
+
+        The autouse `_isolate_env` fixture seeds both secrets, so a default
+        test environment should not trigger any secret prompt.
+        """
+        out = wizard.run_wizard(str(tmp_path / 'memman'))
+        assert config.OPENROUTER_API_KEY not in out
+        assert config.VOYAGE_API_KEY not in out
+
+    def test_secrets_prompt_skipped_when_shell_has_them(
+            self, tmp_path, monkeypatch):
+        """Wizard does not prompt when secrets are exported in the shell.
+
+        Even though the runtime resolver ignores `os.environ`, install will
+        still seed the shell value into the file via `collect_install_knobs`,
+        so the wizard considers a shell-set secret already-resolved.
+        """
+        monkeypatch.setattr('sys.stdin.isatty', lambda: True)
+        _strip_default_secrets(monkeypatch, tmp_path / 'memman')
+        monkeypatch.setenv(config.DATA_DIR, str(tmp_path / 'memman'))
+        monkeypatch.setenv(config.OPENROUTER_API_KEY, 'shell-or')
+        monkeypatch.setenv(config.VOYAGE_API_KEY, 'shell-vy')
+
+        def _should_not_be_called(*a, **kw):
+            raise AssertionError('wizard prompted when shell already had values')
+
+        monkeypatch.setattr(
+            'memman.setup.wizard.click.prompt', _should_not_be_called)
+        out = wizard.run_wizard(str(tmp_path / 'memman'))
+        assert config.OPENROUTER_API_KEY not in out
+        assert config.VOYAGE_API_KEY not in out
 
 
-def test_explicit_backend_flag_bypasses_prompt(no_tty, tmp_path):
-    """`--backend sqlite` is honored without any prompting."""
-    out = wizard.run_wizard(str(tmp_path / 'memman'), backend='sqlite')
-    assert out[config.BACKEND] == 'sqlite'
+class TestDsn:
+    """`--pg-dsn` flag and probe behavior in headless mode."""
 
+    def test_pg_dsn_required_in_non_interactive_postgres(
+            self, no_tty, tmp_path):
+        """Headless --backend postgres without --pg-dsn is a hard error."""
+        import click as _click
+        with pytest.raises(_click.ClickException, match='pg-dsn'):
+            wizard.run_wizard(
+                str(tmp_path / 'memman'), backend='postgres', no_wizard=True)
 
-def test_postgres_hidden_when_extras_unavailable(tty, tmp_path, monkeypatch):
-    """Sqlite-only menu is the no-prompt fast path; wizard returns empty."""
-    monkeypatch.setattr(
-        'memman.setup.wizard.extras.is_available', lambda extra: False)
-    out = wizard.run_wizard(str(tmp_path / 'memman'))
-    assert config.BACKEND not in out
+    def test_pg_dsn_flag_probed_and_returned(
+            self, monkeypatch, no_tty, tmp_path):
+        """A passing `--pg-dsn` is probed via psycopg.connect and returned."""
+        probe_calls = []
 
+        def _fake_probe(dsn):
+            probe_calls.append(dsn)
 
-def test_postgres_hidden_when_backend_module_missing(
-        tty, tmp_path, monkeypatch):
-    """Even with extras present, the postgres backend module gates visibility.
-    """
-    monkeypatch.setattr(
-        'memman.setup.wizard.extras.is_available', lambda extra: True)
-    monkeypatch.setattr(
-        'memman.setup.wizard._backend_module_exists', lambda: False)
-    out = wizard.run_wizard(str(tmp_path / 'memman'))
-    assert config.BACKEND not in out
-
-
-def test_secrets_prompt_fires_when_missing_in_tty(
-        tty, tmp_path, monkeypatch):
-    """Wizard prompts (masked) when mandatory secrets are absent in TTY mode.
-    """
-    _strip_default_secrets(monkeypatch, tmp_path / 'memman')
-    monkeypatch.setattr('sys.stdin.isatty', lambda: True)
-    monkeypatch.setenv(config.DATA_DIR, str(tmp_path / 'memman'))
-    monkeypatch.delenv(config.OPENROUTER_API_KEY, raising=False)
-    monkeypatch.delenv(config.VOYAGE_API_KEY, raising=False)
-
-    inputs = iter(['fresh-or-key', 'fresh-vy-key'])
-    monkeypatch.setattr(
-        'memman.setup.wizard.click.prompt',
-        lambda *a, **kw: next(inputs))
-    out = wizard.run_wizard(str(tmp_path / 'memman'))
-    assert out[config.OPENROUTER_API_KEY] == 'fresh-or-key'
-    assert out[config.VOYAGE_API_KEY] == 'fresh-vy-key'
-
-
-def test_secrets_prompt_skipped_when_present_in_file(tty, tmp_path):
-    """Wizard does not prompt when both secrets are already in the file.
-
-    The autouse `_isolate_env` fixture seeds both secrets, so a default
-    test environment should not trigger any secret prompt.
-    """
-    out = wizard.run_wizard(str(tmp_path / 'memman'))
-    assert config.OPENROUTER_API_KEY not in out
-    assert config.VOYAGE_API_KEY not in out
-
-
-def test_secrets_prompt_skipped_when_shell_has_them(
-        tmp_path, monkeypatch):
-    """Wizard does not prompt when secrets are exported in the shell.
-
-    Even though the runtime resolver ignores `os.environ`, install will
-    still seed the shell value into the file via `collect_install_knobs`,
-    so the wizard considers a shell-set secret already-resolved.
-    """
-    monkeypatch.setattr('sys.stdin.isatty', lambda: True)
-    _strip_default_secrets(monkeypatch, tmp_path / 'memman')
-    monkeypatch.setenv(config.DATA_DIR, str(tmp_path / 'memman'))
-    monkeypatch.setenv(config.OPENROUTER_API_KEY, 'shell-or')
-    monkeypatch.setenv(config.VOYAGE_API_KEY, 'shell-vy')
-
-    def _should_not_be_called(*a, **kw):
-        raise AssertionError('wizard prompted when shell already had values')
-
-    monkeypatch.setattr(
-        'memman.setup.wizard.click.prompt', _should_not_be_called)
-    out = wizard.run_wizard(str(tmp_path / 'memman'))
-    assert config.OPENROUTER_API_KEY not in out
-    assert config.VOYAGE_API_KEY not in out
-
-
-def test_pg_dsn_required_in_non_interactive_postgres(no_tty, tmp_path):
-    """Headless --backend postgres without --pg-dsn is a hard error."""
-    import click as _click
-    with pytest.raises(_click.ClickException, match='pg-dsn'):
-        wizard.run_wizard(
-            str(tmp_path / 'memman'), backend='postgres', no_wizard=True)
-
-
-def test_pg_dsn_flag_probed_and_returned(monkeypatch, no_tty, tmp_path):
-    """A passing `--pg-dsn` is probed via psycopg.connect and returned.
-    """
-    probe_calls = []
-
-    def _fake_probe(dsn):
-        probe_calls.append(dsn)
-
-    monkeypatch.setattr(
-        'memman.setup.wizard._probe_dsn', _fake_probe)
-    out = wizard.run_wizard(
-        str(tmp_path / 'memman'), backend='postgres',
-        pg_dsn='postgresql://u@h/db')
-    assert probe_calls == ['postgresql://u@h/db']
-    assert out[config.BACKEND] == 'postgres'
-    assert out[config.PG_DSN] == 'postgresql://u@h/db'
-
-
-def test_pg_dsn_probe_failure_raises(monkeypatch, no_tty, tmp_path):
-    """A failing `--pg-dsn` probe surfaces as a ClickException."""
-    import click as _click
-
-    def _fail(dsn):
-        raise RuntimeError('connection refused')
-
-    monkeypatch.setattr('memman.setup.wizard._probe_dsn', _fail)
-    with pytest.raises(_click.ClickException, match='connection failed'):
-        wizard.run_wizard(
+        monkeypatch.setattr(
+            'memman.setup.wizard._probe_dsn', _fake_probe)
+        out = wizard.run_wizard(
             str(tmp_path / 'memman'), backend='postgres',
             pg_dsn='postgresql://u@h/db')
+        assert probe_calls == ['postgresql://u@h/db']
+        assert out[config.BACKEND] == 'postgres'
+        assert out[config.PG_DSN] == 'postgresql://u@h/db'
+
+    def test_pg_dsn_probe_failure_raises(
+            self, monkeypatch, no_tty, tmp_path):
+        """A failing `--pg-dsn` probe surfaces as a ClickException."""
+        import click as _click
+
+        def _fail(dsn):
+            raise RuntimeError('connection refused')
+
+        monkeypatch.setattr('memman.setup.wizard._probe_dsn', _fail)
+        with pytest.raises(_click.ClickException, match='connection failed'):
+            wizard.run_wizard(
+                str(tmp_path / 'memman'), backend='postgres',
+                pg_dsn='postgresql://u@h/db')
 
 
 def test_run_install_rejects_flag_vs_file_conflict(tmp_path, monkeypatch):

@@ -37,18 +37,15 @@ class TestEmbedUtils:
         b = [-1.0, -2.0, -3.0]
         assert abs(cosine_similarity(a, b) - (-1.0)) < 1e-9
 
-    def test_cosine_different_length(self):
-        """Mismatched dimensions return 0.0."""
-        assert cosine_similarity([1.0, 2.0], [1.0, 2.0, 3.0]) == 0.0
-
-    def test_cosine_empty(self):
-        """Empty or None vectors return 0.0."""
-        assert cosine_similarity([], []) == 0.0
-        assert cosine_similarity(None, None) == 0.0
-
-    def test_cosine_zero_vector(self):
-        """Zero vector returns 0.0."""
-        assert cosine_similarity([0.0, 0.0, 0.0], [1.0, 2.0, 3.0]) == 0.0
+    @pytest.mark.parametrize('a,b', [
+        ([1.0, 2.0], [1.0, 2.0, 3.0]),
+        ([], []),
+        (None, None),
+        ([0.0, 0.0, 0.0], [1.0, 2.0, 3.0]),
+    ])
+    def test_cosine_returns_zero(self, a, b):
+        """Mismatched dim, empty/None, or zero vector all return 0.0."""
+        assert cosine_similarity(a, b) == 0.0
 
     def test_cosine_scaled(self):
         """Scaled vector has similarity 1.0."""
@@ -230,21 +227,22 @@ class TestOpenRouterClient:
         assert client._api_key == 'sk-or-test'
 
     @pytest.mark.no_default_env
-    def test_raises_when_endpoint_unset(self, env_file):
-        """Constructor raises ConfigError when endpoint is absent."""
-        env_file(config.OPENROUTER_ENDPOINT, None)
-        env_file(config.OPENROUTER_API_KEY, 'k')
-        env_file(config.OPENROUTER_EMBED_MODEL, 'm')
-        with pytest.raises(ConfigError, match='OPENROUTER_ENDPOINT'):
-            OpenRouterClient()
-
-    @pytest.mark.no_default_env
-    def test_raises_when_model_unset(self, env_file):
-        """Constructor raises ConfigError when model is absent."""
-        env_file(config.OPENROUTER_ENDPOINT, 'https://x')
-        env_file(config.OPENROUTER_API_KEY, 'k')
-        env_file(config.OPENROUTER_EMBED_MODEL, None)
-        with pytest.raises(ConfigError, match='OPENROUTER_EMBED_MODEL'):
+    @pytest.mark.parametrize('missing_attr,match', [
+        ('OPENROUTER_ENDPOINT', 'OPENROUTER_ENDPOINT'),
+        ('OPENROUTER_EMBED_MODEL', 'OPENROUTER_EMBED_MODEL'),
+    ])
+    def test_raises_when_required_config_missing(
+            self, env_file, missing_attr, match):
+        """Constructor raises ConfigError when a required env key is absent."""
+        present = {
+            'OPENROUTER_ENDPOINT': 'https://x',
+            'OPENROUTER_EMBED_MODEL': 'm',
+            'OPENROUTER_API_KEY': 'k',
+        }
+        for key, value in present.items():
+            env_file(getattr(config, key),
+                     None if key == missing_attr else value)
+        with pytest.raises(ConfigError, match=match):
             OpenRouterClient()
 
     def test_embed_returns_vector(self, monkeypatch, env_file):
