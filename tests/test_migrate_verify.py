@@ -97,14 +97,14 @@ def test_migrate_raises_on_destination_count_mismatch(pg_dsn, tmp_path):
         if rows:
             with pg_conn.cursor() as cur:
                 cur.execute(
-                    f"DELETE FROM {schema}.insights WHERE id = %s",
+                    f'DELETE FROM {schema}.insights WHERE id = %s',
                     (rows[0],))
         n = real(sqlite_conn, pg_conn, schema, dim)
         with pg_conn.cursor() as cur:
             cur.execute(
-                f"DELETE FROM {schema}.insights"
-                f" WHERE id = (SELECT id FROM {schema}.insights"
-                f" ORDER BY id LIMIT 1)")
+                f'DELETE FROM {schema}.insights'
+                f' WHERE id = (SELECT id FROM {schema}.insights'
+                f' ORDER BY id LIMIT 1)')
         return n
 
     try:

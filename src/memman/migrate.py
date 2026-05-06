@@ -191,10 +191,10 @@ def _verify_destination_counts(
     """
     sql = (
         f'select '
-        f"  (select count(*) from {schema}.insights),"
-        f"  (select count(*) from {schema}.edges),"
-        f"  (select count(*) from {schema}.oplog),"
-        f"  (select count(*) from {schema}.meta)")
+        f'  (select count(*) from {schema}.insights),'
+        f'  (select count(*) from {schema}.edges),'
+        f'  (select count(*) from {schema}.oplog),'
+        f'  (select count(*) from {schema}.meta)')
     with pg_conn.cursor() as cur:
         cur.execute(sql)
         ins, edges, oplog, meta = cur.fetchone()

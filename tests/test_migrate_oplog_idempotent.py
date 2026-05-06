@@ -127,9 +127,7 @@ def test_import_oplog_twice_does_not_duplicate_rows(pg_dsn, tmp_path):
     is what makes this idempotent.
     """
     from pgvector.psycopg import register_vector
-    from scripts.import_sqlite_to_postgres import (
-        _ensure_schema, _import_oplog,
-        )
+    from scripts.import_sqlite_to_postgres import _ensure_schema, _import_oplog
 
     store = 'mig_oplog_twice'
     sdir = tmp_path / store

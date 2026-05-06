@@ -102,7 +102,8 @@ def test_migrate_resolves_non_512_dim_from_source(pg_dsn, tmp_path):
                     "  and attname = 'embedding'",
                     (schema,))
                 row = cur.fetchone()
-                assert row is not None and row[0] == 1024
+                assert row is not None
+                assert row[0] == 1024
                 cur.execute(f'select count(*) from {schema}.insights')
                 assert cur.fetchone()[0] == 3
     finally:

@@ -168,7 +168,7 @@ def _ensure_schema(
             f'ALTER TABLE {schema}.oplog'
             f' ADD COLUMN IF NOT EXISTS legacy_id BIGINT')
         cur.execute(
-            "select 1 from pg_constraint where conname = %s",
+            'select 1 from pg_constraint where conname = %s',
             (f'oplog_legacy_id_key_{schema}',))
         if cur.fetchone() is None:
             cur.execute(

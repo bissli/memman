@@ -134,7 +134,7 @@ def list_stores(data_dir: str) -> list[str]:
     for key, value in file_values.items():
         if not value:
             continue
-        if key == config.DEFAULT_PG_DSN or key == config.PG_DSN:
+        if key in {config.DEFAULT_PG_DSN, config.PG_DSN}:
             dsns.add(value)
         elif key.startswith('MEMMAN_PG_DSN_'):
             dsns.add(value)
@@ -149,8 +149,7 @@ def list_stores(data_dir: str) -> list[str]:
                             "select nspname from pg_namespace"
                             " where nspname like 'store_%'"
                             ' order by nspname')
-                        for row in cur.fetchall():
-                            names.add(row[0][len('store_'):])
+                        names.update(row[0][len('store_'):] for row in cur.fetchall())
                 except Exception:
                     continue
         except ImportError:

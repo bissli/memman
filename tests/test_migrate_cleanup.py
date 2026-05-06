@@ -6,7 +6,6 @@ Doctor's `check_orphan_storage` flags any survivor for a store whose
 backend env value resolves to `postgres`.
 """
 
-import os
 import sqlite3
 import struct
 import uuid

@@ -66,6 +66,7 @@ def PG_DSN_FOR(store: str) -> str:
     """Per-store DSN env-key name: `MEMMAN_PG_DSN_<store>`."""
     return f'MEMMAN_PG_DSN_{store}'
 
+
 OPENROUTER_API_KEY = 'OPENROUTER_API_KEY'
 VOYAGE_API_KEY = 'VOYAGE_API_KEY'
 
@@ -252,7 +253,7 @@ def get_store_backend(
         return get(BACKEND_FOR(store))
     file_values = parse_env_file(env_file_path(data_dir))
     raw = file_values.get(BACKEND_FOR(store))
-    return raw if raw else None
+    return raw or None
 
 
 def get_store_pg_dsn(
@@ -263,7 +264,7 @@ def get_store_pg_dsn(
         return get(PG_DSN_FOR(store))
     file_values = parse_env_file(env_file_path(data_dir))
     raw = file_values.get(PG_DSN_FOR(store))
-    return raw if raw else None
+    return raw or None
 
 
 def get_bool(name: str, default: bool = False) -> bool:

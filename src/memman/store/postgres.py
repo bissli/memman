@@ -361,7 +361,7 @@ where attrelid = (%s || '.insights')::regclass
             row = cur.fetchone()
         if row is None or row[0] is None or int(row[0]) <= 0:
             raise BackendError(
-                f"schema {self._schema!r} has no resolved embedding"
+                f'schema {self._schema!r} has no resolved embedding'
                 f' dim; was the baseline schema applied?')
         self._embedding_dim = int(row[0])
         return self._embedding_dim
@@ -1946,7 +1946,7 @@ where table_schema = %s and table_name = %s
             except _psycopg.Error as exc:
                 logger.debug(f'pg connection close failed: {exc}')
 
-    def __enter__(self) -> 'PostgresBackend':
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -2006,7 +2006,7 @@ def _read_stored_dim(dsn: str, store: str) -> int | None:
 
 def open_postgres_backend(
         store: str, dsn: str, *,
-        read_only: bool = False) -> 'PostgresBackend':
+        read_only: bool = False) -> PostgresBackend:
     """Free-function open: bypass the PostgresCluster scaffold.
 
     Reads the store's stored fingerprint dim (if any) before

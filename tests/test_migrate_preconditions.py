@@ -6,9 +6,6 @@ before any destination work happens.
 """
 
 import sqlite3
-import struct
-import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 

@@ -12,6 +12,7 @@ def test_open_backend_uses_per_store_key_for_sqlite(tmp_path, env_file):
     """`MEMMAN_BACKEND_<store>=sqlite` opens a SqliteBackend.
     """
     import os
+
     from memman import config
     from memman.store.factory import open_backend
     from memman.store.sqlite import SqliteBackend
@@ -29,6 +30,7 @@ def test_open_backend_falls_back_to_default(tmp_path, env_file):
     """No per-store key: falls back to `MEMMAN_DEFAULT_BACKEND`.
     """
     import os
+
     from memman import config
     from memman.store.factory import open_backend
     from memman.store.sqlite import SqliteBackend
@@ -47,6 +49,7 @@ def test_open_backend_raises_for_unknown_backend_value(
     """Unknown backend kind -> ConfigError.
     """
     import os
+
     from memman import config
     from memman.store.errors import ConfigError
     from memman.store.factory import open_backend
@@ -62,6 +65,7 @@ def test_open_backend_routes_two_stores_to_two_backends(
     """One store sqlite, another postgres -- each opens its own backend.
     """
     import os
+
     from memman import config
     from memman.store.factory import open_backend
     from memman.store.postgres import PostgresBackend, _store_schema
@@ -99,6 +103,7 @@ def test_list_stores_returns_local_sqlite_dirs(tmp_path, env_file):
     """
     import os
     from pathlib import Path
+
     from memman import config
     from memman.store.factory import list_stores
 
