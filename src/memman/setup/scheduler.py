@@ -271,6 +271,33 @@ def _write_env_keys(updates: dict[str, str],
     return [f'wrote {path} (mode 600, atomic)']
 
 
+def _write_env_keys_with_flock(
+        updates: dict[str, str],
+        removes: set[str] | None = None,
+        data_dir: str | None = None) -> list[str]:
+    """`_write_env_keys` guarded by an `fcntl.flock` on a sibling lock file.
+
+    Used by hot-path auto-create to serialize concurrent processes
+    racing to write the same per-store key. Single-machine only:
+    flock semantics on NFS or other shared filesystems are not
+    guaranteed and are out of scope.
+    """
+    import fcntl
+
+    path = config.env_file_path(data_dir)
+    lock_path = path.with_suffix(path.suffix + '.lock')
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = lock_path.open('w')
+    try:
+        fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
+        return _write_env_keys(updates, removes=removes, data_dir=data_dir)
+    finally:
+        try:
+            fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+        finally:
+            fd.close()
+
+
 def _write_env_file(knobs: dict[str, str],
                     data_dir: str | None = None) -> list[str]:
     """Persist install-time `INSTALLABLE_KEYS` values to the env file.

@@ -40,8 +40,9 @@ def active_store(
         unchecked: bool = False) -> Iterator[Backend]:
     """Yield the active Backend for one operation.
 
-    Dispatches on `MEMMAN_BACKEND` via `factory.open_cluster()`, runs
-    the constants reindex pass, seeds + asserts the embedding
+    Dispatches on the per-store keys (`MEMMAN_BACKEND_<store>` with
+    fallback to `MEMMAN_DEFAULT_BACKEND`) via `factory.open_backend`,
+    runs the constants reindex pass, seeds + asserts the embedding
     fingerprint, then yields the Backend. Closes on exit even if the
     body raises.
 
@@ -65,10 +66,10 @@ def active_store(
     from memman.embed import get_client
     from memman.exceptions import ConfigError, EmbedFingerprintError
     from memman.graph.engine import reindex_if_constants_changed
-    from memman.store.factory import open_cluster
+    from memman.store.factory import open_backend
 
-    cluster = open_cluster()
-    with cluster.open(store=store, data_dir=data_dir) as backend:
+    backend = open_backend(store, data_dir)
+    try:
         if not unchecked:
             reindex_if_constants_changed(backend)
             try:
@@ -78,3 +79,5 @@ def active_store(
             except (EmbedFingerprintError, ConfigError) as exc:
                 raise click.ClickException(str(exc)) from exc
         yield backend
+    finally:
+        backend.close()

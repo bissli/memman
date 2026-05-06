@@ -606,31 +606,37 @@ def runner_kind(request) -> str:
 
 @pytest.fixture
 def cross_backend_runner(request, runner_kind, tmp_path, env_file, monkeypatch):
-    """CliRunner whose env writes `MEMMAN_BACKEND=<runner_kind>` first.
+    """CliRunner whose env writes per-store keys for `<runner_kind>`.
 
-    For postgres mode also writes `MEMMAN_PG_DSN` from the session
-    container and registers a teardown that drops the per-test
-    schema. Returns the same `(runner, data_dir)` tuple shape as
-    the legacy `runner` fixture in `test_memory_system.py` so a
-    test can swap one for the other transparently.
+    For postgres mode writes `MEMMAN_BACKEND_<store>` and
+    `MEMMAN_PG_DSN_<store>` from the session container DSN and
+    registers a teardown that drops the per-test schema. For sqlite
+    mode writes `MEMMAN_DEFAULT_BACKEND=sqlite`. Returns the same
+    `(runner, data_dir)` tuple shape as the legacy `runner` fixture
+    in `test_memory_system.py` so a test can swap one for the other
+    transparently.
     """
+    import os
+
     from click.testing import CliRunner
     r = CliRunner()
-    data_dir = str(tmp_path / 'memman_data')
+    env_data_dir = os.environ.get('MEMMAN_DATA_DIR')
+    data_dir = env_data_dir or str(tmp_path / 'memman_data')
     Path(data_dir).mkdir(parents=True, exist_ok=True)
 
-    env_file('MEMMAN_BACKEND', runner_kind)
+    env_file('MEMMAN_DEFAULT_BACKEND', runner_kind)
     if runner_kind == 'postgres':
         pg_dsn = request.getfixturevalue('pg_dsn')
-        env_file('MEMMAN_PG_DSN', pg_dsn)
         store_name = _safe_store_name(request.node.name)
+        env_file(f'MEMMAN_BACKEND_{store_name}', 'postgres')
+        env_file(f'MEMMAN_PG_DSN_{store_name}', pg_dsn)
+        env_file('MEMMAN_DEFAULT_PG_DSN', pg_dsn)
         monkeypatch.setenv('MEMMAN_STORE', store_name)
 
         def _drop_postgres_schema() -> None:
             try:
-                from memman.store.postgres import PostgresCluster
-                cluster = PostgresCluster(dsn=pg_dsn)
-                cluster.drop_store(store=store_name, data_dir='')
+                from memman.store.factory import drop_store as _drop
+                _drop(store_name, data_dir)
             except Exception:
                 pass
         request.addfinalizer(_drop_postgres_schema)
@@ -864,10 +870,18 @@ def make_cli_runner(tmp_path, *, subdir: str = 'mm') -> tuple:
     test_provenance.py, test_doctor.py. Each call site can keep its
     `runner` fixture as a 2-line wrapper, or take the tuple inline via
     the `mm_runner` fixture below.
+
+    The data_dir matches `MEMMAN_DATA_DIR` set by the autouse
+    `_isolate_env` fixture so that env-file reads keyed off the CLI
+    `--data-dir` arg find the seeded keys (per-store routing reads
+    `<data_dir>/env` directly).
     """
+    import os
+
     from click.testing import CliRunner
     r = CliRunner()
-    data_dir = str(tmp_path / subdir)
+    env_data_dir = os.environ.get('MEMMAN_DATA_DIR')
+    data_dir = env_data_dir or str(tmp_path / subdir)
     Path(data_dir).mkdir(parents=True, exist_ok=True)
     return r, data_dir
 
@@ -919,8 +933,10 @@ def parse_remember(result, runner_tuple=None):
     _, data_dir = runner_tuple
     from memman import config
     from memman.store.db import read_active
+    from memman.store.factory import _resolve_store_backend
+    from memman.store.factory import _resolve_store_pg_dsn
     name = raw.get('store') or read_active(data_dir) or 'default'
-    backend_kind = (config.get(config.BACKEND) or 'sqlite').lower()
+    backend_kind = _resolve_store_backend(name, data_dir)
     if backend_kind == 'postgres':
         import psycopg
         from memman.store.postgres import _store_schema
@@ -932,7 +948,8 @@ where source = %s
   and deleted_at is null
 order by created_at
 """
-        with psycopg.connect(config.require(config.PG_DSN)) as conn:
+        dsn = _resolve_store_pg_dsn(name, data_dir)
+        with psycopg.connect(dsn) as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, (f'queue:{queue_id}',))
                 rows = cur.fetchall()

@@ -717,9 +717,9 @@ class TestDoctorBackendDispatch:
     def test_doctor_dispatches_to_postgres(
             self, tmp_path, env_file, pg_dsn, monkeypatch):
         """`db_path` reports the redacted DSN, not a filesystem path."""
-        env_file('MEMMAN_BACKEND', 'postgres')
-        env_file('MEMMAN_PG_DSN', pg_dsn)
         store = 'doctor_dispatch'
+        env_file(f'MEMMAN_BACKEND_{store}', 'postgres')
+        env_file(f'MEMMAN_PG_DSN_{store}', pg_dsn)
         monkeypatch.setenv('MEMMAN_STORE', store)
 
         from memman.store.postgres import PostgresCluster

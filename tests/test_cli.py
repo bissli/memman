@@ -1542,8 +1542,8 @@ class TestPostgresGuards:
 
     def test_graph_rebuild_rejects_postgres_backend(self, runner, env_file):
         """`graph rebuild` exits non-zero with a clear message on postgres."""
-        env_file('MEMMAN_BACKEND', 'postgres')
-        env_file('MEMMAN_PG_DSN', 'postgresql://user@host/db')
+        env_file('MEMMAN_BACKEND_default', 'postgres')
+        env_file('MEMMAN_PG_DSN_default', 'postgresql://user@host/db')
         r, data_dir = runner
         out = r.invoke(cli, ['--data-dir', data_dir, 'graph', 'rebuild'])
         assert out.exit_code != 0
@@ -1551,8 +1551,8 @@ class TestPostgresGuards:
 
     def test_embed_reembed_rejects_postgres_backend(self, runner, env_file):
         """`embed reembed` exits non-zero with a clear message on postgres."""
-        env_file('MEMMAN_BACKEND', 'postgres')
-        env_file('MEMMAN_PG_DSN', 'postgresql://user@host/db')
+        env_file('MEMMAN_BACKEND_default', 'postgres')
+        env_file('MEMMAN_PG_DSN_default', 'postgresql://user@host/db')
         r, data_dir = runner
         out = r.invoke(cli, ['--data-dir', data_dir, 'embed', 'reembed'])
         assert out.exit_code != 0

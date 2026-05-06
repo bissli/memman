@@ -121,6 +121,30 @@ def _resolve_store_name(data_dir: str, store_flag: str) -> str:
     return read_active(data_dir)
 
 
+def _ensure_store_backend_key(store_name: str, data_dir: str) -> None:
+    """Hot-path: write `MEMMAN_BACKEND_<store>` from the default if missing.
+
+    Two-process safe via `_write_env_keys_with_flock`. No-op when the
+    per-store key is already present. Single-machine only -- shared
+    filesystems (NFS) are out of scope.
+    """
+    from memman.setup.scheduler import _write_env_keys_with_flock
+
+    file_values = config.parse_env_file(config.env_file_path(data_dir))
+    if config.BACKEND_FOR(store_name) in file_values:
+        return
+    default_kind = (file_values.get(config.DEFAULT_BACKEND)
+                    or 'sqlite').lower()
+    updates: dict[str, str] = {
+        config.BACKEND_FOR(store_name): default_kind,
+        }
+    if default_kind == 'postgres':
+        default_dsn = file_values.get(config.DEFAULT_PG_DSN)
+        if default_dsn:
+            updates[config.PG_DSN_FOR(store_name)] = default_dsn
+    _write_env_keys_with_flock(updates, data_dir=data_dir)
+
+
 def _get_llm_client_or_fail(role: str):
     """Return a per-role LLM client, re-wrapping ConfigError as ClickException.
 
@@ -856,7 +880,8 @@ def _write_recall_snapshot_for_store(
     bounded (cap at 1000 active insights). Failures here are isolated
     per store and never abort the drain or cause queue rows to retry.
     """
-    backend_name = (config.get(config.BACKEND) or 'sqlite').lower()
+    from memman.store.factory import _resolve_store_backend
+    backend_name = _resolve_store_backend(store_name, data_dir_val)
     if backend_name != 'sqlite':
         return
 
@@ -887,13 +912,13 @@ class _StoreContext:
         from memman.embed import registry as _ec_registry
         from memman.exceptions import EmbedFingerprintError
         from memman.llm.client import get_llm_client
-        from memman.store.factory import open_cluster
+        from memman.store.factory import open_backend
 
         self.store_name = store_name
         self.data_dir = data_dir
         from memman.embed import get_client
-        cluster = open_cluster()
-        self.backend = cluster.open(store=store_name, data_dir=data_dir)
+        _ensure_store_backend_key(store_name, data_dir)
+        self.backend = open_backend(store_name, data_dir)
         _fp_mod.seed_if_fresh(self.backend, get_client())
         stored = _fp_mod.stored_fingerprint(self.backend)
         if stored is None:
@@ -2251,7 +2276,8 @@ def prime() -> None:
         data_dir = os.environ.get(config.DATA_DIR, default_data_dir())
         env_store = os.environ.get(config.STORE, '').strip()
         name = env_store or read_active(data_dir)
-        backend_name = (config.get(config.BACKEND) or 'sqlite').lower()
+        from memman.store.factory import _resolve_store_backend
+        backend_name = _resolve_store_backend(name, data_dir)
         if backend_name == 'sqlite':
             from memman.store.node import get_stats
             if store_exists(data_dir, name):
@@ -2299,7 +2325,10 @@ def prime() -> None:
 @click.pass_context
 def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
     """Re-enrich all insights through the full LLM pipeline."""
-    backend_name = (config.get(config.BACKEND) or 'sqlite').lower()
+    from memman.store.factory import _resolve_store_backend
+    data_dir = ctx.obj['data_dir']
+    store_name = _resolve_store_name(data_dir, ctx.obj['store'])
+    backend_name = _resolve_store_backend(store_name, data_dir)
     if backend_name != 'sqlite':
         raise click.ClickException(
             'graph rebuild is SQLite-only; Postgres maintains HNSW'
@@ -2559,15 +2588,17 @@ def embed_reembed(ctx: click.Context, dry_run: bool) -> None:
     A crash mid-sweep leaves state='in_progress'; re-running picks
     up from the cursor.
     """
-    backend_name = (config.get(config.BACKEND) or 'sqlite').lower()
-    if backend_name != 'sqlite':
-        raise click.ClickException(
-            'embed reembed is SQLite-only; Postgres reembed requires'
-            ' a separate workflow (track in a follow-up issue)')
-
     from memman.embed import get_client
     from memman.embed.fingerprint import Fingerprint
     from memman.store.db import list_stores, store_dir
+    from memman.store.factory import _resolve_store_backend
+
+    data_dir = ctx.obj['data_dir']
+    active_name = _resolve_store_name(data_dir, ctx.obj['store'])
+    if _resolve_store_backend(active_name, data_dir) != 'sqlite':
+        raise click.ClickException(
+            'embed reembed is SQLite-only; Postgres reembed requires'
+            ' a separate workflow (track in a follow-up issue)')
 
     if not dry_run:
         _require_stopped('reembed')
@@ -2577,8 +2608,9 @@ def embed_reembed(ctx: click.Context, dry_run: bool) -> None:
         raise click.ClickException(ec.unavailable_message())
 
     target = Fingerprint.from_client(ec)
-    data_dir = ctx.obj['data_dir']
-    names = list_stores(data_dir)
+    names = [
+        n for n in list_stores(data_dir)
+        if _resolve_store_backend(n, data_dir) == 'sqlite']
 
     grand_total = sum(
         _count_active_rows(store_dir(data_dir, name)) for name in names)
@@ -2667,7 +2699,7 @@ def embed_swap(
     from memman.embed.swap import SwapPlan
     from memman.embed.swap import abort_swap as _abort_swap
     from memman.embed.swap import read_progress, run_swap
-    from memman.store.factory import open_cluster
+    from memman.store.factory import open_backend
 
     if abort and resume:
         raise click.ClickException(
@@ -2675,8 +2707,7 @@ def embed_swap(
 
     data_dir = ctx.obj['data_dir']
     name = _resolve_store_name(data_dir, ctx.obj['store'])
-    cluster = open_cluster()
-    backend = cluster.open(store=name, data_dir=data_dir)
+    backend = open_backend(name, data_dir)
     try:
         if abort:
             _abort_swap(backend)
@@ -2723,8 +2754,8 @@ def embed_swap(
             target_model=target_model,
             target_dim=target_dim)
 
-        backend_name = (
-            config.get(config.BACKEND) or 'sqlite').lower()
+        from memman.store.factory import _resolve_store_backend
+        backend_name = _resolve_store_backend(name, data_dir)
         if backend_name == 'postgres':
             with backend.swap_lock() as held:
                 if not held:

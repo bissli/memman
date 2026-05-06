@@ -125,20 +125,19 @@ def _init_default_store(data_dir: str) -> None:
     from memman.embed import get_client
     from memman.embed.fingerprint import seed_if_fresh
     from memman.exceptions import ConfigError, EmbedFingerprintError
-    from memman.store.db import open_db, store_dir, store_exists
-    from memman.store.sqlite import SqliteBackend
+    from memman.store.db import store_dir, store_exists
+    from memman.store.factory import open_backend
 
     if not store_exists(data_dir, 'default'):
-        sdir = store_dir(data_dir, 'default')
-        db = open_db(sdir)
+        backend = open_backend('default', data_dir)
         try:
             try:
-                seed_if_fresh(SqliteBackend(db), get_client())
+                seed_if_fresh(backend, get_client())
             except (EmbedFingerprintError, ConfigError) as exc:
                 raise click.ClickException(str(exc)) from exc
         finally:
-            db.close()
-        print(f'  Initialized default store at {sdir}')
+            backend.close()
+        print(f'  Initialized default store at {store_dir(data_dir, "default")}')
 
 
 def _install_claude_code(env: dict, data_dir: str) -> None:
