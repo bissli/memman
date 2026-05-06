@@ -250,6 +250,8 @@ def run_install(data_dir: str, target: str = '',
     if wizard_out:
         _write_env_keys(wizard_out, data_dir=data_dir)
         config.reset_file_cache()
+    from memman.setup.per_store_bootstrap import bootstrap_per_store_keys
+    bootstrap_per_store_keys(data_dir)
     knobs = check_prereqs(data_dir)
     _run_install_flow(envs, target=target, data_dir=data_dir, knobs=knobs)
 

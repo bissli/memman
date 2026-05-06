@@ -321,6 +321,24 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
     click.echo(f'set {key} in {config.env_file_path(data_dir)}')
 
 
+@config_cmd.command('migrate-keys', hidden=True)
+@click.pass_context
+def config_migrate_keys(ctx: click.Context) -> None:
+    """Convert legacy `MEMMAN_BACKEND` / `MEMMAN_PG_DSN` to per-store keys.
+
+    Idempotent. Re-running on a fully-converted install is a no-op.
+    Operator-edited per-store keys are not overwritten.
+    """
+    from memman.setup.per_store_bootstrap import bootstrap_per_store_keys
+    data_dir = ctx.obj['data_dir']
+    actions = bootstrap_per_store_keys(data_dir)
+    if not actions:
+        click.echo('no legacy keys found; already on per-store shape')
+        return
+    for line in actions:
+        click.echo(line)
+
+
 @config_cmd.command('show')
 @click.pass_context
 def config_show(ctx: click.Context) -> None:
