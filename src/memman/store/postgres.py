@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any, Self
 from memman.store.backend import Backend, Cluster, EdgeStore, MetaStore
 from memman.store.backend import NodeStore, Oplog, RecallSession
 from memman.store.backend import _check_identifier
+from memman.store.base import BaseNodeStore
 from memman.store.errors import BackendError, ConfigError
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
 from memman.store.model import IntegrityReport, NodeStats, OpLogEntry
@@ -330,7 +331,7 @@ _INSIGHT_COLS = (
     ' summary')
 
 
-class PostgresNodeStore(NodeStore):
+class PostgresNodeStore(BaseNodeStore, NodeStore):
     """NodeStore implementation against a per-store Postgres schema."""
 
     def __init__(
@@ -1042,19 +1043,6 @@ where deleted_at is null
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql)
-
-    def review_content_quality(
-            self, *, limit: int = 50) -> list[dict[str, Any]]:
-        from memman.search.quality import check_content_quality
-        flagged: list[dict[str, Any]] = []
-        for ins in self.get_all_active():
-            warnings = check_content_quality(ins.content)
-            if warnings:
-                flagged.append(
-                    {'insight': ins, 'quality_warnings': warnings})
-        flagged.sort(
-            key=lambda x: len(x['quality_warnings']), reverse=True)
-        return flagged[:limit]
 
     def bulk_update_embedding(
             self, rows: list[tuple[Id, list[float], str]]) -> None:

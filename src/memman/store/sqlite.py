@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from memman.embed.fingerprint import Fingerprint
-from memman.embed.vector import deserialize_vector, serialize_vector
+from memman.embed.vector import serialize_vector
 from memman.store import db as _db
 from memman.store import edge as _edge
 from memman.store import node as _node
@@ -30,6 +30,7 @@ from memman.store import oplog as _oplog
 from memman.store import snapshot as _snapshot
 from memman.store.backend import Backend, Cluster, EdgeStore, MetaStore
 from memman.store.backend import NodeStore, Oplog, RecallSession
+from memman.store.base import BaseNodeStore
 from memman.store.db import DB
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
 from memman.store.model import NodeStats, OpLogEntry, OpLogStats
@@ -39,7 +40,7 @@ from memman.store.model import parse_timestamp
 logger = logging.getLogger('memman')
 
 
-class SqliteNodeStore(NodeStore):
+class SqliteNodeStore(BaseNodeStore, NodeStore):
     """Bindings from NodeStore Protocol verbs to `store.node` functions.
     """
 
@@ -178,13 +179,6 @@ class SqliteNodeStore(NodeStore):
     def get_all_embeddings(self) -> list[tuple[Id, str, bytes]]:
         return _node.get_all_embeddings(self._db)
 
-    def iter_embeddings_as_vecs(
-            self) -> Iterator[tuple[Id, list[float]]]:
-        for eid, _content, blob in _node.get_all_embeddings(self._db):
-            v = deserialize_vector(blob)
-            if v is not None:
-                yield eid, v
-
     def embedding_stats(self) -> tuple[int, int]:
         return _node.embedding_stats(self._db)
 
@@ -246,10 +240,6 @@ group by length(embedding)
 
     def clear_linked_at(self) -> None:
         _node.clear_linked_at(self._db)
-
-    def review_content_quality(
-            self, *, limit: int = 50) -> list[dict[str, Any]]:
-        return _node.review_content_quality(self._db, limit)
 
 
 class SqliteEdgeStore(EdgeStore):
