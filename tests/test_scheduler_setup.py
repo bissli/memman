@@ -5,7 +5,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from memman import config
 from memman.setup import scheduler as sch
+from tests.conftest import install_env_factory
+
+
+@pytest.fixture
+def uninstall_home(fake_home, monkeypatch):
+    """`fake_home` plus a `MEMMAN_DATA_DIR` pin under it.
+
+    Used by `TestUninstall` for tests that reach into a fake env file
+    and assert what `sch.uninstall` strips. Standalone scheduler tests
+    keep using `fake_home` directly.
+    """
+    data_dir = fake_home / 'memman'
+    monkeypatch.setenv('MEMMAN_DATA_DIR', str(data_dir))
+    config.reset_file_cache()
+    return fake_home, data_dir
 
 
 def _knobs(openrouter: str = 'sk-or-test',
@@ -697,3 +713,59 @@ class TestSchedulerLogs:
         assert result.exit_code == 0
         assert 'no log file yet' in result.output.lower() \
             or 'no log file yet' in (result.stderr or '').lower()
+
+
+def _install_env_full(data_dir):
+    """Seed an env file with a representative mix of keys.
+
+    Used by `TestUninstall` to verify the strip-secrets path.
+    """
+    install_env_factory(
+        data_dir,
+        **{
+            config.LLM_PROVIDER: 'openrouter',
+            config.LLM_MODEL_FAST: 'anthropic/claude-haiku-4.5',
+            config.LLM_MODEL_SLOW_CANONICAL: 'anthropic/claude-sonnet-4.6',
+            config.EMBED_PROVIDER: 'voyage',
+            config.OPENROUTER_API_KEY: 'sk-or-installed',
+            config.VOYAGE_API_KEY: 'pa-installed',
+            config.OPENAI_EMBED_API_KEY: 'sk-oa-installed',
+            config.BACKEND: 'postgres',
+            config.PG_DSN: 'postgresql://user:pw@host/db',
+            })
+
+
+class TestUninstall:
+    """`sch.uninstall` strips secrets and is a no-op on empty data dirs."""
+
+    def test_uninstall_strips_secrets_keeps_settings(
+            self, uninstall_home, monkeypatch):
+        """Secrets removed; non-secret settings preserved."""
+        _, data_dir = uninstall_home
+        _install_env_full(data_dir)
+
+        monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+        _no_subprocess(monkeypatch, active=False)
+
+        sch.uninstall(data_dir=str(data_dir))
+
+        contents = (data_dir / config.ENV_FILENAME).read_text()
+        assert config.OPENROUTER_API_KEY not in contents
+        assert config.VOYAGE_API_KEY not in contents
+        assert config.OPENAI_EMBED_API_KEY not in contents
+        assert config.PG_DSN not in contents
+        assert f'{config.LLM_PROVIDER}=openrouter' in contents
+        assert config.LLM_MODEL_FAST in contents
+        assert config.EMBED_PROVIDER in contents
+        assert f'{config.BACKEND}=postgres' in contents
+
+    @pytest.mark.no_default_env
+    def test_uninstall_no_op_when_no_env_file(
+            self, uninstall_home, monkeypatch):
+        """Uninstall against an empty data dir doesn't error."""
+        _, data_dir = uninstall_home
+        monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+        _no_subprocess(monkeypatch, active=False)
+
+        result = sch.uninstall(data_dir=str(data_dir))
+        assert result['env_actions'] == []
