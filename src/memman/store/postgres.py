@@ -36,9 +36,8 @@ from memman.store.backend import Oplog, RecallSession, _check_identifier
 from memman.store.base import BaseNodeStore
 from memman.store.errors import BackendError, ConfigError
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
-from memman.store.model import IntegrityReport, NodeStats, OpLogEntry
-from memman.store.model import OpLogStats, ProvenanceCount, QueueRow
-from memman.store.model import QueueStats, ReembedRow, WorkerRun
+from memman.store.model import NodeStats, OpLogEntry, OpLogStats
+from memman.store.model import ProvenanceCount, ReembedRow, WorkerRun
 from memman.store.model import parse_timestamp
 
 if TYPE_CHECKING:
@@ -163,29 +162,6 @@ create index if not exists idx_edges_target_type_{schema}
 create index if not exists idx_oplog_created_{schema}
     on {schema}.oplog(created_at);
 """
-
-_PG_QUEUE_SCHEMA = """
-create schema if not exists queue;
-
-create table if not exists queue.queue (
-    id          bigserial primary key,
-    store       text not null,
-    op          text not null,
-    payload     text not null,
-    status      text not null default 'pending',
-    attempts    integer not null default 0,
-    error       text,
-    created_at  timestamptz not null default now(),
-    claimed_at  timestamptz,
-    finished_at timestamptz
-);
-
-create index if not exists idx_queue_status_id
-    on queue.queue(status, id);
-create index if not exists idx_queue_store
-    on queue.queue(store);
-"""
-
 
 _MAX_OPLOG_ENTRIES = 5000
 
@@ -2102,7 +2078,6 @@ def _ensure_baseline_schema(
     with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
         cur.execute('create extension if not exists vector')
         cur.execute(f'create schema if not exists {schema}')
-        cur.execute(_PG_QUEUE_SCHEMA)
         cur.execute(
             _PG_BASELINE_SCHEMA.format(
                 schema=schema, dim=dim))
@@ -2368,101 +2343,6 @@ where deleted_at is null
                 f'dropping invalid HNSW index {row[0]}')
             cur.execute(f'drop index if exists {row[0]} cascade')
         cur.execute(create_sql)
-
-
-class PostgresQueueBackend:
-    """Cluster-global work queue using `queue.queue` schema.
-
-    Uses `for update skip locked` claim semantics so multiple workers
-    can claim disjoint rows safely. Queue tables live in a single
-    `queue` schema (not per-store) so cross-store ordering is
-    preserved.
-    """
-
-    def __init__(self, dsn: str) -> None:
-        self._dsn = dsn
-
-    def _conn(self) -> psycopg.Connection:
-        return _open_connection(self._dsn, autocommit=True)
-
-    def enqueue(self, *, store: str, op: str, payload: str) -> int:
-        sql = """
-insert into queue.queue (store, op, payload)
-values (%s, %s, %s)
-returning id
-"""
-        with self._conn() as conn, conn.cursor() as cur:
-            cur.execute(sql, (store, op, payload))
-            return int(cur.fetchone()[0])
-
-    def claim_batch(self, *, limit: int) -> list[QueueRow]:
-        sql = """
-update queue.queue q
-set status = 'claimed',
-    claimed_at = now(),
-    attempts = q.attempts + 1
-from (
-    select id from queue.queue
-    where status = 'pending'
-    order by id asc
-    for update skip locked
-    limit %s
-) sel
-where q.id = sel.id
-returning q.id, q.store, q.op, q.payload, q.attempts, q.created_at
-"""
-        with self._conn() as conn, conn.cursor() as cur:
-            cur.execute(sql, (limit,))
-            rows = cur.fetchall()
-        return [
-            QueueRow(
-                id=int(r[0]), store=r[1], op=r[2],
-                payload=r[3], attempts=int(r[4]),
-                created_at=_datetime_or_none(r[5])
-                or datetime.now(timezone.utc))
-            for r in rows
-            ]
-
-    def mark_done(self, ids: Sequence[int]) -> None:
-        if not ids:
-            return
-        sql = """
-update queue.queue
-set status = 'done', finished_at = now()
-where id = any(%s)
-"""
-        with self._conn() as conn, conn.cursor() as cur:
-            cur.execute(sql, (list(ids),))
-
-    def mark_failed(
-            self, ids: Sequence[int], *, error: str) -> None:
-        if not ids:
-            return
-        sql = """
-update queue.queue
-set status = 'failed', finished_at = now(), error = %s
-where id = any(%s)
-"""
-        with self._conn() as conn, conn.cursor() as cur:
-            cur.execute(sql, (error, list(ids)))
-
-    def purge_store(self, store: str) -> int:
-        with self._conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                'delete from queue.queue where store = %s', (store,))
-            return int(cur.rowcount or 0)
-
-    def stats(self) -> QueueStats:
-        with self._conn() as conn, conn.cursor() as cur:
-            cur.execute('select count(*) from queue.queue')
-            total = int(cur.fetchone()[0])
-            cur.execute(
-                'select store, count(*) from queue.queue group by store')
-            by_store = {r[0]: int(r[1]) for r in cur.fetchall()}
-        return QueueStats(total=total, by_store=by_store)
-
-    def integrity_report(self) -> IntegrityReport:
-        return IntegrityReport()
 
 
 def _bfs_python_fallback(

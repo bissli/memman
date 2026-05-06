@@ -1,8 +1,10 @@
 """Backend Protocol surface.
 
 Defines `Backend`, the four sub-store Protocols (`NodeStore`,
-`EdgeStore`, `MetaStore`, `Oplog`), `RecallSession`, and `QueueBackend`.
-SQLite implements them in `store/sqlite.py`; Postgres in `store/postgres.py`.
+`EdgeStore`, `MetaStore`, `Oplog`), and `RecallSession`. SQLite
+implements them in `store/sqlite.py`; Postgres in `store/postgres.py`.
+The work queue is process-global and SQLite-only (see
+`memman.queue`).
 
 Distributed-shaping commitments baked into this Protocol surface:
 
@@ -33,9 +35,8 @@ from typing import Any, Protocol, Self, runtime_checkable
 
 from memman.store.errors import ConfigError
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
-from memman.store.model import IntegrityReport, NodeStats, OpLogEntry
-from memman.store.model import OpLogStats, ProvenanceCount, QueueRow
-from memman.store.model import QueueStats, ReembedRow, WorkerRun
+from memman.store.model import NodeStats, OpLogEntry, OpLogStats
+from memman.store.model import ProvenanceCount, ReembedRow, WorkerRun
 
 _VALID_IDENTIFIER_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
@@ -632,36 +633,3 @@ class Backend(Protocol):
         ...
 
 
-@runtime_checkable
-class QueueBackend(Protocol):
-    """Cross-store work queue."""
-
-    def enqueue(
-            self, *, store: str, op: str, payload: str) -> int:
-        """Append one row, return its id."""
-        ...
-
-    def claim_batch(self, *, limit: int) -> list[QueueRow]:
-        """Claim up to `limit` rows for processing."""
-        ...
-
-    def mark_done(self, ids: Sequence[int]) -> None:
-        """Mark rows as completed."""
-        ...
-
-    def mark_failed(
-            self, ids: Sequence[int], *, error: str) -> None:
-        """Mark rows as failed (with retry accounting)."""
-        ...
-
-    def purge_store(self, store: str) -> int:
-        """Delete all rows for a store, return deleted count."""
-        ...
-
-    def stats(self) -> QueueStats:
-        """Aggregate queue statistics."""
-        ...
-
-    def integrity_report(self) -> IntegrityReport:
-        """Aggregate integrity findings used by `memman doctor`."""
-        ...
