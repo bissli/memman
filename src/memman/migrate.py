@@ -55,6 +55,7 @@ class MigrateResult:
     oplog: int = 0
     meta: int = 0
     dry_run: bool = False
+    verified: bool = False
 
 
 def preflight(dsn: str) -> dict[str, bool]:
@@ -154,6 +155,65 @@ group by n.nspname
     return result
 
 
+_SOURCE_ARTIFACTS = (
+    'memman.db', 'memman.db-wal', 'memman.db-shm',
+    'recall_snapshot.v1.bin',
+    )
+
+
+def _cleanup_source_artifacts(source_dir: Path) -> None:
+    """Delete the four SQLite-side files left behind by a migrated store.
+
+    Runs only after the destination commit and verify step succeed.
+    `os.path.exists` guards each remove because WAL/SHM may be absent
+    (no concurrent writer at the time of migration).
+    """
+    for name in _SOURCE_ARTIFACTS:
+        path = source_dir / name
+        try:
+            if path.exists():
+                path.unlink()
+        except OSError as exc:
+            logger.warning(
+                f'failed to remove source artifact {path}: {exc}')
+
+
+def _verify_destination_counts(
+        pg_conn, schema: str, store: str,
+        expected: dict[str, int]) -> None:
+    """Compare destination table counts against captured source counts.
+
+    Idempotent re-runs against an already-populated schema may legitimately
+    end with destination counts equal to source counts; the destination's
+    `ON CONFLICT DO NOTHING` makes the per-call insert count a lower
+    bound but the post-commit absolute count is the authoritative check.
+    Raises `MigrateError` on any mismatch with the per-table delta.
+    """
+    sql = (
+        f'select '
+        f"  (select count(*) from {schema}.insights),"
+        f"  (select count(*) from {schema}.edges),"
+        f"  (select count(*) from {schema}.oplog),"
+        f"  (select count(*) from {schema}.meta)")
+    with pg_conn.cursor() as cur:
+        cur.execute(sql)
+        ins, edges, oplog, meta = cur.fetchone()
+    actual = {
+        'insights': int(ins), 'edges': int(edges),
+        'oplog': int(oplog), 'meta': int(meta),
+        }
+    diffs = [
+        (table, expected[table], actual[table])
+        for table in ('insights', 'edges', 'oplog', 'meta')
+        if expected[table] != actual[table]
+        ]
+    if diffs:
+        detail = ', '.join(
+            f'{t}: source={s} dest={d}' for t, s, d in diffs)
+        raise MigrateError(
+            f'verify failed for store {store!r}: {detail}')
+
+
 @contextmanager
 def held_drain_lock(data_dir: str) -> Iterator[int]:
     """Acquire the shared drain.lock for the duration of the block."""
@@ -198,7 +258,8 @@ def migrate_store(
         raise MigrateError(
             f'source SQLite database not found: {sqlite_path}')
 
-    sqlite_conn = sqlite3.connect(str(sqlite_path))
+    sqlite_conn = sqlite3.connect(
+        f'file:{sqlite_path}?mode=ro', uri=True)
     sqlite_conn.row_factory = None
     try:
         n_insights = sqlite_conn.execute(
@@ -209,6 +270,13 @@ def migrate_store(
             'select count(*) from oplog').fetchone()[0]
         n_meta = sqlite_conn.execute(
             'select count(*) from meta').fetchone()[0]
+        fp_row = sqlite_conn.execute(
+            "select 1 from meta where key = 'embed_fingerprint'"
+            ).fetchone()
+        if n_insights == 0 and fp_row is None:
+            raise MigrateError(
+                f'source store {store!r} is empty (no insights, no'
+                f' embed fingerprint); nothing to migrate')
         if dry_run:
             sqlite_conn.close()
             return MigrateResult(
@@ -221,6 +289,12 @@ def migrate_store(
         from scripts.import_sqlite_to_postgres import _import_insights
         from scripts.import_sqlite_to_postgres import _import_meta
         from scripts.import_sqlite_to_postgres import _import_oplog
+        from scripts.import_sqlite_to_postgres import _read_source_dim
+
+        try:
+            dim = _read_source_dim(sqlite_conn)
+        except SystemExit as exc:
+            raise MigrateError(str(exc)) from exc
 
         pg_conn = psycopg.connect(dsn, autocommit=False)
         try:
@@ -231,16 +305,21 @@ def migrate_store(
                 with pg_conn.cursor() as cur:
                     cur.execute(
                         f'drop schema if exists {schema} cascade')
-            _ensure_schema(pg_conn, schema)
-            ins_count = _import_insights(sqlite_conn, pg_conn, schema)
+            _ensure_schema(pg_conn, schema, dim)
+            ins_count = _import_insights(
+                sqlite_conn, pg_conn, schema, dim)
             edge_count = _import_edges(sqlite_conn, pg_conn, schema)
             oplog_count = _import_oplog(sqlite_conn, pg_conn, schema)
             meta_count = _import_meta(sqlite_conn, pg_conn, schema)
             pg_conn.commit()
-            return MigrateResult(
-                store=store, schema=schema,
-                insights=ins_count, edges=edge_count,
-                oplog=oplog_count, meta=meta_count, dry_run=False)
+            _verify_destination_counts(
+                pg_conn, schema, store,
+                expected={
+                    'insights': n_insights,
+                    'edges': n_edges,
+                    'oplog': n_oplog,
+                    'meta': n_meta,
+                    })
         except Exception as exc:
             pg_conn.rollback()
             if isinstance(exc, MigrateError):
@@ -252,3 +331,9 @@ def migrate_store(
             pg_conn.close()
     finally:
         sqlite_conn.close()
+    _cleanup_source_artifacts(Path(source_dir))
+    return MigrateResult(
+        store=store, schema=schema,
+        insights=ins_count, edges=edge_count,
+        oplog=oplog_count, meta=meta_count, dry_run=False,
+        verified=True)

@@ -2175,7 +2175,7 @@ def migrate(
                     click.echo(
                         f'{s}: insights={res.insights}'
                         f' edges={res.edges} oplog={res.oplog}'
-                        f' meta={res.meta}')
+                        f' meta={res.meta} (verified, source cleaned)')
                 except MigrateError as exc:
                     raise click.ClickException(f'{s}: {exc}')
             _write_env_keys(

@@ -11,7 +11,8 @@ Streams the four memman tables (`insights`, `edges`, `oplog`, `meta`)
 from a SQLite store directory into the named target schema, applying
 type translations:
 
-- `BLOB` embeddings -> pgvector `vector(512)` via the pgvector adapter.
+- `BLOB` embeddings -> pgvector `vector(N)` via the pgvector adapter,
+  where `N` is read from the source store's `meta.embed_fingerprint`.
   Source SQLite blobs are float64 (`<Nd`); pgvector stores float32, so
   values are cast to `numpy.float32` before binding (otherwise psycopg
   rounds silently and the parity test top-5 set intersection drops).
@@ -41,8 +42,6 @@ import psycopg
 from pgvector.psycopg import register_vector
 
 logger = logging.getLogger('memman.import')
-
-EMBEDDING_DIM = 512
 
 
 _SCHEMA_DDL = """
@@ -87,7 +86,8 @@ CREATE TABLE IF NOT EXISTS {schema}.oplog (
     detail      TEXT DEFAULT '',
     created_at  TIMESTAMPTZ NOT NULL,
     before      JSONB,
-    after       JSONB
+    after       JSONB,
+    legacy_id   BIGINT
 );
 
 CREATE TABLE IF NOT EXISTS {schema}.meta (
@@ -129,34 +129,58 @@ def _parse_json_field(
         return [] if default_kind == 'array' else {}
 
 
-def _decode_embedding(blob: bytes | None) -> list[float] | None:
-    """Decode a memman embedding BLOB into a float32 list for pgvector."""
+def _decode_embedding(
+        blob: bytes | None, dim: int) -> list[float] | None:
+    """Decode a memman embedding BLOB into a float32 list for pgvector.
+
+    `dim` is the source store's declared embedding dim (from
+    `meta.embed_fingerprint`). A blob whose float64 element count does
+    not match raises `ValueError` -- silently dropping a row would
+    return a `None` vector that the destination column rejects only
+    on insert, masking source corruption as a generic insert error.
+    """
     if not blob:
         return None
     arr = np.frombuffer(blob, dtype=np.float64)
-    if arr.size != EMBEDDING_DIM:
-        logger.warning(
-            f'embedding dim {arr.size} != {EMBEDDING_DIM};'
-            f' skipping row')
-        return None
+    if arr.size != dim:
+        raise ValueError(
+            f'embedding dim {arr.size} does not match source'
+            f' fingerprint dim {dim}')
     return arr.astype(np.float32).tolist()
 
 
-def _ensure_schema(conn: psycopg.Connection, schema: str) -> None:
-    """Create the target schema and table DDL (idempotent)."""
+def _ensure_schema(
+        conn: psycopg.Connection, schema: str, dim: int) -> None:
+    """Create the target schema and table DDL (idempotent).
+
+    `dim` is interpolated into `vector(N)` for the embedding column.
+    """
     if not schema.replace('_', '').isalnum():
         raise SystemExit(f'invalid schema name: {schema!r}')
+    if dim <= 0:
+        raise ValueError(f'invalid embedding dim: {dim}')
     with conn.cursor() as cur:
         cur.execute('CREATE EXTENSION IF NOT EXISTS vector')
         cur.execute(f'CREATE SCHEMA IF NOT EXISTS {schema}')
         cur.execute(
-            _SCHEMA_DDL.format(schema=schema, dim=EMBEDDING_DIM))
+            _SCHEMA_DDL.format(schema=schema, dim=dim))
+        cur.execute(
+            f'ALTER TABLE {schema}.oplog'
+            f' ADD COLUMN IF NOT EXISTS legacy_id BIGINT')
+        cur.execute(
+            "select 1 from pg_constraint where conname = %s",
+            (f'oplog_legacy_id_key_{schema}',))
+        if cur.fetchone() is None:
+            cur.execute(
+                f'alter table {schema}.oplog'
+                f' add constraint oplog_legacy_id_key_{schema}'
+                f' unique (legacy_id)')
 
 
 def _import_insights(
         sqlite_conn: sqlite3.Connection,
         pg_conn: psycopg.Connection,
-        schema: str) -> int:
+        schema: str, dim: int) -> int:
     """Stream the insights table. Returns row count imported."""
     rows = sqlite_conn.execute(
         'SELECT id, content, category, importance, entities,'
@@ -177,7 +201,7 @@ def _import_insights(
             json.dumps(_parse_json_field(r[9], default_kind='array'))
                 if r[9] else None,
             _parse_ts(r[10]),
-            _decode_embedding(r[11]),
+            _decode_embedding(r[11], dim),
             r[12], _parse_ts(r[13]), _parse_ts(r[14]),
             _parse_ts(r[15]), _parse_ts(r[16]), _parse_ts(r[17]),
             r[18], r[19], r[20]) for r in rows]
@@ -227,25 +251,56 @@ def _import_oplog(
         sqlite_conn: sqlite3.Connection,
         pg_conn: psycopg.Connection,
         schema: str) -> int:
-    """Stream the oplog table. Returns row count imported."""
+    """Stream the oplog table. Returns row count imported.
+
+    The source SQLite `id` is copied into the destination's
+    `legacy_id` column so that re-running migrate after a partial
+    failure does not duplicate rows. The destination's own `id`
+    (`bigserial`) remains independent.
+    """
     rows = sqlite_conn.execute(
-        'SELECT operation, insight_id, detail, created_at,'
+        'SELECT id, operation, insight_id, detail, created_at,'
         '       before, after'
         ' FROM oplog').fetchall()
     if not rows:
         return 0
     out = [
-        (r[0], r[1], r[2], _parse_ts(r[3]), r[4], r[5])
+        (r[1], r[2], r[3], _parse_ts(r[4]), r[5], r[6], r[0])
         for r in rows
         ]
     with pg_conn.cursor() as cur:
         cur.executemany(
             f'INSERT INTO {schema}.oplog'
             ' (operation, insight_id, detail, created_at,'
-            '  before, after)'
-            ' VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb)',
+            '  before, after, legacy_id)'
+            ' VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)'
+            ' ON CONFLICT (legacy_id) DO NOTHING',
             out)
     return len(out)
+
+
+def _read_source_dim(sqlite_conn: sqlite3.Connection) -> int:
+    """Resolve the source store's embedding dim from `meta.embed_fingerprint`.
+
+    Raises `SystemExit` when the source has no fingerprint -- the
+    destination needs `vector(N)` baked in at schema creation, and
+    guessing a default would silently corrupt the migration of any
+    non-512-dim store.
+    """
+    row = sqlite_conn.execute(
+        "select value from meta where key = 'embed_fingerprint'"
+    ).fetchone()
+    if row is None or not row[0]:
+        raise SystemExit(
+            "source has no meta.embed_fingerprint; cannot determine"
+            " embedding dim. Run 'memman doctor' on the source store"
+            " before migrating.")
+    fp = json.loads(row[0])
+    dim = int(fp['dim'])
+    if dim <= 0:
+        raise SystemExit(
+            f'source meta.embed_fingerprint has invalid dim={dim}')
+    return dim
 
 
 def _import_meta(
@@ -302,13 +357,14 @@ def main(argv: list[str] | None = None) -> int:
     logger.info(f'opening SQLite source: {src_path}')
     sqlite_conn = sqlite3.connect(str(src_path))
     try:
+        dim = _read_source_dim(sqlite_conn)
         logger.info(f'opening Postgres target: {args.target}')
         with psycopg.connect(args.target, autocommit=False) as pg_conn:
             register_vector(pg_conn)
-            _ensure_schema(pg_conn, args.schema)
+            _ensure_schema(pg_conn, args.schema, dim)
             counts = {
                 'insights': _import_insights(
-                    sqlite_conn, pg_conn, args.schema),
+                    sqlite_conn, pg_conn, args.schema, dim),
                 'edges': _import_edges(
                     sqlite_conn, pg_conn, args.schema),
                 'oplog': _import_oplog(

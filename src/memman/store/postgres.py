@@ -20,6 +20,7 @@ Recall issues one round-trip per anchor subset.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -56,9 +57,21 @@ def _store_schema(name: str) -> str:
     return f'store_{name}'
 
 
+def _lock_id(name: str) -> int:
+    """Deterministic int8 lock id for `pg_advisory_*lock` calls.
+
+    Postgres advisory locks take a signed int8. blake2b digest_size=8
+    yields exactly that. Python's built-in `hash()` is randomized per
+    process via PYTHONHASHSEED, so two memman processes computing a
+    lock id from the same input would not serialize against each other.
+    """
+    digest = hashlib.blake2b(name.encode('utf-8'), digest_size=8).digest()
+    return int.from_bytes(digest, 'big', signed=True)
+
+
 def _advisory_lock_key(schema: str, name: str) -> int:
-    """Per-store, per-name int64 key for `pg_advisory_*lock` calls."""
-    return abs(hash(f'{schema}:{name}')) & 0x7FFFFFFFFFFFFFFF
+    """Per-store, per-name int8 key for `pg_advisory_*lock` calls."""
+    return _lock_id(f'{schema}:{name}')
 
 
 _PG_BASELINE_SCHEMA = """
@@ -105,7 +118,8 @@ create table if not exists {schema}.oplog (
     detail      text default '',
     created_at  timestamptz not null default now(),
     before      jsonb,
-    after       jsonb
+    after       jsonb,
+    legacy_id   bigint
 );
 
 create table if not exists {schema}.meta (
@@ -321,10 +335,36 @@ class PostgresNodeStore(BaseNodeStore, NodeStore):
             self, conn: psycopg.Connection, schema: str) -> None:
         self._conn = conn
         self._schema = schema
+        self._embedding_dim: int | None = None
 
     def _q(self, sql: str) -> str:
         """Format SQL with the per-store schema interpolated."""
         return sql.format(s=self._schema)
+
+    def _resolve_embedding_dim(self) -> int:
+        """Look up the stored `vector(N)` column width; cached.
+
+        pgvector exposes `N` directly in `pg_attribute.atttypmod`.
+        Cached on first call because `iter_for_reembed` is hot and the
+        schema dim cannot change without an `embed swap` cutover.
+        """
+        if self._embedding_dim is not None:
+            return self._embedding_dim
+        sql = """
+select atttypmod from pg_attribute
+where attrelid = (%s || '.insights')::regclass
+  and attname = 'embedding'
+  and not attisdropped
+"""
+        with self._conn.cursor() as cur:
+            cur.execute(sql, (self._schema,))
+            row = cur.fetchone()
+        if row is None or row[0] is None or int(row[0]) <= 0:
+            raise BackendError(
+                f"schema {self._schema!r} has no resolved embedding"
+                f' dim; was the baseline schema applied?')
+        self._embedding_dim = int(row[0])
+        return self._embedding_dim
 
     @contextmanager
     def write_lock(self, name: str) -> Iterator[None]:
@@ -633,7 +673,8 @@ order by id
 limit %s
 """)
         with self._conn.cursor() as cur:
-            cur.execute(sql, (EMBEDDING_DIM * 4, cursor, batch))
+            cur.execute(
+                sql, (self._resolve_embedding_dim() * 8, cursor, batch))
             return [
                 ReembedRow(
                     id=r[0], content=r[1], embedding_model=r[2],
@@ -1823,7 +1864,7 @@ class PostgresBackend(Backend):
         Yields True when the lock was acquired, False otherwise.
         """
         target = store or self._store
-        key = abs(hash(f'memman_drain:{target}')) & 0x7FFFFFFFFFFFFFFF
+        key = _lock_id(f'memman_drain:{target}')
         conn = _open_connection(
             self._dsn, autocommit=True, keepalives=True)
         acquired = False
@@ -1912,15 +1953,20 @@ where table_schema = %s and table_name = %s
         self.close()
 
 
-def _resolve_active_dim() -> int:
-    """Return the active embedding client's dim, or `EMBEDDING_DIM` fallback.
+def _resolve_active_dim(expected_dim: int | None = None) -> int:
+    """Return the embedding dim to bake into a fresh schema.
 
-    Resolved lazily because the active client requires env-resolved
-    config that may not be set at module import time. Falls back to
-    the historical 512 default when the active client is not yet
-    available (the open will then proceed with vector(512), and
-    later writes will land on a 512-dim column).
+    When `expected_dim` is provided (e.g. read from `meta.embed_fingerprint`
+    on a pre-existing schema), it is used directly without consulting
+    the env-bound active client. This breaks the chicken-and-egg where
+    `open_postgres_backend` needs a dim to ensure the baseline schema
+    but the env active client may not be the right one for a store
+    whose stored fingerprint differs.
+
+    Falls back to the active fingerprint, then `EMBEDDING_DIM`.
     """
+    if expected_dim is not None and expected_dim > 0:
+        return int(expected_dim)
     try:
         from memman.embed.fingerprint import active_fingerprint
         active = active_fingerprint()
@@ -1931,6 +1977,67 @@ def _resolve_active_dim() -> int:
             f'active fingerprint resolution failed; '
             f'using {EMBEDDING_DIM}-dim default: {exc}')
     return EMBEDDING_DIM
+
+
+def _read_stored_dim(dsn: str, store: str) -> int | None:
+    """Best-effort read of the stored fingerprint dim for `store`.
+
+    Returns None when the schema does not exist yet or the meta row
+    is absent. Used by `open_postgres_backend` to make a freshly
+    discovered store open at its own dim instead of forcing the env
+    active client's dim.
+    """
+    schema = _store_schema(store)
+    sql = f"select value from {schema}.meta where key = 'embed_fingerprint'"
+    try:
+        with _connection(dsn, autocommit=True) as conn, \
+                conn.cursor() as cur:
+            cur.execute(sql)
+            row = cur.fetchone()
+    except Exception:
+        return None
+    if row is None or not row[0]:
+        return None
+    try:
+        return int(json.loads(row[0]).get('dim') or 0) or None
+    except Exception:
+        return None
+
+
+def open_postgres_backend(
+        store: str, dsn: str, *,
+        read_only: bool = False) -> 'PostgresBackend':
+    """Free-function open: bypass the PostgresCluster scaffold.
+
+    Reads the store's stored fingerprint dim (if any) before
+    `_ensure_baseline_schema`, so a freshly discovered Postgres-backed
+    store opens at its own dim rather than the env active client's.
+    """
+    stored = _read_stored_dim(dsn, store)
+    target_dim = _resolve_active_dim(expected_dim=stored)
+    _ensure_baseline_schema(dsn, store, dim=target_dim)
+    _assert_vector_dim_matches(dsn, store, target_dim)
+    if read_only:
+        ro_conn = _open_connection(dsn, autocommit=True)
+        return PostgresBackend(
+            dsn, store, conn=ro_conn, owns_conn=True)
+    backend = PostgresBackend(dsn, store)
+    try:
+        _ensure_hnsw_index(dsn, _store_schema(store))
+    except Exception as exc:
+        logger.warning(f'HNSW index ensure failed: {exc}')
+    return backend
+
+
+def drop_postgres_store(store: str, dsn: str) -> None:
+    """Free-function drop: removes the per-store schema.
+
+    Mirrors `PostgresCluster.drop_store` minus the queue purge (the
+    queue stays SQLite under the per-store routing model).
+    """
+    schema = _store_schema(store)
+    with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(f'drop schema if exists {schema} cascade')
 
 
 def _ensure_baseline_schema(
@@ -1954,6 +2061,17 @@ def _ensure_baseline_schema(
         cur.execute(
             _PG_BASELINE_SCHEMA.format(
                 schema=schema, dim=dim))
+        cur.execute(
+            f'alter table {schema}.oplog'
+            f' add column if not exists legacy_id bigint')
+        cur.execute(
+            'select 1 from pg_constraint where conname = %s',
+            (f'oplog_legacy_id_key_{schema}',))
+        if cur.fetchone() is None:
+            cur.execute(
+                f'alter table {schema}.oplog'
+                f' add constraint oplog_legacy_id_key_{schema}'
+                f' unique (legacy_id)')
 
 
 def _assert_vector_dim_matches(

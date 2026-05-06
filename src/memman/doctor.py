@@ -178,6 +178,58 @@ QUEUE_AGE_WARN_SECONDS = 3600
 QUEUE_AGE_FAIL_SECONDS = 86400
 
 
+_ORPHAN_ARTIFACTS = (
+    'memman.db', 'memman.db-wal', 'memman.db-shm',
+    'recall_snapshot.v1.bin',
+    )
+
+
+def check_orphan_storage(data_dir: str) -> dict[str, Any]:
+    """Flag SQLite artifacts left behind on a Postgres-backed store.
+
+    A successful `memman migrate <store>` deletes the source memman.db
+    (plus WAL/SHM and the recall snapshot). If the cleanup step
+    crashed between commit and unlink, the file remains on disk but
+    no longer represents the truth of the store. This check walks
+    every store directory under `<data_dir>/data/` and reports any
+    survivor when the resolved backend for the process is `postgres`.
+    """
+    backend = (os.environ.get('MEMMAN_BACKEND') or 'sqlite').lower()
+    if backend != 'postgres':
+        return {
+            'name': 'orphan_storage', 'status': 'pass',
+            'detail': {
+                'reason': 'check_skipped_for_sqlite_backend',
+                },
+            }
+    data_root = Path(data_dir) / 'data'
+    if not data_root.is_dir():
+        return {
+            'name': 'orphan_storage', 'status': 'pass',
+            'detail': {'stores': []},
+            }
+    orphans: dict[str, list[str]] = {}
+    for entry in sorted(os.scandir(data_root), key=lambda e: e.name):
+        if not entry.is_dir():
+            continue
+        survivors = [
+            name for name in _ORPHAN_ARTIFACTS
+            if (Path(entry.path) / name).exists()
+            ]
+        if survivors:
+            orphans[entry.name] = survivors
+    if not orphans:
+        return {
+            'name': 'orphan_storage', 'status': 'pass',
+            'detail': {'stores': []},
+            }
+    return {
+        'name': 'orphan_storage', 'status': 'fail',
+        'detail': (
+            f'orphan SQLite files in postgres-backed stores: {orphans}'),
+        }
+
+
 def check_queue_backlog(data_dir: str) -> dict[str, Any]:
     """Report pending/failed counts and oldest-pending age."""
     from memman.queue import open_queue_db
