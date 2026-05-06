@@ -23,7 +23,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import time
 from collections import deque
 from collections.abc import Iterator, Sequence
@@ -49,30 +48,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger('memman')
 
 EMBEDDING_DIM = 512
-
-_PG_SCHEMA_VERSION = 3
-_PG_MIGRATIONS: list[tuple[int, str]] = [
-    (2,
-     ('alter table queue.worker_runs'
-      ' add column if not exists last_heartbeat_at timestamptz')),
-    (3,
-     ('alter table {schema}.oplog'
-      ' add column if not exists before jsonb;'
-      ' alter table {schema}.oplog'
-      ' add column if not exists after jsonb')),
-    ]
-
-_FORBIDDEN_MIGRATION_RE = re.compile(
-    r'(?i)\b(?:'
-    r'drop\s+column|rename|drop\s+table|truncate'
-    r'|alter\s+column\b.*\b(?:not\s+null|type)\b'
-    r')')
-
-for _ver, _sql in _PG_MIGRATIONS:
-    if _FORBIDDEN_MIGRATION_RE.search(_sql):
-        raise AssertionError(
-            f'_PG_MIGRATIONS[{_ver}] contains a non-additive operation;'
-            ' the ladder is forward-only and additive-only')
 
 
 def _store_schema(name: str) -> str:
@@ -2017,51 +1992,6 @@ where attrelid = (%s || '.insights')::regclass
         f' switch back to a {stored_dim}-dim provider.')
 
 
-def _apply_pending_migrations(dsn: str, store: str) -> None:
-    """Apply forward-only `_PG_MIGRATIONS` entries to a store schema.
-
-    Reads `meta.pg_schema_version` (defaulting to 0 when absent),
-    runs every migration with `stored < target_ver <= code_version`
-    in one transaction, and writes the new version atomically. If
-    `stored > code_version` (older binary, newer store), refuses
-    with `BackendError`. Each SQL string interpolates `{schema}`.
-    """
-    schema = _store_schema(store)
-    select_sql = f"""
-select value from {schema}.meta
-where key = 'pg_schema_version'
-"""
-    upsert_sql = f"""
-insert into {schema}.meta (key, value)
-values ('pg_schema_version', %s)
-on conflict (key) do update set value = excluded.value
-"""
-    with _connection(dsn, autocommit=False) as conn:
-        try:
-            with conn.cursor() as cur:
-                cur.execute(select_sql)
-                row = cur.fetchone()
-                stored = int(row[0]) if row else 0
-                if stored > _PG_SCHEMA_VERSION:
-                    raise BackendError(
-                        f'store {store!r} is at schema version {stored};'
-                        f' this binary supports {_PG_SCHEMA_VERSION}.'
-                        ' Upgrade memman before opening this store.')
-                if stored == _PG_SCHEMA_VERSION:
-                    return
-                for target_ver, sql in _PG_MIGRATIONS:
-                    if target_ver <= stored:
-                        continue
-                    if target_ver > _PG_SCHEMA_VERSION:
-                        break
-                    cur.execute(sql.format(schema=schema))
-                cur.execute(upsert_sql, (str(_PG_SCHEMA_VERSION),))
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-
-
 def _check_pg_version(dsn: str) -> None:
     """Refuse if the server is older than Postgres 12.
 
@@ -2418,7 +2348,6 @@ class PostgresCluster(Cluster):
         active_dim = _resolve_active_dim()
         _ensure_baseline_schema(self._dsn, store, dim=active_dim)
         _assert_vector_dim_matches(self._dsn, store, active_dim)
-        _apply_pending_migrations(self._dsn, store)
         backend = PostgresBackend(self._dsn, store)
         try:
             _ensure_hnsw_index(self._dsn, _store_schema(store))

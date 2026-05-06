@@ -506,35 +506,6 @@ def test_reindex_concurrent_writers_no_edges_lost(pg_dsn):
                 cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
 
 
-def test_open_with_stored_version_ahead_refuses(pg_dsn):
-    """Seeding `meta.pg_schema_version = '999'` causes the next open
-    to raise BackendError instead of silently writing.
-    """
-    from memman.store.postgres import _apply_pending_migrations
-
-    store_name = 'pg_version_ahead'
-    schema = _store_schema(store_name)
-    with psycopg.connect(pg_dsn, autocommit=True) as conn:
-        with conn.cursor() as cur:
-            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
-
-    _ensure_baseline_schema(pg_dsn, store_name)
-    try:
-        with psycopg.connect(pg_dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    f'INSERT INTO {schema}.meta (key, value)'
-                    " VALUES ('pg_schema_version', '999')"
-                    ' ON CONFLICT (key) DO UPDATE'
-                    ' SET value = EXCLUDED.value')
-        with pytest.raises(BackendError, match='schema version 999'):
-            _apply_pending_migrations(pg_dsn, store_name)
-    finally:
-        with psycopg.connect(pg_dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
-
-
 def test_memman_reindex_timeout_caps_hnsw_build(
         pg_dsn, monkeypatch):
     """`MEMMAN_REINDEX_TIMEOUT=7` puts statement_timeout on the
