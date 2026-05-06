@@ -752,3 +752,204 @@ def make_edge(**overrides) -> Edge:
         }
     defaults.update(overrides)
     return Edge(**defaults)
+
+
+def insert_pending(db, insight_id: str, content: str = 'test content',
+                   **kw) -> None:
+    """Insert an insight with linked_at = NULL.
+
+    Helper for graph/link tests that need pending insights as fixtures.
+    Forwards extra kwargs to `make_insight` for content/category control.
+    """
+    from memman.store.node import insert_insight
+    insert_insight(db, make_insight(id=insight_id, content=content, **kw))
+    db._conn.execute(
+        'UPDATE insights SET linked_at = NULL WHERE id = ?',
+        (insight_id,))
+
+
+@pytest.fixture
+def queue_conn(tmp_path):
+    """Fresh queue.db connection for direct queue helper tests."""
+    from memman.queue import open_queue_db
+    conn = open_queue_db(str(tmp_path))
+    yield conn
+    conn.close()
+
+
+@pytest.fixture
+def fake_home(tmp_path, monkeypatch):
+    """Redirect HOME and `Path.home` to a tmp_path.
+
+    Used by setup-adjacent tests that touch `~/.memman` directly.
+    Does not pin `MEMMAN_DATA_DIR` (the autouse `_isolate_env` already
+    handles env scoping for unit tests). Tests that need both the
+    redirect and an explicit data-dir under the fake home should
+    construct it locally as `fake_home / 'memman'`.
+    """
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    return tmp_path
+
+
+def install_env_factory(data_dir, **keys: str | None) -> None:
+    """Seed an env file at `data_dir` with selected keys.
+
+    Replacement for the per-file `_write_keys` and `_install_env`
+    helpers. Pass key=value to write a row; pass key=None to omit it.
+    Recognized convenience aliases: ``openrouter`` -> OPENROUTER_API_KEY,
+    ``voyage`` -> VOYAGE_API_KEY. Other kwargs are written as-is.
+    """
+    from pathlib import Path as _Path
+
+    from memman import config
+    aliases = {
+        'openrouter': config.OPENROUTER_API_KEY,
+        'voyage': config.VOYAGE_API_KEY,
+        }
+    p = _Path(data_dir)
+    p.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for k, v in keys.items():
+        if v is None:
+            continue
+        real_key = aliases.get(k, k)
+        rows.append(f'{real_key}={v}')
+    if rows:
+        path = p / config.ENV_FILENAME
+        path.write_text('\n'.join(rows) + '\n')
+        path.chmod(0o600)
+    config.reset_file_cache()
+
+
+def fake_subprocess(monkeypatch, target_module, active: bool = True) -> None:
+    """Stub `subprocess` on `target_module` so tests don't shell out.
+
+    `target_module` is the module under test that imports
+    `subprocess` (typically `memman.setup.scheduler`). When `active`
+    is True, the fake `run` returns a `_FakeResult` with returncode 0
+    and stdout 'active'; when False, returncode 3 and stdout 'inactive'.
+    `_record_subprocess` in `test_scheduler_setup.py` is a richer
+    variant that captures call arguments; this helper covers the common
+    case where the test only needs subprocess to be quiet.
+    """
+    class _FakeResult:
+        returncode = 0 if active else 3
+        stdout = 'active' if active else 'inactive'
+        stderr = ''
+
+    fake = type('S', (), {
+        'run': staticmethod(lambda *a, **k: _FakeResult()),
+        'TimeoutExpired': TimeoutError,
+        })()
+    monkeypatch.setattr(target_module, 'subprocess', fake)
+
+
+def make_cli_runner(tmp_path, *, subdir: str = 'mm') -> tuple:
+    """Build a `(CliRunner, data_dir)` tuple.
+
+    Canonical replacement for the local `runner` fixtures duplicated
+    across test_cli.py, test_cli_new_groups.py, test_worker_runs.py,
+    test_provenance.py, test_doctor.py. Each call site can keep its
+    `runner` fixture as a 2-line wrapper, or take the tuple inline via
+    the `mm_runner` fixture below.
+    """
+    from click.testing import CliRunner
+    r = CliRunner()
+    data_dir = str(tmp_path / subdir)
+    Path(data_dir).mkdir(parents=True, exist_ok=True)
+    return r, data_dir
+
+
+@pytest.fixture
+def mm_runner(tmp_path):
+    """Default `(CliRunner, data_dir)` tuple for sqlite-only CLI tests.
+
+    Tests that need cross-backend parity use `cross_backend_runner`
+    instead. Local file-level `runner` fixtures should delegate here:
+    `def runner(mm_runner): return mm_runner`. Once a callsite no
+    longer needs a custom data_dir name, it can take `mm_runner`
+    directly and drop the local fixture.
+    """
+    return make_cli_runner(tmp_path)
+
+
+def invoke(runner_tuple, args):
+    """Invoke memman CLI with `--data-dir` prepended.
+
+    Shared replacement for the per-file `invoke` helpers.
+    """
+    from memman.cli import cli
+    r, data_dir = runner_tuple
+    return r.invoke(cli, ['--data-dir', data_dir] + args)
+
+
+def parse_remember(result, runner_tuple=None):
+    """Parse remember/replace output, returning a fact-shaped dict.
+
+    Modern `remember`/`replace` returns just `{action: queued,
+    queue_id, store}`. The autouse-drain runs the worker after the
+    invocation, so the new insight lives in the store DB tagged with
+    `source = queue:<queue_id>`. This helper looks it up so tests
+    that read `id`/`content`/`category`/`importance` after a remember
+    keep working. Postgres-aware: switches the lookup query when
+    `MEMMAN_BACKEND=postgres` is in the active env.
+    """
+    raw = json.loads(result.output)
+    if 'facts' in raw and raw['facts']:
+        fact = dict(raw['facts'][0])
+        fact['_raw'] = raw
+        return fact
+    if runner_tuple is None:
+        return raw
+    queue_id = raw.get('queue_id')
+    if queue_id is None:
+        return raw
+    _, data_dir = runner_tuple
+    from memman import config
+    from memman.store.db import read_active
+    name = raw.get('store') or read_active(data_dir) or 'default'
+    backend_kind = (config.get(config.BACKEND) or 'sqlite').lower()
+    if backend_kind == 'postgres':
+        import psycopg
+        from memman.store.postgres import _store_schema
+        schema = _store_schema(name)
+        sql = f"""
+select id, content, category, importance
+from {schema}.insights
+where source = %s
+  and deleted_at is null
+order by created_at
+"""
+        with psycopg.connect(config.require(config.PG_DSN)) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (f'queue:{queue_id}',))
+                rows = cur.fetchall()
+    else:
+        from memman.store.db import open_read_only, store_dir
+        sdir = store_dir(data_dir, name)
+        db = open_read_only(sdir)
+        sql = """
+select id, content, category, importance
+from insights
+where source = ?
+  and deleted_at is null
+order by created_at
+"""
+        try:
+            rows = db._query(sql, (f'queue:{queue_id}',)).fetchall()
+        finally:
+            db.close()
+    if not rows:
+        return raw
+    action = 'replace' if raw.get('replaced_id') else 'add'
+    fact = {
+        'id': rows[0][0],
+        'content': rows[0][1],
+        'category': rows[0][2],
+        'importance': rows[0][3],
+        'action': action,
+        'replaced_id': raw.get('replaced_id'),
+        '_raw': raw,
+        }
+    return fact

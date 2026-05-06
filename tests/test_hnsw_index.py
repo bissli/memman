@@ -13,8 +13,8 @@ import pytest
 from memman.embed.fingerprint import META_KEY, active_fingerprint
 from memman.search.recall import intent_aware_recall
 from memman.store.model import Insight
+from tests.conftest import EMBEDDING_DIM
 
-EMBEDDING_DIM = 512
 N_INSIGHTS = 10
 
 pytestmark = pytest.mark.postgres

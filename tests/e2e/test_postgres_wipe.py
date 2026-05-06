@@ -16,16 +16,9 @@ from memman.store.model import Insight
 from memman.store.postgres import PostgresCluster, PostgresQueueBackend
 from memman.store.postgres import _store_schema
 
+from tests.e2e.conftest import _safe
+
 pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
-
-
-def _safe(s: str) -> str:
-    out = ''.join(c if c.isalnum() else '_' for c in s).lower()
-    if out and not out[0].isalpha():
-        out = 'p_' + out
-    return out[:40] or 'p_test'
-
-
 def test_drop_store_purges_pending_queue_rows(pg_dsn, request):
     """drop_store removes both schema rows and queue.queue rows.
 

@@ -97,18 +97,9 @@ def test_compute_prompt_version_changes_with_prompt(monkeypatch):
     compute_prompt_version.cache_clear()
 
 
-@pytest.fixture
-def runner(tmp_path):
-    """CliRunner with --data-dir pointing to a fresh temp directory."""
-    r = CliRunner()
-    data_dir = str(tmp_path / 'mm')
-    Path(data_dir).mkdir(parents=True, exist_ok=True)
-    return r, data_dir
-
-
-def test_remember_stamps_provenance(runner):
+def test_remember_stamps_provenance(mm_runner):
     """`remember` stores rows with all three provenance columns set."""
-    r, data_dir = runner
+    r, data_dir = mm_runner
 
     def _one_fact(client, content):
         return [{'text': content, 'category': 'fact',

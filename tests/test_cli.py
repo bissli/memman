@@ -15,67 +15,13 @@ from memman.embed.fingerprint import active_fingerprint
 from memman.embed.vector import serialize_vector
 from memman.store.db import store_exists
 from memman.store.node import insert_insight, update_embedding
-from tests.conftest import make_insight
+from tests.conftest import invoke, make_insight, mm_runner, parse_remember
 
 
 @pytest.fixture
-def runner(tmp_path):
-    """CliRunner with --data-dir pointing to temp directory."""
-    r = CliRunner()
-    data_dir = str(tmp_path / 'memman_data')
-    pathlib.Path(data_dir).mkdir(exist_ok=True, parents=True)
-    return r, data_dir
-
-
-def invoke(runner_tuple, args):
-    """Helper to invoke CLI with data-dir."""
-    r, data_dir = runner_tuple
-    return r.invoke(cli, ['--data-dir', data_dir] + args)
-
-
-def parse_remember(result, runner_tuple=None):
-    """Parse remember/replace output to a fact-shaped dict.
-
-    Modern `remember`/`replace` returns just `{action: queued, queue_id,
-    store}`. The autouse-drain runs the worker, so the new insight is
-    in the store DB tagged with `source = queue:<id>`. Look it up so
-    tests that read `id`/`content` keep working.
-    """
-    raw = json.loads(result.output)
-    if 'facts' in raw and raw['facts']:
-        fact = dict(raw['facts'][0])
-        fact['_raw'] = raw
-        return fact
-    if runner_tuple is None:
-        return raw
-    queue_id = raw.get('queue_id')
-    if queue_id is None:
-        return raw
-    _, data_dir = runner_tuple
-    from memman.store.db import open_read_only, read_active, store_dir
-    name = raw.get('store') or read_active(data_dir) or 'default'
-    sdir = store_dir(data_dir, name)
-    db = open_read_only(sdir)
-    try:
-        rows = db._query(
-            'select id, content, category, importance from insights'
-            ' where source = ? and deleted_at is null'
-            ' order by created_at',
-            (f'queue:{queue_id}',)).fetchall()
-    finally:
-        db.close()
-    if not rows:
-        return raw
-    action = 'replace' if raw.get('replaced_id') else 'add'
-    return {
-        'id': rows[0][0],
-        'content': rows[0][1],
-        'category': rows[0][2],
-        'importance': rows[0][3],
-        'action': action,
-        'replaced_id': raw.get('replaced_id'),
-        '_raw': raw,
-        }
+def runner(mm_runner):
+    """CliRunner + data_dir tuple (delegates to conftest `mm_runner`)."""
+    return mm_runner
 
 
 def test_remember_basic(runner):

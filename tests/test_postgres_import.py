@@ -10,7 +10,6 @@ This is the merge-gate parity check for the bundled
 test-infrastructure-plus-SQL-extraction PR.
 """
 
-from __future__ import annotations
 
 import os
 import sqlite3
@@ -26,22 +25,22 @@ import psycopg
 import pytest
 from memman.store.db import _BASELINE_SCHEMA
 from pgvector.psycopg import register_vector
+from tests.conftest import EMBEDDING_DIM
 
 pytestmark = pytest.mark.postgres
 
-EMBED_DIM = 512
 N_ROWS = 60
 
 
 def _make_vec(seed: int) -> list[float]:
     """Deterministic 512-dim float vector for a given seed."""
     rng = np.random.default_rng(seed)
-    return rng.uniform(-1.0, 1.0, EMBED_DIM).astype(np.float64).tolist()
+    return rng.uniform(-1.0, 1.0, EMBEDDING_DIM).astype(np.float64).tolist()
 
 
 def _serialize_blob(vec: list[float]) -> bytes:
     """Encode as memman's float64 blob format (`<Nd`)."""
-    return struct.pack(f'<{EMBED_DIM}d', *vec)
+    return struct.pack(f'<{EMBEDDING_DIM}d', *vec)
 
 
 def _populate_sqlite_store(store_dir: Path) -> list[tuple[str, list[float]]]:

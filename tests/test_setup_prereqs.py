@@ -7,23 +7,11 @@ import pytest
 from click.testing import CliRunner
 from memman.cli import cli
 from memman.setup import claude as setup_claude
+from tests.conftest import install_env_factory
 
 
-def _write_keys(data_dir: str | Path,
-                openrouter: str | None = None,
-                voyage: str | None = None) -> None:
-    """Seed the env file at data_dir with selected mandatory secrets."""
-    from memman import config
-    p = Path(data_dir)
-    p.mkdir(parents=True, exist_ok=True)
-    rows = []
-    if openrouter is not None:
-        rows.append(f'OPENROUTER_API_KEY={openrouter}')
-    if voyage is not None:
-        rows.append(f'VOYAGE_API_KEY={voyage}')
-    if rows:
-        (p / config.ENV_FILENAME).write_text('\n'.join(rows) + '\n')
-    config.reset_file_cache()
+def _write_keys(data_dir, openrouter=None, voyage=None):
+    install_env_factory(data_dir, openrouter=openrouter, voyage=voyage)
 
 
 @pytest.fixture

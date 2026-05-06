@@ -15,7 +15,6 @@ Gated behind `@pytest.mark.postgres` so SQLite-only `make test`
 runs are unaffected.
 """
 
-from __future__ import annotations
 
 import random
 import threading

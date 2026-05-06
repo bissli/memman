@@ -18,16 +18,9 @@ from memman.store.errors import BackendError
 from memman.store.postgres import _assert_vector_dim_matches
 from memman.store.postgres import _ensure_baseline_schema, _store_schema
 
+from tests.e2e.conftest import _safe
+
 pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
-
-
-def _safe(s: str) -> str:
-    out = ''.join(c if c.isalnum() else '_' for c in s).lower()
-    if out and not out[0].isalpha():
-        out = 'p_' + out
-    return out[:40] or 'p_test'
-
-
 def test_baseline_schema_honors_caller_dim(pg_dsn, request):
     """`_ensure_baseline_schema(dim=N)` builds a vector(N) column.
 

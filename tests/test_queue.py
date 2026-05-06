@@ -9,14 +9,6 @@ from memman.queue import mark_done, mark_failed, open_queue_db, purge_done
 from memman.queue import retry_row, stats
 
 
-@pytest.fixture
-def queue_conn(tmp_path):
-    """Fresh queue DB in a temp dir."""
-    conn = open_queue_db(str(tmp_path))
-    yield conn
-    conn.close()
-
-
 def test_enqueue_returns_incrementing_id(queue_conn):
     """Enqueue returns monotonically increasing row ids.
     """

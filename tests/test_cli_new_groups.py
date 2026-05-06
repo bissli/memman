@@ -9,24 +9,14 @@ import json
 from pathlib import Path
 
 import pytest
-from click.testing import CliRunner
 from memman.cli import cli
 from memman.setup import scheduler as sch
+from tests.conftest import invoke, mm_runner
 
 
 @pytest.fixture
-def runner(tmp_path):
-    """CliRunner with --data-dir pointing to a fresh temp directory."""
-    r = CliRunner()
-    data_dir = str(tmp_path / 'mm')
-    Path(data_dir).mkdir(parents=True, exist_ok=True)
-    return r, data_dir
-
-
-def invoke(runner_tuple, args):
-    """Invoke the CLI with --data-dir prepended."""
-    r, data_dir = runner_tuple
-    return r.invoke(cli, ['--data-dir', data_dir] + args)
+def runner(mm_runner):
+    return mm_runner
 
 
 def _fake_run_success(*a, **kw):
@@ -39,16 +29,9 @@ def _fake_run_success(*a, **kw):
 
 
 def _patch_no_subprocess(monkeypatch, *, active: bool = True):
-    """Block real subprocess calls from scheduler.py."""
-    class _FakeResult:
-        returncode = 0 if active else 3
-        stdout = 'active' if active else 'inactive'
-        stderr = ''
-    fake = type('S', (), {
-        'run': staticmethod(lambda *a, **kw: _FakeResult()),
-        'TimeoutExpired': TimeoutError,
-        })()
-    monkeypatch.setattr(sch, 'subprocess', fake)
+    """Thin wrapper for shared `fake_subprocess` keyed on `sch`."""
+    from tests.conftest import fake_subprocess
+    fake_subprocess(monkeypatch, sch, active=active)
 
 
 def test_enrich_requires_pending(runner):

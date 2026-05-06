@@ -28,16 +28,9 @@ from memman.store.postgres import PostgresCluster
 from memman.store.postgres import _open_connection, _store_schema
 from tests.fixtures.postgres import wait_for
 
+from tests.e2e.conftest import _safe
+
 pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
-
-
-def _safe(s: str) -> str:
-    out = ''.join(c if c.isalnum() else '_' for c in s).lower()
-    if out and not out[0].isalpha():
-        out = 'p_' + out
-    return out[:40] or 'p_test'
-
-
 def test_hung_worker_releases_lock_within_keepalive_window(
         pg_dsn, request):
     """A dropped drain-lock connection releases the lock to a contender.

@@ -5,17 +5,10 @@ from datetime import datetime, timezone
 from memman.graph.engine import MAX_LINK_BATCH, link_pending
 from memman.graph.engine import reindex_auto_edges
 from memman.store.node import insert_insight
+from tests.conftest import insert_pending as _insert_pending
 from tests.conftest import make_insight
 
 OLD = datetime(2024, 1, 1, tzinfo=timezone.utc)
-
-
-def _insert_pending(db, insight_id, content='test content', **kw):
-    """Insert an insight with linked_at = NULL."""
-    insert_insight(db, make_insight(id=insight_id, content=content, **kw))
-    db._conn.execute(
-        'UPDATE insights SET linked_at = NULL WHERE id = ?',
-        (insight_id,))
 
 
 class TestLinkPending:

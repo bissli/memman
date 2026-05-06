@@ -16,14 +16,6 @@ from memman.queue import finish_worker_run, last_worker_run, open_queue_db
 from memman.queue import start_worker_run
 
 
-@pytest.fixture
-def queue_conn(tmp_path):
-    """Fresh queue.db connection for direct helper tests."""
-    conn = open_queue_db(str(tmp_path))
-    yield conn
-    conn.close()
-
-
 def test_start_finish_round_trip(queue_conn):
     """start/finish writes and updates exactly one row with counts.
     """
@@ -78,12 +70,8 @@ def test_last_worker_run_returns_most_recent(queue_conn):
 
 
 @pytest.fixture
-def runner(tmp_path):
-    """CliRunner with --data-dir pointing to a fresh temp directory."""
-    r = CliRunner()
-    data_dir = str(tmp_path / 'mm')
-    Path(data_dir).mkdir(parents=True, exist_ok=True)
-    return r, data_dir
+def runner(mm_runner):
+    return mm_runner
 
 
 def _invoke(runner_tuple, args):

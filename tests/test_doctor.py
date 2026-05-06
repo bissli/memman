@@ -556,12 +556,8 @@ class TestHardening:
         assert result['status'] == 'fail'
 
     @pytest.fixture
-    def runner(self, tmp_path):
-        """CliRunner with --data-dir pointing to a fresh temp directory."""
-        r = CliRunner()
-        data_dir = str(tmp_path / 'mm')
-        Path(data_dir).mkdir(parents=True, exist_ok=True)
-        return r, data_dir
+    def runner(self, mm_runner):
+        return mm_runner
 
     def test_doctor_text_mode_emits_colored_summary(self, runner):
         """`memman doctor --text` produces a human-readable report.

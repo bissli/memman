@@ -17,12 +17,12 @@ import pytest
 from memman.embed.fingerprint import META_KEY, active_fingerprint
 from memman.search.recall import intent_aware_recall
 from memman.store.model import Insight
+from tests.conftest import EMBEDDING_DIM
 
 N_TOPICS = 12
 INSIGHTS_PER_TOPIC = 5
 N_INSIGHTS = N_TOPICS * INSIGHTS_PER_TOPIC
 N_QUERIES = 20
-EMBEDDING_DIM = 512
 CORPUS_NOISE = 0.02
 QUERY_NOISE = 0.05
 PARITY_FLOOR = 4

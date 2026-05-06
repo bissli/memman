@@ -22,14 +22,6 @@ def _knobs(openrouter: str = 'sk-or-test',
 
 
 @pytest.fixture
-def fake_home(tmp_path, monkeypatch):
-    """Redirect HOME and scheduler dirs to a tmp_path."""
-    monkeypatch.setenv('HOME', str(tmp_path))
-    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
-    return tmp_path
-
-
-@pytest.fixture
 def fake_binary(monkeypatch):
     """Pretend memman is installed at a known path."""
     monkeypatch.setattr(sch, 'memman_binary_path',
@@ -37,20 +29,9 @@ def fake_binary(monkeypatch):
 
 
 def _no_subprocess(monkeypatch, active: bool = True):
-    """Suppress real subprocess calls for systemctl/launchctl tests."""
-    class _FakeResult:
-        returncode = 0 if active else 3
-        stdout = 'active' if active else 'inactive'
-        stderr = ''
-
-    def _fake_run(*args, **kwargs):
-        return _FakeResult()
-
-    fake = type('S', (), {
-        'run': staticmethod(_fake_run),
-        'TimeoutExpired': TimeoutError,
-        })()
-    monkeypatch.setattr(sch, 'subprocess', fake)
+    """Thin wrapper for shared `fake_subprocess` keyed on `sch`."""
+    from tests.conftest import fake_subprocess
+    fake_subprocess(monkeypatch, sch, active=active)
 
 
 def test_install_systemd_writes_timer_and_service(

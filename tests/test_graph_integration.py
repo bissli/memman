@@ -15,17 +15,18 @@ from memman.graph.engine import fast_edges
 from memman.graph.entity import create_entity_edges
 from memman.graph.semantic import create_semantic_edges
 from memman.graph.temporal import create_temporal_edge
-from tests.conftest import make_edge, make_insight
+from tests.conftest import EMBEDDING_DIM, make_edge, make_insight
 
 
 def _vec_512(*prefix: float) -> list[float]:
-    """Build a 512-dim vector for cross-backend embedding tests.
+    """Build a fixed-dim vector for cross-backend embedding tests.
 
     SQLite stores embeddings as BLOB and accepts any dimension; Postgres
-    uses `vector(512)` and rejects shorter vectors. Padding with zeros
-    preserves cosine similarity for the math the call sites assert on.
+    uses `vector(EMBEDDING_DIM)` and rejects shorter vectors. Padding
+    with zeros preserves cosine similarity for the math the call sites
+    assert on.
     """
-    return list(prefix) + [0.0] * (512 - len(prefix))
+    return list(prefix) + [0.0] * (EMBEDDING_DIM - len(prefix))
 
 # --- Temporal ---
 

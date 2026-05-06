@@ -18,16 +18,9 @@ import pytest
 from memman.embed.fingerprint import META_KEY, Fingerprint
 from memman.store.postgres import PostgresCluster
 
+from tests.e2e.conftest import _safe
+
 pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
-
-
-def _safe(s: str) -> str:
-    out = ''.join(c if c.isalnum() else '_' for c in s).lower()
-    if out and not out[0].isalpha():
-        out = 'p_' + out
-    return out[:40] or 'p_test'
-
-
 def test_stored_fingerprint_round_trips_through_backend_meta(
         pg_dsn, request):
     """Backend.meta.set + .get round-trips a Fingerprint JSON value."""

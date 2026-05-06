@@ -143,3 +143,28 @@ def _writable_mount_dir(parent: Path, group: str) -> Path:
     state = d / 'scheduler.state'
     state.write_text('started\n')
     return d
+
+
+def _safe(s: str) -> str:
+    """Sanitize a string into a Postgres-identifier-safe form.
+
+    Lower-case letters, digits, and underscores only; first character
+    forced to a letter. Used by every postgres e2e test to derive a
+    unique schema name from the test node id without colliding with
+    other tests.
+    """
+    safe = ''.join(c if c.isalnum() else '_' for c in s).lower()
+    if safe and not safe[0].isalpha():
+        safe = 'p_' + safe
+    return safe[:40] or 'p_test'
+
+
+def _pg_vec(seed: int, dim: int = 512) -> list[float]:
+    """Deterministic vector of length `dim` for Postgres e2e fixtures.
+
+    The arithmetic-progression form `(seed + i) * 0.001` produces
+    distinct vectors per seed while staying inside pgvector's value
+    range for any practical dim. Three e2e files used to inline a
+    byte-identical copy of this helper.
+    """
+    return [(seed + i) * 0.001 for i in range(dim)]

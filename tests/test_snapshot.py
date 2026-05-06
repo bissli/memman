@@ -102,16 +102,12 @@ def test_skipped_when_over_max_insights(tmp_db, tmp_path, monkeypatch):
     assert not snapshot_path(store_dir).exists()
 
 
-def test_recall_consumes_snapshot_when_present(tmp_path, monkeypatch):
+def test_recall_consumes_snapshot_when_present(tmp_path):
     """Recall must use the snapshot rather than calling SQL helpers.
 
     Patch the SQL helpers to raise; recall succeeds only because the
     snapshot path bypasses them.
     """
-    from memman.setup import scheduler as sched_mod
-    monkeypatch.setattr(sched_mod, 'read_state',
-                        lambda: sched_mod.STATE_STARTED)
-
     r = CliRunner()
     data_dir = str(tmp_path / 'data')
 
@@ -137,12 +133,8 @@ def test_recall_consumes_snapshot_when_present(tmp_path, monkeypatch):
     assert any('alpha' in c for c in contents)
 
 
-def test_recall_falls_back_when_snapshot_absent(tmp_path, monkeypatch):
+def test_recall_falls_back_when_snapshot_absent(tmp_path):
     """Deleting the snapshot file forces a clean fallback to SQL."""
-    from memman.setup import scheduler as sched_mod
-    monkeypatch.setattr(sched_mod, 'read_state',
-                        lambda: sched_mod.STATE_STARTED)
-
     r = CliRunner()
     data_dir = str(tmp_path / 'data')
     r.invoke(cli, ['--data-dir', data_dir, 'remember', 'gamma topic'])

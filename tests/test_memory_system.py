@@ -8,94 +8,19 @@ import json
 
 import pytest
 from memman.cli import cli
+from tests.conftest import invoke, parse_remember
 
 
 @pytest.fixture
 def runner(cross_backend_runner):
     """CliRunner parametrized over `{sqlite, postgres}`.
 
-    Delegates to `cross_backend_runner` (Phase 4b slice 4) so each of
-    the 53 black-box CLI tests in this module runs against both
-    backends. Postgres invocations carry `pytest.mark.postgres` and
-    are gated on `psycopg + testcontainers` being importable.
+    Delegates to `cross_backend_runner` so each of the 53 black-box CLI
+    tests in this module runs against both backends. Postgres
+    invocations carry `pytest.mark.postgres` and are gated on
+    `psycopg + testcontainers` being importable.
     """
     return cross_backend_runner
-
-
-def invoke(runner_tuple, args):
-    """Invoke CLI with data-dir."""
-    r, data_dir = runner_tuple
-    return r.invoke(cli, ['--data-dir', data_dir] + args)
-
-
-def parse_remember(result, runner_tuple=None):
-    """Parse remember/replace output, returning a fact-shaped dict.
-
-    Modern `remember`/`replace` returns just `{action: queued,
-    queue_id, store}`. The autouse-drain runs the worker after the
-    invocation, so the new insight lives in the store DB tagged with
-    `source = queue:<queue_id>`. This helper looks it up so tests
-    that read `id`/`content`/`category`/`importance` after a remember
-    keep working.
-    """
-    raw = json.loads(result.output)
-    if 'facts' in raw and raw['facts']:
-        fact = dict(raw['facts'][0])
-        fact['_raw'] = raw
-        return fact
-    if runner_tuple is None:
-        return raw
-    queue_id = raw.get('queue_id')
-    if queue_id is None:
-        return raw
-    _, data_dir = runner_tuple
-    from memman import config
-    from memman.store.db import read_active
-    name = raw.get('store') or read_active(data_dir) or 'default'
-    backend_kind = (config.get(config.BACKEND) or 'sqlite').lower()
-    if backend_kind == 'postgres':
-        import psycopg
-        from memman.store.postgres import _store_schema
-        schema = _store_schema(name)
-        sql = f"""
-select id, content, category, importance
-from {schema}.insights
-where source = %s
-  and deleted_at is null
-order by created_at
-"""
-        with psycopg.connect(config.require(config.PG_DSN)) as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, (f'queue:{queue_id}',))
-                rows = cur.fetchall()
-    else:
-        from memman.store.db import open_read_only, store_dir
-        sdir = store_dir(data_dir, name)
-        db = open_read_only(sdir)
-        sql = """
-select id, content, category, importance
-from insights
-where source = ?
-  and deleted_at is null
-order by created_at
-"""
-        try:
-            rows = db._query(sql, (f'queue:{queue_id}',)).fetchall()
-        finally:
-            db.close()
-    if not rows:
-        return raw
-    action = 'replace' if raw.get('replaced_id') else 'add'
-    fact = {
-        'id': rows[0][0],
-        'content': rows[0][1],
-        'category': rows[0][2],
-        'importance': rows[0][3],
-        'action': action,
-        'replaced_id': raw.get('replaced_id'),
-        '_raw': raw,
-        }
-    return fact
 
 
 def remember(runner_tuple, content, no_reconcile=False, **flags):

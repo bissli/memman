@@ -18,7 +18,7 @@ import pytest
 from memman.embed.fingerprint import META_KEY, active_fingerprint
 from memman.search.recall import intent_aware_recall
 from memman.store.model import Insight
-from tests.conftest import make_edge, make_insight
+from tests.conftest import EMBEDDING_DIM, make_edge, make_insight
 
 OLD = datetime(2024, 1, 1, tzinfo=timezone.utc)
 RECENT = datetime.now(timezone.utc)
@@ -403,7 +403,6 @@ class TestEntityCaseInsensitive:
 
 _N_TOPICS = 20
 _INSIGHTS_PER_TOPIC = 3
-_EMBEDDING_DIM = 512
 _NOISE_SCALE = 0.02
 _RECALL_FLOOR = 0.95
 _BACKEND_AGREEMENT_TOLERANCE = 0.05
@@ -420,7 +419,7 @@ def _unit(vec: list) -> list:
 def _gaussian_unit(seed: int) -> list:
     """Deterministic 512-dim unit Gaussian vector."""
     rng = random.Random(seed)
-    return _unit([rng.gauss(0.0, 1.0) for _ in range(_EMBEDDING_DIM)])
+    return _unit([rng.gauss(0.0, 1.0) for _ in range(EMBEDDING_DIM)])
 
 
 def _perturb(vec: list, seed: int) -> list:
