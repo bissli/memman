@@ -5,11 +5,6 @@ from memman.graph.engine import reindex_auto_edges
 from tests.conftest import make_edge, make_insight
 
 
-def test_constants_hash_deterministic():
-    """Calling twice returns the same value."""
-    assert compute_constants_hash() == compute_constants_hash()
-
-
 def test_constants_hash_changes_on_entity_limit(monkeypatch):
     """Changing MAX_ENTITY_LINKS produces a different hash."""
     original = compute_constants_hash()

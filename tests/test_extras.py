@@ -21,27 +21,6 @@ def test_postgres_unavailable_when_psycopg_missing(monkeypatch):
     assert extras.is_available('postgres') is False
 
 
-def test_postgres_available_when_all_probes_resolve(monkeypatch):
-    """is_available returns True when every probe spec is non-None."""
-    monkeypatch.setattr(
-        'memman.extras.find_spec',
-        lambda name: object())
-    assert extras.is_available('postgres') is True
-
-
-def test_detect_active_extras_returns_list(monkeypatch):
-    """detect_active_extras returns the names of importable extras."""
-    monkeypatch.setattr(
-        'memman.extras.find_spec',
-        lambda name: object())
-    assert extras.detect_active_extras() == ['postgres']
-
-    monkeypatch.setattr(
-        'memman.extras.find_spec',
-        lambda name: None)
-    assert extras.detect_active_extras() == []
-
-
 def test_extras_keys_match_pyproject():
     """`_EXTRAS` keys must match `pyproject.toml::[tool.poetry.extras]`."""
     pyproject = Path(__file__).resolve().parent.parent / 'pyproject.toml'

@@ -95,16 +95,6 @@ class TestVoyageClient:
         monkeypatch.setenv('VOYAGE_API_KEY', 'test-key-123')
         return VoyageClient()
 
-    def test_default_endpoint(self):
-        """Client uses default Voyage endpoint."""
-        client = VoyageClient()
-        assert client.endpoint == DEFAULT_ENDPOINT
-
-    def test_default_model(self):
-        """Client uses voyage-3-lite model."""
-        client = VoyageClient()
-        assert client.model == DEFAULT_MODEL
-
     def test_api_key_from_env_file(self, env_file):
         """Client reads VOYAGE_API_KEY from the env file."""
         env_file('VOYAGE_API_KEY', 'real-test-key')
@@ -210,10 +200,6 @@ class TestVoyageClient:
         """Unavailable message mentions VOYAGE_API_KEY."""
         client = VoyageClient()
         assert 'VOYAGE_API_KEY' in client.unavailable_message()
-
-    def test_embedding_dim(self):
-        """Voyage embedding dimension is 512."""
-        assert EMBEDDING_DIM == 512
 
 
 def _seed_openrouter_keys(env_file):

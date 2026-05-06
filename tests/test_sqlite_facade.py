@@ -110,14 +110,6 @@ def test_readonly_context_yields_separate_backend(backend):
         assert ro.nodes.get('ro').content == 'read me'
 
 
-def test_recall_session_yields_session(backend):
-    """recall_session() yields a SqliteRecallSession."""
-    backend.nodes.insert(Insight(id='rs', content='recall'))
-    with backend.recall_session() as session:
-        assert session is not None
-        assert session.snapshot is None or session.snapshot is not None
-
-
 def test_cluster_open_returns_sqlite_backend(tmp_path):
     """SqliteCluster.open(store=, data_dir=) returns a SqliteBackend.
     """

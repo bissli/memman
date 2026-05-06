@@ -3,7 +3,7 @@
 import pytest
 from memman.search.intent import detect_intent, get_weights, intent_from_string
 from memman.search.keyword import keyword_search, tokenize
-from memman.search.recall import RECALL_HINTS, RERANK_WEIGHTS
+from memman.search.recall import RERANK_WEIGHTS
 from memman.search.recall import get_traversal_params, intent_aware_recall
 from memman.store.model import Insight
 from tests.conftest import make_insight
@@ -191,8 +191,8 @@ class TestRecallRanking:
         assert why_beam > gen_beam
 
     def test_get_traversal_params_unknown_fallback(self):
-        """Unknown intent falls back to GENERAL."""
-        assert get_traversal_params('UNKNOWN') == get_traversal_params('GENERAL')
+        """Unknown intent falls back to GENERAL = (10, 4, 500)."""
+        assert get_traversal_params('UNKNOWN') == (10, 4, 500)
 
     def test_rerank_weights_all_intents_present(self):
         """Weight dict covers all four intents."""
@@ -226,15 +226,21 @@ class TestRecallRanking:
 
     def test_hint_field_by_intent(self, backend):
         """Each intent produces its expected hint string."""
+        expected_hints = {
+            'WHY': 'Trace the causal chain: earlier results cause later ones',
+            'WHEN': 'Results are newest-first: reconstruct the timeline',
+            'ENTITY': 'Describe the entity using evidence across these memories',
+            'GENERAL': 'Synthesize key points across these related memories',
+            }
         backend.nodes.insert(make_insight(
             id='meta-any',
             content='test content for recall meta fields'))
-        for intent in ['WHY', 'WHEN', 'ENTITY', 'GENERAL']:
+        for intent, expected in expected_hints.items():
             result = intent_aware_recall(
                 backend, query='test content recall',
                 query_vec=None, query_entities=[],
                 limit=5, intent_override=intent)
-            assert result['meta']['hint'] == RECALL_HINTS[intent]
+            assert result['meta']['hint'] == expected
 
     def test_ordering_field_by_intent(self, backend):
         """Ordering field matches intent-specific sort strategy."""

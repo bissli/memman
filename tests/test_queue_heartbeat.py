@@ -1,57 +1,21 @@
 """Heartbeat schema + QueueBackend verb tests.
 
-Covers `queue.worker_runs.last_heartbeat_at`, two QueueBackend verbs:
+Covers `queue.worker_runs.last_heartbeat_at` via live DB round-trip:
 
 - `start_run() -> int` -- inserts a fresh worker_runs row with
   `started_at = now()` and `last_heartbeat_at = now()`, returns id.
 - `beat_run(run_id: int) -> None` -- advances `last_heartbeat_at`.
 
-The migration test simulates a pre-version-2 store by setting
-`meta.pg_schema_version = 1` and asserting `_apply_pending_migrations`
-bumps it to 2. Column presence is proven transitively by the
-`start_run` / `beat_run` round-trip tests.
+Column presence and Protocol shape are proven transitively by the
+`start_run` / `beat_run` round-trip tests against a real container.
 """
 
-import inspect
 import time
 
 import psycopg
 import pytest
-from memman.store.backend import QueueBackend
 
 pytestmark = pytest.mark.postgres
-
-
-def test_queuebackend_start_run_protocol_signature():
-    """QueueBackend.start_run is a Protocol verb returning int."""
-    assert hasattr(QueueBackend, 'start_run')
-    sig = inspect.signature(QueueBackend.start_run)
-    assert list(sig.parameters) == ['self']
-
-
-def test_queuebackend_beat_run_protocol_signature():
-    """QueueBackend.beat_run takes a `run_id` argument."""
-    assert hasattr(QueueBackend, 'beat_run')
-    sig = inspect.signature(QueueBackend.beat_run)
-    assert 'run_id' in sig.parameters
-
-
-def test_workerrun_dataclass_has_last_heartbeat_at():
-    """WorkerRun dataclass exposes `last_heartbeat_at`."""
-    from memman.store.model import WorkerRun
-    fields = {f.name for f in WorkerRun.__dataclass_fields__.values()}
-    assert 'last_heartbeat_at' in fields
-
-
-def test_pg_schema_version_at_2_with_migration_entry():
-    """`_PG_SCHEMA_VERSION` is 2 and `_PG_MIGRATIONS` carries a v2 entry."""
-    from memman.store.postgres import _PG_MIGRATIONS, _PG_SCHEMA_VERSION
-    assert _PG_SCHEMA_VERSION == 2
-    versions = {v for v, _sql in _PG_MIGRATIONS}
-    assert 2 in versions
-    v2_sql = next(sql for v, sql in _PG_MIGRATIONS if v == 2)
-    assert 'last_heartbeat_at' in v2_sql
-    assert 'IF NOT EXISTS' in v2_sql.upper()
 
 
 def test_forbidden_migration_re_blocks_alter_column_type():

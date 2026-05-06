@@ -14,15 +14,6 @@ from tests.conftest import make_insight
 # --- Fix 1: ANCHOR_TOP_K ---
 
 
-class TestAnchorTopK:
-    """ANCHOR_TOP_K increased from 20 to 30."""
-
-    def test_anchor_constant_is_30(self):
-        """Verify ANCHOR_TOP_K is 30."""
-        from memman.search.recall import ANCHOR_TOP_K
-        assert ANCHOR_TOP_K == 30
-
-
 # --- Fix 2: Entity Normalization ---
 
 
@@ -157,12 +148,7 @@ class TestEnrichmentMergeCaseInsensitive:
 
 
 class TestTemporalConstants:
-    """MAX_PROXIMITY_EDGES reduced from 10 to 5."""
-
-    def test_max_proximity_edges_is_5(self):
-        """Verify constant is 5."""
-        from memman.graph.temporal import MAX_PROXIMITY_EDGES
-        assert MAX_PROXIMITY_EDGES == 5
+    """MAX_PROXIMITY_EDGES cap is enforced."""
 
     def test_proximity_capped_at_5(self, tmp_db, tmp_backend):
         """Exactly 5 proximity neighbors connected when 8 candidates qualify.

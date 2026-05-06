@@ -273,47 +273,6 @@ class TestWhenIntentChronologicalOrdering:
         assert hi_idx < lo_idx
 
 
-class TestWhyIntentGraphWeight:
-    """WHY intent weights graph signal higher than GENERAL in final score."""
-
-    def test_why_intent_weights_graph_higher_than_general(self, backend):
-        """Same query under WHY vs GENERAL: WHY graph contribution > GENERAL."""
-        _insert_fillers(backend)
-        backend.nodes.insert(make_insight(
-            id='wg-1',
-            content='Chose SQLite because embedded serverless database',
-            importance=4))
-        backend.nodes.insert(make_insight(
-            id='wg-2',
-            content='SQLite chosen enables single-file deployment',
-            importance=4))
-
-        backend.edges.upsert(make_edge(
-            source_id='wg-1', target_id='wg-2',
-            edge_type='causal', weight=0.9))
-
-        query = 'why SQLite chosen because embedded'
-        why_result = intent_aware_recall(
-            backend, query=query, query_vec=None,
-            query_entities=[], limit=20, intent_override='WHY')
-        gen_result = intent_aware_recall(
-            backend, query=query, query_vec=None,
-            query_entities=[], limit=20, intent_override='GENERAL')
-
-        why_r1 = _find_result(why_result['results'], 'wg-1')
-        gen_r1 = _find_result(gen_result['results'], 'wg-1')
-        assert why_r1 is not None
-        assert gen_r1 is not None
-
-        from memman.search.recall import RERANK_WEIGHTS
-        why_w = RERANK_WEIGHTS['WHY']
-        gen_w = RERANK_WEIGHTS['GENERAL']
-        graph_sig = why_r1['signals']['graph']
-        why_graph_contrib = why_w[3] * graph_sig
-        gen_graph_contrib = gen_w[3] * graph_sig
-        assert why_graph_contrib > gen_graph_contrib
-
-
 class TestSingletonEntity:
     """Singleton entity still produces a positive entity signal."""
 

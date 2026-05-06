@@ -1,7 +1,7 @@
 """Tests for memman.rerank.voyage and the rerank provider registry."""
 
 import pytest
-from memman.rerank import RERANKERS, Reranker, get_client, voyage
+from memman.rerank import RERANKERS, get_client, voyage
 
 
 class TestProviderRegistry:
@@ -25,13 +25,6 @@ class TestProviderRegistry:
         env_file('MEMMAN_RERANK_PROVIDER', 'nosuch')
         with pytest.raises(ConfigError, match='nosuch'):
             get_client()
-
-    def test_protocol_attributes(self):
-        """Reranker Protocol declares name + model + the three methods.
-        """
-        assert hasattr(Reranker, 'rerank')
-        assert hasattr(Reranker, 'available')
-        assert hasattr(Reranker, 'unavailable_message')
 
 
 class TestVoyageClient:

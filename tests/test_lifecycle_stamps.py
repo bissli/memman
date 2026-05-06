@@ -9,22 +9,14 @@ from memman.store.node import reset_for_rebuild, stamp_enriched, stamp_linked
 from tests.conftest import make_insight
 
 
-class TestStampLinked:
-    """stamp_linked sets linked_at timestamp."""
-
-    def test_sets_timestamp(self, tmp_db):
-        """Insight's linked_at is set to the given timestamp."""
-        insert_insight(tmp_db, make_insight(id='sl-1', content='a'))
-        ts = format_timestamp(datetime(2025, 6, 1, tzinfo=timezone.utc))
-        stamp_linked(tmp_db, 'sl-1', ts)
-        row = tmp_db._query(
-            'SELECT linked_at FROM insights WHERE id = ?',
-            ('sl-1',)).fetchone()
-        assert row[0] == ts
-
-
 class TestStampEnriched:
-    """stamp_enriched sets enriched_at timestamp."""
+    """stamp_enriched sets enriched_at timestamp.
+
+    Only the enriched_at variant stays as a column-correctness check;
+    stamp_linked is covered transitively by `TestGetPendingLinkIds`
+    (a stamp_linked column-name typo would surface there as a row
+    failing to disappear from the pending list).
+    """
 
     def test_sets_timestamp(self, tmp_db):
         """Insight's enriched_at is set to the given timestamp."""
