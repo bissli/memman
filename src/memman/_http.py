@@ -8,9 +8,12 @@ debug tracing relies on per-subsystem identifiability and we don't
 want a 429 from one provider to wedge another.
 """
 
+import logging
 import time
 
 import httpx
+
+logger = logging.getLogger('memman')
 
 _SESSIONS: dict[str, httpx.Client] = {}
 
@@ -33,8 +36,8 @@ def reset_sessions() -> None:
     for client in _SESSIONS.values():
         try:
             client.close()
-        except Exception:
-            pass
+        except httpx.HTTPError as exc:
+            logger.debug(f'http session close failed: {exc}')
     _SESSIONS.clear()
 
 

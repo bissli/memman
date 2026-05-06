@@ -56,22 +56,16 @@ def create_entity_edges(
             if count >= MAX_TOTAL_ENTITY_EDGES:
                 break
             if not dry_run:
-                try:
-                    backend.edges.upsert(Edge(
-                        source_id=insight.id, target_id=target_id,
-                        edge_type='entity', weight=weight,
-                        metadata={'entity': entity}))
-                except Exception:
-                    pass
+                backend.edges.upsert(Edge(
+                    source_id=insight.id, target_id=target_id,
+                    edge_type='entity', weight=weight,
+                    metadata={'entity': entity}))
             count += 1
             if not dry_run:
-                try:
-                    backend.edges.upsert(Edge(
-                        source_id=target_id, target_id=insight.id,
-                        edge_type='entity', weight=weight,
-                        metadata={'entity': entity}))
-                except Exception:
-                    pass
+                backend.edges.upsert(Edge(
+                    source_id=target_id, target_id=insight.id,
+                    edge_type='entity', weight=weight,
+                    metadata={'entity': entity}))
             count += 1
 
     return count

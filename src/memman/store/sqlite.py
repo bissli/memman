@@ -646,6 +646,12 @@ class SqliteBackend(Backend):
     def close(self) -> None:
         self._db.close()
 
+    def __enter__(self) -> 'SqliteBackend':
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
 
 def open_ro_db(sdir: str) -> DB:
     """Open the SQLite store at `sdir` in read-only mode.

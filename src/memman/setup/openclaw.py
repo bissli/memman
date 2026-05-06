@@ -1,11 +1,14 @@
 """OpenClaw integration: install, uninstall."""
 
 import json
+import logging
 import os
 import shutil
 from pathlib import Path
 
 from memman.setup._atomic import atomic_write_secure
+
+logger = logging.getLogger('memman')
 from memman.setup.deploy import symlink_asset
 from memman.setup.prompt import status_error, status_ok, status_updated
 from memman.setup.settings import remove_if_empty
@@ -117,8 +120,8 @@ def openclaw_uninstall(config_dir: str) -> list[Exception]:
             cfg['plugins'] = plugins
             content = json.dumps(cfg, indent=2) + '\n'
             atomic_write_secure(Path(cfg_path), content)
-    except Exception:
-        pass
+    except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+        logger.debug(f'openclaw.json cleanup skipped: {exc}')
 
     remove_if_empty(config_dir)
     return errs

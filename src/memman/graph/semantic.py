@@ -49,22 +49,16 @@ def create_semantic_edges(
             'cosine': format_float(sim),
             }
         if not dry_run:
-            try:
-                backend.edges.upsert(Edge(
-                    source_id=insight.id, target_id=eid,
-                    edge_type='semantic', weight=sim,
-                    metadata=meta))
-            except Exception:
-                pass
+            backend.edges.upsert(Edge(
+                source_id=insight.id, target_id=eid,
+                edge_type='semantic', weight=sim,
+                metadata=meta))
         count += 1
         if not dry_run:
-            try:
-                backend.edges.upsert(Edge(
-                    source_id=eid, target_id=insight.id,
-                    edge_type='semantic', weight=sim,
-                    metadata=meta))
-            except Exception:
-                pass
+            backend.edges.upsert(Edge(
+                source_id=eid, target_id=insight.id,
+                edge_type='semantic', weight=sim,
+                metadata=meta))
         count += 1
 
     return count

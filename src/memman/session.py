@@ -68,8 +68,7 @@ def active_store(
     from memman.store.factory import open_cluster
 
     cluster = open_cluster()
-    backend = cluster.open(store=store, data_dir=data_dir)
-    try:
+    with cluster.open(store=store, data_dir=data_dir) as backend:
         if not unchecked:
             reindex_if_constants_changed(backend)
             try:
@@ -79,8 +78,3 @@ def active_store(
             except (EmbedFingerprintError, ConfigError) as exc:
                 raise click.ClickException(str(exc)) from exc
         yield backend
-    finally:
-        try:
-            backend.close()
-        except Exception:
-            pass

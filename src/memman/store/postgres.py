@@ -238,10 +238,11 @@ def _connection(
     try:
         yield conn
     finally:
+        import psycopg as _psycopg
         try:
             conn.close()
-        except Exception:
-            pass
+        except _psycopg.Error as exc:
+            logger.debug(f'pg connection close failed: {exc}')
 
 
 def _datetime_or_none(v: Any) -> datetime | None:
@@ -1565,10 +1566,12 @@ class PostgresRecallSession(RecallSession):
             except Exception as e:
                 logger.warning(f'search_path reset failed: {e}')
             if self._owns_conn:
+                import psycopg as _psycopg
                 try:
                     self._conn.close()
-                except Exception:
-                    pass
+                except _psycopg.Error as exc:
+                    logger.debug(
+                        f'pg connection close failed: {exc}')
             self._conn = None
 
     def close(self) -> None:
@@ -1885,10 +1888,17 @@ where table_schema = %s and table_name = %s
 
     def close(self) -> None:
         if self._owns_conn and self._conn is not None:
+            import psycopg as _psycopg
             try:
                 self._conn.close()
-            except Exception:
-                pass
+            except _psycopg.Error as exc:
+                logger.debug(f'pg connection close failed: {exc}')
+
+    def __enter__(self) -> 'PostgresBackend':
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
 
 
 def _resolve_active_dim() -> int:
@@ -1905,7 +1915,7 @@ def _resolve_active_dim() -> int:
         active = active_fingerprint()
         if active.dim > 0:
             return int(active.dim)
-    except Exception as exc:
+    except (ConfigError, ImportError) as exc:
         logger.warning(
             f'active fingerprint resolution failed; '
             f'using {EMBEDDING_DIM}-dim default: {exc}')

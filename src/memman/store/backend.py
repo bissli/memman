@@ -29,7 +29,7 @@ Distributed-shaping commitments baked into this Protocol surface:
 import re
 from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, Self, runtime_checkable
 
 from memman.store.errors import ConfigError
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
@@ -582,6 +582,14 @@ class Backend(Protocol):
 
     def close(self) -> None:
         """Close the backend's connection."""
+        ...
+
+    def __enter__(self) -> Self:
+        """Return self so `with cluster.open(...) as backend:` works."""
+        ...
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        """Close the backend on context exit."""
         ...
 
 

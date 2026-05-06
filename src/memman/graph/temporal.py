@@ -30,22 +30,16 @@ def create_temporal_edge(backend: Backend, insight: Insight) -> int:
     prev = backend.nodes.get_latest_by_source(
         source=insight.source, exclude_id=insight.id)
     if prev is not None:
-        try:
-            backend.edges.upsert(Edge(
-                source_id=prev.id, target_id=insight.id,
-                edge_type='temporal', weight=1.0,
-                metadata={'sub_type': 'backbone', 'direction': 'precedes'}))
-            count += 1
-        except Exception:
-            pass
-        try:
-            backend.edges.upsert(Edge(
-                source_id=insight.id, target_id=prev.id,
-                edge_type='temporal', weight=1.0,
-                metadata={'sub_type': 'backbone', 'direction': 'succeeds'}))
-            count += 1
-        except Exception:
-            pass
+        backend.edges.upsert(Edge(
+            source_id=prev.id, target_id=insight.id,
+            edge_type='temporal', weight=1.0,
+            metadata={'sub_type': 'backbone', 'direction': 'precedes'}))
+        count += 1
+        backend.edges.upsert(Edge(
+            source_id=insight.id, target_id=prev.id,
+            edge_type='temporal', weight=1.0,
+            metadata={'sub_type': 'backbone', 'direction': 'succeeds'}))
+        count += 1
 
     recent = backend.nodes.get_recent_in_window(
         exclude_id=insight.id, window_hours=TEMPORAL_WINDOW_HOURS,
@@ -71,21 +65,15 @@ def create_temporal_edge(backend: Backend, insight: Insight) -> int:
             'sub_type': 'proximity',
             'hours_diff': f'{hours_diff:.2f}',
             }
-        try:
-            backend.edges.upsert(Edge(
-                source_id=insight.id, target_id=near.id,
-                edge_type='temporal', weight=weight,
-                metadata=meta))
-            count += 1
-        except Exception:
-            pass
-        try:
-            backend.edges.upsert(Edge(
-                source_id=near.id, target_id=insight.id,
-                edge_type='temporal', weight=weight,
-                metadata=meta))
-            count += 1
-        except Exception:
-            pass
+        backend.edges.upsert(Edge(
+            source_id=insight.id, target_id=near.id,
+            edge_type='temporal', weight=weight,
+            metadata=meta))
+        count += 1
+        backend.edges.upsert(Edge(
+            source_id=near.id, target_id=insight.id,
+            edge_type='temporal', weight=weight,
+            metadata=meta))
+        count += 1
 
     return count

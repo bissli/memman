@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
 from memman.embed import get_client
 from memman.embed.vector import cosine_similarity
 from memman.exceptions import EmbedCredentialError
@@ -319,8 +320,9 @@ def _plan_fact(
         fact_vec = ec.embed(fact_text)
     except EmbedCredentialError:
         raise
-    except Exception:
-        pass
+    except (httpx.HTTPError, RuntimeError) as exc:
+        logger.warning(
+            f'fact embed failed; row stored without vector: {exc}')
 
     action = 'ADD'
     target_id: str | None = None
@@ -402,8 +404,10 @@ def _plan_fact(
             embed_vec = ec.embed(effective_text)
         except EmbedCredentialError:
             raise
-        except Exception:
-            pass
+        except (httpx.HTTPError, RuntimeError) as exc:
+            logger.warning(
+                f'merged embed failed; falling back to fact vector:'
+                f' {exc}')
 
     if action == 'NONE':
         return FactPlan(
@@ -559,10 +563,7 @@ def _apply_plan(
         backend, fi, embed_cache)
 
     for edge in plan.causal_edges:
-        try:
-            backend.edges.upsert(edge)
-        except Exception:
-            pass
+        backend.edges.upsert(edge)
 
     if (plan.action in {'update', 'replace'}
             and plan.target_id and not target_already_gone):

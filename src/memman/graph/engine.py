@@ -131,10 +131,7 @@ def link_pending(
 
             backend.edges.delete_auto_for_node(insight.id, 'causal')
             for edge in causal_edges:
-                try:
-                    backend.edges.upsert(edge)
-                except Exception:
-                    pass
+                backend.edges.upsert(edge)
 
             backend.nodes.stamp_linked(insight_id)
             if enrichment:

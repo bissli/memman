@@ -1,9 +1,12 @@
 """Environment detection for LLM CLI integrations."""
 
+import logging
 import os
 import shutil
 import subprocess
 from pathlib import Path
+
+logger = logging.getLogger('memman')
 
 
 def home_dir() -> str:
@@ -51,8 +54,9 @@ def _detect_claude() -> dict:
                 [env['bin_path'], '--version'],
                 timeout=5, stderr=subprocess.DEVNULL)
             env['version'] = clean_version(out.decode().strip())
-        except Exception:
-            pass
+        except (subprocess.SubprocessError, OSError) as exc:
+            logger.debug(
+                f'version probe failed for {env["bin_path"]}: {exc}')
 
     return env
 
@@ -89,8 +93,9 @@ def _detect_openclaw() -> dict:
                 [env['bin_path'], '--version'],
                 timeout=5, stderr=subprocess.DEVNULL)
             env['version'] = clean_version(out.decode().strip())
-        except Exception:
-            pass
+        except (subprocess.SubprocessError, OSError) as exc:
+            logger.debug(
+                f'version probe failed for {env["bin_path"]}: {exc}')
 
     return env
 
