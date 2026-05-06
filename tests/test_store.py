@@ -616,6 +616,18 @@ class TestGetAllActiveInsights:
         assert len(all_active) == 2
 
 
+class TestGetMany:
+    """`NodeStore.get_many` hydrates insights in input order, drops misses."""
+
+    def test_get_many_hydrates_in_order(self, backend):
+        """`get_many` returns insights in input order, drops absent ids."""
+        from memman.store.model import Insight
+        backend.nodes.insert(Insight(id='gm-1', content='one'))
+        backend.nodes.insert(Insight(id='gm-2', content='two'))
+        insights = backend.nodes.get_many(['gm-2', 'absent', 'gm-1'])
+        assert [i.id for i in insights] == ['gm-2', 'gm-1']
+
+
 # --- IncrementAccessCount ---
 
 

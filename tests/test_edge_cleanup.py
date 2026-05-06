@@ -228,3 +228,68 @@ class TestTemporalProximity:
             metadata={'sub_type': 'proximity'}))
         count = count_low_weight_temporal_proximity(tmp_db, 0.1)
         assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# get_neighborhood
+# ---------------------------------------------------------------------------
+
+
+def _seed_neighborhood(backend) -> None:
+    """Build a 5-node graph: a -> b -> c (semantic), a -> d (causal),
+    plus an isolated e.
+    """
+    from memman.store.model import Edge, Insight
+    for i, content in (('a', 'A'), ('b', 'B'), ('c', 'C'),
+                       ('d', 'D'), ('e', 'E')):
+        backend.nodes.insert(Insight(id=i, content=content))
+    backend.edges.upsert(Edge(
+        source_id='a', target_id='b', edge_type='semantic',
+        weight=1.0))
+    backend.edges.upsert(Edge(
+        source_id='b', target_id='c', edge_type='semantic',
+        weight=1.0))
+    backend.edges.upsert(Edge(
+        source_id='a', target_id='d', edge_type='causal',
+        weight=1.0))
+
+
+class TestGetNeighborhood:
+    """`EdgeStore.get_neighborhood` bounded BFS traversal."""
+
+    def test_depth_one(self, backend):
+        """depth=1 reaches the immediate neighbors of `a`."""
+        _seed_neighborhood(backend)
+        triples = backend.edges.get_neighborhood('a', depth=1)
+        nbrs = {nid for nid, _hop, _etype in triples}
+        assert nbrs == {'b', 'd'}
+
+    def test_depth_two(self, backend):
+        """depth=2 reaches `c` via `b`."""
+        _seed_neighborhood(backend)
+        triples = backend.edges.get_neighborhood('a', depth=2)
+        nbrs = {nid for nid, _hop, _etype in triples}
+        assert nbrs == {'b', 'c', 'd'}
+
+    def test_edge_filter_causal(self, backend):
+        """edge_filter='causal' walks only causal edges."""
+        _seed_neighborhood(backend)
+        triples = backend.edges.get_neighborhood(
+            'a', depth=2, edge_filter='causal')
+        nbrs = {nid for nid, _hop, _etype in triples}
+        assert nbrs == {'d'}
+
+    def test_isolated_seed_returns_empty(self, backend):
+        """A node with no edges produces no triples."""
+        _seed_neighborhood(backend)
+        triples = backend.edges.get_neighborhood('e', depth=2)
+        assert triples == []
+
+    def test_hop_values_are_correct(self, backend):
+        """Each triple's hop value matches its distance from the seed."""
+        _seed_neighborhood(backend)
+        triples = backend.edges.get_neighborhood('a', depth=2)
+        by_id = {nid: hop for nid, hop, _etype in triples}
+        assert by_id['b'] == 1
+        assert by_id['d'] == 1
+        assert by_id['c'] == 2
