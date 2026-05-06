@@ -1,15 +1,13 @@
-"""Phase 5 e2e -- embed fingerprint mismatch refusal.
+"""Embed fingerprint mismatch refusal on Postgres.
 
 The fingerprint contract: every store stamps `meta.embed_fingerprint`
 with `{provider, model, dim}` of the embedding client used at seed
 time. On reopen, a different active client surfaces a mismatch.
 
-Phase 4 retro flagged `stored_fingerprint(db)` -> `(backend)` as a
-deferred refactor; until then, the e2e check exercises the contract
-at the Backend Protocol layer (`backend.meta.set` / `.get`) and
-compares to a `Fingerprint` parsed from the stored JSON. This is
-what the application-layer `assert_consistent` does once it loads
-the row.
+The e2e check exercises the contract at the Backend Protocol layer
+(`backend.meta.set` / `.get`) and compares to a `Fingerprint`
+parsed from the stored JSON -- the same shape `assert_consistent`
+checks once the application-layer loads the row.
 """
 
 from __future__ import annotations

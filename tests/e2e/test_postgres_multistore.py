@@ -1,8 +1,8 @@
-"""Phase 5 e2e -- fresh init, multi-store isolation, cross-backend parity.
+"""Fresh init, multi-store isolation, cross-backend parity.
 
 Drives `PostgresCluster` against the testcontainers pgvector
 session container at the highest abstraction (Cluster/Backend
-Protocol). Covers Phase 5 e2e scenarios:
+Protocol):
 
 - Fresh init: schema applied cleanly on a new store.
 - Multi-store isolation: `drop_store(A)` does not affect store B.

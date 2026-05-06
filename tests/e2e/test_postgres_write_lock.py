@@ -1,4 +1,4 @@
-"""Phase 5 e2e -- write_lock concurrent reindex.
+"""write_lock concurrent reindex on Postgres.
 
 The contract under test: while an agent holds the per-store
 `write_lock` advisory key (transaction-scoped via

@@ -452,10 +452,10 @@ class TestStore:
     def test_store_remove_purges_queue(self, runner):
         """Removing a store also drops its in-flight queue rows.
 
-        Latent bug regression test: before Phase 0 the `store remove`
-        flow rmtreed the data dir but left queue rows orphaned, so the
-        worker would re-attempt them against a missing store dir. The
-        fix is `queue.purge_store(name)` before `shutil.rmtree(sdir)`.
+        Regression: the old `store remove` flow rmtreed the data dir
+        but left queue rows orphaned, so the worker would re-attempt
+        them against a missing store dir. `queue.purge_store(name)`
+        runs before `shutil.rmtree(sdir)`.
         """
         import json as _json
 

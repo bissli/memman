@@ -1,4 +1,4 @@
-"""Phase 5 e2e -- enqueue -> drain -> recall round-trip.
+"""Enqueue -> drain -> recall round-trip on Postgres.
 
 Exercises the basic happy path of the queue + backend integration on
 Postgres without invoking the LLM/embedding pipeline:

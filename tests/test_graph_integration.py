@@ -1,11 +1,11 @@
 """Graph integration tests ported from Go integration_test.go.
 
-These tests exercise temporal, entity, causal, semantic, BFS, and engine
+Exercises temporal, entity, causal, semantic, BFS, and engine
 modules against the Backend Protocol; parametrized over
-`{sqlite, postgres}` per Phase 3. Tests that need controlled
-`created_at` values use the `set_created_at` test helper to issue a
-raw UPDATE after `backend.nodes.insert` (Phase 1a Decision #1: both
-backends stamp server-side and ignore caller-passed timestamps).
+`{sqlite, postgres}`. Tests that need controlled `created_at`
+values use the `set_created_at` helper to issue a raw UPDATE
+after `backend.nodes.insert` -- both backends stamp server-side
+and ignore caller-passed timestamps.
 """
 
 from datetime import datetime, timedelta, timezone

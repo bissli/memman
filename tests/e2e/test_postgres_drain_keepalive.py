@@ -1,4 +1,4 @@
-"""Phase 5 e2e -- hung-drain detection via TCP keepalives.
+"""Hung-drain detection via TCP keepalives.
 
 The drain-lock contract: `Backend.drain_lock` opens a dedicated
 psycopg connection with `keepalives=1` + `keepalives_idle=30`, holds
@@ -6,18 +6,12 @@ a session-scoped `pg_try_advisory_lock`, and relies on connection
 close (clean or dropped) to release the lock so another agent can
 claim a hung drain.
 
-This file covers the two relevant guarantees:
+Two guarantees covered:
 
 - A hung-worker simulation (closing the connection without explicit
   unlock) releases the lock promptly enough that another agent
   acquires within the keepalive window.
-- The drain-lock connection has `keepalives_idle=30` set, matching
-  the Phase 2.5 ship-time invariant.
-
-Gate item 6 ("pool-pinning assertion fires deliberately") refers to
-a runtime assertion that does not yet exist -- Phase 2.5 retro Q3
-deferred the connection pool to Phase 3+, and no pool-pinning code
-landed. The retro for Phase 5 documents this carryover.
+- The drain-lock connection has `keepalives_idle=30` set.
 """
 
 from __future__ import annotations
@@ -89,10 +83,10 @@ def test_hung_worker_releases_lock_within_keepalive_window(
 def test_drain_lock_connection_has_keepalives_idle_30(pg_dsn, request):
     """The drain-lock connection sets `tcp_keepalives_idle=30`.
 
-    Phase 2.5 invariant: any connection used to hold the drain lock
-    must opt into TCP keepalives with `keepalives_idle=30`, otherwise
-    a hung worker on a dead network path holds the lock indefinitely.
-    Inspects the live connection's settings via `SHOW`.
+    Any connection used to hold the drain lock must opt into TCP
+    keepalives with `keepalives_idle=30`, otherwise a hung worker on
+    a dead network path holds the lock indefinitely. Inspects the
+    live connection's settings via `SHOW`.
     """
     store = _safe(request.node.name)
     cluster = PostgresCluster(dsn=pg_dsn)

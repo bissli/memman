@@ -238,8 +238,8 @@ class TestEdgeUpsert:
     def test_edge_upsert_preserves_created_at(self, tmp_db):
         """Re-inserting does not change the original created_at timestamp.
 
-        Phase 1a Decision #1: `insert_edge` ignores caller `created_at`
-        and stamps server-side. The ON CONFLICT clause does NOT update
+        `insert_edge` ignores caller `created_at` and stamps
+        server-side. The ON CONFLICT clause does NOT update
         created_at, so the original server-stamped value survives the
         re-insert. We use `time.sleep` to ensure two distinct stamps
         and verify the first one is preserved.

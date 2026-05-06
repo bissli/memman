@@ -1,8 +1,8 @@
-"""Phase 5 e2e -- advisory-lock contention.
+"""Advisory-lock contention.
 
 Drives the per-store `Backend.drain_lock` advisory lock from two
 threads gated on a `threading.Barrier` and asserts exactly one
-acquires the lock. Phase 5 gate item 4 explicitly names this test.
+acquires the lock.
 
 Threads (not processes) are sufficient because `drain_lock` opens
 its own dedicated psycopg connection inside the contextmanager;

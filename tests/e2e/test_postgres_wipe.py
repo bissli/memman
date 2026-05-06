@@ -1,8 +1,7 @@
-"""Phase 5 e2e -- wipe-and-recreate (drop schema + queue purge).
+"""Wipe-and-recreate on Postgres (drop schema + queue purge).
 
-Covers Phase 5 e2e scenario "Wipe-and-recreate (drop schema + queue
-purge)". `PostgresCluster.drop_store` performs both operations
-atomically: `DROP SCHEMA ... CASCADE` for the per-store schema and
+`PostgresCluster.drop_store` performs both operations atomically:
+`DROP SCHEMA ... CASCADE` for the per-store schema and
 `DELETE FROM queue.queue WHERE store = %s` for any pending work.
 After a wipe, reopening the same store name yields a fresh schema
 with no residue.

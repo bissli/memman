@@ -60,10 +60,9 @@ def check_enrichment_coverage(backend: Backend) -> dict[str, Any]:
 def check_oplog_delta_coverage(backend: Backend) -> dict[str, Any]:
     """Check the share of oplog rows that carry before/after deltas.
 
-    Pre-Slice-D oplog rows have null `before` / `after`. Post-slice
-    coverage approaches 100% on stores that see frequent write
-    traffic; new stores with no writes report 100% (vacuously
-    covered).
+    Older oplog rows have null `before` / `after`; coverage
+    approaches 100% on stores with frequent write traffic. New
+    stores report 100% (vacuously covered).
     """
     total, with_delta = backend.oplog.delta_coverage()
     if total == 0:

@@ -597,11 +597,9 @@ def backend_kind(request) -> str:
 def runner_kind(request) -> str:
     """Backend identifier for CliRunner-driven cross-backend tests.
 
-    Pairs with the `cross_backend_runner` fixture below to flip
+    Pairs with the `cross_backend_runner` fixture to flip
     `MEMMAN_BACKEND` between sqlite and postgres for each test
-    invocation. Phase 4b adds this fixture so the deferred
-    `test_memory_system.py` 53 CliRunner tests can be parametrized
-    over both backends.
+    invocation.
     """
     return request.param
 
@@ -641,7 +639,7 @@ def cross_backend_runner(request, runner_kind, tmp_path, env_file, monkeypatch):
 
 @pytest.fixture
 def backend(request, backend_kind, tmp_path):
-    """Cross-backend Backend fixture for Phase 3 pipeline tests.
+    """Cross-backend Backend fixture for pipeline tests.
 
     Parametrizes over `{sqlite, postgres}` (postgres slot active only
     when extras are importable). Yields a fully-isolated Backend with
@@ -706,12 +704,12 @@ def set_created_at(backend, insight_id: str, when: datetime) -> None:
     """Test-only: directly UPDATE `created_at` on a stored insight.
 
     The Backend Protocol's `nodes.insert` ignores caller-passed
-    `Insight.created_at` per Phase 1a Decision #1 (server-side
-    timestamps). Tests that exercise temporal logic against
-    pre-existing rows with controlled timestamps call this helper
-    after `backend.nodes.insert` to override the server-stamped
-    value. Bypasses the Protocol intentionally; do NOT use outside
-    test code.
+    `Insight.created_at` (server-side timestamps). Tests that
+    exercise temporal logic against pre-existing rows with
+    controlled timestamps call this helper after
+    `backend.nodes.insert` to override the server-stamped value.
+    Bypasses the Protocol intentionally; do NOT use outside test
+    code.
     """
     from memman.store.model import format_timestamp
     from memman.store.sqlite import SqliteBackend

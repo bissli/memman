@@ -118,7 +118,7 @@ class OpLogEntry:
     `before` and `after` capture the insight content before and
     after the logged operation. Populated by reconcile, replace,
     forget, and auto_prune so forensic questions can be answered
-    from the oplog alone. Pre-Slice-D rows have both as None.
+    from the oplog alone. Older rows may have both as None.
     """
 
     id: int
