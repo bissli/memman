@@ -208,9 +208,11 @@ class NodeStore(Protocol):
         """Yield (id, vec) for every active insight with an embedding.
 
         SQLite implementation deserializes the blob inside the
-        backend so callers see only `list[float]`. Postgres implements
-        this as a server-side cursor over `select id, embedding ...`,
-        binding pgvector(512) directly.
+        backend so callers see only `list[float]`. Postgres
+        implementation issues `select id, embedding from
+        {schema}.insights ...` and yields `(id, list[float])` tuples
+        (pgvector binds the column to a Python list when
+        `register_vector` is active on the connection).
 
         Use `dict(backend.nodes.iter_embeddings_as_vecs())` when a
         cache is needed; iterate directly when memory matters.
@@ -631,5 +633,3 @@ class Backend(Protocol):
         `worker_runs` table.
         """
         ...
-
-
