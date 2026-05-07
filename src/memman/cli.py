@@ -2257,11 +2257,22 @@ def migrate(
         raise click.UsageError(
             'pass either --store NAME or --all, not both')
 
-    dsn = config.get(config.DEFAULT_PG_DSN)
-    if not dsn:
-        raise click.UsageError(
-            'MEMMAN_DEFAULT_PG_DSN is not set; configure with '
-            '`memman config set MEMMAN_DEFAULT_PG_DSN <url>` first')
+    if migrate_all:
+        dsn = config.get(config.DEFAULT_PG_DSN)
+        if not dsn:
+            raise click.UsageError(
+                'MEMMAN_DEFAULT_PG_DSN is not set; --all requires a'
+                ' default DSN. Run `memman config set-pg-dsn --default`,'
+                ' or migrate one store at a time with --store NAME.')
+    else:
+        dsn = (config.get(config.PG_DSN_FOR(store))
+               or config.get(config.DEFAULT_PG_DSN))
+        if not dsn:
+            raise click.UsageError(
+                f'no DSN for store {store!r}: set'
+                f' {config.PG_DSN_FOR(store)} or {config.DEFAULT_PG_DSN}'
+                f' (run `memman config set-pg-dsn --store {store}`'
+                ' or `--default`).')
 
     try:
         preflight(dsn)

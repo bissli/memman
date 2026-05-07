@@ -237,6 +237,55 @@ def test_migrate_cli_yes_flag_skips_prompt(
                 cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
 
 
+def test_migrate_cli_per_store_dsn_without_default(
+        tmp_path, env_file, pg_dsn):
+    """`--store NAME` resolves MEMMAN_PG_DSN_<store> when DEFAULT is unset."""
+    data_dir = tmp_path / 'memman'
+    _seed_sqlite_store(data_dir, 'mig_per_store')
+    from memman.store.postgres import _store_schema
+    schema = _store_schema('mig_per_store')
+    with psycopg.connect(pg_dsn, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+
+    env_file('MEMMAN_PG_DSN_mig_per_store', pg_dsn)
+
+    from memman.cli import cli
+    runner = CliRunner()
+    try:
+        result = runner.invoke(
+            cli, [
+                '--data-dir', str(data_dir),
+                'migrate', '--store', 'mig_per_store', '--yes'],
+            catch_exceptions=False)
+        assert result.exit_code == 0, result.output
+        assert '(verified)' in result.output
+        with psycopg.connect(pg_dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f'SELECT COUNT(*) FROM {schema}.insights')
+                assert cur.fetchone()[0] == 1
+    finally:
+        with psycopg.connect(pg_dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+
+
+def test_migrate_cli_per_store_missing_dsn_lists_both_keys(tmp_path):
+    """No DSN at all: error names PG_DSN_<store> and DEFAULT_PG_DSN."""
+    _seed_sqlite_store(tmp_path / 'memman', 'mig_no_dsn')
+    from memman.cli import cli
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, [
+            '--data-dir', str(tmp_path / 'memman'),
+            'migrate', '--store', 'mig_no_dsn', '--yes'],
+        catch_exceptions=False)
+    assert result.exit_code != 0
+    assert 'MEMMAN_PG_DSN_mig_no_dsn' in result.output
+    assert 'MEMMAN_DEFAULT_PG_DSN' in result.output
+    assert 'set-pg-dsn' in result.output
+
+
 def test_migrate_cli_dry_run_succeeds(tmp_path, env_file, pg_dsn):
     """CLI dry-run prints plan with redacted DSN, no prompt, no writes."""
     env_file('MEMMAN_DEFAULT_PG_DSN', pg_dsn)
