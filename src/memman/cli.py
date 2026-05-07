@@ -20,9 +20,8 @@ import click
 import memman
 from memman import config
 from memman.store import factory
-from memman.store.db import default_data_dir, open_db
-from memman.store.db import read_active, store_dir, store_exists
-from memman.store.db import valid_store_name, write_active
+from memman.store.db import default_data_dir, open_db, read_active, store_dir
+from memman.store.db import store_exists, valid_store_name, write_active
 from memman.store.factory import list_stores
 from memman.store.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge
 from memman.store.model import Insight, format_timestamp, is_immune
@@ -1872,7 +1871,7 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
 @click.pass_context
 def status(ctx: click.Context) -> None:
     """Show database statistics."""
-    from memman.store.factory import resolve_store_backend, list_stores
+    from memman.store.factory import list_stores, resolve_store_backend
 
     data_dir = ctx.obj['data_dir']
     store_name = _resolve_store_name(data_dir, ctx.obj['store'])
@@ -2598,28 +2597,17 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
             ctx, dry_run=dry_run, progress_jsonl=progress_jsonl)
         return
 
-    from memman.store.factory import resolve_store_backend
-    data_dir = ctx.obj['data_dir']
-    store_name = _resolve_store_name(data_dir, ctx.obj['store'])
-    backend_name = resolve_store_backend(store_name, data_dir)
-    if backend_name != 'sqlite':
-        raise click.ClickException(
-            'graph rebuild is SQLite-only; Postgres maintains HNSW'
-            ' indexes live and reindexes on constant change')
     if not dry_run:
         _require_started('rebuild')
     from memman.embed import get_client
     from memman.graph.engine import MAX_LINK_BATCH, link_pending
-    from memman.store.node import count_pending_links, get_active_insight_ids
-    from memman.store.node import reset_for_rebuild
-    from memman.store.oplog import log_op
 
-    with _open_db(ctx) as db:
+    with _active_backend(ctx) as backend:
         llm_client = _get_llm_client_or_fail('slow_canonical')
         metadata_llm_client = _get_llm_client_or_fail('slow_metadata')
         ec = get_client()
 
-        all_ids = get_active_insight_ids(db)
+        all_ids = backend.nodes.get_active_ids()
         total_count = len(all_ids)
 
         if dry_run:
@@ -2630,8 +2618,6 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
             _json_out({'processed': 0, 'remaining': 0})
             return
 
-        from memman.store.sqlite import SqliteBackend
-        backend = SqliteBackend(db)
         with backend.reembed_lock('rebuild') as held:
             if not held:
                 raise click.ClickException(
@@ -2666,7 +2652,7 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
 
             for i in range(0, total_count, MAX_LINK_BATCH):
                 batch_ids = all_ids[i:i + MAX_LINK_BATCH]
-                reset_for_rebuild(db, batch_ids)
+                backend.nodes.reset_for_rebuild(batch_ids)
 
                 while True:
                     count = link_pending(
@@ -2682,10 +2668,12 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
             bar.set_description('Done')
             bar.close()
 
-            remaining = count_pending_links(db)
+            remaining = backend.nodes.count_pending_links()
 
             stats = {'processed': processed, 'remaining': remaining}
-            log_op(db, 'rebuild', '', json.dumps(stats))
+            backend.oplog.log(
+                operation='rebuild', insight_id='',
+                detail=json.dumps(stats))
             _json_out(stats)
 
 

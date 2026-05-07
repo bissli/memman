@@ -43,48 +43,6 @@ def test_resolve_store_backend_dispatches_per_store(tmp_path, env_file):
     assert resolve_store_backend('shared', data_dir) == 'postgres'
 
 
-def test_graph_rebuild_guard_uses_per_store_kind(tmp_path, env_file):
-    """`graph rebuild --store pg_one` rejects on per-store postgres key.
-    """
-    from click.testing import CliRunner
-    from memman.cli import cli
-
-    data_dir = os.environ[config.DATA_DIR]
-    env_file(config.BACKEND_FOR('pg_one'), 'postgres')
-    env_file(config.PG_DSN_FOR('pg_one'), 'postgresql://x@y/z')
-
-    r = CliRunner()
-    out = r.invoke(
-        cli,
-        ['--data-dir', data_dir, '--store', 'pg_one',
-         'graph', 'rebuild'])
-    assert out.exit_code != 0
-    assert 'SQLite-only' in out.output
-
-
-def test_graph_rebuild_guard_passes_for_sqlite_store(tmp_path, env_file):
-    """`graph rebuild --store sqlite_one` reaches the rebuild path.
-
-    Asserts the guard does NOT fire when the per-store kind is sqlite,
-    even when a sibling postgres store is configured.
-    """
-    from click.testing import CliRunner
-    from memman.cli import cli
-
-    data_dir = os.environ[config.DATA_DIR]
-    _seed_sqlite_dir(data_dir, 'sqlite_one')
-    env_file(config.BACKEND_FOR('sqlite_one'), 'sqlite')
-    env_file(config.BACKEND_FOR('pg_one'), 'postgres')
-    env_file(config.PG_DSN_FOR('pg_one'), 'postgresql://x@y/z')
-
-    r = CliRunner()
-    out = r.invoke(
-        cli,
-        ['--data-dir', data_dir, '--store', 'sqlite_one',
-         'graph', 'rebuild', '--dry-run'])
-    assert 'SQLite-only' not in out.output
-
-
 def test_store_list_returns_mixed_stores(tmp_path, env_file):
     """`memman store list` returns both sqlite and postgres-keyed stores.
     """

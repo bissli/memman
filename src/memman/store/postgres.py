@@ -1167,8 +1167,8 @@ class PostgresEdgeStore(EdgeStore):
         import json as _json
         sql = self._q("""
 insert into {s}.edges
-    (source_id, target_id, edge_type, weight, metadata)
-values (%s, %s, %s, %s, %s::jsonb)
+    (source_id, target_id, edge_type, weight, metadata, created_at)
+values (%s, %s, %s, %s, %s::jsonb, coalesce(%s, now()))
 on conflict (source_id, target_id, edge_type) do update set
     metadata = case
         when {s}.edges.metadata->>'created_by' in ('claude', 'manual')
@@ -1182,7 +1182,8 @@ on conflict (source_id, target_id, edge_type) do update set
         with self._conn.cursor() as cur:
             cur.execute(sql, (
                 edge.source_id, edge.target_id, edge.edge_type,
-                edge.weight, _json.dumps(edge.metadata or {})))
+                edge.weight, _json.dumps(edge.metadata or {}),
+                edge.created_at))
 
     def by_node(self, node_id: Id) -> list[Edge]:
         sql = self._q("""

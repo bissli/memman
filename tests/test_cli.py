@@ -1347,6 +1347,18 @@ class TestGraphRebuildStaleOnly:
         assert data['mode'] == 'stale-only'
         assert 'SQLite-only' not in out.output
 
+    def test_wholesale_rebuild_accepted_on_postgres_runner(
+            self, cross_backend_runner):
+        """Wholesale `graph rebuild` is now cross-backend (gate lifted)."""
+        r, data_dir = cross_backend_runner
+        out = r.invoke(cli, [
+            '--data-dir', data_dir, 'graph', 'rebuild', '--dry-run'])
+        assert out.exit_code == 0, out.output
+        data = json.loads(out.output)
+        assert 'total' in data
+        assert data.get('dry_run') == 1
+        assert 'SQLite-only' not in out.output
+
 
 class TestIntraBatchDedup:
     """Sibling facts from the same remember call must deduplicate."""
@@ -1720,15 +1732,6 @@ class TestHotPathPurity:
 
 class TestPostgresGuards:
     """Admin commands that are SQLite-only must reject postgres backend."""
-
-    def test_graph_rebuild_rejects_postgres_backend(self, runner, env_file):
-        """`graph rebuild` exits non-zero with a clear message on postgres."""
-        env_file('MEMMAN_BACKEND_default', 'postgres')
-        env_file('MEMMAN_PG_DSN_default', 'postgresql://user@host/db')
-        r, data_dir = runner
-        out = r.invoke(cli, ['--data-dir', data_dir, 'graph', 'rebuild'])
-        assert out.exit_code != 0
-        assert 'SQLite-only' in out.output
 
     def test_embed_reembed_rejects_postgres_backend(self, runner, env_file):
         """`embed reembed` exits non-zero with a clear message on postgres."""
