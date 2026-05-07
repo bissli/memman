@@ -288,28 +288,6 @@ def cli(ctx: click.Context, data_dir: str | None, store_name: str,
     ctx.obj['data_dir'] = data_dir
     ctx.obj['store'] = store_name
     ctx.obj['readonly'] = readonly
-    _warn_on_legacy_bare_keys(data_dir)
-
-
-def _warn_on_legacy_bare_keys(data_dir: str) -> None:
-    """Warn once per invocation if the env file carries a bare canonical.
-
-    `MEMMAN_BACKEND` and `MEMMAN_PG_DSN` are silently ignored under
-    the per-store routing model, which is a quiet 0.13->0.14 upgrade
-    trap. Surface the drift on every CLI bootstrap (and `memman
-    doctor` flags it as a fail).
-    """
-    env_path = config.env_file_path(data_dir)
-    if not env_path.exists():
-        return
-    file_values = config.parse_env_file(env_path)
-    for legacy in ('MEMMAN_BACKEND', 'MEMMAN_PG_DSN'):
-        if file_values.get(legacy):
-            logger.warning(
-                'legacy bare key %r found in %s; ignored under'
-                ' per-store routing -- run `memman doctor` for'
-                ' migration hints',
-                legacy, env_path)
 
 
 @cli.group()
@@ -1010,6 +988,13 @@ class _StoreContext:
 
     def close(self) -> None:
         """Close the active Backend's underlying connection."""
+        if self._run_id is not None:
+            try:
+                self.backend.finish_run(self._run_id)
+            except Exception:
+                logger.exception(
+                    f'finish_run failed for store {self.store_name!r}')
+            self._run_id = None
         try:
             self.backend.close()
         except Exception:

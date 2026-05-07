@@ -626,6 +626,16 @@ class Backend(Protocol):
         """
         ...
 
+    def finish_run(self, run_id: int | None) -> None:
+        """Stamp `ended_at = now()` on a specific run.
+
+        Called once when the drain context closes so
+        `check_drain_heartbeat` sees the run as completed rather
+        than perpetually in-progress. SQLite is a no-op;
+        `run_id=None` is a no-op.
+        """
+        ...
+
     def recent_runs(self, *, limit: int) -> list[WorkerRun]:
         """Return recent worker drain runs (most recent first).
 

@@ -31,6 +31,7 @@ to switch a store from SQLite to Postgres. The CLI surface is the
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import sqlite3
@@ -40,7 +41,6 @@ from pathlib import Path
 
 import numpy as np
 import psycopg
-from pgvector.psycopg import register_vector
 
 logger = logging.getLogger('memman.import')
 
@@ -355,13 +355,13 @@ def main(argv: list[str] | None = None) -> int:
         logger.error(f'source SQLite store not found: {src_path}')
         return 2
 
+    from memman.store.postgres import _connection
+
     logger.info(f'opening SQLite source: {src_path}')
-    sqlite_conn = sqlite3.connect(str(src_path))
-    try:
+    with contextlib.closing(sqlite3.connect(str(src_path))) as sqlite_conn:
         dim = _read_source_dim(sqlite_conn)
         logger.info(f'opening Postgres target: {args.target}')
-        with psycopg.connect(args.target, autocommit=False) as pg_conn:
-            register_vector(pg_conn)
+        with _connection(args.target, autocommit=False) as pg_conn:
             _ensure_schema(pg_conn, args.schema, dim)
             counts = {
                 'insights': _import_insights(
@@ -374,8 +374,6 @@ def main(argv: list[str] | None = None) -> int:
                     sqlite_conn, pg_conn, args.schema),
                 }
             pg_conn.commit()
-    finally:
-        sqlite_conn.close()
     for name, count in counts.items():
         print(f'{name}: imported {count} rows', file=sys.stderr)
     return 0

@@ -558,32 +558,6 @@ class TestStore:
         r.invoke(cli, ['--data-dir', data_dir, 'store', 'remove', 'auto-created'])
 
 
-class TestRootBootstrap:
-    """Root callback: legacy bare-key warn at every CLI invocation."""
-
-    def test_root_warns_on_legacy_bare_keys(self, mm_runner, caplog):
-        """A bare `MEMMAN_BACKEND` in the env file emits a warn on every
-        `memman <subcommand>` invocation -- defense-in-depth so doctor
-        is not the only surface that catches the silent 0.13->0.14
-        upgrade trap.
-        """
-        import logging
-
-        from memman import config
-        from tests.conftest import invoke as _invoke
-        _, data_dir = mm_runner
-        env_path = config.env_file_path(data_dir)
-        text = env_path.read_text() if env_path.exists() else ''
-        env_path.write_text(text + 'MEMMAN_BACKEND=postgres\n')
-        config.reset_file_cache()
-        with caplog.at_level(logging.WARNING, logger='memman'):
-            _invoke(mm_runner, ['status'])
-        bare_warns = [
-            r for r in caplog.records
-            if 'legacy bare key' in r.getMessage()]
-        assert bare_warns
-
-
 class TestStatus:
     """`memman status` and `memman doctor` smoke."""
 

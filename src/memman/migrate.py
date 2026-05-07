@@ -223,6 +223,7 @@ def migrate_store(
     is responsible for the outer drain.lock guard and the
     confirmation prompt.
     """
+    import contextlib
     import sqlite3
 
     from memman.store.postgres import _check_identifier, _store_schema
@@ -235,10 +236,9 @@ def migrate_store(
         raise MigrateError(
             f'source SQLite database not found: {sqlite_path}')
 
-    sqlite_conn = sqlite3.connect(
-        f'file:{sqlite_path}?mode=ro', uri=True)
-    sqlite_conn.row_factory = None
-    try:
+    with contextlib.closing(sqlite3.connect(
+            f'file:{sqlite_path}?mode=ro', uri=True)) as sqlite_conn:
+        sqlite_conn.row_factory = None
         n_insights = sqlite_conn.execute(
             'select count(*) from insights').fetchone()[0]
         n_edges = sqlite_conn.execute(
@@ -255,7 +255,6 @@ def migrate_store(
                 f'source store {store!r} is empty (no insights, no'
                 f' embed fingerprint); nothing to migrate')
         if dry_run:
-            sqlite_conn.close()
             return MigrateResult(
                 store=store, schema=schema,
                 insights=n_insights, edges=n_edges,
@@ -302,8 +301,6 @@ def migrate_store(
                 raise MigrateError(
                     f'migration of store {store!r} failed: '
                     f'{type(exc).__name__}: {exc}') from exc
-    finally:
-        sqlite_conn.close()
     return MigrateResult(
         store=store, schema=schema,
         insights=ins_count, edges=edge_count,

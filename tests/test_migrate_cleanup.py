@@ -100,7 +100,7 @@ def test_doctor_warns_on_stale_post_migrate_source(
     env_file('MEMMAN_DEFAULT_BACKEND', 'postgres')
     result = check_stale_post_migrate_source(data_dir)
     assert result['status'] == 'warn'
-    assert 'stale_store' in result.get('detail', '')
+    assert 'stale_store' in result['detail']['stores']
 
 
 def test_doctor_passes_when_postgres_store_is_clean(

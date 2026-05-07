@@ -658,6 +658,10 @@ class SqliteBackend(Backend):
         """No-op for SQLite mode."""
         return
 
+    def finish_run(self, run_id: int | None) -> None:
+        """No-op for SQLite mode."""
+        return
+
     def recent_runs(self, *, limit: int) -> list:
         """No-op: SQLite drain has no per-store worker_runs table."""
         return []

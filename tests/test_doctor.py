@@ -450,41 +450,6 @@ class TestCheckPerStoreKeys:
         assert pg.get('warning') is None
         assert pg.get('error') is None
 
-    def test_check_per_store_keys_flags_bare_memman_backend(
-            self, tmp_path, env_file):
-        """Bare `MEMMAN_BACKEND` in the env file -> fail with hint.
-
-        Locks the silent 0.13->0.14 upgrade path: the bare canonical
-        is ignored under per-store routing, so doctor must surface it.
-        """
-        from memman.doctor import check_per_store_keys
-
-        data_dir = str(tmp_path / 'memman')
-        env_file('MEMMAN_BACKEND', 'postgres')
-
-        out = check_per_store_keys(data_dir)
-        assert out['status'] == 'fail'
-        bare_entries = [
-            s for s in out['detail']['stores'] if s['store'] is None]
-        assert bare_entries
-        assert 'MEMMAN_BACKEND' in bare_entries[0]['error']
-        assert 'MEMMAN_DEFAULT' in bare_entries[0]['error']
-
-    def test_check_per_store_keys_flags_bare_pg_dsn(
-            self, tmp_path, env_file):
-        """Bare `MEMMAN_PG_DSN` in the env file -> fail with hint."""
-        from memman.doctor import check_per_store_keys
-
-        data_dir = str(tmp_path / 'memman')
-        env_file('MEMMAN_PG_DSN', 'postgresql://x')
-
-        out = check_per_store_keys(data_dir)
-        assert out['status'] == 'fail'
-        bare_entries = [
-            s for s in out['detail']['stores'] if s['store'] is None]
-        assert bare_entries
-        assert 'MEMMAN_PG_DSN' in bare_entries[0]['error']
-
     def test_check_per_store_keys_includes_declared_but_not_created_store(
             self, tmp_path, env_file):
         """A store declared via `MEMMAN_BACKEND_<name>` but missing

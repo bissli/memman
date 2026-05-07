@@ -81,7 +81,7 @@ def check_oplog_delta_coverage(backend: Backend) -> dict[str, Any]:
     elif coverage_pct >= 50:
         status = 'warn'
     else:
-        status = 'warn'
+        status = 'fail'
     return {
         'name': 'oplog_delta_coverage',
         'status': status,
@@ -228,11 +228,14 @@ def check_stale_post_migrate_source(data_dir: str) -> dict[str, Any]:
             }
     return {
         'name': 'stale_post_migrate_source', 'status': 'warn',
-        'detail': (
-            f'stale post-migrate SQLite source files preserved in'
-            f' postgres-routed stores: {stale}.'
-            f' Delete with `rm <data_dir>/data/<store>/memman.db*`'
-            f' once you have verified the postgres-side data is intact.'),
+        'detail': {
+            'stores': stale,
+            'message': (
+                'stale post-migrate SQLite source files preserved in'
+                ' postgres-routed stores. Delete with'
+                ' `rm <data_dir>/data/<store>/memman.db*` once you'
+                ' have verified the postgres-side data is intact.'),
+            },
         }
 
 
@@ -439,24 +442,6 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
             worst = level
 
     entries: list[dict[str, Any]] = []
-
-    legacy_bares = [
-        k for k in ('MEMMAN_BACKEND', 'MEMMAN_PG_DSN')
-        if file_values.get(k)
-        ]
-    if legacy_bares:
-        entries.append({
-            'store': None,
-            'backend': None,
-            'source': None,
-            'error': (
-                f'legacy bare keys ignored under per-store routing:'
-                f' {legacy_bares}; rename to MEMMAN_DEFAULT_BACKEND /'
-                f' MEMMAN_DEFAULT_PG_DSN (cluster fallback) or to'
-                f' MEMMAN_BACKEND_<store> / MEMMAN_PG_DSN_<store>'),
-            'warning': None,
-            })
-        _bump('fail')
 
     for store in stores:
         per_key = config.BACKEND_FOR(store)
@@ -885,9 +870,13 @@ def check_embed_fingerprint(backend: Backend) -> dict[str, Any]:
             }
 
     if stored is None:
+        if backend.nodes.count_active() == 0:
+            return {
+                'name': 'embed_fingerprint', 'status': 'pass',
+                'detail': detail}
         detail['error'] = (
-            "DB not initialized."
-            " Run 'memman embed reembed' to initialize this store.")
+            "Active store has insights but no stored fingerprint."
+            " Run 'memman embed reembed' to seed it.")
         return {
             'name': 'embed_fingerprint', 'status': 'fail',
             'detail': detail}

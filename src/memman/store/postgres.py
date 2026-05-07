@@ -1960,6 +1960,17 @@ where table_schema = %s and table_name = %s
             cur.execute(sql, (run_id,))
             self._conn.commit()
 
+    def finish_run(self, run_id: int | None) -> None:
+        """Stamp `ended_at = now()` on the per-store run row."""
+        if run_id is None:
+            return
+        sql = (
+            f'update {self._schema}.worker_runs'
+            f' set ended_at = now() where id = %s')
+        with self._conn.cursor() as cur:
+            cur.execute(sql, (run_id,))
+            self._conn.commit()
+
     def recent_runs(self, *, limit: int) -> list[WorkerRun]:
         """Return the per-store recent `worker_runs` rows (newest first)."""
         sql = (

@@ -461,13 +461,35 @@ class TestReembed:
         assert result['detail']['stored']['provider'] == 'voyage'
 
     @pytest.mark.no_autoseed_fingerprint
-    def test_doctor_reports_fingerprint_fail_unseeded(self, tmp_path):
-        """check_embed_fingerprint fails on unseeded DB."""
+    def test_doctor_reports_fingerprint_pass_when_empty_and_unseeded(
+            self, tmp_path):
+        """Empty store with no stored fingerprint passes.
+
+        A fresh `memman install` has zero insights and no fingerprint;
+        the first write seeds the fingerprint. Reporting `fail` here
+        would surface a doctor regression on every fresh install.
+        """
         from memman.doctor import check_embed_fingerprint
         from memman.store.db import store_dir
         sdir = store_dir(str(tmp_path), 'default')
         db = open_db(sdir)
         try:
+            result = check_embed_fingerprint(SqliteBackend(db))
+        finally:
+            db.close()
+        assert result['status'] == 'pass'
+
+    @pytest.mark.no_autoseed_fingerprint
+    def test_doctor_reports_fingerprint_fail_when_populated_and_unseeded(
+            self, tmp_path):
+        """Populated store missing the fingerprint fails — schema regression.
+        """
+        from memman.doctor import check_embed_fingerprint
+        from memman.store.db import store_dir
+        sdir = store_dir(str(tmp_path), 'default')
+        db = open_db(sdir)
+        try:
+            _seed_row_with_embedding(db, id='r1')
             result = check_embed_fingerprint(SqliteBackend(db))
         finally:
             db.close()
