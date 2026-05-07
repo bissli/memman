@@ -393,7 +393,11 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
       `MEMMAN_DEFAULT_BACKEND`, then 'sqlite');
     - fail when the resolved value is not a registered backend;
     - fail when the resolved kind is `postgres` and no DSN is reachable
-      via `MEMMAN_PG_DSN_<store>` or `MEMMAN_DEFAULT_PG_DSN`.
+      via `MEMMAN_PG_DSN_<store>` or `MEMMAN_DEFAULT_PG_DSN`;
+    - warn when both `MEMMAN_PG_DSN_<store>` and `MEMMAN_DEFAULT_PG_DSN`
+      are set and they differ (operator may have rotated one without
+      the other -- cheap mitigation for the deferred DSN-rotation
+      command).
 
     Empty data dirs (no stores at all) pass with an empty list.
     """
@@ -410,8 +414,15 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
             'detail': {'error': f'list_stores: {exc}'},
             }
 
-    entries: list[dict[str, Any]] = []
+    rank = {'pass': 0, 'warn': 1, 'fail': 2}
     worst = 'pass'
+
+    def _bump(level: str) -> None:
+        nonlocal worst
+        if rank[level] > rank[worst]:
+            worst = level
+
+    entries: list[dict[str, Any]] = []
     for store in stores:
         per_key = config.BACKEND_FOR(store)
         per_value = (file_values.get(per_key) or '').strip()
@@ -427,21 +438,30 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
             'backend': kind,
             'source': source,
             'error': None,
+            'warning': None,
             }
         if kind not in _KNOWN_BACKENDS:
             entry['error'] = (
                 f'unknown backend {kind!r}; registered:'
                 f' {", ".join(sorted(_KNOWN_BACKENDS))}')
-            worst = 'fail'
+            _bump('fail')
         elif kind == 'postgres':
-            dsn = (
-                file_values.get(config.PG_DSN_FOR(store))
-                or file_values.get(config.DEFAULT_PG_DSN))
+            per_store_dsn = file_values.get(config.PG_DSN_FOR(store))
+            default_dsn = file_values.get(config.DEFAULT_PG_DSN)
+            dsn = per_store_dsn or default_dsn
             if not dsn:
                 entry['error'] = (
                     f'no DSN: set {config.PG_DSN_FOR(store)} or'
                     f' {config.DEFAULT_PG_DSN}')
-                worst = 'fail'
+                _bump('fail')
+            elif (per_store_dsn and default_dsn
+                  and per_store_dsn != default_dsn):
+                entry['warning'] = (
+                    f'{config.PG_DSN_FOR(store)} differs from'
+                    f' {config.DEFAULT_PG_DSN}; verify intentional'
+                    ' rotation (run `memman config set` on whichever'
+                    ' is stale)')
+                _bump('warn')
         entries.append(entry)
 
     return {

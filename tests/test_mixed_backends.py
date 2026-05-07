@@ -212,3 +212,95 @@ def test_drain_processes_mixed_backends_in_one_batch(
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(f'drop schema if exists {schema} cascade')
+
+
+@pytest.mark.postgres
+@pytest.mark.no_auto_drain
+def test_cross_backend_retry(tmp_path, env_file, pg_dsn, monkeypatch):
+    """Failed-row retry observes a freshly-resolved per-store backend.
+
+    Enqueue against sqlite, force one failure, swap the per-store key
+    to postgres, drain again. The retry's `_StoreContext` construction
+    re-reads `MEMMAN_BACKEND_<store>` so the row routes to the new
+    backend; the queue row carries no backend identity itself. Locks
+    the cross-backend retry invariant the per-store routing cutover
+    relies on.
+    """
+    import psycopg
+    from click.testing import CliRunner
+
+    from memman import cli as memman_cli
+    from memman.cli import cli
+    from memman.queue import claim as _real_claim
+    from memman.store.postgres import _store_schema
+
+    data_dir = os.environ[config.DATA_DIR]
+    store = 'xfer'
+
+    env_file(config.DEFAULT_BACKEND, 'sqlite')
+    env_file(config.BACKEND_FOR(store), 'sqlite')
+
+    schema = _store_schema(store)
+    with psycopg.connect(pg_dsn, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f'drop schema if exists {schema} cascade')
+
+    try:
+        monkeypatch.setattr('memman.queue.STALE_CLAIM_SECONDS', 0)
+        monkeypatch.setattr(
+            'memman.queue.claim',
+            lambda *a, **kw: _real_claim(
+                *a, **{**kw, 'stale_after_seconds': 0}))
+
+        attempts_seen = [0]
+        real_process = memman_cli._process_queue_row
+
+        def flaky_process(row, ctx, executor):
+            attempts_seen[0] += 1
+            if attempts_seen[0] == 1:
+                raise RuntimeError('transient failure on sqlite leg')
+            return real_process(row, ctx, executor)
+
+        monkeypatch.setattr(
+            'memman.cli._process_queue_row', flaky_process)
+
+        r = CliRunner()
+        out = r.invoke(
+            cli, ['--data-dir', data_dir, '--store', store,
+                  'remember', 'cross-backend retry note'])
+        assert out.exit_code == 0, out.output
+
+        out = r.invoke(
+            cli, ['--data-dir', data_dir,
+                  'scheduler', 'drain', '--pending', '--limit', '1'])
+        assert out.exit_code == 0, out.output
+        assert attempts_seen[0] == 1, (
+            f'expected one process call on first drain,'
+            f' saw {attempts_seen[0]}')
+
+        env_file(config.BACKEND_FOR(store), 'postgres')
+        env_file(config.PG_DSN_FOR(store), pg_dsn)
+        config.reset_file_cache()
+
+        out = r.invoke(
+            cli, ['--data-dir', data_dir,
+                  'scheduler', 'drain', '--pending', '--limit', '1'])
+        assert out.exit_code == 0, out.output
+        assert attempts_seen[0] == 2, (
+            f'expected a second process call after backend swap,'
+            f' saw {attempts_seen[0]}')
+
+        with psycopg.connect(pg_dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f'select count(*) from {schema}.insights'
+                    " where deleted_at is null")
+                count = cur.fetchone()[0]
+        assert count > 0, (
+            f'expected the retried row to land in {schema}.insights;'
+            f' the per-drain _StoreContext should have routed to the'
+            f' new postgres backend')
+    finally:
+        with psycopg.connect(pg_dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f'drop schema if exists {schema} cascade')
