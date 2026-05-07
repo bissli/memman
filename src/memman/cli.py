@@ -2321,8 +2321,13 @@ def prime() -> None:
 @graph.command('rebuild')
 @click.option('--dry-run', is_flag=True, default=False,
               help='Show counts without modifying DB')
+@click.option('--progress-jsonl', is_flag=True, default=False,
+              help='Emit one JSON line per done event to stderr'
+                   ' (for parents that capture stderr and need streaming'
+                   ' progress while the inner tqdm bar is suppressed).')
 @click.pass_context
-def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
+def graph_rebuild(ctx: click.Context, dry_run: bool,
+                  progress_jsonl: bool) -> None:
     """Re-enrich all insights through the full LLM pipeline."""
     from memman.store.factory import _resolve_store_backend
     data_dir = ctx.obj['data_dir']
@@ -2373,11 +2378,23 @@ def graph_rebuild(ctx: click.Context, dry_run: bool) -> None:
                 dynamic_ncols=True,
                 disable=not sys.stderr.isatty())
 
+            done_count = 0
+
             def _on_progress(stage: str, insight: Insight) -> None:
+                nonlocal done_count
                 preview = insight.content[:40].replace('\n', ' ')
                 bar.set_description(f'{stage}: {preview}')
                 if stage == 'done':
                     bar.update(1)
+                    done_count += 1
+                    if progress_jsonl:
+                        sys.stderr.write(json.dumps({
+                            'event': 'progress',
+                            'stage': 'done',
+                            'n': done_count,
+                            'total': total_count,
+                            }) + '\n')
+                        sys.stderr.flush()
 
             for i in range(0, total_count, MAX_LINK_BATCH):
                 batch_ids = all_ids[i:i + MAX_LINK_BATCH]
