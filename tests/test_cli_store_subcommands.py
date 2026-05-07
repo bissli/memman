@@ -64,7 +64,8 @@ def test_store_remove_uses_factory(monkeypatch, tmp_path, mm_runner):
         'memman.store.factory.drop_store', _fake_drop)
     result = invoke(mm_runner, ['store', 'remove', '--yes', 'doomed'])
     assert result.exit_code == 0, result.output
-    assert calls and calls[0][0] == 'doomed'
+    assert calls
+    assert calls[0][0] == 'doomed'
 
 
 @pytest.mark.postgres
@@ -78,8 +79,7 @@ def test_store_list_includes_postgres_only_store(tmp_path, pg_dsn):
     """
     runner, data_dir = _make_runner_with_pg_store(tmp_path, pg_dsn, 'work')
     create = runner.invoke(
-        cli, ['--data-dir', data_dir, '--store', 'work',
-              'store', 'create'])
+        cli, ['--data-dir', data_dir, 'store', 'create', 'work'])
     assert create.exit_code == 0, create.output
     result = runner.invoke(
         cli, ['--data-dir', data_dir, 'store', 'list'])
@@ -98,8 +98,7 @@ def test_store_use_accepts_postgres_only_store(tmp_path, pg_dsn):
     """
     runner, data_dir = _make_runner_with_pg_store(tmp_path, pg_dsn, 'work')
     runner.invoke(
-        cli, ['--data-dir', data_dir, '--store', 'work',
-              'store', 'create'])
+        cli, ['--data-dir', data_dir, 'store', 'create', 'work'])
     result = runner.invoke(
         cli, ['--data-dir', data_dir, 'store', 'use', 'work'])
     assert result.exit_code == 0, result.output
@@ -117,8 +116,7 @@ def test_store_remove_drops_postgres_schema(tmp_path, pg_dsn):
     import psycopg
     runner, data_dir = _make_runner_with_pg_store(tmp_path, pg_dsn, 'work')
     runner.invoke(
-        cli, ['--data-dir', data_dir, '--store', 'work',
-              'store', 'create'])
+        cli, ['--data-dir', data_dir, 'store', 'create', 'work'])
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -145,11 +143,9 @@ def test_store_create_rejects_duplicate_postgres_store(tmp_path, pg_dsn):
     """
     runner, data_dir = _make_runner_with_pg_store(tmp_path, pg_dsn, 'work')
     first = runner.invoke(
-        cli, ['--data-dir', data_dir, '--store', 'work',
-              'store', 'create'])
+        cli, ['--data-dir', data_dir, 'store', 'create', 'work'])
     assert first.exit_code == 0, first.output
     second = runner.invoke(
-        cli, ['--data-dir', data_dir, '--store', 'work',
-              'store', 'create'])
+        cli, ['--data-dir', data_dir, 'store', 'create', 'work'])
     assert second.exit_code != 0
     assert 'already exists' in (second.output or '').lower()

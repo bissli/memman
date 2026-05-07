@@ -37,8 +37,7 @@ import shutil
 import subprocess
 import sys
 import time
-from concurrent.futures import (
-    CancelledError, ThreadPoolExecutor, as_completed)
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock

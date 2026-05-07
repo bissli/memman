@@ -199,8 +199,7 @@ def check_stale_post_migrate_source(data_dir: str) -> dict[str, Any]:
     a `warn` (not `fail`) because preserved-but-stale is a known
     operator-driven state, not a corruption signal.
     """
-    from memman.store.factory import (
-        resolve_store_backend, list_stores)
+    from memman.store.factory import list_stores, resolve_store_backend
 
     data_root = Path(data_dir) / 'data'
     if not data_root.is_dir():
@@ -235,8 +234,6 @@ def check_stale_post_migrate_source(data_dir: str) -> dict[str, Any]:
             f' Delete with `rm <data_dir>/data/<store>/memman.db*`'
             f' once you have verified the postgres-side data is intact.'),
         }
-
-
 
 
 def check_queue_backlog(data_dir: str) -> dict[str, Any]:
@@ -285,7 +282,7 @@ def check_queue_backlog(data_dir: str) -> dict[str, Any]:
 EXPECTED_INSIGHT_COLUMNS = {
     'prompt_version', 'model_id', 'embedding_model',
     'linked_at', 'enriched_at', 'last_accessed_at',
-    'embedding_pending', 'effective_importance',
+    'effective_importance',
     'summary', 'keywords', 'semantic_facts',
     }
 EXPECTED_QUEUE_TABLES = {'queue', 'worker_runs'}
@@ -696,8 +693,8 @@ def check_drain_heartbeat(data_dir: str) -> dict[str, Any]:
     """
     from datetime import datetime, timezone
 
-    from memman.store.factory import resolve_store_backend, list_stores
-    from memman.store.factory import open_backend
+    from memman.store.factory import list_stores, open_backend
+    from memman.store.factory import resolve_store_backend
 
     try:
         stores = list_stores(data_dir)

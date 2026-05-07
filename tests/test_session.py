@@ -24,10 +24,9 @@ def test_active_store_wraps_backend_config_error_from_open(
     """
     env_file('MEMMAN_BACKEND_oops', 'postgres')
     data_dir = str(tmp_path / 'memman')
-    with pytest.raises(ClickException) as exc:
-        with active_store(
-                data_dir=data_dir, store='oops', unchecked=True):
-            pass
+    with pytest.raises(ClickException) as exc, active_store(
+            data_dir=data_dir, store='oops', unchecked=True):
+        pass
     assert 'oops' in str(exc.value).lower() or 'dsn' in str(exc.value).lower()
 
 

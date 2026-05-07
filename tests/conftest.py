@@ -663,8 +663,7 @@ def backend(request, backend_kind, tmp_path):
     from memman.embed.fingerprint import META_KEY, active_fingerprint
     pg_dsn = None
     if backend_kind == 'sqlite':
-        from memman.store.sqlite import drop_sqlite_store
-        from memman.store.sqlite import open_sqlite_backend
+        from memman.store.sqlite import drop_sqlite_store, open_sqlite_backend
         data_dir = str(tmp_path / 'memman')
         store_name = 'test'
         b = open_sqlite_backend(store_name, data_dir)
@@ -936,7 +935,6 @@ def parse_remember(result, runner_tuple=None):
     if queue_id is None:
         return raw
     _, data_dir = runner_tuple
-    from memman import config
     from memman.store.db import read_active
     from memman.store.factory import resolve_store_backend
     from memman.store.factory import resolve_store_pg_dsn
@@ -954,10 +952,9 @@ where source = %s
 order by created_at
 """
         dsn = resolve_store_pg_dsn(name, data_dir)
-        with psycopg.connect(dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, (f'queue:{queue_id}',))
-                rows = cur.fetchall()
+        with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute(sql, (f'queue:{queue_id}',))
+            rows = cur.fetchall()
     else:
         from memman.store.db import open_read_only, store_dir
         sdir = store_dir(data_dir, name)

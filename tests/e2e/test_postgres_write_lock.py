@@ -79,7 +79,7 @@ def test_concurrent_remember_during_reindex_preserves_edge(
                 backend.edges.upsert(Edge(
                     source_id='wl-src',
                     target_id='wl-dst',
-                    edge_type='manual',
+                    edge_type='entity',
                     weight=1.0,
                     metadata={'origin': 'concurrent-remember'}))
                 backend._conn.commit()
@@ -107,7 +107,7 @@ def test_concurrent_remember_during_reindex_preserves_edge(
     verify = open_postgres_backend(store, pg_dsn)
     try:
         edges = verify.edges.get_neighborhood(
-            seed_id='wl-src', depth=1, edge_filter='manual')
+            seed_id='wl-src', depth=1, edge_filter='entity')
         target_ids = [hit[0] for hit in edges]
         assert 'wl-dst' in target_ids, (
             f'concurrent edge must survive write_lock window;'

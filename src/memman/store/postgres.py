@@ -190,12 +190,20 @@ _PER_NODE_CREATED_BY_FILTER = {
 def _open_connection(
         dsn: str, *, autocommit: bool = False,
         keepalives: bool = False,
-        connect_timeout: int | None = None) -> psycopg.Connection:
+        connect_timeout: int | None = None,
+        register_vector: bool = True) -> psycopg.Connection:
     """Open a fresh psycopg connection with pgvector adapters.
 
     `keepalives=True` adds `keepalives_idle=30` for the drain-lock
     connection so a hung worker is detected by the kernel rather
     than holding the lock indefinitely.
+
+    Set `register_vector=False` for probes that must run against a
+    database where the `vector` extension may legitimately be absent
+    (e.g., the install wizard's pgvector-presence check). The
+    pgvector adapter raises `ProgrammingError` on register when the
+    extension is missing; skipping registration lets callers detect
+    absence with their own SQL probe.
 
     Returns a bare connection; lock-holding paths (`drain_lock`,
     `reembed_lock`) and long-lived backend connections own the
@@ -203,7 +211,7 @@ def _open_connection(
     below for guaranteed close-on-exit semantics.
     """
     import psycopg
-    from pgvector.psycopg import register_vector
+    from pgvector.psycopg import register_vector as _register_vector
     kwargs: dict[str, Any] = {'autocommit': autocommit}
     if keepalives:
         kwargs['keepalives'] = 1
@@ -211,7 +219,8 @@ def _open_connection(
     if connect_timeout is not None:
         kwargs['connect_timeout'] = connect_timeout
     conn = psycopg.connect(dsn, **kwargs)
-    register_vector(conn)
+    if register_vector:
+        _register_vector(conn)
     return conn
 
 
@@ -219,7 +228,8 @@ def _open_connection(
 def _connection(
         dsn: str, *, autocommit: bool = False,
         keepalives: bool = False,
-        connect_timeout: int | None = None
+        connect_timeout: int | None = None,
+        register_vector: bool = True
         ) -> Iterator[psycopg.Connection]:
     """Context-manager wrapper around `_open_connection`.
 
@@ -230,7 +240,8 @@ def _connection(
     """
     conn = _open_connection(
         dsn, autocommit=autocommit, keepalives=keepalives,
-        connect_timeout=connect_timeout)
+        connect_timeout=connect_timeout,
+        register_vector=register_vector)
     try:
         yield conn
     finally:

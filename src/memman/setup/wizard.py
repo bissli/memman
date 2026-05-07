@@ -233,7 +233,8 @@ def _probe_dsn(dsn: str) -> None:
     """
     from memman.store.postgres import _connection
     with _connection(
-            dsn, connect_timeout=DSN_PROBE_TIMEOUT_SEC) as conn, \
+            dsn, connect_timeout=DSN_PROBE_TIMEOUT_SEC,
+            register_vector=False) as conn, \
             conn.cursor() as cur:
         cur.execute('select 1')
         cur.execute(

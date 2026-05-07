@@ -10,8 +10,6 @@ the transactional fallback.
 
 import logging
 
-import pytest
-
 
 def _new_insight(content: str):
     """Build a fresh Insight for the pipeline test."""

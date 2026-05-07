@@ -15,11 +15,7 @@ a prior postgres trial without erroring.
 """
 
 import pytest
-
-from memman.store.config import (
-    PostgresBackendConfig,
-    SqliteBackendConfig,
-    )
+from memman.store.config import PostgresBackendConfig, SqliteBackendConfig
 from memman.store.errors import ConfigError
 
 

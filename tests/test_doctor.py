@@ -330,6 +330,7 @@ class TestEnvCompleteness:
         assert config.OPENAI_EMBED_API_KEY not in out.get('detail', {}).get(
             'missing', [])
 
+
 class TestCheckPerStoreKeys:
     """`check_per_store_keys` validates `MEMMAN_BACKEND_<store>` shape."""
 
@@ -789,6 +790,7 @@ class TestDrainHeartbeat:
     def test_passes_when_no_in_progress_runs(self, env_file, pg_dsn):
         """Postgres-backed store with no in-progress runs: status pass."""
         import os
+
         from memman.store.postgres import _store_schema, drop_postgres_store
         from memman.store.postgres import open_postgres_backend
 
@@ -825,6 +827,7 @@ class TestDrainHeartbeat:
     def test_warns_no_drain_heartbeat_in_5m(self, env_file, pg_dsn):
         """In-progress per-store run with stale heartbeat -> warn."""
         import os
+
         from memman.store.postgres import _store_schema, drop_postgres_store
         from memman.store.postgres import open_postgres_backend
 
@@ -868,6 +871,7 @@ class TestDrainHeartbeat:
     def test_no_warn_for_fresh_heartbeat(self, env_file, pg_dsn):
         """Per-store in-progress run with recent heartbeat does NOT warn."""
         import os
+
         from memman.store.postgres import _store_schema, drop_postgres_store
         from memman.store.postgres import open_postgres_backend
 

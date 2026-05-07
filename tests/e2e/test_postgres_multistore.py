@@ -26,7 +26,11 @@ pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
 
 
 def test_fresh_init_creates_schema_with_all_tables(pg_dsn, request):
-    """`open_postgres_backend` on a never-seen store creates all four tables."""
+    """`open_postgres_backend` on a never-seen store creates the per-store tables.
+
+    Includes `worker_runs` -- the drain heartbeat moved from a global
+    `queue` schema to per-store in 0.14.x.
+    """
     store = _safe(request.node.name)
     schema = _store_schema(store)
     try:
@@ -42,7 +46,8 @@ def test_fresh_init_creates_schema_with_all_tables(pg_dsn, request):
                     ' WHERE schemaname = %s ORDER BY tablename',
                     (schema,))
                 tables = [r[0] for r in cur.fetchall()]
-        assert tables == ['edges', 'insights', 'meta', 'oplog']
+        assert tables == [
+            'edges', 'insights', 'meta', 'oplog', 'worker_runs']
     finally:
         backend.close()
         drop_postgres_store(store, pg_dsn)

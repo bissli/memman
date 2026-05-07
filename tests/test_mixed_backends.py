@@ -13,7 +13,6 @@ import pathlib
 from pathlib import Path
 
 import pytest
-
 from memman import config
 
 
@@ -48,7 +47,6 @@ def test_graph_rebuild_guard_uses_per_store_kind(tmp_path, env_file):
     """`graph rebuild --store pg_one` rejects on per-store postgres key.
     """
     from click.testing import CliRunner
-
     from memman.cli import cli
 
     data_dir = os.environ[config.DATA_DIR]
@@ -71,7 +69,6 @@ def test_graph_rebuild_guard_passes_for_sqlite_store(tmp_path, env_file):
     even when a sibling postgres store is configured.
     """
     from click.testing import CliRunner
-
     from memman.cli import cli
 
     data_dir = os.environ[config.DATA_DIR]
@@ -92,7 +89,6 @@ def test_store_list_returns_mixed_stores(tmp_path, env_file):
     """`memman store list` returns both sqlite and postgres-keyed stores.
     """
     from click.testing import CliRunner
-
     from memman.cli import cli
 
     data_dir = os.environ[config.DATA_DIR]
@@ -127,7 +123,6 @@ def test_status_reports_per_store_backend_and_summary(tmp_path, env_file):
     """`memman status` reports the per-store kind + a `backends_in_use` set.
     """
     from click.testing import CliRunner
-
     from memman.cli import cli
 
     data_dir = os.environ[config.DATA_DIR]
@@ -153,7 +148,6 @@ def test_config_show_redacts_per_store_dsn(tmp_path, env_file):
     """`memman config show` redacts every `MEMMAN_PG_DSN_<store>` value.
     """
     from click.testing import CliRunner
-
     from memman.cli import cli
 
     data_dir = os.environ[config.DATA_DIR]
@@ -180,7 +174,6 @@ def test_drain_processes_mixed_backends_in_one_batch(
     """
     import psycopg
     from click.testing import CliRunner
-
     from memman.cli import cli
     from memman.store.postgres import _store_schema
 
@@ -231,7 +224,6 @@ def test_cross_backend_retry(tmp_path, env_file, pg_dsn, monkeypatch):
     """
     import psycopg
     from click.testing import CliRunner
-
     from memman import cli as memman_cli
     from memman.cli import cli
     from memman.store.postgres import _store_schema
@@ -295,12 +287,11 @@ def test_cross_backend_retry(tmp_path, env_file, pg_dsn, monkeypatch):
             f'expected a second process call after backend swap,'
             f' saw {attempts_seen[0]}')
 
-        with psycopg.connect(pg_dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    f'select count(*) from {schema}.insights'
-                    " where deleted_at is null")
-                count = cur.fetchone()[0]
+        with psycopg.connect(pg_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                f'select count(*) from {schema}.insights'
+                ' where deleted_at is null')
+            count = cur.fetchone()[0]
         assert count > 0, (
             f'expected the retried row to land in {schema}.insights;'
             f' the per-drain _StoreContext should have routed to the'
@@ -323,7 +314,6 @@ def test_default_sqlite_with_work_postgres(
     """
     import psycopg
     from click.testing import CliRunner
-
     from memman.cli import cli
     from memman.store.postgres import _store_schema
 
@@ -350,12 +340,11 @@ def test_default_sqlite_with_work_postgres(
         assert sqlite_db.exists(), (
             f'expected sqlite store at {sqlite_db}')
 
-        with psycopg.connect(pg_dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    f'select count(*) from {schema}.insights'
-                    " where deleted_at is null")
-                count = cur.fetchone()[0]
+        with psycopg.connect(pg_dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                f'select count(*) from {schema}.insights'
+                ' where deleted_at is null')
+            count = cur.fetchone()[0]
         assert count > 0, (
             f'expected at least one row in {schema}.insights')
     finally:

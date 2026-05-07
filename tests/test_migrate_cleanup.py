@@ -88,9 +88,9 @@ def test_doctor_warns_on_stale_post_migrate_source(
     The artifact is intentional preservation, not corruption -- so
     the check is `warn` (operator-burden) rather than `fail`.
     """
-    from memman.doctor import check_stale_post_migrate_source
-
     import os
+
+    from memman.doctor import check_stale_post_migrate_source
 
     data_dir = os.environ['MEMMAN_DATA_DIR']
     sdir = Path(data_dir) / 'data' / 'stale_store'
@@ -107,9 +107,9 @@ def test_doctor_passes_when_postgres_store_is_clean(
         tmp_path, env_file):
     """A store dir with no SQLite artifacts under postgres routing passes.
     """
-    from memman.doctor import check_stale_post_migrate_source
-
     import os
+
+    from memman.doctor import check_stale_post_migrate_source
 
     data_dir = os.environ['MEMMAN_DATA_DIR']
     sdir = Path(data_dir) / 'data' / 'clean_store'
@@ -124,9 +124,9 @@ def test_doctor_skips_sqlite_routed_stores(tmp_path, env_file):
     """A sqlite-routed store with `memman.db` is the source of truth,
     not a stale artifact -- do not flag.
     """
-    from memman.doctor import check_stale_post_migrate_source
-
     import os
+
+    from memman.doctor import check_stale_post_migrate_source
 
     data_dir = os.environ['MEMMAN_DATA_DIR']
     sdir = Path(data_dir) / 'data' / 'sqlite_store'

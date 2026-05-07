@@ -6,7 +6,7 @@ import re
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 logger = logging.getLogger('memman')
 
@@ -92,7 +92,7 @@ class DB:
         """Close the database connection."""
         self._conn.close()
 
-    def __enter__(self) -> 'DB':
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:

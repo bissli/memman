@@ -22,7 +22,6 @@ remain governed by the flat `INSTALLABLE_KEYS` membership check at
 import difflib
 from dataclasses import dataclass
 
-from memman import config
 from memman.store.errors import ConfigError
 
 

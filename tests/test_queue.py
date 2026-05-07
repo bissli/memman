@@ -6,7 +6,7 @@ import pytest
 from memman.queue import MAX_ATTEMPTS, STALE_CLAIM_SECONDS, STATUS_DONE
 from memman.queue import STATUS_FAILED, STATUS_PENDING, claim, enqueue
 from memman.queue import get_row, list_rows, mark_done, mark_failed
-from memman.queue import open_queue_db, purge_done, queue_db, retry_row, stats
+from memman.queue import purge_done, queue_db, retry_row, stats
 
 
 def test_enqueue_returns_incrementing_id(queue_conn):

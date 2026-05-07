@@ -17,9 +17,8 @@ def test_db_context_manager_closes_on_exit(tmp_path):
 
 def test_db_context_manager_closes_on_exception(tmp_path):
     """Exception inside the with-block still closes the connection."""
-    with pytest.raises(RuntimeError):
-        with open_db(str(tmp_path)) as db:
-            underlying = db.conn
-            raise RuntimeError('boom')
+    with pytest.raises(RuntimeError), open_db(str(tmp_path)) as db:
+        underlying = db.conn
+        raise RuntimeError('boom')
     with pytest.raises(sqlite3.ProgrammingError):
         underlying.execute('select 1')
