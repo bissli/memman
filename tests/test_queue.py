@@ -6,7 +6,7 @@ import pytest
 from memman.queue import MAX_ATTEMPTS, STALE_CLAIM_SECONDS, STATUS_DONE
 from memman.queue import STATUS_FAILED, STATUS_PENDING, claim, enqueue
 from memman.queue import get_row, list_rows, mark_done, mark_failed
-from memman.queue import open_queue_db, purge_done, retry_row, stats
+from memman.queue import open_queue_db, purge_done, queue_db, retry_row, stats
 
 
 def test_enqueue_returns_incrementing_id(queue_conn):
@@ -144,6 +144,35 @@ def test_mark_failed_backoff_grows_with_attempts(queue_conn, monkeypatch):
             f' got {row["claimed_at"]} (backoff {backoff}s)')
 
 
+def test_mark_failed_backoff_caps_at_stale_claim_seconds(
+        queue_conn, monkeypatch):
+    """The `min(60 * 2**(attempts-1), STALE_CLAIM_SECONDS)` cap fires
+    when max_attempts is high enough for the geometric series to
+    exceed the cap before hitting the failed-state branch.
+
+    At default MAX_ATTEMPTS=5 the row transitions to failed before
+    the cap is reached. Pass max_attempts=10 so attempt 5
+    (backoff 960s -> capped to 600s) and beyond are observable.
+    """
+    fixed_now = 1_000_000
+    monkeypatch.setattr('memman.queue.time.time', lambda: fixed_now)
+    enqueue(queue_conn, 'main', 'a')
+
+    for attempt_idx in range(1, 7):
+        r = claim(queue_conn, worker_pid=1, stale_after_seconds=0)
+        assert r is not None
+        mark_failed(
+            queue_conn, r.id, f'attempt {attempt_idx}',
+            max_attempts=10)
+        if attempt_idx >= 5:
+            row = get_row(queue_conn, r.id)
+            expected = fixed_now
+            assert row['claimed_at'] == expected, (
+                f'attempt {attempt_idx}: backoff cap at'
+                f' STALE_CLAIM_SECONDS expected; got'
+                f' claimed_at={row["claimed_at"]}, expected={expected}')
+
+
 def test_mark_failed_at_threshold_transitions_to_failed(queue_conn):
     """Once attempts reaches MAX_ATTEMPTS, the row moves to failed.
     """
@@ -244,9 +273,8 @@ def test_list_rows_status_filter(queue_conn):
 def test_concurrent_claim_across_two_connections(tmp_path):
     """Atomic claim: two connections racing never claim the same row twice.
     """
-    conn_a = open_queue_db(str(tmp_path))
-    conn_b = open_queue_db(str(tmp_path))
-    try:
+    with queue_db(str(tmp_path)) as conn_a, \
+            queue_db(str(tmp_path)) as conn_b:
         for _ in range(10):
             enqueue(conn_a, 'main', 'row')
 
@@ -261,6 +289,14 @@ def test_concurrent_claim_across_two_connections(tmp_path):
         assert len(set(claimed_ids)) == len(claimed_ids), (
             'same row claimed by both connections')
         assert len(claimed_ids) == 10
-    finally:
-        conn_a.close()
-        conn_b.close()
+
+
+def test_queue_db_context_manager_closes_on_exit(tmp_path):
+    """`with queue_db(...)` closes the connection on scope exit."""
+    import sqlite3
+    with queue_db(str(tmp_path)) as conn:
+        enqueue(conn, 'main', 'hi')
+        assert conn.execute(
+            'select count(*) from queue').fetchone() == (1,)
+    with pytest.raises(sqlite3.ProgrammingError):
+        conn.execute('select 1')

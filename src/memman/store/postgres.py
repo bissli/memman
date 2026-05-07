@@ -2,9 +2,8 @@
 
 Single-file parallel to `store/sqlite.py`. Schema-per-store layout:
 each memman store maps to a Postgres schema named `store_<name>`,
-holding the four per-store tables (insights, edges, oplog, meta).
-Queue tables live in a global `queue` schema, shared across all
-stores in the cluster.
+holding the per-store tables (insights, edges, oplog, meta,
+worker_runs).
 
 Vector storage:
 - `embedding vector(512)` (pgvector); pgvector adapter binds
@@ -106,7 +105,9 @@ create table if not exists {schema}.edges (
     created_at  timestamptz not null default now(),
     primary key (source_id, target_id, edge_type),
     foreign key (source_id) references {schema}.insights(id) on delete cascade,
-    foreign key (target_id) references {schema}.insights(id) on delete cascade
+    foreign key (target_id) references {schema}.insights(id) on delete cascade,
+    constraint edges_edge_type_check_{schema}
+        check (edge_type in ('temporal','semantic','causal','entity'))
 );
 
 create table if not exists {schema}.oplog (
@@ -188,7 +189,8 @@ _PER_NODE_CREATED_BY_FILTER = {
 
 def _open_connection(
         dsn: str, *, autocommit: bool = False,
-        keepalives: bool = False) -> psycopg.Connection:
+        keepalives: bool = False,
+        connect_timeout: int | None = None) -> psycopg.Connection:
     """Open a fresh psycopg connection with pgvector adapters.
 
     `keepalives=True` adds `keepalives_idle=30` for the drain-lock
@@ -206,6 +208,8 @@ def _open_connection(
     if keepalives:
         kwargs['keepalives'] = 1
         kwargs['keepalives_idle'] = 30
+    if connect_timeout is not None:
+        kwargs['connect_timeout'] = connect_timeout
     conn = psycopg.connect(dsn, **kwargs)
     register_vector(conn)
     return conn
@@ -214,7 +218,9 @@ def _open_connection(
 @contextmanager
 def _connection(
         dsn: str, *, autocommit: bool = False,
-        keepalives: bool = False) -> Iterator[psycopg.Connection]:
+        keepalives: bool = False,
+        connect_timeout: int | None = None
+        ) -> Iterator[psycopg.Connection]:
     """Context-manager wrapper around `_open_connection`.
 
     Closes on exit (psycopg3's `with conn:` is transaction-scoped, not
@@ -223,7 +229,8 @@ def _connection(
     without losing the `register_vector` adapter setup).
     """
     conn = _open_connection(
-        dsn, autocommit=autocommit, keepalives=keepalives)
+        dsn, autocommit=autocommit, keepalives=keepalives,
+        connect_timeout=connect_timeout)
     try:
         yield conn
     finally:
@@ -280,6 +287,8 @@ def _row_to_insight(row: tuple[Any, ...]) -> Insight:
         i.linked_at = _datetime_or_none(row[11])
     if len(row) > 12:
         i.enriched_at = _datetime_or_none(row[12])
+    if len(row) > 13:
+        i.last_accessed_at = _datetime_or_none(row[13])
     return i
 
 
@@ -304,7 +313,7 @@ def _row_to_edge(row: tuple[Any, ...]) -> Edge:
 _INSIGHT_COLS = (
     'id, content, category, importance, entities,'
     ' source, access_count, created_at, updated_at, deleted_at,'
-    ' summary, linked_at, enriched_at')
+    ' summary, linked_at, enriched_at, last_accessed_at')
 
 
 class PostgresNodeStore(BaseNodeStore, NodeStore):
@@ -553,7 +562,7 @@ where id = %s
         from memman.store.model import is_immune
         from memman.store.node import compute_effective_importance
         rows_sql = self._q(f"""
-select {_INSIGHT_COLS}, last_accessed_at
+select {_INSIGHT_COLS}
 from {{s}}.insights
 where deleted_at is null
 """)
@@ -585,8 +594,8 @@ group by id
         candidates: list[dict[str, Any]] = []
         updates: list[tuple[float, str]] = []
         for r in rows:
-            ins = _row_to_insight(r[:13])
-            last_access = _datetime_or_none(r[13]) or (
+            ins = _row_to_insight(r)
+            last_access = ins.last_accessed_at or (
                 ins.created_at or now)
             days_since = (now - last_access).total_seconds() / 86400.0
             ec = edge_counts.get(ins.id, 0)
@@ -2006,19 +2015,25 @@ def _resolve_active_dim(expected_dim: int | None = None) -> int:
 def _read_stored_dim(dsn: str, store: str) -> int | None:
     """Best-effort read of the stored fingerprint dim for `store`.
 
-    Returns None when the schema does not exist yet or the meta row
-    is absent. Used by `open_postgres_backend` to make a freshly
-    discovered store open at its own dim instead of forcing the env
-    active client's dim.
+    Returns None when the schema does not exist yet (UndefinedTable),
+    when the meta row is absent, or when the value is unparseable.
+    Connection failures (network/auth) propagate so a transient
+    outage doesn't masquerade as a fresh schema and silently force a
+    fingerprint mismatch on the next assert.
     """
+    import psycopg
+
     schema = _store_schema(store)
     sql = f"select value from {schema}.meta where key = 'embed_fingerprint'"
     try:
         with _connection(dsn, autocommit=True) as conn, \
                 conn.cursor() as cur:
-            cur.execute(sql)
+            try:
+                cur.execute(sql)
+            except psycopg.errors.UndefinedTable:
+                return None
             row = cur.fetchone()
-    except Exception:
+    except psycopg.errors.UndefinedTable:
         return None
     if row is None or not row[0]:
         return None
@@ -2096,6 +2111,15 @@ def _ensure_baseline_schema(
                 f'alter table {schema}.oplog'
                 f' add constraint oplog_legacy_id_key_{schema}'
                 f' unique (legacy_id)')
+        cur.execute(
+            'select 1 from pg_constraint where conname = %s',
+            (f'edges_edge_type_check_{schema}',))
+        if cur.fetchone() is None:
+            cur.execute(
+                f'alter table {schema}.edges'
+                f' add constraint edges_edge_type_check_{schema}'
+                f" check (edge_type in"
+                f" ('temporal','semantic','causal','entity'))")
 
 
 def _assert_vector_dim_matches(

@@ -544,3 +544,25 @@ def test_memman_reindex_timeout_caps_hnsw_build(
     assert set_idx < create_idx, (
         f'SET statement_timeout must precede CREATE INDEX;'
         f' captured order: {captured}')
+
+
+def test_read_stored_dim_distinguishes_absent_from_unreachable(
+        pg_dsn, monkeypatch):
+    """`_read_stored_dim` returns None for an absent schema and raises
+    for an unreachable connection.
+
+    Pre-F.4 the helper swallowed every Exception, so a transient
+    connection outage masqueraded as a fresh schema and the next
+    fingerprint assert silently kicked off as if the dim were unknown.
+    """
+    from memman.store.postgres import _read_stored_dim
+
+    schema = _store_schema('absent_store')
+    with psycopg.connect(pg_dsn, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+    assert _read_stored_dim(pg_dsn, 'absent_store') is None
+
+    bad_dsn = 'postgresql://user@nonexistent.invalid:5432/x'
+    with pytest.raises(psycopg.OperationalError):
+        _read_stored_dim(bad_dsn, 'absent_store')

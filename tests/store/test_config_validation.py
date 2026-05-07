@@ -128,3 +128,72 @@ class TestOpenBackendIntegration:
             factory.open_backend('default', str(data_dir))
         assert 'MEMMAN_PG_DSL' in str(exc.value)
         assert 'MEMMAN_PG_DSN' in str(exc.value)
+
+
+class TestValidateAll:
+    """`validate_all` runs every registered backend's namespace check."""
+
+    def test_empty_suffix_rejected(self):
+        """`MEMMAN_PG_DSN_` (no suffix) is an invalid store name.
+        """
+        from memman.store.config import validate_for
+        env = {'MEMMAN_PG_DSN_': 'x'}
+        with pytest.raises(ConfigError):
+            validate_for('postgres', env)
+
+    def test_invalid_store_name_suffix_rejected(self):
+        """A suffix containing slashes / spaces is rejected.
+        """
+        from memman.store.config import validate_for
+        env = {'MEMMAN_PG_DSN_bad/name': 'x'}
+        with pytest.raises(ConfigError):
+            validate_for('postgres', env)
+
+    def test_validate_all_catches_inactive_namespace_typo(self):
+        """`validate_all` runs both registered config classes, so a
+        `MEMMAN_PG_DSN_typo` key is rejected even when the active
+        backend is sqlite.
+
+        Closes the validator gap where typos in an inactive backend's
+        namespace passed silently because `validate_for(backend, ...)`
+        only ran one class.
+        """
+        from memman.store.config import validate_all
+        env = {
+            'MEMMAN_DEFAULT_BACKEND': 'sqlite',
+            'MEMMAN_PG_FAKE_KEY_main': 'x',
+            }
+        with pytest.raises(ConfigError):
+            validate_all(env)
+
+    def test_validate_all_catches_inactive_postgres_typo_when_active_is_sqlite(
+            self):
+        """End-to-end inactive-namespace coverage: a `MEMMAN_PG_*`
+        typo is caught when sqlite is active.
+        """
+        from memman.store.config import validate_all
+        env = {
+            'MEMMAN_DEFAULT_BACKEND': 'sqlite',
+            'MEMMAN_PG_DSL': 'postgresql://x',
+            }
+        with pytest.raises(ConfigError):
+            validate_all(env)
+
+    def test_did_you_mean_hints_point_at_per_store_form(self):
+        """Property: every did-you-mean hint produced by either
+        registered config class points at the per-store form
+        (`<canonical>_<store>`), never at a bare canonical.
+        """
+        from memman.store.config import _REGISTRY
+        for cls in _REGISTRY.values():
+            for owned in cls.OWNED_KEYS:
+                typo = owned + 'L'
+                env = {typo: 'value'}
+                try:
+                    cls._validate(env)
+                except ConfigError as exc:
+                    msg = str(exc)
+                    if 'did you mean' in msg.lower():
+                        assert '<store>' in msg, (
+                            f'hint for {typo!r} should point at the'
+                            f' per-store form: {msg!r}')

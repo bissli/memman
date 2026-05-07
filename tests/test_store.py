@@ -2,7 +2,7 @@
 
 
 import pytest
-from memman.store.db import DEFAULT_STORE_NAME, list_stores, open_db
+from memman.store.db import DEFAULT_STORE_NAME, list_local_store_dirs, open_db
 from memman.store.db import read_active, store_dir, store_exists
 from memman.store.db import valid_store_name, write_active
 from memman.store.edge import count_insights_with_entity
@@ -692,7 +692,7 @@ class TestListStores:
 
     def test_empty(self, tmp_path):
         """No data dir returns empty list."""
-        names = list_stores(str(tmp_path))
+        names = list_local_store_dirs(str(tmp_path))
         assert len(names) == 0
 
     def test_two_stores(self, tmp_path):
@@ -703,7 +703,7 @@ class TestListStores:
         db2 = open_db(store_dir(base, 'beta'))
         db2.close()
 
-        names = list_stores(base)
+        names = list_local_store_dirs(base)
         assert len(names) == 2
         assert names[0] == 'alpha'
         assert names[1] == 'beta'

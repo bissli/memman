@@ -18,9 +18,11 @@ from datetime import datetime, timedelta, timezone
 import click
 import memman
 from memman import config
-from memman.store.db import default_data_dir, list_stores, open_db
+from memman.store import factory
+from memman.store.db import default_data_dir, open_db
 from memman.store.db import read_active, store_dir, store_exists
 from memman.store.db import valid_store_name, write_active
+from memman.store.factory import list_stores
 from memman.store.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge
 from memman.store.model import Insight, format_timestamp, is_immune
 from memman.store.sqlite import open_ro_db
@@ -286,6 +288,28 @@ def cli(ctx: click.Context, data_dir: str | None, store_name: str,
     ctx.obj['data_dir'] = data_dir
     ctx.obj['store'] = store_name
     ctx.obj['readonly'] = readonly
+    _warn_on_legacy_bare_keys(data_dir)
+
+
+def _warn_on_legacy_bare_keys(data_dir: str) -> None:
+    """Warn once per invocation if the env file carries a bare canonical.
+
+    `MEMMAN_BACKEND` and `MEMMAN_PG_DSN` are silently ignored under
+    the per-store routing model, which is a quiet 0.13->0.14 upgrade
+    trap. Surface the drift on every CLI bootstrap (and `memman
+    doctor` flags it as a fail).
+    """
+    env_path = config.env_file_path(data_dir)
+    if not env_path.exists():
+        return
+    file_values = config.parse_env_file(env_path)
+    for legacy in ('MEMMAN_BACKEND', 'MEMMAN_PG_DSN'):
+        if file_values.get(legacy):
+            logger.warning(
+                'legacy bare key %r found in %s; ignored under'
+                ' per-store routing -- run `memman doctor` for'
+                ' migration hints',
+                legacy, env_path)
 
 
 @cli.group()
@@ -333,15 +357,44 @@ def config_cmd() -> None:
 def config_set(ctx: click.Context, key: str, value: str) -> None:
     """Write `KEY=VALUE` to the env file, bypassing the install seed model.
 
-    Use this to change an INSTALLABLE_KEYS value after initial install
-    -- switching backends, rotating an API key, updating a DSN. Install
+    Use this to change a persistable setting after initial install --
+    switching backends, rotating an API key, updating a DSN. Install
     flags remain sticky-seed (they never override an existing file
     value); `config set` is the explicit override path.
+
+    Three shapes of key are accepted:
+      * any member of `config.INSTALLABLE_KEYS`
+      * `MEMMAN_BACKEND_<store>` (per-store backend routing)
+      * `MEMMAN_PG_DSN_<store>` (per-store DSN)
+    Bare canonicals (`MEMMAN_BACKEND`, `MEMMAN_PG_DSN`) are rejected
+    with hints pointing at `MEMMAN_DEFAULT_*` or the per-store form.
     """
-    if key not in config.INSTALLABLE_KEYS:
+    bare_canonicals = {
+        'MEMMAN_BACKEND': (
+            'use MEMMAN_DEFAULT_BACKEND for the cluster fallback'
+            ' or MEMMAN_BACKEND_<store> for a specific store'),
+        'MEMMAN_PG_DSN': (
+            'use MEMMAN_DEFAULT_PG_DSN for the cluster fallback'
+            ' or MEMMAN_PG_DSN_<store> for a specific store'),
+        }
+    if key in bare_canonicals:
         raise click.ClickException(
-            f'{key!r} is not in INSTALLABLE_KEYS; only persistable'
-            ' settings can be changed via `config set`')
+            f'{key!r} is no longer accepted under the per-store routing'
+            f' model; {bare_canonicals[key]}')
+    if key in config.INSTALLABLE_KEYS:
+        pass
+    elif key.startswith('MEMMAN_BACKEND_') and valid_store_name(
+            key[len('MEMMAN_BACKEND_'):]):
+        pass
+    elif key.startswith('MEMMAN_PG_DSN_') and valid_store_name(
+            key[len('MEMMAN_PG_DSN_'):]):
+        pass
+    else:
+        raise click.ClickException(
+            f'{key!r} is not a recognized config key. Accepted shapes:'
+            ' INSTALLABLE_KEYS members,'
+            ' MEMMAN_BACKEND_<store> (per-store routing),'
+            ' or MEMMAN_PG_DSN_<store> (per-store DSN).')
     from memman.setup.scheduler import _write_env_keys
     data_dir = ctx.obj['data_dir']
     _write_env_keys({key: value}, data_dir=data_dir)
@@ -434,9 +487,8 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     data_dir_val = ctx.obj['data_dir']
     name = _resolve_store_name(data_dir_val, ctx.obj['store'])
 
-    from memman.queue import enqueue, open_queue_db
-    conn = open_queue_db(data_dir_val)
-    try:
+    from memman.queue import enqueue, queue_db
+    with queue_db(data_dir_val) as conn:
         cat_hint = cat if cat != 'general' else None
         imp_hint = imp if imp != 3 else None
         row_id = enqueue(
@@ -446,8 +498,6 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
             hint_entities=entities or None,
             hint_no_reconcile=no_reconcile,
             priority=0)
-    finally:
-        conn.close()
     _json_out({
         'action': 'queued',
         'queue_id': row_id,
@@ -526,18 +576,25 @@ def scheduler_drain(ctx: click.Context, pending: bool, limit: int,
 
 
 @scheduler.command('serve')
-@click.option('--interval', default=60, type=int,
-              help='Seconds between drain iterations (default 60)')
+@click.option('--interval', default=None, type=int,
+              help=('Seconds between drain iterations.'
+                    ' Falls back to MEMMAN_INTERVAL, then 60.'))
 @click.option('--once', is_flag=True, default=False,
               help='Run a single drain pass and exit')
 @click.pass_context
-def scheduler_serve(ctx: click.Context, interval: int, once: bool) -> None:
+def scheduler_serve(ctx: click.Context, interval: int | None,
+                    once: bool) -> None:
     """Run the drain loop continuously as a long-lived process.
 
     Used as PID 1 in containers and by hosts where systemd/launchd are
     not available (set MEMMAN_SCHEDULER_KIND=serve). On SIGTERM/SIGINT
     the current drain finishes (bounded by the per-iteration timeout)
     and the process exits 0.
+
+    Resolution order for the iteration interval:
+      1. `--interval` flag (when passed)
+      2. `MEMMAN_INTERVAL` from the env file
+      3. 60 (the documented default)
     """
     import signal
     import socket
@@ -546,10 +603,20 @@ def scheduler_serve(ctx: click.Context, interval: int, once: bool) -> None:
 
     from memman import __version__ as _memman_version
     from memman import trace
-    from memman.queue import mark_stale_on_resume, open_queue_db
+    from memman.queue import mark_stale_on_resume, queue_db
     from memman.setup.scheduler import STATE_STOPPED, clear_serve_interval
     from memman.setup.scheduler import read_state, write_serve_interval
 
+    if interval is None:
+        raw = config.get(config.INTERVAL)
+        if raw is None or raw.strip() == '':
+            interval = 60
+        else:
+            try:
+                interval = int(raw)
+            except ValueError:
+                raise click.ClickException(
+                    f'MEMMAN_INTERVAL must be an integer, got {raw!r}')
     if interval < 0:
         raise click.ClickException('--interval must be >= 0')
 
@@ -567,14 +634,11 @@ def scheduler_serve(ctx: click.Context, interval: int, once: bool) -> None:
         write_serve_interval(interval)
 
         data_dir_val = ctx.obj['data_dir']
-        conn = open_queue_db(data_dir_val)
-        try:
+        with queue_db(data_dir_val) as conn:
             reclaimed = mark_stale_on_resume(conn)
             if reclaimed:
                 logger.info(
                     f'scheduler serve: reclaimed {reclaimed} stale rows')
-        finally:
-            conn.close()
 
         trace.setup()
         trace.event(
@@ -837,8 +901,8 @@ def _write_recall_snapshot_for_store(
     bounded (cap at 1000 active insights). Failures here are isolated
     per store and never abort the drain or cause queue rows to retry.
     """
-    from memman.store.factory import _resolve_store_backend
-    backend_name = _resolve_store_backend(store_name, data_dir_val)
+    from memman.store.factory import resolve_store_backend
+    backend_name = resolve_store_backend(store_name, data_dir_val)
     if backend_name != 'sqlite':
         return
 
@@ -847,11 +911,8 @@ def _write_recall_snapshot_for_store(
     from memman.store.sqlite import SqliteBackend
 
     sdir = store_dir(data_dir_val, store_name)
-    db = _open_store_db(sdir)
-    try:
+    with _open_store_db(sdir) as db:
         SqliteBackend(db).write_snapshot(active_fingerprint())
-    finally:
-        db.close()
 
 
 class _StoreContext:
@@ -1099,8 +1160,11 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
         query_vec = None
         try:
             query_vec = ec.embed(keyword_str)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                'recall query embed failed (%s): %s;'
+                ' degrading to keyword path',
+                type(exc).__name__, exc)
 
         query_entities = list(expansion.get('entities', []))
 
@@ -1240,9 +1304,8 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
     if entities_src != click.core.ParameterSource.COMMANDLINE:
         entities = ','.join(old.entities) if old.entities else ''
 
-    from memman.queue import enqueue, open_queue_db
-    conn = open_queue_db(data_dir_val)
-    try:
+    from memman.queue import enqueue, queue_db
+    with queue_db(data_dir_val) as conn:
         row_id = enqueue(
             conn, store=name, content=content_str,
             hint_cat=cat, hint_imp=imp,
@@ -1251,8 +1314,6 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             hint_replaced_id=id,
             hint_no_reconcile=not reconcile,
             priority=0)
-    finally:
-        conn.close()
     _json_out({
         'action': 'queued',
         'queue_id': row_id,
@@ -1375,15 +1436,12 @@ def graph_related(ctx: click.Context, id: str, edge: str,
 @click.pass_context
 def queue_list(ctx: click.Context, limit: int) -> None:
     """List recent queue rows."""
-    from memman.queue import list_rows, open_queue_db, stats
-    conn = open_queue_db(ctx.obj['data_dir'])
-    try:
+    from memman.queue import list_rows, queue_db, stats
+    with queue_db(ctx.obj['data_dir']) as conn:
         _json_out({
             'stats': stats(conn),
             'rows': list_rows(conn, limit=limit),
             })
-    finally:
-        conn.close()
 
 
 @queue.command('failed')
@@ -1391,15 +1449,12 @@ def queue_list(ctx: click.Context, limit: int) -> None:
 @click.pass_context
 def queue_failed(ctx: click.Context, limit: int) -> None:
     """List failed queue rows."""
-    from memman.queue import STATUS_FAILED, list_rows, open_queue_db, stats
-    conn = open_queue_db(ctx.obj['data_dir'])
-    try:
+    from memman.queue import STATUS_FAILED, list_rows, queue_db, stats
+    with queue_db(ctx.obj['data_dir']) as conn:
         _json_out({
             'stats': stats(conn),
             'rows': list_rows(conn, status=STATUS_FAILED, limit=limit),
             })
-    finally:
-        conn.close()
 
 
 @queue.command('show')
@@ -1407,15 +1462,12 @@ def queue_failed(ctx: click.Context, limit: int) -> None:
 @click.pass_context
 def queue_show(ctx: click.Context, row_id: int) -> None:
     """Print the full content of a queue row."""
-    from memman.queue import get_row, open_queue_db
-    conn = open_queue_db(ctx.obj['data_dir'])
-    try:
+    from memman.queue import get_row, queue_db
+    with queue_db(ctx.obj['data_dir']) as conn:
         row = get_row(conn, row_id)
         if row is None:
             raise click.ClickException(f'queue row {row_id} not found')
         _json_out(row)
-    finally:
-        conn.close()
 
 
 @queue.command('retry')
@@ -1423,15 +1475,12 @@ def queue_show(ctx: click.Context, row_id: int) -> None:
 @click.pass_context
 def queue_retry(ctx: click.Context, row_id: int) -> None:
     """Re-queue a failed row."""
-    from memman.queue import open_queue_db, retry_row
-    conn = open_queue_db(ctx.obj['data_dir'])
-    try:
+    from memman.queue import queue_db, retry_row
+    with queue_db(ctx.obj['data_dir']) as conn:
         if not retry_row(conn, row_id):
             raise click.ClickException(
                 f'queue row {row_id} not found or not in failed state')
         _json_out({'action': 'requeued', 'queue_id': row_id})
-    finally:
-        conn.close()
 
 
 @queue.command('purge')
@@ -1443,13 +1492,10 @@ def queue_purge(ctx: click.Context, done: bool) -> None:
     if not done:
         raise click.ClickException(
             'pass --done to confirm deletion of completed rows')
-    from memman.queue import open_queue_db, purge_done
-    conn = open_queue_db(ctx.obj['data_dir'])
-    try:
+    from memman.queue import purge_done, queue_db
+    with queue_db(ctx.obj['data_dir']) as conn:
         deleted = purge_done(conn)
         _json_out({'deleted': deleted})
-    finally:
-        conn.close()
 
 
 @scheduler.command('status')
@@ -1458,7 +1504,7 @@ def scheduler_status(ctx: click.Context) -> None:
     """Show scheduler install state, interval, next run, log paths,
     and the most recent worker-drain summary from worker_runs.
     """
-    from memman.queue import last_worker_run, open_queue_db
+    from memman.queue import last_worker_run, queue_db
     from memman.setup.scheduler import status
     result = status()
     logs_dir = pathlib.Path.home() / '.memman' / 'logs'
@@ -1476,11 +1522,8 @@ def scheduler_status(ctx: click.Context) -> None:
 
     result['last_run'] = None
     try:
-        conn = open_queue_db(ctx.obj['data_dir'])
-        try:
+        with queue_db(ctx.obj['data_dir']) as conn:
             result['last_run'] = last_worker_run(conn)
-        finally:
-            conn.close()
     except Exception as exc:
         logger.debug(f'worker_runs lookup failed: {exc}')
 
@@ -1495,7 +1538,7 @@ def scheduler_start(ctx: click.Context) -> None:
     Idempotent. Sweeps long-stalled queue rows to `stale` so they can
     be retried with `scheduler queue retry`.
     """
-    from memman.queue import mark_stale_on_resume, open_queue_db
+    from memman.queue import mark_stale_on_resume, queue_db
     from memman.setup.scheduler import start
     try:
         result = start()
@@ -1503,11 +1546,8 @@ def scheduler_start(ctx: click.Context) -> None:
         raise click.ClickException(str(exc)) from exc
 
     data_dir_val = ctx.obj['data_dir']
-    conn = open_queue_db(data_dir_val)
-    try:
+    with queue_db(data_dir_val) as conn:
         n_stale = mark_stale_on_resume(conn)
-    finally:
-        conn.close()
     if n_stale:
         result['marked_stale'] = n_stale
         result.setdefault('actions', []).append(
@@ -1699,7 +1739,7 @@ def store_create(ctx: click.Context, name: str) -> None:
     if not valid_store_name(name):
         raise click.ClickException(
             f'invalid store name {name!r}')
-    if store_exists(data_dir, name):
+    if name in factory.list_stores(data_dir):
         raise click.ClickException(
             f'store "{name}" already exists')
     from memman.session import active_store
@@ -1714,7 +1754,7 @@ def store_create(ctx: click.Context, name: str) -> None:
 def store_use(ctx: click.Context, name: str) -> None:
     """Switch the active store."""
     data_dir = ctx.obj['data_dir']
-    if not store_exists(data_dir, name):
+    if name not in factory.list_stores(data_dir):
         raise click.ClickException(
             f"store \"{name}\" does not exist"
             f" (use 'memman store create {name}' first)")
@@ -1729,9 +1769,8 @@ def store_use(ctx: click.Context, name: str) -> None:
 @click.pass_context
 def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
     """Remove a store (prompts unless --yes)."""
-    import shutil
     data_dir = ctx.obj['data_dir']
-    if not store_exists(data_dir, name):
+    if name not in factory.list_stores(data_dir):
         raise click.ClickException(
             f"store \"{name}\" does not exist"
             f" (use 'memman store create {name}' first)")
@@ -1740,19 +1779,11 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
         raise click.ClickException(
             f"cannot remove the active store \"{name}\""
             f" (switch first with 'memman store use <other>')")
-    sdir = store_dir(data_dir, name)
     if not yes:
         click.confirm(
-            f'Delete store "{name}" and all data at {sdir}?',
+            f'Drop store "{name}" (and all of its data)?',
             abort=True)
-    from memman.queue import open_queue_db
-    from memman.queue import purge_store as queue_purge_store
-    qconn = open_queue_db(data_dir)
-    try:
-        queue_purge_store(qconn, name)
-    finally:
-        qconn.close()
-    shutil.rmtree(sdir)
+    factory.drop_store(name, data_dir)
     _json_out({'action': 'removed', 'store': name})
 
 
@@ -1760,7 +1791,7 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
 @click.pass_context
 def status(ctx: click.Context) -> None:
     """Show database statistics."""
-    from memman.store.factory import _resolve_store_backend, list_stores
+    from memman.store.factory import resolve_store_backend, list_stores
 
     data_dir = ctx.obj['data_dir']
     store_name = _resolve_store_name(data_dir, ctx.obj['store'])
@@ -1773,11 +1804,11 @@ def status(ctx: click.Context) -> None:
             }
         all_stores = set(list_stores(data_dir)) | declared
         backends_in_use = sorted({
-            _resolve_store_backend(s, data_dir) for s in all_stores
+            resolve_store_backend(s, data_dir) for s in all_stores
             })
         out = {
             'store': store_name,
-            'backend': _resolve_store_backend(store_name, data_dir),
+            'backend': resolve_store_backend(store_name, data_dir),
             'backends_in_use': backends_in_use,
             'total_insights': node_stats.total_insights,
             'deleted_insights': node_stats.deleted_insights,
@@ -2121,7 +2152,7 @@ def migrate(
     from memman.migrate import inspect_target_schemas, migrate_store
     from memman.migrate import preflight
     from memman.setup.scheduler import _write_env_keys
-    from memman.store.db import list_stores, store_dir
+    from memman.store.db import list_local_store_dirs, store_dir
     from memman.trace import redact_dsn
 
     data_dir = ctx.obj['data_dir']
@@ -2144,7 +2175,7 @@ def migrate(
         raise click.ClickException(str(exc))
 
     if migrate_all:
-        stores = list_stores(data_dir)
+        stores = list_local_store_dirs(data_dir)
     else:
         stores = [store]
     if not stores:
@@ -2275,16 +2306,13 @@ def prime() -> None:
         data_dir = os.environ.get(config.DATA_DIR, default_data_dir())
         env_store = os.environ.get(config.STORE, '').strip()
         name = env_store or read_active(data_dir)
-        from memman.store.factory import _resolve_store_backend
-        backend_name = _resolve_store_backend(name, data_dir)
+        from memman.store.factory import resolve_store_backend
+        backend_name = resolve_store_backend(name, data_dir)
         if backend_name == 'sqlite':
             from memman.store.node import get_stats
             if store_exists(data_dir, name):
-                db = open_ro_db(store_dir(data_dir, name))
-                try:
+                with open_ro_db(store_dir(data_dir, name)) as db:
                     stats = get_stats(db)
-                finally:
-                    db.close()
                 status_line = (f"[memman] Memory active "
                                f"({stats['total_insights']} insights, "
                                f"{stats['edge_count']} edges).")
@@ -2297,8 +2325,8 @@ def prime() -> None:
                 status_line = (f'[memman] Memory active '
                                f'({s.total_insights} insights, '
                                f'{s.edge_count} edges).')
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug('prime status fallback: %s', exc)
     click.echo(status_line)
 
     if source == 'compact':
@@ -2329,10 +2357,10 @@ def prime() -> None:
 def graph_rebuild(ctx: click.Context, dry_run: bool,
                   progress_jsonl: bool) -> None:
     """Re-enrich all insights through the full LLM pipeline."""
-    from memman.store.factory import _resolve_store_backend
+    from memman.store.factory import resolve_store_backend
     data_dir = ctx.obj['data_dir']
     store_name = _resolve_store_name(data_dir, ctx.obj['store'])
-    backend_name = _resolve_store_backend(store_name, data_dir)
+    backend_name = resolve_store_backend(store_name, data_dir)
     if backend_name != 'sqlite':
         raise click.ClickException(
             'graph rebuild is SQLite-only; Postgres maintains HNSW'
@@ -2345,8 +2373,7 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
     from memman.store.node import reset_for_rebuild
     from memman.store.oplog import log_op
 
-    db = _open_db(ctx)
-    try:
+    with _open_db(ctx) as db:
         llm_client = _get_llm_client_or_fail('slow_canonical')
         metadata_llm_client = _get_llm_client_or_fail('slow_metadata')
         ec = get_client()
@@ -2419,8 +2446,6 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
             stats = {'processed': processed, 'remaining': remaining}
             log_op(db, 'rebuild', '', json.dumps(stats))
             _json_out(stats)
-    finally:
-        db.close()
 
 
 @embed_grp.command('status')
@@ -2478,11 +2503,8 @@ def _count_active_rows(sdir: str) -> int:
     """
     from memman.store.node import count_active_insights
 
-    db = open_ro_db(sdir)
-    try:
+    with open_ro_db(sdir) as db:
         return count_active_insights(db)
-    finally:
-        db.close()
 
 
 def _reembed_one_store(
@@ -2502,9 +2524,8 @@ def _reembed_one_store(
     from memman.store.sqlite import SqliteBackend
 
     store_name = pathlib.Path(sdir).name
-    db = open_db(sdir)
-    backend = SqliteBackend(db)
-    try:
+    with open_db(sdir) as db:
+        backend = SqliteBackend(db)
         with backend.reembed_lock('reembed') as held:
             if not held:
                 raise click.ClickException(
@@ -2577,8 +2598,6 @@ def _reembed_one_store(
                 operation='embed_reembed', insight_id='',
                 detail=json.dumps(stats))
             return stats
-    finally:
-        db.close()
 
 
 @embed_grp.command('reembed')
@@ -2606,12 +2625,12 @@ def embed_reembed(ctx: click.Context, dry_run: bool) -> None:
     """
     from memman.embed import get_client
     from memman.embed.fingerprint import Fingerprint
-    from memman.store.db import list_stores, store_dir
-    from memman.store.factory import _resolve_store_backend
+    from memman.store.db import list_local_store_dirs, store_dir
+    from memman.store.factory import resolve_store_backend
 
     data_dir = ctx.obj['data_dir']
     active_name = _resolve_store_name(data_dir, ctx.obj['store'])
-    if _resolve_store_backend(active_name, data_dir) != 'sqlite':
+    if resolve_store_backend(active_name, data_dir) != 'sqlite':
         raise click.ClickException(
             'embed reembed is SQLite-only; Postgres reembed requires'
             ' a separate workflow (track in a follow-up issue)')
@@ -2625,8 +2644,8 @@ def embed_reembed(ctx: click.Context, dry_run: bool) -> None:
 
     target = Fingerprint.from_client(ec)
     names = [
-        n for n in list_stores(data_dir)
-        if _resolve_store_backend(n, data_dir) == 'sqlite']
+        n for n in list_local_store_dirs(data_dir)
+        if resolve_store_backend(n, data_dir) == 'sqlite']
 
     grand_total = sum(
         _count_active_rows(store_dir(data_dir, name)) for name in names)
@@ -2723,8 +2742,7 @@ def embed_swap(
 
     data_dir = ctx.obj['data_dir']
     name = _resolve_store_name(data_dir, ctx.obj['store'])
-    backend = open_backend(name, data_dir)
-    try:
+    with open_backend(name, data_dir) as backend:
         if abort:
             _abort_swap(backend)
             _json_out({'store': name, 'state': 'aborted'})
@@ -2770,8 +2788,8 @@ def embed_swap(
             target_model=target_model,
             target_dim=target_dim)
 
-        from memman.store.factory import _resolve_store_backend
-        backend_name = _resolve_store_backend(name, data_dir)
+        from memman.store.factory import resolve_store_backend
+        backend_name = resolve_store_backend(name, data_dir)
         if backend_name == 'postgres':
             with backend.swap_lock() as held:
                 if not held:
@@ -2809,5 +2827,3 @@ def embed_swap(
                 'dim': fp.dim,
                 },
             })
-    finally:
-        backend.close()

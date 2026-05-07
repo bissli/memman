@@ -5,6 +5,7 @@ import os
 import pathlib
 import subprocess
 
+import click
 import pytest
 from click.testing import CliRunner
 from memman.cli import cli
@@ -822,3 +823,44 @@ class TestSymlinks:
         assert not (config / 'skills' / 'memman' / 'SKILL.md').exists()
         assert target.exists()
         assert target.read_bytes() == target_bytes
+
+
+class TestInstallLoopErrorSurfacing:
+    """Per-env install errors are surfaced with detail (F.4)."""
+
+    def test_install_loop_surfaces_per_env_errors(
+            self, tmp_path, monkeypatch):
+        """A failing `_install_env` is logged and rolled into the
+        ClickException detail string.
+
+        Pre-F.4 the loop counted errors and raised an opaque
+        '%d error(s)' message. The new shape includes per-env name +
+        exception text.
+        """
+        from memman.setup import claude as claude_setup
+
+        def _boom(env, data_dir):
+            raise RuntimeError(f'boom-{env["name"]}')
+
+        monkeypatch.setattr(claude_setup, '_install_env', _boom)
+        monkeypatch.setattr(
+            claude_setup, 'install_scheduler',
+            lambda data_dir, knobs: {
+                'platform': 'noop', 'env_actions': [], 'actions': []})
+
+        envs = [
+            {'name': 'envA', 'detected': True, 'display': 'envA',
+             'version': '1.0', 'config_dir': '/tmp/a'},
+            {'name': 'envB', 'detected': True, 'display': 'envB',
+             'version': '1.0', 'config_dir': '/tmp/b'},
+            ]
+
+        with pytest.raises(click.ClickException) as exc:
+            claude_setup._run_install_flow(
+                envs, target='', data_dir=str(tmp_path / 'memman'),
+                knobs={})
+        msg = str(exc.value.message)
+        assert 'envA' in msg
+        assert 'envB' in msg
+        assert 'boom-envA' in msg
+        assert 'boom-envB' in msg

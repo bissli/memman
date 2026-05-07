@@ -65,3 +65,47 @@ class TestEnrichedAtOnLinkPending:
             " WHERE id = 'ls-1'").fetchone()
         assert row[0] is not None
         assert row[1] is not None
+
+    def test_reembed_failure_skips_stamp_enriched(
+            self, tmp_db, tmp_backend, monkeypatch, caplog):
+        """A re-embed failure mid-link must NOT mark the insight enriched.
+
+        Pre-F.4 the failure was silent at debug level and the insight
+        flipped to `enriched_at != NULL` despite carrying a stale
+        embedding. Now the failure logs at warn and `stamp_enriched`
+        is skipped so the row is retried on the next pass.
+        """
+        import logging
+
+        _insert_pending(tmp_db, 'rf-1', 'reembed-fail content')
+        tmp_db._conn.execute(
+            'UPDATE insights SET enriched_at = NULL'
+            " WHERE id = 'rf-1'")
+
+        mock_llm = MagicMock()
+        mock_llm.complete.return_value = (
+            '{"keywords": ["alpha"], "summary": "s",'
+            ' "semantic_facts": [], "entities": []}')
+
+        class _FailingClient:
+            available = staticmethod(lambda: True)
+            model = 'mock'
+
+            def embed(self, text):
+                raise RuntimeError('forced reembed failure')
+
+        with caplog.at_level(logging.WARNING, logger='memman'):
+            link_pending(
+                tmp_backend, llm_client=mock_llm,
+                embed_client=_FailingClient())
+
+        warned = [r for r in caplog.records
+                  if 'Re-embed failed' in r.getMessage()]
+        assert warned
+
+        row = tmp_db._conn.execute(
+            'SELECT linked_at, enriched_at FROM insights'
+            " WHERE id = 'rf-1'").fetchone()
+        assert row[0] is not None
+        assert row[1] is None, (
+            'enriched_at must stay NULL when the re-embed failed')

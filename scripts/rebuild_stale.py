@@ -32,11 +32,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    CancelledError, ThreadPoolExecutor, as_completed)
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -47,9 +49,21 @@ DEFAULT_PARALLEL = 4
 
 
 def _resolve_memman(explicit: str | None) -> str:
-    """Return the absolute path to the memman binary to invoke."""
+    """Return the absolute path to the memman binary to invoke.
+
+    Prefers the sibling of the running Python interpreter so a
+    side-by-side install (e.g., a pipx production binary on PATH and
+    a Poetry editable dev install in a virtualenv) selects the dev
+    binary when running from the dev environment, instead of
+    silently picking up whichever binary PATH happens to surface
+    first. Falls back to `shutil.which` for system-python +
+    `pip install --user` layouts where the sibling is absent.
+    """
     if explicit:
         return explicit
+    sibling = Path(sys.executable).with_name('memman')
+    if sibling.is_file() and os.access(sibling, os.X_OK):
+        return str(sibling)
     found = shutil.which('memman')
     if not found:
         raise SystemExit(
@@ -141,8 +155,11 @@ def _rebuild_store(memman: str, store: str, log_path: Path,
         try:
             payload = json.loads(stdout)
             processed = int(payload.get('processed', 0))
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as exc:
+            with _LOG_LOCK, log_path.open('a') as fh:
+                fh.write(
+                    f'json-parse-failed for store {store}: {exc};'
+                    f' first 200 chars: {stdout[:200]!r}\n')
     return proc.returncode, processed, (stdout + stderr_text).strip()
 
 
@@ -218,7 +235,10 @@ def main() -> int:
 
             for fut in as_completed(futures):
                 store, expected = futures[fut]
-                t_start, rc, processed, output = fut.result()
+                try:
+                    t_start, rc, processed, output = fut.result()
+                except CancelledError:
+                    continue
                 elapsed = time.monotonic() - t_start
                 bar.write(
                     f'[{store}] rc={rc} processed={processed}'

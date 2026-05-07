@@ -42,13 +42,61 @@ class TestGetFor:
     def test_get_for_returns_same_instance_when_cached(self):
         """Repeat calls with identical args return the cached client.
 
-        The lru_cache on `get_for` ensures `factory()` + `prepare()`
-        run only once per (provider, model) pair per process.
+        The explicit Lock + dict cache on `get_for` ensures
+        `factory()` + `prepare()` run only once per (provider, model)
+        pair per process, even under cold-start contention.
         """
         from memman.embed.registry import get_for
         first = get_for('voyage', 'voyage-3-lite')
         second = get_for('voyage', 'voyage-3-lite')
         assert first is second
+
+    def test_get_for_calls_factory_and_prepare_once_under_contention(
+            self, monkeypatch):
+        """Concurrent first-call workers must not double-probe the
+        provider. The lock prevents the lru_cache double-miss footgun
+        where two threads both run `factory()` + `prepare()`.
+        """
+        import threading
+
+        from memman.embed import PROVIDERS, registry
+
+        registry.reset_for_tests()
+
+        prepare_calls = 0
+        factory_calls = 0
+
+        class _Stub:
+            name = 'stubprov'
+            model = 'stubmodel'
+            dim = 0
+            _availability_cache = None
+
+            def prepare(self):
+                nonlocal prepare_calls
+                prepare_calls += 1
+
+        def _factory():
+            nonlocal factory_calls
+            factory_calls += 1
+            return _Stub()
+
+        monkeypatch.setitem(PROVIDERS, 'stubprov', _factory)
+
+        results: list = []
+        threads = [
+            threading.Thread(
+                target=lambda: results.append(
+                    registry.get_for('stubprov', 'stubmodel')))
+            for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert factory_calls == 1
+        assert prepare_calls == 1
+        assert all(r is results[0] for r in results)
 
 
 class TestLazyCredentialing:

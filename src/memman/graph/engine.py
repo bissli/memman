@@ -93,6 +93,7 @@ def link_pending(
 
         keywords = enrichment.get('keywords', [])
         new_vec = None
+        reembed_failed = False
         if (keywords
                 and embed_client is not None
                 and embed_client.available()):
@@ -101,8 +102,12 @@ def link_pending(
                 insight.content, keywords)
             try:
                 new_vec = embed_client.embed(enriched_text)
-            except Exception:
-                logger.debug(f'Re-embed failed for {insight.id}')
+            except Exception as exc:
+                reembed_failed = True
+                logger.warning(
+                    'Re-embed failed for %s: %s; insight will not flip'
+                    ' to enriched (retry on next pass)',
+                    insight.id, exc)
 
         def _write_results() -> int:
             if enrichment:
@@ -134,7 +139,7 @@ def link_pending(
                 backend.edges.upsert(edge)
 
             backend.nodes.stamp_linked(insight_id)
-            if enrichment:
+            if enrichment and not reembed_failed:
                 backend.nodes.stamp_enriched(insight_id)
             return sem_count
 

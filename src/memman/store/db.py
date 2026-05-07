@@ -52,8 +52,15 @@ def write_active(base_dir: str, name: str) -> None:
     Path(active_file(base_dir)).write_text(name + '\n')
 
 
-def list_stores(base_dir: str) -> list[str]:
-    """Return sorted names of all stores under <base_dir>/data/."""
+def list_local_store_dirs(base_dir: str) -> list[str]:
+    """Return sorted names of every SQLite store dir under
+    `<base_dir>/data/`.
+
+    SQLite-only filesystem scanner. Cross-backend enumeration
+    (filesystem dirs ∪ Postgres `pg_namespace`) lives in
+    `memman.store.factory.list_stores`; that is the helper to use
+    from any code path that can encounter postgres-routed stores.
+    """
     data_dir = os.path.join(base_dir, 'data')
     if not Path(data_dir).is_dir():
         return []
@@ -84,6 +91,12 @@ class DB:
     def close(self) -> None:
         """Close the database connection."""
         self._conn.close()
+
+    def __enter__(self) -> 'DB':
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
 
     def _exec(
             self, sql: str,

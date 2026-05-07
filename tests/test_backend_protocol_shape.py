@@ -62,7 +62,12 @@ class TestBackendIntrospection:
         assert 'detail' in result
 
     def test_introspect_columns_returns_insights_schema(self, backend):
-        """introspect_columns('insights') returns the expected core columns."""
+        """introspect_columns('insights') returns every doctor-expected
+        column. Locks the backend protocol contract so a schema
+        regression on either backend can't sneak past doctor.
+        """
+        from memman.doctor import EXPECTED_INSIGHT_COLUMNS
+
         cols = backend.introspect_columns('insights')
         assert isinstance(cols, set)
         expected_core = {
@@ -72,6 +77,10 @@ class TestBackendIntrospection:
         assert expected_core.issubset(cols), (
             f'missing core columns: {sorted(expected_core - cols)}; '
             f'got: {sorted(cols)}')
+        assert EXPECTED_INSIGHT_COLUMNS.issubset(cols), (
+            f'missing doctor-expected columns:'
+            f' {sorted(EXPECTED_INSIGHT_COLUMNS - cols)};'
+            f' got: {sorted(cols)}')
 
     def test_introspect_columns_unknown_table_returns_empty(self, backend):
         """introspect_columns on an unknown table returns an empty set."""

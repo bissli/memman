@@ -184,64 +184,68 @@ _ORPHAN_ARTIFACTS = (
     )
 
 
-def check_orphan_storage(data_dir: str) -> dict[str, Any]:
-    """Flag SQLite artifacts left behind on a Postgres-backed store.
+def check_stale_post_migrate_source(data_dir: str) -> dict[str, Any]:
+    """Flag SQLite source files left behind on a Postgres-routed store.
 
-    A successful `memman migrate <store>` deletes the source memman.db
-    (plus WAL/SHM and the recall snapshot). If the cleanup step
-    crashed between commit and unlink, the file remains on disk but
-    no longer represents the truth of the store. This check walks
-    every store directory under `<data_dir>/data/` and reports any
-    survivor when the resolved backend for the process is `postgres`.
+    A successful `memman migrate <store>` intentionally preserves the
+    source `memman.db` (plus WAL/SHM and the recall snapshot) so the
+    operator has a forensic copy of pre-migrate state. The file is no
+    longer the source of truth -- writes go to Postgres -- so it is
+    "stale" and the operator may want to delete it once the postgres
+    side is verified. Report each store where survivors remain.
+
+    Iteration is per-store via `factory.list_stores`: only stores
+    whose resolved backend is `postgres` are scanned. The check is
+    a `warn` (not `fail`) because preserved-but-stale is a known
+    operator-driven state, not a corruption signal.
     """
-    from memman import config
-    backend = (
-        config.get(config.DEFAULT_BACKEND) or 'sqlite').lower()
-    if backend != 'postgres':
-        return {
-            'name': 'orphan_storage', 'status': 'pass',
-            'detail': {
-                'reason': 'check_skipped_for_sqlite_backend',
-                },
-            }
+    from memman.store.factory import (
+        resolve_store_backend, list_stores)
+
     data_root = Path(data_dir) / 'data'
     if not data_root.is_dir():
         return {
-            'name': 'orphan_storage', 'status': 'pass',
+            'name': 'stale_post_migrate_source', 'status': 'pass',
             'detail': {'stores': []},
             }
-    orphans: dict[str, list[str]] = {}
-    for entry in sorted(os.scandir(data_root), key=lambda e: e.name):
-        if not entry.is_dir():
+    stores = list_stores(data_dir)
+    stale: dict[str, list[str]] = {}
+    for store in stores:
+        if resolve_store_backend(store, data_dir) != 'postgres':
+            continue
+        store_path = data_root / store
+        if not store_path.is_dir():
             continue
         survivors = [
             name for name in _ORPHAN_ARTIFACTS
-            if (Path(entry.path) / name).exists()
+            if (store_path / name).exists()
             ]
         if survivors:
-            orphans[entry.name] = survivors
-    if not orphans:
+            stale[store] = survivors
+    if not stale:
         return {
-            'name': 'orphan_storage', 'status': 'pass',
+            'name': 'stale_post_migrate_source', 'status': 'pass',
             'detail': {'stores': []},
             }
     return {
-        'name': 'orphan_storage', 'status': 'fail',
+        'name': 'stale_post_migrate_source', 'status': 'warn',
         'detail': (
-            f'orphan SQLite files in postgres-backed stores: {orphans}'),
+            f'stale post-migrate SQLite source files preserved in'
+            f' postgres-routed stores: {stale}.'
+            f' Delete with `rm <data_dir>/data/<store>/memman.db*`'
+            f' once you have verified the postgres-side data is intact.'),
         }
+
+
 
 
 def check_queue_backlog(data_dir: str) -> dict[str, Any]:
     """Report pending/failed counts and oldest-pending age."""
-    from memman.queue import open_queue_db
+    from memman.queue import queue_db
     from memman.queue import stats as queue_stats
 
-    conn = open_queue_db(data_dir)
-    try:
+    with queue_db(data_dir) as conn:
         s = queue_stats(conn)
-    finally:
-        conn.close()
 
     pending = s['pending']
     failed = s['failed']
@@ -280,7 +284,9 @@ def check_queue_backlog(data_dir: str) -> dict[str, Any]:
 
 EXPECTED_INSIGHT_COLUMNS = {
     'prompt_version', 'model_id', 'embedding_model',
-    'linked_at', 'enriched_at',
+    'linked_at', 'enriched_at', 'last_accessed_at',
+    'embedding_pending', 'effective_importance',
+    'summary', 'keywords', 'semantic_facts',
     }
 EXPECTED_QUEUE_TABLES = {'queue', 'worker_runs'}
 
@@ -304,15 +310,12 @@ def check_schema_columns(backend: Backend) -> dict[str, Any]:
 def check_queue_schema(data_dir: str) -> dict[str, Any]:
     """Verify queue.db has the canonical tables (queue + worker_runs).
     """
-    from memman.queue import open_queue_db
+    from memman.queue import queue_db
 
-    conn = open_queue_db(data_dir)
-    try:
+    with queue_db(data_dir) as conn:
         rows = conn.execute(
             "select name from sqlite_master where type='table'"
             ).fetchall()
-    finally:
-        conn.close()
     present = {row[0] for row in rows}
     missing = sorted(EXPECTED_QUEUE_TABLES - present)
     status = 'pass' if not missing else 'fail'
@@ -382,22 +385,31 @@ def check_env_completeness() -> dict[str, Any]:
         }
 
 
-_KNOWN_BACKENDS = frozenset({'sqlite', 'postgres'})
+from memman.store.factory import KNOWN_BACKENDS as _KNOWN_BACKENDS
 
 
 def check_per_store_keys(data_dir: str) -> dict[str, Any]:
     """Validate per-store backend dispatch keys for every known store.
 
-    For each store enumerated by `list_stores`:
+    Iteration set is the union of (a) every store enumerated by
+    `list_stores` and (b) every store declared in the env file via a
+    `MEMMAN_BACKEND_<store>` key. The union surfaces declared-but-not-
+    yet-on-disk stores (the operator wrote the routing key but never
+    ran `store create`).
+
+    For each store:
     - resolve `MEMMAN_BACKEND_<store>` (per-store key first, then
       `MEMMAN_DEFAULT_BACKEND`, then 'sqlite');
     - fail when the resolved value is not a registered backend;
     - fail when the resolved kind is `postgres` and no DSN is reachable
-      via `MEMMAN_PG_DSN_<store>` or `MEMMAN_DEFAULT_PG_DSN`;
-    - warn when both `MEMMAN_PG_DSN_<store>` and `MEMMAN_DEFAULT_PG_DSN`
-      are set and they differ (operator may have rotated one without
-      the other -- cheap mitigation for the deferred DSN-rotation
-      command).
+      via `MEMMAN_PG_DSN_<store>` or `MEMMAN_DEFAULT_PG_DSN`.
+
+    Also fails the check at the top when the env file carries a bare
+    `MEMMAN_BACKEND` or `MEMMAN_PG_DSN` -- both are silently ignored
+    by the per-store routing model and represent a 0.13->0.14 upgrade
+    trap. The DSN-drift warn (per-store vs default) is intentionally
+    not raised: per-store routing pins a store to a specific DSN, so
+    differing values are the canonical state, not a typo.
 
     Empty data dirs (no stores at all) pass with an empty list.
     """
@@ -406,13 +418,20 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
 
     file_values = config.parse_env_file(config.env_file_path(data_dir))
     try:
-        stores = list_stores(data_dir)
+        on_disk = list_stores(data_dir)
     except Exception as exc:
         return {
             'name': 'per_store_keys',
             'status': 'fail',
             'detail': {'error': f'list_stores: {exc}'},
             }
+
+    declared = {
+        key[len('MEMMAN_BACKEND_'):]
+        for key in file_values
+        if key.startswith('MEMMAN_BACKEND_')
+        }
+    stores = sorted(set(on_disk) | declared)
 
     rank = {'pass': 0, 'warn': 1, 'fail': 2}
     worst = 'pass'
@@ -423,6 +442,25 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
             worst = level
 
     entries: list[dict[str, Any]] = []
+
+    legacy_bares = [
+        k for k in ('MEMMAN_BACKEND', 'MEMMAN_PG_DSN')
+        if file_values.get(k)
+        ]
+    if legacy_bares:
+        entries.append({
+            'store': None,
+            'backend': None,
+            'source': None,
+            'error': (
+                f'legacy bare keys ignored under per-store routing:'
+                f' {legacy_bares}; rename to MEMMAN_DEFAULT_BACKEND /'
+                f' MEMMAN_DEFAULT_PG_DSN (cluster fallback) or to'
+                f' MEMMAN_BACKEND_<store> / MEMMAN_PG_DSN_<store>'),
+            'warning': None,
+            })
+        _bump('fail')
+
     for store in stores:
         per_key = config.BACKEND_FOR(store)
         per_value = (file_values.get(per_key) or '').strip()
@@ -454,14 +492,6 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
                     f'no DSN: set {config.PG_DSN_FOR(store)} or'
                     f' {config.DEFAULT_PG_DSN}')
                 _bump('fail')
-            elif (per_store_dsn and default_dsn
-                  and per_store_dsn != default_dsn):
-                entry['warning'] = (
-                    f'{config.PG_DSN_FOR(store)} differs from'
-                    f' {config.DEFAULT_PG_DSN}; verify intentional'
-                    ' rotation (run `memman config set` on whichever'
-                    ' is stale)')
-                _bump('warn')
         entries.append(entry)
 
     return {
@@ -559,7 +589,7 @@ def check_scheduler_heartbeat(data_dir: str) -> dict[str, Any]:
     the 3x multiplier dominates: two consecutive misses indicate a
     real problem; one-miss tolerance handles transient delays.
     """
-    from memman.queue import last_worker_run, open_queue_db
+    from memman.queue import last_worker_run, queue_db
     from memman.setup.scheduler import STATE_STARTED
     from memman.setup.scheduler import status as sch_status
 
@@ -600,11 +630,8 @@ def check_scheduler_heartbeat(data_dir: str) -> dict[str, Any]:
                 },
             }
 
-    conn = open_queue_db(data_dir)
-    try:
+    with queue_db(data_dir) as conn:
         last = last_worker_run(conn)
-    finally:
-        conn.close()
 
     if last is None:
         return {
@@ -669,7 +696,7 @@ def check_drain_heartbeat(data_dir: str) -> dict[str, Any]:
     """
     from datetime import datetime, timezone
 
-    from memman.store.factory import _resolve_store_backend, list_stores
+    from memman.store.factory import resolve_store_backend, list_stores
     from memman.store.factory import open_backend
 
     try:
@@ -683,7 +710,7 @@ def check_drain_heartbeat(data_dir: str) -> dict[str, Any]:
 
     pg_stores = [
         s for s in stores
-        if _resolve_store_backend(s, data_dir) == 'postgres']
+        if resolve_store_backend(s, data_dir) == 'postgres']
     if not pg_stores:
         return {
             'name': 'drain_heartbeat',
@@ -700,26 +727,14 @@ def check_drain_heartbeat(data_dir: str) -> dict[str, Any]:
     failures: list[dict[str, str]] = []
     for store in pg_stores:
         try:
-            backend = open_backend(store, data_dir, read_only=True)
+            with open_backend(store, data_dir, read_only=True) as backend:
+                runs = backend.recent_runs(limit=50)
         except Exception as exc:
             failures.append({
                 'store': store,
                 'error': f'{type(exc).__name__}: {exc}',
                 })
             continue
-        try:
-            runs = backend.recent_runs(limit=50)
-        except Exception as exc:
-            failures.append({
-                'store': store,
-                'error': f'{type(exc).__name__}: {exc}',
-                })
-            continue
-        finally:
-            try:
-                backend.close()
-            except Exception:
-                pass
         for r in runs:
             if r.ended_at is not None:
                 continue
@@ -1019,6 +1034,7 @@ def run_all_checks(
             check_drain_heartbeat(data_dir),
             check_env_completeness(),
             check_per_store_keys(data_dir),
+            check_stale_post_migrate_source(data_dir),
             check_env_permissions(),
             check_scheduler_state(),
             check_llm_probe(),

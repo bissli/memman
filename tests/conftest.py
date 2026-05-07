@@ -938,10 +938,10 @@ def parse_remember(result, runner_tuple=None):
     _, data_dir = runner_tuple
     from memman import config
     from memman.store.db import read_active
-    from memman.store.factory import _resolve_store_backend
-    from memman.store.factory import _resolve_store_pg_dsn
+    from memman.store.factory import resolve_store_backend
+    from memman.store.factory import resolve_store_pg_dsn
     name = raw.get('store') or read_active(data_dir) or 'default'
-    backend_kind = _resolve_store_backend(name, data_dir)
+    backend_kind = resolve_store_backend(name, data_dir)
     if backend_kind == 'postgres':
         import psycopg
         from memman.store.postgres import _store_schema
@@ -953,7 +953,7 @@ where source = %s
   and deleted_at is null
 order by created_at
 """
-        dsn = _resolve_store_pg_dsn(name, data_dir)
+        dsn = resolve_store_pg_dsn(name, data_dir)
         with psycopg.connect(dsn) as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, (f'queue:{queue_id}',))

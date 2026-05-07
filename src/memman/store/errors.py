@@ -6,6 +6,8 @@ can `from memman.store.errors import NotFound` without pulling in the
 full Protocol typing surface.
 """
 
+from memman.exceptions import ConfigError as _RuntimeConfigError
+
 
 class BackendError(Exception):
     """Base class for all backend errors."""
@@ -33,5 +35,12 @@ class SchemaVersionMismatch(BackendError):
     """
 
 
-class ConfigError(BackendError):
-    """Raised when the backend selection or DSN is misconfigured."""
+class ConfigError(BackendError, _RuntimeConfigError):
+    """Raised when the backend selection or DSN is misconfigured.
+
+    Inherits from both `BackendError` (so backend code that catches
+    `BackendError` keeps working) and the runtime `ConfigError`
+    (so a single `except memman.exceptions.ConfigError` at the CLI
+    seam catches both runtime config failures and backend dispatch
+    failures uniformly).
+    """

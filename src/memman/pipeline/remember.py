@@ -209,7 +209,10 @@ def run_remember(
             for nid in new_ids:
                 try:
                     ei = backend.nodes.refresh_effective_importance(nid)
-                except Exception:
+                except Exception as exc:
+                    logger.warning(
+                        'refresh_effective_importance failed for %s: %s',
+                        nid, exc)
                     ei = 0.0
                 for r in fact_results:
                     if r.get('id') == nid:
@@ -220,7 +223,8 @@ def run_remember(
                 try:
                     pruned = backend.nodes.auto_prune(
                         max_insights=MAX_INSIGHTS, exclude_ids=new_ids)
-                except Exception:
+                except Exception as exc:
+                    logger.warning('auto_prune failed: %s', exc)
                     pruned = 0
                 for r in fact_results:
                     if r.get('id') in new_ids:

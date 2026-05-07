@@ -423,51 +423,83 @@ class TestCheckPerStoreKeys:
         assert pg.get('error') is None
         assert pg['backend'] == 'postgres'
 
-    def test_warns_on_dsn_drift_between_per_store_and_default(
-            self, tmp_path, env_file):
-        """Per-store DSN differs from default DSN -> warn (rotation drift).
+    def test_no_warn_when_dsns_differ(self, tmp_path, env_file):
+        """Per-store DSN differs from default DSN -> pass (canonical
+        rotation-pinning state, not a typo).
 
-        Cheap mitigation for the deferred DSN-rotation command: if the
-        operator rotates one DSN without the other, doctor surfaces it
-        rather than letting them silently diverge.
+        The 0.14.1 doctor warned on this divergence; F.2 drops the
+        warn because per-store routing pins each store to its own
+        DSN, and an explicit per-store DSN is the documented way to
+        keep a store on a stable cluster while the default rotates.
         """
         from memman import config
         from memman.doctor import check_per_store_keys
 
         data_dir = str(tmp_path / 'memman')
-        Path(data_dir, 'data', 'pg_drift').mkdir(parents=True, exist_ok=True)
-        Path(data_dir, 'data', 'pg_drift', 'memman.db').write_bytes(b'')
-        env_file(config.BACKEND_FOR('pg_drift'), 'postgres')
-        env_file(config.PG_DSN_FOR('pg_drift'), 'postgresql://new@host/db')
-        env_file(config.DEFAULT_PG_DSN, 'postgresql://old@host/db')
-
-        out = check_per_store_keys(data_dir)
-        assert out['status'] == 'warn'
-        pg = next(s for s in out['detail']['stores']
-                  if s['store'] == 'pg_drift')
-        assert pg.get('error') is None
-        assert pg.get('warning') is not None
-        assert config.PG_DSN_FOR('pg_drift') in pg['warning']
-        assert config.DEFAULT_PG_DSN in pg['warning']
-
-    def test_no_warn_when_dsns_match(self, tmp_path, env_file):
-        """Per-store DSN equals default DSN -> pass (no drift)."""
-        from memman import config
-        from memman.doctor import check_per_store_keys
-
-        data_dir = str(tmp_path / 'memman')
-        Path(data_dir, 'data', 'pg_same').mkdir(parents=True, exist_ok=True)
-        Path(data_dir, 'data', 'pg_same', 'memman.db').write_bytes(b'')
-        dsn = 'postgresql://shared@host/db'
-        env_file(config.BACKEND_FOR('pg_same'), 'postgres')
-        env_file(config.PG_DSN_FOR('pg_same'), dsn)
-        env_file(config.DEFAULT_PG_DSN, dsn)
+        Path(data_dir, 'data', 'pg_pinned').mkdir(parents=True, exist_ok=True)
+        Path(data_dir, 'data', 'pg_pinned', 'memman.db').write_bytes(b'')
+        env_file(config.BACKEND_FOR('pg_pinned'), 'postgres')
+        env_file(config.PG_DSN_FOR('pg_pinned'), 'postgresql://pinned@host/db')
+        env_file(config.DEFAULT_PG_DSN, 'postgresql://default@host/db')
 
         out = check_per_store_keys(data_dir)
         assert out['status'] == 'pass'
         pg = next(s for s in out['detail']['stores']
-                  if s['store'] == 'pg_same')
+                  if s['store'] == 'pg_pinned')
         assert pg.get('warning') is None
+        assert pg.get('error') is None
+
+    def test_check_per_store_keys_flags_bare_memman_backend(
+            self, tmp_path, env_file):
+        """Bare `MEMMAN_BACKEND` in the env file -> fail with hint.
+
+        Locks the silent 0.13->0.14 upgrade path: the bare canonical
+        is ignored under per-store routing, so doctor must surface it.
+        """
+        from memman.doctor import check_per_store_keys
+
+        data_dir = str(tmp_path / 'memman')
+        env_file('MEMMAN_BACKEND', 'postgres')
+
+        out = check_per_store_keys(data_dir)
+        assert out['status'] == 'fail'
+        bare_entries = [
+            s for s in out['detail']['stores'] if s['store'] is None]
+        assert bare_entries
+        assert 'MEMMAN_BACKEND' in bare_entries[0]['error']
+        assert 'MEMMAN_DEFAULT' in bare_entries[0]['error']
+
+    def test_check_per_store_keys_flags_bare_pg_dsn(
+            self, tmp_path, env_file):
+        """Bare `MEMMAN_PG_DSN` in the env file -> fail with hint."""
+        from memman.doctor import check_per_store_keys
+
+        data_dir = str(tmp_path / 'memman')
+        env_file('MEMMAN_PG_DSN', 'postgresql://x')
+
+        out = check_per_store_keys(data_dir)
+        assert out['status'] == 'fail'
+        bare_entries = [
+            s for s in out['detail']['stores'] if s['store'] is None]
+        assert bare_entries
+        assert 'MEMMAN_PG_DSN' in bare_entries[0]['error']
+
+    def test_check_per_store_keys_includes_declared_but_not_created_store(
+            self, tmp_path, env_file):
+        """A store declared via `MEMMAN_BACKEND_<name>` but missing
+        on disk still appears in the doctor enumeration so the
+        operator notices the mismatch.
+        """
+        from memman import config
+        from memman.doctor import check_per_store_keys
+
+        data_dir = str(tmp_path / 'memman')
+        env_file(config.BACKEND_FOR('declared_only'), 'sqlite')
+
+        out = check_per_store_keys(data_dir)
+        names = [s['store'] for s in out['detail']['stores']
+                 if s['store'] is not None]
+        assert 'declared_only' in names
 
 
 def _started_scheduler_status(interval=900):

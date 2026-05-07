@@ -11,6 +11,7 @@ import logging
 import os
 import sqlite3
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -59,6 +60,22 @@ def open_queue_db(base_dir: str) -> sqlite3.Connection:
     conn.execute('pragma busy_timeout=5000')
     _migrate(conn)
     return conn
+
+
+@contextmanager
+def queue_db(base_dir: str):
+    """Context-managed open/close around `open_queue_db`.
+
+    The deferred-write queue is always SQLite, so this is the canonical
+    way to acquire a queue connection scoped to a function body.
+    `open_queue_db` stays available for callers that need a raw
+    connection lifetime.
+    """
+    conn = open_queue_db(base_dir)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 _BASELINE_SCHEMA = """

@@ -83,7 +83,7 @@ memman has one schema source of truth per backend. Both are additive-only: colum
 
 **SQLite** -- `_BASELINE_SCHEMA` in `src/memman/store/db.py` (per-store DB) and `src/memman/queue.py` (queue DB). There is no `PRAGMA user_version` ladder. Fresh databases are created via `CREATE TABLE IF NOT EXISTS`; existing stores get one-off `ALTER TABLE` invocations against `~/.memman/data/*/memman.db` and `~/.memman/queue.db` if the change is in queue schema.
 
-**Postgres** -- `_PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py` creates per-store schemas (`store_<name>`), each carrying its own `worker_runs` table for drain heartbeats. The deferred-write queue is always SQLite (`<data_dir>/queue.db`); Postgres has no shared queue schema. There is no migration ladder: the baseline is the only schema source. Existing stores receive one-off `ALTER TABLE` invocations against the live cluster when a column is added.
+**Postgres** -- `_PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py` creates per-store schemas (`store_<name>`), each carrying its own `worker_runs` table for drain heartbeats. The deferred-write queue is always SQLite (`<data_dir>/queue.db`); Postgres has no shared queue schema. There is no migration ladder: the baseline is the only schema source. Existing stores receive one-off `ALTER TABLE` invocations against the live Postgres server when a column is added.
 
 When a schema change is needed:
 

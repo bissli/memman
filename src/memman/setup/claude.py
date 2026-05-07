@@ -1,11 +1,14 @@
 """Claude Code integration: install and uninstall orchestration."""
 
+import logging
 import os
 import platform
 import shutil
 from pathlib import Path
 
 import click
+
+logger = logging.getLogger('memman')
 from memman import config
 from memman.setup.deploy import symlink_asset
 from memman.setup.detect import detect_environments
@@ -129,14 +132,11 @@ def _init_default_store(data_dir: str) -> None:
     from memman.store.factory import open_backend
 
     if not store_exists(data_dir, 'default'):
-        backend = open_backend('default', data_dir)
-        try:
+        with open_backend('default', data_dir) as backend:
             try:
                 seed_if_fresh(backend, get_client())
             except (EmbedFingerprintError, ConfigError) as exc:
                 raise click.ClickException(str(exc)) from exc
-        finally:
-            backend.close()
         print(f'  Initialized default store at {store_dir(data_dir, "default")}')
 
 
@@ -316,15 +316,19 @@ def _run_install_flow(envs: list[dict], target: str,
             print('Installing scheduler only; manual'
                   ' `memman remember` calls will still work.')
         else:
-            err_count = 0
+            errors: list[tuple[str, str]] = []
             for env in detected:
                 try:
                     _install_env(env, data_dir=data_dir)
-                except Exception:
-                    err_count += 1
-            if err_count > 0:
+                except Exception as exc:
+                    logger.exception(
+                        'install failed for %s', env['name'])
+                    errors.append((env['name'], str(exc)))
+            if errors:
+                detail = '; '.join(f'{n}: {e}' for n, e in errors)
                 raise click.ClickException(
-                    f'{err_count} error(s) during CLI integration install')
+                    f'{len(errors)} error(s) during'
+                    f' CLI integration install: {detail}')
 
     print('\n[scheduler]')
     result = install_scheduler(data_dir, knobs)

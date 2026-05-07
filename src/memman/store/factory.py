@@ -6,41 +6,41 @@ free function. `list_stores` and `drop_store` apply the same
 resolution so dispatch is one place.
 """
 
+import logging
 import os
 
 from memman import config
 from memman.store.backend import Backend
-from memman.store.config import validate_for
+from memman.store.config import validate_all
 from memman.store.errors import ConfigError
+
+logger = logging.getLogger('memman')
 
 KNOWN_BACKENDS = frozenset({'sqlite', 'postgres'})
 
 
-def _resolve_store_backend(store: str, data_dir: str) -> str:
+def resolve_store_backend(store: str, data_dir: str) -> str:
     """Return the backend kind for `store`: per-store, then default.
 
     Reads `MEMMAN_BACKEND_<store>`, falling back to
     `MEMMAN_DEFAULT_BACKEND`, then to `'sqlite'`. Centralized so each
     of `open_backend` / `list_stores` / `drop_store` agrees on
-    resolution order.
+    resolution order. Public name -- doctor and other module-level
+    callers may import this directly.
     """
-    file_values = config.parse_env_file(
-        config.env_file_path(data_dir))
     raw = (
-        file_values.get(config.BACKEND_FOR(store))
-        or file_values.get(config.DEFAULT_BACKEND)
+        config.get_store_backend(store, data_dir)
+        or config.get(config.DEFAULT_BACKEND)
         or 'sqlite')
     return raw.lower()
 
 
-def _resolve_store_pg_dsn(store: str, data_dir: str) -> str | None:
+def resolve_store_pg_dsn(store: str, data_dir: str) -> str | None:
     """Return the DSN for `store`: per-store key, then default key.
     """
-    file_values = config.parse_env_file(
-        config.env_file_path(data_dir))
     return (
-        file_values.get(config.PG_DSN_FOR(store))
-        or file_values.get(config.DEFAULT_PG_DSN)
+        config.get_store_pg_dsn(store, data_dir)
+        or config.get(config.DEFAULT_PG_DSN)
         or None)
 
 
@@ -54,7 +54,7 @@ def open_backend(
     env keys for that backend, and dispatches to the matching free
     function. Two stores in one process can pick distinct backends.
     """
-    name = _resolve_store_backend(store, data_dir)
+    name = resolve_store_backend(store, data_dir)
     if name not in KNOWN_BACKENDS:
         known = ', '.join(sorted(KNOWN_BACKENDS))
         raise ConfigError(
@@ -62,14 +62,14 @@ def open_backend(
             f' registered: {known}')
     merged = dict(os.environ)
     merged.update(config.parse_env_file(config.env_file_path(data_dir)))
-    validate_for(name, merged)
+    validate_all(merged)
     if name == 'sqlite':
         from memman.store.sqlite import open_sqlite_backend
         return open_sqlite_backend(
             store, data_dir, read_only=read_only)
     if name == 'postgres':
         from memman.store.postgres import open_postgres_backend
-        dsn = _resolve_store_pg_dsn(store, data_dir)
+        dsn = resolve_store_pg_dsn(store, data_dir)
         if not dsn:
             raise ConfigError(
                 f'no DSN for postgres-backed store {store!r};'
@@ -89,7 +89,7 @@ def list_stores(data_dir: str) -> list[str]:
     """
     from memman.store import db as _db
 
-    names: set[str] = set(_db.list_stores(data_dir))
+    names: set[str] = set(_db.list_local_store_dirs(data_dir))
     file_values = config.parse_env_file(
         config.env_file_path(data_dir))
     dsns: set[str] = set()
@@ -112,7 +112,10 @@ def list_stores(data_dir: str) -> list[str]:
                             " where nspname like 'store_%'"
                             ' order by nspname')
                         names.update(row[0][len('store_'):] for row in cur.fetchall())
-                except Exception:
+                except Exception as exc:
+                    logger.warning(
+                        'postgres store probe failed for dsn %r: %s',
+                        dsn, exc)
                     continue
         except ImportError:
             pass
@@ -126,20 +129,20 @@ def drop_store(store: str, data_dir: str) -> None:
     """
     from memman import queue as _queue
 
-    name = _resolve_store_backend(store, data_dir)
-    if name == 'sqlite':
-        from memman.store.sqlite import drop_sqlite_store
-        drop_sqlite_store(store, data_dir)
-    elif name == 'postgres':
-        from memman.store.postgres import drop_postgres_store
-        dsn = _resolve_store_pg_dsn(store, data_dir)
-        if dsn:
-            drop_postgres_store(store, dsn)
+    name = resolve_store_backend(store, data_dir)
     try:
-        conn = _queue.open_queue_db(data_dir)
+        if name == 'sqlite':
+            from memman.store.sqlite import drop_sqlite_store
+            drop_sqlite_store(store, data_dir)
+        elif name == 'postgres':
+            from memman.store.postgres import drop_postgres_store
+            dsn = resolve_store_pg_dsn(store, data_dir)
+            if dsn:
+                drop_postgres_store(store, dsn)
+    finally:
         try:
-            _queue.purge_store(conn, store)
-        finally:
-            conn.close()
-    except Exception:
-        pass
+            with _queue.queue_db(data_dir) as conn:
+                _queue.purge_store(conn, store)
+        except Exception as exc:
+            logger.warning(
+                'failed to purge queue rows for store %r: %s', store, exc)

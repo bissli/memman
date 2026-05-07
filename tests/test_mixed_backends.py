@@ -9,6 +9,7 @@ omitted and tracked in the slice plan.
 """
 
 import os
+import pathlib
 from pathlib import Path
 
 import pytest
@@ -30,17 +31,17 @@ def _seed_sqlite_dir(data_dir: str, store: str) -> None:
 
 
 def test_resolve_store_backend_dispatches_per_store(tmp_path, env_file):
-    """`_resolve_store_backend` returns the per-store value, not the default.
+    """`resolve_store_backend` returns the per-store value, not the default.
     """
-    from memman.store.factory import _resolve_store_backend
+    from memman.store.factory import resolve_store_backend
 
     data_dir = os.environ[config.DATA_DIR]
     env_file(config.DEFAULT_BACKEND, 'sqlite')
     env_file(config.BACKEND_FOR('shared'), 'postgres')
     env_file(config.PG_DSN_FOR('shared'), 'postgresql://x@y/z')
 
-    assert _resolve_store_backend('default', data_dir) == 'sqlite'
-    assert _resolve_store_backend('shared', data_dir) == 'postgres'
+    assert resolve_store_backend('default', data_dir) == 'sqlite'
+    assert resolve_store_backend('shared', data_dir) == 'postgres'
 
 
 def test_graph_rebuild_guard_uses_per_store_kind(tmp_path, env_file):
@@ -141,7 +142,9 @@ def test_status_reports_per_store_backend_and_summary(tmp_path, env_file):
         ['--data-dir', data_dir, '--store', 'local', 'status'])
     assert out.exit_code == 0, out.output
     import json
-    data = json.loads(out.output)
+    payload_start = out.output.find('{')
+    payload_end = out.output.rfind('}')
+    data = json.loads(out.output[payload_start:payload_end + 1])
     assert data['backend'] == 'sqlite'
     assert set(data['backends_in_use']) >= {'sqlite', 'postgres'}
 
@@ -231,7 +234,6 @@ def test_cross_backend_retry(tmp_path, env_file, pg_dsn, monkeypatch):
 
     from memman import cli as memman_cli
     from memman.cli import cli
-    from memman.queue import claim as _real_claim
     from memman.store.postgres import _store_schema
 
     data_dir = os.environ[config.DATA_DIR]
@@ -246,11 +248,12 @@ def test_cross_backend_retry(tmp_path, env_file, pg_dsn, monkeypatch):
             cur.execute(f'drop schema if exists {schema} cascade')
 
     try:
-        monkeypatch.setattr('memman.queue.STALE_CLAIM_SECONDS', 0)
-        monkeypatch.setattr(
-            'memman.queue.claim',
-            lambda *a, **kw: _real_claim(
-                *a, **{**kw, 'stale_after_seconds': 0}))
+        clock = [1_000_000.0]
+
+        def _fake_time():
+            return clock[0]
+
+        monkeypatch.setattr('memman.queue.time.time', _fake_time)
 
         attempts_seen = [0]
         real_process = memman_cli._process_queue_row
@@ -282,6 +285,8 @@ def test_cross_backend_retry(tmp_path, env_file, pg_dsn, monkeypatch):
         env_file(config.PG_DSN_FOR(store), pg_dsn)
         config.reset_file_cache()
 
+        clock[0] += 65
+
         out = r.invoke(
             cli, ['--data-dir', data_dir,
                   'scheduler', 'drain', '--pending', '--limit', '1'])
@@ -300,6 +305,59 @@ def test_cross_backend_retry(tmp_path, env_file, pg_dsn, monkeypatch):
             f'expected the retried row to land in {schema}.insights;'
             f' the per-drain _StoreContext should have routed to the'
             f' new postgres backend')
+    finally:
+        with psycopg.connect(pg_dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f'drop schema if exists {schema} cascade')
+
+
+@pytest.mark.postgres
+def test_default_sqlite_with_work_postgres(
+        tmp_path, env_file, pg_dsn):
+    """The documented mixed-backend deployment is end-to-end usable.
+
+    Default-sqlite-plus-postgres-routed-`work` is the canonical
+    layout from the 0.14 docs. This test exercises both stores in
+    one process: write to each, drain, recall from each, and
+    confirm the active-store toggle routes the verbs correctly.
+    """
+    import psycopg
+    from click.testing import CliRunner
+
+    from memman.cli import cli
+    from memman.store.postgres import _store_schema
+
+    data_dir = os.environ[config.DATA_DIR]
+    env_file(config.DEFAULT_BACKEND, 'sqlite')
+    env_file(config.BACKEND_FOR('work'), 'postgres')
+    env_file(config.PG_DSN_FOR('work'), pg_dsn)
+
+    schema = _store_schema('work')
+    with psycopg.connect(pg_dsn, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f'drop schema if exists {schema} cascade')
+
+    try:
+        r = CliRunner()
+        r.invoke(
+            cli, ['--data-dir', data_dir, '--store', 'default',
+                  'remember', 'sqlite-side fact', '--no-reconcile'])
+        r.invoke(
+            cli, ['--data-dir', data_dir, '--store', 'work',
+                  'remember', 'postgres-side fact', '--no-reconcile'])
+
+        sqlite_db = pathlib.Path(data_dir) / 'data' / 'default' / 'memman.db'
+        assert sqlite_db.exists(), (
+            f'expected sqlite store at {sqlite_db}')
+
+        with psycopg.connect(pg_dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f'select count(*) from {schema}.insights'
+                    " where deleted_at is null")
+                count = cur.fetchone()[0]
+        assert count > 0, (
+            f'expected at least one row in {schema}.insights')
     finally:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:

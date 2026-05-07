@@ -26,7 +26,7 @@ pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]
 
 
 def test_fresh_init_creates_schema_with_all_tables(pg_dsn, request):
-    """Cluster.open on a never-seen store creates all four tables."""
+    """`open_postgres_backend` on a never-seen store creates all four tables."""
     store = _safe(request.node.name)
     schema = _store_schema(store)
     try:

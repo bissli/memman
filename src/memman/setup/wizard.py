@@ -231,18 +231,18 @@ def _probe_dsn(dsn: str) -> None:
     Lazy-imports `psycopg` so users without `memman[postgres]` are
     not blocked from importing the wizard module itself.
     """
-    import psycopg
-    with psycopg.connect(
-            dsn, connect_timeout=DSN_PROBE_TIMEOUT_SEC) as conn:
-        with conn.cursor() as cur:
-            cur.execute('select 1')
-            cur.execute(
-                "select 1 from pg_extension where extname = 'vector'")
-            if cur.fetchone() is None:
-                raise RuntimeError(
-                    'pgvector extension is not installed in the target '
-                    'database; run `create extension vector;` as a '
-                    'superuser, then retry')
+    from memman.store.postgres import _connection
+    with _connection(
+            dsn, connect_timeout=DSN_PROBE_TIMEOUT_SEC) as conn, \
+            conn.cursor() as cur:
+        cur.execute('select 1')
+        cur.execute(
+            "select 1 from pg_extension where extname = 'vector'")
+        if cur.fetchone() is None:
+            raise RuntimeError(
+                'pgvector extension is not installed in the target '
+                'database; run `create extension vector;` as a '
+                'superuser, then retry')
     if _is_remote_dsn(dsn):
         click.echo(click.style(
             '  hint: non-localhost Postgres detected; consider'

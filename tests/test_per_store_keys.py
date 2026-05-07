@@ -79,3 +79,60 @@ def test_validator_rejects_unknown_per_store_canonical_key():
         validate_for('postgres', {
             'MEMMAN_PG_FAKE_KEY_main': 'value',
             })
+
+
+def test_config_set_per_store_backend(mm_runner):
+    """`config set MEMMAN_BACKEND_<store> postgres` writes the per-store
+    routing key without rejection.
+    """
+    from tests.conftest import invoke
+    result = invoke(mm_runner, [
+        'config', 'set', 'MEMMAN_BACKEND_work', 'postgres'])
+    assert result.exit_code == 0, result.output
+    assert 'set MEMMAN_BACKEND_work' in result.output
+
+
+def test_config_set_per_store_pg_dsn(mm_runner):
+    """`config set MEMMAN_PG_DSN_<store> <url>` writes the per-store DSN
+    without rejection.
+    """
+    from tests.conftest import invoke
+    result = invoke(mm_runner, [
+        'config', 'set', 'MEMMAN_PG_DSN_work',
+        'postgresql://localhost/x'])
+    assert result.exit_code == 0, result.output
+
+
+def test_config_set_rejects_bare_memman_backend(mm_runner):
+    """The bare canonical `MEMMAN_BACKEND` is rejected with a hint
+    pointing at `MEMMAN_DEFAULT_BACKEND` and `MEMMAN_BACKEND_<store>`.
+    """
+    from tests.conftest import invoke
+    result = invoke(mm_runner, [
+        'config', 'set', 'MEMMAN_BACKEND', 'postgres'])
+    assert result.exit_code != 0
+    assert 'MEMMAN_DEFAULT_BACKEND' in result.output
+    assert 'MEMMAN_BACKEND_<store>' in result.output
+
+
+def test_config_set_rejects_bare_memman_pg_dsn(mm_runner):
+    """The bare canonical `MEMMAN_PG_DSN` is rejected.
+    """
+    from tests.conftest import invoke
+    result = invoke(mm_runner, [
+        'config', 'set', 'MEMMAN_PG_DSN', 'postgresql://x'])
+    assert result.exit_code != 0
+    assert 'MEMMAN_DEFAULT_PG_DSN' in result.output
+    assert 'MEMMAN_PG_DSN_<store>' in result.output
+
+
+def test_config_set_rejects_unrecognized_key_with_hint(mm_runner):
+    """An unrecognized key produces the new shape-list hint.
+    """
+    from tests.conftest import invoke
+    result = invoke(mm_runner, [
+        'config', 'set', 'MEMMAN_NOT_A_KEY', 'value'])
+    assert result.exit_code != 0
+    assert 'not a recognized config key' in result.output
+    assert 'MEMMAN_BACKEND_<store>' in result.output
+    assert 'MEMMAN_PG_DSN_<store>' in result.output

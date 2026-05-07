@@ -545,8 +545,7 @@ class SqliteBackend(Backend):
 
     def swap_prepare(self, target_dim: int) -> None:
         """No-op on SQLite; `embedding_pending` blob is in the baseline
-        schema (added via `_migrate` patch loop on existing DBs).
-        Dim is not enforced at the column level on SQLite.
+        schema. Dim is not enforced at the column level on SQLite.
         """
         return
 

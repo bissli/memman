@@ -118,8 +118,12 @@ def _strip_store_suffix(key: str, owned: frozenset) -> str | None:
     Returns None when no owned key prefixes `key` with a trailing
     underscore. The suffix syntactic check is the caller's
     responsibility -- this helper only handles the canonical lookup.
+
+    Iterates owned keys longest-first so a hypothetical future second
+    canonical key that prefixes another (e.g. `MEMMAN_PG_DSN` and
+    `MEMMAN_PG_DSN_BACKUP`) matches the more specific one first.
     """
-    for canonical in owned:
+    for canonical in sorted(owned, key=len, reverse=True):
         if key.startswith(canonical + '_'):
             return canonical
     return None
@@ -142,3 +146,15 @@ def validate_for(backend: str, env: dict) -> None:
     if cls is None:
         return
     cls._validate(env)
+
+
+def validate_all(env: dict) -> None:
+    """Validate `env` against every registered backend namespace.
+
+    Catches typos in inactive-backend namespaces (e.g. a
+    `MEMMAN_PG_DSN_typo=...` while every store is sqlite-backed).
+    Used by `factory.open_backend` so a single open-time call covers
+    both backend kinds.
+    """
+    for cls in _REGISTRY.values():
+        cls._validate(env)

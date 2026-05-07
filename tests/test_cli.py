@@ -165,6 +165,32 @@ class TestRecall:
             assert result.exit_code == 0
             mock_lp.assert_not_called()
 
+    def test_recall_logs_when_query_embed_fails(
+            self, runner, caplog, monkeypatch):
+        """A raising `ec.embed` for the recall query is now warned, not
+        swallowed silently. The recall still degrades to the keyword
+        path and returns successfully.
+        """
+        import logging
+
+        invoke(runner, [
+            'remember', 'Go uses SQLite for persistent storage',
+            '--no-reconcile'])
+
+        from memman import embed as embed_mod
+        real_ec = embed_mod.get_client()
+
+        def _boom(self, text):
+            raise RuntimeError('forced query embed failure')
+
+        monkeypatch.setattr(type(real_ec), 'embed', _boom)
+        with caplog.at_level(logging.WARNING, logger='memman'):
+            result = invoke(runner, ['recall', 'Go SQLite storage'])
+        assert result.exit_code == 0
+        warned = [r for r in caplog.records
+                  if 'recall query embed failed' in r.getMessage()]
+        assert warned
+
     def test_recall_default_does_not_call_expand_query(self, runner):
         """Default recall must not run LLM query expansion."""
         invoke(runner, [
@@ -454,8 +480,10 @@ class TestStore:
 
         Regression: the old `store remove` flow rmtreed the data dir
         but left queue rows orphaned, so the worker would re-attempt
-        them against a missing store dir. `queue.purge_store(name)`
-        runs before `shutil.rmtree(sdir)`.
+        them against a missing store dir. The purge now happens
+        inside `factory.drop_store`, which is what `store remove`
+        invokes; the test asserts the observable contract (no
+        survivor queue rows) regardless of where the purge fires.
         """
         import json as _json
 
@@ -528,6 +556,32 @@ class TestStore:
         assert 'auto-created' in list_result.output
 
         r.invoke(cli, ['--data-dir', data_dir, 'store', 'remove', 'auto-created'])
+
+
+class TestRootBootstrap:
+    """Root callback: legacy bare-key warn at every CLI invocation."""
+
+    def test_root_warns_on_legacy_bare_keys(self, mm_runner, caplog):
+        """A bare `MEMMAN_BACKEND` in the env file emits a warn on every
+        `memman <subcommand>` invocation -- defense-in-depth so doctor
+        is not the only surface that catches the silent 0.13->0.14
+        upgrade trap.
+        """
+        import logging
+
+        from memman import config
+        from tests.conftest import invoke as _invoke
+        _, data_dir = mm_runner
+        env_path = config.env_file_path(data_dir)
+        text = env_path.read_text() if env_path.exists() else ''
+        env_path.write_text(text + 'MEMMAN_BACKEND=postgres\n')
+        config.reset_file_cache()
+        with caplog.at_level(logging.WARNING, logger='memman'):
+            _invoke(mm_runner, ['status'])
+        bare_warns = [
+            r for r in caplog.records
+            if 'legacy bare key' in r.getMessage()]
+        assert bare_warns
 
 
 class TestStatus:

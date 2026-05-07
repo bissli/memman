@@ -46,7 +46,7 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 _INSIGHT_COLUMNS = (
     'id, content, category, importance, entities,'
     ' source, access_count, created_at, updated_at, deleted_at,'
-    ' summary, linked_at, enriched_at')
+    ' summary, linked_at, enriched_at, last_accessed_at')
 
 
 def get_insight_by_id(db: 'DB', id: str) -> Insight | None:
@@ -242,7 +242,7 @@ def get_retention_candidates(
         limit: int) -> tuple[list[dict[str, Any]], int]:
     """Return non-immune insights sorted by effective_importance ascending."""
     sql = f"""
-select {_INSIGHT_COLUMNS}, last_accessed_at
+select {_INSIGHT_COLUMNS}
 from insights
 where deleted_at is null
 """
@@ -250,14 +250,11 @@ where deleted_at is null
 
     insight_rows: list[tuple[Insight, datetime]] = []
     for r in rows:
-        ins = _scan_insight(r[:13])
-        last_accessed_str = r[13]
-        last_access = ins.created_at or datetime.now(timezone.utc)
-        if last_accessed_str:
-            try:
-                last_access = parse_timestamp(last_accessed_str)
-            except ValueError:
-                pass
+        ins = _scan_insight(r)
+        last_access = (
+            ins.last_accessed_at
+            or ins.created_at
+            or datetime.now(timezone.utc))
         insight_rows.append((ins, last_access))
 
     ec_sql = """
@@ -835,4 +832,6 @@ def _scan_insight(row: tuple[Any, ...]) -> Insight:
         i.linked_at = parse_timestamp(row[11])
     if len(row) > 12 and row[12]:
         i.enriched_at = parse_timestamp(row[12])
+    if len(row) > 13 and row[13]:
+        i.last_accessed_at = parse_timestamp(row[13])
     return i

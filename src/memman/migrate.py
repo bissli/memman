@@ -120,8 +120,7 @@ def inspect_target_schemas(
     with one or more tables is POPULATED. Raises `MigrateError` on
     connection or permission failures so preflight stays fail-closed.
     """
-    import psycopg
-    from memman.store.postgres import _store_schema
+    from memman.store.postgres import _connection, _store_schema
 
     schema_to_store = {_store_schema(s): s for s in stores}
     schema_names = list(schema_to_store.keys())
@@ -136,10 +135,10 @@ where n.nspname = any(%s)
 group by n.nspname
 """
     try:
-        with psycopg.connect(dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, (schema_names,))
-                rows = cur.fetchall()
+        with _connection(dsn, autocommit=True) as conn, \
+                conn.cursor() as cur:
+            cur.execute(sql, (schema_names,))
+            rows = cur.fetchall()
     except Exception as exc:
         raise MigrateError(
             f'failed to inspect target schemas: '
@@ -155,29 +154,6 @@ group by n.nspname
         else:
             result[store] = SchemaState.POPULATED
     return result
-
-
-_SOURCE_ARTIFACTS = (
-    'memman.db', 'memman.db-wal', 'memman.db-shm',
-    'recall_snapshot.v1.bin',
-    )
-
-
-def _cleanup_source_artifacts(source_dir: Path) -> None:
-    """Delete the four SQLite-side files left behind by a migrated store.
-
-    Runs only after the destination commit and verify step succeed.
-    `os.path.exists` guards each remove because WAL/SHM may be absent
-    (no concurrent writer at the time of migration).
-    """
-    for name in _SOURCE_ARTIFACTS:
-        path = source_dir / name
-        try:
-            if path.exists():
-                path.unlink()
-        except OSError as exc:
-            logger.warning(
-                f'failed to remove source artifact {path}: {exc}')
 
 
 def _verify_destination_counts(
@@ -249,7 +225,6 @@ def migrate_store(
     """
     import sqlite3
 
-    import psycopg
     from memman.store.postgres import _check_identifier, _store_schema
 
     _check_identifier(store)
@@ -298,42 +273,37 @@ def migrate_store(
         except SystemExit as exc:
             raise MigrateError(str(exc)) from exc
 
-        pg_conn = psycopg.connect(dsn, autocommit=False)
-        try:
-            from pgvector.psycopg import register_vector
-            register_vector(pg_conn)
-
-            if state in {SchemaState.EMPTY, SchemaState.POPULATED}:
-                with pg_conn.cursor() as cur:
-                    cur.execute(
-                        f'drop schema if exists {schema} cascade')
-            _ensure_schema(pg_conn, schema, dim)
-            ins_count = _import_insights(
-                sqlite_conn, pg_conn, schema, dim)
-            edge_count = _import_edges(sqlite_conn, pg_conn, schema)
-            oplog_count = _import_oplog(sqlite_conn, pg_conn, schema)
-            meta_count = _import_meta(sqlite_conn, pg_conn, schema)
-            pg_conn.commit()
-            _verify_destination_counts(
-                pg_conn, schema, store,
-                expected={
-                    'insights': n_insights,
-                    'edges': n_edges,
-                    'oplog': n_oplog,
-                    'meta': n_meta,
-                    })
-        except Exception as exc:
-            pg_conn.rollback()
-            if isinstance(exc, MigrateError):
-                raise
-            raise MigrateError(
-                f'migration of store {store!r} failed: '
-                f'{type(exc).__name__}: {exc}') from exc
-        finally:
-            pg_conn.close()
+        from memman.store.postgres import _connection
+        with _connection(dsn, autocommit=False) as pg_conn:
+            try:
+                if state in {SchemaState.EMPTY, SchemaState.POPULATED}:
+                    with pg_conn.cursor() as cur:
+                        cur.execute(
+                            f'drop schema if exists {schema} cascade')
+                _ensure_schema(pg_conn, schema, dim)
+                ins_count = _import_insights(
+                    sqlite_conn, pg_conn, schema, dim)
+                edge_count = _import_edges(sqlite_conn, pg_conn, schema)
+                oplog_count = _import_oplog(sqlite_conn, pg_conn, schema)
+                meta_count = _import_meta(sqlite_conn, pg_conn, schema)
+                pg_conn.commit()
+                _verify_destination_counts(
+                    pg_conn, schema, store,
+                    expected={
+                        'insights': n_insights,
+                        'edges': n_edges,
+                        'oplog': n_oplog,
+                        'meta': n_meta,
+                        })
+            except Exception as exc:
+                pg_conn.rollback()
+                if isinstance(exc, MigrateError):
+                    raise
+                raise MigrateError(
+                    f'migration of store {store!r} failed: '
+                    f'{type(exc).__name__}: {exc}') from exc
     finally:
         sqlite_conn.close()
-    _cleanup_source_artifacts(Path(source_dir))
     return MigrateResult(
         store=store, schema=schema,
         insights=ins_count, edges=edge_count,

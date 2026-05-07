@@ -31,6 +31,7 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_OLLAMA_HOST',
     'MEMMAN_OLLAMA_EMBED_MODEL',
     'MEMMAN_OPENROUTER_EMBED_MODEL',
+    'MEMMAN_INTERVAL',
     }
 
 
@@ -90,6 +91,7 @@ def test_constants_match_expected_names():
         config.OPENROUTER_EMBED_MODEL,
         config.DEFAULT_BACKEND,
         config.DEFAULT_PG_DSN,
+        config.INTERVAL,
         }
     assert actual == ALL_EXPECTED_NAMES
 
@@ -200,14 +202,16 @@ class TestConfigSet:
         assert parsed[config.DEFAULT_BACKEND] == 'postgres'
 
     def test_rejects_unknown_key(self, tmp_path):
-        """`config set` exits non-zero when KEY is not in INSTALLABLE_KEYS."""
+        """`config set` exits non-zero with the new shape-list hint
+        when KEY is not in INSTALLABLE_KEYS or a per-store form.
+        """
         runner = CliRunner()
         data_dir = str(tmp_path / 'memman')
         result = runner.invoke(
             cli, ['--data-dir', data_dir, 'config', 'set',
                   'MEMMAN_BOGUS_KEY', 'value'])
         assert result.exit_code != 0
-        assert 'INSTALLABLE_KEYS' in result.output
+        assert 'not a recognized config key' in result.output
 
     def test_overrides_existing_value(self, tmp_path):
         """`config set` overrides an existing env-file value."""

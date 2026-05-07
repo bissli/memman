@@ -58,9 +58,11 @@ def active_store(
             diagnostics that must run against a stale or fresh store.
 
     Raises
-        click.ClickException: if the fingerprint check fails. Other
-            exceptions (cluster open failures, schema absence) propagate
-            unchanged.
+        click.ClickException: when the fingerprint check or backend
+            open via `factory.open_backend` fails. `ConfigError` from
+            either the runtime layer or the backend layer is wrapped
+            uniformly because `store.errors.ConfigError` now
+            subclasses `memman.exceptions.ConfigError`.
     """
     from memman.embed import fingerprint as fp_mod
     from memman.embed import get_client
@@ -68,7 +70,10 @@ def active_store(
     from memman.graph.engine import reindex_if_constants_changed
     from memman.store.factory import open_backend
 
-    backend = open_backend(store, data_dir)
+    try:
+        backend = open_backend(store, data_dir)
+    except ConfigError as exc:
+        raise click.ClickException(str(exc)) from exc
     try:
         if not unchecked:
             reindex_if_constants_changed(backend)

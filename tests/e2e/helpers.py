@@ -106,20 +106,6 @@ def assert_not_contains(text: str, needle: str, label: str = '') -> None:
         f'{label}: {needle!r} should not be in: {text!r}')
 
 
-def extract_id_from_facts(data: dict) -> str:
-    """Extract `.facts[0].id` or fallback `.id`.
-
-    Legacy shape — used by a few CLI commands that still return a
-    `{facts: [...]}` envelope (e.g., `graph rebuild --dry-run`). Most
-    write paths now go through the queue and return `{queue_id: N}`
-    instead; use `extract_queue_id` for those.
-    """
-    facts = data.get('facts')
-    if facts:
-        return facts[0]['id']
-    return data['id']
-
-
 def extract_queue_id(data: dict) -> int:
     """Return `queue_id` from a queued `remember` response."""
     return int(data['queue_id'])
