@@ -31,11 +31,6 @@ PREVENTS_PATTERN = re.compile(
     r'(?i)\b(despite|prevented|prevents|blocked)\b')
 
 
-def has_causal_signal(text: str) -> bool:
-    """Return True if the text contains causal keywords."""
-    return bool(CAUSAL_PATTERN.search(text))
-
-
 def suggest_sub_type(text: str) -> str:
     """Guess a causal sub_type from the content text."""
     if PREVENTS_PATTERN.search(text):

@@ -89,12 +89,22 @@ def test_queue_cat_missing_errors(runner):
     assert 'not found' in result.output.lower()
 
 
-def test_queue_purge_requires_done(runner):
-    """`memman scheduler queue purge` without --done errors out.
+def test_queue_purge_requires_flag(runner):
+    """`memman scheduler queue purge` without --done or --stale errors out.
     """
     result = invoke(runner, ['scheduler', 'queue', 'purge'])
     assert result.exit_code != 0
     assert '--done' in result.output
+    assert '--stale' in result.output
+
+
+def test_queue_purge_rejects_both_flags(runner):
+    """`queue purge --done --stale` rejects the conflicting flag pair.
+    """
+    result = invoke(
+        runner, ['scheduler', 'queue', 'purge', '--done', '--stale'])
+    assert result.exit_code != 0
+    assert 'not both' in result.output
 
 
 def test_queue_retry_noop_on_unknown(runner):
@@ -102,6 +112,131 @@ def test_queue_retry_noop_on_unknown(runner):
     """
     result = invoke(runner, ['scheduler', 'queue', 'retry', '999'])
     assert result.exit_code != 0
+
+
+def test_queue_retry_requires_arg_or_flag(runner):
+    """`queue retry` without a row id or --all-stale errors out.
+    """
+    result = invoke(runner, ['scheduler', 'queue', 'retry'])
+    assert result.exit_code != 0
+    assert '--all-stale' in result.output
+
+
+def test_queue_retry_rejects_id_with_all_stale(runner):
+    """`queue retry 5 --all-stale` rejects the conflicting combination.
+    """
+    result = invoke(
+        runner, ['scheduler', 'queue', 'retry', '5', '--all-stale'])
+    assert result.exit_code != 0
+    assert 'not both' in result.output
+
+
+def _seed_row(data_dir: str, status: str = 'stale') -> int:
+    """Insert one queue row with the given status. Returns row id."""
+    from memman.queue import open_queue_db
+    conn = open_queue_db(data_dir)
+    try:
+        cur = conn.execute(
+            "insert into queue"
+            " (store, content, hint_cat, hint_imp, hint_source,"
+            "  hint_entities, status, queued_at)"
+            " values (?, ?, ?, ?, ?, ?, ?, strftime('%s','now'))",
+            ('default', f'{status}-row', 'general', 3, 'test', '[]', status))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def _seed_stale_row(data_dir: str) -> int:
+    """Insert one queue row and force it to status='stale'. Returns row id."""
+    return _seed_row(data_dir, 'stale')
+
+
+def test_queue_retry_all_stale_requeues(runner):
+    """`queue retry --all-stale` flips stale rows back to pending.
+    """
+    _, data_dir = runner
+    row_id = _seed_stale_row(data_dir)
+    result = invoke(
+        runner, ['scheduler', 'queue', 'retry', '--all-stale'])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data['action'] == 'requeued'
+    assert data['count'] >= 1
+
+    from memman.queue import open_queue_db
+    conn = open_queue_db(data_dir)
+    try:
+        status = conn.execute(
+            'select status from queue where id = ?', (row_id,)).fetchone()[0]
+        assert status == 'pending'
+    finally:
+        conn.close()
+
+
+def test_queue_purge_stale_deletes_only_stale(runner):
+    """`queue purge --stale` deletes stale rows only.
+    """
+    _, data_dir = runner
+    stale_id = _seed_row(data_dir, 'stale')
+    failed_id = _seed_row(data_dir, 'failed')
+
+    result = invoke(runner, ['scheduler', 'queue', 'purge', '--stale'])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data['deleted'] >= 1
+
+    from memman.queue import open_queue_db
+    conn = open_queue_db(data_dir)
+    try:
+        gone = conn.execute(
+            'select id from queue where id = ?', (stale_id,)).fetchone()
+        assert gone is None
+        survived = conn.execute(
+            'select status from queue where id = ?',
+            (failed_id,)).fetchone()
+        assert survived is not None
+        assert survived[0] == 'failed'
+    finally:
+        conn.close()
+
+
+def test_maintenance_retries_stale_rows(runner):
+    """`run_maintenance` re-queues stale rows automatically.
+    """
+    _, data_dir = runner
+    row_id = _seed_stale_row(data_dir)
+
+    from memman.maintenance import run_maintenance
+    from memman.queue import open_queue_db
+    conn = open_queue_db(data_dir)
+    try:
+        import time as _time
+        run_maintenance(
+            queue_conn=conn,
+            data_dir=data_dir,
+            touched_stores=set(),
+            store_contexts={},
+            deadline_monotonic=_time.monotonic() + 60,
+            snapshot_writer=lambda *a, **kw: None)
+        status = conn.execute(
+            'select status from queue where id = ?', (row_id,)).fetchone()[0]
+        assert status == 'pending'
+    finally:
+        conn.close()
+
+
+def test_scheduler_status_text_output(runner, monkeypatch):
+    """`scheduler status --text` emits human-readable key:value lines.
+    """
+    _patch_no_subprocess(monkeypatch)
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    monkeypatch.setattr(Path, 'home', lambda: Path(runner[1]))
+    result = invoke(runner, ['scheduler', 'status', '--text'])
+    assert result.exit_code == 0, result.output
+    assert 'installed:' in result.output
+    assert 'platform:' in result.output
 
 
 def test_scheduler_bare_shows_help(runner):

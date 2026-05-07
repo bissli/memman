@@ -1,29 +1,6 @@
 """Causal signal detection and token overlap tests."""
 
-from memman.graph.causal import has_causal_signal
 from memman.graph.causal import suggest_sub_type, token_overlap
-
-
-def test_has_causal_signal_absent():
-    """Texts without causal keywords return False.
-
-    The corpus rejects temporal 'since', dependency verbs, and
-    'blocked on'. This is the only line of defense against accidental
-    keyword additions to `CAUSAL_PATTERN`.
-    """
-    cases = [
-        'The sky is blue today',
-        'Python is a popular language',
-        'We had a meeting yesterday',
-        'Working on this since yesterday',
-        'Available since Python 3.10',
-        'This requires Python 3.11',
-        'The feature depends on network availability',
-        'Blocked on code review',
-        ]
-    for text in cases:
-        assert has_causal_signal(text) is False, (
-            f'expected False for: {text}')
 
 
 def test_suggest_sub_type_prevents_overrides():

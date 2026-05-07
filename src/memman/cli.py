@@ -349,10 +349,10 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
     """
     bare_canonicals = {
         'MEMMAN_BACKEND': (
-            'use MEMMAN_DEFAULT_BACKEND for the cluster fallback'
+            'use MEMMAN_DEFAULT_BACKEND as the default backend'
             ' or MEMMAN_BACKEND_<store> for a specific store'),
         'MEMMAN_PG_DSN': (
-            'use MEMMAN_DEFAULT_PG_DSN for the cluster fallback'
+            'use MEMMAN_DEFAULT_PG_DSN as the default Postgres DSN'
             ' or MEMMAN_PG_DSN_<store> for a specific store'),
         }
     if key in bare_canonicals:
@@ -420,7 +420,7 @@ def config_show(ctx: click.Context) -> None:
             'platform': s.get('platform'),
             'interval_seconds': s.get('interval_seconds'),
             }
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         pass
     _json_out(out)
 
@@ -818,8 +818,8 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                         'embedder_credential_missing',
                         row_id=row.id,
                         store=row.store,
-                        provider=getattr(ctx.ec, 'name', None),
-                        model=getattr(ctx.ec, 'model', None),
+                        provider=ctx.ec.name,
+                        model=ctx.ec.model,
                         reason=str(exc)[:500])
                 if verbose:
                     click.echo(
@@ -1456,12 +1456,27 @@ def queue_show(ctx: click.Context, row_id: int) -> None:
 
 
 @queue.command('retry')
-@click.argument('row_id', type=int)
+@click.argument('row_id', type=int, required=False)
+@click.option('--all-stale', 'all_stale', is_flag=True, default=False,
+              help='Re-queue every row currently in status=stale')
 @click.pass_context
-def queue_retry(ctx: click.Context, row_id: int) -> None:
-    """Re-queue a failed row."""
-    from memman.queue import queue_db, retry_row
+def queue_retry(
+        ctx: click.Context,
+        row_id: int | None,
+        all_stale: bool) -> None:
+    """Re-queue a failed row by id, or every stale row with --all-stale."""
+    from memman.queue import queue_db, retry_row, retry_stale
+    if all_stale and row_id is not None:
+        raise click.ClickException(
+            'pass either ROW_ID or --all-stale, not both')
+    if not all_stale and row_id is None:
+        raise click.ClickException(
+            'pass a ROW_ID or --all-stale')
     with queue_db(ctx.obj['data_dir']) as conn:
+        if all_stale:
+            count = retry_stale(conn)
+            _json_out({'action': 'requeued', 'count': count})
+            return
         if not retry_row(conn, row_id):
             raise click.ClickException(
                 f'queue row {row_id} not found or not in failed state')
@@ -1471,21 +1486,28 @@ def queue_retry(ctx: click.Context, row_id: int) -> None:
 @queue.command('purge')
 @click.option('--done', is_flag=True, default=False,
               help='Delete all rows with status=done')
+@click.option('--stale', 'stale', is_flag=True, default=False,
+              help='Delete all rows with status=stale')
 @click.pass_context
-def queue_purge(ctx: click.Context, done: bool) -> None:
-    """Remove completed queue rows."""
-    if not done:
+def queue_purge(ctx: click.Context, done: bool, stale: bool) -> None:
+    """Remove completed or stale queue rows."""
+    if done and stale:
         raise click.ClickException(
-            'pass --done to confirm deletion of completed rows')
-    from memman.queue import purge_done, queue_db
+            'pass either --done or --stale, not both')
+    if not (done or stale):
+        raise click.ClickException(
+            'pass --done or --stale to confirm deletion')
+    from memman.queue import purge_done, purge_stale, queue_db
     with queue_db(ctx.obj['data_dir']) as conn:
-        deleted = purge_done(conn)
+        deleted = purge_done(conn) if done else purge_stale(conn)
         _json_out({'deleted': deleted})
 
 
 @scheduler.command('status')
+@click.option('--text', 'text_output', is_flag=True, default=False,
+              help='Human-readable output (default: JSON)')
 @click.pass_context
-def scheduler_status(ctx: click.Context) -> None:
+def scheduler_status(ctx: click.Context, text_output: bool) -> None:
     """Show scheduler install state, interval, next run, log paths,
     and the most recent worker-drain summary from worker_runs.
     """
@@ -1512,16 +1534,18 @@ def scheduler_status(ctx: click.Context) -> None:
     except Exception as exc:
         logger.debug(f'worker_runs lookup failed: {exc}')
 
-    _json_out(result)
+    _scheduler_emit(result, text_output)
 
 
 @scheduler.command('start')
+@click.option('--text', 'text_output', is_flag=True, default=False,
+              help='Human-readable output (default: JSON)')
 @click.pass_context
-def scheduler_start(ctx: click.Context) -> None:
+def scheduler_start(ctx: click.Context, text_output: bool) -> None:
     """Start the scheduler. Worker drains; writes are accepted.
 
     Idempotent. Sweeps long-stalled queue rows to `stale` so they can
-    be retried with `scheduler queue retry`.
+    be retried with `scheduler queue retry --all-stale`.
     """
     from memman.queue import mark_stale_on_resume, queue_db
     from memman.setup.scheduler import start
@@ -1537,13 +1561,15 @@ def scheduler_start(ctx: click.Context) -> None:
         result['marked_stale'] = n_stale
         result.setdefault('actions', []).append(
             f"moved {n_stale} long-pending rows to status='stale'"
-            ' (retry with `memman scheduler queue retry`)')
-    _json_out(result)
+            ' (retry with `memman scheduler queue retry --all-stale`)')
+    _scheduler_emit(result, text_output)
 
 
 @scheduler.command('stop')
+@click.option('--text', 'text_output', is_flag=True, default=False,
+              help='Human-readable output (default: JSON)')
 @click.pass_context
-def scheduler_stop(ctx: click.Context) -> None:
+def scheduler_stop(ctx: click.Context, text_output: bool) -> None:
     """Stop the scheduler. Trigger files stay; memman becomes recall-only.
 
     Writes (`remember`/`replace`/`forget`/`graph link`/`graph rebuild`/
@@ -1555,7 +1581,27 @@ def scheduler_stop(ctx: click.Context) -> None:
         result = stop()
     except (FileNotFoundError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
-    _json_out(result)
+    _scheduler_emit(result, text_output)
+
+
+def _scheduler_emit(result: dict, text_output: bool) -> None:
+    """Render a scheduler-command result dict.
+
+    JSON by default for script consumers; `--text` renders flat
+    key:value lines and an indented `actions` list when present.
+    """
+    if not text_output:
+        _json_out(result)
+        return
+    actions = result.get('actions') or []
+    for key, value in result.items():
+        if key == 'actions':
+            continue
+        click.echo(f'{key}: {value}')
+    if actions:
+        click.echo('actions:')
+        for action in actions:
+            click.echo(f'  - {action}')
 
 
 @scheduler.command('install')

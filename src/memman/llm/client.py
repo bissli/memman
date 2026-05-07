@@ -39,10 +39,16 @@ VALID_ROLES = frozenset({ROLE_FAST, ROLE_SLOW_CANONICAL, ROLE_SLOW_METADATA})
 class LLMProvider(Protocol):
     """Structural contract for any LLM client used by memman.
 
-    The single `complete` method takes the system + user prompts and
-    returns the assistant's response text. Streaming is deliberately
-    out of scope — memman's pipeline reads each response as a whole.
+    Implementations must expose `model` (the resolved model slug for
+    diagnostics) and `complete(system, user)` (the synchronous chat
+    call). Streaming is deliberately out of scope — memman's pipeline
+    reads each response as a whole.
     """
+
+    @property
+    def model(self) -> str:
+        """The resolved model slug used by this client."""
+        ...
 
     def complete(self, system: str, user: str) -> str:
         """Run a completion and return the assistant response text."""

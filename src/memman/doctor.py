@@ -351,7 +351,7 @@ def check_env_completeness() -> dict[str, Any]:
     when absent (the user may not have configured an alternate provider).
 
     Per-store dispatch is validated separately by `check_per_store_keys`;
-    this check covers cluster-global installable knobs only.
+    this check covers global installable knobs only.
     """
     from memman import config
 
@@ -784,7 +784,7 @@ def check_llm_probe() -> dict[str, Any]:
             detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
             return {'name': 'llm_probe', 'status': 'fail', 'detail': detail}
         out = client.complete('Reply with exactly: ok', 'probe')
-        detail['model'] = getattr(client, 'model', None)
+        detail['model'] = client.model
         detail['sample'] = (out or '')[:60]
         detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
         if out:
@@ -815,8 +815,8 @@ def check_embed_probe() -> dict[str, Any]:
     try:
         from memman.embed import get_client
         ec = get_client()
-        detail['provider'] = getattr(ec, 'name', None)
-        detail['model'] = getattr(ec, 'model', None)
+        detail['provider'] = ec.name
+        detail['model'] = ec.model
         if not ec.available():
             detail['error'] = ec.unavailable_message()
             detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)

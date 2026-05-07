@@ -43,7 +43,7 @@ def run_maintenance(
             f' {MAINTENANCE_MIN_BUDGET_SECONDS}s of budget remains')
         return
 
-    from memman.queue import purge_done, purge_worker_runs
+    from memman.queue import purge_done, purge_worker_runs, retry_stale
 
     try:
         dropped = purge_done(queue_conn)
@@ -59,6 +59,14 @@ def run_maintenance(
                 f'maintenance: pruned {dropped} stale worker_runs rows')
     except Exception:
         logger.exception('maintenance: purge_worker_runs failed')
+
+    try:
+        requeued = retry_stale(queue_conn)
+        if requeued:
+            logger.debug(
+                f'maintenance: re-queued {requeued} stale rows back to pending')
+    except Exception:
+        logger.exception('maintenance: retry_stale failed')
 
     for store_name in touched_stores:
         if time.monotonic() >= deadline_monotonic:
