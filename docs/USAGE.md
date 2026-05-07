@@ -202,7 +202,7 @@ Different agents or processes can use different stores via the `MEMMAN_STORE` en
 
 `memman migrate` copies a store's data from SQLite into the configured Postgres backend. The SQLite source is preserved (copy-only, never modified), so it remains a durable fallback until you choose to remove it.
 
-The command echoes a plan (source paths, redacted destination DSN, per-store target schema state — `ABSENT` / `EMPTY` / `POPULATED`) and prompts for confirmation. Stores whose target schema already exists are dropped and recreated. On success the command flips `MEMMAN_BACKEND=postgres` in the env file so the next drain routes to the new database.
+The command echoes a plan (source paths, redacted destination DSN, per-store target schema state — `ABSENT` / `EMPTY` / `POPULATED`) and prompts for confirmation. Stores whose target schema already exists are dropped and recreated. On success the command writes `MEMMAN_BACKEND_<store>=postgres` to the env file so the next drain routes that specific store to Postgres; other stores are unaffected.
 
 ```bash
 # Dry-run: print the plan only, no writes, no prompt
@@ -215,7 +215,7 @@ memman migrate --store work
 memman migrate --all --yes
 ```
 
-The command holds the shared `drain.lock` for its duration so a scheduler-fired drain cannot race the SQLite reader. To verify the cutover, run `memman doctor`. To revert, use `memman config set MEMMAN_BACKEND sqlite`.
+The command holds the shared `drain.lock` for its duration so a scheduler-fired drain cannot race the SQLite reader. To verify the cutover, run `memman doctor`. To revert per-store, use `memman config set MEMMAN_BACKEND_<store> sqlite` (or unset the key to fall back to `MEMMAN_DEFAULT_BACKEND`).
 
 Reverse migration (Postgres → SQLite) is not implemented; restore from the preserved SQLite source if needed.
 
@@ -272,60 +272,71 @@ Run `memman install` in a TTY to get the interactive wizard. It prompts (with ma
 - `--pg-dsn URL` -- Postgres DSN; required with `--backend postgres` in non-interactive mode. The DSN may omit the password to use `~/.pgpass`, `PGSERVICE`, or `PGPASSWORD` (psycopg3 honors all three).
 - `--no-wizard` -- disables prompts even in a TTY; flags + defaults only.
 
-If you pass an `INSTALLABLE_KEYS` flag whose value conflicts with the env file, install exits with a clear message pointing at `memman config set` -- the explicit override path. Use `memman config set KEY VALUE` to change a setting after the initial install (e.g., `memman config set MEMMAN_BACKEND postgres`).
+If you pass an `INSTALLABLE_KEYS` flag whose value conflicts with the env file, install exits with a clear message pointing at `memman config set` -- the explicit override path. Use `memman config set KEY VALUE` to change a setting after the initial install (e.g., `memman config set MEMMAN_DEFAULT_BACKEND postgres` to change the fallback default, or `memman config set MEMMAN_BACKEND_<store> postgres` to route a specific store).
 
-**`MEMMAN_PG_DSN` syntax.** Standard PostgreSQL libpq URI per psycopg3:
+**Backend selection.** memman routes each store through a backend chosen by an env-file lookup:
+
+1. `MEMMAN_BACKEND_<store>` — explicit per-store override (e.g., `MEMMAN_BACKEND_work=postgres`).
+2. `MEMMAN_DEFAULT_BACKEND` — fallback when no per-store key is set (default `sqlite`).
+
+`memman migrate <store>` writes `MEMMAN_BACKEND_<store>=postgres` so a single store can move to Postgres while others stay on SQLite. Use `memman config set MEMMAN_DEFAULT_BACKEND postgres` only when you want every newly-created store to default to Postgres.
+
+The deferred-write queue is always SQLite at `<data_dir>/queue.db`; the Postgres backend stores per-store data in `store_<name>` schemas, each carrying its own `worker_runs` heartbeat table.
+
+**Postgres DSN syntax.** Standard PostgreSQL libpq URI per psycopg3:
 
 ```
 postgresql://[user[:password]@][host][:port]/[dbname][?param=value&...]
 ```
 
-Worked examples:
+Worked examples (replace `<store>` with the store name, or use `MEMMAN_DEFAULT_PG_DSN` for the fallback):
 
 ```bash
 # Local dev (defaults: localhost:5432, no password)
-memman config set MEMMAN_PG_DSN 'postgresql://memman@localhost/memman'
+memman config set MEMMAN_PG_DSN_default 'postgresql://memman@localhost/memman'
 
 # Inline credentials (URL-encode special chars in the password: ':' -> %3A, '@' -> %40, '/' -> %2F)
-memman config set MEMMAN_PG_DSN 'postgresql://memman:s3cret@db.internal:5432/memman'
+memman config set MEMMAN_PG_DSN_work 'postgresql://memman:s3cret@db.internal:5432/memman'
 
 # Passwordless DSN sourcing the password from ~/.pgpass (recommended on shared hosts)
-memman config set MEMMAN_PG_DSN 'postgresql://memman@db.internal:5432/memman'
+memman config set MEMMAN_DEFAULT_PG_DSN 'postgresql://memman@db.internal:5432/memman'
 
 # Production: TLS-required, custom application_name (any libpq parameter is accepted)
-memman config set MEMMAN_PG_DSN 'postgresql://memman@db.internal:5432/memman?sslmode=require&application_name=memman'
+memman config set MEMMAN_PG_DSN_default 'postgresql://memman@db.internal:5432/memman?sslmode=require&application_name=memman'
 ```
 
-> **Security note.** `MEMMAN_PG_DSN` is stored plaintext in `~/.memman/env` at mode 0600. Root and any process running as your user can read it. For shared hosts, prefer `~/.pgpass` (mode 0600) and pass a passwordless DSN -- psycopg3 will source the password from `~/.pgpass`, `PGSERVICE`, or `PGPASSWORD` automatically.
+> **Security note.** `MEMMAN_DEFAULT_PG_DSN` and any `MEMMAN_PG_DSN_<store>` are stored plaintext in `~/.memman/env` at mode 0600. Root and any process running as your user can read them. For shared hosts, prefer `~/.pgpass` (mode 0600) and pass a passwordless DSN -- psycopg3 will source the password from `~/.pgpass`, `PGSERVICE`, or `PGPASSWORD` automatically.
 
-| Variable                          | Install-time default                              | Description                                                                                                           |
-| --------------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `MEMMAN_DATA_DIR`                 | `~/.memman`                                       | Base data directory (process-control; not persisted).                                                                 |
-| `MEMMAN_STORE`                    | `default`                                         | Active named store (process-control; not persisted).                                                                  |
-| `OPENROUTER_API_KEY`              | —                                                 | Required at install: LLM inference (fact extraction, reconciliation, causal, expansion).                              |
-| `VOYAGE_API_KEY`                  | —                                                 | Required at install: Voyage AI embeddings (512-dim).                                                                  |
-| `MEMMAN_LLM_PROVIDER`             | `openrouter`                                      | Registered LLM provider name (see `memman.llm.client.PROVIDERS`).                                                     |
-| `MEMMAN_OPENROUTER_ENDPOINT`      | `https://openrouter.ai/api/v1`                    | Endpoint for the OpenRouter client.                                                                                   |
-| `MEMMAN_LLM_MODEL_FAST`           | resolved at install (haiku family via `/models`)  | Recall hot path model id (query expansion, doctor probe).                                                             |
-| `MEMMAN_LLM_MODEL_SLOW_CANONICAL` | resolved at install (sonnet family via `/models`) | Worker model for canonical content (fact extraction, reconciliation).                                                 |
-| `MEMMAN_LLM_MODEL_SLOW_METADATA`  | resolved at install (sonnet family via `/models`) | Worker model for derived metadata (enrichment summaries/keywords, causal-edge inference).                             |
-| `MEMMAN_EMBED_PROVIDER`           | `voyage`                                          | Embedding provider: `voyage`, `openai`, `openrouter`, `ollama`.                                                       |
-| `MEMMAN_RERANK_PROVIDER`          | `voyage`                                          | Cross-encoder rerank provider used when callers pass `memman recall --rerank`.                                        |
-| `MEMMAN_VOYAGE_RERANK_MODEL`      | `rerank-2.5-lite`                                 | Voyage rerank model id.                                                                                               |
-| `MEMMAN_OPENAI_EMBED_API_KEY`     | —                                                 | API key for `openai` provider.                                                                                        |
-| `MEMMAN_OPENAI_EMBED_ENDPOINT`    | `https://api.openai.com`                          | Endpoint URL for `openai` provider.                                                                                   |
-| `MEMMAN_OPENAI_EMBED_MODEL`       | `text-embedding-3-small`                          | Model id for `openai` provider.                                                                                       |
-| `MEMMAN_OPENROUTER_EMBED_MODEL`   | `baai/bge-m3`                                     | Model id for `openrouter` embed provider; reuses `OPENROUTER_API_KEY` + `MEMMAN_OPENROUTER_ENDPOINT`.                 |
-| `MEMMAN_OLLAMA_HOST`              | `http://localhost:11434`                          | Host URL for `ollama` provider.                                                                                       |
-| `MEMMAN_OLLAMA_EMBED_MODEL`       | `nomic-embed-text`                                | Model id for `ollama` provider.                                                                                       |
-| `MEMMAN_DEBUG`                    | (unset)                                           | Truthy value enables JSONL tracing to `~/.memman/logs/debug.log`.                                                     |
-| `MEMMAN_WORKER`                   | (unset)                                           | `1` inside the scheduler-triggered worker; enables the rotating log.                                                  |
-| `MEMMAN_LOG_LEVEL`                | `WARNING`                                         | Logger level when neither `--verbose` nor `--debug` is passed.                                                        |
-| `MEMMAN_BACKEND`                  | `sqlite`                                          | Storage backend (`sqlite` or `postgres`). Postgres requires the `memman[postgres]` extra.                             |
-| `MEMMAN_PG_DSN`                   | —                                                 | Postgres DSN (`postgresql://...`). Secret. Stripped on `memman uninstall`.                                            |
-| `MEMMAN_REINDEX_TIMEOUT`          | `180`                                             | Seconds Postgres reindex (HNSW) is allowed to run before `statement_timeout` aborts; reraised idempotently next call. |
-| `MEMMAN_EMBED_SWAP_BATCH_SIZE`    | `200`                                             | Rows per backfill batch in `memman embed swap`.                                                                       |
-| `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT` | `0` (unlimited)                                   | Seconds Postgres `CREATE INDEX CONCURRENTLY` may run during cutover; `0` disables `statement_timeout`.                |
+| Variable                          | Install-time default                              | Description                                                                                                                                          |
+| --------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MEMMAN_DATA_DIR`                 | `~/.memman`                                       | Base data directory (process-control; not persisted).                                                                                                |
+| `MEMMAN_STORE`                    | `default`                                         | Active named store (process-control; not persisted).                                                                                                 |
+| `OPENROUTER_API_KEY`              | —                                                 | Required at install: LLM inference (fact extraction, reconciliation, causal, expansion).                                                             |
+| `VOYAGE_API_KEY`                  | —                                                 | Required at install: Voyage AI embeddings (512-dim).                                                                                                 |
+| `MEMMAN_LLM_PROVIDER`             | `openrouter`                                      | Registered LLM provider name (see `memman.llm.client.PROVIDERS`).                                                                                    |
+| `MEMMAN_OPENROUTER_ENDPOINT`      | `https://openrouter.ai/api/v1`                    | Endpoint for the OpenRouter client.                                                                                                                  |
+| `MEMMAN_LLM_MODEL_FAST`           | resolved at install (haiku family via `/models`)  | Recall hot path model id (query expansion, doctor probe).                                                                                            |
+| `MEMMAN_LLM_MODEL_SLOW_CANONICAL` | resolved at install (sonnet family via `/models`) | Worker model for canonical content (fact extraction, reconciliation).                                                                                |
+| `MEMMAN_LLM_MODEL_SLOW_METADATA`  | resolved at install (sonnet family via `/models`) | Worker model for derived metadata (enrichment summaries/keywords, causal-edge inference).                                                            |
+| `MEMMAN_EMBED_PROVIDER`           | `voyage`                                          | Embedding provider: `voyage`, `openai`, `openrouter`, `ollama`.                                                                                      |
+| `MEMMAN_RERANK_PROVIDER`          | `voyage`                                          | Cross-encoder rerank provider used when callers pass `memman recall --rerank`.                                                                       |
+| `MEMMAN_VOYAGE_RERANK_MODEL`      | `rerank-2.5-lite`                                 | Voyage rerank model id.                                                                                                                              |
+| `MEMMAN_OPENAI_EMBED_API_KEY`     | —                                                 | API key for `openai` provider.                                                                                                                       |
+| `MEMMAN_OPENAI_EMBED_ENDPOINT`    | `https://api.openai.com`                          | Endpoint URL for `openai` provider.                                                                                                                  |
+| `MEMMAN_OPENAI_EMBED_MODEL`       | `text-embedding-3-small`                          | Model id for `openai` provider.                                                                                                                      |
+| `MEMMAN_OPENROUTER_EMBED_MODEL`   | `baai/bge-m3`                                     | Model id for `openrouter` embed provider; reuses `OPENROUTER_API_KEY` + `MEMMAN_OPENROUTER_ENDPOINT`.                                                |
+| `MEMMAN_OLLAMA_HOST`              | `http://localhost:11434`                          | Host URL for `ollama` provider.                                                                                                                      |
+| `MEMMAN_OLLAMA_EMBED_MODEL`       | `nomic-embed-text`                                | Model id for `ollama` provider.                                                                                                                      |
+| `MEMMAN_DEBUG`                    | (unset)                                           | Truthy value enables JSONL tracing to `~/.memman/logs/debug.log`.                                                                                    |
+| `MEMMAN_WORKER`                   | (unset)                                           | `1` inside the scheduler-triggered worker; enables the rotating log.                                                                                 |
+| `MEMMAN_LOG_LEVEL`                | `WARNING`                                         | Logger level when neither `--verbose` nor `--debug` is passed.                                                                                       |
+| `MEMMAN_DEFAULT_BACKEND`          | `sqlite`                                          | Fallback storage backend for stores without an explicit per-store override (`sqlite` or `postgres`). Postgres requires the `memman[postgres]` extra. |
+| `MEMMAN_DEFAULT_PG_DSN`           | —                                                 | Fallback Postgres DSN (`postgresql://...`) when no `MEMMAN_PG_DSN_<store>` is set. Secret. Stripped on `memman uninstall`.                           |
+| `MEMMAN_BACKEND_<store>`          | (unset)                                           | Per-store backend override (e.g., `MEMMAN_BACKEND_work=postgres`). Written by `memman migrate <store>`; not seeded by `install`.                     |
+| `MEMMAN_PG_DSN_<store>`           | —                                                 | Per-store Postgres DSN override. Secret. Stripped on `memman uninstall`.                                                                             |
+| `MEMMAN_REINDEX_TIMEOUT`          | `180`                                             | Seconds Postgres reindex (HNSW) is allowed to run before `statement_timeout` aborts; reraised idempotently next call.                                |
+| `MEMMAN_EMBED_SWAP_BATCH_SIZE`    | `200`                                             | Rows per backfill batch in `memman embed swap`.                                                                                                      |
+| `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT` | `0` (unlimited)                                   | Seconds Postgres `CREATE INDEX CONCURRENTLY` may run during cutover; `0` disables `statement_timeout`.                                               |
 
 ---
 

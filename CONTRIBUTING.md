@@ -24,7 +24,7 @@ The install wizard adds three flags: `--backend [sqlite|postgres]` selects the s
 
 `memman config set KEY VALUE` is the explicit override path. Use it to change an `INSTALLABLE_KEYS` value after initial install (switching backends, rotating an API key, updating a DSN). The install command stays sticky-seed by design; `config set` is the unambiguous "I'm changing my mind" verb.
 
-`memman uninstall` strips the secret keys (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`, `MEMMAN_PG_DSN`) from the env file but keeps non-secret settings (including `MEMMAN_BACKEND`), so a later `memman install` resurrects model/provider/backend preferences without re-export.
+`memman uninstall` strips the secret keys (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`, `MEMMAN_DEFAULT_PG_DSN`, and any per-store `MEMMAN_PG_DSN_<store>`) from the env file but keeps non-secret settings (including `MEMMAN_DEFAULT_BACKEND` and any `MEMMAN_BACKEND_<store>` routes), so a later `memman install` resurrects model/provider/backend preferences without re-export.
 
 `memman doctor` includes an `env_completeness` check that warns when a new `INSTALLABLE_KEYS` entry is missing, plus an `optional_extras` check that reports which `memman[extras]` install groups (e.g., `postgres`) resolve at runtime.
 
@@ -54,8 +54,10 @@ Set any of these in your shell before `memman install` and they land in the env 
 | `MEMMAN_OPENROUTER_EMBED_MODEL`   | Model id for the OpenRouter embed provider (`MEMMAN_EMBED_PROVIDER=openrouter`). Default `baai/bge-m3`. Reuses `OPENROUTER_API_KEY` and `MEMMAN_OPENROUTER_ENDPOINT`; no separate secret needed. |
 | `MEMMAN_OLLAMA_HOST`              | Ollama host URL (default `http://localhost:11434`).                                                                                                                                              |
 | `MEMMAN_OLLAMA_EMBED_MODEL`       | Ollama embedding model name (default `nomic-embed-text`).                                                                                                                                        |
-| `MEMMAN_BACKEND`                  | Storage backend (`sqlite` default, `postgres` requires the `memman[postgres]` extra).                                                                                                            |
-| `MEMMAN_PG_DSN`                   | Postgres DSN (`postgresql://...`); secret. Stripped from the env file on `memman uninstall`.                                                                                                     |
+| `MEMMAN_DEFAULT_BACKEND`          | Fallback storage backend for stores without an explicit per-store override (`sqlite` default, `postgres` requires the `memman[postgres]` extra).                                                 |
+| `MEMMAN_DEFAULT_PG_DSN`           | Fallback Postgres DSN (`postgresql://...`) used when no `MEMMAN_PG_DSN_<store>` is set; secret. Stripped from the env file on `memman uninstall`.                                                |
+| `MEMMAN_BACKEND_<store>`          | Per-store backend override (e.g., `MEMMAN_BACKEND_work=postgres`). Not seeded by `install`; set via `memman config set` or written by `memman migrate <store>`.                                  |
+| `MEMMAN_PG_DSN_<store>`           | Per-store Postgres DSN override; secret. Stripped from the env file on `memman uninstall`.                                                                                                       |
 | `MEMMAN_RERANK_PROVIDER`          | Cross-encoder rerank provider (default `voyage`). Used when callers pass `memman recall --rerank`.                                                                                               |
 | `MEMMAN_VOYAGE_RERANK_MODEL`      | Voyage rerank model id (default `rerank-2.5-lite`).                                                                                                                                              |
 
@@ -81,7 +83,7 @@ memman has one schema source of truth per backend. Both are additive-only: colum
 
 **SQLite** -- `_BASELINE_SCHEMA` in `src/memman/store/db.py` (per-store DB) and `src/memman/queue.py` (queue DB). There is no `PRAGMA user_version` ladder. Fresh databases are created via `CREATE TABLE IF NOT EXISTS`; existing stores get one-off `ALTER TABLE` invocations against `~/.memman/data/*/memman.db` and `~/.memman/queue.db` if the change is in queue schema.
 
-**Postgres** -- `_PG_BASELINE_SCHEMA` and `_PG_QUEUE_SCHEMA` in `src/memman/store/postgres.py` create per-store schemas (`store_<name>`) and a shared `queue` schema. There is no migration ladder: the baseline is the only schema source. Existing stores receive one-off `ALTER TABLE` invocations against the live cluster when a column is added.
+**Postgres** -- `_PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py` creates per-store schemas (`store_<name>`), each carrying its own `worker_runs` table for drain heartbeats. The deferred-write queue is always SQLite (`<data_dir>/queue.db`); Postgres has no shared queue schema. There is no migration ladder: the baseline is the only schema source. Existing stores receive one-off `ALTER TABLE` invocations against the live cluster when a column is added.
 
 When a schema change is needed:
 
@@ -101,7 +103,7 @@ Operationally:
 - The shared `~/.memman/drain.lock` is held for the duration so a scheduler-fired drain cannot race the SQLite reader.
 - Each store runs inside one Postgres transaction with `autocommit=False`; any failure rolls back.
 - Per-store schemas are inspected up front and classified ABSENT / EMPTY / POPULATED. The plan is echoed (with the DSN password redacted) and the user must confirm; `--yes` skips the prompt. EMPTY and POPULATED schemas are dropped and recreated; ABSENT schemas are created.
-- On success `MEMMAN_BACKEND` is flipped to `postgres` in the env file so the next drain routes to the new database. Revert with `memman config set MEMMAN_BACKEND sqlite` if needed.
+- On success `MEMMAN_BACKEND_<store>=postgres` is written to the env file so the next drain routes that specific store to Postgres. Revert per-store with `memman config set MEMMAN_BACKEND_<store> sqlite` (or unset the key to fall back to `MEMMAN_DEFAULT_BACKEND`).
 
 Postgres -> SQLite is not implemented; restore from the preserved SQLite source if needed.
 

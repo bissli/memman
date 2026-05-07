@@ -142,7 +142,7 @@
         <mxCell id="a_ollama_s" value="&lt;b&gt;OpenRouter&lt;/b&gt; (LLM, Anthropic Haiku/Sonnet) &amp;nbsp;|&amp;nbsp; &lt;b&gt;Voyage AI&lt;/b&gt; (embeddings, default)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="60" y="725" width="320" height="40" as="geometry" />
         </mxCell>
-        <mxCell id="a_fs" value="&lt;b&gt;Persistence&lt;/b&gt;&lt;br&gt;SQLite: ~/.memman/data/&amp;lt;store&amp;gt;/memman.db + ~/.memman/queue.db&lt;br&gt;Postgres: store_&amp;lt;name&amp;gt; schema + shared queue.queue" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;dashed=1;" vertex="1" parent="1">
+        <mxCell id="a_fs" value="&lt;b&gt;Persistence&lt;/b&gt;&lt;br&gt;Per-store: SQLite at ~/.memman/data/&amp;lt;store&amp;gt;/memman.db OR Postgres store_&amp;lt;name&amp;gt; schema&lt;br&gt;Queue (always SQLite): ~/.memman/queue.db" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="400" y="715" width="380" height="50" as="geometry" />
         </mxCell>
         <mxCell id="a_e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#999999;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" edge="1" parent="1" source="a_claude" target="a_cmd_rem">

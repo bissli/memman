@@ -64,12 +64,12 @@ The four edge types form the foundation of the MAGMA four-graph model, detailed 
 
 ## 2.3 Database Schema
 
-Each named store is physically isolated via the active storage backend (`MEMMAN_BACKEND`):
+Each named store is physically isolated via its own storage backend, chosen per store via `MEMMAN_BACKEND_<store>` (falling back to `MEMMAN_DEFAULT_BACKEND` when unset):
 
 - **SQLite (default)** — one `~/.memman/data/<store>/memman.db` file per store, in WAL mode (concurrent reads + serial writer). Schema source of truth: `_BASELINE_SCHEMA` in `src/memman/store/db.py`.
 - **Postgres** — one Postgres schema per store (`store_<name>`) sharing one database; `pgvector` provides the `vector(N)` column type. Schema source of truth: `_PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py`. The backend is enabled with the `memman[postgres]` install extra.
 
-Switching backends is all-or-nothing across every store under `~/.memman/data/`; per-store backend choice is not supported. See [Migrating from SQLite to Postgres](../USAGE.md#migrating-from-sqlite-to-postgres) for the operator workflow.
+Backend choice is per-store, so a `work` store on Postgres can coexist with a `default` store on SQLite under the same data dir. `memman migrate <store>` writes `MEMMAN_BACKEND_<store>=postgres` for a single store; `MEMMAN_DEFAULT_BACKEND` only changes what newly-created stores fall back to. See [Migrating from SQLite to Postgres](../USAGE.md#migrating-from-sqlite-to-postgres) for the operator workflow.
 
 The logical column layout below is shared between backends; the type translations are SQLite `TEXT`/`BLOB` ↔ Postgres `TIMESTAMPTZ`/`JSONB`/`vector(N)`.
 
@@ -110,12 +110,13 @@ record which LLM and embedding model produced each insight. They power
 or prompts change.
 
 **Insight dataclass vs DB schema.** The `Insight` dataclass in
-`src/memman/model.py` is a subset of the DB schema — it holds the
+`src/memman/store/model.py` is a subset of the DB schema — it holds the
 identity, content, category, importance, entities, source,
-timestamps, access bookkeeping, effective_importance, and provenance
-columns. The enrichment payload (`embedding`, `keywords`, `summary`,
-`semantic_facts`, `linked_at`, `enriched_at`) lives in the DB only and
-is read/written through SQL helpers, not via the dataclass.
+timestamps (including `linked_at` and `enriched_at` lifecycle stamps),
+access bookkeeping, effective_importance, and provenance columns. The
+enrichment payload (`embedding`, `keywords`, `summary`,
+`semantic_facts`) lives in the DB only and is read/written through
+SQL helpers, not via the dataclass.
 
 ---
 
@@ -210,9 +211,9 @@ memman/
 
 **Isolation boundary**: Each store is fully independent — insights, edges, and oplog do not cross stores. On SQLite this is one `memman.db` per store; on Postgres it is one `store_<name>` schema per store inside one shared database. Shipped assets (`guide.md`, `SKILL.md`) live inside the installed package and are read via `importlib.resources`; nothing memman deploys lives under `~/.memman/`. `~/.memman/` is strictly user state: memory data, API keys, caches, logs, queued work.
 
-**Backend lifecycle**: `Backend` is a context manager (`__enter__`/`__exit__`); CLI and pipeline call sites open it via `with cluster.open(store=...) as backend:` so the underlying connection (SQLite handle or Postgres pool checkout) is released deterministically. The `BaseNodeStore` mixin in `src/memman/store/base.py` holds default Python-side computations (effective-importance recomputation, low-retention candidate scoring) shared by both `SqliteNodeStore` and `PostgresNodeStore`.
+**Backend lifecycle**: `Backend` is a context manager (`__enter__`/`__exit__`); CLI and pipeline call sites open it via `with open_backend(store, data_dir) as backend:` so the underlying connection (SQLite handle or Postgres pool checkout) is released deterministically. The `BaseNodeStore` mixin in `src/memman/store/base.py` holds default Python-side computations (effective-importance recomputation, low-retention candidate scoring) shared by both `SqliteNodeStore` and `PostgresNodeStore`.
 
-When `MEMMAN_BACKEND=postgres`, `~/.memman/queue.db` and the per-store `memman.db` files are not used at runtime — the queue lives in the shared `queue` Postgres schema and store rows live in `store_<name>`. The SQLite files remain on disk after `memman migrate` as a durable fallback; the operator removes them manually after verifying the new backend with `memman doctor`.
+When a store routes to Postgres (`MEMMAN_BACKEND_<store>=postgres`), its `~/.memman/data/<store>/memman.db` file is not used at runtime — store rows live in `store_<name>` and drain heartbeats in `store_<name>.worker_runs`. The deferred-write queue is always SQLite at `~/.memman/queue.db` regardless of any store's backend. The SQLite store file remains on disk after `memman migrate <store>` as a durable fallback; the operator removes it manually after verifying the new backend with `memman doctor`.
 
 ## 2.6 Store Isolation
 

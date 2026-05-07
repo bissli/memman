@@ -13,7 +13,7 @@
 ### Tier 1: Synchronous queue-append (host session)
 
 1. `memman remember [--cat X --imp Y --entities a,b] "<text>"` validates input.
-2. Inserts one row into the deferred-write queue with `status='pending'`, priority, queued_at, and the raw text + hints. On `MEMMAN_BACKEND=sqlite` (default), the queue is `~/.memman/queue.db` (SQLite WAL); on `MEMMAN_BACKEND=postgres`, it is the shared `queue.queue` table in the configured Postgres database.
+2. Inserts one row into the deferred-write queue with `status='pending'`, priority, queued_at, and the raw text + hints. The queue is always `~/.memman/queue.db` (SQLite WAL) regardless of any store's backend choice -- it's a process-global write buffer, not per-store state.
 3. Returns `{action: queued, queue_id: N, store: ...}` to the caller.
 
 No LLM calls. No embeddings. No similarity scan. No edges. The host session never blocks.
@@ -30,7 +30,7 @@ There is no sync path: every write goes through the queue. When the scheduler is
 
 Per-blob processing inside `_process_queue_row`:
 
-1. **Atomic claim** — `UPDATE queue SET claimed_at=..., attempts=attempts+1 WHERE id = (SELECT ... WHERE status='pending' ORDER BY priority DESC, queued_at ASC LIMIT 1) RETURNING ...`. Race-free under SQLite WAL; on Postgres the equivalent claim runs inside a `FOR UPDATE SKIP LOCKED` cursor in the `queue` schema. Stale claims (>10 min) are reclaimable. Drains never overlap: an `fcntl.flock` on `~/.memman/drain.lock` gates `_drain_queue` regardless of backend.
+1. **Atomic claim** — `UPDATE queue SET claimed_at=..., attempts=attempts+1 WHERE id = (SELECT ... WHERE status='pending' ORDER BY priority DESC, queued_at ASC LIMIT 1) RETURNING ...`. The queue is SQLite WAL, so the claim is race-free under the WAL writer guarantee. Stale claims (>10 min) are reclaimable. Drains never overlap: an `fcntl.flock` on `~/.memman/drain.lock` gates `_drain_queue` regardless of which backend the store-under-drain routes to.
 2. **Idempotency check** — if the target store already has any insight with `source='queue:<id>'`, skip and mark done (crash-recovery after partial commit).
 3. **Quality gate** — regex-based `check_content_quality()` rejects transient patterns.
 4. **LLM fact extraction** — decomposes into 1–5 atomic facts with category/importance/entities.

@@ -1,15 +1,22 @@
 """Backend-namespaced env key validation.
 
 Each backend declares its `MEMMAN_<NS>_` namespace and the explicit
-set of keys it owns within that namespace. `_validate(env)` scans
-the input dict for keys that fall in the backend's namespace and
-raises `ConfigError` on any unknown key, with a `did you mean`
+set of canonical keys it owns within that namespace. `_validate(env)`
+scans the input dict for keys that fall in the backend's namespace
+and raises `ConfigError` on any unknown key, with a `did you mean`
 hint when one is close.
 
+Bare canonical keys (e.g., `MEMMAN_PG_DSN`) are rejected: the
+per-store routing model requires the per-store suffixed form
+(`MEMMAN_PG_DSN_<store>`) or the cross-store fallback
+(`MEMMAN_DEFAULT_PG_DSN`). The canonical list survives only as the
+difflib candidate set used to build the suggestion.
+
 Cross-backend keys (`OPENROUTER_API_KEY`, `MEMMAN_DEFAULT_BACKEND`,
-`MEMMAN_EMBED_PROVIDER`, etc.) belong to neither dataclass and are
-never scanned by either validator. They remain governed by the
-flat `INSTALLABLE_KEYS` membership check at `config set`.
+`MEMMAN_DEFAULT_PG_DSN`, `MEMMAN_EMBED_PROVIDER`, etc.) belong to
+neither dataclass and are never scanned by either validator. They
+remain governed by the flat `INSTALLABLE_KEYS` membership check at
+`config set`.
 """
 
 import difflib
@@ -66,21 +73,27 @@ def _validate_namespace(
         env: dict, prefix: str, owned: frozenset) -> None:
     """Common namespace scan.
 
-    Iterates `env` keys with the namespace prefix; any key not in
-    `owned` raises `ConfigError`. Per-store-suffixed keys (e.g.
-    `MEMMAN_PG_DSN_<store>`) are accepted when the canonical
-    `<owned-key>_<suffix>` form decomposes to (a) a known canonical
-    key and (b) a syntactically valid store-name suffix.
+    Iterates `env` keys with the namespace prefix. Bare canonical
+    keys (members of `owned` like `MEMMAN_PG_DSN`) are rejected --
+    the per-store routing model requires the suffixed form. Per-
+    store-suffixed keys (e.g. `MEMMAN_PG_DSN_<store>`) are accepted
+    when the canonical `<owned-key>_<suffix>` form decomposes to
+    (a) a known canonical key and (b) a syntactically valid
+    store-name suffix.
 
     The error message includes a `did you mean` hint pulled from
-    `difflib.get_close_matches` when one is sufficiently close.
+    `difflib.get_close_matches`, suffixed with `_<store>` so the
+    suggestion points at the per-store form rather than the
+    rejected bare canonical.
     """
     from memman.store.db import valid_store_name
 
     candidates = [k for k in env if k.startswith(prefix)]
     for key in candidates:
         if key in owned:
-            continue
+            raise ConfigError(
+                f'{key!r} is not a valid bare key under the per-store'
+                f' routing model; did you mean {key + "_<store>"!r}?')
         canonical = _strip_store_suffix(key, owned)
         if canonical is not None:
             suffix = key[len(canonical) + 1:]
@@ -94,7 +107,7 @@ def _validate_namespace(
         if suggestions:
             raise ConfigError(
                 f'unknown {prefix} key {key!r};'
-                f' did you mean {suggestions[0]!r}?')
+                f' did you mean {suggestions[0] + "_<store>"!r}?')
         raise ConfigError(
             f'unknown {prefix} key {key!r}')
 

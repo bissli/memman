@@ -3,12 +3,15 @@
 Validates that `factory.open_backend()` rejects typo'd keys that
 fall in the active backend's namespace (`MEMMAN_PG_*` for postgres,
 `MEMMAN_SQLITE_*` for sqlite) before any connection attempt, with
-a `did you mean` hint when one is close. Cross-backend keys
+a `did you mean` hint pointing at the per-store form. Bare canonical
+keys (e.g. `MEMMAN_PG_DSN`) are also rejected -- the per-store
+routing model requires the `_<store>` suffix or the
+`MEMMAN_DEFAULT_PG_DSN` fallback. Cross-backend keys
 (`OPENROUTER_API_KEY`, `MEMMAN_DEFAULT_BACKEND`,
-`MEMMAN_EMBED_PROVIDER`) are never scanned by either validator.
-Inactive-backend keys are tolerated -- a sqlite-active install
-may carry `MEMMAN_PG_DSN_<store>` from a prior postgres trial
-without erroring.
+`MEMMAN_DEFAULT_PG_DSN`, `MEMMAN_EMBED_PROVIDER`) are never
+scanned by either validator. Inactive-backend keys are tolerated
+-- a sqlite-active install may carry `MEMMAN_PG_DSN_<store>` from
+a prior postgres trial without erroring.
 """
 
 import pytest
@@ -23,21 +26,32 @@ from memman.store.errors import ConfigError
 class TestPostgresValidation:
     """`PostgresBackendConfig._validate` for `MEMMAN_PG_*` keys."""
 
-    def test_known_key_passes(self):
-        """A correctly-spelled MEMMAN_PG_DSN passes silently.
+    def test_per_store_key_passes(self):
+        """A per-store MEMMAN_PG_DSN_<store> passes silently.
         """
-        env = {'MEMMAN_PG_DSN': 'postgresql://localhost/x'}
+        env = {'MEMMAN_PG_DSN_default': 'postgresql://localhost/x'}
         PostgresBackendConfig._validate(env)
 
+    def test_bare_pg_dsn_rejected_with_hint(self):
+        """The bare canonical MEMMAN_PG_DSN is no longer accepted.
+        """
+        env = {'MEMMAN_PG_DSN': 'postgresql://localhost/x'}
+        with pytest.raises(ConfigError) as exc:
+            PostgresBackendConfig._validate(env)
+        msg = str(exc.value)
+        assert 'MEMMAN_PG_DSN' in msg
+        assert 'MEMMAN_PG_DSN_<store>' in msg
+
     def test_typo_raises_with_hint(self):
-        """A typo'd MEMMAN_PG_DSL raises ConfigError with a did-you-mean.
+        """A typo'd MEMMAN_PG_DSL raises ConfigError with a did-you-mean
+        pointing at the per-store form.
         """
         env = {'MEMMAN_PG_DSL': 'postgresql://localhost/x'}
         with pytest.raises(ConfigError) as exc:
             PostgresBackendConfig._validate(env)
         msg = str(exc.value)
         assert 'MEMMAN_PG_DSL' in msg
-        assert 'MEMMAN_PG_DSN' in msg
+        assert 'MEMMAN_PG_DSN_<store>' in msg
         assert 'did you mean' in msg.lower()
 
     def test_unknown_key_without_close_match(self):
@@ -54,6 +68,7 @@ class TestPostgresValidation:
         env = {
             'OPENROUTER_API_KEY': 'k',
             'MEMMAN_DEFAULT_BACKEND': 'postgres',
+            'MEMMAN_DEFAULT_PG_DSN': 'postgresql://localhost/x',
             'MEMMAN_EMBED_PROVIDER': 'voyage',
             'MEMMAN_DATA_DIR': '/tmp/x',
             }

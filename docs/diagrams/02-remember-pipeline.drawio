@@ -28,7 +28,7 @@
           <mxGeometry x="830" y="100" width="200" height="50" as="geometry" />
         </mxCell>
 
-        <mxCell id="r_enqueue" value="Append row to ~/.memman/queue.db (SQLite WAL) or shared queue.queue (Postgres)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;status='pending', priority, queued_at,&lt;br&gt;hint_cat / hint_imp / hint_entities / hint_source / hint_replaced_id / hint_no_reconcile&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_enqueue" value="Append row to ~/.memman/queue.db (SQLite WAL, always)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;status='pending', priority, queued_at,&lt;br&gt;hint_cat / hint_imp / hint_entities / hint_source / hint_replaced_id / hint_no_reconcile&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="120" y="180" width="500" height="60" as="geometry" />
         </mxCell>
 

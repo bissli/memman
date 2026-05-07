@@ -101,7 +101,7 @@ Embeddings power semantic search and graph connectivity. The provider is pluggab
 
 ### Vector Storage
 
-Vector serialization depends on the active storage backend (`MEMMAN_BACKEND`):
+Vector serialization depends on the active storage backend for the store (`MEMMAN_BACKEND_<store>`, falling back to `MEMMAN_DEFAULT_BACKEND`):
 
 - **SQLite** — little-endian float64 BLOB stored in `insights.embedding` (e.g., 512 × 8 = 4096 bytes for `voyage-3-lite`).
 - **Postgres** — `pgvector` `vector(N)` typed column, persisted as float32 (HNSW-indexed). The migrate path (`scripts/import_sqlite_to_postgres.py`) explicitly casts SQLite float64 BLOBs to `numpy.float32` before binding to avoid silent rounding by psycopg.
