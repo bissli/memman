@@ -103,11 +103,12 @@ def _detect_openclaw() -> dict:
 def _detect_nanoclaw() -> dict:
     """Detect NanoClaw integration opportunity.
 
-    NanoClaw is a containerised agent platform. "Detection" here means
-    both (a) Docker is available on the host and (b) the current working
-    directory looks like a NanoClaw project (has a `.claude/` or a
-    `nanoclaw/` marker). If either signal is missing, we still expose
-    the target — users can install the skill ahead of time.
+    NanoClaw is a containerised agent platform. Detection requires
+    (a) Docker available on the host and (b) a top-level `nanoclaw/`
+    directory in the current working directory. `.claude/` alone is
+    not a NanoClaw signal -- every Claude Code project has one.
+    Pass `--target nanoclaw` explicitly to install ahead of time
+    when no project marker is present.
     """
     env = {
         'name': 'nanoclaw',
@@ -120,9 +121,7 @@ def _detect_nanoclaw() -> dict:
         }
 
     docker_path = shutil.which('docker')
-    has_project_marker = (
-        Path('.claude').exists() or Path('nanoclaw').exists())
-    if docker_path and has_project_marker:
+    if docker_path and Path('nanoclaw').exists():
         env['detected'] = True
         env['bin_path'] = docker_path
 
