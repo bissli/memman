@@ -297,7 +297,16 @@ The deferred-write queue is always SQLite at `<data_dir>/queue.db`; the Postgres
 postgresql://[user[:password]@][host][:port]/[dbname][?param=value&...]
 ```
 
-Worked examples (replace `<store>` with the store name, or use `MEMMAN_DEFAULT_PG_DSN` for the fallback):
+**Easiest path -- prompt-driven assembly.** `memman config set-pg-dsn` walks you through host / port / user / password (masked) / dbname and writes the URI for you, URL-encoding any special characters in the credentials. Pass `--default` for `MEMMAN_DEFAULT_PG_DSN` or `--store NAME` for `MEMMAN_PG_DSN_<store>`:
+
+```bash
+memman config set-pg-dsn --default       # writes MEMMAN_DEFAULT_PG_DSN
+memman config set-pg-dsn --store work    # writes MEMMAN_PG_DSN_work
+```
+
+Leave the password prompt empty to produce a passwordless DSN that defers to `~/.pgpass` (recommended on shared hosts). The command does not probe connectivity -- verify with `memman doctor` or `memman migrate --dry-run`.
+
+Worked examples for `memman config set` (replace `<store>` with the store name, or use `MEMMAN_DEFAULT_PG_DSN` for the fallback):
 
 ```bash
 # Local dev (defaults: localhost:5432, no password)

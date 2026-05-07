@@ -246,6 +246,55 @@ class TestConfigSet:
         assert parsed[config.OPENROUTER_API_KEY] == 'keep-me'
 
 
+class TestConfigSetPgDsn:
+    """`memman config set-pg-dsn` assembles a libpq URI from prompts."""
+
+    def test_default_writes_assembled_uri(self, tmp_path):
+        """`--default` writes MEMMAN_DEFAULT_PG_DSN built from five prompts."""
+        runner = CliRunner()
+        data_dir = str(tmp_path / 'memman')
+        result = runner.invoke(
+            cli, ['--data-dir', data_dir,
+                  'config', 'set-pg-dsn', '--default'],
+            input='db.internal\n5433\nmemman\ns3cret!@\nmemman_prod\n')
+        assert result.exit_code == 0, result.output
+        parsed = config.parse_env_file(config.env_file_path(data_dir))
+        dsn = parsed[config.DEFAULT_PG_DSN]
+        assert dsn == (
+            'postgresql://memman:s3cret%21%40@db.internal:5433/memman_prod')
+        assert 's3cret' not in result.output
+        assert ':***@' in result.output
+
+    def test_store_writes_per_store_key(self, tmp_path):
+        """`--store NAME` writes MEMMAN_PG_DSN_<NAME>."""
+        runner = CliRunner()
+        data_dir = str(tmp_path / 'memman')
+        result = runner.invoke(
+            cli, ['--data-dir', data_dir,
+                  'config', 'set-pg-dsn', '--store', 'work'],
+            input='localhost\n5432\nmemman\n\nmemman\n')
+        assert result.exit_code == 0, result.output
+        parsed = config.parse_env_file(config.env_file_path(data_dir))
+        assert parsed[config.PG_DSN_FOR('work')] == (
+            'postgresql://memman@localhost:5432/memman')
+        assert config.DEFAULT_PG_DSN not in parsed
+
+    def test_requires_default_or_store(self, tmp_path):
+        """No flags = error; both flags = error."""
+        runner = CliRunner()
+        data_dir = str(tmp_path / 'memman')
+        no_flags = runner.invoke(
+            cli, ['--data-dir', data_dir, 'config', 'set-pg-dsn'])
+        assert no_flags.exit_code != 0
+        assert 'exactly one of --default or --store' in no_flags.output
+        both = runner.invoke(
+            cli, ['--data-dir', data_dir,
+                  'config', 'set-pg-dsn',
+                  '--default', '--store', 'work'])
+        assert both.exit_code != 0
+        assert 'exactly one of --default or --store' in both.output
+
+
 def _write_env(path: Path, contents: str) -> None:
     """Write contents to an env file and reset the config cache."""
     path.write_text(contents)

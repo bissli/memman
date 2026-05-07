@@ -14,6 +14,7 @@ import re
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import click
 import memman
@@ -378,6 +379,55 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
     _write_env_keys({key: value}, data_dir=data_dir)
     config.reset_file_cache()
     click.echo(f'set {key} in {config.env_file_path(data_dir)}')
+
+
+@config_cmd.command('set-pg-dsn')
+@click.option('--store', 'store', default=None,
+              help='Per-store key: writes MEMMAN_PG_DSN_<store>.')
+@click.option('--default', 'is_default', is_flag=True,
+              help='Default fallback: writes MEMMAN_DEFAULT_PG_DSN.')
+@click.pass_context
+def config_set_pg_dsn(
+        ctx: click.Context, store: str | None, is_default: bool) -> None:
+    """Build a Postgres DSN from prompts and write it to the env file.
+
+    Frees the operator from hand-typing libpq URIs. Prompts for host,
+    port, user, password, and dbname; assembles a `postgresql://...`
+    URI (URL-encoding credentials), and persists it under either
+    `MEMMAN_DEFAULT_PG_DSN` (`--default`) or
+    `MEMMAN_PG_DSN_<store>` (`--store NAME`). Exactly one of the two
+    flags is required. No connectivity probe; verify with
+    `memman doctor` or `memman migrate --dry-run`.
+    """
+    from memman.setup.scheduler import _write_env_keys
+    from memman.trace import redact_dsn
+
+    if is_default == bool(store):
+        raise click.ClickException(
+            'specify exactly one of --default or --store NAME')
+    if store is not None and not valid_store_name(store):
+        raise click.ClickException(
+            f'invalid store name {store!r}'
+            ' (alnum, dash, underscore; 1-64 chars)')
+
+    host = click.prompt('host', default='localhost')
+    port = click.prompt('port', type=int, default=5432)
+    user = click.prompt('user')
+    password = click.prompt(
+        'password (leave empty to use ~/.pgpass)',
+        hide_input=True, default='', show_default=False)
+    dbname = click.prompt('dbname', default='memman')
+
+    auth = quote(user, safe='')
+    if password:
+        auth = f'{auth}:{quote(password, safe="")}'
+    dsn = f'postgresql://{auth}@{host}:{port}/{quote(dbname, safe="")}'
+
+    key = config.DEFAULT_PG_DSN if is_default else config.PG_DSN_FOR(store)
+    data_dir = ctx.obj['data_dir']
+    _write_env_keys({key: dsn}, data_dir=data_dir)
+    config.reset_file_cache()
+    click.echo(f'set {key}={redact_dsn(dsn)} in {config.env_file_path(data_dir)}')
 
 
 @config_cmd.command('show')
