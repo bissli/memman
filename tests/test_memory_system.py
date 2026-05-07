@@ -7,7 +7,6 @@ module imports.
 import json
 
 import pytest
-from memman.cli import cli
 from tests.conftest import invoke, parse_remember
 
 

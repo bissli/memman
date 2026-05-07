@@ -14,7 +14,6 @@ from memman.store.edge import get_all_edges, insert_edge
 from memman.store.node import insert_insight
 from tests.conftest import make_edge, make_insight
 
-
 _EDGE_KW = {
     'entity': {'weight': 0.5, 'extra': {'entity': 'Go'}},
     'semantic': {'weight': 0.7, 'extra': {'cosine': '0.70'}},
@@ -28,7 +27,7 @@ def _setup_node_pair(db, id_a='n-1', id_b='n-2'):
     insert_insight(db, make_insight(id=id_b, content=f'node {id_b}'))
 
 
-@pytest.mark.parametrize('edge_type,created_by,expected_remaining', [
+@pytest.mark.parametrize(('edge_type', 'created_by', 'expected_remaining'), [
     ('entity', 'claude', 1),
     ('entity', 'manual', 1),
     ('entity', 'auto', 0),

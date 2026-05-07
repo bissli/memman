@@ -974,6 +974,52 @@ class TestDrainHeartbeat:
                 pass
 
 
+class TestDrainHeartbeatSeverity:
+    """check_drain_heartbeat severity ladder when failures and stale combine."""
+
+    def test_failures_outrank_stale(self, tmp_path, monkeypatch):
+        """Both failures and stale present -> fail (failures wins)."""
+        from contextlib import contextmanager
+
+        from memman import doctor as doctor_mod
+        from memman.store.factory import \
+            list_stores as real_list_stores  # noqa: F401
+
+        @contextmanager
+        def _fake_open_backend(store, data_dir, *, read_only=False):
+            if store == 'broken':
+                raise RuntimeError('connection refused')
+            yield _StaleRunsBackend()
+
+        class _StaleRunsBackend:
+
+            def recent_runs(self, *, limit):
+                from datetime import datetime, timedelta, timezone
+
+                from memman.store.model import WorkerRun
+                stale = datetime.now(timezone.utc) - timedelta(minutes=10)
+                return [WorkerRun(
+                    id=42, started_at=stale, ended_at=None,
+                    rows_processed=0, error='',
+                    last_heartbeat_at=stale)]
+
+        monkeypatch.setattr(
+            'memman.store.factory.list_stores',
+            lambda data_dir: ['broken', 'has_stale'])
+        monkeypatch.setattr(
+            'memman.store.factory.resolve_store_backend',
+            lambda store, data_dir: 'postgres')
+        monkeypatch.setattr(
+            'memman.store.factory.open_backend', _fake_open_backend)
+
+        result = doctor_mod.check_drain_heartbeat(str(tmp_path))
+        assert result['status'] == 'fail'
+        assert len(result['detail']['failures']) == 1
+        assert result['detail']['failures'][0]['store'] == 'broken'
+        assert len(result['detail']['stale_runs']) == 1
+        assert result['detail']['stale_runs'][0]['store'] == 'has_stale'
+
+
 class TestDoctorBackendDispatch:
     """`memman doctor` runs against the active backend, not always SQLite."""
 

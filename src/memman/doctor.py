@@ -740,21 +740,14 @@ def check_drain_heartbeat(data_dir: str) -> dict[str, Any]:
         }
     if failures:
         detail['failures'] = failures
-    if failures and not stale:
-        return {
-            'name': 'drain_heartbeat',
-            'status': 'fail',
-            'detail': detail,
-            }
-    if stale:
-        return {
-            'name': 'drain_heartbeat',
-            'status': 'warn',
-            'detail': detail,
-            }
+        status = 'fail'
+    elif stale:
+        status = 'warn'
+    else:
+        status = 'pass'
     return {
         'name': 'drain_heartbeat',
-        'status': 'pass',
+        'status': status,
         'detail': detail,
         }
 
@@ -912,6 +905,27 @@ def check_no_stale_swap_meta(backend: Backend) -> dict[str, Any]:
         'detail': {'leftover_keys': leftover}}
 
 
+def _is_provenance_stale(
+        row_pv: str | None, row_model: str | None,
+        active_pv: str, active_model: str | None) -> bool:
+    """Single source of truth for the stale-row predicate.
+
+    A row is stale iff `prompt_version` is non-NULL and differs from
+    `active_pv`, OR `model_id` is non-NULL and `active_model` is non-
+    NULL and they differ. NULL provenance is intentionally not stale
+    (those rows pre-date provenance tracking and need a separate
+    backfill).
+
+    The same predicate is encoded in SQL by `count_stale_insights`
+    and `iter_stale_insight_ids` (`store/node.py`,
+    `store/postgres.py`); keep those WHERE clauses aligned with this
+    function when the rule changes.
+    """
+    if row_pv is not None and row_pv != active_pv:
+        return True
+    return bool(row_model is not None and active_model is not None and row_model != active_model)
+
+
 def check_provenance_drift(backend: Backend) -> dict[str, Any]:
     """Surface rows whose prompt_version or model_id no longer matches active.
 
@@ -950,20 +964,18 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
     active_pv = detail['active_prompt_version']
     active_model = detail['active_model_slow_canonical']
     breakdown: list[dict[str, Any]] = []
+    stale_rows = 0
     for pc in provenance:
-        is_stale = (
-            (pc.prompt_version is not None
-             and pc.prompt_version != active_pv)
-            or (pc.model_id is not None and active_model is not None
-                and pc.model_id != active_model))
+        is_stale = _is_provenance_stale(
+            pc.prompt_version, pc.model_id, active_pv, active_model)
         breakdown.append({
             'prompt_version': pc.prompt_version,
             'model_id': pc.model_id,
             'count': pc.count,
             'stale': is_stale,
             })
-    stale_rows = backend.nodes.count_stale_insights(
-        active_pv, active_model)
+        if is_stale:
+            stale_rows += pc.count
     detail['breakdown'] = breakdown
     detail['stale_rows'] = stale_rows
 

@@ -8,8 +8,7 @@ from click.testing import CliRunner
 from memman import config
 from memman.cli import cli
 from memman.embed import PROVIDERS
-from memman.embed.fingerprint import Fingerprint
-from memman.embed.fingerprint import write_fingerprint
+from memman.embed.fingerprint import Fingerprint, write_fingerprint
 from memman.embed.vector import serialize_vector
 from memman.store.db import open_db
 from memman.store.sqlite import SqliteBackend

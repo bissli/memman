@@ -14,7 +14,6 @@ import pytest
 from memman.store.model import Insight
 from memman.store.postgres import _store_schema, drop_postgres_store
 from memman.store.postgres import open_postgres_backend
-
 from tests.e2e.conftest import _safe
 
 pytestmark = [pytest.mark.postgres, pytest.mark.e2e_container]

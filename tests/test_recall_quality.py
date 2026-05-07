@@ -443,8 +443,7 @@ class TestRecallAt10Gate:
         """
         from memman.store.postgres import drop_postgres_store
         from memman.store.postgres import open_postgres_backend
-        from memman.store.sqlite import drop_sqlite_store
-        from memman.store.sqlite import open_sqlite_backend
+        from memman.store.sqlite import drop_sqlite_store, open_sqlite_backend
 
         topic_centers = [_gaussian_unit(seed=i) for i in range(_N_TOPICS)]
 

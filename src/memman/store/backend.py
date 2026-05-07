@@ -31,12 +31,15 @@ Distributed-shaping commitments baked into this Protocol surface:
 import re
 from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager
-from typing import Any, Protocol, Self, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
 from memman.store.errors import ConfigError
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
 from memman.store.model import NodeStats, OpLogEntry, OpLogStats
 from memman.store.model import ProvenanceCount, ReembedRow, WorkerRun
+
+if TYPE_CHECKING:
+    from memman.embed.fingerprint import Fingerprint
 
 _VALID_IDENTIFIER_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
@@ -567,6 +570,60 @@ class Backend(Protocol):
         `write_lock` for these because `pg_advisory_xact_lock` would
         pin a transaction for the entire sweep duration and block
         autovacuum.
+        """
+        ...
+
+    def swap_lock(self) -> AbstractContextManager[bool]:
+        """Acquire a session-scoped swap lock for the embedding swap flow.
+
+        SQLite: yields True (single-process; `_require_stopped`
+        already excludes the drain). Postgres:
+        `pg_try_advisory_lock` on a dedicated `embed_swap:<schema>`
+        key, mirroring `reembed_lock` so swaps and reembeds do not
+        contend on the same key. Held continuously across
+        prepare -> backfill -> cutover.
+        """
+        ...
+
+    def swap_prepare(self, target_dim: int) -> None:
+        """Add the `embedding_pending` shadow column for a swap.
+
+        SQLite: `alter table insights add column embedding_pending
+        BLOB`. Postgres: `alter table {schema}.insights add column
+        embedding_pending vector(N)` plus a CONCURRENTLY-built HNSW
+        index. Idempotent.
+        """
+        ...
+
+    def iter_for_swap(
+            self, cursor: str, batch: int) -> list[tuple[Id, str]]:
+        """Return up to `batch` (id, content) pairs needing pending vectors.
+
+        Filtered to `embedding_pending IS NULL` and `id > cursor`,
+        ordered by id ascending. Used by the swap orchestrator to
+        page through rows resumably.
+        """
+        ...
+
+    def write_swap_batch(
+            self, items: list[tuple[Id, list[float]]]) -> None:
+        """Persist a batch of (id, new_vec) pairs into `embedding_pending`.
+        """
+        ...
+
+    def swap_cutover(self, target: 'Fingerprint') -> None:
+        """Atomically promote `embedding_pending` to `embedding`.
+
+        SQLite: `update insights set embedding = embedding_pending,
+        embedding_pending = null`. Postgres: drop `embedding`,
+        rename `embedding_pending` to `embedding` in one
+        transaction. Writes the new fingerprint as part of the
+        same transaction.
+        """
+        ...
+
+    def swap_abort(self) -> None:
+        """Drop or null `embedding_pending` and clear all swap meta.
         """
         ...
 

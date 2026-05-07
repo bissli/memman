@@ -2291,7 +2291,7 @@ def migrate(
                     click.echo(
                         f'{s}: insights={res.insights}'
                         f' edges={res.edges} oplog={res.oplog}'
-                        f' meta={res.meta} (verified, source cleaned)')
+                        f' meta={res.meta} (verified)')
                     _write_env_keys({
                         config.BACKEND_FOR(s): 'postgres',
                         config.PG_DSN_FOR(s): dsn,
@@ -2307,6 +2307,9 @@ def migrate(
     click.echo('')
     click.echo(
         f'Migration complete: {len(stores)} store(s) copied to Postgres.')
+    click.echo(
+        f'Source SQLite preserved at {data_dir}/data/<store>/.'
+        f' Remove with `rm <path>*` once the postgres-side data is verified.')
     click.echo('')
     click.echo('Recommended next step:')
     click.echo('  memman doctor    # verify the postgres backend health')
@@ -2965,17 +2968,10 @@ def embed_swap(
             target_model=target_model,
             target_dim=target_dim)
 
-        from memman.store.factory import resolve_store_backend
-        backend_name = resolve_store_backend(name, data_dir)
-        if backend_name == 'postgres':
-            with backend.swap_lock() as held:
-                if not held:
-                    raise click.ClickException(
-                        f'another swap is in progress on'
-                        f' store {name!r}')
-                _require_stopped('swap')
-                progress = run_swap(backend, ec_new, plan)
-        else:
+        with backend.swap_lock() as held:
+            if not held:
+                raise click.ClickException(
+                    f'another swap is in progress on store {name!r}')
             _require_stopped('swap')
             progress = run_swap(backend, ec_new, plan)
 

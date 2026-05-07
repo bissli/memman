@@ -671,13 +671,13 @@ class TestMemmanBinaryPath:
         fake_python.touch()
         fake_memman = venv_bin / 'memman'
         fake_memman.write_text('#!/bin/sh\necho fake\n')
-        os.chmod(fake_memman, 0o755)
+        Path(fake_memman).chmod(0o755)
 
         other_bin = tmp_path / 'other'
         other_bin.mkdir()
         decoy = other_bin / 'memman'
         decoy.write_text('#!/bin/sh\necho decoy\n')
-        os.chmod(decoy, 0o755)
+        Path(decoy).chmod(0o755)
 
         monkeypatch.setattr(sch.sys, 'executable', str(fake_python))
         monkeypatch.setattr(sch.shutil, 'which', lambda _: str(decoy))
@@ -697,7 +697,7 @@ class TestMemmanBinaryPath:
         path_bin.mkdir()
         path_memman = path_bin / 'memman'
         path_memman.write_text('#!/bin/sh\necho path\n')
-        os.chmod(path_memman, 0o755)
+        Path(path_memman).chmod(0o755)
 
         monkeypatch.setattr(sch.sys, 'executable', str(fake_python))
         monkeypatch.setattr(
@@ -732,13 +732,13 @@ class TestMemmanBinaryPath:
         fake_python.touch()
         non_exec = venv_bin / 'memman'
         non_exec.write_text('not a script')
-        os.chmod(non_exec, 0o644)
+        Path(non_exec).chmod(0o644)
 
         path_bin = tmp_path / 'pathfound'
         path_bin.mkdir()
         path_memman = path_bin / 'memman'
         path_memman.write_text('#!/bin/sh\necho path\n')
-        os.chmod(path_memman, 0o755)
+        Path(path_memman).chmod(0o755)
 
         monkeypatch.setattr(sch.sys, 'executable', str(fake_python))
         monkeypatch.setattr(

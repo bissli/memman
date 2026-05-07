@@ -13,7 +13,7 @@ from memman.llm.extract import reconcile_memories
 from memman.llm.shared import parse_json_response
 
 
-@pytest.mark.parametrize('text,expected', [
+@pytest.mark.parametrize(('text', 'expected'), [
     ('See cli.py:182 for the fix', 'See for the fix'),
     ('src/pkg/module/file.py:590 has the bug', 'has the bug'),
     ('Error on line 42 of the module', 'Error on of the module'),
@@ -298,7 +298,7 @@ class TestExpandQuery:
         assert result['intent'] is None
 
 
-@pytest.mark.parametrize('raw,expected', [
+@pytest.mark.parametrize(('raw', 'expected'), [
     ('{"key": "val"}', {'key': 'val'}),
     ('```json\n{"key": "val"}\n```', {'key': 'val'}),
     ('not json', None),

@@ -1823,7 +1823,7 @@ class PostgresBackend(Backend):
                 pass
 
     @contextmanager
-    def swap_lock(self, name: str = '') -> Iterator[bool]:
+    def swap_lock(self) -> Iterator[bool]:
         """Acquire a per-store session-scoped advisory swap lock.
 
         Mirrors `reembed_lock` but with the dedicated key

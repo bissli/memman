@@ -123,11 +123,15 @@ memman graph related <id> --edge causal --depth 2
 # Rebuild — full LLM re-enrichment + re-embed + edge rebuild
 memman graph rebuild              # process all insights
 memman graph rebuild --dry-run    # preview count without modifying DB
+memman graph rebuild --stale-only # re-enrich only rows whose prompt_version
+                                  # or model_id no longer matches active config
 ```
 
 Auto-reindex of computed edges (semantic, entity, temporal) fires transparently when `open_db()` detects graph constants have changed — there is no operator command for it.
 
 Rebuild re-enriches all insights through the full LLM pipeline (enrichment, re-embedding, causal inference, edge recreation). Processes in batches of 20. Returns `{"processed": N, "remaining": 0}`. Rejected when the scheduler is stopped.
+
+`--stale-only` is the targeted variant: it only touches rows whose persisted `prompt_version` or `model_id` no longer matches the active config. Cross-backend (works on Postgres, unlike wholesale `graph rebuild` which remains SQLite-only). Shares the `'rebuild'` advisory lock so it cannot race a wholesale rebuild. NULL-provenance rows are not swept; they need a separate backfill.
 
 ### Insights Lifecycle
 
@@ -222,7 +226,7 @@ Reverse migration (Postgres → SQLite) is not implemented; restore from the pre
 ### Observability
 
 ```bash
-memman status                                       # memory statistics
+memman status                                       # memory statistics; JSON includes stale_insights count
 memman doctor                                       # health checks (integrity, schema, enrichment, embeddings, fingerprint, queue, scheduler, drain heartbeat, env, no_stale_swap_meta, provenance_drift)
 memman doctor --text                                # human-readable colored table
 memman config show                                  # effective configuration (env + on-disk)
@@ -239,9 +243,9 @@ memman log worker [--errors] [--lines N]            # tail worker output (~/.mem
 ### Scheduler
 
 ```bash
-memman scheduler status                  # platform, interval, state, next run, last heartbeat
-memman scheduler start                   # flip persistent state to STARTED (resume drains + writes)
-memman scheduler stop                    # flip persistent state to STOPPED (pause drains + reject writes)
+memman scheduler status [--text]         # platform, interval, state, next run, last heartbeat (default JSON)
+memman scheduler start [--text]          # flip persistent state to STARTED (resume drains + writes)
+memman scheduler stop [--text]           # flip persistent state to STOPPED (pause drains + reject writes)
 memman scheduler trigger                 # run a drain now (systemd/launchd; not applicable in serve mode)
 memman scheduler interval --seconds N    # change cadence (60s minimum on systemd/launchd)
 memman scheduler install                 # install the scheduler unit (idempotent)
@@ -253,8 +257,12 @@ memman scheduler queue list [--limit N]  # peek pending rows
 memman scheduler queue failed [--limit N]# rows in 'failed' state
 memman scheduler queue show <row_id>     # full payload + trace events for one row
 memman scheduler queue retry <row_id>    # requeue a single failed row
+memman scheduler queue retry --all-stale # requeue every row currently in status='stale'
 memman scheduler queue purge --done      # delete rows where status='done'
+memman scheduler queue purge --stale     # delete rows where status='stale'
 ```
+
+Stale rows are pending entries whose claim is older than `STALE_CLAIM_SECONDS` (default 600s) — typically left behind by a worker crash mid-drain. The post-drain maintenance pass auto-recovers them by calling `queue.retry_stale` alongside `purge_done` and `purge_worker_runs`, so most operators never need the explicit verbs; they exist for incident response when the auto-recovery path is itself broken.
 
 When the scheduler is **stopped**, memman is recall-only: every write exits 1 with `Scheduler is stopped; cannot <verb>`. The `serve` loop polls the state file every iteration, so pause is observed within seconds even mid-drain.
 

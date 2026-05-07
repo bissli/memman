@@ -15,7 +15,8 @@ from memman.embed.fingerprint import active_fingerprint
 from memman.embed.vector import serialize_vector
 from memman.store.db import store_exists
 from memman.store.node import insert_insight, update_embedding
-from tests.conftest import invoke, make_insight, mm_runner, parse_remember
+from tests.conftest import invoke, make_insight, parse_remember
+
 
 @pytest.fixture
 def runner(mm_runner):
@@ -1035,6 +1036,7 @@ class TestSingleTierEnrichment:
         assert row is not None
         assert row[0] is not None
 
+
 class TestGraphRebuild:
     """Graph rebuild command tests — dry-run, live, edge preservation."""
 
@@ -1197,6 +1199,7 @@ class TestGraphRebuild:
             'should preserve created_by=claude')
         db.close()
 
+
 class TestGraphRebuildStaleOnly:
     """Tests for `graph rebuild --stale-only` flag."""
 
@@ -1229,8 +1232,8 @@ class TestGraphRebuildStaleOnly:
         for iid in ('drift-1', 'fresh-1'):
             update_enrichment(db, iid, ['kw'], 'sum', ['fact'])
             db._conn.execute(
-                "UPDATE insights SET linked_at = ?, enriched_at = ?"
-                " WHERE id = ?",
+                'UPDATE insights SET linked_at = ?, enriched_at = ?'
+                ' WHERE id = ?',
                 ('2024-01-01T00:00:00+00:00',
                  '2024-01-01T00:00:00+00:00', iid))
         db.close()
@@ -1627,6 +1630,7 @@ class TestIntraBatchDedup:
             f'dangling edges found: {doctor_result["detail"]}')
         assert doctor_result['detail']['count'] == 0
 
+
 class TestHotPathPurity:
     """Synchronous write commands must be LLM/embed-free.
 
@@ -1712,6 +1716,7 @@ class TestHotPathPurity:
         out = r.invoke(cli, ['--data-dir', data_dir,
                              'insights', 'protect', 'aud-a'])
         assert out.exit_code == 0, out.output
+
 
 class TestPostgresGuards:
     """Admin commands that are SQLite-only must reject postgres backend."""

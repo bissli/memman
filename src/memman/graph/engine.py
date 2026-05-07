@@ -5,14 +5,15 @@ import json
 import logging
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
 
+from memman.embed import EmbeddingProvider
 from memman.graph.entity import MAX_ENTITY_LINKS, MAX_TOTAL_ENTITY_EDGES
 from memman.graph.entity import create_entity_edges
 from memman.graph.semantic import AUTO_SEMANTIC_THRESHOLD
 from memman.graph.semantic import create_semantic_edges
 from memman.graph.temporal import MAX_PROXIMITY_EDGES, MIN_PROXIMITY_WEIGHT
 from memman.graph.temporal import TEMPORAL_WINDOW_HOURS, create_temporal_edge
+from memman.llm.client import LLMProvider
 from memman.store.backend import Backend
 from memman.store.model import Edge, Insight
 
@@ -37,9 +38,9 @@ MAX_LINK_BATCH = 20
 def link_pending(
         backend: Backend,
         embed_cache: dict[str, list[float]] | None = None,
-        llm_client: Any | None = None,
-        metadata_llm_client: Any | None = None,
-        embed_client: Any | None = None,
+        llm_client: LLMProvider | None = None,
+        metadata_llm_client: LLMProvider | None = None,
+        embed_client: EmbeddingProvider | None = None,
         max_batch: int = MAX_LINK_BATCH,
         on_progress: Callable[[str, Insight], None] | None = None,
         ) -> int:
@@ -105,6 +106,7 @@ def link_pending(
 
         keywords = enrichment.get('keywords', [])
         new_vec = None
+        new_vec_model = ''
         reembed_failed = False
         if (keywords
                 and embed_client is not None
@@ -114,6 +116,7 @@ def link_pending(
                 insight.content, keywords)
             try:
                 new_vec = embed_client.embed(enriched_text)
+                new_vec_model = embed_client.model or ''
             except Exception as exc:
                 reembed_failed = True
                 logger.warning(
@@ -136,8 +139,7 @@ def link_pending(
                 if embed_cache is not None:
                     embed_cache[insight.id] = new_vec
                 backend.nodes.update_embedding(
-                    insight.id, new_vec,
-                    getattr(embed_client, 'model', None) or '')
+                    insight.id, new_vec, new_vec_model)
 
             backend.edges.delete_auto_for_node(insight.id, 'entity')
             create_entity_edges(backend, insight)

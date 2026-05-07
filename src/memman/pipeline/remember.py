@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-from memman.embed import get_client
+from memman.embed import EmbeddingProvider, get_client
 from memman.embed.vector import cosine_similarity
 from memman.exceptions import EmbedCredentialError
 from memman.graph.causal import infer_llm_causal_edges
@@ -35,7 +35,7 @@ from memman.graph.enrichment import build_enriched_text, enrich_with_llm
 from memman.graph.entity import create_entity_edges
 from memman.graph.semantic import create_semantic_edges
 from memman.llm import extract as llm_extract
-from memman.llm.client import get_llm_client
+from memman.llm.client import LLMProvider, get_llm_client
 from memman.search.keyword import keyword_search
 from memman.search.quality import check_content_quality
 from memman.store.backend import Backend
@@ -102,8 +102,8 @@ def run_remember(
         embed_cache: dict[str, list[float]] | None = None,
         insights_by_id: dict[str, Insight] | None = None,
         executor: ThreadPoolExecutor | None = None,
-        llm_client: Any = None,
-        ec: Any = None,
+        llm_client: LLMProvider | None = None,
+        ec: EmbeddingProvider | None = None,
         ) -> dict[str, Any]:
     """Run the full remember pipeline and return the result dict.
 
@@ -161,8 +161,8 @@ def run_remember(
     plans: list[FactPlan] = []
     pending_replaced_id = replaced_id
     prompt_version = compute_prompt_version()
-    llm_model_id = getattr(llm_client, 'model', None)
-    embed_model = getattr(ec, 'model', None)
+    llm_model_id = llm_client.model
+    embed_model = ec.model
     try:
         for fact in facts:
             plan, calls = _plan_fact(

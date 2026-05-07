@@ -25,11 +25,12 @@ resuming.
 """
 
 import os
-from dataclasses import dataclass
-from typing import Any
 from collections.abc import Callable
+from dataclasses import dataclass
 
+from memman.embed import EmbeddingProvider
 from memman.embed.fingerprint import Fingerprint, write_fingerprint
+from memman.store.backend import Backend
 
 STATE_BACKFILLING = 'backfilling'
 STATE_CUTOVER = 'cutover'
@@ -82,7 +83,7 @@ def batch_size_from_env() -> int:
     return n if n > 0 else DEFAULT_BATCH_SIZE
 
 
-def read_progress(backend: Any) -> SwapProgress:
+def read_progress(backend: Backend) -> SwapProgress:
     """Snapshot the swap meta keys from a backend.
     """
     meta = backend.meta
@@ -99,7 +100,7 @@ def read_progress(backend: Any) -> SwapProgress:
         target_dim=dim)
 
 
-def _begin_swap(backend: Any, plan: SwapPlan) -> None:
+def _begin_swap(backend: Backend, plan: SwapPlan) -> None:
     """Add `embedding_pending` column and write swap meta.
     """
     backend.swap_prepare(plan.target_dim)
@@ -112,7 +113,7 @@ def _begin_swap(backend: Any, plan: SwapPlan) -> None:
 
 
 def _backfill_step(
-        backend: Any, ec_new: Any, batch_size: int) -> int:
+        backend: Backend, ec_new: EmbeddingProvider, batch_size: int) -> int:
     """Embed and write one batch into `embedding_pending`. Return rows
     processed; zero return signals backfill complete.
     """
@@ -134,7 +135,7 @@ def _backfill_step(
     return len(items)
 
 
-def _commit_cutover(backend: Any, plan: SwapPlan) -> None:
+def _commit_cutover(backend: Backend, plan: SwapPlan) -> None:
     """Mark cutover-in-progress, run backend swap_cutover, drop swap meta.
     """
     with backend.transaction():
@@ -150,7 +151,7 @@ def _commit_cutover(backend: Any, plan: SwapPlan) -> None:
             backend.meta.delete(key)
 
 
-def abort_swap(backend: Any) -> None:
+def abort_swap(backend: Backend) -> None:
     """Drop `embedding_pending`/null shadow values and clear all swap meta.
     """
     backend.swap_abort()
@@ -160,7 +161,7 @@ def abort_swap(backend: Any) -> None:
 
 
 def run_swap(
-        backend: Any, ec_new: Any, plan: SwapPlan, *,
+        backend: Backend, ec_new: EmbeddingProvider, plan: SwapPlan, *,
         batch_size: int | None = None,
         progress_cb: Callable[[int], None] | None = None
         ) -> SwapProgress:

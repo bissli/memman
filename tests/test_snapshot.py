@@ -65,9 +65,10 @@ def test_write_then_read_round_trip(tmp_db, tmp_path):
 
 def test_round_trip_preserves_linked_and_enriched_at(tmp_db, tmp_path):
     """Snapshot writer + reader round-trips the new lifecycle stamps."""
+    from datetime import datetime, timezone
+
     from memman.store.model import format_timestamp
     from memman.store.node import stamp_enriched, stamp_linked
-    from datetime import datetime, timezone
 
     fp = _seed(tmp_db)
     ts = format_timestamp(

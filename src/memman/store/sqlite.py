@@ -560,6 +560,17 @@ class SqliteBackend(Backend):
         """
         yield True
 
+    @contextmanager
+    def swap_lock(self) -> Iterator[bool]:
+        """Always yields True on SQLite (single-process by definition).
+
+        `_require_stopped('swap')` already excludes the drain at the
+        CLI boundary. Postgres acquires `pg_try_advisory_lock` on
+        the `embed_swap:<schema>` key so cross-process swaps fail-
+        fast instead of racing.
+        """
+        yield True
+
     def swap_prepare(self, target_dim: int) -> None:
         """No-op on SQLite; `embedding_pending` blob is in the baseline
         schema. Dim is not enforced at the column level on SQLite.

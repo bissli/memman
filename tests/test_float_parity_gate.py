@@ -98,7 +98,8 @@ def test_threshold_zone_does_not_collapse_result_set(tmp_path, pg_dsn):
     result set to empty when the other still finds hits, and any hits
     returned all clear the cutoff.
     """
-    from memman.store.postgres import drop_postgres_store, open_postgres_backend
+    from memman.store.postgres import drop_postgres_store
+    from memman.store.postgres import open_postgres_backend
     from memman.store.sqlite import drop_sqlite_store, open_sqlite_backend
 
     topic_centers = [_gaussian_unit(seed=i) for i in range(N_TOPICS)]
@@ -152,7 +153,8 @@ def test_threshold_zone_does_not_collapse_result_set(tmp_path, pg_dsn):
 def test_float32_float64_top5_intersection_geq_4_across_20_queries(
         tmp_path, pg_dsn):
     """Sqlite top-5 ∩ postgres top-5 >= 4 for each of 20 query vectors."""
-    from memman.store.postgres import drop_postgres_store, open_postgres_backend
+    from memman.store.postgres import drop_postgres_store
+    from memman.store.postgres import open_postgres_backend
     from memman.store.sqlite import drop_sqlite_store, open_sqlite_backend
 
     topic_centers = [_gaussian_unit(seed=i) for i in range(N_TOPICS)]

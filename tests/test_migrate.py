@@ -226,6 +226,8 @@ def test_migrate_cli_yes_flag_skips_prompt(
             catch_exceptions=False)
         assert result.exit_code == 0, result.output
         assert 'MEMMAN_BACKEND_mig_cli_yes' in result.output
+        assert '(verified)' in result.output
+        assert 'source cleaned' not in result.output
         env_text = (data_dir / 'env').read_text()
         assert 'MEMMAN_BACKEND_mig_cli_yes=postgres' in env_text
         assert f'MEMMAN_PG_DSN_mig_cli_yes={pg_dsn}' in env_text

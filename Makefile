@@ -3,17 +3,13 @@ DIAGRAMS   := docs/diagrams
 DRAWIO_SRC := $(wildcard $(DIAGRAMS)/*.drawio)
 DRAWIO_PNG := $(DRAWIO_SRC:.drawio=.drawio.png)
 
-.PHONY: test test-postgres typecheck e2e e2e-cli e2e-container clean dev diagrams
+.PHONY: test typecheck e2e e2e-cli e2e-container clean dev diagrams
 
 dev:
 	poetry install
 
 test:
 	poetry run pytest tests/ -v --ignore=tests/e2e
-
-test-postgres:
-	MEMMAN_BACKEND=postgres MEMMAN_PG_DSN=$$PG_TEST_URL \
-	  poetry run pytest tests/ -v --ignore=tests/e2e -m postgres
 
 typecheck:
 	poetry run mypy --strict --ignore-missing-imports \

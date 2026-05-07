@@ -9,24 +9,12 @@ because the reads continue to hit `embedding` until cutover commits.
 
 import psycopg
 import pytest
-
-from memman.embed.fingerprint import (
-    Fingerprint,
-    stored_fingerprint,
-    write_fingerprint,
-    )
-from memman.embed.swap import (
-    META_STATE,
-    STATE_DONE,
-    SwapPlan,
-    abort_swap,
-    run_swap,
-    )
-from memman.store.postgres import (
-    EMBEDDING_DIM,
-    _store_schema,
-    open_postgres_backend,
-    )
+from memman.embed.fingerprint import Fingerprint, stored_fingerprint
+from memman.embed.fingerprint import write_fingerprint
+from memman.embed.swap import STATE_DONE, SwapPlan, abort_swap
+from memman.embed.swap import run_swap
+from memman.store.postgres import EMBEDDING_DIM, _store_schema
+from memman.store.postgres import open_postgres_backend
 
 pytestmark = pytest.mark.postgres
 
@@ -122,7 +110,7 @@ def test_swap_completes_full_workflow(swap_backend):
             cols = {r[0] for r in cur.fetchall()}
             cur.execute(
                 'select atttypmod from pg_attribute'
-                ' where attrelid = (%s||\'.insights\')::regclass'
+                " where attrelid = (%s||'.insights')::regclass"
                 '   and attname = %s and not attisdropped',
                 (schema, 'embedding'))
             row = cur.fetchone()

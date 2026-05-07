@@ -12,8 +12,8 @@ from datetime import datetime, timezone
 
 import pytest
 from memman.embed.fingerprint import Fingerprint, stored_fingerprint
-from memman.embed.swap import STATE_DONE, SwapPlan, abort_swap
-from memman.embed.swap import read_progress, run_swap
+from memman.embed.swap import STATE_DONE, SwapPlan, abort_swap, read_progress
+from memman.embed.swap import run_swap
 from memman.embed.vector import deserialize_vector, serialize_vector
 from memman.store.db import open_db
 from memman.store.sqlite import SqliteBackend
