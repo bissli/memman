@@ -423,6 +423,52 @@ class TestCheckPerStoreKeys:
         assert pg.get('error') is None
         assert pg['backend'] == 'postgres'
 
+    def test_warns_on_dsn_drift_between_per_store_and_default(
+            self, tmp_path, env_file):
+        """Per-store DSN differs from default DSN -> warn (rotation drift).
+
+        Cheap mitigation for the deferred DSN-rotation command: if the
+        operator rotates one DSN without the other, doctor surfaces it
+        rather than letting them silently diverge.
+        """
+        from memman import config
+        from memman.doctor import check_per_store_keys
+
+        data_dir = str(tmp_path / 'memman')
+        Path(data_dir, 'data', 'pg_drift').mkdir(parents=True, exist_ok=True)
+        Path(data_dir, 'data', 'pg_drift', 'memman.db').write_bytes(b'')
+        env_file(config.BACKEND_FOR('pg_drift'), 'postgres')
+        env_file(config.PG_DSN_FOR('pg_drift'), 'postgresql://new@host/db')
+        env_file(config.DEFAULT_PG_DSN, 'postgresql://old@host/db')
+
+        out = check_per_store_keys(data_dir)
+        assert out['status'] == 'warn'
+        pg = next(s for s in out['detail']['stores']
+                  if s['store'] == 'pg_drift')
+        assert pg.get('error') is None
+        assert pg.get('warning') is not None
+        assert config.PG_DSN_FOR('pg_drift') in pg['warning']
+        assert config.DEFAULT_PG_DSN in pg['warning']
+
+    def test_no_warn_when_dsns_match(self, tmp_path, env_file):
+        """Per-store DSN equals default DSN -> pass (no drift)."""
+        from memman import config
+        from memman.doctor import check_per_store_keys
+
+        data_dir = str(tmp_path / 'memman')
+        Path(data_dir, 'data', 'pg_same').mkdir(parents=True, exist_ok=True)
+        Path(data_dir, 'data', 'pg_same', 'memman.db').write_bytes(b'')
+        dsn = 'postgresql://shared@host/db'
+        env_file(config.BACKEND_FOR('pg_same'), 'postgres')
+        env_file(config.PG_DSN_FOR('pg_same'), dsn)
+        env_file(config.DEFAULT_PG_DSN, dsn)
+
+        out = check_per_store_keys(data_dir)
+        assert out['status'] == 'pass'
+        pg = next(s for s in out['detail']['stores']
+                  if s['store'] == 'pg_same')
+        assert pg.get('warning') is None
+
 
 def _started_scheduler_status(interval=900):
     """Test helper: pretend the scheduler is installed + started."""
