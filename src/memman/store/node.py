@@ -753,11 +753,24 @@ def stamp_linked(db: 'DB', insight_id: str, ts: str) -> None:
         (ts, insight_id))
 
 
-def stamp_enriched(db: 'DB', insight_id: str, ts: str) -> None:
-    """Set enriched_at timestamp for an insight."""
+def stamp_enriched(
+        db: 'DB', insight_id: str, ts: str, *,
+        prompt_version: str | None = None,
+        model_id: str | None = None) -> None:
+    """Set enriched_at timestamp for an insight.
+
+    When `prompt_version` / `model_id` are provided, also writes them
+    so future provenance-drift checks see the row as current.
+    """
+    if prompt_version is None and model_id is None:
+        db._exec(
+            'update insights set enriched_at = ? where id = ?',
+            (ts, insight_id))
+        return
     db._exec(
-        'update insights set enriched_at = ? where id = ?',
-        (ts, insight_id))
+        'update insights set enriched_at = ?,'
+        ' prompt_version = ?, model_id = ? where id = ?',
+        (ts, prompt_version, model_id, insight_id))
 
 
 def get_pending_link_ids(db: 'DB', limit: int) -> list[str]:
@@ -788,6 +801,51 @@ def count_pending_links(db: 'DB') -> int:
     row = db._query(
         'select count(*) from insights'
         ' where linked_at is null and deleted_at is null').fetchone()
+    return row[0] if row else 0
+
+
+def iter_stale_insight_ids(
+        db: 'DB', active_pv: str,
+        active_model: str | None) -> list[str]:
+    """Return ids of active insights whose provenance no longer matches.
+
+    Mirrors the predicate in `doctor.check_provenance_drift`: a row is
+    stale iff `prompt_version` is non-NULL and differs from `active_pv`,
+    OR `model_id` is non-NULL and `active_model` is non-NULL and they
+    differ. NULL provenance is intentionally not stale (those rows
+    pre-date provenance tracking and need a separate backfill).
+    """
+    sql = """
+select id from insights
+where deleted_at is null
+  and (
+    (prompt_version is not null and prompt_version != ?)
+    or (model_id is not null and ? is not null and model_id != ?)
+  )
+order by created_at asc
+"""
+    rows = db._query(
+        sql, (active_pv, active_model, active_model)).fetchall()
+    return [r[0] for r in rows]
+
+
+def count_stale_insights(
+        db: 'DB', active_pv: str,
+        active_model: str | None) -> int:
+    """Count active insights stale w.r.t. current prompt/model.
+
+    Same predicate as `iter_stale_insight_ids`.
+    """
+    sql = """
+select count(*) from insights
+where deleted_at is null
+  and (
+    (prompt_version is not null and prompt_version != ?)
+    or (model_id is not null and ? is not null and model_id != ?)
+  )
+"""
+    row = db._query(
+        sql, (active_pv, active_model, active_model)).fetchone()
     return row[0] if row else 0
 
 

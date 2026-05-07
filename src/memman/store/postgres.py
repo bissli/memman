@@ -1024,11 +1024,21 @@ limit %s
                 'update {s}.insights set linked_at = now() where id = %s'),
                 (id,))
 
-    def stamp_enriched(self, id: Id) -> None:
+    def stamp_enriched(
+            self, id: Id, *,
+            prompt_version: str | None = None,
+            model_id: str | None = None) -> None:
         with self._conn.cursor() as cur:
+            if prompt_version is None and model_id is None:
+                cur.execute(self._q(
+                    'update {s}.insights set enriched_at = now()'
+                    ' where id = %s'),
+                    (id,))
+                return
             cur.execute(self._q(
-                'update {s}.insights set enriched_at = now() where id = %s'),
-                (id,))
+                'update {s}.insights set enriched_at = now(),'
+                ' prompt_version = %s, model_id = %s where id = %s'),
+                (prompt_version, model_id, id))
 
     def get_pending_link_ids(self, *, limit: int) -> list[Id]:
         sql = self._q("""
@@ -1058,6 +1068,40 @@ where linked_at is null and deleted_at is null
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql)
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
+
+    def iter_stale_insight_ids(
+            self, active_pv: str,
+            active_model: str | None) -> list[Id]:
+        sql = self._q("""
+select id from {s}.insights
+where deleted_at is null
+  and (
+    (prompt_version is not null and prompt_version != %s)
+    or (model_id is not null and %s::text is not null and model_id != %s)
+  )
+order by created_at asc
+""")
+        with self._conn.cursor() as cur:
+            cur.execute(
+                sql, (active_pv, active_model, active_model))
+            return [r[0] for r in cur.fetchall()]
+
+    def count_stale_insights(
+            self, active_pv: str,
+            active_model: str | None) -> int:
+        sql = self._q("""
+select count(*) from {s}.insights
+where deleted_at is null
+  and (
+    (prompt_version is not null and prompt_version != %s)
+    or (model_id is not null and %s::text is not null and model_id != %s)
+  )
+""")
+        with self._conn.cursor() as cur:
+            cur.execute(
+                sql, (active_pv, active_model, active_model))
             row = cur.fetchone()
             return int(row[0]) if row else 0
 

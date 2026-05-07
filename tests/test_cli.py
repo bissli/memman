@@ -1197,6 +1197,154 @@ class TestGraphRebuild:
             'should preserve created_by=claude')
         db.close()
 
+class TestGraphRebuildStaleOnly:
+    """Tests for `graph rebuild --stale-only` flag."""
+
+    def _seed_drift(self, store_path, active_pv, active_model):
+        """Insert one drifted row and one current row. Return ids.
+
+        Also primes the per-store constants_hash so that opening via
+        `_active_backend` does not trigger a wholesale reindex that
+        nulls every row's `linked_at` (which would erase the seed's
+        linked-state and mask the test's intent).
+        """
+        from memman.embed.fingerprint import Fingerprint, write_fingerprint
+        from memman.graph.engine import compute_constants_hash
+        from memman.store.db import open_db
+        from memman.store.node import insert_insight, update_enrichment
+        from memman.store.sqlite import SqliteBackend
+        from tests.conftest import make_insight
+        OLD_PV = 'old-prompt-version-deadbeef'
+        db = open_db(str(store_path))
+        backend = SqliteBackend(db)
+        backend.meta.set('constants_hash', compute_constants_hash())
+        write_fingerprint(backend, Fingerprint(
+            provider='voyage', model='voyage-3-lite', dim=512))
+        insert_insight(db, make_insight(
+            id='drift-1', content='Drifted insight needing re-enrichment',
+            prompt_version=OLD_PV, model_id=active_model))
+        insert_insight(db, make_insight(
+            id='fresh-1', content='Fresh insight already on active config',
+            prompt_version=active_pv, model_id=active_model))
+        for iid in ('drift-1', 'fresh-1'):
+            update_enrichment(db, iid, ['kw'], 'sum', ['fact'])
+            db._conn.execute(
+                "UPDATE insights SET linked_at = ?, enriched_at = ?"
+                " WHERE id = ?",
+                ('2024-01-01T00:00:00+00:00',
+                 '2024-01-01T00:00:00+00:00', iid))
+        db.close()
+
+    def test_dry_run_reports_stale_count(self, tmp_path, monkeypatch):
+        """`--stale-only --dry-run` reports stale count without modifying."""
+        from memman import config
+        from memman.pipeline.remember import compute_prompt_version
+
+        active_pv = compute_prompt_version()
+        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
+
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
+        data_dir = str(tmp_path)
+        store_path = tmp_path / 'data' / 'default'
+        self._seed_drift(store_path, active_pv, active_model)
+
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            '--data-dir', data_dir, 'graph', 'rebuild',
+            '--stale-only', '--dry-run'])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data['mode'] == 'stale-only'
+        assert data['total'] == 1
+        assert data['dry_run'] == 1
+
+    def test_empty_stale_fast_path(self, tmp_path, monkeypatch):
+        """Zero-stale store returns processed=0 without doing work."""
+        from memman import config
+        from memman.embed.fingerprint import Fingerprint, write_fingerprint
+        from memman.graph.engine import compute_constants_hash
+        from memman.pipeline.remember import compute_prompt_version
+        from memman.store.sqlite import SqliteBackend
+
+        active_pv = compute_prompt_version()
+        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
+
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
+        data_dir = str(tmp_path)
+        store_path = tmp_path / 'data' / 'default'
+        from memman.store.db import open_db
+        from memman.store.node import insert_insight
+        from tests.conftest import make_insight
+        db = open_db(str(store_path))
+        backend = SqliteBackend(db)
+        backend.meta.set('constants_hash', compute_constants_hash())
+        write_fingerprint(backend, Fingerprint(
+            provider='voyage', model='voyage-3-lite', dim=512))
+        insert_insight(db, make_insight(
+            id='ok-1', content='Already on active config',
+            prompt_version=active_pv, model_id=active_model))
+        db.close()
+
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            '--data-dir', data_dir, 'graph', 'rebuild', '--stale-only'])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data['mode'] == 'stale-only'
+        assert data['processed'] == 0
+        assert data['skipped'] == 'no_stale_rows'
+
+    def test_stale_only_re_enriches_drifted_rows(self, tmp_path, monkeypatch):
+        """`--stale-only` clears enriched_at on drifted rows only."""
+        from memman import config
+        from memman.pipeline.remember import compute_prompt_version
+        from memman.store.db import open_db
+
+        active_pv = compute_prompt_version()
+        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
+
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
+        data_dir = str(tmp_path)
+        store_path = tmp_path / 'data' / 'default'
+        self._seed_drift(store_path, active_pv, active_model)
+
+        db = open_db(str(store_path))
+        before = {
+            row[0]: (row[1], row[2]) for row in db._conn.execute(
+                'SELECT id, enriched_at, prompt_version FROM insights')
+            }
+        db.close()
+
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            '--data-dir', data_dir, 'graph', 'rebuild', '--stale-only'])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data['mode'] == 'stale-only'
+        assert data['processed'] == 1
+
+        db = open_db(str(store_path))
+        after = {
+            row[0]: (row[1], row[2]) for row in db._conn.execute(
+                'SELECT id, enriched_at, prompt_version FROM insights')
+            }
+        db.close()
+        assert after['fresh-1'] == before['fresh-1']
+        assert after['drift-1'][0] != before['drift-1'][0]
+        assert after['drift-1'][1] == active_pv
+
+    def test_stale_only_accepted_on_postgres_runner(self, cross_backend_runner):
+        """`--stale-only` does not trip the SQLite-only guard on Postgres."""
+        r, data_dir = cross_backend_runner
+        out = r.invoke(cli, [
+            '--data-dir', data_dir, 'graph', 'rebuild',
+            '--stale-only', '--dry-run'])
+        assert out.exit_code == 0, out.output
+        data = json.loads(out.output)
+        assert data['mode'] == 'stale-only'
+        assert 'SQLite-only' not in out.output
+
+
 class TestIntraBatchDedup:
     """Sibling facts from the same remember call must deduplicate."""
 

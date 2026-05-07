@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-r"""Re-enrich stale insights across stores via `memman graph rebuild`.
+r"""Re-enrich provenance-drifted insights via `graph rebuild --stale-only`.
 
-Iterates a list of stores, runs `memman graph rebuild` per store, and
-streams a tqdm progress bar showing total-row progress plus the per-
-store completion log. Per-store output is captured and appended to a
-log file under `/tmp` so the rebuild can run in the background and
-the operator can tail it later.
+Iterates a list of stores, runs `memman graph rebuild --stale-only`
+per store, and streams a tqdm progress bar sized from the *stale*
+row count (rows whose persisted `prompt_version` or `model_id` no
+longer matches active config), not the active-row count. Per-store
+output is captured and appended to a log file under `/tmp` so the
+rebuild can run in the background and the operator can tail it later.
+
+Stores with zero stale rows are skipped entirely (no LLM acquisition,
+no lock, no oplog entry). The pre-flight stale count comes from the
+`stale_insights` field of `memman --store X status` JSON, which is
+cheap (single sequential scan over insights, no LLM probes).
 
 Cross-store parallelism (`--parallel N`) runs N store-rebuilds at
 once via a subprocess thread pool; each rebuild process internally
@@ -14,9 +20,9 @@ completion count is ~2 * N. The default of 4 keeps that under
 typical OpenRouter rate ceilings for sonnet-class models. Bump for
 higher tiers; set 1 to revert to serial.
 
-Different SQLite stores live in different DB files, so cross-store
-concurrency does not race the per-store `reembed_lock` (a no-op on
-SQLite anyway). Same-store parallelism is unsafe and not exposed.
+Different stores live in different DBs (or different schemas on
+Postgres), so cross-store concurrency does not race the per-store
+`reembed_lock`. Same-store parallelism is unsafe and not exposed.
 
 Usage
 -----
@@ -25,7 +31,7 @@ Usage
                                     [--continue-on-error]
 
 With no STORE arguments, runs against every store reported by
-`memman store list`. Skips stores whose active-insight count is zero.
+`memman store list`. Skips stores whose stale-insight count is zero.
 """
 
 from __future__ import annotations
@@ -78,12 +84,14 @@ def _list_stores(memman: str) -> list[str]:
     return list(json.loads(out.stdout).get('stores') or [])
 
 
-def _store_active_count(memman: str, store: str) -> int:
-    """Return the active (non-deleted) insight count for `store`.
+def _store_stale_count(memman: str, store: str) -> int:
+    """Return the stale (provenance-drifted) insight count for `store`.
 
     Uses `memman --store <store> status` (cheap, no LLM). The status
-    JSON exposes the active count as `total_insights` (deleted rows
-    are tracked separately under `deleted_insights`).
+    JSON exposes the count as `stale_insights`; null indicates the
+    active prompt_version/model couldn't be resolved (e.g., missing
+    config), in which case treat the store as having no work and
+    skip it.
     """
     out = subprocess.run(
         [memman, '--store', store, 'status'],
@@ -94,9 +102,9 @@ def _store_active_count(memman: str, store: str) -> int:
         data = json.loads(out.stdout)
     except json.JSONDecodeError:
         return 0
-    raw = data.get('total_insights')
+    raw = data.get('stale_insights')
     if raw is None:
-        raw = sum((data.get('by_category') or {}).values())
+        return 0
     return int(raw or 0)
 
 
@@ -116,7 +124,7 @@ def _rebuild_store(memman: str, store: str, log_path: Path,
     """
     proc = subprocess.Popen(
         [memman, '--store', store, 'graph', 'rebuild',
-         '--progress-jsonl'],
+         '--stale-only', '--progress-jsonl'],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, bufsize=1)
 
@@ -191,11 +199,11 @@ def main() -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     targets = args.stores or _list_stores(memman)
-    sized = [(s, _store_active_count(memman, s)) for s in targets]
+    sized = [(s, _store_stale_count(memman, s)) for s in targets]
     sized = [(s, n) for s, n in sized if n > 0]
 
     if not sized:
-        print('no stores with active insights to rebuild', file=sys.stderr)
+        print('no stores with stale insights to rebuild', file=sys.stderr)
         return 0
 
     parallel = max(1, min(args.parallel, len(sized)))
@@ -204,7 +212,7 @@ def main() -> int:
     weights = dict(sized)
 
     print(
-        f'rebuilding {len(sized)} stores, {total_rows} active rows total,'
+        f'rebuilding {len(sized)} stores, {total_rows} stale rows total,'
         f' parallel={parallel}; log -> {log_path}',
         file=sys.stderr)
 

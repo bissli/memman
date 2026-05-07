@@ -949,7 +949,6 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
 
     active_pv = detail['active_prompt_version']
     active_model = detail['active_model_slow_canonical']
-    stale_rows = 0
     breakdown: list[dict[str, Any]] = []
     for pc in provenance:
         is_stale = (
@@ -963,8 +962,8 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
             'count': pc.count,
             'stale': is_stale,
             })
-        if is_stale:
-            stale_rows += pc.count
+    stale_rows = backend.nodes.count_stale_insights(
+        active_pv, active_model)
     detail['breakdown'] = breakdown
     detail['stale_rows'] = stale_rows
 
@@ -973,10 +972,8 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
             'name': 'provenance_drift', 'status': 'pass',
             'detail': detail}
     detail['remediation'] = (
-        "Run 'memman graph rebuild' to re-enrich every stale row,"
-        " or scope: update insights set linked_at=null,"
-        " enriched_at=null where prompt_version=<old> or model_id=<old>;"
-        " then drain the scheduler.")
+        "Run 'memman graph rebuild --stale-only' to re-enrich only"
+        " drifted rows.")
     return {
         'name': 'provenance_drift', 'status': 'warn',
         'detail': detail}

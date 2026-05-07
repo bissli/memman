@@ -217,6 +217,107 @@ class TestProvenanceDrift:
             assert 'remediation' in result['detail']
 
 
+class TestStaleHelpers:
+    """Cross-backend tests for iter_stale_insight_ids and count_stale_insights.
+    """
+
+    def _seed_six_row_matrix(self, backend, active_pv, active_model):
+        """Seed the 6 canonical predicate rows; return expected stale ids.
+
+        Mapping: A=NULL/NULL (not stale), B=current/current (not stale),
+        C=OLD/current (stale), D=current/OLD (stale), E=OLD/OLD (stale),
+        F=NULL/OLD (stale, model branch fires; prompt branch IS NOT NULL
+        guard suppresses it).
+        """
+        OLD_PV = 'old-prompt-version-deadbeef'
+        OLD_MODEL = 'anthropic/claude-old-1.0'
+        rows = [
+            ('row-a', None, None),
+            ('row-b', active_pv, active_model),
+            ('row-c', OLD_PV, active_model),
+            ('row-d', active_pv, OLD_MODEL),
+            ('row-e', OLD_PV, OLD_MODEL),
+            ('row-f', None, OLD_MODEL),
+            ]
+        for rid, pv, mid in rows:
+            backend.nodes.insert(make_insight(
+                id=rid, content=f'content for {rid} long enough',
+                prompt_version=pv, model_id=mid))
+        return ['row-c', 'row-d', 'row-e', 'row-f']
+
+    def test_iter_returns_only_drifted_rows(self, backend):
+        """iter_stale_insight_ids excludes NULL provenance and current rows.
+        """
+        from memman import config
+        from memman.pipeline.remember import compute_prompt_version
+
+        active_pv = compute_prompt_version()
+        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
+        expected = self._seed_six_row_matrix(
+            backend, active_pv, active_model)
+
+        ids = backend.nodes.iter_stale_insight_ids(active_pv, active_model)
+        assert sorted(ids) == sorted(expected)
+
+    def test_count_matches_iter(self, backend):
+        """count_stale_insights agrees with len(iter_stale_insight_ids)."""
+        from memman import config
+        from memman.pipeline.remember import compute_prompt_version
+
+        active_pv = compute_prompt_version()
+        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
+        self._seed_six_row_matrix(backend, active_pv, active_model)
+
+        n = backend.nodes.count_stale_insights(active_pv, active_model)
+        ids = backend.nodes.iter_stale_insight_ids(active_pv, active_model)
+        assert n == len(ids) == 4
+
+    def test_count_matches_doctor_stale_rows(self, backend):
+        """count_stale_insights agrees with check_provenance_drift's stale_rows.
+        """
+        from memman import config
+        from memman.doctor import check_provenance_drift
+        from memman.pipeline.remember import compute_prompt_version
+
+        active_pv = compute_prompt_version()
+        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
+        self._seed_six_row_matrix(backend, active_pv, active_model)
+
+        helper_count = backend.nodes.count_stale_insights(
+            active_pv, active_model)
+        doctor_result = check_provenance_drift(backend)
+        assert helper_count == doctor_result['detail']['stale_rows']
+
+    def test_no_active_model_skips_model_branch(self, backend):
+        """When active_model is None, only prompt_version drift is stale."""
+        from memman.pipeline.remember import compute_prompt_version
+
+        active_pv = compute_prompt_version()
+        OLD_PV = 'old-prompt-version-deadbeef'
+        OLD_MODEL = 'anthropic/claude-old-1.0'
+        backend.nodes.insert(make_insight(
+            id='r-pv-drift', content='content one long enough',
+            prompt_version=OLD_PV, model_id=OLD_MODEL))
+        backend.nodes.insert(make_insight(
+            id='r-model-drift-only', content='content two long enough',
+            prompt_version=active_pv, model_id=OLD_MODEL))
+
+        ids = backend.nodes.iter_stale_insight_ids(active_pv, None)
+        assert ids == ['r-pv-drift']
+
+    def test_empty_store(self, backend):
+        """Empty store returns 0 / [] from both helpers."""
+        from memman import config
+        from memman.pipeline.remember import compute_prompt_version
+
+        active_pv = compute_prompt_version()
+        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
+        assert backend.nodes.iter_stale_insight_ids(
+            active_pv, active_model) == []
+        assert backend.nodes.count_stale_insights(
+            active_pv, active_model) == 0
+
+
 class TestEdgeDegree:
 
     def test_healthy_pass(self, tmp_db, tmp_backend):

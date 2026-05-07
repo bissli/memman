@@ -251,8 +251,17 @@ class NodeStore(Protocol):
         """
         ...
 
-    def stamp_enriched(self, id: Id) -> None:
+    def stamp_enriched(
+            self, id: Id, *,
+            prompt_version: str | None = None,
+            model_id: str | None = None) -> None:
         """Mark an insight as enriched. Backend stamps `enriched_at` now.
+
+        When `prompt_version` and/or `model_id` are provided, also
+        records them on the row so future drift checks see the row
+        as current. Pass these from the caller that knows the active
+        config (the link/rebuild driver) so a re-enrichment fully
+        clears provenance drift, not just timestamps.
         """
         ...
 
@@ -266,6 +275,19 @@ class NodeStore(Protocol):
 
     def count_pending_links(self) -> int:
         """Count active insights with NULL linked_at."""
+        ...
+
+    def iter_stale_insight_ids(
+            self, active_pv: str,
+            active_model: str | None) -> list[Id]:
+        """Return ids of active insights stale w.r.t. current prompt/model.
+        """
+        ...
+
+    def count_stale_insights(
+            self, active_pv: str,
+            active_model: str | None) -> int:
+        """Count active insights stale w.r.t. current prompt/model."""
         ...
 
     def reset_for_rebuild(self, ids: list[Id]) -> None:

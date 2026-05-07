@@ -1791,12 +1791,25 @@ def status(ctx: click.Context) -> None:
         backends_in_use = sorted({
             resolve_store_backend(s, data_dir) for s in all_stores
             })
+        try:
+            from memman.pipeline.remember import compute_prompt_version
+            active_pv = compute_prompt_version()
+            try:
+                active_model = config.require(
+                    config.LLM_MODEL_SLOW_CANONICAL)
+            except Exception:
+                active_model = None
+            stale_insights: int | None = backend.nodes.count_stale_insights(
+                active_pv, active_model)
+        except Exception:
+            stale_insights = None
         out = {
             'store': store_name,
             'backend': resolve_store_backend(store_name, data_dir),
             'backends_in_use': backends_in_use,
             'total_insights': node_stats.total_insights,
             'deleted_insights': node_stats.deleted_insights,
+            'stale_insights': stale_insights,
             'edge_count': node_stats.edge_count,
             'oplog_count': node_stats.oplog_count,
             'by_category': node_stats.by_category,
@@ -2331,6 +2344,129 @@ def prime() -> None:
     _emit_guide()
 
 
+def _graph_rebuild_stale_only(
+        ctx: click.Context, *, dry_run: bool,
+        progress_jsonl: bool) -> None:
+    """Stale-only branch of `graph rebuild`.
+
+    Filters work to rows whose persisted `prompt_version` / `model_id`
+    no longer match the active values. Works on SQLite and Postgres
+    (the wholesale rebuild's SQLite-only guard does not apply here:
+    the per-row writes through `link_pending` are the same traffic
+    the `remember` hot path already exercises). Lock + predicate +
+    reset run inside a single `reembed_lock('rebuild')` window so
+    a concurrent wholesale rebuild cannot race.
+    """
+    from memman.embed import get_client
+    from memman.graph.engine import MAX_LINK_BATCH, link_pending
+    from memman.pipeline.remember import compute_prompt_version
+
+    if not dry_run:
+        _require_started('rebuild')
+
+    try:
+        active_pv = compute_prompt_version()
+    except Exception as exc:
+        raise click.ClickException(
+            f'cannot resolve active prompt version: {exc}')
+    try:
+        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
+    except Exception:
+        active_model = None
+
+    with _active_backend(ctx) as backend:
+        if dry_run:
+            stale = backend.nodes.count_stale_insights(
+                active_pv, active_model)
+            _json_out({
+                'mode': 'stale-only', 'total': stale, 'dry_run': 1,
+                'active_pv': active_pv, 'active_model': active_model,
+                })
+            return
+
+        with backend.reembed_lock('rebuild') as held:
+            if not held:
+                raise click.ClickException(
+                    'another graph rebuild is in progress on this store')
+
+            stale_ids = backend.nodes.iter_stale_insight_ids(
+                active_pv, active_model)
+            total_count = len(stale_ids)
+
+            if total_count == 0:
+                stats = {
+                    'processed': 0, 'remaining': 0,
+                    'mode': 'stale-only',
+                    'skipped': 'no_stale_rows',
+                    'active_pv': active_pv,
+                    'active_model': active_model,
+                    }
+                _json_out(stats)
+                return
+
+            llm_client = _get_llm_client_or_fail('slow_canonical')
+            metadata_llm_client = _get_llm_client_or_fail('slow_metadata')
+            ec = get_client()
+
+            embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
+            processed = 0
+
+            bar = tqdm(
+                total=total_count, desc='Rebuilding (stale)',
+                unit='insight', file=sys.stderr,
+                dynamic_ncols=True,
+                disable=not sys.stderr.isatty())
+
+            done_count = 0
+
+            def _on_progress(stage: str, insight: Insight) -> None:
+                nonlocal done_count
+                preview = insight.content[:40].replace('\n', ' ')
+                bar.set_description(f'{stage}: {preview}')
+                if stage == 'done':
+                    bar.update(1)
+                    done_count += 1
+                    if progress_jsonl:
+                        sys.stderr.write(json.dumps({
+                            'event': 'progress',
+                            'stage': 'done',
+                            'n': done_count,
+                            'total': total_count,
+                            }) + '\n')
+                        sys.stderr.flush()
+
+            for i in range(0, total_count, MAX_LINK_BATCH):
+                batch_ids = stale_ids[i:i + MAX_LINK_BATCH]
+                backend.nodes.reset_for_rebuild(batch_ids)
+
+                while True:
+                    count = link_pending(
+                        backend, embed_cache=embed_cache,
+                        llm_client=llm_client,
+                        metadata_llm_client=metadata_llm_client,
+                        embed_client=ec,
+                        on_progress=_on_progress)
+                    processed += count
+                    if count == 0:
+                        break
+
+            bar.set_description('Done')
+            bar.close()
+
+            remaining = backend.nodes.count_pending_links()
+
+            stats = {
+                'processed': processed, 'remaining': remaining,
+                'mode': 'stale-only',
+                'active_pv': active_pv,
+                'active_model': active_model,
+                }
+            backend.oplog.log(
+                operation='rebuild', insight_id='',
+                detail=json.dumps(stats))
+            _json_out(stats)
+
+
 @graph.command('rebuild')
 @click.option('--dry-run', is_flag=True, default=False,
               help='Show counts without modifying DB')
@@ -2338,10 +2474,20 @@ def prime() -> None:
               help='Emit one JSON line per done event to stderr'
                    ' (for parents that capture stderr and need streaming'
                    ' progress while the inner tqdm bar is suppressed).')
+@click.option('--stale-only', is_flag=True, default=False,
+              help='Re-enrich only rows whose prompt_version or model_id'
+                   ' no longer matches the active config. Cross-backend'
+                   ' (works on Postgres). NULL provenance rows are not'
+                   ' swept; they need a separate backfill.')
 @click.pass_context
 def graph_rebuild(ctx: click.Context, dry_run: bool,
-                  progress_jsonl: bool) -> None:
+                  progress_jsonl: bool, stale_only: bool) -> None:
     """Re-enrich all insights through the full LLM pipeline."""
+    if stale_only:
+        _graph_rebuild_stale_only(
+            ctx, dry_run=dry_run, progress_jsonl=progress_jsonl)
+        return
+
     from memman.store.factory import resolve_store_backend
     data_dir = ctx.obj['data_dir']
     store_name = _resolve_store_name(data_dir, ctx.obj['store'])
