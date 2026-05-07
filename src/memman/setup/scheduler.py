@@ -9,11 +9,13 @@ is persisted to `<MEMMAN_DATA_DIR>/env` at mode 600 and sourced by
 EnvironmentFile (systemd) or a wrapper script (launchd).
 """
 
+import os
 import platform
 import re
 import shlex
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -181,7 +183,25 @@ def detect_scheduler() -> str:
 
 
 def memman_binary_path() -> str:
-    """Return the absolute path to the memman binary."""
+    """Return the absolute path to the running memman binary.
+
+    Resolves to the console-script sibling of the current Python
+    interpreter (`sys.executable`) so the installer self-identifies
+    correctly regardless of `$PATH` order. Falls back to
+    `shutil.which` only when the sibling does not exist (covers
+    layouts where the console script is not co-located with the
+    interpreter, e.g. system `python3` + `pip install --user`).
+
+    Without this, two side-by-side installs (a pipx production
+    install at `~/.local/bin/memman` plus a Poetry editable dev
+    install in a `~/.venv/...` venv) silently fight: whichever
+    venv comes first on PATH is what `memman install` writes into
+    the systemd unit's `ExecStart`, even when the operator invoked
+    install from the other one.
+    """
+    sibling = Path(sys.executable).with_name('memman')
+    if sibling.exists() and os.access(sibling, os.X_OK):
+        return str(sibling)
     path = shutil.which('memman')
     if not path:
         raise RuntimeError(

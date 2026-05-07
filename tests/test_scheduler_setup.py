@@ -654,6 +654,99 @@ class TestDetectScheduler:
             sch.detect_scheduler()
 
 
+class TestMemmanBinaryPath:
+    """`memman_binary_path` self-identifies via sys.executable's sibling."""
+
+    def test_returns_sibling_of_sys_executable(self, tmp_path, monkeypatch):
+        """When a memman script lives next to sys.executable, return it.
+
+        Locks the PATH-independent self-identification: regardless of
+        what `shutil.which('memman')` would resolve, the function must
+        prefer the sibling so a side-by-side install (pipx + dev venv)
+        does not write the wrong path into the systemd unit.
+        """
+        venv_bin = tmp_path / 'venv' / 'bin'
+        venv_bin.mkdir(parents=True)
+        fake_python = venv_bin / 'python'
+        fake_python.touch()
+        fake_memman = venv_bin / 'memman'
+        fake_memman.write_text('#!/bin/sh\necho fake\n')
+        os.chmod(fake_memman, 0o755)
+
+        other_bin = tmp_path / 'other'
+        other_bin.mkdir()
+        decoy = other_bin / 'memman'
+        decoy.write_text('#!/bin/sh\necho decoy\n')
+        os.chmod(decoy, 0o755)
+
+        monkeypatch.setattr(sch.sys, 'executable', str(fake_python))
+        monkeypatch.setattr(sch.shutil, 'which', lambda _: str(decoy))
+
+        assert sch.memman_binary_path() == str(fake_memman)
+
+    def test_falls_back_to_path_when_sibling_missing(
+            self, tmp_path, monkeypatch):
+        """Sibling absent (e.g., system-python + pip --user) -> shutil.which.
+        """
+        venv_bin = tmp_path / 'venv' / 'bin'
+        venv_bin.mkdir(parents=True)
+        fake_python = venv_bin / 'python'
+        fake_python.touch()
+
+        path_bin = tmp_path / 'pathfound'
+        path_bin.mkdir()
+        path_memman = path_bin / 'memman'
+        path_memman.write_text('#!/bin/sh\necho path\n')
+        os.chmod(path_memman, 0o755)
+
+        monkeypatch.setattr(sch.sys, 'executable', str(fake_python))
+        monkeypatch.setattr(
+            sch.shutil, 'which', lambda _: str(path_memman))
+
+        assert sch.memman_binary_path() == str(path_memman)
+
+    def test_raises_when_neither_resolves(self, tmp_path, monkeypatch):
+        """No sibling, nothing on PATH -> RuntimeError with install hint.
+        """
+        venv_bin = tmp_path / 'venv' / 'bin'
+        venv_bin.mkdir(parents=True)
+        fake_python = venv_bin / 'python'
+        fake_python.touch()
+
+        monkeypatch.setattr(sch.sys, 'executable', str(fake_python))
+        monkeypatch.setattr(sch.shutil, 'which', lambda _: None)
+
+        with pytest.raises(RuntimeError, match='install with pipx'):
+            sch.memman_binary_path()
+
+    def test_sibling_must_be_executable(self, tmp_path, monkeypatch):
+        """A non-executable file next to python is not the binary.
+
+        Defensive: when `memman` happens to exist next to the
+        interpreter as a regular file (e.g., a stray text file),
+        skip it and let `shutil.which` find the real script.
+        """
+        venv_bin = tmp_path / 'venv' / 'bin'
+        venv_bin.mkdir(parents=True)
+        fake_python = venv_bin / 'python'
+        fake_python.touch()
+        non_exec = venv_bin / 'memman'
+        non_exec.write_text('not a script')
+        os.chmod(non_exec, 0o644)
+
+        path_bin = tmp_path / 'pathfound'
+        path_bin.mkdir()
+        path_memman = path_bin / 'memman'
+        path_memman.write_text('#!/bin/sh\necho path\n')
+        os.chmod(path_memman, 0o755)
+
+        monkeypatch.setattr(sch.sys, 'executable', str(fake_python))
+        monkeypatch.setattr(
+            sch.shutil, 'which', lambda _: str(path_memman))
+
+        assert sch.memman_binary_path() == str(path_memman)
+
+
 class TestSchedulerLogs:
     """`memman log worker` and the install-time logs/ directory."""
 
