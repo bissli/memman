@@ -276,6 +276,10 @@ def _row_to_insight(row: tuple[Any, ...]) -> Insight:
     i.deleted_at = _datetime_or_none(row[9])
     if len(row) > 10 and row[10]:
         i.summary = row[10]
+    if len(row) > 11:
+        i.linked_at = _datetime_or_none(row[11])
+    if len(row) > 12:
+        i.enriched_at = _datetime_or_none(row[12])
     return i
 
 
@@ -300,7 +304,7 @@ def _row_to_edge(row: tuple[Any, ...]) -> Edge:
 _INSIGHT_COLS = (
     'id, content, category, importance, entities,'
     ' source, access_count, created_at, updated_at, deleted_at,'
-    ' summary')
+    ' summary, linked_at, enriched_at')
 
 
 class PostgresNodeStore(BaseNodeStore, NodeStore):
@@ -581,8 +585,8 @@ group by id
         candidates: list[dict[str, Any]] = []
         updates: list[tuple[float, str]] = []
         for r in rows:
-            ins = _row_to_insight(r[:11])
-            last_access = _datetime_or_none(r[11]) or (
+            ins = _row_to_insight(r[:13])
+            last_access = _datetime_or_none(r[13]) or (
                 ins.created_at or now)
             days_since = (now - last_access).total_seconds() / 86400.0
             ec = edge_counts.get(ins.id, 0)

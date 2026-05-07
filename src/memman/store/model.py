@@ -54,6 +54,8 @@ class Insight:
     model_id: str | None = None
     embedding_model: str | None = None
     summary: str = ''
+    linked_at: datetime | None = None
+    enriched_at: datetime | None = None
 
     def entities_json(self) -> str:
         """Return entities as a JSON string for storage."""

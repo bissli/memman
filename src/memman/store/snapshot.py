@@ -105,6 +105,12 @@ def write_snapshot(db, store_dir: str, fingerprint: Fingerprint) -> bool:
                 if i.updated_at else
                 i.created_at.astimezone(timezone.utc).isoformat()),
             'summary': i.summary,
+            'linked_at': (
+                i.linked_at.astimezone(timezone.utc).isoformat()
+                if i.linked_at else None),
+            'enriched_at': (
+                i.enriched_at.astimezone(timezone.utc).isoformat()
+                if i.enriched_at else None),
             }
         for i in insights
         ]
@@ -230,6 +236,12 @@ def read_snapshot(
             updated_at=parse_timestamp(
                 entry.get('updated_at') or entry['created_at']),
             summary=entry.get('summary', ''),
+            linked_at=(
+                parse_timestamp(entry['linked_at'])
+                if entry.get('linked_at') else None),
+            enriched_at=(
+                parse_timestamp(entry['enriched_at'])
+                if entry.get('enriched_at') else None),
             ) for entry in meta_list]
 
     raw_adj = json.loads(adj_blob)

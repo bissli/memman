@@ -7,10 +7,18 @@ must continue to return identical shapes after the override is
 dropped (Postgres: `review_content_quality`) or the default is
 inherited (SQLite: `iter_embeddings_as_vecs`).
 
-`get_pending_link_ids`, `count_pending_links`, `clear_linked_at`,
-and `boost_retention` are not in this set: `Insight` does not
-carry `linked_at`, and `increment_access_count` skips
-`updated_at` so it cannot stand in for `boost_retention`.
+`get_pending_link_ids`, `count_pending_links`, and `clear_linked_at`
+are deliberately NOT defaulted in `BaseNodeStore` even though
+`Insight` now carries `linked_at` and a Python-level filter is
+formally possible. Reason: Postgres has indexed pushdown via the
+partial index `idx_insights_pending_link_{schema}` (defined at
+`src/memman/store/postgres.py:_PG_BASELINE_SCHEMA`), so a
+default that calls `get_all_active()` and filters in Python would
+fetch every row instead of the index-only scan. The SQLite verbs
+are tiny single-column queries; collapsing them into a default
+buys nothing and would only obscure the perf-critical Postgres
+path. `boost_retention` is excluded because `increment_access_count`
+skips `updated_at` and cannot stand in for it.
 """
 
 from tests.conftest import _vec, make_insight

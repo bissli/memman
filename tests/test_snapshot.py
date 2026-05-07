@@ -63,6 +63,73 @@ def test_write_then_read_round_trip(tmp_db, tmp_path):
     assert targets == ['snap-b']
 
 
+def test_round_trip_preserves_linked_and_enriched_at(tmp_db, tmp_path):
+    """Snapshot writer + reader round-trips the new lifecycle stamps."""
+    from memman.store.model import format_timestamp
+    from memman.store.node import stamp_enriched, stamp_linked
+    from datetime import datetime, timezone
+
+    fp = _seed(tmp_db)
+    ts = format_timestamp(
+        datetime(2026, 3, 1, 12, 0, tzinfo=timezone.utc))
+    stamp_linked(tmp_db, 'snap-a', ts)
+    stamp_enriched(tmp_db, 'snap-a', ts)
+
+    store_dir = str(tmp_path)
+    assert write_snapshot(tmp_db, store_dir, fp) is True
+    snap = read_snapshot(store_dir, fp)
+    assert snap is not None
+    by_id = {i.id: i for i in snap.insights}
+    assert by_id['snap-a'].linked_at is not None
+    assert by_id['snap-a'].linked_at.tzinfo is not None
+    assert by_id['snap-a'].enriched_at is not None
+    assert by_id['snap-b'].linked_at is None
+    assert by_id['snap-b'].enriched_at is None
+
+
+def test_read_back_compat_old_snapshot_without_lifecycle_keys(
+        tmp_db, tmp_path):
+    """Old snapshot files without `linked_at`/`enriched_at` keys still load.
+
+    Simulates a pre-fix snapshot by writing one through the current
+    writer, then surgically rewriting the meta JSON to drop the new
+    keys before reading back. The reader must default to None rather
+    than raising KeyError.
+    """
+    import struct
+    fp = _seed(tmp_db)
+    store_dir = str(tmp_path)
+    assert write_snapshot(tmp_db, store_dir, fp) is True
+
+    path = snapshot_path(store_dir)
+    raw = path.read_bytes()
+    cursor = 4
+    (header_len,) = struct.unpack('<I', raw[cursor:cursor + 4])
+    cursor += 4 + header_len
+    (embed_len,) = struct.unpack('<Q', raw[cursor:cursor + 8])
+    cursor += 8 + embed_len
+    (meta_len,) = struct.unpack('<I', raw[cursor:cursor + 4])
+    meta_start = cursor + 4
+    meta_end = meta_start + meta_len
+    old_meta = json.loads(raw[meta_start:meta_end].decode('utf-8'))
+    for entry in old_meta:
+        entry.pop('linked_at', None)
+        entry.pop('enriched_at', None)
+    new_meta_blob = json.dumps(old_meta).encode('utf-8')
+    rebuilt = (
+        raw[:cursor]
+        + struct.pack('<I', len(new_meta_blob))
+        + new_meta_blob
+        + raw[meta_end:])
+    path.write_bytes(rebuilt)
+
+    snap = read_snapshot(store_dir, fp)
+    assert snap is not None
+    for i in snap.insights:
+        assert i.linked_at is None
+        assert i.enriched_at is None
+
+
 def test_read_returns_none_on_fingerprint_mismatch(tmp_db, tmp_path):
     """A snapshot with a different embedding model is rejected."""
     fp = _seed(tmp_db)

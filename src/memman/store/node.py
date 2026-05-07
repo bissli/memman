@@ -46,7 +46,7 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 _INSIGHT_COLUMNS = (
     'id, content, category, importance, entities,'
     ' source, access_count, created_at, updated_at, deleted_at,'
-    ' summary')
+    ' summary, linked_at, enriched_at')
 
 
 def get_insight_by_id(db: 'DB', id: str) -> Insight | None:
@@ -250,8 +250,8 @@ where deleted_at is null
 
     insight_rows: list[tuple[Insight, datetime]] = []
     for r in rows:
-        ins = _scan_insight(r[:11])
-        last_accessed_str = r[11]
+        ins = _scan_insight(r[:13])
+        last_accessed_str = r[13]
         last_access = ins.created_at or datetime.now(timezone.utc)
         if last_accessed_str:
             try:
@@ -831,4 +831,8 @@ def _scan_insight(row: tuple[Any, ...]) -> Insight:
         i.deleted_at = parse_timestamp(row[9])
     if len(row) > 10 and row[10]:
         i.summary = row[10]
+    if len(row) > 11 and row[11]:
+        i.linked_at = parse_timestamp(row[11])
+    if len(row) > 12 and row[12]:
+        i.enriched_at = parse_timestamp(row[12])
     return i

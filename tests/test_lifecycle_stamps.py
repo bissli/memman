@@ -4,8 +4,9 @@ from datetime import datetime, timezone
 
 from memman.store.model import format_timestamp
 from memman.store.node import count_pending_links, get_active_insight_ids
-from memman.store.node import get_pending_link_ids, insert_insight
-from memman.store.node import reset_for_rebuild, stamp_enriched, stamp_linked
+from memman.store.node import get_insight_by_id, get_pending_link_ids
+from memman.store.node import insert_insight, reset_for_rebuild
+from memman.store.node import stamp_enriched, stamp_linked
 from tests.conftest import make_insight
 
 
@@ -119,3 +120,39 @@ class TestResetForRebuild:
     def test_empty_list_is_noop(self, tmp_db):
         """Passing empty list does nothing."""
         reset_for_rebuild(tmp_db, [])
+
+
+class TestInsightDataclassExposesStamps:
+    """The Insight dataclass returned by `get` reflects stamped timestamps.
+    """
+
+    def test_linked_at_round_trips(self, tmp_db):
+        """`get_insight_by_id(...).linked_at` is non-None after stamp_linked.
+        """
+        insert_insight(tmp_db, make_insight(id='dx-1', content='a'))
+        ts = format_timestamp(datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc))
+        stamp_linked(tmp_db, 'dx-1', ts)
+        ins = get_insight_by_id(tmp_db, 'dx-1')
+        assert ins is not None
+        assert ins.linked_at is not None
+        assert ins.linked_at.tzinfo is not None
+        assert ins.enriched_at is None
+
+    def test_enriched_at_round_trips(self, tmp_db):
+        """`get_insight_by_id(...).enriched_at` is non-None after stamp_enriched.
+        """
+        insert_insight(tmp_db, make_insight(id='dx-2', content='b'))
+        ts = format_timestamp(datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc))
+        stamp_enriched(tmp_db, 'dx-2', ts)
+        ins = get_insight_by_id(tmp_db, 'dx-2')
+        assert ins is not None
+        assert ins.enriched_at is not None
+        assert ins.linked_at is None
+
+    def test_unstamped_insight_has_none_stamps(self, tmp_db):
+        """Fresh insight returns linked_at and enriched_at as None."""
+        insert_insight(tmp_db, make_insight(id='dx-3', content='c'))
+        ins = get_insight_by_id(tmp_db, 'dx-3')
+        assert ins is not None
+        assert ins.linked_at is None
+        assert ins.enriched_at is None

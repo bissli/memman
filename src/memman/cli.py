@@ -240,6 +240,10 @@ def _insight_to_dict(i: Insight) -> dict:
         d['deleted_at'] = format_timestamp(i.deleted_at)
     if i.summary:
         d['summary'] = i.summary
+    if i.linked_at:
+        d['linked_at'] = format_timestamp(i.linked_at)
+    if i.enriched_at:
+        d['enriched_at'] = format_timestamp(i.enriched_at)
     return d
 
 
