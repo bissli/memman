@@ -229,10 +229,16 @@ def mark_failed(
         error: str,
         max_attempts: int = MAX_ATTEMPTS,
         ) -> None:
-    """Mark a claimed row as failed or release it for retry.
+    """Mark a claimed row as failed or release it for retry with backoff.
 
-    If attempts >= max_attempts, transitions to status='failed';
-    otherwise releases the claim so the next worker can retry.
+    If attempts >= max_attempts, transitions to status='failed'.
+    Otherwise rewrites `claimed_at` to a past timestamp so the existing
+    stale-claim reclaim predicate (`claimed_at <= now - STALE_CLAIM_SECONDS`)
+    unlocks the row exactly `backoff_seconds` from now -- exponential
+    backoff (60, 120, 240, 480, capped at STALE_CLAIM_SECONDS=600) on
+    top of the existing claim arithmetic, no new column needed.
+    Permanent-failure rows (bad creds, 429 storms) thus get a gentle
+    retry curve instead of hammering upstream every drain tick.
     """
     row = conn.execute(
         'select attempts from queue where id = ?',
@@ -257,12 +263,16 @@ where id = ?
         logger.warning(
             f'queue row {row_id} failed after {attempts} attempts: {error[:200]}')
     else:
+        backoff_seconds = min(
+            60 * (2 ** (attempts - 1)), STALE_CLAIM_SECONDS)
+        reclaim_at = (
+            int(time.time()) - STALE_CLAIM_SECONDS + backoff_seconds)
         conn.execute(
-            'update queue set last_error = ? where id = ?',
-            (error[:1000], row_id))
+            'update queue set last_error = ?, claimed_at = ? where id = ?',
+            (error[:1000], reclaim_at, row_id))
         logger.debug(
             f'queue row {row_id} deferred for retry (attempt {attempts});'
-            ' will unlock after stale-claim timeout')
+            f' unlocks in {backoff_seconds}s')
 
 
 def stats(conn: sqlite3.Connection) -> dict:

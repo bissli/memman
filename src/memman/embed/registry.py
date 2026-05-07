@@ -4,12 +4,21 @@
 requested pair. If the provider constructor raises `ConfigError`
 (missing creds), returns a `_PlaceholderEmbedder` so processes can
 open multiple stores even when one provider's creds are absent.
+
+The result is cached per `(provider, model)` for the lifetime of
+the process so `factory()` + `prepare()` (which may issue a network
+probe) only run once per pair. Tests share one process, so the
+autouse fixture in `tests/conftest.py` calls `reset_for_tests()`
+between tests to keep credential-missing flows reproducible.
 """
+
+from functools import lru_cache
 
 from memman.embed import PROVIDERS, EmbeddingProvider
 from memman.exceptions import ConfigError, EmbedCredentialError
 
 
+@lru_cache(maxsize=None)
 def get_for(provider: str, model: str) -> EmbeddingProvider:
     """Return an embedder client bound to (provider, model).
 
@@ -18,6 +27,8 @@ def get_for(provider: str, model: str) -> EmbeddingProvider:
     the client's `model` attribute and resets cached state. When the
     constructor raises `ConfigError` (missing creds), returns a
     placeholder whose `embed()` raises `EmbedCredentialError`.
+
+    Cached per `(provider, model)` for the process lifetime.
     """
     factory = PROVIDERS.get(provider)
     if factory is None:
@@ -35,6 +46,9 @@ def get_for(provider: str, model: str) -> EmbeddingProvider:
         client._availability_cache = None
     client.prepare()
     return client
+
+
+reset_for_tests = get_for.cache_clear
 
 
 class _PlaceholderEmbedder:

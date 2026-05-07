@@ -68,8 +68,11 @@ def _isolate_env(tmp_path, monkeypatch, request):
     if 'no_default_env' not in request.keywords:
         _write_default_env_file(data_dir)
     config.reset_file_cache()
+    from memman.embed import registry as _embed_registry
+    _embed_registry.reset_for_tests()
     yield
     config.reset_file_cache()
+    _embed_registry.reset_for_tests()
 
 
 _TEST_MOCK_SECRETS = {

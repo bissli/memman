@@ -3,10 +3,10 @@
 import time
 
 import pytest
-from memman.queue import MAX_ATTEMPTS, STATUS_DONE, STATUS_FAILED
-from memman.queue import STATUS_PENDING, claim, enqueue, get_row, list_rows
-from memman.queue import mark_done, mark_failed, open_queue_db, purge_done
-from memman.queue import retry_row, stats
+from memman.queue import MAX_ATTEMPTS, STALE_CLAIM_SECONDS, STATUS_DONE
+from memman.queue import STATUS_FAILED, STATUS_PENDING, claim, enqueue
+from memman.queue import get_row, list_rows, mark_done, mark_failed
+from memman.queue import open_queue_db, purge_done, retry_row, stats
 
 
 def test_enqueue_returns_incrementing_id(queue_conn):
@@ -91,16 +91,57 @@ def test_mark_done_sets_status_and_clears_claim(queue_conn):
     assert row['processed_at'] is not None
 
 
-def test_mark_failed_below_threshold_holds_claim(queue_conn):
-    """mark_failed below max_attempts keeps claimed_at set to block re-claim.
+def test_mark_failed_below_threshold_backs_off(queue_conn):
+    """mark_failed reschedules claimed_at into the past so the row
+    becomes reclaimable exactly `backoff_seconds` from now.
+
+    On attempt 1 the backoff is 60 s; the row is still PENDING with a
+    claim timestamp `STALE_CLAIM_SECONDS - 60` seconds in the past, so
+    a stale-claim reclaim with the default timeout is held off until
+    that wait elapses but a zero-timeout reclaim succeeds immediately.
     """
     enqueue(queue_conn, 'main', 'a')
     r = claim(queue_conn, worker_pid=1)
+    before = int(time.time())
     mark_failed(queue_conn, r.id, 'transient')
     row = get_row(queue_conn, r.id)
     assert row['status'] == STATUS_PENDING
-    assert row['claimed_at'] is not None
     assert row['last_error'] == 'transient'
+    expected = before - STALE_CLAIM_SECONDS + 60
+    assert row['claimed_at'] is not None
+    assert abs(row['claimed_at'] - expected) <= 1
+
+    again = claim(queue_conn, worker_pid=2)
+    assert again is None
+    again = claim(queue_conn, worker_pid=2, stale_after_seconds=0)
+    assert again is not None
+    assert again.id == r.id
+
+
+def test_mark_failed_backoff_grows_with_attempts(queue_conn, monkeypatch):
+    """Attempt 1 unlocks at +60s, 2 at +120s, 3 at +240s, capped at 600s.
+    """
+    fixed_now = 1_000_000
+    monkeypatch.setattr('memman.queue.time.time', lambda: fixed_now)
+    enqueue(queue_conn, 'main', 'a')
+
+    expected_backoffs = [60, 120, 240, 480, STALE_CLAIM_SECONDS]
+    for attempt_idx, backoff in enumerate(expected_backoffs, start=1):
+        r = claim(queue_conn, worker_pid=1, stale_after_seconds=0)
+        assert r is not None, f'attempt {attempt_idx}: nothing to claim'
+        assert r.attempts == attempt_idx
+        if attempt_idx >= MAX_ATTEMPTS:
+            mark_failed(queue_conn, r.id, 'final')
+            row = get_row(queue_conn, r.id)
+            assert row['status'] == STATUS_FAILED
+            return
+        mark_failed(queue_conn, r.id, f'attempt {attempt_idx}')
+        row = get_row(queue_conn, r.id)
+        assert row['status'] == STATUS_PENDING
+        expected = fixed_now - STALE_CLAIM_SECONDS + backoff
+        assert row['claimed_at'] == expected, (
+            f'attempt {attempt_idx}: expected unlock at {expected},'
+            f' got {row["claimed_at"]} (backoff {backoff}s)')
 
 
 def test_mark_failed_at_threshold_transitions_to_failed(queue_conn):

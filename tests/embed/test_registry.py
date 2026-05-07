@@ -39,6 +39,17 @@ class TestGetFor:
         assert ec.name == 'openrouter'
         assert ec.model == 'totally-different-model'
 
+    def test_get_for_returns_same_instance_when_cached(self):
+        """Repeat calls with identical args return the cached client.
+
+        The lru_cache on `get_for` ensures `factory()` + `prepare()`
+        run only once per (provider, model) pair per process.
+        """
+        from memman.embed.registry import get_for
+        first = get_for('voyage', 'voyage-3-lite')
+        second = get_for('voyage', 'voyage-3-lite')
+        assert first is second
+
 
 class TestLazyCredentialing:
     """Missing creds yield a placeholder; only embed() raises."""
