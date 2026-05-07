@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.14.1
+
+`memman_binary_path()` (in `memman.setup.scheduler`) now resolves the
+running memman binary via `sys.executable`'s sibling instead of
+`shutil.which('memman')`. This makes the systemd / launchd unit's
+`ExecStart` path PATH-independent: a side-by-side install (e.g., a
+pipx production binary at `~/.local/bin/memman` plus a Poetry editable
+dev install in a `~/.venv/...` venv) no longer silently writes the
+wrong binary into the unit when the dev venv comes first on PATH.
+Falls back to `shutil.which` when the sibling is absent (covers
+system-python + `pip install --user` layouts).
+
 ## 0.14.0
 
 ### Per-store backend routing
