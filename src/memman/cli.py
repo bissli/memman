@@ -22,7 +22,9 @@ from memman import config
 from memman.store import factory
 from memman.store.db import default_data_dir, open_db, read_active, store_dir
 from memman.store.db import store_exists, valid_store_name, write_active
-from memman.store.factory import list_stores
+from memman.store.factory import known_backends, list_stores
+
+_BACKEND_CHOICES = sorted(known_backends())
 from memman.store.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge
 from memman.store.model import Insight, format_timestamp, is_immune
 from memman.store.sqlite import open_ro_db
@@ -2186,7 +2188,7 @@ def insights_show(ctx: click.Context, id: str) -> None:
 @cli.command()
 @click.option('--target', default='',
               help='Target environment (claude-code | openclaw | nanoclaw)')
-@click.option('--backend', type=click.Choice(['sqlite', 'postgres']),
+@click.option('--backend', type=click.Choice(_BACKEND_CHOICES),
               default=None,
               help='Storage backend; bypasses the wizard prompt when set.')
 @click.option('--pg-dsn', default=None,
@@ -2223,7 +2225,7 @@ def uninstall(ctx: click.Context, target: str) -> None:
 @click.option('--all', 'migrate_all', is_flag=True,
               help='Migrate every store under the data dir.')
 @click.option('--to', 'target_backend',
-              type=click.Choice(['sqlite', 'postgres']),
+              type=click.Choice(_BACKEND_CHOICES),
               default='postgres',
               help='Target backend for the migration. Default: postgres.')
 @click.option('--dry-run', is_flag=True,

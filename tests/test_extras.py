@@ -22,12 +22,18 @@ def test_postgres_unavailable_when_psycopg_missing(monkeypatch):
 
 
 def test_extras_keys_match_pyproject():
-    """`_EXTRAS` keys must match `pyproject.toml::[tool.poetry.extras]`."""
+    """Backend extras must match `pyproject.toml::[tool.poetry.extras]`.
+
+    The set of backend extras is derived from the static
+    `BACKENDS` registry; this test pins it against the poetry
+    declaration so adding a backend without a matching extras
+    block in pyproject is caught at test time.
+    """
     pyproject = Path(__file__).resolve().parent.parent / 'pyproject.toml'
     with Path(pyproject).open('rb') as fh:
         data = tomllib.load(fh)
     declared = set(data['tool']['poetry'].get('extras', {}).keys())
-    detected = set(extras._EXTRAS.keys())
+    detected = set(extras._extras_map().keys())
     assert declared == detected, (
         f'pyproject.toml extras {declared} drifted from'
-        f' extras._EXTRAS {detected}')
+        f' extras._extras_map() {detected}')
