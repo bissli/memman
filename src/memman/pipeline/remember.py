@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-from memman.embed import EmbeddingProvider, get_client
+from memman.embed import EmbeddingProvider
 from memman.embed.vector import cosine_similarity
 from memman.exceptions import EmbedCredentialError
 from memman.graph.causal import infer_llm_causal_edges
@@ -95,6 +95,7 @@ def run_remember(
         backend: Backend,
         insight: Insight,
         content: str,
+        ec: EmbeddingProvider,
         no_reconcile: bool = False,
         replaced_id: str = '',
         cat_explicit: bool = False,
@@ -103,16 +104,18 @@ def run_remember(
         insights_by_id: dict[str, Insight] | None = None,
         executor: ThreadPoolExecutor | None = None,
         llm_client: LLMProvider | None = None,
-        ec: EmbeddingProvider | None = None,
         ) -> dict[str, Any]:
     """Run the full remember pipeline and return the result dict.
 
     See module docstring for the overall shape.
 
-    `embed_cache`, `insights_by_id`, `executor`, `llm_client`, `ec`
-    are optional drain-scope state hoisted by `_drain_queue` to amortize
-    setup across rows in one drain pass. When omitted (e.g., direct
-    test use), the function builds them from the backend itself.
+    `ec` is the store-bound embed client (resolved from the store's
+    `meta.embed_fingerprint` via `bound_embedder`); production callers
+    pass `_StoreContext.ec`. `embed_cache`, `insights_by_id`,
+    `executor`, `llm_client` are optional drain-scope state hoisted
+    by `_drain_queue` to amortize setup across rows in one drain pass.
+    When omitted (e.g., direct test use), the function builds them
+    from the backend itself.
     """
     quality_warnings = check_content_quality(content)
 
@@ -121,8 +124,6 @@ def run_remember(
         metadata_llm_client = get_llm_client('slow_metadata')
     else:
         metadata_llm_client = llm_client
-    if ec is None:
-        ec = get_client()
     llm_calls = 0
 
     if no_reconcile:

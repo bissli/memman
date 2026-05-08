@@ -638,19 +638,19 @@ class SqliteBackend(Backend):
             ro_db.close()
 
     @contextmanager
-    def recall_session(self) -> Iterator[SqliteRecallSession]:
+    def recall_session(
+            self, fingerprint: 'Fingerprint',
+            ) -> Iterator[SqliteRecallSession]:
         """Yield a SqliteRecallSession for one recall request.
 
-        Reads the snapshot eagerly using the active embed fingerprint;
-        falls through to SQL when the snapshot is missing or
-        fingerprint-mismatched.
+        Reads the snapshot keyed by the store-bound `fingerprint`;
+        falls through to SQL when the snapshot is missing or its
+        embedding model disagrees with `fingerprint`.
         """
         snap: _snapshot.Snapshot | None = None
         try:
-            from memman.embed.fingerprint import active_fingerprint
             store_dir_path = str(Path(self._db.path).parent)
-            snap = _snapshot.read_snapshot(
-                store_dir_path, active_fingerprint())
+            snap = _snapshot.read_snapshot(store_dir_path, fingerprint)
         except Exception as exc:
             logger.warning(f'snapshot load failed, using SQL: {exc}')
             snap = None

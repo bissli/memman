@@ -1,6 +1,7 @@
 """Tests for memman.search -- keyword, intent, and recall."""
 
 import pytest
+from memman.embed.fingerprint import stored_fingerprint
 from memman.search.intent import detect_intent, get_weights, intent_from_string
 from memman.search.keyword import keyword_search, tokenize
 from memman.search.recall import RERANK_WEIGHTS, get_traversal_params
@@ -239,7 +240,8 @@ class TestRecallRanking:
             result = intent_aware_recall(
                 backend, query='test content recall',
                 query_vec=None, query_entities=[],
-                limit=5, intent_override=intent)
+                limit=5, intent_override=intent,
+                fingerprint=stored_fingerprint(backend))
             assert result['meta']['hint'] == expected
 
     def test_ordering_field_by_intent(self, backend):
@@ -257,7 +259,8 @@ class TestRecallRanking:
             result = intent_aware_recall(
                 backend, query='test content recall',
                 query_vec=None, query_entities=[],
-                limit=5, intent_override=intent)
+                limit=5, intent_override=intent,
+                fingerprint=stored_fingerprint(backend))
             assert result['meta']['ordering'] == ordering
 
     def test_sparse_flag_present(self, backend):
@@ -265,7 +268,8 @@ class TestRecallRanking:
         result = intent_aware_recall(
             backend, query='nonexistent query xyz',
             query_vec=None, query_entities=[],
-            limit=10, intent_override='GENERAL')
+            limit=10, intent_override='GENERAL',
+            fingerprint=stored_fingerprint(backend))
         assert result['meta']['sparse'] is True
 
     def test_sparse_flag_absent(self, backend):
@@ -277,5 +281,6 @@ class TestRecallRanking:
         result = intent_aware_recall(
             backend, query='common keyword topic alpha',
             query_vec=None, query_entities=[],
-            limit=5, intent_override='GENERAL')
+            limit=5, intent_override='GENERAL',
+            fingerprint=stored_fingerprint(backend))
         assert 'sparse' not in result['meta']

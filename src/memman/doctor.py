@@ -824,31 +824,22 @@ def check_embed_probe() -> dict[str, Any]:
 
 
 def check_embed_fingerprint(backend: Backend) -> dict[str, Any]:
-    """Compare active client fingerprint against `meta.embed_fingerprint`.
+    """Report the store's stored fingerprint and credential availability.
 
-    Surfaces the same mismatch that `assert_consistent` enforces at
-    runtime, but as a structured doctor check so the operator sees
-    the active/stored values explicitly.
+    Under per-store embedder sovereignty there is no env-active
+    fingerprint to compare against. The check reports the stored
+    `meta.embed_fingerprint` and verifies that credentials for that
+    fingerprint's provider are available; missing credentials produce
+    a fail because recall against this store cannot proceed.
     """
-    from memman.embed.fingerprint import active_fingerprint, stored_fingerprint
+    from memman.embed import registry as _ec_registry
+    from memman.embed.fingerprint import stored_fingerprint
 
     detail: dict[str, Any] = {
-        'active': None,
         'stored': None,
+        'credentials_available': None,
         'error': None,
         }
-    try:
-        active = active_fingerprint()
-        detail['active'] = {
-            'provider': active.provider,
-            'model': active.model,
-            'dim': active.dim,
-            }
-    except Exception as exc:
-        detail['error'] = f'{type(exc).__name__}: {exc}'
-        return {
-            'name': 'embed_fingerprint', 'status': 'fail',
-            'detail': detail}
 
     stored = stored_fingerprint(backend)
     if stored is not None:
@@ -864,16 +855,16 @@ def check_embed_fingerprint(backend: Backend) -> dict[str, Any]:
                 'name': 'embed_fingerprint', 'status': 'pass',
                 'detail': detail}
         detail['error'] = (
-            "Active store has insights but no stored fingerprint."
+            "Store has insights but no stored fingerprint."
             " Run 'memman embed reembed' to seed it.")
         return {
             'name': 'embed_fingerprint', 'status': 'fail',
             'detail': detail}
-    if stored != active:
-        detail['error'] = (
-            "Active does not match stored. Run"
-            " 'memman scheduler stop && memman embed reembed'"
-            " to converge.")
+
+    ec = _ec_registry.get_for(stored.provider, stored.model)
+    detail['credentials_available'] = ec.available()
+    if not ec.available():
+        detail['error'] = ec.unavailable_message()
         return {
             'name': 'embed_fingerprint', 'status': 'fail',
             'detail': detail}

@@ -638,8 +638,15 @@ class Backend(Protocol):
         ...
 
     def recall_session(
-            self) -> AbstractContextManager[RecallSession]:
-        """Yield a `RecallSession` bound to a read-side cache."""
+            self,
+            fingerprint: 'Fingerprint',
+            ) -> AbstractContextManager[RecallSession]:
+        """Yield a `RecallSession` bound to a read-side cache.
+
+        `fingerprint` is the store-bound fingerprint (read from
+        `meta.embed_fingerprint` via `bound_embedder`). SQLite uses it
+        to validate the on-disk snapshot; Postgres ignores it.
+        """
         ...
 
     def storage_summary(self) -> dict[str, Any]:

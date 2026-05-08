@@ -254,20 +254,17 @@ def force_drain(data_dir: str) -> None:
 
 @pytest.fixture(autouse=True)
 def _autoseed_fingerprint(request, monkeypatch):
-    """Auto-seed `meta.embed_fingerprint` whenever assert_consistent runs.
+    """Auto-seed `meta.embed_fingerprint` on `bound_embedder`.
 
-    Production seeding (in `_open_db`, `_StoreContext`, `store_create`,
-    `_init_default_store`) routes through `seed_if_fresh`, which
-    declines to seed a DB that already has insights without a
-    fingerprint (corruption). This fixture is intentionally more
-    lenient: when a test hand-builds a DB by calling `open_db` and
-    `insert_insight` directly, the fixture seeds on first
-    `assert_consistent` regardless of insights count, so tests that
-    don't care about fingerprint mechanics don't need boilerplate.
+    `tmp_db` already writes a fingerprint via `write_fingerprint`; this
+    fixture additionally backstops tests that hand-build backends and
+    then call `bound_embedder(backend)` -- it seeds the env-active
+    fingerprint on first lookup so those tests don't need
+    `seed_if_fresh` boilerplate.
 
-    Tests that exercise the strict production behavior (corruption
-    detection or the raw missing-fingerprint error) should mark
-    themselves `@pytest.mark.no_autoseed_fingerprint`.
+    Tests that exercise the strict production behavior (raw missing-
+    fingerprint error from `bound_embedder`) should mark themselves
+    `@pytest.mark.no_autoseed_fingerprint`.
     """
     if 'tests/e2e/' in str(request.node.fspath):
         return
@@ -275,15 +272,16 @@ def _autoseed_fingerprint(request, monkeypatch):
         return
 
     from memman.embed import fingerprint as fp_mod
-    real_assert = fp_mod.assert_consistent
+    real_bound = fp_mod.bound_embedder
 
-    def seed_then_assert(backend, ec):
+    def seed_then_bound(backend):
         if fp_mod.stored_fingerprint(backend) is None:
+            from memman.embed import get_client
             fp_mod.write_fingerprint(
-                backend, fp_mod.Fingerprint.from_client(ec))
-        real_assert(backend, ec)
+                backend, fp_mod.Fingerprint.from_client(get_client()))
+        return real_bound(backend)
 
-    monkeypatch.setattr(fp_mod, 'assert_consistent', seed_then_assert)
+    monkeypatch.setattr(fp_mod, 'bound_embedder', seed_then_bound)
 
 
 @pytest.fixture(autouse=True)
@@ -551,9 +549,10 @@ def tmp_db(request, tmp_path):
     from memman.store.sqlite import SqliteBackend
     db = open_db(str(tmp_path))
     if 'no_autoseed_fingerprint' not in request.keywords:
-        from memman.embed.fingerprint import active_fingerprint
+        from memman.embed.fingerprint import seed_default_fingerprint
         from memman.embed.fingerprint import write_fingerprint
-        write_fingerprint(SqliteBackend(db), active_fingerprint())
+        write_fingerprint(
+            SqliteBackend(db), seed_default_fingerprint())
     yield db
     db.close()
 
@@ -660,7 +659,7 @@ def backend(request, backend_kind, tmp_path):
     Pipeline / search / graph tests should use this fixture instead
     of `tmp_backend` to gain Postgres parity.
     """
-    from memman.embed.fingerprint import META_KEY, active_fingerprint
+    from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
     pg_dsn = None
     if backend_kind == 'sqlite':
         from memman.store.sqlite import drop_sqlite_store, open_sqlite_backend
@@ -677,7 +676,7 @@ def backend(request, backend_kind, tmp_path):
         except Exception:
             pass
         b = open_postgres_backend(store_name, pg_dsn)
-    b.meta.set(META_KEY, active_fingerprint().to_json())
+    b.meta.set(META_KEY, seed_default_fingerprint().to_json())
     try:
         yield b
     finally:

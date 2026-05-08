@@ -329,7 +329,8 @@ def test_postgres_recall_issues_pgvector_distance_operator(
     distance operator -- HNSW is on the production recall path, not
     dead code.
     """
-    from memman.embed.fingerprint import META_KEY, active_fingerprint
+    from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
+    from memman.embed.fingerprint import stored_fingerprint
     from memman.search.recall import intent_aware_recall
     from memman.store.model import Insight
 
@@ -338,7 +339,7 @@ def test_postgres_recall_issues_pgvector_distance_operator(
     except Exception:
         pass
     backend = open_postgres_backend('hnsw_smoke', pg_dsn)
-    backend.meta.set(META_KEY, active_fingerprint().to_json())
+    backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
 
     n_insights = 10
     for i in range(n_insights):
@@ -367,7 +368,8 @@ def test_postgres_recall_issues_pgvector_distance_operator(
         intent_aware_recall(
             backend, query='document alpha',
             query_vec=_voyage_shape_vector(seed=999),
-            query_entities=[], limit=5, intent_override='GENERAL')
+            query_entities=[], limit=5, intent_override='GENERAL',
+            fingerprint=stored_fingerprint(backend))
     finally:
         try:
             backend.close()

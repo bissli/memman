@@ -11,7 +11,7 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 from memman.cli import cli
-from memman.embed.fingerprint import active_fingerprint
+from memman.embed.fingerprint import seed_default_fingerprint
 from memman.embed.vector import serialize_vector
 from memman.store.db import store_exists
 from memman.store.node import insert_insight, update_embedding
@@ -1667,7 +1667,7 @@ class TestHotPathPurity:
         write_active(data_dir, name)
         sdir = store_dir(data_dir, name)
         db = open_db(sdir)
-        fp = active_fingerprint()
+        fp = seed_default_fingerprint()
         write_fingerprint(SqliteBackend(db), fp)
 
         a = make_insight(id='aud-a', content='alpha', importance=3)

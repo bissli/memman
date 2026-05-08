@@ -174,8 +174,8 @@ def link_pending(
 def compute_constants_hash() -> str:
     """Return a short SHA-256 hash of all edge-relevant constants.
 
-    Embed provider/model/dim drift is owned by
-    `embed.fingerprint.assert_consistent` (hard-fail) and not
+    Embed provider/model/dim drift is owned per-store by the stored
+    `meta.embed_fingerprint` (resolved via `bound_embedder`) and not
     folded into this hash, which only governs silent edge-reindex
     on graph-shape constant changes.
     """

@@ -11,13 +11,16 @@ and `nodes.get` calls from the synchronous recall hot path.
 import heapq
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from memman.embed.vector import cosine_similarity
 from memman.search.intent import detect_intent, get_weights
 from memman.search.keyword import insight_tokens, keyword_search, tokenize
 from memman.store.backend import Backend
 from memman.store.model import Insight
+
+if TYPE_CHECKING:
+    from memman.embed.fingerprint import Fingerprint
 
 logger = logging.getLogger('memman')
 
@@ -226,7 +229,8 @@ def intent_aware_recall(
         backend: Backend, query: str,
         query_vec: list[float] | None,
         query_entities: list[str],
-        limit: int,
+        limit: int, *,
+        fingerprint: 'Fingerprint',
         intent_override: str | None = None,
         rerank: bool = False) -> dict[str, Any]:
     """Perform MAGMA-aligned intent-aware retrieval.
@@ -252,7 +256,7 @@ def intent_aware_recall(
     weights = get_weights(intent)
     params = get_traversal_params(intent)
 
-    with backend.recall_session() as session:
+    with backend.recall_session(fingerprint) as session:
         snapshot = session.snapshot
 
         if snapshot is not None:

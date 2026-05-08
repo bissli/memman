@@ -14,7 +14,8 @@ than random, so cosines for the matching topic clear
 import random
 
 import pytest
-from memman.embed.fingerprint import META_KEY, active_fingerprint
+from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
+from memman.embed.fingerprint import stored_fingerprint
 from memman.search.recall import intent_aware_recall
 from memman.store.model import Insight
 from tests.conftest import EMBEDDING_DIM
@@ -79,7 +80,8 @@ def _top5_ids(backend, qvec) -> set[str]:
     result = intent_aware_recall(
         backend, query='topic insight',
         query_vec=qvec, query_entities=[],
-        limit=5, intent_override='GENERAL')
+        limit=5, intent_override='GENERAL',
+        fingerprint=stored_fingerprint(backend))
     return {r['insight'].id for r in result['results'][:5]}
 
 
@@ -105,7 +107,7 @@ def test_threshold_zone_does_not_collapse_result_set(tmp_path, pg_dsn):
     topic_centers = [_gaussian_unit(seed=i) for i in range(N_TOPICS)]
     sqlite_data_dir = str(tmp_path / 'memman')
     sqlite_backend = open_sqlite_backend('parity_thresh', sqlite_data_dir)
-    sqlite_backend.meta.set(META_KEY, active_fingerprint().to_json())
+    sqlite_backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
     _populate(sqlite_backend, topic_centers)
 
     try:
@@ -113,7 +115,7 @@ def test_threshold_zone_does_not_collapse_result_set(tmp_path, pg_dsn):
     except Exception:
         pass
     postgres_backend = open_postgres_backend('parity_thresh', pg_dsn)
-    postgres_backend.meta.set(META_KEY, active_fingerprint().to_json())
+    postgres_backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
     _populate(postgres_backend, topic_centers)
 
     n_threshold_queries = 5
@@ -161,7 +163,7 @@ def test_float32_float64_top5_intersection_geq_4_across_20_queries(
 
     sqlite_data_dir = str(tmp_path / 'memman')
     sqlite_backend = open_sqlite_backend('parity', sqlite_data_dir)
-    sqlite_backend.meta.set(META_KEY, active_fingerprint().to_json())
+    sqlite_backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
     _populate(sqlite_backend, topic_centers)
 
     try:
@@ -169,7 +171,7 @@ def test_float32_float64_top5_intersection_geq_4_across_20_queries(
     except Exception:
         pass
     postgres_backend = open_postgres_backend('parity_test', pg_dsn)
-    postgres_backend.meta.set(META_KEY, active_fingerprint().to_json())
+    postgres_backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
     _populate(postgres_backend, topic_centers)
 
     try:

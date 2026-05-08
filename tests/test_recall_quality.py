@@ -15,7 +15,8 @@ import random
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from memman.embed.fingerprint import META_KEY, active_fingerprint
+from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
+from memman.embed.fingerprint import stored_fingerprint
 from memman.search.recall import intent_aware_recall
 from memman.store.model import Insight
 from tests.conftest import EMBEDDING_DIM, make_edge, make_insight
@@ -63,7 +64,8 @@ class TestKeywordSignal:
         result = intent_aware_recall(
             backend,
             query='Prometheus monitoring Grafana dashboards',
-            query_vec=None, query_entities=[], limit=20)
+            query_vec=None, query_entities=[], limit=20,
+            fingerprint=stored_fingerprint(backend))
 
         match = _find_result(result['results'], 'kw-match')
         miss1 = _find_result(result['results'], 'kw-miss-1')
@@ -100,7 +102,8 @@ class TestEntitySignal:
             backend,
             query='Docker container',
             query_vec=None, query_entities=['Docker'],
-            limit=20, intent_override='ENTITY')
+            limit=20, intent_override='ENTITY',
+            fingerprint=stored_fingerprint(backend))
 
         d1 = _find_result(result['results'], 'ent-docker-1')
         d2 = _find_result(result['results'], 'ent-docker-2')
@@ -144,7 +147,8 @@ class TestGraphTraversal:
             backend,
             query='API rate limiting design',
             query_vec=None, query_entities=['FastAPI'],
-            limit=20)
+            limit=20,
+            fingerprint=stored_fingerprint(backend))
 
         g3 = _find_result(result['results'], 'graph-3')
         assert g3 is not None, 'graph-3 should be discovered via traversal'
@@ -175,7 +179,8 @@ class TestWhyIntentCausalOrdering:
             backend,
             query='why SQLite chosen because embedded',
             query_vec=None, query_entities=[],
-            limit=20, intent_override='WHY')
+            limit=20, intent_override='WHY',
+            fingerprint=stored_fingerprint(backend))
 
         cause = _find_result(result['results'], 'why-cause')
         effect = _find_result(result['results'], 'why-effect')
@@ -218,7 +223,8 @@ class TestWhenIntentChronologicalOrdering:
             backend,
             query='database production migration',
             query_vec=None, query_entities=[],
-            limit=20, intent_override='WHEN')
+            limit=20, intent_override='WHEN',
+            fingerprint=stored_fingerprint(backend))
 
         old = _find_result(result['results'], 'when-old')
         mid = _find_result(result['results'], 'when-mid')
@@ -258,7 +264,8 @@ class TestWhenIntentChronologicalOrdering:
             backend,
             query='database production migration',
             query_vec=None, query_entities=[],
-            limit=20, intent_override='WHEN')
+            limit=20, intent_override='WHEN',
+            fingerprint=stored_fingerprint(backend))
 
         hi = _find_result(result['results'], 'when-tie-hi')
         lo = _find_result(result['results'], 'when-tie-lo')
@@ -288,7 +295,8 @@ class TestSingletonEntity:
             backend,
             query='Terraform infrastructure',
             query_vec=None, query_entities=['Terraform'],
-            limit=20, intent_override='ENTITY')
+            limit=20, intent_override='ENTITY',
+            fingerprint=stored_fingerprint(backend))
 
         singleton = _find_result(result['results'], 'singleton')
         assert singleton is not None
@@ -322,7 +330,8 @@ class TestImportanceTiebreaker:
             backend,
             query='logging best practices',
             query_vec=None, query_entities=[],
-            limit=20, intent_override='GENERAL')
+            limit=20, intent_override='GENERAL',
+            fingerprint=stored_fingerprint(backend))
 
         high = _find_result(result['results'], 'tie-high')
         low = _find_result(result['results'], 'tie-low')
@@ -353,7 +362,8 @@ class TestEntityCaseInsensitive:
             backend,
             query='python tips',
             query_vec=None, query_entities=['python'],
-            limit=20, intent_override='ENTITY')
+            limit=20, intent_override='ENTITY',
+            fingerprint=stored_fingerprint(backend))
 
         py = _find_result(result['results'], 'case-py')
         assert py is not None
@@ -416,7 +426,8 @@ def _topk_ids(backend, qvec, k) -> list:
     result = intent_aware_recall(
         backend, query='topic insight',
         query_vec=qvec, query_entities=[],
-        limit=k, intent_override='GENERAL')
+        limit=k, intent_override='GENERAL',
+        fingerprint=stored_fingerprint(backend))
     return [r['insight'].id for r in result['results'][:k]]
 
 
@@ -449,7 +460,7 @@ class TestRecallAt10Gate:
 
         sqlite_data_dir = str(tmp_path / 'memman')
         sqlite_backend = open_sqlite_backend('r10', sqlite_data_dir)
-        sqlite_backend.meta.set(META_KEY, active_fingerprint().to_json())
+        sqlite_backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
         _populate_recall(sqlite_backend, topic_centers)
 
         try:
@@ -457,7 +468,7 @@ class TestRecallAt10Gate:
         except Exception:
             pass
         postgres_backend = open_postgres_backend('r10_test', pg_dsn)
-        postgres_backend.meta.set(META_KEY, active_fingerprint().to_json())
+        postgres_backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
         _populate_recall(postgres_backend, topic_centers)
 
         try:

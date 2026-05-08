@@ -1,10 +1,10 @@
 """Tests for the pluggable embed provider + fingerprint flow.
 
 Covers: provider registry resolution, Fingerprint serialization,
-assert_consistent semantics (match / unseeded / mismatch),
 install-time seeding, the embed reembed sweep (initialize, swap,
-resumability, scheduler-stopped gate), and CLI block-on-mismatch
-behavior for recall/remember/worker.
+resumability, scheduler-stopped gate), and per-store sovereignty
+(worker + recall bind to each store's stored fingerprint regardless
+of env-active provider).
 """
 
 import json
@@ -12,9 +12,8 @@ import json
 import pytest
 from click.testing import CliRunner
 from memman.cli import cli
-from memman.embed.fingerprint import Fingerprint, active_fingerprint
-from memman.embed.fingerprint import assert_consistent, stored_fingerprint
-from memman.embed.fingerprint import write_fingerprint
+from memman.embed.fingerprint import Fingerprint, seed_default_fingerprint
+from memman.embed.fingerprint import stored_fingerprint, write_fingerprint
 from memman.embed.vector import serialize_vector
 from memman.exceptions import ConfigError, EmbedFingerprintError
 from memman.store.db import get_meta, open_db
@@ -68,7 +67,7 @@ class TestFingerprintRegistry:
     def test_default_provider_is_voyage(self, monkeypatch):
         """Unset MEMMAN_EMBED_PROVIDER picks voyage and matches its triple."""
         monkeypatch.delenv('MEMMAN_EMBED_PROVIDER', raising=False)
-        fp = active_fingerprint()
+        fp = seed_default_fingerprint()
         assert fp.provider == 'voyage'
         assert fp.model == 'voyage-3-lite'
         assert fp.dim == 512
@@ -94,35 +93,15 @@ class TestFingerprintRegistry:
 
 
 class TestFingerprintConsistency:
-    """assert_consistent semantics and install-time seeding."""
+    """Install-time seeding and bound_embedder behavior."""
 
     @pytest.mark.no_autoseed_fingerprint
-    def test_passes_on_match(self, tmp_db):
-        """Seeded matching fingerprint -> no error."""
-        from memman.embed import get_client
-        _seed_voyage(tmp_db)
-        assert_consistent(SqliteBackend(tmp_db), get_client())
-
-    @pytest.mark.no_autoseed_fingerprint
-    def test_raises_on_unseeded(self, tmp_db):
+    def test_bound_embedder_raises_on_unseeded(self, tmp_db):
         """No meta.embed_fingerprint -> EmbedFingerprintError with hint."""
-        from memman.embed import get_client
+        from memman.embed.fingerprint import bound_embedder
         with pytest.raises(EmbedFingerprintError) as excinfo:
-            assert_consistent(SqliteBackend(tmp_db), get_client())
-        msg = str(excinfo.value)
-        assert 'embed reembed' in msg
-        assert 'initialize' in msg
-
-    @pytest.mark.no_autoseed_fingerprint
-    def test_raises_on_mismatch(self, tmp_db):
-        """Seeded fingerprint != active -> EmbedFingerprintError with hint."""
-        from memman.embed import get_client
-        write_fingerprint(SqliteBackend(tmp_db), Fingerprint(provider='openai', model='m', dim=1024))
-        with pytest.raises(EmbedFingerprintError) as excinfo:
-            assert_consistent(SqliteBackend(tmp_db), get_client())
-        msg = str(excinfo.value)
-        assert 'mismatch' in msg.lower()
-        assert 'embed reembed' in msg
+            bound_embedder(SqliteBackend(tmp_db))
+        assert 'embed reembed' in str(excinfo.value)
 
     def test_init_default_store_seeds_fingerprint(self, tmp_path):
         """_init_default_store writes meta.embed_fingerprint at create time."""
@@ -411,8 +390,9 @@ class TestReembed:
         finally:
             ctx.close()
 
-    def test_embed_status_consistent(self, tmp_path):
-        """Embed status reports consistent=True when active matches stored."""
+    def test_embed_status_reports_stored_fingerprint(self, tmp_path):
+        """Embed status reports the stored fingerprint and credential availability.
+        """
         from memman.store.db import store_dir
         sdir = store_dir(str(tmp_path), 'default')
         db = open_db(sdir)
@@ -425,13 +405,13 @@ class TestReembed:
             '--data-dir', str(tmp_path), 'embed', 'status'])
         assert result.exit_code == 0, result.output
         out = json.loads(result.output)
-        assert out['consistent'] is True
-        assert out['active']['provider'] == 'voyage'
         assert out['stored']['provider'] == 'voyage'
+        assert out['stored']['dim'] == 512
+        assert out['credentials_available'] is True
 
     @pytest.mark.no_autoseed_fingerprint
-    def test_embed_status_unseeded_reports_inconsistent(self, tmp_path):
-        """Embed status reports consistent=False when DB has no fingerprint."""
+    def test_embed_status_unseeded_reports_no_fingerprint(self, tmp_path):
+        """Embed status reports stored=None when DB has no fingerprint."""
         from memman.store.db import store_dir
         sdir = store_dir(str(tmp_path), 'default')
         db = open_db(sdir)
@@ -441,12 +421,12 @@ class TestReembed:
             '--data-dir', str(tmp_path), 'embed', 'status'])
         assert result.exit_code == 0, result.output
         out = json.loads(result.output)
-        assert out['consistent'] is False
         assert out['stored'] is None
         assert 'embed reembed' in out['hint']
 
     def test_doctor_reports_fingerprint_pass(self, tmp_path):
-        """check_embed_fingerprint passes when active matches stored."""
+        """check_embed_fingerprint passes when stored exists and creds available.
+        """
         from memman.doctor import check_embed_fingerprint
         from memman.store.db import store_dir
         sdir = store_dir(str(tmp_path), 'default')
@@ -457,8 +437,8 @@ class TestReembed:
         finally:
             db.close()
         assert result['status'] == 'pass'
-        assert result['detail']['active']['provider'] == 'voyage'
         assert result['detail']['stored']['provider'] == 'voyage'
+        assert result['detail']['credentials_available'] is True
 
     @pytest.mark.no_autoseed_fingerprint
     def test_doctor_reports_fingerprint_pass_when_empty_and_unseeded(
@@ -495,46 +475,6 @@ class TestReembed:
             db.close()
         assert result['status'] == 'fail'
         assert 'embed reembed' in result['detail']['error']
-
-    @pytest.mark.no_autoseed_fingerprint
-    def test_doctor_reports_fingerprint_fail_mismatch(self, tmp_path):
-        """check_embed_fingerprint fails when stored != active."""
-        from memman.doctor import check_embed_fingerprint
-        from memman.store.db import store_dir
-        sdir = store_dir(str(tmp_path), 'default')
-        db = open_db(sdir)
-        try:
-            write_fingerprint(SqliteBackend(db), Fingerprint(provider='openai', model='m', dim=1024))
-            result = check_embed_fingerprint(SqliteBackend(db))
-        finally:
-            db.close()
-        assert result['status'] == 'fail'
-        assert result['detail']['active']['provider'] == 'voyage'
-        assert result['detail']['stored']['provider'] == 'openai'
-        assert 'embed reembed' in result['detail']['error']
-
-    @pytest.mark.no_autoseed_fingerprint
-    def test_embed_status_reports_mismatch(self, tmp_path):
-        """Embed status reports consistent=False with the right hint
-        when stored fingerprint diverges from the active client.
-        """
-        from memman.store.db import store_dir
-        sdir = store_dir(str(tmp_path), 'default')
-        db = open_db(sdir)
-        try:
-            write_fingerprint(SqliteBackend(db), Fingerprint(provider='openai', model='m', dim=1024))
-        finally:
-            db.close()
-
-        result = _invoke([
-            '--data-dir', str(tmp_path), 'embed', 'status'])
-        assert result.exit_code == 0, result.output
-        out = json.loads(result.output)
-        assert out['consistent'] is False
-        assert out['stored']['provider'] == 'openai'
-        assert out['active']['provider'] == 'voyage'
-        assert 'scheduler stop' in out['hint']
-        assert 'embed reembed' in out['hint']
 
     def test_idempotent_on_repeat(self, tmp_path, _scheduler_stopped):
         """Running reembed twice with the same active provider:

@@ -11,7 +11,7 @@ import pathlib
 
 from click.testing import CliRunner
 from memman.cli import cli
-from memman.embed.fingerprint import Fingerprint, active_fingerprint
+from memman.embed.fingerprint import Fingerprint, seed_default_fingerprint
 from memman.embed.vector import serialize_vector
 from memman.store.edge import insert_edge
 from memman.store.model import Edge
@@ -29,7 +29,7 @@ def _seed(tmp_db):
                      entities=['Beta'])
     insert_insight(tmp_db, a)
     insert_insight(tmp_db, b)
-    fp = active_fingerprint()
+    fp = seed_default_fingerprint()
     update_embedding(
         tmp_db, 'snap-a',
         serialize_vector([0.1] * fp.dim), fp.model)
@@ -121,7 +121,7 @@ def test_skipped_when_over_max_insights(tmp_db, tmp_path, monkeypatch):
     monkeypatch.setattr(
         'memman.store.snapshot.SNAPSHOT_MAX_INSIGHTS', 1)
     _seed(tmp_db)
-    fp = active_fingerprint()
+    fp = seed_default_fingerprint()
     store_dir = str(tmp_path)
     assert write_snapshot(tmp_db, store_dir, fp) is False
     assert not snapshot_path(store_dir).exists()

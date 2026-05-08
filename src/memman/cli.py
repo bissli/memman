@@ -165,36 +165,6 @@ def _get_llm_client_or_fail(role: str):
         raise click.ClickException(str(exc)) from exc
 
 
-def _open_db(ctx: click.Context) -> 'DB':
-    """Open the database using context options."""
-    data_dir = ctx.obj['data_dir']
-    store_flag = ctx.obj['store']
-    read_only = ctx.obj['readonly']
-
-    name = _resolve_store_name(data_dir, store_flag)
-    sdir = store_dir(data_dir, name)
-
-    if read_only:
-        return open_ro_db(sdir)
-
-    db = open_db(sdir)
-    from memman.embed import get_client
-    from memman.embed.fingerprint import assert_consistent, seed_if_fresh
-    from memman.exceptions import ConfigError, EmbedFingerprintError
-    from memman.graph.engine import reindex_if_constants_changed
-    from memman.store.sqlite import SqliteBackend
-    backend = SqliteBackend(db)
-    reindex_if_constants_changed(backend)
-    try:
-        ec = get_client()
-        seed_if_fresh(backend, ec)
-        assert_consistent(backend, ec)
-    except (EmbedFingerprintError, ConfigError) as exc:
-        db.close()
-        raise click.ClickException(str(exc)) from exc
-    return db
-
-
 def _active_backend(ctx: click.Context, *, unchecked: bool = False):
     """Click adapter around `memman.session.active_store`.
 
@@ -923,26 +893,31 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
 
 
 def _write_recall_snapshot_for_store(
-        data_dir_val: str, store_name: str) -> None:
+        data_dir_val: str, store_name: str,
+        fp: 'Fingerprint') -> None:
     """Materialize the recall snapshot for one store after a successful drain.
 
     SQLite-only: Postgres reads via live `recall_session` queries and
     has no on-disk snapshot file. Snapshot writes are idempotent and
     bounded (cap at 1000 active insights). Failures here are isolated
     per store and never abort the drain or cause queue rows to retry.
+
+    `fp` is the store-bound fingerprint captured at `_StoreContext`
+    construction; passing it in (rather than reading the env-active
+    one here) keeps the snapshot stamp aligned with the per-store
+    embedder under per-store-sovereignty routing.
     """
     from memman.store.factory import resolve_store_backend
     backend_name = resolve_store_backend(store_name, data_dir_val)
     if backend_name != 'sqlite':
         return
 
-    from memman.embed.fingerprint import active_fingerprint
     from memman.store.db import open_db as _open_store_db
     from memman.store.sqlite import SqliteBackend
 
     sdir = store_dir(data_dir_val, store_name)
     with _open_store_db(sdir) as db:
-        SqliteBackend(db).write_snapshot(active_fingerprint())
+        SqliteBackend(db).write_snapshot(fp)
 
 
 class _StoreContext:
@@ -957,7 +932,6 @@ class _StoreContext:
 
     def __init__(self, store_name: str, data_dir: str) -> None:
         from memman.embed import fingerprint as _fp_mod
-        from memman.embed import registry as _ec_registry
         from memman.exceptions import EmbedFingerprintError
         from memman.llm.client import get_llm_client
         from memman.store.factory import open_backend
@@ -973,7 +947,7 @@ class _StoreContext:
             raise EmbedFingerprintError(
                 f"store {store_name!r} has no embed fingerprint and"
                 " contains data; run 'memman embed reembed' to converge.")
-        self.ec = _ec_registry.get_for(stored.provider, stored.model)
+        self.ec = _fp_mod.bound_embedder(self.backend)
         self._stored_fp = stored
         self.llm_client = get_llm_client('slow_canonical')
         self.embed_cache: dict[str, list[float]] = dict(
@@ -1151,7 +1125,9 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
            limit: int, source: str, basic: bool,
            intent: str, expand: bool, rerank: bool) -> None:
     """Retrieve insights by keyword."""
-    from memman.embed import get_client
+    from memman.embed.fingerprint import (
+        assert_fingerprint_unchanged_for_sync, bound_embedder,
+        stored_fingerprint)
     from memman.llm.extract import expand_query
     from memman.search.intent import intent_from_string
     from memman.search.recall import intent_aware_recall
@@ -1174,6 +1150,9 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                 })
             return
 
+        ec = bound_embedder(backend)
+        bound_fp = stored_fingerprint(backend)
+
         expansion: dict = {}
         if expand:
             llm_client = _get_llm_client_or_fail('fast')
@@ -1193,7 +1172,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
             except ValueError:
                 pass
 
-        ec = get_client()
+        assert_fingerprint_unchanged_for_sync(backend, bound_fp)
         query_vec = None
         try:
             query_vec = ec.embed(keyword_str)
@@ -1208,7 +1187,8 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
         fetch_limit = limit * 3 if (cat or source) else limit
         resp = intent_aware_recall(
             backend, keyword_str, query_vec, query_entities,
-            fetch_limit, intent_override, rerank=rerank)
+            fetch_limit, fingerprint=bound_fp,
+            intent_override=intent_override, rerank=rerank)
         if cat:
             resp['results'] = [
                 r for r in resp['results']
@@ -2697,7 +2677,7 @@ def _graph_rebuild_stale_only(
     reset run inside a single `reembed_lock('rebuild')` window so
     a concurrent wholesale rebuild cannot race.
     """
-    from memman.embed import get_client
+    from memman.embed.fingerprint import bound_embedder
     from memman.graph.engine import MAX_LINK_BATCH, link_pending
     from memman.pipeline.remember import compute_prompt_version
 
@@ -2746,7 +2726,7 @@ def _graph_rebuild_stale_only(
 
             llm_client = _get_llm_client_or_fail('slow_canonical')
             metadata_llm_client = _get_llm_client_or_fail('slow_metadata')
-            ec = get_client()
+            ec = bound_embedder(backend)
 
             embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
             processed = 0
@@ -2830,13 +2810,13 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
 
     if not dry_run:
         _require_started('rebuild')
-    from memman.embed import get_client
+    from memman.embed.fingerprint import bound_embedder
     from memman.graph.engine import MAX_LINK_BATCH, link_pending
 
     with _active_backend(ctx) as backend:
         llm_client = _get_llm_client_or_fail('slow_canonical')
         metadata_llm_client = _get_llm_client_or_fail('slow_metadata')
-        ec = get_client()
+        ec = bound_embedder(backend)
 
         all_ids = backend.nodes.get_active_ids()
         total_count = len(all_ids)
@@ -2911,28 +2891,36 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
 @embed_grp.command('status')
 @click.pass_context
 def embed_status(ctx: click.Context) -> None:
-    """Show active client, stored fingerprint, consistency, swap state.
+    """Show the store's stored fingerprint, swap state, and credential
+    availability for that fingerprint's provider.
+
+    Under per-store embedder sovereignty, the store's stored
+    fingerprint is the source of truth -- there is no env-active
+    fingerprint to compare against.
     """
-    from memman.embed.fingerprint import active_fingerprint, stored_fingerprint
+    from memman.embed import registry as _ec_registry
+    from memman.embed.fingerprint import stored_fingerprint
     from memman.embed.swap import read_progress
 
-    active = active_fingerprint()
     with _active_backend(ctx, unchecked=True) as backend:
         stored = stored_fingerprint(backend)
         progress = read_progress(backend)
 
     out: dict = {
-        'active': {
-            'provider': active.provider,
-            'model': active.model,
-            'dim': active.dim,
-            },
         'stored': None if stored is None else {
             'provider': stored.provider,
             'model': stored.model,
             'dim': stored.dim,
             },
         }
+    if stored is not None:
+        ec = _ec_registry.get_for(stored.provider, stored.model)
+        out['credentials_available'] = ec.available()
+        if not ec.available():
+            out['hint'] = ec.unavailable_message()
+    else:
+        out['hint'] = (
+            "DB not initialized. Run 'memman embed reembed'.")
     if progress.state:
         out['swap'] = {
             'state': progress.state,
@@ -2941,17 +2929,6 @@ def embed_status(ctx: click.Context) -> None:
             'target_model': progress.target_model,
             'target_dim': progress.target_dim,
             }
-    if stored is None:
-        out['consistent'] = False
-        out['hint'] = (
-            "DB not initialized. Run 'memman embed reembed'.")
-    elif stored != active:
-        out['consistent'] = False
-        out['hint'] = (
-            "Fingerprint mismatch. Run"
-            " 'memman scheduler stop && memman embed reembed'.")
-    else:
-        out['consistent'] = True
     _json_out(out)
 
 
@@ -3236,7 +3213,7 @@ def embed_swap(
         if not ec_new.available():
             raise click.ClickException(ec_new.unavailable_message())
         if target_dim == 0:
-            target_dim = int(getattr(ec_new, 'dim', 0))
+            target_dim = ec_new.dim
         if target_dim <= 0:
             raise click.ClickException(
                 f'failed to discover dim for {target_provider}:'

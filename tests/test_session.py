@@ -1,10 +1,10 @@
-"""Tests for `memman.session.active_store` error wrapping.
+"""Tests for `memman.session.active_store` per-store sovereignty.
 
 `active_store` opens the per-store backend via
-`factory.open_backend` and runs the embedding fingerprint pre-flight.
-Both layers can raise `ConfigError`; the helper must wrap both as
-`click.ClickException` so the CLI emits a clean exit message instead
-of a bare traceback.
+`factory.open_backend` and resolves the embedder from each store's
+own stored fingerprint via `bound_embedder`. The CLI boundary wraps
+backend `ConfigError` as `click.ClickException` so misconfigured
+stores produce a clean exit message instead of a bare traceback.
 """
 
 import pytest
@@ -16,11 +16,6 @@ def test_active_store_wraps_backend_config_error_from_open(
         tmp_path, env_file, monkeypatch):
     """A misconfigured store (postgres backend, no DSN) raises
     `ClickException` instead of leaking the backend `ConfigError`.
-
-    Pre-fix: `open_backend` was called outside the try block, so the
-    raw backend `ConfigError` propagated as a traceback. Post-fix:
-    `store.errors.ConfigError` subclasses `exceptions.ConfigError`
-    and the `try/except ConfigError` wraps the open call.
     """
     env_file('MEMMAN_BACKEND_oops', 'postgres')
     data_dir = str(tmp_path / 'memman')
@@ -30,23 +25,69 @@ def test_active_store_wraps_backend_config_error_from_open(
     assert 'oops' in str(exc.value).lower() or 'dsn' in str(exc.value).lower()
 
 
-def test_active_store_wraps_runtime_config_error_from_assert(
-        tmp_path, monkeypatch):
-    """A `memman.exceptions.ConfigError` raised by the fingerprint
-    assert path is wrapped as `ClickException`.
+def test_active_store_yields_store_bound_ec_per_store(
+        tmp_path, env_file, monkeypatch):
+    """Two stores with different stored fingerprints in one process
+    each yield their own bound embedder, regardless of env-active.
 
-    Locks the existing post-open catch geometry so the F.1 refactor
-    doesn't regress it.
+    Per-store sovereignty: the env var
+    `MEMMAN_EMBED_PROVIDER` no longer drives recall/remember in an
+    existing store; the store's `meta.embed_fingerprint` does.
     """
-    from memman.exceptions import ConfigError as RuntimeConfigError
+    from memman.embed import fingerprint as fp_mod
+    from memman.embed import registry as ec_registry
+    from memman.store.factory import open_backend
 
-    def _raise(*args, **kwargs):
-        raise RuntimeConfigError('forced')
+    data_dir = str(tmp_path / 'memman')
+
+    def _seed(name: str, provider: str, model: str, dim: int) -> None:
+        backend = open_backend(name, data_dir)
+        try:
+            fp_mod.write_fingerprint(
+                backend,
+                fp_mod.Fingerprint(
+                    provider=provider, model=model, dim=dim))
+        finally:
+            backend.close()
 
     monkeypatch.setattr(
-        'memman.embed.fingerprint.assert_consistent', _raise)
-    data_dir = str(tmp_path / 'memman')
-    with pytest.raises(ClickException) as exc:
-        with active_store(data_dir=data_dir, store='default'):
-            pass
-    assert 'forced' in str(exc.value)
+        ec_registry, 'get_for',
+        lambda provider, model: _StubEC(
+            provider=provider, model=model,
+            dim=8 if provider == 'stub-a' else 16))
+
+    _seed('store_a', 'stub-a', 'stub-a-d8', 8)
+    _seed('store_b', 'stub-b', 'stub-b-d16', 16)
+
+    with active_store(
+            data_dir=data_dir, store='store_a',
+            unchecked=True) as backend_a:
+        ec_a = fp_mod.bound_embedder(backend_a)
+    with active_store(
+            data_dir=data_dir, store='store_b',
+            unchecked=True) as backend_b:
+        ec_b = fp_mod.bound_embedder(backend_b)
+
+    assert ec_a.provider == 'stub-a'
+    assert ec_a.dim == 8
+    assert ec_b.provider == 'stub-b'
+    assert ec_b.dim == 16
+
+
+class _StubEC:
+    """Minimal embed client stub for per-store binding tests."""
+
+    def __init__(self, *, provider: str, model: str, dim: int) -> None:
+        self.provider = provider
+        self.name = provider
+        self.model = model
+        self.dim = dim
+
+    def available(self) -> bool:
+        return True
+
+    def unavailable_message(self) -> str:
+        return ''
+
+    def embed(self, text: str) -> list[float]:
+        return [0.0] * self.dim

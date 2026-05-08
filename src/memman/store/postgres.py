@@ -1781,7 +1781,10 @@ class PostgresBackend(Backend):
                 pass
 
     @contextmanager
-    def recall_session(self) -> Iterator[PostgresRecallSession]:
+    def recall_session(
+            self, fingerprint: 'Fingerprint',
+            ) -> Iterator[PostgresRecallSession]:
+        del fingerprint
         session = PostgresRecallSession(self._dsn, self._schema)
         with session:
             yield session
@@ -2068,8 +2071,8 @@ def _resolve_active_dim(expected_dim: int | None = None) -> int:
     if expected_dim is not None and expected_dim > 0:
         return int(expected_dim)
     try:
-        from memman.embed.fingerprint import active_fingerprint
-        active = active_fingerprint()
+        from memman.embed.fingerprint import seed_default_fingerprint
+        active = seed_default_fingerprint()
         if active.dim > 0:
             return int(active.dim)
     except (ConfigError, ImportError) as exc:
@@ -2168,7 +2171,7 @@ def _ensure_baseline_schema(
     """Create the schema and apply baseline DDL idempotently.
 
     `dim` is the embedding dimension to bake into `vector(N)` for
-    new schemas. Resolved from `active_fingerprint().dim` by
+    new schemas. Resolved from `seed_default_fingerprint().dim` by
     `open_postgres_backend` so a non-Voyage operator (e.g. openai
     1536) gets a correctly-sized column on first deploy. For
     existing schemas the call is idempotent: `create table if not

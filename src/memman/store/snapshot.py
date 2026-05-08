@@ -161,14 +161,14 @@ def write_snapshot(db, store_dir: str, fingerprint: Fingerprint) -> bool:
 
 def read_snapshot(
         store_dir: str,
-        active_fingerprint: Fingerprint) -> Snapshot | None:
+        fingerprint: Fingerprint) -> Snapshot | None:
     """Load and return the snapshot, or None when unusable.
 
     Returns None when:
     - the snapshot file is missing
     - the magic / version don't match
-    - the embedding fingerprint doesn't match `active_fingerprint`
-      (recall must fall back to SQL after a provider swap)
+    - the embedding fingerprint doesn't match `fingerprint` (recall
+      must fall back to SQL after a provider swap)
     - any structural read error occurs
     """
     path = snapshot_path(store_dir)
@@ -190,8 +190,8 @@ def read_snapshot(
 
             stored_model = header.get('embedding_model', '')
             active_model = (
-                f'{active_fingerprint.provider}:'
-                f'{active_fingerprint.model}:{active_fingerprint.dim}')
+                f'{fingerprint.provider}:'
+                f'{fingerprint.model}:{fingerprint.dim}')
             if stored_model != active_model:
                 logger.info(
                     f'snapshot fingerprint mismatch'

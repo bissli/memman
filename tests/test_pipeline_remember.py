@@ -40,6 +40,7 @@ def test_refresh_effective_importance_failure_is_logged(
     The fallback (`ei = 0.0`) still applies so the transaction
     completes, but the failure is visible in operator logs.
     """
+    from memman.embed.fingerprint import bound_embedder
     from memman.pipeline.remember import run_remember
 
     def _boom(*args, **kwargs):
@@ -52,6 +53,7 @@ def test_refresh_effective_importance_failure_is_logged(
         run_remember(
             tmp_backend, insight,
             content=insight.content,
+            ec=bound_embedder(tmp_backend),
             no_reconcile=True)
     matches = [
         r for r in caplog.records
@@ -66,6 +68,7 @@ def test_auto_prune_failure_is_logged(
     The fallback (`pruned = 0`) still applies so the new insight
     persists and the transaction completes.
     """
+    from memman.embed.fingerprint import bound_embedder
     from memman.pipeline.remember import run_remember
 
     def _boom(*args, **kwargs):
@@ -77,6 +80,7 @@ def test_auto_prune_failure_is_logged(
         run_remember(
             tmp_backend, insight,
             content=insight.content,
+            ec=bound_embedder(tmp_backend),
             no_reconcile=True)
     matches = [
         r for r in caplog.records

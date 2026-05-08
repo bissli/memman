@@ -70,8 +70,16 @@ class Fingerprint:
             dim=int(client.dim))
 
 
-def active_fingerprint() -> Fingerprint:
-    """Return the fingerprint of the env-resolved active client.
+def seed_default_fingerprint() -> Fingerprint:
+    """Return the env-active client's fingerprint for fresh-store seeding.
+
+    The narrow legitimate role: the default `Fingerprint` to write into
+    a brand-new store's `meta.embed_fingerprint` (via `seed_if_fresh`)
+    or to bake into a fresh Postgres `vector(N)` column. Once a store
+    has a stored fingerprint, callers should resolve via
+    `stored_fingerprint`/`bound_embedder` -- the env-active value is
+    not the right answer for an existing store under per-store
+    embedder sovereignty.
     """
     from memman.embed import get_client
     return Fingerprint.from_client(get_client())
@@ -116,23 +124,40 @@ def seed_if_fresh(
     return True
 
 
-def assert_consistent(
-        backend: 'Backend',
-        ec: 'EmbeddingProvider') -> None:
-    """Raise `EmbedFingerprintError` when `ec` does not match the
-    stored fingerprint, or when no fingerprint is stored.
+def bound_embedder(backend: 'Backend') -> 'EmbeddingProvider':
+    """Return the embed client cached for this store's stored fingerprint.
+
+    Resolves `meta.embed_fingerprint` and dispatches to
+    `embed.registry.get_for(provider, model)`. Raises
+    `EmbedFingerprintError` if the store has no fingerprint yet --
+    callers that may face a fresh store must run `seed_if_fresh`
+    first.
     """
-    active = Fingerprint.from_client(ec)
-    stored = stored_fingerprint(backend)
-    if stored is None:
+    from memman.embed import registry as _ec_registry
+    fp = stored_fingerprint(backend)
+    if fp is None:
         raise EmbedFingerprintError(
-            f"DB has no embed fingerprint. Active is"
-            f" {active.provider}:{active.model}:{active.dim}."
-            f" Run 'memman embed reembed' to initialize this store.")
-    if stored != active:
+            "store has no embed fingerprint;"
+            " run 'memman embed reembed' to initialize.")
+    return _ec_registry.get_for(fp.provider, fp.model)
+
+
+def assert_fingerprint_unchanged_for_sync(
+        backend: 'Backend', expected: Fingerprint) -> None:
+    """Raise `EmbedFingerprintError` if the store fingerprint drifted.
+
+    Sync analogue of `_StoreContext.assert_fingerprint_unchanged`.
+    Callers in the sync CLI capture the fingerprint at command entry
+    and re-check it before any embed call to catch a swap that
+    completed mid-command (e.g., between LLM query expansion and
+    `ec.embed(query)` inside `recall`).
+    """
+    current = stored_fingerprint(backend)
+    if current != expected:
         raise EmbedFingerprintError(
-            f"Embed fingerprint mismatch: active is"
-            f" {active.provider}:{active.model}:{active.dim},"
-            f" stored is {stored.provider}:{stored.model}:{stored.dim}."
-            f" Run 'memman scheduler stop && memman embed reembed'"
-            f" to converge.")
+            f'store fingerprint changed mid-command: was'
+            f' {expected.provider}:{expected.model}:{expected.dim},'
+            f' now {current.provider if current else None}:'
+            f'{current.model if current else None}:'
+            f'{current.dim if current else None};'
+            ' rerun the command.')

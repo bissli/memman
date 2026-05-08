@@ -79,7 +79,7 @@ def run_maintenance(
         _run_per_store_maintenance(
             ctx, store_name, deadline_monotonic)
         try:
-            snapshot_writer(data_dir, store_name)
+            snapshot_writer(data_dir, store_name, ctx._stored_fp)
         except Exception:
             logger.exception(
                 f'maintenance: snapshot write failed for {store_name!r}')
