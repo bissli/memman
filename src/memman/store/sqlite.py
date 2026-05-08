@@ -187,7 +187,9 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
 select count(*),
        sum(case when embedding is null then 1 else 0 end),
        sum(case when keywords is null or keywords = '' then 1 else 0 end),
-       sum(case when summary is null or summary = '' then 1 else 0 end),
+       sum(case when (summary is null or summary = '')
+                 and enriched_at is null
+                then 1 else 0 end),
        sum(case when semantic_facts is null
                  or semantic_facts = ''
                 then 1 else 0 end)

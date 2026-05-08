@@ -58,33 +58,23 @@ def check_enrichment_coverage(backend: Backend) -> dict[str, Any]:
 
 
 def check_oplog_delta_coverage(backend: Backend) -> dict[str, Any]:
-    """Check the share of oplog rows that carry before/after deltas.
+    """Report the share of oplog rows that carry before/after deltas.
 
-    Older oplog rows have null `before` / `after`; coverage
-    approaches 100% on stores with frequent write traffic. New
-    stores report 100% (vacuously covered).
+    Informational only -- the `before`/`after` columns were added
+    after the oplog table existed, so historical rows from older
+    memman versions have NULL deltas with no path to backfill.
+    Coverage on long-lived stores trends slowly upward as new
+    writes accrue. Always returns `pass`; operators consult the
+    `coverage_pct` for trend awareness.
     """
     total, with_delta = backend.oplog.delta_coverage()
     if total == 0:
-        return {
-            'name': 'oplog_delta_coverage',
-            'status': 'pass',
-            'detail': {
-                'total_oplog_rows': 0,
-                'rows_with_delta': 0,
-                'coverage_pct': 100.0,
-                },
-            }
-    coverage_pct = round(with_delta / total * 100, 1)
-    if coverage_pct >= 90:
-        status = 'pass'
-    elif coverage_pct >= 50:
-        status = 'warn'
+        coverage_pct = 100.0
     else:
-        status = 'fail'
+        coverage_pct = round(with_delta / total * 100, 1)
     return {
         'name': 'oplog_delta_coverage',
-        'status': status,
+        'status': 'pass',
         'detail': {
             'total_oplog_rows': total,
             'rows_with_delta': with_delta,
@@ -361,9 +351,15 @@ def check_env_completeness() -> dict[str, Any]:
     optional_secrets = {
         config.OPENAI_EMBED_API_KEY,
         }
+    default_backend = parsed.get(config.DEFAULT_BACKEND, 'sqlite')
+    optional_unless_default_postgres = set()
+    if default_backend != 'postgres':
+        optional_unless_default_postgres.add(config.DEFAULT_PG_DSN)
     missing = [
         key for key in config.INSTALLABLE_KEYS
-        if not parsed.get(key) and key not in optional_secrets
+        if not parsed.get(key)
+        and key not in optional_secrets
+        and key not in optional_unless_default_postgres
         ]
 
     if not missing:

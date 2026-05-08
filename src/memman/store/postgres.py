@@ -969,7 +969,8 @@ select count(*),
               or jsonb_typeof(keywords) is null
        ),
        count(*) filter (
-           where summary is null or summary = ''
+           where (summary is null or summary = '')
+             and enriched_at is null
        ),
        count(*) filter (
            where semantic_facts is null
