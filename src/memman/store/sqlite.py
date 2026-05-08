@@ -11,18 +11,25 @@ its SQL-or-snapshot branching logic and falls through to the
 active backend's verbs when the snapshot is absent.
 """
 
+import contextlib
+import json
 import logging
 import shutil
+import sqlite3
 from collections import deque
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 from memman.embed.fingerprint import Fingerprint
-from memman.embed.vector import serialize_vector
+from memman.embed.vector import deserialize_vector, serialize_vector
+from memman.migrate import PAYLOAD_VERSION, Artifact, BackendFeatures
+from memman.migrate import MigrateEdge, MigrateError, MigrateInsight
+from memman.migrate import MigrateOpLog, MigrationPayload, Migrator
+from memman.migrate import PendingReembed, SwapState, sanitize_identifier
 from memman.store import db as _db
 from memman.store import edge as _edge
 from memman.store import node as _node
@@ -737,3 +744,342 @@ def drop_sqlite_store(store: str, data_dir: str) -> None:
     sdir = _db.store_dir(data_dir, store)
     if Path(sdir).is_dir():
         shutil.rmtree(sdir)
+
+
+_SQLITE_MIGRATOR_FEATURES = BackendFeatures(
+    supports_edges=True,
+    supports_oplog=True,
+    supports_recall_snapshot=True,
+    supports_reembed=True,
+    supports_drain_heartbeat=False,
+    supports_filesystem_artifacts=True,
+    supports_dry_run=True,
+    accepted_embedding_dtypes=frozenset({'float64'}))
+
+
+class SqliteMigrator(Migrator):
+    """SQLite implementation of the Migrator surface.
+
+    `gather(store)` opens `<data_dir>/data/<store>/memman.db`
+    read-only and materializes every row into a backend-agnostic
+    `MigrationPayload`. `apply(store, payload)` writes the payload
+    into a fresh sqlite store at the same path. Self-round-trip
+    (gather -> apply -> gather) is the equality invariant; the
+    cross-backend round-trip via `PostgresMigrator` is locked by
+    test_migrator_classes.py.
+    """
+
+    backend_name: ClassVar[str] = 'sqlite'
+    snapshot_features: ClassVar[BackendFeatures] = _SQLITE_MIGRATOR_FEATURES
+
+    def __init__(self, data_dir: str) -> None:
+        self.data_dir = data_dir
+
+    def _store_path(self, store: str) -> Path:
+        return Path(_db.store_dir(self.data_dir, store)) / 'memman.db'
+
+    def preflight_source(self, store: str) -> None:
+        path = self._store_path(store)
+        if not path.exists():
+            raise MigrateError(
+                f'sqlite store not found: {path}')
+        with contextlib.closing(sqlite3.connect(
+                f'file:{path}?mode=ro', uri=True)) as conn:
+            n = conn.execute(
+                'select count(*) from insights').fetchone()[0]
+            fp = conn.execute(
+                "select 1 from meta where key ="
+                " 'embed_fingerprint'").fetchone()
+        if n == 0 and fp is None:
+            raise MigrateError(
+                f'sqlite store {store!r} is empty (no insights,'
+                f' no embed fingerprint); nothing to migrate')
+
+    def preflight_target(self, store: str) -> None:
+        sanitize_identifier(
+            store, max_len=63, allowed_chars=r'[A-Za-z0-9_]')
+        target_root = Path(self.data_dir) / 'data'
+        target_root.mkdir(mode=0o755, exist_ok=True, parents=True)
+
+    def gather(self, store: str) -> MigrationPayload:
+        path = self._store_path(store)
+        if not path.exists():
+            raise MigrateError(
+                f'sqlite store not found: {path}')
+
+        with contextlib.closing(sqlite3.connect(
+                f'file:{path}?mode=ro', uri=True)) as conn:
+            meta_dict = dict(conn.execute(
+                'select key, value from meta').fetchall())
+
+            fp_str = meta_dict.get('embed_fingerprint')
+            if not fp_str:
+                raise MigrateError(
+                    f'sqlite store {store!r} has no'
+                    f' embed_fingerprint meta key')
+            fingerprint = Fingerprint.from_json(fp_str)
+
+            rows = conn.execute("""
+select id, content, category, importance, entities,
+       source, access_count, keywords, summary, semantic_facts,
+       last_accessed_at, embedding, effective_importance,
+       linked_at, enriched_at, created_at, updated_at,
+       deleted_at, prompt_version, model_id, embedding_model,
+       embedding_pending
+from insights
+order by id
+""").fetchall()
+            insights: list[MigrateInsight] = []
+            pending: list[PendingReembed] = []
+            for r in rows:
+                emb = deserialize_vector(r[11]) if r[11] else None
+                insights.append(MigrateInsight(
+                    id=r[0], content=r[1], category=r[2],
+                    importance=int(r[3]),
+                    entities=json.loads(r[4]) if r[4] else [],
+                    source=r[5], access_count=int(r[6]),
+                    keywords=json.loads(r[7]) if r[7] else None,
+                    summary=r[8],
+                    semantic_facts=(
+                        json.loads(r[9]) if r[9] else None),
+                    last_accessed_at=(
+                        parse_timestamp(r[10]) if r[10] else None),
+                    embedding=emb,
+                    effective_importance=float(r[12]),
+                    linked_at=(
+                        parse_timestamp(r[13]) if r[13] else None),
+                    enriched_at=(
+                        parse_timestamp(r[14]) if r[14] else None),
+                    created_at=parse_timestamp(r[15]),
+                    updated_at=parse_timestamp(r[16]),
+                    deleted_at=(
+                        parse_timestamp(r[17]) if r[17] else None),
+                    prompt_version=r[18], model_id=r[19],
+                    embedding_model=r[20]))
+                if r[21] is not None:
+                    pv = deserialize_vector(r[21])
+                    if pv is not None:
+                        pending.append(PendingReembed(
+                            insight_id=r[0], vector=pv))
+
+            edge_rows = conn.execute("""
+select source_id, target_id, edge_type, weight,
+       metadata, created_at
+from edges
+order by source_id, target_id, edge_type
+""").fetchall()
+            edges = [
+                MigrateEdge(
+                    source_id=e[0], target_id=e[1],
+                    edge_type=e[2], weight=float(e[3]),
+                    metadata=json.loads(e[4]) if e[4] else {},
+                    created_at=parse_timestamp(e[5]))
+                for e in edge_rows]
+
+            op_rows = conn.execute("""
+select id, operation, insight_id, detail, created_at,
+       before, after
+from oplog
+order by id
+""").fetchall()
+            oplog = [
+                MigrateOpLog(
+                    id=int(o[0]), operation=o[1],
+                    insight_id=o[2], detail=o[3] or '',
+                    created_at=parse_timestamp(o[4]),
+                    before=json.loads(o[5]) if o[5] else None,
+                    after=json.loads(o[6]) if o[6] else None,
+                    legacy_id=int(o[0]))
+                for o in op_rows]
+
+        swap_state = None
+        if 'embed_swap_state' in meta_dict:
+            try:
+                dim = int(meta_dict.get(
+                    'embed_swap_target_dim', '0'))
+            except ValueError:
+                dim = 0
+            swap_state = SwapState(
+                target_provider=meta_dict.get(
+                    'embed_swap_target_provider', ''),
+                target_model=meta_dict.get(
+                    'embed_swap_target_model', ''),
+                target_dim=dim,
+                cursor=meta_dict.get('embed_swap_cursor') or None,
+                started_at=None)
+
+        stripped_meta = {
+            k: v for k, v in meta_dict.items()
+            if not k.startswith('embed_swap_')}
+
+        return MigrationPayload(
+            payload_version=PAYLOAD_VERSION,
+            fingerprint=fingerprint,
+            embedding_dim=fingerprint.dim,
+            embedding_dtype='float64',
+            insights=insights,
+            edges=edges,
+            oplog=oplog,
+            embedding_pending=pending,
+            swap_state=swap_state,
+            meta=stripped_meta)
+
+    def apply(
+            self, store: str, payload: MigrationPayload) -> None:
+        if payload.embedding_dtype not in (
+                self.snapshot_features.accepted_embedding_dtypes):
+            raise MigrateError(
+                f'sqlite cannot accept embedding_dtype'
+                f' {payload.embedding_dtype!r}; accepted:'
+                f' {sorted(self.snapshot_features.accepted_embedding_dtypes)}')
+
+        target_dir = _db.store_dir(self.data_dir, store)
+        Path(target_dir).mkdir(
+            mode=0o755, exist_ok=True, parents=True)
+        db = _db.open_db(target_dir)
+        try:
+            conn = db.conn
+            try:
+                conn.execute('begin')
+
+                insight_rows = []
+                for ins in payload.insights:
+                    emb_blob = (
+                        serialize_vector(ins.embedding)
+                        if ins.embedding is not None else None)
+                    insight_rows.append((
+                        ins.id, ins.content, ins.category,
+                        ins.importance,
+                        json.dumps(ins.entities),
+                        ins.source, ins.access_count,
+                        json.dumps(ins.keywords)
+                        if ins.keywords is not None else None,
+                        ins.summary,
+                        json.dumps(ins.semantic_facts)
+                        if ins.semantic_facts is not None
+                        else None,
+                        format_timestamp(ins.last_accessed_at)
+                        if ins.last_accessed_at else None,
+                        emb_blob,
+                        ins.effective_importance,
+                        format_timestamp(ins.linked_at)
+                        if ins.linked_at else None,
+                        format_timestamp(ins.enriched_at)
+                        if ins.enriched_at else None,
+                        format_timestamp(ins.created_at),
+                        format_timestamp(ins.updated_at),
+                        format_timestamp(ins.deleted_at)
+                        if ins.deleted_at else None,
+                        ins.prompt_version, ins.model_id,
+                        ins.embedding_model))
+                if insight_rows:
+                    conn.executemany(
+                        'insert into insights ('
+                        ' id, content, category, importance,'
+                        ' entities, source, access_count,'
+                        ' keywords, summary, semantic_facts,'
+                        ' last_accessed_at, embedding,'
+                        ' effective_importance, linked_at,'
+                        ' enriched_at, created_at, updated_at,'
+                        ' deleted_at, prompt_version, model_id,'
+                        ' embedding_model)'
+                        ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
+                        ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        insight_rows)
+
+                edge_rows = [(
+                    e.source_id, e.target_id, e.edge_type, e.weight,
+                    json.dumps(e.metadata),
+                    format_timestamp(e.created_at))
+                    for e in payload.edges]
+                if edge_rows:
+                    conn.executemany(
+                        'insert into edges ('
+                        ' source_id, target_id, edge_type, weight,'
+                        ' metadata, created_at)'
+                        ' values (?, ?, ?, ?, ?, ?)',
+                        edge_rows)
+
+                max_oplog_id = 0
+                for op in payload.oplog:
+                    desired_id = op.legacy_id or op.id
+                    row = (
+                        desired_id, op.operation, op.insight_id,
+                        op.detail,
+                        format_timestamp(op.created_at),
+                        json.dumps(op.before)
+                        if op.before is not None else None,
+                        json.dumps(op.after)
+                        if op.after is not None else None)
+                    try:
+                        conn.execute(
+                            'insert into oplog ('
+                            ' id, operation, insight_id, detail,'
+                            ' created_at, before, after)'
+                            ' values (?, ?, ?, ?, ?, ?, ?)',
+                            row)
+                        max_oplog_id = max(max_oplog_id, desired_id)
+                    except sqlite3.IntegrityError:
+                        conn.execute(
+                            'insert into oplog ('
+                            ' operation, insight_id, detail,'
+                            ' created_at, before, after)'
+                            ' values (?, ?, ?, ?, ?, ?)',
+                            row[1:])
+                if max_oplog_id > 0:
+                    conn.execute(
+                        "insert or replace into sqlite_sequence"
+                        " (name, seq) values ('oplog', ?)",
+                        (max_oplog_id,))
+
+                for p in payload.embedding_pending:
+                    blob = serialize_vector(p.vector)
+                    conn.execute(
+                        'update insights'
+                        ' set embedding_pending = ?'
+                        ' where id = ?',
+                        (blob, p.insight_id))
+
+                meta_rows = list(payload.meta.items())
+                if payload.swap_state:
+                    s = payload.swap_state
+                    meta_rows.extend([
+                        ('embed_swap_target_provider',
+                         s.target_provider),
+                        ('embed_swap_target_model', s.target_model),
+                        ('embed_swap_target_dim', str(s.target_dim)),
+                        ('embed_swap_cursor', s.cursor or ''),
+                        ])
+                if meta_rows:
+                    conn.executemany(
+                        'insert or replace into meta'
+                        ' (key, value) values (?, ?)',
+                        meta_rows)
+
+                conn.execute('commit')
+            except Exception as exc:
+                try:
+                    conn.execute('rollback')
+                except sqlite3.Error:
+                    pass
+                if isinstance(exc, MigrateError):
+                    raise
+                raise MigrateError(
+                    f'sqlite apply for store {store!r} failed:'
+                    f' {type(exc).__name__}: {exc}') from exc
+        finally:
+            db.close()
+
+    def archive(self, store: str, data_dir: str) -> Artifact:
+        from memman.setup.archive import archive_store_dir
+        path = archive_store_dir(data_dir, store)
+        if path is None:
+            return Artifact(
+                kind='none', location=None,
+                metadata={'reason': 'no source dir to archive'})
+        return Artifact(
+            kind='filesystem',
+            location=str(path), metadata={})
+
+    def drop(self, store: str) -> None:
+        drop_sqlite_store(store, self.data_dir)

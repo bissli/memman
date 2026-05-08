@@ -26,6 +26,7 @@ migrated store while leaving sibling stores untouched.
 
 from __future__ import annotations
 
+import abc
 import enum
 import hashlib
 import logging
@@ -35,7 +36,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, ClassVar, Literal, Protocol, runtime_checkable
+from typing import Any, ClassVar, Literal
 
 from memman.embed.fingerprint import Fingerprint
 
@@ -207,50 +208,65 @@ class Artifact:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-@runtime_checkable
-class Migrator(Protocol):
+class Migrator(abc.ABC):
     """Per-backend migration surface.
 
-    Stateless across calls: each method acquires + releases its
-    own connection. One instance per (backend, command) is fine
-    but not required. Concrete implementations live with their
-    backend (`store/sqlite.py`, `store/postgres.py`).
+    Abstract base class for the six migration verbs. Concrete
+    implementations live with their backend (`store/sqlite.py`,
+    `store/postgres.py`) and inherit from this class. Stateless
+    across calls: each method acquires + releases its own
+    connection. ABC was chosen over Protocol so missing methods
+    fail at instantiation (registry build time) rather than at
+    first call from the CLI runner -- the entire point of the
+    abstraction is making it cheap to add backends, and immediate
+    failure shortens the feedback loop.
     """
 
     backend_name: ClassVar[str]
     snapshot_features: ClassVar[BackendFeatures]
 
+    @abc.abstractmethod
     def preflight_source(self, store: str) -> None:
         """Verify the store is in a state that can be migrated FROM.
 
         Raises `MigrateError` on any precondition failure (missing
         store, schema mismatch, broken connection).
         """
-        ...
 
     def preflight_target(self, store: str) -> None:
         """Verify the backend can accept a fresh migration INTO `store`.
 
-        Raises `MigrateError` if the target cannot be written
-        (missing extension, lacking privilege, name collision).
+        Default checks identifier sanity against the backend's
+        feature flags; subclasses override to add extension /
+        privilege / name-collision checks. Raises `MigrateError`
+        on failure.
         """
-        ...
+        sanitize_identifier(
+            store, max_len=63, allowed_chars=r'[A-Za-z0-9_]')
 
+    @abc.abstractmethod
     def gather(self, store: str) -> MigrationPayload:
         """Read the full store contents into a portable payload."""
-        ...
 
+    @abc.abstractmethod
     def apply(self, store: str, payload: MigrationPayload) -> None:
         """Write `payload` into a fresh `store` on this backend."""
-        ...
 
     def archive(self, store: str, data_dir: str) -> Artifact:
-        """Snapshot the source state to a recoverable artifact."""
-        ...
+        """Snapshot the source state to a recoverable artifact.
 
+        Default: `Artifact(kind='none', ...)` for backends whose
+        `apply` is a full migration with no pre-state to preserve.
+        Subclasses with filesystem state (sqlite dirs, postgres
+        pg_dump) override to return a `kind='filesystem'` artifact.
+        """
+        return Artifact(
+            kind='none', location=None,
+            metadata={'reason': 'apply is a full migration'})
+
+    @abc.abstractmethod
     def drop(self, store: str) -> None:
         """Remove this backend's storage for `store`."""
-        ...
 
 
 def sanitize_identifier(

@@ -28,8 +28,13 @@ from collections import deque
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 
+from memman.embed.fingerprint import Fingerprint
+from memman.migrate import PAYLOAD_VERSION, Artifact, BackendFeatures
+from memman.migrate import MigrateEdge, MigrateError, MigrateInsight
+from memman.migrate import MigrateOpLog, MigrationPayload, Migrator
+from memman.migrate import PendingReembed, SwapState, sanitize_identifier
 from memman.store.backend import Backend, EdgeStore, MetaStore, NodeStore
 from memman.store.backend import Oplog, RecallSession, _check_identifier
 from memman.store.base import BaseNodeStore
@@ -41,7 +46,6 @@ from memman.store.model import parse_timestamp
 
 if TYPE_CHECKING:
     import psycopg
-    from memman.embed.fingerprint import Fingerprint
 
 logger = logging.getLogger('memman')
 
@@ -2489,3 +2493,353 @@ def _bfs_python_fallback(
             out.append((neighbor_id, hop + 1, edge.edge_type))
             queue.append((neighbor_id, hop + 1))
     return out
+
+
+_POSTGRES_MIGRATOR_FEATURES = BackendFeatures(
+    supports_edges=True,
+    supports_oplog=True,
+    supports_recall_snapshot=False,
+    supports_reembed=True,
+    supports_drain_heartbeat=True,
+    supports_filesystem_artifacts=True,
+    supports_dry_run=True,
+    accepted_embedding_dtypes=frozenset({'float32', 'float64'}))
+
+
+class PostgresMigrator(Migrator):
+    """Postgres + pgvector implementation of the Migrator surface.
+
+    `gather(store)` reads `store_<store>` schema into a portable
+    `MigrationPayload`. `apply(store, payload)` creates the schema
+    (idempotently) and inserts rows in one transaction with
+    `ON CONFLICT DO NOTHING`. `archive` invokes `pg_dump -Fc` for
+    a recoverable filesystem artifact. `drop` issues
+    `drop schema cascade`.
+    """
+
+    backend_name: ClassVar[str] = 'postgres'
+    snapshot_features: ClassVar[BackendFeatures] = _POSTGRES_MIGRATOR_FEATURES
+
+    def __init__(self, data_dir: str, *, dsn: str) -> None:
+        self.data_dir = data_dir
+        self.dsn = dsn
+
+    def preflight_source(self, store: str) -> None:
+        _check_identifier(store)
+        schema = _store_schema(store)
+        with _connection(self.dsn, autocommit=True) as conn, \
+                conn.cursor() as cur:
+            cur.execute(
+                'select 1 from pg_namespace where nspname = %s',
+                (schema,))
+            if cur.fetchone() is None:
+                raise MigrateError(
+                    f'source postgres schema {schema!r} does not'
+                    f' exist for store {store!r}')
+            cur.execute(
+                f"select value from {schema}.meta"
+                " where key = 'embed_fingerprint'")
+            fp_row = cur.fetchone()
+            if fp_row is None or not fp_row[0]:
+                raise MigrateError(
+                    f'source schema {schema!r} has no'
+                    f' meta.embed_fingerprint; run `memman doctor`'
+                    f' on the source store before migrating')
+
+    def preflight_target(self, store: str) -> None:
+        sanitize_identifier(
+            store, max_len=63, allowed_chars=r'[A-Za-z0-9_]')
+        _check_identifier(store)
+        with _connection(self.dsn, autocommit=True) as conn, \
+                conn.cursor() as cur:
+            cur.execute('select 1')
+            cur.execute(
+                "select 1 from pg_extension where extname = 'vector'")
+            if cur.fetchone() is None:
+                raise MigrateError(
+                    'pgvector extension not installed in the'
+                    ' target database; run `create extension'
+                    ' vector;` as a superuser first')
+            cur.execute(
+                'select has_database_privilege(current_user,'
+                " current_database(), 'CREATE')")
+            if not bool(cur.fetchone()[0]):
+                raise MigrateError(
+                    'current postgres role lacks create schema'
+                    ' privilege on the target database')
+
+    def gather(self, store: str) -> MigrationPayload:
+        _check_identifier(store)
+        schema = _store_schema(store)
+        with _connection(self.dsn, autocommit=True) as conn, \
+                conn.cursor() as cur:
+            cur.execute(
+                'select 1 from pg_namespace where nspname = %s',
+                (schema,))
+            if cur.fetchone() is None:
+                raise MigrateError(
+                    f'source postgres schema {schema!r} does not'
+                    f' exist for store {store!r}')
+
+            cur.execute(f'select key, value from {schema}.meta')
+            meta_dict = dict(cur.fetchall())
+
+            fp_str = meta_dict.get('embed_fingerprint')
+            if not fp_str:
+                raise MigrateError(
+                    f'source schema {schema!r} has no'
+                    f' meta.embed_fingerprint')
+            fingerprint = Fingerprint.from_json(fp_str)
+
+            cur.execute(f"""
+select id, content, category, importance, entities,
+       source, access_count, keywords, summary, semantic_facts,
+       last_accessed_at, embedding, effective_importance,
+       linked_at, enriched_at, created_at, updated_at,
+       deleted_at, prompt_version, model_id, embedding_model,
+       embedding_pending
+from {schema}.insights
+order by id
+""")
+            insight_rows = cur.fetchall()
+            insights: list[MigrateInsight] = []
+            pending: list[PendingReembed] = []
+            for r in insight_rows:
+                emb = list(r[11]) if r[11] is not None else None
+                insights.append(MigrateInsight(
+                    id=r[0], content=r[1], category=r[2],
+                    importance=int(r[3]),
+                    entities=list(r[4]) if r[4] is not None else [],
+                    source=r[5], access_count=int(r[6]),
+                    keywords=(
+                        list(r[7]) if r[7] is not None else None),
+                    summary=r[8],
+                    semantic_facts=(
+                        list(r[9]) if r[9] is not None else None),
+                    last_accessed_at=r[10],
+                    embedding=emb,
+                    effective_importance=float(r[12]),
+                    linked_at=r[13],
+                    enriched_at=r[14],
+                    created_at=r[15],
+                    updated_at=r[16],
+                    deleted_at=r[17],
+                    prompt_version=r[18], model_id=r[19],
+                    embedding_model=r[20]))
+                if r[21] is not None:
+                    pending.append(PendingReembed(
+                        insight_id=r[0], vector=list(r[21])))
+
+            cur.execute(f"""
+select source_id, target_id, edge_type, weight,
+       metadata, created_at
+from {schema}.edges
+order by source_id, target_id, edge_type
+""")
+            edges = [
+                MigrateEdge(
+                    source_id=e[0], target_id=e[1],
+                    edge_type=e[2], weight=float(e[3]),
+                    metadata=dict(e[4]) if e[4] else {},
+                    created_at=e[5])
+                for e in cur.fetchall()]
+
+            cur.execute(f"""
+select coalesce(legacy_id, id) as sqlite_id,
+       operation, insight_id, detail, created_at,
+       before, after, id
+from {schema}.oplog
+order by sqlite_id
+""")
+            oplog = [
+                MigrateOpLog(
+                    id=int(o[7]), operation=o[1],
+                    insight_id=o[2], detail=o[3] or '',
+                    created_at=o[4],
+                    before=dict(o[5]) if o[5] else None,
+                    after=dict(o[6]) if o[6] else None,
+                    legacy_id=int(o[0]) if o[0] is not None else None)
+                for o in cur.fetchall()]
+
+        swap_state = None
+        if 'embed_swap_state' in meta_dict:
+            try:
+                dim = int(meta_dict.get('embed_swap_target_dim', '0'))
+            except ValueError:
+                dim = 0
+            swap_state = SwapState(
+                target_provider=meta_dict.get(
+                    'embed_swap_target_provider', ''),
+                target_model=meta_dict.get(
+                    'embed_swap_target_model', ''),
+                target_dim=dim,
+                cursor=meta_dict.get('embed_swap_cursor') or None,
+                started_at=None)
+
+        stripped_meta = {
+            k: v for k, v in meta_dict.items()
+            if not k.startswith('embed_swap_')}
+
+        return MigrationPayload(
+            payload_version=PAYLOAD_VERSION,
+            fingerprint=fingerprint,
+            embedding_dim=fingerprint.dim,
+            embedding_dtype='float32',
+            insights=insights,
+            edges=edges,
+            oplog=oplog,
+            embedding_pending=pending,
+            swap_state=swap_state,
+            meta=stripped_meta)
+
+    def apply(
+            self, store: str, payload: MigrationPayload) -> None:
+        if payload.embedding_dtype not in (
+                self.snapshot_features.accepted_embedding_dtypes):
+            raise MigrateError(
+                f'postgres cannot accept embedding_dtype'
+                f' {payload.embedding_dtype!r}; accepted:'
+                f' {sorted(self.snapshot_features.accepted_embedding_dtypes)}')
+
+        _check_identifier(store)
+        schema = _store_schema(store)
+        dim = payload.embedding_dim
+        with _connection(self.dsn, autocommit=False) as conn:
+            try:
+                apply_baseline_schema(conn, schema, dim)
+
+                if payload.insights:
+                    insight_rows = []
+                    for ins in payload.insights:
+                        emb = (
+                            [float(x) for x in ins.embedding]
+                            if ins.embedding is not None else None)
+                        insight_rows.append((
+                            ins.id, ins.content, ins.category,
+                            ins.importance,
+                            json.dumps(ins.entities),
+                            ins.source, ins.access_count,
+                            json.dumps(ins.keywords)
+                            if ins.keywords is not None else None,
+                            ins.summary,
+                            json.dumps(ins.semantic_facts)
+                            if ins.semantic_facts is not None
+                            else None,
+                            ins.last_accessed_at, emb,
+                            ins.effective_importance,
+                            ins.linked_at, ins.enriched_at,
+                            ins.created_at, ins.updated_at,
+                            ins.deleted_at, ins.prompt_version,
+                            ins.model_id, ins.embedding_model))
+                    with conn.cursor() as cur:
+                        cur.executemany(
+                            f'insert into {schema}.insights ('
+                            ' id, content, category, importance,'
+                            ' entities, source, access_count,'
+                            ' keywords, summary, semantic_facts,'
+                            ' last_accessed_at, embedding,'
+                            ' effective_importance, linked_at,'
+                            ' enriched_at, created_at, updated_at,'
+                            ' deleted_at, prompt_version, model_id,'
+                            ' embedding_model)'
+                            ' values (%s, %s, %s, %s, %s::jsonb,'
+                            ' %s, %s, %s::jsonb, %s, %s::jsonb,'
+                            ' %s, %s, %s, %s, %s, %s, %s, %s,'
+                            ' %s, %s, %s)'
+                            ' on conflict (id) do nothing',
+                            insight_rows)
+
+                if payload.edges:
+                    edge_rows = [(
+                        e.source_id, e.target_id, e.edge_type,
+                        e.weight, json.dumps(e.metadata),
+                        e.created_at) for e in payload.edges]
+                    with conn.cursor() as cur:
+                        cur.executemany(
+                            f'insert into {schema}.edges'
+                            ' (source_id, target_id, edge_type,'
+                            ' weight, metadata, created_at)'
+                            ' values (%s, %s, %s, %s, %s::jsonb,'
+                            ' %s)'
+                            ' on conflict (source_id, target_id,'
+                            ' edge_type) do nothing',
+                            edge_rows)
+
+                if payload.oplog:
+                    op_rows = []
+                    for op in payload.oplog:
+                        legacy = op.legacy_id or op.id
+                        op_rows.append((
+                            op.operation, op.insight_id, op.detail,
+                            op.created_at,
+                            json.dumps(op.before)
+                            if op.before is not None else None,
+                            json.dumps(op.after)
+                            if op.after is not None else None,
+                            legacy))
+                    with conn.cursor() as cur:
+                        cur.executemany(
+                            f'insert into {schema}.oplog'
+                            ' (operation, insight_id, detail,'
+                            '  created_at, before, after, legacy_id)'
+                            ' values (%s, %s, %s, %s, %s::jsonb,'
+                            ' %s::jsonb, %s)'
+                            ' on conflict (legacy_id) do nothing',
+                            op_rows)
+
+                if payload.embedding_pending:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            f'alter table {schema}.insights'
+                            ' add column if not exists'
+                            f' embedding_pending vector({dim})')
+                        for p in payload.embedding_pending:
+                            cur.execute(
+                                f'update {schema}.insights'
+                                ' set embedding_pending = %s'
+                                ' where id = %s',
+                                ([float(x) for x in p.vector],
+                                 p.insight_id))
+
+                meta_rows = list(payload.meta.items())
+                if payload.swap_state:
+                    s = payload.swap_state
+                    meta_rows.extend([
+                        ('embed_swap_target_provider',
+                         s.target_provider),
+                        ('embed_swap_target_model', s.target_model),
+                        ('embed_swap_target_dim', str(s.target_dim)),
+                        ('embed_swap_cursor', s.cursor or ''),
+                        ])
+                if meta_rows:
+                    with conn.cursor() as cur:
+                        cur.executemany(
+                            f'insert into {schema}.meta (key, value)'
+                            ' values (%s, %s)'
+                            ' on conflict (key) do update'
+                            ' set value = excluded.value',
+                            meta_rows)
+
+                conn.commit()
+            except Exception as exc:
+                conn.rollback()
+                if isinstance(exc, MigrateError):
+                    raise
+                raise MigrateError(
+                    f'postgres apply for store {store!r} failed:'
+                    f' {type(exc).__name__}: {exc}') from exc
+
+    def archive(self, store: str, data_dir: str) -> Artifact:
+        from memman.setup.archive import archive_postgres_schema
+        try:
+            path = archive_postgres_schema(data_dir, store, self.dsn)
+        except RuntimeError as exc:
+            raise MigrateError(
+                f'archive failed for store {store!r}: {exc}'
+                ) from exc
+        return Artifact(
+            kind='filesystem',
+            location=str(path / 'dump.pgdump'), metadata={})
+
+    def drop(self, store: str) -> None:
+        drop_postgres_store(store, self.dsn)
