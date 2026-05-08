@@ -79,10 +79,7 @@ def active_store(
             reindex_if_constants_changed(backend)
             try:
                 fp_mod.seed_if_fresh(backend, get_client())
-                ec = fp_mod.bound_embedder(backend)
-                if not ec.available():
-                    raise EmbedFingerprintError(
-                        ec.unavailable_message())
+                fp_mod.bound_embedder(backend)
             except (EmbedFingerprintError, ConfigError) as exc:
                 raise click.ClickException(str(exc)) from exc
         yield backend
