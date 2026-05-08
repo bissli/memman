@@ -79,7 +79,7 @@ def _seed_store(store_dir: Path, dim: int, n_rows: int = 3) -> None:
 def test_migrate_resolves_non_512_dim_from_source(pg_dsn, tmp_path):
     """A 1024-dim source store yields a `vector(1024)` destination.
     """
-    from memman.migrate import SchemaState, migrate_store
+    from memman.migrate import SchemaState, migrate_store_to_postgres
     from memman.store.postgres import _store_schema
 
     store = 'mig_dim_1024'
@@ -91,7 +91,7 @@ def test_migrate_resolves_non_512_dim_from_source(pg_dsn, tmp_path):
         with conn.cursor() as cur:
             cur.execute(f'drop schema if exists {schema} cascade')
     try:
-        migrate_store(
+        migrate_store_to_postgres(
             source_dir=str(sdir), dsn=pg_dsn, store=store,
             state=SchemaState.ABSENT)
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
@@ -117,7 +117,7 @@ def test_migrate_raises_on_mixed_dim_rows(pg_dsn, tmp_path):
     """A source row whose blob size disagrees with the fingerprint dim
     surfaces as ValueError, not a silent vector loss.
     """
-    from memman.migrate import MigrateError, SchemaState, migrate_store
+    from memman.migrate import MigrateError, SchemaState, migrate_store_to_postgres
     from memman.store.postgres import _store_schema
 
     store = 'mig_mixed_dim'
@@ -151,7 +151,7 @@ def test_migrate_raises_on_mixed_dim_rows(pg_dsn, tmp_path):
             cur.execute(f'drop schema if exists {schema} cascade')
     try:
         with pytest.raises(MigrateError, match='256|dim'):
-            migrate_store(
+            migrate_store_to_postgres(
                 source_dir=str(sdir), dsn=pg_dsn, store=store,
                 state=SchemaState.ABSENT)
     finally:

@@ -60,7 +60,7 @@ def test_migrate_preserves_source_artifacts(pg_dsn, tmp_path):
     the documented operator-driven cleanup is `rm <store>/memman.db*`
     once the postgres data is verified.
     """
-    from memman.migrate import SchemaState, migrate_store
+    from memman.migrate import SchemaState, migrate_store_to_postgres
     from memman.store.postgres import _store_schema
 
     store = 'mig_preserve'
@@ -71,7 +71,7 @@ def test_migrate_preserves_source_artifacts(pg_dsn, tmp_path):
         with conn.cursor() as cur:
             cur.execute(f'drop schema if exists {schema} cascade')
     try:
-        migrate_store(
+        migrate_store_to_postgres(
             source_dir=str(sdir), dsn=pg_dsn, store=store,
             state=SchemaState.ABSENT)
         assert (sdir / 'memman.db').exists()

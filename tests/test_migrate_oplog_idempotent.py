@@ -58,7 +58,7 @@ def _seed_store_with_oplog(
 def test_oplog_table_has_legacy_id_column(pg_dsn, tmp_path):
     """After migrate, the destination oplog has a `legacy_id` column.
     """
-    from memman.migrate import SchemaState, migrate_store
+    from memman.migrate import SchemaState, migrate_store_to_postgres
     from memman.store.postgres import _store_schema
 
     store = 'mig_oplog_legacy'
@@ -69,7 +69,7 @@ def test_oplog_table_has_legacy_id_column(pg_dsn, tmp_path):
         with conn.cursor() as cur:
             cur.execute(f'drop schema if exists {schema} cascade')
     try:
-        migrate_store(
+        migrate_store_to_postgres(
             source_dir=str(sdir), dsn=pg_dsn, store=store,
             state=SchemaState.ABSENT)
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
@@ -91,7 +91,7 @@ def test_oplog_table_has_legacy_id_column(pg_dsn, tmp_path):
 def test_oplog_legacy_id_matches_source_id(pg_dsn, tmp_path):
     """Migrated oplog rows have `legacy_id = source.id`.
     """
-    from memman.migrate import SchemaState, migrate_store
+    from memman.migrate import SchemaState, migrate_store_to_postgres
     from memman.store.postgres import _store_schema
 
     store = 'mig_oplog_match'
@@ -102,7 +102,7 @@ def test_oplog_legacy_id_matches_source_id(pg_dsn, tmp_path):
         with conn.cursor() as cur:
             cur.execute(f'drop schema if exists {schema} cascade')
     try:
-        migrate_store(
+        migrate_store_to_postgres(
             source_dir=str(sdir), dsn=pg_dsn, store=store,
             state=SchemaState.ABSENT)
         with psycopg.connect(pg_dsn, autocommit=True) as conn:

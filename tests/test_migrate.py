@@ -48,7 +48,7 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
 
 def test_migrate_dry_run_reports_counts_without_writing(tmp_path, pg_dsn):
     """`--dry-run` returns counts and creates no Postgres schema."""
-    from memman.migrate import migrate_store
+    from memman.migrate import migrate_store_to_postgres
     from memman.store.postgres import _store_schema
 
     _seed_sqlite_store(tmp_path, 'mig_dry')
@@ -58,7 +58,7 @@ def test_migrate_dry_run_reports_counts_without_writing(tmp_path, pg_dsn):
             cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
 
     from memman.store.db import store_dir
-    result = migrate_store(
+    result = migrate_store_to_postgres(
         source_dir=store_dir(str(tmp_path), 'mig_dry'),
         dsn=pg_dsn, store='mig_dry', dry_run=True)
     assert result.dry_run is True
@@ -76,7 +76,7 @@ def test_migrate_dry_run_reports_counts_without_writing(tmp_path, pg_dsn):
 
 def test_migrate_writes_rows_into_target_schema(tmp_path, pg_dsn):
     """Real migrate inserts rows; ON CONFLICT makes re-run idempotent."""
-    from memman.migrate import SchemaState, migrate_store
+    from memman.migrate import SchemaState, migrate_store_to_postgres
     from memman.store.postgres import _store_schema
 
     _seed_sqlite_store(tmp_path, 'mig_write')
@@ -87,7 +87,7 @@ def test_migrate_writes_rows_into_target_schema(tmp_path, pg_dsn):
 
     from memman.store.db import store_dir
     source = store_dir(str(tmp_path), 'mig_write')
-    result = migrate_store(
+    result = migrate_store_to_postgres(
         source_dir=source, dsn=pg_dsn, store='mig_write',
         state=SchemaState.ABSENT)
     assert not result.dry_run
@@ -108,7 +108,7 @@ def test_migrate_writes_rows_into_target_schema(tmp_path, pg_dsn):
 
 def test_migrate_populated_state_drops_and_recreates(tmp_path, pg_dsn):
     """SchemaState.POPULATED triggers drop+recreate."""
-    from memman.migrate import SchemaState, migrate_store
+    from memman.migrate import SchemaState, migrate_store_to_postgres
     from memman.store.postgres import _store_schema
 
     _seed_sqlite_store(tmp_path, 'mig_overwrite')
@@ -125,7 +125,7 @@ def test_migrate_populated_state_drops_and_recreates(tmp_path, pg_dsn):
     from memman.store.db import store_dir
     source = store_dir(str(tmp_path), 'mig_overwrite')
     try:
-        migrate_store(
+        migrate_store_to_postgres(
             source_dir=source, dsn=pg_dsn, store='mig_overwrite',
             state=SchemaState.POPULATED)
         with psycopg.connect(pg_dsn, autocommit=True) as conn:

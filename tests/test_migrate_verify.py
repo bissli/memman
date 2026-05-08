@@ -1,4 +1,4 @@
-"""Post-commit verification tests for `migrate_store`.
+"""Post-commit verification tests for `migrate_store_to_postgres`.
 
 Slice 1.3: after the destination commit lands, row counts in each
 destination table must match the captured source counts. A mismatch
@@ -50,7 +50,7 @@ def _seed_store_with_rows(store_dir: Path, n_rows: int = 4) -> None:
 def test_migrate_result_marks_verified_on_count_match(pg_dsn, tmp_path):
     """Happy-path migrate sets `MigrateResult.verified = True`.
     """
-    from memman.migrate import SchemaState, migrate_store
+    from memman.migrate import SchemaState, migrate_store_to_postgres
     from memman.store.postgres import _store_schema
 
     store = 'mig_verify_ok'
@@ -61,7 +61,7 @@ def test_migrate_result_marks_verified_on_count_match(pg_dsn, tmp_path):
         with conn.cursor() as cur:
             cur.execute(f'drop schema if exists {schema} cascade')
     try:
-        result = migrate_store(
+        result = migrate_store_to_postgres(
             source_dir=str(sdir), dsn=pg_dsn, store=store,
             state=SchemaState.ABSENT)
         assert result.verified is True
@@ -77,7 +77,7 @@ def test_migrate_raises_on_destination_count_mismatch(pg_dsn, tmp_path):
 
     Patch `_import_insights` to skip one row; verify step catches it.
     """
-    from memman.migrate import MigrateError, SchemaState, migrate_store
+    from memman.migrate import MigrateError, SchemaState, migrate_store_to_postgres
     from memman.store.postgres import _store_schema
 
     store = 'mig_verify_mismatch'
@@ -110,7 +110,7 @@ def test_migrate_raises_on_destination_count_mismatch(pg_dsn, tmp_path):
     try:
         with patch.object(imp, '_import_insights', side_effect=short):
             with pytest.raises(MigrateError, match='verif'):
-                migrate_store(
+                migrate_store_to_postgres(
                     source_dir=str(sdir), dsn=pg_dsn, store=store,
                     state=SchemaState.ABSENT)
     finally:

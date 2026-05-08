@@ -1,4 +1,4 @@
-"""Source-side precondition tests for `migrate_store`.
+"""Source-side precondition tests for `migrate_store_to_postgres`.
 
 Slice 1.2: source SQLite is opened read-only and an empty source
 (zero insights and no fingerprint) is rejected with a clear error
@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from memman.migrate import MigrateError, migrate_store
+from memman.migrate import MigrateError, migrate_store_to_postgres
 from memman.store.db import _BASELINE_SCHEMA
 
 
@@ -49,7 +49,7 @@ def test_migrate_rejects_truly_empty_source(tmp_path):
     sdir = tmp_path / 'empty_store'
     _empty_store(sdir)
     with pytest.raises(MigrateError, match='empty'):
-        migrate_store(
+        migrate_store_to_postgres(
             source_dir=str(sdir), dsn='postgresql://unused',
             store='empty_store')
 
@@ -68,7 +68,7 @@ def test_migrate_opens_source_in_readonly_mode(tmp_path):
 
     with patch('sqlite3.connect', side_effect=spy):
         try:
-            migrate_store(
+            migrate_store_to_postgres(
                 source_dir=str(sdir), dsn='postgresql://unused',
                 store='ro_check')
         except MigrateError:

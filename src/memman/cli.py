@@ -2221,6 +2221,10 @@ def uninstall(ctx: click.Context, target: str) -> None:
               help='Store to migrate. Required unless --all.')
 @click.option('--all', 'migrate_all', is_flag=True,
               help='Migrate every store under the data dir.')
+@click.option('--to', 'target_backend',
+              type=click.Choice(['sqlite', 'postgres']),
+              default='postgres',
+              help='Target backend for the migration. Default: postgres.')
 @click.option('--dry-run', is_flag=True,
               help='Report the plan without writing or prompting.')
 @click.option('--yes', is_flag=True, default=False,
@@ -2228,24 +2232,32 @@ def uninstall(ctx: click.Context, target: str) -> None:
 @click.pass_context
 def migrate(
         ctx: click.Context, store: str, migrate_all: bool,
-        dry_run: bool, yes: bool) -> None:
-    """Migrate memman stores from SQLite to Postgres.
+        target_backend: str, dry_run: bool, yes: bool) -> None:
+    """Migrate memman stores between SQLite and Postgres backends.
 
-    Echoes a plan (source paths, redacted destination DSN, per-store
-    target schema state) and prompts for confirmation. Stores whose
-    target schema already exists on the remote are dropped and
-    recreated. Holds the shared drain.lock for the duration so a
-    scheduler-fired drain cannot race the SQLite reader. On success
-    writes per-store `MEMMAN_BACKEND_<store>=postgres` and
-    `MEMMAN_PG_DSN_<store>=<dsn>` keys to the env file so the next
-    drain routes the migrated store to Postgres.
+    Migration is symmetric. `--to postgres` (default) copies SQLite
+    stores into a Postgres schema, archives the SQLite source, and
+    flips MEMMAN_BACKEND_<store>=postgres. `--to sqlite` dumps the
+    Postgres schema to archive/, copies rows into a fresh SQLite
+    store, drops the postgres schema, and flips
+    MEMMAN_BACKEND_<store>=sqlite. Stores already on the target
+    backend emit a warning and are skipped (idempotent). The shared
+    drain.lock is held throughout so a scheduler-fired drain cannot
+    race the migration.
     """
+    import shutil
+
     from memman import config
-    from memman.migrate import MigrateError, SchemaState, held_drain_lock
-    from memman.migrate import inspect_target_schemas, migrate_store
-    from memman.migrate import preflight
+    from memman.migrate import (
+        MigrateError, SchemaState, held_drain_lock,
+        inspect_target_schemas, migrate_store_to_postgres,
+        migrate_store_to_sqlite, preflight,
+        )
     from memman.setup.scheduler import _write_env_keys
     from memman.store.db import list_local_store_dirs, store_dir
+    from memman.store.factory import (
+        list_stores, resolve_store_backend, resolve_store_pg_dsn,
+        )
     from memman.trace import redact_dsn
 
     data_dir = ctx.obj['data_dir']
@@ -2255,135 +2267,308 @@ def migrate(
     if migrate_all and store:
         raise click.UsageError(
             'pass either --store NAME or --all, not both')
+    if dry_run and target_backend == 'sqlite':
+        raise click.UsageError(
+            '--dry-run is not supported with --to sqlite')
 
     if migrate_all:
-        dsn = config.get(config.DEFAULT_PG_DSN)
-        if not dsn:
-            raise click.UsageError(
-                'MEMMAN_DEFAULT_PG_DSN is not set; --all requires a'
-                ' default DSN. Run `memman config set-pg-dsn --default`,'
-                ' or migrate one store at a time with --store NAME.')
+        if target_backend == 'sqlite':
+            stores_all = list_stores(data_dir)
+        else:
+            stores_all = list_local_store_dirs(data_dir)
     else:
-        dsn = (config.get(config.PG_DSN_FOR(store))
-               or config.get(config.DEFAULT_PG_DSN))
-        if not dsn:
-            raise click.UsageError(
-                f'no DSN for store {store!r}: set'
-                f' {config.PG_DSN_FOR(store)} or {config.DEFAULT_PG_DSN}'
-                f' (run `memman config set-pg-dsn --store {store}`'
-                ' or `--default`).')
-
-    try:
-        preflight(dsn)
-    except MigrateError as exc:
-        raise click.ClickException(str(exc))
-
-    if migrate_all:
-        stores = list_local_store_dirs(data_dir)
-    else:
-        stores = [store]
-    if not stores:
+        stores_all = [store]
+    if not stores_all:
         click.echo('no stores to migrate', err=True)
         return
 
-    try:
-        states = inspect_target_schemas(dsn, stores)
-    except MigrateError as exc:
-        raise click.ClickException(str(exc))
+    todo: list[str] = []
+    skipped: list[str] = []
+    for s in stores_all:
+        current = resolve_store_backend(s, data_dir)
+        if current == target_backend:
+            click.echo(
+                f'Store {s!r} is already on {target_backend} backend.'
+                f' Nothing to migrate.')
+            skipped.append(s)
+            continue
+        todo.append(s)
 
-    populated = [s for s in stores
-                 if states[s] == SchemaState.POPULATED]
-
-    click.echo('Migration plan:')
-    click.echo(f'  Source:      {data_dir}/data/')
-    click.echo(f'  Destination: {redact_dsn(dsn)}')
-    click.echo(f'  Stores ({len(stores)}):')
-    width = max((len(s) for s in stores), default=0)
-    for s in stores:
-        st = states[s]
-        if st == SchemaState.ABSENT:
-            note = 'will create'
-        elif st == SchemaState.EMPTY:
-            note = 'EMPTY, will recreate'
-        else:
-            note = 'POPULATED, will DROP CASCADE and recreate'
-        click.echo(
-            f'    {s.ljust(width)} -> store_{s}    [{note}]')
-    if populated:
-        click.echo('')
-        click.echo(
-            f'WARNING: {len(populated)} store(s) will be'
-            f' destructively overwritten.')
-    if not dry_run:
-        click.echo('')
-        click.echo(
-            'After successful migrate, MEMMAN_BACKEND_<store>=postgres'
-            ' and MEMMAN_PG_DSN_<store>=<dsn> will be written to'
-            ' the env file for each migrated store.')
-
-    if dry_run:
-        for s in stores:
-            source = store_dir(data_dir, s)
-            try:
-                res = migrate_store(
-                    source_dir=source, dsn=dsn, store=s,
-                    dry_run=True, state=states[s])
-                click.echo(
-                    f'{s}: insights={res.insights}'
-                    f' edges={res.edges} oplog={res.oplog}'
-                    f' meta={res.meta} (dry-run)')
-            except MigrateError as exc:
-                raise click.ClickException(f'{s}: {exc}')
+    if not todo:
+        if migrate_all:
+            click.echo(f'migrated=0 skipped={len(skipped)}')
         return
+
+    if target_backend == 'postgres':
+        if migrate_all:
+            dsn = config.get(config.DEFAULT_PG_DSN)
+            if not dsn:
+                raise click.UsageError(
+                    'MEMMAN_DEFAULT_PG_DSN is not set; --all requires a'
+                    ' default DSN. Run `memman config set-pg-dsn'
+                    ' --default`, or migrate one store at a time with'
+                    ' --store NAME.')
+        else:
+            dsn = (config.get(config.PG_DSN_FOR(todo[0]))
+                   or config.get(config.DEFAULT_PG_DSN))
+            if not dsn:
+                raise click.UsageError(
+                    f'no DSN for store {todo[0]!r}: set'
+                    f' {config.PG_DSN_FOR(todo[0])} or'
+                    f' {config.DEFAULT_PG_DSN} (run `memman config'
+                    f' set-pg-dsn --store {todo[0]}` or `--default`).')
+
+        try:
+            preflight(dsn)
+        except MigrateError as exc:
+            raise click.ClickException(str(exc))
+
+        try:
+            states = inspect_target_schemas(dsn, todo)
+        except MigrateError as exc:
+            raise click.ClickException(str(exc))
+
+        populated = [s for s in todo
+                     if states[s] == SchemaState.POPULATED]
+
+        click.echo('Migration plan:')
+        click.echo(f'  Source:      {data_dir}/data/')
+        click.echo(f'  Destination: {redact_dsn(dsn)}')
+        click.echo(f'  Stores ({len(todo)}):')
+        width = max((len(s) for s in todo), default=0)
+        for s in todo:
+            st = states[s]
+            if st == SchemaState.ABSENT:
+                note = 'will create'
+            elif st == SchemaState.EMPTY:
+                note = 'EMPTY, will recreate'
+            else:
+                note = 'POPULATED, will DROP CASCADE and recreate'
+            click.echo(
+                f'    {s.ljust(width)} -> store_{s}    [{note}]')
+        if populated:
+            click.echo('')
+            click.echo(
+                f'WARNING: {len(populated)} store(s) will be'
+                f' destructively overwritten.')
+        if not dry_run:
+            click.echo('')
+            click.echo(
+                'After successful migrate,'
+                ' MEMMAN_BACKEND_<store>=postgres'
+                ' and MEMMAN_PG_DSN_<store>=<dsn> will be written to'
+                ' the env file for each migrated store.')
+
+        if dry_run:
+            for s in todo:
+                source = store_dir(data_dir, s)
+                try:
+                    res = migrate_store_to_postgres(
+                        source_dir=source, dsn=dsn, store=s,
+                        dry_run=True, state=states[s])
+                    click.echo(
+                        f'{s}: insights={res.insights}'
+                        f' edges={res.edges} oplog={res.oplog}'
+                        f' meta={res.meta} (dry-run)')
+                except MigrateError as exc:
+                    raise click.ClickException(f'{s}: {exc}')
+            return
+
+        if not yes:
+            click.echo('')
+            click.confirm('Proceed?', default=False, abort=True)
+
+        try:
+            with held_drain_lock(data_dir):
+                for s in todo:
+                    source = store_dir(data_dir, s)
+                    try:
+                        res = migrate_store_to_postgres(
+                            source_dir=source, dsn=dsn, store=s,
+                            dry_run=False, state=states[s])
+                        click.echo(
+                            f'{s}: insights={res.insights}'
+                            f' edges={res.edges} oplog={res.oplog}'
+                            f' meta={res.meta} (verified)')
+                        _write_env_keys({
+                            config.BACKEND_FOR(s): 'postgres',
+                            config.PG_DSN_FOR(s): dsn,
+                            }, data_dir=data_dir)
+                        click.echo(
+                            f'  Wrote {config.BACKEND_FOR(s)}=postgres'
+                            f' to {data_dir}/env.')
+                        from memman.setup.archive import archive_store_dir
+                        try:
+                            archive_dest = archive_store_dir(data_dir, s)
+                            if archive_dest is not None:
+                                click.echo(
+                                    f'  Archived source to'
+                                    f' {archive_dest}.')
+                        except OSError as exc:
+                            click.echo(
+                                f'  WARNING: could not archive source'
+                                f' for {s!r}: {exc}; leaving in place.'
+                                ' Run `memman doctor` to track.',
+                                err=True)
+                    except MigrateError as exc:
+                        raise click.ClickException(f'{s}: {exc}')
+        except MigrateError as exc:
+            raise click.ClickException(str(exc))
+
+        click.echo('')
+        click.echo(
+            f'Migration complete: {len(todo)} store(s)'
+            f' copied to Postgres.')
+        click.echo(
+            f'Sources archived to'
+            f' {data_dir}/archive/<store>/<YYYYMMDD>_<NN>/.'
+            f' Remove with `rm -rf` when no longer needed.')
+        if migrate_all and skipped:
+            click.echo(
+                f'migrated={len(todo)} skipped={len(skipped)}')
+        click.echo('')
+        click.echo('Recommended next step:')
+        click.echo(
+            '  memman doctor    # verify the postgres backend health')
+        return
+
+    if shutil.which('pg_dump') is None:
+        raise click.ClickException(
+            "pg_dump not found on PATH. Install postgresql-client:"
+            "\n  apt: sudo apt install postgresql-client"
+            "\n  brew: brew install libpq && brew link --force libpq")
+
+    store_dsns: dict[str, str] = {}
+    for s in todo:
+        dsn = resolve_store_pg_dsn(s, data_dir)
+        if not dsn:
+            raise click.UsageError(
+                f'no postgres DSN for store {s!r}: set'
+                f' {config.PG_DSN_FOR(s)} or {config.DEFAULT_PG_DSN}.')
+        store_dsns[s] = dsn
+
+    target_paths: dict[str, pathlib.Path] = {
+        s: pathlib.Path(store_dir(data_dir, s)) for s in todo
+        }
+    for s in todo:
+        if target_paths[s].exists():
+            raise click.ClickException(
+                f'target directory {target_paths[s]} already exists;'
+                f' move it aside (`mv {target_paths[s]}'
+                f' {target_paths[s]}.bak`) and re-run.')
+
+    click.echo('Migration plan (postgres -> sqlite):')
+    click.echo(f'  Target: {data_dir}/data/')
+    click.echo(f'  Stores ({len(todo)}):')
+    width = max((len(s) for s in todo), default=0)
+    for s in todo:
+        click.echo(
+            f'    {s.ljust(width)} <- {redact_dsn(store_dsns[s])}'
+            f' (schema store_{s})')
+    click.echo('')
+    click.echo(
+        'After successful migrate, MEMMAN_BACKEND_<store>=sqlite will'
+        ' be written and MEMMAN_PG_DSN_<store> removed for each'
+        ' migrated store. Postgres schemas will be archived to'
+        f' {data_dir}/archive/<store>/<YYYYMMDD>_<NN>/dump.pgdump'
+        ' and dropped.')
 
     if not yes:
         click.echo('')
         click.confirm('Proceed?', default=False, abort=True)
 
+    from memman.embed.fingerprint import Fingerprint
+    from memman.setup.archive import archive_postgres_schema
+    from memman.store.db import open_db
+    from memman.store.postgres import drop_postgres_store
+    from memman.store.snapshot import write_snapshot
+
     try:
         with held_drain_lock(data_dir):
-            for s in stores:
-                source = store_dir(data_dir, s)
+            for s in todo:
+                dsn = store_dsns[s]
+                target = target_paths[s]
+                tmp = target.with_name(target.name + '.tmp')
+                if tmp.exists():
+                    click.echo(f'  Cleaning leftover {tmp}.')
+                    shutil.rmtree(tmp)
                 try:
-                    res = migrate_store(
-                        source_dir=source, dsn=dsn, store=s,
-                        dry_run=False, state=states[s])
+                    res = migrate_store_to_sqlite(
+                        dsn=dsn, target_dir=str(tmp), store=s)
                     click.echo(
                         f'{s}: insights={res.insights}'
                         f' edges={res.edges} oplog={res.oplog}'
                         f' meta={res.meta} (verified)')
-                    _write_env_keys({
-                        config.BACKEND_FOR(s): 'postgres',
-                        config.PG_DSN_FOR(s): dsn,
-                        }, data_dir=data_dir)
-                    click.echo(
-                        f'  Wrote {config.BACKEND_FOR(s)}=postgres'
-                        f' to {data_dir}/env.')
-                    from memman.setup.archive import archive_store_dir
-                    try:
-                        archive_dest = archive_store_dir(data_dir, s)
-                        if archive_dest is not None:
-                            click.echo(
-                                f'  Archived source to {archive_dest}.')
-                    except OSError as exc:
-                        click.echo(
-                            f'  WARNING: could not archive source for'
-                            f' {s!r}: {exc}; leaving in place. Run'
-                            ' `memman doctor` to track.', err=True)
                 except MigrateError as exc:
+                    if tmp.exists():
+                        shutil.rmtree(tmp, ignore_errors=True)
                     raise click.ClickException(f'{s}: {exc}')
+
+                tmp.rename(target)
+                click.echo(f'  Wrote sqlite store at {target}.')
+
+                try:
+                    archive_dest = archive_postgres_schema(
+                        data_dir, s, dsn)
+                    click.echo(
+                        f'  Archived postgres schema to'
+                        f' {archive_dest}.')
+                except Exception as exc:
+                    raise click.ClickException(
+                        f'{s}: archive_postgres_schema failed: {exc}')
+
+                _write_env_keys(
+                    {config.BACKEND_FOR(s): 'sqlite'},
+                    removes={config.PG_DSN_FOR(s)},
+                    data_dir=data_dir)
+                click.echo(
+                    f'  Wrote {config.BACKEND_FOR(s)}=sqlite to'
+                    f' {data_dir}/env (removed'
+                    f' {config.PG_DSN_FOR(s)}).')
+
+                try:
+                    db = open_db(str(target))
+                    try:
+                        fp_row = db.conn.execute(
+                            'select value from meta'
+                            " where key = 'embed_fingerprint'"
+                            ).fetchone()
+                        if fp_row and fp_row[0]:
+                            fp = Fingerprint.from_json(fp_row[0])
+                            write_snapshot(db, str(target), fp)
+                            click.echo('  Regenerated snapshot.')
+                    finally:
+                        db.close()
+                except Exception as exc:
+                    click.echo(
+                        f'  WARNING: snapshot regeneration failed:'
+                        f' {exc}', err=True)
+
+                try:
+                    drop_postgres_store(s, dsn)
+                    click.echo(f'  Dropped postgres schema store_{s}.')
+                except Exception as exc:
+                    click.echo(
+                        f'  WARNING: failed to drop postgres schema'
+                        f' for {s!r}: {exc}; remove manually with'
+                        f' `psql -c "drop schema store_{s} cascade"`.',
+                        err=True)
     except MigrateError as exc:
         raise click.ClickException(str(exc))
 
     click.echo('')
     click.echo(
-        f'Migration complete: {len(stores)} store(s) copied to Postgres.')
+        f'Migration complete: {len(todo)} store(s)'
+        f' migrated to SQLite.')
     click.echo(
-        f'Sources archived to {data_dir}/archive/<store>/<YYYYMMDD>_<NN>/.'
-        f' Remove with `rm -rf` when no longer needed.')
+        f'Postgres schemas archived to'
+        f' {data_dir}/archive/<store>/<YYYYMMDD>_<NN>/dump.pgdump.'
+        f' Replay with `pg_restore -d <dsn> <archive>` if needed.')
+    if migrate_all and skipped:
+        click.echo(f'migrated={len(todo)} skipped={len(skipped)}')
     click.echo('')
     click.echo('Recommended next step:')
-    click.echo('  memman doctor    # verify the postgres backend health')
+    click.echo('  memman doctor    # verify the sqlite backend health')
 
 
 def _emit_guide() -> None:
