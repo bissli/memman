@@ -383,7 +383,7 @@ def check_env_completeness() -> dict[str, Any]:
         }
 
 
-from memman.store.factory import KNOWN_BACKENDS as _KNOWN_BACKENDS
+from memman.store.factory import known_backends as _known_backends
 
 
 def check_per_store_keys(data_dir: str) -> dict[str, Any]:
@@ -458,10 +458,11 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
             'error': None,
             'warning': None,
             }
-        if kind not in _KNOWN_BACKENDS:
+        registered = _known_backends()
+        if kind not in registered:
             entry['error'] = (
                 f'unknown backend {kind!r}; registered:'
-                f' {", ".join(sorted(_KNOWN_BACKENDS))}')
+                f' {", ".join(sorted(registered))}')
             _bump('fail')
         elif kind == 'postgres':
             per_store_dsn = file_values.get(config.PG_DSN_FOR(store))
