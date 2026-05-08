@@ -452,5 +452,3 @@ def held_drain_lock(data_dir: str) -> Iterator[int]:
         yield fd
     finally:
         release(fd)
-
-

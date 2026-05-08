@@ -10,7 +10,6 @@ refactor that deleted the module-level
 """
 from __future__ import annotations
 
-import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -31,7 +30,7 @@ def _canonical_data_dir(per_store_path: Path, store: str) -> tuple[str, str | No
         return str(per_store_path.parent.parent), None
     scratch = Path(tempfile.mkdtemp(prefix='memman-migrate-helper-'))
     (scratch / 'data').mkdir()
-    os.symlink(per_store_path, scratch / 'data' / store)
+    Path(scratch / 'data' / store).symlink_to(per_store_path)
     return str(scratch), str(scratch)
 
 
@@ -48,12 +47,8 @@ def migrate_store_to_postgres(
     mismatch so tests asserting verify behavior keep working.
     """
     from memman.migrate import _verify_destination_counts
-    from memman.store.postgres import (
-        PostgresMigrator,
-        _connection,
-        _store_schema,
-        drop_postgres_store,
-        )
+    from memman.store.postgres import PostgresMigrator, _connection
+    from memman.store.postgres import _store_schema, drop_postgres_store
     from memman.store.sqlite import SqliteMigrator
 
     data_dir, scratch = _canonical_data_dir(Path(source_dir), store)
@@ -73,7 +68,7 @@ def migrate_store_to_postgres(
                 meta=len(payload.meta),
                 dry_run=True)
 
-        if state in (SchemaState.EMPTY, SchemaState.POPULATED):
+        if state in {SchemaState.EMPTY, SchemaState.POPULATED}:
             drop_postgres_store(store, dsn)
 
         tgt = PostgresMigrator(data_dir, dsn=dsn)

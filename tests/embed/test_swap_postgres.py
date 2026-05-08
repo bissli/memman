@@ -11,8 +11,7 @@ import psycopg
 import pytest
 from memman.embed.fingerprint import Fingerprint, stored_fingerprint
 from memman.embed.fingerprint import write_fingerprint
-from memman.embed.swap import STATE_DONE, SwapPlan, abort_swap
-from memman.embed.swap import run_swap
+from memman.embed.swap import STATE_DONE, SwapPlan, abort_swap, run_swap
 from memman.store.postgres import EMBEDDING_DIM, _store_schema
 from memman.store.postgres import open_postgres_backend
 

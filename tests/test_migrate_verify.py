@@ -81,9 +81,8 @@ def test_migrate_raises_on_destination_count_mismatch(pg_dsn, tmp_path):
     discrepancy and raises.
     """
     from memman.migrate import MigrateError, SchemaState
-    from memman.store.postgres import (
-        PostgresMigrator, _connection, _store_schema,
-        )
+    from memman.store.postgres import PostgresMigrator, _connection
+    from memman.store.postgres import _store_schema
     from tests._migrate_helpers import migrate_store_to_postgres
 
     store = 'mig_verify_mismatch'

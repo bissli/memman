@@ -17,10 +17,9 @@ from __future__ import annotations
 
 import re
 
-from memman.migrate import MigrateInsight, MigrationPayload, PAYLOAD_VERSION
+from memman.migrate import PAYLOAD_VERSION, MigrateInsight, MigrationPayload
 from memman.store.db import _BASELINE_SCHEMA
 from memman.store.postgres import PG_BASELINE_SCHEMA
-
 
 _MIGRATE_INSIGHT_FIELDS = set(MigrateInsight.__dataclass_fields__.keys())
 
@@ -44,8 +43,8 @@ def _columns_under(ddl: str, table: str) -> set[str]:
         if not line or line.startswith('--'):
             continue
         head = line.split()[0]
-        if head.lower() in (
-                'primary', 'foreign', 'constraint', 'check', 'unique'):
+        if head.lower() in {
+                'primary', 'foreign', 'constraint', 'check', 'unique'}:
             continue
         cols.add(head.lower())
     return cols

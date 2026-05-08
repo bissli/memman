@@ -12,7 +12,6 @@ from unittest.mock import patch
 import pytest
 from memman.migrate import MigrateError
 from memman.store.db import _BASELINE_SCHEMA
-
 from tests._migrate_helpers import migrate_store_to_postgres
 
 

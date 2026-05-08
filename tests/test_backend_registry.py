@@ -17,12 +17,9 @@ edits to factory.py / cli.py / doctor.py / extras.py dispatch.
 from __future__ import annotations
 
 import pytest
-
 from memman.migrate import BackendFeatures
-from memman.store.factory import (
-    BACKENDS, BackendDescriptor, all_descriptors, descriptor,
-    known_backends,
-    )
+from memman.store.factory import BACKENDS, BackendDescriptor, all_descriptors
+from memman.store.factory import descriptor, known_backends
 
 
 def test_known_backends_reads_from_static_dict():

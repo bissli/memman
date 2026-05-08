@@ -8,7 +8,6 @@ edge keys, and oplog ids (via `coalesce(legacy_id, id)`) is the
 cornerstone test.
 """
 
-import json
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -59,11 +58,9 @@ def _drop_schema(pg_dsn: str, store: str) -> None:
 def test_migrate_to_sqlite_round_trip(tmp_path, pg_dsn):
     """SQLite -> Postgres -> SQLite round-trip preserves row counts."""
     from memman.migrate import SchemaState
-    from tests._migrate_helpers import (
-        migrate_store_to_postgres,
-        migrate_store_to_sqlite,
-        )
     from memman.store.db import open_db, store_dir
+    from tests._migrate_helpers import migrate_store_to_postgres
+    from tests._migrate_helpers import migrate_store_to_sqlite
 
     store = 'rb_round'
     _seed_sqlite_store(tmp_path, store)
@@ -95,11 +92,9 @@ def test_migrate_to_sqlite_round_trip(tmp_path, pg_dsn):
 def test_migrate_to_sqlite_preserves_insight_ids(tmp_path, pg_dsn):
     """Insight ids survive the round-trip bit-exact."""
     from memman.migrate import SchemaState
-    from tests._migrate_helpers import (
-        migrate_store_to_postgres,
-        migrate_store_to_sqlite,
-        )
     from memman.store.db import open_db, store_dir
+    from tests._migrate_helpers import migrate_store_to_postgres
+    from tests._migrate_helpers import migrate_store_to_sqlite
 
     store = 'rb_ids'
     _seed_sqlite_store(tmp_path, store)
@@ -129,11 +124,9 @@ def test_migrate_to_sqlite_preserves_insight_ids(tmp_path, pg_dsn):
 def test_migrate_to_sqlite_preserves_oplog_legacy_ids(tmp_path, pg_dsn):
     """Round-trip oplog ids match the original sqlite ids via legacy_id."""
     from memman.migrate import SchemaState
-    from tests._migrate_helpers import (
-        migrate_store_to_postgres,
-        migrate_store_to_sqlite,
-        )
     from memman.store.db import open_db, store_dir
+    from tests._migrate_helpers import migrate_store_to_postgres
+    from tests._migrate_helpers import migrate_store_to_sqlite
 
     store = 'rb_oplog'
     _seed_sqlite_store(tmp_path, store)
@@ -197,8 +190,8 @@ def test_migrate_to_sqlite_errors_when_fingerprint_missing(
         tmp_path, pg_dsn):
     """Schema without meta.embed_fingerprint raises MigrateError."""
     from memman.migrate import MigrateError
-    from tests._migrate_helpers import migrate_store_to_sqlite
     from memman.store.postgres import _store_schema
+    from tests._migrate_helpers import migrate_store_to_sqlite
 
     store = 'rb_nofp'
     schema = _store_schema(store)
@@ -232,9 +225,9 @@ def test_migrate_cli_to_sqlite_archives_dump_and_drops_schema(
     """CLI reverse migrate writes dump.pgdump, drops schema, flips env."""
     from memman.cli import cli
     from memman.migrate import SchemaState
-    from tests._migrate_helpers import migrate_store_to_postgres
     from memman.store.db import store_dir
     from memman.store.postgres import _store_schema
+    from tests._migrate_helpers import migrate_store_to_postgres
 
     store = 'rb_cli_full'
     data_dir = tmp_path / 'memman'
@@ -289,9 +282,9 @@ def test_migrate_cli_to_sqlite_regenerates_snapshot(
     """CLI reverse migrate writes recall_snapshot.v1.bin to target dir."""
     from memman.cli import cli
     from memman.migrate import SchemaState
-    from tests._migrate_helpers import migrate_store_to_postgres
     from memman.store.db import store_dir
     from memman.store.snapshot import SNAPSHOT_FILENAME
+    from tests._migrate_helpers import migrate_store_to_postgres
 
     store = 'rb_snap'
     data_dir = tmp_path / 'memman'
@@ -325,8 +318,8 @@ def test_migrate_cli_to_sqlite_errors_when_pg_dump_missing(
     """`shutil.which('pg_dump') is None` -> ClickException with install hint."""
     from memman.cli import cli
     from memman.migrate import SchemaState
-    from tests._migrate_helpers import migrate_store_to_postgres
     from memman.store.db import store_dir
+    from tests._migrate_helpers import migrate_store_to_postgres
 
     store = 'rb_nopgdump'
     data_dir = tmp_path / 'memman'
@@ -370,8 +363,8 @@ def test_migrate_cli_to_sqlite_refuses_when_target_dir_exists(
     """Pre-existing data/<store>/ guards against accidental overwrite."""
     from memman.cli import cli
     from memman.migrate import SchemaState
-    from tests._migrate_helpers import migrate_store_to_postgres
     from memman.store.db import store_dir
+    from tests._migrate_helpers import migrate_store_to_postgres
 
     store = 'rb_target_exists'
     data_dir = tmp_path / 'memman'
@@ -423,8 +416,8 @@ def test_migrate_cli_to_postgres_warns_when_already_postgres(
     """`--to postgres` against a postgres-routed store warns and exits 0."""
     from memman.cli import cli
     from memman.migrate import SchemaState
-    from tests._migrate_helpers import migrate_store_to_postgres
     from memman.store.db import store_dir
+    from tests._migrate_helpers import migrate_store_to_postgres
 
     store = 'rb_already_pg'
     data_dir = tmp_path / 'memman'
@@ -457,8 +450,8 @@ def test_migrate_cli_to_sqlite_drop_failure_is_warn_only(
     """Drop-schema failure logs a warning but completes successfully."""
     from memman.cli import cli
     from memman.migrate import SchemaState
-    from tests._migrate_helpers import migrate_store_to_postgres
     from memman.store.db import store_dir
+    from tests._migrate_helpers import migrate_store_to_postgres
 
     store = 'rb_dropfail'
     data_dir = tmp_path / 'memman'
