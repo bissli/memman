@@ -88,49 +88,6 @@ def test_round_trip_preserves_linked_and_enriched_at(tmp_db, tmp_path):
     assert by_id['snap-b'].enriched_at is None
 
 
-def test_read_back_compat_old_snapshot_without_lifecycle_keys(
-        tmp_db, tmp_path):
-    """Old snapshot files without `linked_at`/`enriched_at` keys still load.
-
-    Simulates a pre-fix snapshot by writing one through the current
-    writer, then surgically rewriting the meta JSON to drop the new
-    keys before reading back. The reader must default to None rather
-    than raising KeyError.
-    """
-    import struct
-    fp = _seed(tmp_db)
-    store_dir = str(tmp_path)
-    assert write_snapshot(tmp_db, store_dir, fp) is True
-
-    path = snapshot_path(store_dir)
-    raw = path.read_bytes()
-    cursor = 4
-    (header_len,) = struct.unpack('<I', raw[cursor:cursor + 4])
-    cursor += 4 + header_len
-    (embed_len,) = struct.unpack('<Q', raw[cursor:cursor + 8])
-    cursor += 8 + embed_len
-    (meta_len,) = struct.unpack('<I', raw[cursor:cursor + 4])
-    meta_start = cursor + 4
-    meta_end = meta_start + meta_len
-    old_meta = json.loads(raw[meta_start:meta_end].decode('utf-8'))
-    for entry in old_meta:
-        entry.pop('linked_at', None)
-        entry.pop('enriched_at', None)
-    new_meta_blob = json.dumps(old_meta).encode('utf-8')
-    rebuilt = (
-        raw[:cursor]
-        + struct.pack('<I', len(new_meta_blob))
-        + new_meta_blob
-        + raw[meta_end:])
-    path.write_bytes(rebuilt)
-
-    snap = read_snapshot(store_dir, fp)
-    assert snap is not None
-    for i in snap.insights:
-        assert i.linked_at is None
-        assert i.enriched_at is None
-
-
 def test_read_returns_none_on_fingerprint_mismatch(tmp_db, tmp_path):
     """A snapshot with a different embedding model is rejected."""
     fp = _seed(tmp_db)
@@ -190,7 +147,7 @@ def test_recall_consumes_snapshot_when_present(tmp_path):
     from memman.store.db import store_dir as _store_dir
     snap_path = (
         pathlib.Path(_store_dir(data_dir, read_active(data_dir)))
-        / 'recall_snapshot.v1.bin')
+        / SNAPSHOT_FILENAME)
     assert snap_path.exists(), 'drain should write a recall snapshot'
 
     recall_result = r.invoke(

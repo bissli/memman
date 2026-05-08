@@ -86,7 +86,7 @@ def swap_backend(pg_dsn):
         _drop_schema(pg_dsn, store_name)
 
 
-def test_swap_completes_full_workflow(swap_backend):
+def test_swap_completes_full_workflow(swap_backend, monkeypatch):
     """run_swap walks all rows, cuts over, marks done."""
     backend, pg_dsn, store_name = swap_backend
     _seed(backend, 4)
@@ -97,7 +97,8 @@ def test_swap_completes_full_workflow(swap_backend):
         target_model='stub-target-d384',
         target_dim=384)
 
-    progress = run_swap(backend, ec, plan, batch_size=2)
+    monkeypatch.setenv('MEMMAN_EMBED_SWAP_BATCH_SIZE', '2')
+    progress = run_swap(backend, ec, plan)
 
     assert progress.state == STATE_DONE
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
@@ -118,7 +119,7 @@ def test_swap_completes_full_workflow(swap_backend):
     assert int(row[0]) == 384
 
 
-def test_swap_writes_fingerprint(swap_backend):
+def test_swap_writes_fingerprint(swap_backend, monkeypatch):
     """meta.embed_fingerprint reflects the target after cutover."""
     backend, _pg_dsn, _store_name = swap_backend
     _seed(backend, 2)
@@ -128,7 +129,8 @@ def test_swap_writes_fingerprint(swap_backend):
         target_model='stub-target-d256',
         target_dim=256)
 
-    run_swap(backend, ec, plan, batch_size=10)
+    monkeypatch.setenv('MEMMAN_EMBED_SWAP_BATCH_SIZE', '10')
+    run_swap(backend, ec, plan)
 
     fp = stored_fingerprint(backend)
     assert fp == Fingerprint(

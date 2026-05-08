@@ -122,7 +122,8 @@ create table if not exists {schema}.oplog (
     created_at  timestamptz not null default now(),
     before      jsonb,
     after       jsonb,
-    legacy_id   bigint
+    legacy_id   bigint,
+    constraint oplog_legacy_id_key_{schema} unique (legacy_id)
 );
 
 create table if not exists {schema}.meta (
@@ -454,8 +455,6 @@ where id = any(%s) and deleted_at is null
         if source:
             conditions.append('source = %s')
             args.append(source)
-        if limit <= 0:
-            limit = 20
         args.append(limit)
         where_clause = ' and '.join(conditions)
         sql = self._q(f"""
@@ -1010,8 +1009,6 @@ group by vector_dims(embedding)
 
     def get_without_embedding(
             self, *, limit: int = 100) -> list[Insight]:
-        if limit <= 0:
-            limit = 100
         sql = self._q(f"""
 select {_INSIGHT_COLS}
 from {{s}}.insights
@@ -1534,8 +1531,6 @@ where created_at < now() - (%s * interval '1 day')
     def recent(
             self, *, limit: int = 20,
             since: str = '') -> list[OpLogEntry]:
-        if limit <= 0:
-            limit = 20
         if since:
             since_dt = parse_timestamp(since)
             sql = f"""
@@ -2159,34 +2154,13 @@ def apply_baseline_schema(
     Caller controls the transaction. Used both by
     `_ensure_baseline_schema` (autocommit, store-open path) and by
     the migrator (in-transaction so DDL rolls back on import
-    failure). Creates the `vector` extension, the schema, base
-    tables, and the conditional `oplog.legacy_id` UNIQUE +
-    `edges.edge_type` CHECK constraints.
+    failure). Creates the `vector` extension, the schema, and the
+    base tables (with all constraints declared inline).
     """
     with conn.cursor() as cur:
         cur.execute('create extension if not exists vector')
         cur.execute(f'create schema if not exists {schema}')
         cur.execute(PG_BASELINE_SCHEMA.format(schema=schema, dim=dim))
-        cur.execute(
-            f'alter table {schema}.oplog'
-            f' add column if not exists legacy_id bigint')
-        cur.execute(
-            'select 1 from pg_constraint where conname = %s',
-            (f'oplog_legacy_id_key_{schema}',))
-        if cur.fetchone() is None:
-            cur.execute(
-                f'alter table {schema}.oplog'
-                f' add constraint oplog_legacy_id_key_{schema}'
-                f' unique (legacy_id)')
-        cur.execute(
-            'select 1 from pg_constraint where conname = %s',
-            (f'edges_edge_type_check_{schema}',))
-        if cur.fetchone() is None:
-            cur.execute(
-                f'alter table {schema}.edges'
-                f' add constraint edges_edge_type_check_{schema}'
-                f" check (edge_type in"
-                f" ('temporal','semantic','causal','entity'))")
 
 
 def _ensure_baseline_schema(

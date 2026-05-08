@@ -86,8 +86,6 @@ def trim_oplog_by_age(
 def get_oplog(db: 'DB', limit: int = 20,
               since: str = '') -> list[dict[str, Any]]:
     """Return the most recent N oplog entries, optionally filtered by date."""
-    if limit <= 0:
-        limit = 20
     if since:
         sql = """
 select id, operation, insight_id, detail, created_at, before, after

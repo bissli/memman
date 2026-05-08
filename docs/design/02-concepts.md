@@ -185,7 +185,7 @@ memman/
 │   ├── llm/                  # LLM client + extraction/reconciliation
 │   └── setup/                # LLM CLI integration + install wizard
 ├── scripts/
-│   └── import_sqlite_to_postgres.py   # Streaming reader used by migrate
+│   └── rebuild_stale.py       # Operator helper to rebuild stale embeddings
 ├── tests/
 ├── pyproject.toml            # Poetry package config (memman[postgres] extra)
 └── Makefile

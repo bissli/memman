@@ -162,7 +162,6 @@ def abort_swap(backend: Backend) -> None:
 
 def run_swap(
         backend: Backend, ec_new: EmbeddingProvider, plan: SwapPlan, *,
-        batch_size: int | None = None,
         progress_cb: Callable[[int], None] | None = None
         ) -> SwapProgress:
     """Run the full swap workflow end-to-end. Idempotent + resumable.
@@ -170,8 +169,7 @@ def run_swap(
     Reads existing progress; if no swap is in flight starts a new
     one. Continues backfilling until exhausted, then cuts over.
     """
-    if batch_size is None:
-        batch_size = batch_size_from_env()
+    batch_size = batch_size_from_env()
     progress = read_progress(backend)
     if progress.state == '':
         from memman.embed.fingerprint import stored_fingerprint

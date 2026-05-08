@@ -79,7 +79,7 @@ def swap_backend(tmp_path):
         db.close()
 
 
-def test_swap_completes_full_workflow(swap_backend):
+def test_swap_completes_full_workflow(swap_backend, monkeypatch):
     """run_swap fills embedding_pending, cuts over, marks done."""
     _seed_insights(swap_backend, 5)
     ec = _StubEmbedder(dim=768)
@@ -88,7 +88,8 @@ def test_swap_completes_full_workflow(swap_backend):
         target_model='stub-target-d768',
         target_dim=768)
 
-    progress = run_swap(swap_backend, ec, plan, batch_size=2)
+    monkeypatch.setenv('MEMMAN_EMBED_SWAP_BATCH_SIZE', '2')
+    progress = run_swap(swap_backend, ec, plan)
 
     assert progress.state == STATE_DONE
     rows = swap_backend._db._query(
@@ -100,7 +101,7 @@ def test_swap_completes_full_workflow(swap_backend):
     assert len(vec) == 768
 
 
-def test_swap_writes_fingerprint(swap_backend):
+def test_swap_writes_fingerprint(swap_backend, monkeypatch):
     """After cutover, meta.embed_fingerprint matches the target."""
     _seed_insights(swap_backend, 3)
     ec = _StubEmbedder(dim=768)
@@ -109,7 +110,8 @@ def test_swap_writes_fingerprint(swap_backend):
         target_model='stub-target-d768',
         target_dim=768)
 
-    run_swap(swap_backend, ec, plan, batch_size=10)
+    monkeypatch.setenv('MEMMAN_EMBED_SWAP_BATCH_SIZE', '10')
+    run_swap(swap_backend, ec, plan)
 
     fp = stored_fingerprint(swap_backend)
     assert fp == Fingerprint(
@@ -140,7 +142,7 @@ def test_swap_clears_meta_after_done(swap_backend):
     assert leftover == []
 
 
-def test_swap_resume_skips_already_filled_rows(swap_backend):
+def test_swap_resume_skips_already_filled_rows(swap_backend, monkeypatch):
     """A second run after a partial backfill resumes from the cursor.
 
     Simulated by manually filling embedding_pending for half the rows
@@ -167,7 +169,8 @@ def test_swap_resume_skips_already_filled_rows(swap_backend):
         target_provider='stub-target',
         target_model='stub-target-d768',
         target_dim=768)
-    progress = run_swap(swap_backend, ec, plan, batch_size=2)
+    monkeypatch.setenv('MEMMAN_EMBED_SWAP_BATCH_SIZE', '2')
+    progress = run_swap(swap_backend, ec, plan)
 
     assert progress.state == STATE_DONE
     rows = swap_backend._db._query(

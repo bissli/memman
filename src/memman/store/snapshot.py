@@ -238,10 +238,10 @@ def read_snapshot(
             summary=entry.get('summary', ''),
             linked_at=(
                 parse_timestamp(entry['linked_at'])
-                if entry.get('linked_at') else None),
+                if entry['linked_at'] else None),
             enriched_at=(
                 parse_timestamp(entry['enriched_at'])
-                if entry.get('enriched_at') else None),
+                if entry['enriched_at'] else None),
             ) for entry in meta_list]
 
     raw_adj = json.loads(adj_blob)

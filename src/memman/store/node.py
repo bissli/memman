@@ -101,8 +101,6 @@ def query_insights(db: 'DB', keyword: str = '', category: str = '',
         conditions.append('source = ?')
         args.append(source)
 
-    if limit <= 0:
-        limit = 20
     args.append(limit)
 
     where_clause = ' and '.join(conditions)
@@ -733,8 +731,6 @@ def embedding_stats(db: 'DB') -> tuple[int, int]:
 def get_insights_without_embedding(
         db: 'DB', limit: int = 100) -> list[Insight]:
     """Return active insights that lack embeddings."""
-    if limit <= 0:
-        limit = 100
     sql = f"""
 select {_INSIGHT_COLUMNS}
 from insights

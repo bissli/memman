@@ -222,11 +222,8 @@ def check_stale_post_migrate_source(data_dir: str) -> dict[str, Any]:
             'stores': stale,
             'message': (
                 'stale post-migrate SQLite source files in postgres-'
-                'routed stores. Recent migrations auto-archive into'
-                ' `<data_dir>/archive/<store>/<YYYYMMDD>_<NN>/`. For'
-                ' legacy migrations (pre-0.14.12), back-fill with'
-                ' `mv <data_dir>/data/<store> <data_dir>/archive/'
-                '<store>/<YYYYMMDD>_01`.'),
+                'routed stores. Migrations auto-archive into'
+                ' `<data_dir>/archive/<store>/<YYYYMMDD>_<NN>/`.'),
             },
         }
 
