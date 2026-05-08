@@ -1,9 +1,8 @@
-"""Post-commit verification tests for `migrate_store_to_postgres`.
+"""Post-commit verification tests for sqlite -> postgres migration.
 
 Slice 1.3: after the destination commit lands, row counts in each
 destination table must match the captured source counts. A mismatch
-raises `MigrateError` and `MigrateResult.verified` is True only on
-strict equality.
+raises `MigrateError`.
 """
 
 import sqlite3
@@ -48,25 +47,37 @@ def _seed_store_with_rows(store_dir: Path, n_rows: int = 4) -> None:
 
 
 def test_migrate_result_marks_verified_on_count_match(pg_dsn, tmp_path):
-    """Happy-path migrate sets `MigrateResult.verified = True`.
+    """Happy-path migrate verifies destination row counts match source.
     """
-    from memman.migrate import SchemaState
+    from memman.migrate import _verify_destination_counts
+    from memman.store.postgres import PostgresMigrator, _connection
     from memman.store.postgres import _store_schema
-    from tests._migrate_helpers import migrate_store_to_postgres
+    from memman.store.sqlite import SqliteMigrator
 
     store = 'mig_verify_ok'
-    sdir = tmp_path / store
+    sdir = tmp_path / 'data' / store
     _seed_store_with_rows(sdir, n_rows=3)
     schema = _store_schema(store)
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(f'drop schema if exists {schema} cascade')
     try:
-        result = migrate_store_to_postgres(
-            source_dir=str(sdir), dsn=pg_dsn, store=store,
-            state=SchemaState.ABSENT)
-        assert result.verified is True
-        assert result.insights == 3
+        src_mig = SqliteMigrator(str(tmp_path))
+        src_mig.preflight_source(store)
+        payload = src_mig.gather(store)
+        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig.preflight_target(store)
+        tgt_mig.apply(store, payload)
+        with _connection(pg_dsn, autocommit=True) as conn:
+            _verify_destination_counts(
+                conn, schema, store,
+                expected={
+                    'insights': len(payload.insights),
+                    'edges': len(payload.edges),
+                    'oplog': len(payload.oplog),
+                    'meta': len(payload.meta),
+                    })
+        assert len(payload.insights) == 3
     finally:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
@@ -77,16 +88,15 @@ def test_migrate_raises_on_destination_count_mismatch(pg_dsn, tmp_path):
     """If the destination ends up short, MigrateError is raised.
 
     Wraps `PostgresMigrator.apply` to delete one row before commit;
-    the verify-counts step in the migrate helper catches the
-    discrepancy and raises.
+    the verify-counts step then catches the discrepancy and raises.
     """
-    from memman.migrate import MigrateError, SchemaState
+    from memman.migrate import MigrateError, _verify_destination_counts
     from memman.store.postgres import PostgresMigrator, _connection
     from memman.store.postgres import _store_schema
-    from tests._migrate_helpers import migrate_store_to_postgres
+    from memman.store.sqlite import SqliteMigrator
 
     store = 'mig_verify_mismatch'
-    sdir = tmp_path / store
+    sdir = tmp_path / 'data' / store
     _seed_store_with_rows(sdir, n_rows=4)
     schema = _store_schema(store)
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
@@ -105,12 +115,24 @@ def test_migrate_raises_on_destination_count_mismatch(pg_dsn, tmp_path):
                     f' order by id limit 1)')
 
     try:
+        src_mig = SqliteMigrator(str(tmp_path))
+        src_mig.preflight_source(store)
+        payload = src_mig.gather(store)
+        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig.preflight_target(store)
         with patch.object(
                 PostgresMigrator, 'apply', new=short_apply):
-            with pytest.raises(MigrateError, match='verif'):
-                migrate_store_to_postgres(
-                    source_dir=str(sdir), dsn=pg_dsn, store=store,
-                    state=SchemaState.ABSENT)
+            tgt_mig.apply(store, payload)
+        with pytest.raises(MigrateError, match='verif'):
+            with _connection(pg_dsn, autocommit=True) as conn:
+                _verify_destination_counts(
+                    conn, schema, store,
+                    expected={
+                        'insights': len(payload.insights),
+                        'edges': len(payload.edges),
+                        'oplog': len(payload.oplog),
+                        'meta': len(payload.meta),
+                        })
     finally:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:

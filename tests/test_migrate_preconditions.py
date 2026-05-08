@@ -1,4 +1,4 @@
-"""Source-side precondition tests for `migrate_store_to_postgres`.
+"""Source-side precondition tests for sqlite -> postgres migration.
 
 Slice 1.2: source SQLite is opened read-only and an empty source
 (zero insights and no fingerprint) is rejected with a clear error
@@ -12,7 +12,7 @@ from unittest.mock import patch
 import pytest
 from memman.migrate import MigrateError
 from memman.store.db import _BASELINE_SCHEMA
-from tests._migrate_helpers import migrate_store_to_postgres
+from memman.store.sqlite import SqliteMigrator
 
 
 def _empty_store(store_dir: Path) -> None:
@@ -47,18 +47,17 @@ def _seed_with_fingerprint_only(store_dir: Path, dim: int = 512) -> None:
 def test_migrate_rejects_truly_empty_source(tmp_path):
     """Source with no insights AND no fingerprint raises MigrateError.
     """
-    sdir = tmp_path / 'empty_store'
+    sdir = tmp_path / 'data' / 'empty_store'
     _empty_store(sdir)
+    src_mig = SqliteMigrator(str(tmp_path))
     with pytest.raises(MigrateError, match='empty'):
-        migrate_store_to_postgres(
-            source_dir=str(sdir), dsn='postgresql://unused',
-            store='empty_store')
+        src_mig.preflight_source('empty_store')
 
 
 def test_migrate_opens_source_in_readonly_mode(tmp_path):
     """`sqlite3.connect` is called with the read-only URI form.
     """
-    sdir = tmp_path / 'ro_check'
+    sdir = tmp_path / 'data' / 'ro_check'
     _seed_with_fingerprint_only(sdir)
     seen_uris: list[tuple[str, bool]] = []
     real_connect = sqlite3.connect
@@ -69,9 +68,9 @@ def test_migrate_opens_source_in_readonly_mode(tmp_path):
 
     with patch('sqlite3.connect', side_effect=spy):
         try:
-            migrate_store_to_postgres(
-                source_dir=str(sdir), dsn='postgresql://unused',
-                store='ro_check')
+            src_mig = SqliteMigrator(str(tmp_path))
+            src_mig.preflight_source('ro_check')
+            src_mig.gather('ro_check')
         except MigrateError:
             pass
         except Exception:

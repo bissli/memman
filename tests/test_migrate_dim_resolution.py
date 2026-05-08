@@ -50,12 +50,11 @@ def _seed_store(store_dir: Path, dim: int, n_rows: int = 3) -> None:
 def test_migrate_resolves_non_512_dim_from_source(pg_dsn, tmp_path):
     """A 1024-dim source store yields a `vector(1024)` destination.
     """
-    from memman.migrate import SchemaState
-    from memman.store.postgres import _store_schema
-    from tests._migrate_helpers import migrate_store_to_postgres
+    from memman.store.postgres import PostgresMigrator, _store_schema
+    from memman.store.sqlite import SqliteMigrator
 
     store = 'mig_dim_1024'
-    sdir = tmp_path / store
+    sdir = tmp_path / 'data' / store
     _seed_store(sdir, dim=1024, n_rows=3)
 
     schema = _store_schema(store)
@@ -63,9 +62,12 @@ def test_migrate_resolves_non_512_dim_from_source(pg_dsn, tmp_path):
         with conn.cursor() as cur:
             cur.execute(f'drop schema if exists {schema} cascade')
     try:
-        migrate_store_to_postgres(
-            source_dir=str(sdir), dsn=pg_dsn, store=store,
-            state=SchemaState.ABSENT)
+        src_mig = SqliteMigrator(str(tmp_path))
+        src_mig.preflight_source(store)
+        payload = src_mig.gather(store)
+        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig.preflight_target(store)
+        tgt_mig.apply(store, payload)
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -89,12 +91,12 @@ def test_migrate_raises_on_mixed_dim_rows(pg_dsn, tmp_path):
     """A source row whose blob size disagrees with the fingerprint dim
     surfaces as ValueError, not a silent vector loss.
     """
-    from memman.migrate import MigrateError, SchemaState
-    from memman.store.postgres import _store_schema
-    from tests._migrate_helpers import migrate_store_to_postgres
+    from memman.migrate import MigrateError
+    from memman.store.postgres import PostgresMigrator, _store_schema
+    from memman.store.sqlite import SqliteMigrator
 
     store = 'mig_mixed_dim'
-    sdir = tmp_path / store
+    sdir = tmp_path / 'data' / store
     sdir.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(sdir / 'memman.db'))
     try:
@@ -124,9 +126,12 @@ def test_migrate_raises_on_mixed_dim_rows(pg_dsn, tmp_path):
             cur.execute(f'drop schema if exists {schema} cascade')
     try:
         with pytest.raises(MigrateError, match='256|dim'):
-            migrate_store_to_postgres(
-                source_dir=str(sdir), dsn=pg_dsn, store=store,
-                state=SchemaState.ABSENT)
+            src_mig = SqliteMigrator(str(tmp_path))
+            src_mig.preflight_source(store)
+            payload = src_mig.gather(store)
+            tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+            tgt_mig.preflight_target(store)
+            tgt_mig.apply(store, payload)
     finally:
         with psycopg.connect(pg_dsn, autocommit=True) as cn:
             with cn.cursor() as cur:

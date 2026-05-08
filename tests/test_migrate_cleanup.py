@@ -60,21 +60,23 @@ def test_migrate_preserves_source_artifacts(pg_dsn, tmp_path):
     the documented operator-driven cleanup is `rm <store>/memman.db*`
     once the postgres data is verified.
     """
-    from memman.migrate import SchemaState
-    from memman.store.postgres import _store_schema
-    from tests._migrate_helpers import migrate_store_to_postgres
+    from memman.store.postgres import PostgresMigrator, _store_schema
+    from memman.store.sqlite import SqliteMigrator
 
     store = 'mig_preserve'
-    sdir = tmp_path / store
+    sdir = tmp_path / 'data' / store
     _seed_with_artifacts(sdir)
     schema = _store_schema(store)
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(f'drop schema if exists {schema} cascade')
     try:
-        migrate_store_to_postgres(
-            source_dir=str(sdir), dsn=pg_dsn, store=store,
-            state=SchemaState.ABSENT)
+        src_mig = SqliteMigrator(str(tmp_path))
+        src_mig.preflight_source(store)
+        payload = src_mig.gather(store)
+        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig.preflight_target(store)
+        tgt_mig.apply(store, payload)
         assert (sdir / 'memman.db').exists()
     finally:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:

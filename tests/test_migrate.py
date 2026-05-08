@@ -49,7 +49,7 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
 def test_migrate_dry_run_reports_counts_without_writing(tmp_path, pg_dsn):
     """`--dry-run` returns counts and creates no Postgres schema."""
     from memman.store.postgres import _store_schema
-    from tests._migrate_helpers import migrate_store_to_postgres
+    from memman.store.sqlite import SqliteMigrator
 
     _seed_sqlite_store(tmp_path, 'mig_dry')
     schema = _store_schema('mig_dry')
@@ -57,13 +57,11 @@ def test_migrate_dry_run_reports_counts_without_writing(tmp_path, pg_dsn):
         with conn.cursor() as cur:
             cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
 
-    from memman.store.db import store_dir
-    result = migrate_store_to_postgres(
-        source_dir=store_dir(str(tmp_path), 'mig_dry'),
-        dsn=pg_dsn, store='mig_dry', dry_run=True)
-    assert result.dry_run is True
-    assert result.insights == 1
-    assert result.meta >= 1
+    src = SqliteMigrator(str(tmp_path))
+    src.preflight_source('mig_dry')
+    payload = src.gather('mig_dry')
+    assert payload.insights and len(payload.insights) == 1
+    assert len(payload.meta) >= 1
 
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
@@ -76,9 +74,8 @@ def test_migrate_dry_run_reports_counts_without_writing(tmp_path, pg_dsn):
 
 def test_migrate_writes_rows_into_target_schema(tmp_path, pg_dsn):
     """Real migrate inserts rows; ON CONFLICT makes re-run idempotent."""
-    from memman.migrate import SchemaState
-    from memman.store.postgres import _store_schema
-    from tests._migrate_helpers import migrate_store_to_postgres
+    from memman.store.postgres import PostgresMigrator, _store_schema
+    from memman.store.sqlite import SqliteMigrator
 
     _seed_sqlite_store(tmp_path, 'mig_write')
     schema = _store_schema('mig_write')
@@ -86,13 +83,13 @@ def test_migrate_writes_rows_into_target_schema(tmp_path, pg_dsn):
         with conn.cursor() as cur:
             cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
 
-    from memman.store.db import store_dir
-    source = store_dir(str(tmp_path), 'mig_write')
-    result = migrate_store_to_postgres(
-        source_dir=source, dsn=pg_dsn, store='mig_write',
-        state=SchemaState.ABSENT)
-    assert not result.dry_run
-    assert result.insights == 1
+    src = SqliteMigrator(str(tmp_path))
+    src.preflight_source('mig_write')
+    payload = src.gather('mig_write')
+    tgt = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+    tgt.preflight_target('mig_write')
+    tgt.apply('mig_write', payload)
+    assert len(payload.insights) == 1
 
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
         with conn.cursor() as cur:
@@ -109,9 +106,9 @@ def test_migrate_writes_rows_into_target_schema(tmp_path, pg_dsn):
 
 def test_migrate_populated_state_drops_and_recreates(tmp_path, pg_dsn):
     """SchemaState.POPULATED triggers drop+recreate."""
-    from memman.migrate import SchemaState
-    from memman.store.postgres import _store_schema
-    from tests._migrate_helpers import migrate_store_to_postgres
+    from memman.store.postgres import PostgresMigrator, _store_schema
+    from memman.store.postgres import drop_postgres_store
+    from memman.store.sqlite import SqliteMigrator
 
     _seed_sqlite_store(tmp_path, 'mig_overwrite')
     schema = _store_schema('mig_overwrite')
@@ -124,12 +121,14 @@ def test_migrate_populated_state_drops_and_recreates(tmp_path, pg_dsn):
             cur.execute(
                 f'INSERT INTO {schema}.junk VALUES (42)')
 
-    from memman.store.db import store_dir
-    source = store_dir(str(tmp_path), 'mig_overwrite')
     try:
-        migrate_store_to_postgres(
-            source_dir=source, dsn=pg_dsn, store='mig_overwrite',
-            state=SchemaState.POPULATED)
+        src = SqliteMigrator(str(tmp_path))
+        src.preflight_source('mig_overwrite')
+        payload = src.gather('mig_overwrite')
+        drop_postgres_store('mig_overwrite', pg_dsn)
+        tgt = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt.preflight_target('mig_overwrite')
+        tgt.apply('mig_overwrite', payload)
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(

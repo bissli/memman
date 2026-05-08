@@ -57,26 +57,32 @@ def _drop_schema(pg_dsn: str, store: str) -> None:
 
 def test_migrate_to_sqlite_round_trip(tmp_path, pg_dsn):
     """SQLite -> Postgres -> SQLite round-trip preserves row counts."""
-    from memman.migrate import SchemaState
     from memman.store.db import open_db, store_dir
-    from tests._migrate_helpers import migrate_store_to_postgres
-    from tests._migrate_helpers import migrate_store_to_sqlite
+    from memman.store.postgres import PostgresMigrator
+    from memman.store.sqlite import SqliteMigrator
 
     store = 'rb_round'
     _seed_sqlite_store(tmp_path, store)
     _drop_schema(pg_dsn, store)
     try:
         source = store_dir(str(tmp_path), store)
-        migrate_store_to_postgres(
-            source_dir=source, dsn=pg_dsn, store=store,
-            state=SchemaState.ABSENT)
+        src_mig = SqliteMigrator(str(tmp_path))
+        src_mig.preflight_source(store)
+        payload = src_mig.gather(store)
+        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig.preflight_target(store)
+        tgt_mig.apply(store, payload)
         shutil.rmtree(source)
 
         target = store_dir(str(tmp_path), store)
-        result = migrate_store_to_sqlite(
-            dsn=pg_dsn, target_dir=target, store=store)
-        assert result.insights == 1
-        assert result.meta >= 1
+        rev_src = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        rev_src.preflight_source(store)
+        rev_payload = rev_src.gather(store)
+        rev_tgt = SqliteMigrator(str(tmp_path))
+        rev_tgt.preflight_target(store)
+        rev_tgt.apply(store, rev_payload)
+        assert len(rev_payload.insights) == 1
+        assert len(rev_payload.meta) >= 1
 
         db = open_db(target)
         try:
@@ -91,24 +97,30 @@ def test_migrate_to_sqlite_round_trip(tmp_path, pg_dsn):
 
 def test_migrate_to_sqlite_preserves_insight_ids(tmp_path, pg_dsn):
     """Insight ids survive the round-trip bit-exact."""
-    from memman.migrate import SchemaState
     from memman.store.db import open_db, store_dir
-    from tests._migrate_helpers import migrate_store_to_postgres
-    from tests._migrate_helpers import migrate_store_to_sqlite
+    from memman.store.postgres import PostgresMigrator
+    from memman.store.sqlite import SqliteMigrator
 
     store = 'rb_ids'
     _seed_sqlite_store(tmp_path, store)
     _drop_schema(pg_dsn, store)
     try:
         source = store_dir(str(tmp_path), store)
-        migrate_store_to_postgres(
-            source_dir=source, dsn=pg_dsn, store=store,
-            state=SchemaState.ABSENT)
+        src_mig = SqliteMigrator(str(tmp_path))
+        src_mig.preflight_source(store)
+        payload = src_mig.gather(store)
+        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig.preflight_target(store)
+        tgt_mig.apply(store, payload)
         shutil.rmtree(source)
 
         target = store_dir(str(tmp_path), store)
-        migrate_store_to_sqlite(
-            dsn=pg_dsn, target_dir=target, store=store)
+        rev_src = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        rev_src.preflight_source(store)
+        rev_payload = rev_src.gather(store)
+        rev_tgt = SqliteMigrator(str(tmp_path))
+        rev_tgt.preflight_target(store)
+        rev_tgt.apply(store, rev_payload)
 
         db = open_db(target)
         try:
@@ -123,10 +135,9 @@ def test_migrate_to_sqlite_preserves_insight_ids(tmp_path, pg_dsn):
 
 def test_migrate_to_sqlite_preserves_oplog_legacy_ids(tmp_path, pg_dsn):
     """Round-trip oplog ids match the original sqlite ids via legacy_id."""
-    from memman.migrate import SchemaState
     from memman.store.db import open_db, store_dir
-    from tests._migrate_helpers import migrate_store_to_postgres
-    from tests._migrate_helpers import migrate_store_to_sqlite
+    from memman.store.postgres import PostgresMigrator
+    from memman.store.sqlite import SqliteMigrator
 
     store = 'rb_oplog'
     _seed_sqlite_store(tmp_path, store)
@@ -151,14 +162,21 @@ def test_migrate_to_sqlite_preserves_oplog_legacy_ids(tmp_path, pg_dsn):
         finally:
             db.close()
 
-        migrate_store_to_postgres(
-            source_dir=source, dsn=pg_dsn, store=store,
-            state=SchemaState.ABSENT)
+        src_mig = SqliteMigrator(str(tmp_path))
+        src_mig.preflight_source(store)
+        payload = src_mig.gather(store)
+        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig.preflight_target(store)
+        tgt_mig.apply(store, payload)
         shutil.rmtree(source)
 
         target = store_dir(str(tmp_path), store)
-        migrate_store_to_sqlite(
-            dsn=pg_dsn, target_dir=target, store=store)
+        rev_src = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        rev_src.preflight_source(store)
+        rev_payload = rev_src.gather(store)
+        rev_tgt = SqliteMigrator(str(tmp_path))
+        rev_tgt.preflight_target(store)
+        rev_tgt.apply(store, rev_payload)
 
         db = open_db(target)
         try:
@@ -176,22 +194,20 @@ def test_migrate_to_sqlite_preserves_oplog_legacy_ids(tmp_path, pg_dsn):
 def test_migrate_to_sqlite_errors_when_schema_missing(tmp_path, pg_dsn):
     """Reverse migrate of a non-existent schema raises MigrateError."""
     from memman.migrate import MigrateError
-    from tests._migrate_helpers import migrate_store_to_sqlite
+    from memman.store.postgres import PostgresMigrator
 
     store = 'rb_missing'
     _drop_schema(pg_dsn, store)
-    target = tmp_path / 'data' / store
+    rev_src = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
     with pytest.raises(MigrateError, match='does not exist'):
-        migrate_store_to_sqlite(
-            dsn=pg_dsn, target_dir=str(target), store=store)
+        rev_src.preflight_source(store)
 
 
 def test_migrate_to_sqlite_errors_when_fingerprint_missing(
         tmp_path, pg_dsn):
     """Schema without meta.embed_fingerprint raises MigrateError."""
     from memman.migrate import MigrateError
-    from memman.store.postgres import _store_schema
-    from tests._migrate_helpers import migrate_store_to_sqlite
+    from memman.store.postgres import PostgresMigrator, _store_schema
 
     store = 'rb_nofp'
     schema = _store_schema(store)
@@ -212,10 +228,9 @@ def test_migrate_to_sqlite_errors_when_fingerprint_missing(
                     '  primary key (source_id, target_id, edge_type))')
                 cur.execute(
                     f'create table {schema}.oplog (id bigserial primary key)')
-        target = tmp_path / 'data' / store
+        rev_src = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
         with pytest.raises(MigrateError, match='embed_fingerprint'):
-            migrate_store_to_sqlite(
-                dsn=pg_dsn, target_dir=str(target), store=store)
+            rev_src.preflight_source(store)
     finally:
         _drop_schema(pg_dsn, store)
 
@@ -224,10 +239,9 @@ def test_migrate_cli_to_sqlite_archives_dump_and_drops_schema(
         tmp_path, env_file, pg_dsn):
     """CLI reverse migrate writes dump.pgdump, drops schema, flips env."""
     from memman.cli import cli
-    from memman.migrate import SchemaState
     from memman.store.db import store_dir
-    from memman.store.postgres import _store_schema
-    from tests._migrate_helpers import migrate_store_to_postgres
+    from memman.store.postgres import PostgresMigrator, _store_schema
+    from memman.store.sqlite import SqliteMigrator
 
     store = 'rb_cli_full'
     data_dir = tmp_path / 'memman'
@@ -235,9 +249,12 @@ def test_migrate_cli_to_sqlite_archives_dump_and_drops_schema(
     _drop_schema(pg_dsn, store)
     try:
         source = store_dir(str(data_dir), store)
-        migrate_store_to_postgres(
-            source_dir=source, dsn=pg_dsn, store=store,
-            state=SchemaState.ABSENT)
+        src_mig = SqliteMigrator(str(data_dir))
+        src_mig.preflight_source(store)
+        payload = src_mig.gather(store)
+        tgt_mig = PostgresMigrator(str(data_dir), dsn=pg_dsn)
+        tgt_mig.preflight_target(store)
+        tgt_mig.apply(store, payload)
         shutil.rmtree(source)
         env_file('MEMMAN_BACKEND_' + store, 'postgres')
         env_file('MEMMAN_POSTGRES_DSN_' + store, pg_dsn)
@@ -281,10 +298,10 @@ def test_migrate_cli_to_sqlite_regenerates_snapshot(
         tmp_path, env_file, pg_dsn):
     """CLI reverse migrate writes recall_snapshot.v1.bin to target dir."""
     from memman.cli import cli
-    from memman.migrate import SchemaState
     from memman.store.db import store_dir
+    from memman.store.postgres import PostgresMigrator
     from memman.store.snapshot import SNAPSHOT_FILENAME
-    from tests._migrate_helpers import migrate_store_to_postgres
+    from memman.store.sqlite import SqliteMigrator
 
     store = 'rb_snap'
     data_dir = tmp_path / 'memman'
@@ -292,9 +309,12 @@ def test_migrate_cli_to_sqlite_regenerates_snapshot(
     _drop_schema(pg_dsn, store)
     try:
         source = store_dir(str(data_dir), store)
-        migrate_store_to_postgres(
-            source_dir=source, dsn=pg_dsn, store=store,
-            state=SchemaState.ABSENT)
+        src_mig = SqliteMigrator(str(data_dir))
+        src_mig.preflight_source(store)
+        payload = src_mig.gather(store)
+        tgt_mig = PostgresMigrator(str(data_dir), dsn=pg_dsn)
+        tgt_mig.preflight_target(store)
+        tgt_mig.apply(store, payload)
         shutil.rmtree(source)
         env_file('MEMMAN_BACKEND_' + store, 'postgres')
         env_file('MEMMAN_POSTGRES_DSN_' + store, pg_dsn)
@@ -317,9 +337,9 @@ def test_migrate_cli_to_sqlite_errors_when_pg_dump_missing(
         tmp_path, env_file, pg_dsn, monkeypatch):
     """`shutil.which('pg_dump') is None` -> ClickException with install hint."""
     from memman.cli import cli
-    from memman.migrate import SchemaState
     from memman.store.db import store_dir
-    from tests._migrate_helpers import migrate_store_to_postgres
+    from memman.store.postgres import PostgresMigrator
+    from memman.store.sqlite import SqliteMigrator
 
     store = 'rb_nopgdump'
     data_dir = tmp_path / 'memman'
@@ -327,9 +347,12 @@ def test_migrate_cli_to_sqlite_errors_when_pg_dump_missing(
     _drop_schema(pg_dsn, store)
     try:
         source = store_dir(str(data_dir), store)
-        migrate_store_to_postgres(
-            source_dir=source, dsn=pg_dsn, store=store,
-            state=SchemaState.ABSENT)
+        src_mig = SqliteMigrator(str(data_dir))
+        src_mig.preflight_source(store)
+        payload = src_mig.gather(store)
+        tgt_mig = PostgresMigrator(str(data_dir), dsn=pg_dsn)
+        tgt_mig.preflight_target(store)
+        tgt_mig.apply(store, payload)
         shutil.rmtree(source)
         env_file('MEMMAN_BACKEND_' + store, 'postgres')
         env_file('MEMMAN_POSTGRES_DSN_' + store, pg_dsn)
@@ -362,19 +385,20 @@ def test_migrate_cli_to_sqlite_refuses_when_target_dir_exists(
         tmp_path, env_file, pg_dsn):
     """Pre-existing data/<store>/ guards against accidental overwrite."""
     from memman.cli import cli
-    from memman.migrate import SchemaState
-    from memman.store.db import store_dir
-    from tests._migrate_helpers import migrate_store_to_postgres
+    from memman.store.postgres import PostgresMigrator
+    from memman.store.sqlite import SqliteMigrator
 
     store = 'rb_target_exists'
     data_dir = tmp_path / 'memman'
     _seed_sqlite_store(data_dir, store)
     _drop_schema(pg_dsn, store)
     try:
-        source = store_dir(str(data_dir), store)
-        migrate_store_to_postgres(
-            source_dir=source, dsn=pg_dsn, store=store,
-            state=SchemaState.ABSENT)
+        src_mig = SqliteMigrator(str(data_dir))
+        src_mig.preflight_source(store)
+        payload = src_mig.gather(store)
+        tgt_mig = PostgresMigrator(str(data_dir), dsn=pg_dsn)
+        tgt_mig.preflight_target(store)
+        tgt_mig.apply(store, payload)
         env_file('MEMMAN_BACKEND_' + store, 'postgres')
         env_file('MEMMAN_POSTGRES_DSN_' + store, pg_dsn)
 
@@ -415,9 +439,9 @@ def test_migrate_cli_to_postgres_warns_when_already_postgres(
         tmp_path, env_file, pg_dsn):
     """`--to postgres` against a postgres-routed store warns and exits 0."""
     from memman.cli import cli
-    from memman.migrate import SchemaState
     from memman.store.db import store_dir
-    from tests._migrate_helpers import migrate_store_to_postgres
+    from memman.store.postgres import PostgresMigrator
+    from memman.store.sqlite import SqliteMigrator
 
     store = 'rb_already_pg'
     data_dir = tmp_path / 'memman'
@@ -425,9 +449,12 @@ def test_migrate_cli_to_postgres_warns_when_already_postgres(
     _drop_schema(pg_dsn, store)
     try:
         source = store_dir(str(data_dir), store)
-        migrate_store_to_postgres(
-            source_dir=source, dsn=pg_dsn, store=store,
-            state=SchemaState.ABSENT)
+        src_mig = SqliteMigrator(str(data_dir))
+        src_mig.preflight_source(store)
+        payload = src_mig.gather(store)
+        tgt_mig = PostgresMigrator(str(data_dir), dsn=pg_dsn)
+        tgt_mig.preflight_target(store)
+        tgt_mig.apply(store, payload)
         shutil.rmtree(source)
         env_file('MEMMAN_BACKEND_' + store, 'postgres')
         env_file('MEMMAN_POSTGRES_DSN_' + store, pg_dsn)
@@ -449,9 +476,9 @@ def test_migrate_cli_to_sqlite_drop_failure_is_warn_only(
         tmp_path, env_file, pg_dsn, monkeypatch):
     """Drop-schema failure logs a warning but completes successfully."""
     from memman.cli import cli
-    from memman.migrate import SchemaState
     from memman.store.db import store_dir
-    from tests._migrate_helpers import migrate_store_to_postgres
+    from memman.store.postgres import PostgresMigrator
+    from memman.store.sqlite import SqliteMigrator
 
     store = 'rb_dropfail'
     data_dir = tmp_path / 'memman'
@@ -459,9 +486,12 @@ def test_migrate_cli_to_sqlite_drop_failure_is_warn_only(
     _drop_schema(pg_dsn, store)
     try:
         source = store_dir(str(data_dir), store)
-        migrate_store_to_postgres(
-            source_dir=source, dsn=pg_dsn, store=store,
-            state=SchemaState.ABSENT)
+        src_mig = SqliteMigrator(str(data_dir))
+        src_mig.preflight_source(store)
+        payload = src_mig.gather(store)
+        tgt_mig = PostgresMigrator(str(data_dir), dsn=pg_dsn)
+        tgt_mig.preflight_target(store)
+        tgt_mig.apply(store, payload)
         shutil.rmtree(source)
         env_file('MEMMAN_BACKEND_' + store, 'postgres')
         env_file('MEMMAN_POSTGRES_DSN_' + store, pg_dsn)
