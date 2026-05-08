@@ -67,7 +67,7 @@ The four edge types form the foundation of the MAGMA four-graph model, detailed 
 Each named store is physically isolated via its own storage backend, chosen per store via `MEMMAN_BACKEND_<store>` (falling back to `MEMMAN_DEFAULT_BACKEND` when unset):
 
 - **SQLite (default)** — one `~/.memman/data/<store>/memman.db` file per store, in WAL mode (concurrent reads + serial writer). Schema source of truth: `_BASELINE_SCHEMA` in `src/memman/store/db.py`.
-- **Postgres** — one Postgres schema per store (`store_<name>`) sharing one database; `pgvector` provides the `vector(N)` column type. Schema source of truth: `_PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py`. The backend is enabled with the `memman[postgres]` install extra.
+- **Postgres** — one Postgres schema per store (`store_<name>`) sharing one database; `pgvector` provides the `vector(N)` column type. Schema source of truth: `PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py`. The backend is enabled with the `memman[postgres]` install extra.
 
 Backend choice is per-store, so a `work` store on Postgres can coexist with a `default` store on SQLite under the same data dir. `memman migrate <store>` writes `MEMMAN_BACKEND_<store>=postgres` for a single store; `MEMMAN_DEFAULT_BACKEND` only changes what newly-created stores fall back to. See [Migrating from SQLite to Postgres](../USAGE.md#migrating-from-sqlite-to-postgres) for the operator workflow.
 

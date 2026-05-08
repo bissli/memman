@@ -83,11 +83,11 @@ memman has one schema source of truth per backend. Both are additive-only: colum
 
 **SQLite** -- `_BASELINE_SCHEMA` in `src/memman/store/db.py` (per-store DB) and `src/memman/queue.py` (queue DB). There is no `PRAGMA user_version` ladder. Fresh databases are created via `CREATE TABLE IF NOT EXISTS`; existing stores get one-off `ALTER TABLE` invocations against `~/.memman/data/*/memman.db` and `~/.memman/queue.db` if the change is in queue schema.
 
-**Postgres** -- `_PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py` creates per-store schemas (`store_<name>`), each carrying its own `worker_runs` table for drain heartbeats. The deferred-write queue is always SQLite (`<data_dir>/queue.db`); Postgres has no shared queue schema. There is no migration ladder: the baseline is the only schema source. Existing stores receive one-off `ALTER TABLE` invocations against the live Postgres server when a column is added.
+**Postgres** -- `PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py` creates per-store schemas (`store_<name>`), each carrying its own `worker_runs` table for drain heartbeats. The deferred-write queue is always SQLite (`<data_dir>/queue.db`); Postgres has no shared queue schema. There is no migration ladder: the baseline is the only schema source. Existing stores receive one-off `ALTER TABLE` invocations against the live Postgres server when a column is added.
 
 When a schema change is needed:
 
-1. Update the relevant baseline (`_BASELINE_SCHEMA` for SQLite, `_PG_BASELINE_SCHEMA` for Postgres). Fresh databases pick the change up automatically.
+1. Update the relevant baseline (`_BASELINE_SCHEMA` for SQLite, `PG_BASELINE_SCHEMA` for Postgres). Fresh databases pick the change up automatically.
 2. For existing stores, run a one-off `ALTER TABLE` against every `~/.memman/data/*/memman.db` (SQLite) or every `store_<name>` schema (Postgres).
 3. Commit the schema change and the evidence (test asserting the column is present) in the same change.
 

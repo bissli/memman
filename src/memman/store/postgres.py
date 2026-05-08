@@ -71,7 +71,7 @@ def _advisory_lock_key(schema: str, name: str) -> int:
     return _lock_id(f'{schema}:{name}')
 
 
-_PG_BASELINE_SCHEMA = """
+PG_BASELINE_SCHEMA = """
 create table if not exists {schema}.insights (
     id          text primary key,
     content     text not null,
@@ -2148,26 +2148,21 @@ def drop_postgres_store(store: str, dsn: str) -> None:
         cur.execute(f'drop schema if exists {schema} cascade')
 
 
-def _ensure_baseline_schema(
-        dsn: str, store: str, *, dim: int = EMBEDDING_DIM) -> None:
-    """Create the schema and apply baseline DDL idempotently.
+def apply_baseline_schema(
+        conn: Any, schema: str, dim: int) -> None:
+    """Apply the baseline DDL on an open connection (idempotent).
 
-    `dim` is the embedding dimension to bake into `vector(N)` for
-    new schemas. Resolved from `active_fingerprint().dim` by
-    `open_postgres_backend` so a non-Voyage operator (e.g. openai
-    1536) gets a correctly-sized column on first deploy. For
-    existing schemas the call is idempotent: `create table if not
-    exists` does not alter the existing column width, and the
-    open-time guard at `_assert_vector_dim_matches` refuses the
-    open if the stored width differs from `dim`.
+    Caller controls the transaction. Used both by
+    `_ensure_baseline_schema` (autocommit, store-open path) and by
+    the migrator (in-transaction so DDL rolls back on import
+    failure). Creates the `vector` extension, the schema, base
+    tables, and the conditional `oplog.legacy_id` UNIQUE +
+    `edges.edge_type` CHECK constraints.
     """
-    schema = _store_schema(store)
-    with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
+    with conn.cursor() as cur:
         cur.execute('create extension if not exists vector')
         cur.execute(f'create schema if not exists {schema}')
-        cur.execute(
-            _PG_BASELINE_SCHEMA.format(
-                schema=schema, dim=dim))
+        cur.execute(PG_BASELINE_SCHEMA.format(schema=schema, dim=dim))
         cur.execute(
             f'alter table {schema}.oplog'
             f' add column if not exists legacy_id bigint')
@@ -2188,6 +2183,24 @@ def _ensure_baseline_schema(
                 f' add constraint edges_edge_type_check_{schema}'
                 f" check (edge_type in"
                 f" ('temporal','semantic','causal','entity'))")
+
+
+def _ensure_baseline_schema(
+        dsn: str, store: str, *, dim: int = EMBEDDING_DIM) -> None:
+    """Create the schema and apply baseline DDL idempotently.
+
+    `dim` is the embedding dimension to bake into `vector(N)` for
+    new schemas. Resolved from `active_fingerprint().dim` by
+    `open_postgres_backend` so a non-Voyage operator (e.g. openai
+    1536) gets a correctly-sized column on first deploy. For
+    existing schemas the call is idempotent: `create table if not
+    exists` does not alter the existing column width, and the
+    open-time guard at `_assert_vector_dim_matches` refuses the
+    open if the stored width differs from `dim`.
+    """
+    schema = _store_schema(store)
+    with _connection(dsn, autocommit=True) as conn:
+        apply_baseline_schema(conn, schema, dim)
 
 
 def _assert_vector_dim_matches(

@@ -12,7 +12,7 @@ are deliberately NOT defaulted in `BaseNodeStore` even though
 `Insight` now carries `linked_at` and a Python-level filter is
 formally possible. Reason: Postgres has indexed pushdown via the
 partial index `idx_insights_pending_link_{schema}` (defined at
-`src/memman/store/postgres.py:_PG_BASELINE_SCHEMA`), so a
+`src/memman/store/postgres.py:PG_BASELINE_SCHEMA`), so a
 default that calls `get_all_active()` and filters in Python would
 fetch every row instead of the index-only scan. The SQLite verbs
 are tiny single-column queries; collapsing them into a default

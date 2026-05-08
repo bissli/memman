@@ -263,7 +263,6 @@ def migrate_store_to_postgres(
                 insights=n_insights, edges=n_edges,
                 oplog=n_oplog, meta=n_meta, dry_run=True)
 
-        from scripts.import_sqlite_to_postgres import _ensure_schema
         from scripts.import_sqlite_to_postgres import _import_edges
         from scripts.import_sqlite_to_postgres import _import_insights
         from scripts.import_sqlite_to_postgres import _import_meta
@@ -275,14 +274,14 @@ def migrate_store_to_postgres(
         except SystemExit as exc:
             raise MigrateError(str(exc)) from exc
 
-        from memman.store.postgres import _connection
+        from memman.store.postgres import _connection, apply_baseline_schema
         with _connection(dsn, autocommit=False) as pg_conn:
             try:
                 if state in {SchemaState.EMPTY, SchemaState.POPULATED}:
                     with pg_conn.cursor() as cur:
                         cur.execute(
                             f'drop schema if exists {schema} cascade')
-                _ensure_schema(pg_conn, schema, dim)
+                apply_baseline_schema(pg_conn, schema, dim)
                 ins_count = _import_insights(
                     sqlite_conn, pg_conn, schema, dim)
                 edge_count = _import_edges(sqlite_conn, pg_conn, schema)
