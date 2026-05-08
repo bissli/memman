@@ -27,14 +27,252 @@ migrated store while leaving sibling stores untouched.
 from __future__ import annotations
 
 import enum
+import hashlib
 import logging
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar, Literal, Protocol, runtime_checkable
+
+from memman.embed.fingerprint import Fingerprint
 
 logger = logging.getLogger('memman.migrate')
+
+PAYLOAD_VERSION = 1
+
+EmbeddingDtype = Literal[
+    'float64', 'float32', 'float16', 'int8', 'binary']
+
+
+@dataclass(frozen=True)
+class BackendFeatures:
+    """Capability flags a backend's migrator advertises.
+
+    Drives capability gates in the CLI (e.g. dry-run, recall
+    snapshot regeneration) and `apply()` payload-content checks
+    (e.g. refusing edge-bearing payloads on edgeless backends).
+    """
+
+    supports_edges: bool
+    supports_oplog: bool
+    supports_recall_snapshot: bool
+    supports_reembed: bool
+    supports_drain_heartbeat: bool
+    supports_filesystem_artifacts: bool
+    supports_dry_run: bool
+    accepted_embedding_dtypes: frozenset[str] = field(
+        default_factory=lambda: frozenset({'float32', 'float64'}))
+
+
+@dataclass(frozen=True)
+class SwapState:
+    """Mid-reembed swap state captured from `meta.embed_swap_*`.
+
+    `cursor` is the highest insight id whose pending embedding has
+    been written; resuming after a partial swap requires the same
+    cursor to avoid re-embedding completed rows.
+    """
+
+    target_provider: str
+    target_model: str
+    target_dim: int
+    cursor: str | None
+    started_at: datetime | None
+
+
+@dataclass
+class PendingReembed:
+    """In-flight pending embedding for a single insight during a swap."""
+
+    insight_id: str
+    vector: list[float]
+
+
+@dataclass
+class MigrateInsight:
+    """Full insight row for migration round-trips.
+
+    Mirrors the union of SQLite/Postgres column shapes. JSON columns
+    arrive as parsed Python objects; timestamps as `datetime`. The
+    embedding is carried as a `list[float]`; precision is governed
+    by the payload's `embedding_dtype` field.
+    """
+
+    id: str
+    content: str
+    category: str
+    importance: int
+    entities: list[str]
+    source: str
+    access_count: int
+    keywords: list[str] | None
+    summary: str | None
+    semantic_facts: list[Any] | None
+    last_accessed_at: datetime | None
+    embedding: list[float] | None
+    effective_importance: float
+    linked_at: datetime | None
+    enriched_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: datetime | None
+    prompt_version: str | None
+    model_id: str | None
+    embedding_model: str | None
+
+
+@dataclass
+class MigrateEdge:
+    """Full edge row for migration round-trips."""
+
+    source_id: str
+    target_id: str
+    edge_type: str
+    weight: float
+    metadata: dict[str, Any]
+    created_at: datetime
+
+
+@dataclass
+class MigrateOpLog:
+    """Full oplog row for migration round-trips.
+
+    `legacy_id` carries the original sqlite row id when a row that
+    began life on sqlite gets exported to postgres; on the reverse
+    direction the sqlite row id is recovered as
+    `coalesce(legacy_id, id)` so id continuity is preserved across
+    repeated round-trips.
+    """
+
+    id: int
+    operation: str
+    insight_id: str | None
+    detail: str
+    created_at: datetime
+    before: dict[str, Any] | None
+    after: dict[str, Any] | None
+    legacy_id: int | None = None
+
+
+@dataclass
+class MigrationPayload:
+    """Wire-format payload for a single store's migration.
+
+    Backend-agnostic. Produced by `Migrator.gather`, consumed by
+    `Migrator.apply`. Round-trip preservation between any two
+    backends with matching `BackendFeatures.supports_*` is the
+    invariant.
+    """
+
+    payload_version: int
+    fingerprint: Fingerprint
+    embedding_dim: int
+    embedding_dtype: EmbeddingDtype
+    insights: list[MigrateInsight]
+    edges: list[MigrateEdge]
+    oplog: list[MigrateOpLog]
+    embedding_pending: list[PendingReembed]
+    swap_state: SwapState | None
+    meta: dict[str, str]
+
+    @property
+    def has_edges(self) -> bool:
+        return bool(self.edges)
+
+    @property
+    def has_oplog(self) -> bool:
+        return bool(self.oplog)
+
+    @property
+    def has_swap(self) -> bool:
+        return self.swap_state is not None or bool(self.embedding_pending)
+
+
+@dataclass
+class Artifact:
+    """Where a backend's pre-migration source state was archived.
+
+    `kind='filesystem'` describes a local archive directory or
+    file. `kind='none'` is used by backends whose `apply` is a
+    full migration (no pre-state to preserve as a snapshot).
+    Other kinds (`'object_store'`, `'dump_job'`) are reserved for
+    future backends and should be treated as opaque by callers.
+    """
+
+    kind: Literal['filesystem', 'object_store', 'dump_job', 'none']
+    location: str | None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@runtime_checkable
+class Migrator(Protocol):
+    """Per-backend migration surface.
+
+    Stateless across calls: each method acquires + releases its
+    own connection. One instance per (backend, command) is fine
+    but not required. Concrete implementations live with their
+    backend (`store/sqlite.py`, `store/postgres.py`).
+    """
+
+    backend_name: ClassVar[str]
+    snapshot_features: ClassVar[BackendFeatures]
+
+    def preflight_source(self, store: str) -> None:
+        """Verify the store is in a state that can be migrated FROM.
+
+        Raises `MigrateError` on any precondition failure (missing
+        store, schema mismatch, broken connection).
+        """
+        ...
+
+    def preflight_target(self, store: str) -> None:
+        """Verify the backend can accept a fresh migration INTO `store`.
+
+        Raises `MigrateError` if the target cannot be written
+        (missing extension, lacking privilege, name collision).
+        """
+        ...
+
+    def gather(self, store: str) -> MigrationPayload:
+        """Read the full store contents into a portable payload."""
+        ...
+
+    def apply(self, store: str, payload: MigrationPayload) -> None:
+        """Write `payload` into a fresh `store` on this backend."""
+        ...
+
+    def archive(self, store: str, data_dir: str) -> Artifact:
+        """Snapshot the source state to a recoverable artifact."""
+        ...
+
+    def drop(self, store: str) -> None:
+        """Remove this backend's storage for `store`."""
+        ...
+
+
+def sanitize_identifier(
+        name: str, *, max_len: int,
+        allowed_chars: str = r'[A-Za-z0-9_]') -> str:
+    """Backend-portable identifier sanitizer.
+
+    Postgres/MySQL allow 63/64 chars; SQL Server / Oracle 12.2+
+    allow 128; Oracle legacy caps at 30. When `len(name) > max_len`
+    a deterministic 8-hex-char sha256 suffix replaces the truncated
+    tail so two distinct names with the same prefix don't collide.
+    Raises `MigrateError` on illegal characters.
+    """
+    if not re.fullmatch(rf'{allowed_chars}+', name):
+        raise MigrateError(
+            f'identifier {name!r} contains characters outside'
+            f' the allowed set; expected pattern {allowed_chars}+')
+    if len(name) <= max_len:
+        return name
+    digest = hashlib.sha256(name.encode('utf-8')).hexdigest()[:8]
+    suffix = f'_{digest}'
+    return name[:max_len - len(suffix)] + suffix
 
 
 class MigrateError(Exception):
@@ -328,9 +566,8 @@ def migrate_store_to_sqlite(
     from memman.embed.vector import serialize_vector
     from memman.store.db import open_db
     from memman.store.model import format_timestamp
-    from memman.store.postgres import (
-        _check_identifier, _connection, _store_schema,
-        )
+    from memman.store.postgres import _check_identifier, _connection
+    from memman.store.postgres import _store_schema
 
     _check_identifier(store)
     schema = _store_schema(store)
@@ -351,9 +588,9 @@ def migrate_store_to_sqlite(
         fp_row = cur.fetchone()
         if fp_row is None or not fp_row[0]:
             raise MigrateError(
-                f"source schema {schema!r} has no"
-                f" meta.embed_fingerprint; run `memman doctor` on the"
-                f" source store before migrating")
+                f'source schema {schema!r} has no'
+                f' meta.embed_fingerprint; run `memman doctor` on the'
+                f' source store before migrating')
 
         cur.execute(f'select count(*) from {schema}.insights')
         n_insights = int(cur.fetchone()[0])
