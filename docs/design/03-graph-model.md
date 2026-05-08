@@ -10,100 +10,22 @@ MemMan implements four graphs, each capturing one dimension of relationships:
 
 ![MAGMA Four-Graph Model](../diagrams/04-magma-four-graph.drawio.png)
 
-## 3.1 Temporal Graph
+## 3.1 Edge Type Reference
 
-**Purpose**: Capture the chronological order of memories.
+| Edge Type | Purpose                                                      | How edges are created                                                                                                                                                                                          | Weight                                                         | Key constants                                                                                                                               |
+| --------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Temporal  | Chronological ordering and session-window co-occurrence      | Auto. Two sub-types: a `backbone` edge from each new insight to the most recent insight from the same source, and bidirectional `proximity` edges to insights within a `TEMPORAL_WINDOW_HOURS` window.         | proximity: `1 / (1 + hours_diff)`; backbone: `1.0`             | `TEMPORAL_WINDOW_HOURS = 4`, `MAX_PROXIMITY_EDGES = 5`                                                                                      |
+| Entity    | Link insights that mention the same entity                   | Auto. Bidirectional edges to insights sharing each LLM-extracted (or `--entities` provided) entity. Edge weight is IDF-weighted so rare entities produce stronger links.                                       | `log(N/df) / log(N)` floored at 0.1; `1.0` when N ≤ 5          | `MAX_ENTITY_LINKS = 5` per entity, `MAX_TOTAL_ENTITY_EDGES = 50` per insert                                                                 |
+| Causal    | Capture cause-effect relationships and decision rationale    | LLM-inferred during parallel enrichment. Candidates: 2-hop BFS + recent insights, filtered by ≥ 15% token overlap, capped at `MAX_CAUSAL_CANDIDATES`. The LLM returns sub-types `causes`/`enables`/`prevents`. | LLM confidence (0–1); rejected if below `LLM_CONFIDENCE_FLOOR` | `MIN_CAUSAL_OVERLAP = 0.15`, `MAX_CAUSAL_CANDIDATES = 10`, `LLM_BFS_NEIGHBORS = 10`, `LLM_RECENT_COUNT = 20`, `LLM_CONFIDENCE_FLOOR = 0.75` |
+| Semantic  | Connect semantically similar insights via embedding distance | Auto. Bidirectional edges to the top `MAX_AUTO_SEMANTIC_EDGES` insights with cosine similarity ≥ `AUTO_SEMANTIC_THRESHOLD`. Recomputed after enrichment when keywords are appended to the embedding.           | cosine similarity                                              | `AUTO_SEMANTIC_THRESHOLD = 0.62`, `MAX_AUTO_SEMANTIC_EDGES = 3`                                                                             |
 
-**Automatically created edges**:
+Edge metadata is JSON. Examples: `{"sub_type": "proximity", "hours_diff": "2.34"}` (temporal); `{"entity": "Qdrant"}` (entity); `{"created_by": "llm", "confidence": 0.80, "sub_type": "causes", "rationale": "..."}` (causal); `{"created_by": "auto", "cosine": "0.8234"}` (semantic).
 
-- **Backbone**: New insight → most recent insight from the same source (bidirectional)
-  - Ensures memories from each source (user/agent) form a continuous timeline
-  - Metadata: `{"sub_type": "backbone", "direction": "precedes"|"succeeds"}`
-- **Proximity**: New insight <-> insights within a 4-hour window (bidirectional)
-  - Weight formula: `w = 1 / (1 + hours_diff)`
-  - Up to 5 proximity edges
-  - Metadata: `{"sub_type": "proximity", "hours_diff": "2.34"}`
+> **Threshold recalibration.** `AUTO_SEMANTIC_THRESHOLD` is calibrated for Voyage `voyage-3-lite` 512-dim embeddings (verified empirically: pairs above 0.62 are genuine topical links; noise begins ~0.50). Different embedding models and dimensionalities produce different similarity distributions — when switching providers, compute all pairwise cosines, inspect quality bands, and pick the cutoff where noise begins. There is no reliable formula.
 
-```
-Insight A (2h ago) ←── backbone ──→ Insight B (1h ago) ←── backbone ──→ Insight C (now)
-     ↑                                     ↑
-     └──────── proximity (w=0.33) ─────────┘
-```
+> **Causal candidate-pool rationale.** The 2-hop BFS + recent-insights union keeps the LLM's input bounded while still surfacing both topologically near (recently linked) and temporally near candidates. The 15% token overlap floor and `LLM_CONFIDENCE_FLOOR = 0.75` together ensure a high bar — incidental token overlap and uncertain LLM judgments are both rejected.
 
-**Constants:**
-
-- **`TEMPORAL_WINDOW_HOURS = 4`**: A focused session window. Memories created within the same few hours are likely contextually related.
-- **`MAX_PROXIMITY_EDGES = 5`**: Limits fan-out per insert.
-
-## 3.2 Entity Graph
-
-**Purpose**: Link insights that mention the same entities.
-
-**Entity extraction**: LLM-based via `extract_facts()` (sequential phase) and `enrich_with_llm()` (parallel enrichment via ThreadPoolExecutor). The LLM extracts entities as part of fact decomposition. User-provided entities via `--entities` flag are merged with LLM-extracted ones.
-
-**Automatically created edges**: New insight <-> up to 5 existing insights per shared entity (bidirectional). Edge weight is computed via IDF: rare entities produce high-weight edges; common entities produce low-weight edges. When the store has ≤5 insights, all entity edges use weight 1.0 (IDF is not meaningful at that scale).
-
-```
-                   ┌─── "Qdrant" ───┐
-                   │                │
-Insight A ←── entity ──→ Insight B ←── entity ──→ Insight C
-("Chose Qdrant")         ("Qdrant perf test")     ("Qdrant deployment config")
-```
-
-**Metadata**: `{"entity": "Qdrant"}`
-
-**Constants:**
-
-- **`MAX_ENTITY_LINKS = 5` per entity**: Caps edge creation per shared entity to prevent popular entities from creating O(n) edges on every insert.
-- **`MAX_TOTAL_ENTITY_EDGES = 50`**: Hard cap across all entities per insert.
-- **IDF weighting**: `log(N/df) / log(N)` (floored at 0.1), where N = total active insights and df = count of insights containing the entity. Disabled when N ≤ 5.
-
-## 3.3 Causal Graph
-
-**Purpose**: Capture cause-effect relationships and decision rationale.
-
-**LLM-only inference** (parallel enrichment via ThreadPoolExecutor, `infer_llm_causal_edges()`):
-
-1. Candidate discovery: 2-hop BFS neighbors (max 10 nodes) + recent insights (up to 20), filtered by token overlap ≥ 15%, capped at `MAX_CAUSAL_CANDIDATES = 10` before sending to LLM
-2. LLM evaluates candidates and returns edges with confidence scores
-3. Edges below `LLM_CONFIDENCE_FLOOR` (0.75) are rejected
-4. Sub-types: `causes` (direct cause), `enables` (enabling condition), `prevents` (preventing factor)
-
-```
-Insight A ──── causal ────→ Insight B
-("Team lacks Redis exp.")   ("Chose SQLite as storage")
-  sub_type: "causes"
-  weight: 0.80 (LLM confidence)
-```
-
-**Metadata**: `{"created_by": "llm", "confidence": 0.80, "rationale": "...", "sub_type": "causes"}`
-
-**Constants:**
-
-- **`MIN_CAUSAL_OVERLAP = 0.15`**: Filters BFS candidates — below this, shared tokens are incidental.
-- **`MAX_CAUSAL_CANDIDATES = 10`**: Caps candidates sent to LLM.
-- **`LLM_BFS_NEIGHBORS = 10`**: Max nodes in 2-hop BFS.
-- **`LLM_RECENT_COUNT = 20`**: Recent insights added to candidate pool.
-- **`LLM_CONFIDENCE_FLOOR = 0.75`**: High bar for accepting inferred edges.
-
-## 3.4 Semantic Graph
-
-**Purpose**: Connect semantically similar insights based on embedding distance.
-
-**Auto-link**: Cosine similarity ≥ 0.62 (`AUTO_SEMANTIC_THRESHOLD`), top 3 per insight (`MAX_AUTO_SEMANTIC_EDGES`). Bidirectional edges created automatically.
-
-Embeddings are Voyage AI 512-dim vectors. Semantic edges are created initially from the raw embedding, then rebuilt after enrichment when keywords are appended and the embedding is recomputed.
-
-**Metadata**: `{"created_by": "auto", "cosine": "0.8234"}`
-
-**Constants:**
-
-- **`AUTO_SEMANTIC_THRESHOLD = 0.62`**: Calibrated for Voyage `voyage-3-lite` 512-dim embeddings. Empirically verified: all pairs above 0.62 are genuine topical links; noise floor begins around 0.50.
-- **`MAX_AUTO_SEMANTIC_EDGES = 3`**: Limits edges per insert to prevent over-linking on dense topics.
-
-> **If the embedding model changes, this threshold must be recalibrated.** Different models (and different dimensionalities) produce different similarity distributions. Compute all pairwise cosine similarities, inspect quality at each band, and pick the cutoff where noise begins. There is no reliable formula — empirical calibration on actual data is required.
-
-## 3.5 Intent-Adaptive Weighting
+## 3.2 Intent-Adaptive Weighting
 
 Different query intents activate different graph traversal weights:
 

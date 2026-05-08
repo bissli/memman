@@ -137,22 +137,7 @@ for each anchor:
                 push(priority_queue, neighbor)
 ```
 
-**Adaptive parameters**:
-
-| Intent  | Beam Width | Max Depth | Max Visited |
-| ------- | ---------- | --------- | ----------- |
-| WHY     | 15         | 5         | 500         |
-| WHEN    | 10         | 5         | 400         |
-| ENTITY  | 10         | 4         | 400         |
-| GENERAL | 10         | 4         | 500         |
-
-WHY queries use a wider beam and deeper traversal because causal chains typically span multiple hops.
-
-**Rationale:**
-
-- **`LAMBDA1 = 1.0`**: Directly from MAGMA Table 5 ("λ1 (Structure Coef.): 1.0 (Base)").
-- **`LAMBDA2 = 0.4`**: Falls within MAGMA's empirically tuned range ("λ2 (Semantic Coef.): 0.3–0.7"). 0.4 chosen as a conservative value — structural signal is weighted 2.5× semantic, prioritizing graph topology over embedding similarity during traversal.
-- **Max depth 5** (WHY/WHEN): Directly from MAGMA Table 5. WHY gets beam width 15 (50% wider than base 10) because causal chains typically span more hops. GENERAL gets max_visited=500 (matching WHY) because unknown intent should not restrict exploration. WHEN/ENTITY get 400 as a moderate budget — their primary edges (temporal/entity) form shorter chains.
+Beam width, max depth, and max-visited budgets are intent-adaptive — see the per-intent tuning table in Step 4.
 
 ### Step 4: Multi-Factor Re-Ranking
 
@@ -167,16 +152,20 @@ graph_score    = (traversal_score - min) / (max - min)   // min-max normalizatio
 final = w_kw·keyword + w_ent·entity + w_sim·similarity + w_gr·graph
 ```
 
-Weights vary by intent:
+**Per-intent tuning.** Both the Step 3 traversal budget and the Step 4 reranker weights vary by intent. The columns at left tune beam search; the columns at right tune the reranker:
 
-| Intent  | Keyword | Entity   | Similarity | Graph    |
-| ------- | ------- | -------- | ---------- | -------- |
-| WHY     | 0.15    | 0.10     | **0.45**   | **0.30** |
-| WHEN    | 0.20    | 0.10     | **0.40**   | **0.30** |
-| ENTITY  | 0.20    | **0.35** | **0.35**   | 0.10     |
-| GENERAL | 0.25    | 0.15     | **0.45**   | 0.15     |
+| Intent  | Beam | Depth | MaxVis | KW   | Ent      | Sim      | Graph    |
+| ------- | ---- | ----- | ------ | ---- | -------- | -------- | -------- |
+| WHY     | 15   | 5     | 500    | 0.15 | 0.10     | **0.45** | **0.30** |
+| WHEN    | 10   | 5     | 400    | 0.20 | 0.10     | **0.40** | **0.30** |
+| ENTITY  | 10   | 4     | 400    | 0.20 | **0.35** | **0.35** | 0.10     |
+| GENERAL | 10   | 4     | 500    | 0.25 | 0.15     | **0.45** | 0.15     |
 
-These extend MAGMA's intent-adaptive philosophy (which steers beam search via edge type weights) into the final reranking stage. MAGMA does not define a separate reranking stage — this is MemMan's extension.
+**Rationale.**
+
+- **`LAMBDA1 = 1.0`, `LAMBDA2 = 0.4`** (Step 3 traversal-score blend): `LAMBDA1` is from MAGMA Table 5 ("λ1 (Structure Coef.): 1.0 (Base)"); `LAMBDA2` falls within MAGMA's empirically tuned range (0.3–0.7), chosen at the conservative end so structural signal is weighted 2.5× semantic.
+- **Beam / Depth / MaxVis**: Max depth 5 (WHY/WHEN) is from MAGMA Table 5. WHY gets beam width 15 (50% wider than the base 10) because causal chains typically span more hops. GENERAL gets `MaxVis=500` (matching WHY) because unknown intent should not restrict exploration. WHEN/ENTITY get 400 as a moderate budget — their primary edges (temporal/entity) form shorter chains.
+- **KW / Ent / Sim / Graph**: extends MAGMA's intent-adaptive philosophy (which steers beam search via edge type weights) into the final reranking stage. MAGMA does not define a separate reranking stage — this is MemMan's extension.
 
 Embeddings are Voyage AI 512-dim vectors. The expanded query from Step 0 is embedded for vector search and reranking.
 
@@ -190,63 +179,19 @@ Failures (timeouts, non-200 responses) are caught and logged; the baseline order
 
 ### Empirical evidence
 
-Two-phase evaluation supported the decision to ship rerank as a `--rerank` flag and to instruct LLM agents (via `SKILL.md`) to always pass it:
+A two-phase evaluation supported the decision to ship rerank as a `--rerank` flag and instruct LLM agents (via `SKILL.md`) to always pass it. **Phase 1** (12 queries × 1 store, no labels) ruled out the cheap alternatives: bumping `ANCHOR_TOP_K`, retuning weights, and LLM query expansion none closed the gap. **Phase 2** (90 queries × 3 stores, ~4500 graded relevance labels via Haiku 4.5 on a 0–3 scale) measured the lift against ground truth.
 
-**Phase 1 — Cheap-alternative ablation** (12 queries × 1 store, no labels): asked whether bumping `ANCHOR_TOP_K`, retuning weights, or LLM query expansion could close the gap without an LLM call on the read path. None did. Rerank changed 72% of the top-10; the next-best non-rerank config changed 35%.
+| Headline metric                                           | baseline | rerank           | Δ          |
+| --------------------------------------------------------- | --------: | ----------------: | ----------: |
+| nDCG@5 (combined)                                         | 0.648    | **0.788**        | **+0.140** |
+| Recall@5                                                  | 0.573    | **0.695**        | +0.122     |
+| MRR                                                       | 0.759    | **0.835**        | +0.076     |
+| P@1                                                       | 0.711    | **0.789**        | +0.078     |
+| Mean P@5 (fraction of top-5 with rel ≥ 2)                 | 0.476    | **0.556**        | +0.080     |
+| Queries where rerank wins / ties / loses                  | —        | **56 / 12 / 22** | —          |
+| Queries where rerank loses a rel=3 (directly-answers) doc | —        | **0**            | —          |
 
-**Phase 2 — LLM-judged labeled eval** (90 queries × 3 stores `search`/`memman`/`main`, ~4500 graded relevance labels via Haiku 4.5): scored every config against ground truth with nDCG@5, Recall@5, MRR, P@1.
-
-Combined results across all 90 queries:
-
-| Config                        | nDCG@5    | Rec@5     | MRR       | P@1       | vs baseline |
-| ----------------------------- | ---------: | ---------: | ---------: | ---------: | -----------: |
-| `baseline`                    | 0.648     | 0.573     | 0.759     | 0.711     | —           |
-| `anchor_60` (cap 30→60)       | 0.646     | 0.576     | 0.738     | 0.678     | -0.002      |
-| `anchor_100` (cap 30→100)     | 0.648     | 0.583     | 0.734     | 0.678     | -0.001      |
-| `weights_v2` (retuned)        | 0.627     | 0.562     | 0.732     | 0.678     | -0.022      |
-| `expand_only` (LLM expansion) | 0.595     | 0.527     | 0.689     | 0.600     | -0.054      |
-| `rerank_replace_general_only` | 0.641     | 0.616     | 0.755     | 0.700     | -0.007      |
-| `rerank_blend_all`            | 0.719     | 0.624     | 0.783     | 0.733     | +0.070      |
-| **`rerank_voyage` (replace)** | **0.788** | **0.695** | **0.835** | **0.789** | **+0.140**  |
-
-Per-intent nDCG@5 (regression check):
-
-| Config                        | ENTITY (n=2) | GENERAL (n=52) | WHEN (n=18) | WHY (n=18) |
-| ----------------------------- | ------------: | --------------: | -----------: | ----------: |
-| `baseline`                    | 0.604        | 0.734          | 0.381       | 0.674      |
-| `rerank_replace_general_only` | 0.604        | 0.815          | **0.122**   | 0.661      |
-| `rerank_blend_all`            | 0.631        | 0.786          | 0.528       | 0.723      |
-| **`rerank_voyage`**           | **0.742**    | **0.815**      | **0.732**   | **0.771**  |
-
-Per-store consistency (rerank_voyage vs baseline nDCG@5):
-
-| Store    | baseline | rerank_voyage | delta  |
-| -------- | --------: | -------------: | ------: |
-| `search` | 0.655    | 0.809         | +0.154 |
-| `memman` | 0.596    | 0.737         | +0.141 |
-| `main`   | 0.695    | 0.819         | +0.124 |
-
-Rerank wins **56 of 90 queries**, ties 12, loses 22. The win is consistent across all three stores, contradicting an a-priori prediction that the cross-encoder would regress WHY/WHEN intents (it actually wins them by the largest margins because their bi-encoder baselines are weakest).
-
-User-facing top-5 impact (rerank_voyage vs baseline):
-
-| Metric                                                             | baseline | rerank          | Δ      |
-| ------------------------------------------------------------------ | --------: | ---------------: | ------: |
-| Mean P@5 (fraction of top-5 with rel ≥ 2)                          | 0.476    | 0.556           | +0.080 |
-| Queries where the directly-answers (rel=3) doc surfaces (in top-5) | 39       | 45 (+6 rescues) | +6     |
-| Queries where rerank loses a directly-answers doc                  | —        | 0               | 0      |
-
-Where the lift is biggest (sharpest cut: baseline strength):
-
-| Baseline mean rel of top-5 | n  | Δ     | wins | losses |
-| -------------------------- | ---: | -----: | ----: | ------: |
-| Weak (< 1.0)               | 22 | +0.40 | 18   | **1**  |
-| OK (1.0–1.6)               | 24 | +0.34 | 16   | 3      |
-| Strong (≥ 1.6)             | 44 | +0.06 | 19   | 9      |
-
-So rerank pays off most when the bi-encoder is uncertain. When the bi-encoder is already confident, rerank's average lift collapses and individual queries can mildly regress.
-
-The eval scripts and full per-query tables live under `experiments/eval/`. The labeled query set is in `experiments/eval/queries_labeled_<store>.jsonl`; each pair was scored by Haiku 4.5 on a 0–3 graded scale (cached so re-runs only score new pairs).
+The lift is biggest where the bi-encoder is weakest (Δ +0.40 nDCG@5 on the 22 queries with weak baseline; Δ +0.06 on the 44 already-strong ones), and is consistent across all three stores. Notably WHY/WHEN intents — predicted to regress — gained the most (Δ +0.097 / +0.351) because their bi-encoder baselines were the weakest. Per-config, per-intent, and per-store breakdowns are in `experiments/eval/` alongside the labeled query sets (`queries_labeled_<store>.jsonl`).
 
 ### Step 5: WHY Post-Processing — Causal Topological Sort
 

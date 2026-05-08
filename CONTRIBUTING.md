@@ -24,56 +24,48 @@ The install wizard adds three flags: `--backend [sqlite|postgres]` selects the s
 
 `memman config set KEY VALUE` is the explicit override path. Use it to change an `INSTALLABLE_KEYS` value after initial install (switching backends, rotating an API key, updating a DSN). The install command stays sticky-seed by design; `config set` is the unambiguous "I'm changing my mind" verb.
 
-`memman uninstall` strips the secret keys (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`, `MEMMAN_DEFAULT_PG_DSN`, and any per-store `MEMMAN_PG_DSN_<store>`) from the env file but keeps non-secret settings (including `MEMMAN_DEFAULT_BACKEND` and any `MEMMAN_BACKEND_<store>` routes), so a later `memman install` resurrects model/provider/backend preferences without re-export.
+`memman uninstall` strips the secret keys (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`, `MEMMAN_DEFAULT_POSTGRES_DSN`, and any per-store `MEMMAN_POSTGRES_DSN_<store>`) from the env file but keeps non-secret settings (including `MEMMAN_DEFAULT_BACKEND` and any `MEMMAN_BACKEND_<store>` routes), so a later `memman install` resurrects model/provider/backend preferences without re-export.
 
 `memman doctor` includes an `env_completeness` check that warns when a new `INSTALLABLE_KEYS` entry is missing, plus an `optional_extras` check that reports which `memman[extras]` install groups (e.g., `postgres`) resolve at runtime.
 
-### Required keys
+### Variable reference
 
-| Variable             | Purpose                         |
-| -------------------- | ------------------------------- |
-| `OPENROUTER_API_KEY` | LLM inference via OpenRouter.   |
-| `VOYAGE_API_KEY`     | Voyage AI embeddings (512-dim). |
+The `Type` column distinguishes how each variable is sourced:
 
-### Persisted at install (`INSTALLABLE_KEYS`)
+- `required` — must be present in the env file before any command runs (`memman install` prompts for these in TTY mode and refuses to finish without them).
+- `installed` — optional INSTALLABLE_KEYS; seeded by `memman install` from defaults or a one-time shell pull, then read from the env file at runtime. Override later with `memman config set KEY VALUE`.
+- `process` — never persisted; read directly from `os.environ` by the component that owns them.
 
-Set any of these in your shell before `memman install` and they land in the env file. `memman doctor` shows the resolved value and which layer it came from.
+Set an `installed` variable in your shell before `memman install` and it lands in the env file. `memman doctor` shows the resolved value and which layer it came from. Run `memman doctor` to probe both providers with cheap calls (the `llm_probe` and `embed_probe` checks).
 
-| Variable                          | Purpose                                                                                                                                                                                          |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `MEMMAN_LLM_PROVIDER`             | Registered provider name (default `openrouter`).                                                                                                                                                 |
-| `MEMMAN_LLM_MODEL_FAST`           | Hot-path model id. OpenRouter resolves the latest at install time.                                                                                                                               |
-| `MEMMAN_LLM_MODEL_SLOW_CANONICAL` | Worker model for canonical content (fact extraction, reconciliation). OpenRouter resolves the latest at install time.                                                                            |
-| `MEMMAN_LLM_MODEL_SLOW_METADATA`  | Worker model for derived metadata (enrichment summaries/keywords, causal-edge inference). OpenRouter resolves the latest at install time.                                                        |
-| `MEMMAN_EMBED_PROVIDER`           | `voyage` (default), `openai`, `openrouter`, or `ollama`.                                                                                                                                         |
-| `MEMMAN_OPENROUTER_ENDPOINT`      | OpenRouter base URL (default `https://openrouter.ai/api/v1`).                                                                                                                                    |
-| `MEMMAN_LOG_LEVEL`                | Logger level when neither `--verbose` nor `--debug` is passed (default `WARNING`).                                                                                                               |
-| `MEMMAN_OPENAI_EMBED_API_KEY`     | Secret for the OpenAI-compatible embed provider (`MEMMAN_EMBED_PROVIDER=openai`).                                                                                                                |
-| `MEMMAN_OPENAI_EMBED_ENDPOINT`    | Endpoint for the OpenAI-compatible embed provider.                                                                                                                                               |
-| `MEMMAN_OPENAI_EMBED_MODEL`       | Model name for the OpenAI-compatible embed provider.                                                                                                                                             |
-| `MEMMAN_OPENROUTER_EMBED_MODEL`   | Model id for the OpenRouter embed provider (`MEMMAN_EMBED_PROVIDER=openrouter`). Default `baai/bge-m3`. Reuses `OPENROUTER_API_KEY` and `MEMMAN_OPENROUTER_ENDPOINT`; no separate secret needed. |
-| `MEMMAN_OLLAMA_HOST`              | Ollama host URL (default `http://localhost:11434`).                                                                                                                                              |
-| `MEMMAN_OLLAMA_EMBED_MODEL`       | Ollama embedding model name (default `nomic-embed-text`).                                                                                                                                        |
-| `MEMMAN_DEFAULT_BACKEND`          | Fallback storage backend for stores without an explicit per-store override (`sqlite` default, `postgres` requires the `memman[postgres]` extra).                                                 |
-| `MEMMAN_DEFAULT_PG_DSN`           | Fallback Postgres DSN (`postgresql://...`) used when no `MEMMAN_PG_DSN_<store>` is set; secret. Stripped from the env file on `memman uninstall`.                                                |
-| `MEMMAN_BACKEND_<store>`          | Per-store backend override (e.g., `MEMMAN_BACKEND_work=postgres`). Not seeded by `install`; set via `memman config set` or written by `memman migrate <store>`.                                  |
-| `MEMMAN_PG_DSN_<store>`           | Per-store Postgres DSN override; secret. Stripped from the env file on `memman uninstall`.                                                                                                       |
-| `MEMMAN_RERANK_PROVIDER`          | Cross-encoder rerank provider (default `voyage`). Used when callers pass `memman recall --rerank`.                                                                                               |
-| `MEMMAN_VOYAGE_RERANK_MODEL`      | Voyage rerank model id (default `rerank-2.5-lite`).                                                                                                                                              |
-
-### Process-control vars (NOT persisted in the env file)
-
-These bypass the resolver and are read directly from `os.environ`. Persisting them would either be circular, override per-invocation choices, or leak deployment specifics across hosts.
-
-| Variable                | Why it stays direct                                                        |
-| ----------------------- | -------------------------------------------------------------------------- |
-| `MEMMAN_DATA_DIR`       | Locates the env file itself; persisting it inside the file is circular.    |
-| `MEMMAN_STORE`          | Per-invocation override of the active store; not a global default.         |
-| `MEMMAN_WORKER`         | Set to `1` by the systemd/launchd unit; enables the rotating worker log.   |
-| `MEMMAN_SCHEDULER_KIND` | Deployment directive (set by container entrypoint or auto-detected).       |
-| `MEMMAN_DEBUG`          | Runtime toggle; persistent state lives in `~/.memman/debug.state` instead. |
-
-Run `memman doctor` to probe both providers with cheap calls (the `llm_probe` and `embed_probe` checks).
+| Variable                          | Type      | Purpose                                                                                                                                                                                          |
+| --------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `OPENROUTER_API_KEY`              | required  | LLM inference via OpenRouter.                                                                                                                                                                    |
+| `VOYAGE_API_KEY`                  | required  | Voyage AI embeddings (512-dim).                                                                                                                                                                  |
+| `MEMMAN_LLM_PROVIDER`             | installed | Registered provider name (default `openrouter`).                                                                                                                                                 |
+| `MEMMAN_LLM_MODEL_FAST`           | installed | Hot-path model id. OpenRouter resolves the latest at install time.                                                                                                                               |
+| `MEMMAN_LLM_MODEL_SLOW_CANONICAL` | installed | Worker model for canonical content (fact extraction, reconciliation). OpenRouter resolves the latest at install time.                                                                            |
+| `MEMMAN_LLM_MODEL_SLOW_METADATA`  | installed | Worker model for derived metadata (enrichment summaries/keywords, causal-edge inference). OpenRouter resolves the latest at install time.                                                        |
+| `MEMMAN_EMBED_PROVIDER`           | installed | `voyage` (default), `openai`, `openrouter`, or `ollama`.                                                                                                                                         |
+| `MEMMAN_OPENROUTER_ENDPOINT`      | installed | OpenRouter base URL (default `https://openrouter.ai/api/v1`).                                                                                                                                    |
+| `MEMMAN_LOG_LEVEL`                | installed | Logger level when neither `--verbose` nor `--debug` is passed (default `WARNING`).                                                                                                               |
+| `MEMMAN_OPENAI_EMBED_API_KEY`     | installed | Secret for the OpenAI-compatible embed provider (`MEMMAN_EMBED_PROVIDER=openai`).                                                                                                                |
+| `MEMMAN_OPENAI_EMBED_ENDPOINT`    | installed | Endpoint for the OpenAI-compatible embed provider.                                                                                                                                               |
+| `MEMMAN_OPENAI_EMBED_MODEL`       | installed | Model name for the OpenAI-compatible embed provider.                                                                                                                                             |
+| `MEMMAN_OPENROUTER_EMBED_MODEL`   | installed | Model id for the OpenRouter embed provider (`MEMMAN_EMBED_PROVIDER=openrouter`). Default `baai/bge-m3`. Reuses `OPENROUTER_API_KEY` and `MEMMAN_OPENROUTER_ENDPOINT`; no separate secret needed. |
+| `MEMMAN_OLLAMA_HOST`              | installed | Ollama host URL (default `http://localhost:11434`).                                                                                                                                              |
+| `MEMMAN_OLLAMA_EMBED_MODEL`       | installed | Ollama embedding model name (default `nomic-embed-text`).                                                                                                                                        |
+| `MEMMAN_DEFAULT_BACKEND`          | installed | Fallback storage backend for stores without an explicit per-store override (`sqlite` default, `postgres` requires the `memman[postgres]` extra).                                                 |
+| `MEMMAN_DEFAULT_POSTGRES_DSN`     | installed | Fallback Postgres DSN (`postgresql://...`) used when no `MEMMAN_POSTGRES_DSN_<store>` is set; secret. Stripped from the env file on `memman uninstall`.                                          |
+| `MEMMAN_BACKEND_<store>`          | installed | Per-store backend override (e.g., `MEMMAN_BACKEND_work=postgres`). Not seeded by `install`; set via `memman config set` or written by `memman migrate <store>`.                                  |
+| `MEMMAN_POSTGRES_DSN_<store>`     | installed | Per-store Postgres DSN override; secret. Stripped from the env file on `memman uninstall`.                                                                                                       |
+| `MEMMAN_RERANK_PROVIDER`          | installed | Cross-encoder rerank provider (default `voyage`). Used when callers pass `memman recall --rerank`.                                                                                               |
+| `MEMMAN_VOYAGE_RERANK_MODEL`      | installed | Voyage rerank model id (default `rerank-2.5-lite`).                                                                                                                                              |
+| `MEMMAN_DATA_DIR`                 | process   | Locates the env file itself; persisting it inside the file is circular.                                                                                                                          |
+| `MEMMAN_STORE`                    | process   | Per-invocation override of the active store; not a global default.                                                                                                                               |
+| `MEMMAN_WORKER`                   | process   | Set to `1` by the systemd/launchd unit; enables the rotating worker log.                                                                                                                         |
+| `MEMMAN_SCHEDULER_KIND`           | process   | Deployment directive (set by container entrypoint or auto-detected).                                                                                                                             |
+| `MEMMAN_DEBUG`                    | process   | Runtime toggle; persistent state lives in `~/.memman/debug.state` instead.                                                                                                                       |
 
 ## Conventions
 
@@ -93,19 +85,18 @@ When a schema change is needed:
 
 Do not add a SQLite or Postgres migration ladder; only additive ALTERs are permitted.
 
-### SQLite -> Postgres migration
+### Migrating between SQLite and Postgres
 
-`memman migrate` (in `src/memman/migrate.py`, wrapping `scripts/import_sqlite_to_postgres.py`) copies a store from SQLite into the configured Postgres backend. It is copy-only -- the SQLite source is never modified -- and idempotent (`ON CONFLICT (id) DO NOTHING` on the `insights` insert path so an interrupted run is safely re-runnable).
+`memman migrate` (in the `src/memman/migrate/` package) is symmetric: `--to postgres` (default) copies a store from SQLite into Postgres; `--to sqlite` copies it back. Both directions are copy-only on the source side and idempotent (`ON CONFLICT (id) DO NOTHING` on the `insights` insert path so an interrupted run is safely re-runnable). The two migrators (`SqliteMigrator`, `PostgresMigrator`) extend a common `Migrator` ABC and are dispatched from a `BACKENDS` registry, so adding a new RDBMS backend means implementing the ABC, not forking the CLI.
 
 Operationally:
 
-- A DSN preflight verifies `select 1`, the `pgvector` extension, and `CREATE` privilege.
-- The shared `~/.memman/drain.lock` is held for the duration so a scheduler-fired drain cannot race the SQLite reader.
-- Each store runs inside one Postgres transaction with `autocommit=False`; any failure rolls back.
-- Per-store schemas are inspected up front and classified ABSENT / EMPTY / POPULATED. The plan is echoed (with the DSN password redacted) and the user must confirm; `--yes` skips the prompt. EMPTY and POPULATED schemas are dropped and recreated; ABSENT schemas are created.
-- On success `MEMMAN_BACKEND_<store>=postgres` is written to the env file so the next drain routes that specific store to Postgres. Revert per-store with `memman config set MEMMAN_BACKEND_<store> sqlite` (or unset the key to fall back to `MEMMAN_DEFAULT_BACKEND`).
-
-Postgres -> SQLite is not implemented; restore from the preserved SQLite source if needed.
+- A preflight verifies `select 1`, the `pgvector` extension, and `CREATE` privilege on the Postgres side.
+- The shared `~/.memman/drain.lock` is held for the duration so a scheduler-fired drain cannot race the source reader.
+- Per-store work runs inside one transaction (`autocommit=False` on Postgres); any failure rolls back.
+- Per-store schemas are inspected up front and classified ABSENT / EMPTY / POPULATED. The plan is echoed (with the DSN password redacted) and the user must confirm; `--yes` skips the prompt. `--dry-run` is supported only with `--to postgres`.
+- For `--to sqlite`, the Postgres `store_<name>` schema is dumped under `<data_dir>/archive/` before being dropped, so the source remains recoverable.
+- On success `MEMMAN_BACKEND_<store>` is flipped to the target backend. Revert without re-migrating data via `memman config set MEMMAN_BACKEND_<store> <backend>` (or unset the key to fall back to `MEMMAN_DEFAULT_BACKEND`).
 
 ### Adding an LLM provider
 

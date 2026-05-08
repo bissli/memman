@@ -90,7 +90,7 @@ memman insights show <id>
 
 Embeddings power semantic search and graph connectivity. The provider is pluggable via `MEMMAN_EMBED_PROVIDER`; vector dimensionality is provider-defined and recorded in a per-store `embed_fingerprint` so a provider/model/dim change is detected and surfaced in `memman embed status` and `memman doctor`. Switching providers happens explicitly -- either online via `memman embed swap` (resumable shadow-column backfill) or offline via `memman embed reembed`. There is never a silent migration.
 
-### Supported providers
+### 5.5.1 Supported providers
 
 | `MEMMAN_EMBED_PROVIDER` | Default model             | Notes                                                                                                                         |
 | ----------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
@@ -99,16 +99,16 @@ Embeddings power semantic search and graph connectivity. The provider is pluggab
 | `openrouter`            | `baai/bge-m3`             | Reuses `OPENROUTER_API_KEY` + `MEMMAN_OPENROUTER_ENDPOINT`; no separate secret needed.                                        |
 | `ollama`                | `nomic-embed-text`        | Local Ollama at `MEMMAN_OLLAMA_HOST` (default `http://localhost:11434`).                                                      |
 
-### Vector Storage
+### 5.5.2 Vector Storage
 
 Vector serialization depends on the active storage backend for the store (`MEMMAN_BACKEND_<store>`, falling back to `MEMMAN_DEFAULT_BACKEND`):
 
 - **SQLite** — little-endian float64 BLOB stored in `insights.embedding` (e.g., 512 × 8 = 4096 bytes for `voyage-3-lite`).
-- **Postgres** — `pgvector` `vector(N)` typed column, persisted as float32 (HNSW-indexed). The migrate path (`scripts/import_sqlite_to_postgres.py`) explicitly casts SQLite float64 BLOBs to `numpy.float32` before binding to avoid silent rounding by psycopg.
+- **Postgres** — `pgvector` `vector(N)` typed column, persisted as float32 (HNSW-indexed). The migrate path (`PostgresMigrator` in `src/memman/store/postgres.py`) explicitly casts SQLite float64 BLOBs to `numpy.float32` before binding to avoid silent rounding by psycopg.
 
 > **Threshold recalibration.** The semantic-edge auto-link threshold (`AUTO_SEMANTIC_THRESHOLD = 0.62`) is calibrated for `voyage-3-lite`. Different providers and dimensionalities produce different similarity distributions; if you switch provider, recalibrate from observed pairwise distributions.
 
-### Embedding in the Pipeline
+### 5.5.3 Embedding in the Pipeline
 
 - **Initial (remember — sequential)**: Each fact is embedded immediately after extraction
 - **Merged (remember — sequential)**: If reconciliation merges facts, the merged text is re-embedded
@@ -116,11 +116,11 @@ Vector serialization depends on the active storage backend for the store (`MEMMA
 - **Recovery (`graph rebuild`)**: Re-enriches all insights through the full LLM pipeline and updates embeddings
 - **Recall**: Expanded query is embedded for vector search anchors and reranking
 
-### Recovery
+### 5.5.4 Recovery
 
 `memman graph rebuild` re-enriches all insights through the full LLM pipeline and updates embeddings. There is no separate operator command for embedding maintenance — the worker owns the embedding lifecycle (initial, merged, enriched, rebuild).
 
-### Online Embedding Swap
+### 5.5.5 Online Embedding Swap
 
 `memman embed swap` performs a per-store provider/model change without going recall-only. The orchestrator (`src/memman/embed/swap.py`) drives a small state machine recorded in per-store meta keys:
 

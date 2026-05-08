@@ -69,7 +69,7 @@ Each named store is physically isolated via its own storage backend, chosen per 
 - **SQLite (default)** — one `~/.memman/data/<store>/memman.db` file per store, in WAL mode (concurrent reads + serial writer). Schema source of truth: `_BASELINE_SCHEMA` in `src/memman/store/db.py`.
 - **Postgres** — one Postgres schema per store (`store_<name>`) sharing one database; `pgvector` provides the `vector(N)` column type. Schema source of truth: `PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py`. The backend is enabled with the `memman[postgres]` install extra.
 
-Backend choice is per-store, so a `work` store on Postgres can coexist with a `default` store on SQLite under the same data dir. `memman migrate <store>` writes `MEMMAN_BACKEND_<store>=postgres` for a single store; `MEMMAN_DEFAULT_BACKEND` only changes what newly-created stores fall back to. See [Migrating from SQLite to Postgres](../USAGE.md#migrating-from-sqlite-to-postgres) for the operator workflow.
+Backend choice is per-store, so a `work` store on Postgres can coexist with a `default` store on SQLite under the same data dir. `memman migrate <store>` is symmetric (`--to postgres` / `--to sqlite`) and flips `MEMMAN_BACKEND_<store>` accordingly; `MEMMAN_DEFAULT_BACKEND` only changes what newly-created stores fall back to. See [Migrating between SQLite and Postgres](../USAGE.md#migrating-between-sqlite-and-postgres) for the operator workflow.
 
 The logical column layout below is shared between backends; the type translations are SQLite `TEXT`/`BLOB` ↔ Postgres `TIMESTAMPTZ`/`JSONB`/`vector(N)`.
 
@@ -78,7 +78,8 @@ The logical column layout below is shared between backends; the type translation
 insights (
   id, content, category, importance,
   entities, source,
-  embedding,                                    -- embedding vector (BLOB)
+  embedding,                                    -- embedding vector (active provider)
+  embedding_pending,                            -- shadow vector during online provider swap
   keywords, summary, semantic_facts,            -- LLM enrichment columns
   access_count, last_accessed_at,
   effective_importance,                         -- Decayed effective importance
@@ -95,7 +96,9 @@ edges (
 
 -- Operation log (audit trail, queryable with --since/--stats)
 oplog (
-  id, operation, insight_id, detail, created_at
+  id, operation, insight_id, detail,
+  before, after,                                -- forensic delta (pre/post payload)
+  created_at
 )
 
 -- Key/value metadata (e.g., embed/graph constants fingerprints)

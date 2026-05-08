@@ -180,22 +180,7 @@ The hot-path/background split is universal across integrations. What changes is 
 
 **OpenClaw** sits on the same host as Claude Code: install memman once on the host and the worker is shared. The agent invokes `memman` via the `exec` tool rather than Bash-hook nudges.
 
-**NanoClaw** is the only topology where the boundary actually moves. Agent and worker both live inside the container, but the SQLite store is volume-mounted from the host, so memory survives container restarts. Each WhatsApp group gets its own container and its own private store; an optional `~/.memman/data/global/` is mounted read-only into every container for shared knowledge.
-
-```
-┌────────────── HOST ──────────────┐     ┌──────────── CONTAINER (per group) ────────────┐
-│                                  │     │                                                │
-│  ~/.memman/data/{group}/  ── rw ─┼─────┼─► /home/node/.memman/data/default/             │
-│  ~/.memman/data/global/   ── ro ─┼─────┼─► /home/node/.memman/data/global/              │
-│                                  │     │                                                │
-│  (no host scheduler unit         │     │  PID 1: memman scheduler serve --interval 60   │
-│   needed for NanoClaw)           │     │    drains queue.db (per-container, ephemeral)  │
-│                                  │     │                                                │
-│                                  │     │  agent + hooks ─► memman recall / remember     │
-└──────────────────────────────────┘     └────────────────────────────────────────────────┘
-```
-
-The container's `queue.db` is intentionally outside the volume mount — pending writes are seconds old and re-driven on the next drain tick, so a restart loses at most one cycle of unprocessed items.
+**NanoClaw** is the only topology where the boundary actually moves. Agent and worker both live inside the container; the SQLite data dir is volume-mounted from `~/.memman/data/{group}/` (rw) on the host so memory survives container restarts, and an optional `~/.memman/data/global/` is mounted read-only into every container for shared knowledge. Each WhatsApp group gets its own container and its own private store. `queue.db` is intentionally outside the volume mount — pending writes are seconds old and re-driven on the next drain tick, so a restart loses at most one cycle of unprocessed items.
 
 ## Features
 
