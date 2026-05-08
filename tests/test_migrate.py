@@ -48,8 +48,8 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
 
 def test_migrate_dry_run_reports_counts_without_writing(tmp_path, pg_dsn):
     """`--dry-run` returns counts and creates no Postgres schema."""
-    from memman.migrate import migrate_store_to_postgres
     from memman.store.postgres import _store_schema
+    from tests._migrate_helpers import migrate_store_to_postgres
 
     _seed_sqlite_store(tmp_path, 'mig_dry')
     schema = _store_schema('mig_dry')
@@ -76,8 +76,9 @@ def test_migrate_dry_run_reports_counts_without_writing(tmp_path, pg_dsn):
 
 def test_migrate_writes_rows_into_target_schema(tmp_path, pg_dsn):
     """Real migrate inserts rows; ON CONFLICT makes re-run idempotent."""
-    from memman.migrate import SchemaState, migrate_store_to_postgres
+    from memman.migrate import SchemaState
     from memman.store.postgres import _store_schema
+    from tests._migrate_helpers import migrate_store_to_postgres
 
     _seed_sqlite_store(tmp_path, 'mig_write')
     schema = _store_schema('mig_write')
@@ -108,8 +109,9 @@ def test_migrate_writes_rows_into_target_schema(tmp_path, pg_dsn):
 
 def test_migrate_populated_state_drops_and_recreates(tmp_path, pg_dsn):
     """SchemaState.POPULATED triggers drop+recreate."""
-    from memman.migrate import SchemaState, migrate_store_to_postgres
+    from memman.migrate import SchemaState
     from memman.store.postgres import _store_schema
+    from tests._migrate_helpers import migrate_store_to_postgres
 
     _seed_sqlite_store(tmp_path, 'mig_overwrite')
     schema = _store_schema('mig_overwrite')

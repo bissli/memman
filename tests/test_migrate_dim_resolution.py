@@ -17,35 +17,6 @@ import pytest
 from memman.store.db import _BASELINE_SCHEMA
 
 
-def test_decode_embedding_accepts_dim_parameter():
-    """_decode_embedding decodes a float64 blob of the requested dim.
-    """
-    from scripts.import_sqlite_to_postgres import _decode_embedding
-    vec = [0.1] * 1024
-    blob = struct.pack(f'<{len(vec)}d', *vec)
-    out = _decode_embedding(blob, dim=1024)
-    assert out is not None
-    assert len(out) == 1024
-
-
-def test_decode_embedding_returns_none_for_null():
-    """`None`/empty blob returns None regardless of expected dim.
-    """
-    from scripts.import_sqlite_to_postgres import _decode_embedding
-    assert _decode_embedding(None, dim=512) is None
-    assert _decode_embedding(b'', dim=1024) is None
-
-
-def test_decode_embedding_raises_on_dim_mismatch():
-    """Wrong-size blob raises ValueError, not a silent skip.
-    """
-    from scripts.import_sqlite_to_postgres import _decode_embedding
-    vec = [0.1] * 256
-    blob = struct.pack(f'<{len(vec)}d', *vec)
-    with pytest.raises(ValueError, match='256.*1024'):
-        _decode_embedding(blob, dim=1024)
-
-
 def _seed_store(store_dir: Path, dim: int, n_rows: int = 3) -> None:
     """Build a SQLite store with `n_rows` insights at the given dim.
     """
@@ -79,8 +50,9 @@ def _seed_store(store_dir: Path, dim: int, n_rows: int = 3) -> None:
 def test_migrate_resolves_non_512_dim_from_source(pg_dsn, tmp_path):
     """A 1024-dim source store yields a `vector(1024)` destination.
     """
-    from memman.migrate import SchemaState, migrate_store_to_postgres
+    from memman.migrate import SchemaState
     from memman.store.postgres import _store_schema
+    from tests._migrate_helpers import migrate_store_to_postgres
 
     store = 'mig_dim_1024'
     sdir = tmp_path / store
@@ -117,8 +89,9 @@ def test_migrate_raises_on_mixed_dim_rows(pg_dsn, tmp_path):
     """A source row whose blob size disagrees with the fingerprint dim
     surfaces as ValueError, not a silent vector loss.
     """
-    from memman.migrate import MigrateError, SchemaState, migrate_store_to_postgres
+    from memman.migrate import MigrateError, SchemaState
     from memman.store.postgres import _store_schema
+    from tests._migrate_helpers import migrate_store_to_postgres
 
     store = 'mig_mixed_dim'
     sdir = tmp_path / store

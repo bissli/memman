@@ -2591,13 +2591,22 @@ class PostgresMigrator(Migrator):
                     f' meta.embed_fingerprint')
             fingerprint = Fingerprint.from_json(fp_str)
 
+            cur.execute(
+                "select 1 from information_schema.columns"
+                " where table_schema = %s"
+                " and table_name = 'insights'"
+                " and column_name = 'embedding_pending'",
+                (schema,))
+            has_pending = cur.fetchone() is not None
+            pending_select = (
+                ', embedding_pending' if has_pending else '')
             cur.execute(f"""
 select id, content, category, importance, entities,
        source, access_count, keywords, summary, semantic_facts,
        last_accessed_at, embedding, effective_importance,
        linked_at, enriched_at, created_at, updated_at,
-       deleted_at, prompt_version, model_id, embedding_model,
-       embedding_pending
+       deleted_at, prompt_version, model_id, embedding_model
+       {pending_select}
 from {schema}.insights
 order by id
 """)
@@ -2626,7 +2635,7 @@ order by id
                     deleted_at=r[17],
                     prompt_version=r[18], model_id=r[19],
                     embedding_model=r[20]))
-                if r[21] is not None:
+                if has_pending and r[21] is not None:
                     pending.append(PendingReembed(
                         insight_id=r[0], vector=list(r[21])))
 

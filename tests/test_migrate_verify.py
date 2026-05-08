@@ -50,8 +50,9 @@ def _seed_store_with_rows(store_dir: Path, n_rows: int = 4) -> None:
 def test_migrate_result_marks_verified_on_count_match(pg_dsn, tmp_path):
     """Happy-path migrate sets `MigrateResult.verified = True`.
     """
-    from memman.migrate import SchemaState, migrate_store_to_postgres
+    from memman.migrate import SchemaState
     from memman.store.postgres import _store_schema
+    from tests._migrate_helpers import migrate_store_to_postgres
 
     store = 'mig_verify_ok'
     sdir = tmp_path / store
@@ -75,10 +76,15 @@ def test_migrate_result_marks_verified_on_count_match(pg_dsn, tmp_path):
 def test_migrate_raises_on_destination_count_mismatch(pg_dsn, tmp_path):
     """If the destination ends up short, MigrateError is raised.
 
-    Patch `_import_insights` to skip one row; verify step catches it.
+    Wraps `PostgresMigrator.apply` to delete one row before commit;
+    the verify-counts step in the migrate helper catches the
+    discrepancy and raises.
     """
-    from memman.migrate import MigrateError, SchemaState, migrate_store_to_postgres
-    from memman.store.postgres import _store_schema
+    from memman.migrate import MigrateError, SchemaState
+    from memman.store.postgres import (
+        PostgresMigrator, _connection, _store_schema,
+        )
+    from tests._migrate_helpers import migrate_store_to_postgres
 
     store = 'mig_verify_mismatch'
     sdir = tmp_path / store
@@ -88,27 +94,20 @@ def test_migrate_raises_on_destination_count_mismatch(pg_dsn, tmp_path):
         with conn.cursor() as cur:
             cur.execute(f'drop schema if exists {schema} cascade')
 
-    from scripts import import_sqlite_to_postgres as imp
-    real = imp._import_insights
+    real_apply = PostgresMigrator.apply
 
-    def short(sqlite_conn, pg_conn, schema, dim):
-        rows = sqlite_conn.execute(
-            'SELECT id FROM insights LIMIT 1').fetchone()
-        if rows:
-            with pg_conn.cursor() as cur:
+    def short_apply(self, store_arg, payload):
+        real_apply(self, store_arg, payload)
+        with _connection(self.dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
                 cur.execute(
-                    f'DELETE FROM {schema}.insights WHERE id = %s',
-                    (rows[0],))
-        n = real(sqlite_conn, pg_conn, schema, dim)
-        with pg_conn.cursor() as cur:
-            cur.execute(
-                f'DELETE FROM {schema}.insights'
-                f' WHERE id = (SELECT id FROM {schema}.insights'
-                f' ORDER BY id LIMIT 1)')
-        return n
+                    f'delete from {schema}.insights'
+                    f' where id = (select id from {schema}.insights'
+                    f' order by id limit 1)')
 
     try:
-        with patch.object(imp, '_import_insights', side_effect=short):
+        with patch.object(
+                PostgresMigrator, 'apply', new=short_apply):
             with pytest.raises(MigrateError, match='verif'):
                 migrate_store_to_postgres(
                     source_dir=str(sdir), dsn=pg_dsn, store=store,

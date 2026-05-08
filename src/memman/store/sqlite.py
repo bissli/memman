@@ -754,7 +754,7 @@ _SQLITE_MIGRATOR_FEATURES = BackendFeatures(
     supports_drain_heartbeat=False,
     supports_filesystem_artifacts=True,
     supports_dry_run=True,
-    accepted_embedding_dtypes=frozenset({'float64'}))
+    accepted_embedding_dtypes=frozenset({'float32', 'float64'}))
 
 
 class SqliteMigrator(Migrator):

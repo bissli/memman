@@ -58,8 +58,9 @@ def _seed_store_with_oplog(
 def test_oplog_table_has_legacy_id_column(pg_dsn, tmp_path):
     """After migrate, the destination oplog has a `legacy_id` column.
     """
-    from memman.migrate import SchemaState, migrate_store_to_postgres
+    from memman.migrate import SchemaState
     from memman.store.postgres import _store_schema
+    from tests._migrate_helpers import migrate_store_to_postgres
 
     store = 'mig_oplog_legacy'
     sdir = tmp_path / store
@@ -91,8 +92,9 @@ def test_oplog_table_has_legacy_id_column(pg_dsn, tmp_path):
 def test_oplog_legacy_id_matches_source_id(pg_dsn, tmp_path):
     """Migrated oplog rows have `legacy_id = source.id`.
     """
-    from memman.migrate import SchemaState, migrate_store_to_postgres
+    from memman.migrate import SchemaState
     from memman.store.postgres import _store_schema
+    from tests._migrate_helpers import migrate_store_to_postgres
 
     store = 'mig_oplog_match'
     sdir = tmp_path / store
@@ -119,45 +121,40 @@ def test_oplog_legacy_id_matches_source_id(pg_dsn, tmp_path):
 
 
 def test_import_oplog_twice_does_not_duplicate_rows(pg_dsn, tmp_path):
-    """Calling `_import_oplog` twice on the same source yields N rows.
+    """Re-running the migrate path against an already-migrated store
+    yields N rows, not 2N.
 
     Simulates the partial-failure-then-resume case: a first run wrote
     rows but committed before crashing; a second run re-imports and
     must not duplicate. The ON CONFLICT (legacy_id) DO NOTHING clause
-    is what makes this idempotent.
+    in PostgresMigrator.apply is what makes this idempotent.
     """
-    from pgvector.psycopg import register_vector
-    from scripts.import_sqlite_to_postgres import _ensure_schema, _import_oplog
+    from memman.migrate import SchemaState
+    from memman.store.postgres import _store_schema
+    from tests._migrate_helpers import migrate_store_to_postgres
 
     store = 'mig_oplog_twice'
     sdir = tmp_path / store
     src_ids = _seed_store_with_oplog(sdir, n_oplog=4)
-    schema = f'staging_{store}'
-    sqlite_conn = sqlite3.connect(
-        f'file:{sdir / "memman.db"}?mode=ro', uri=True)
+    schema = _store_schema(store)
+    with psycopg.connect(pg_dsn, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f'drop schema if exists {schema} cascade')
     try:
+        migrate_store_to_postgres(
+            source_dir=str(sdir), dsn=pg_dsn, store=store,
+            state=SchemaState.ABSENT)
+        migrate_store_to_postgres(
+            source_dir=str(sdir), dsn=pg_dsn, store=store,
+            state=SchemaState.ABSENT)
+        with psycopg.connect(pg_dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f'select count(*) from {schema}.oplog')
+                got = int(cur.fetchone()[0])
+        assert got == len(src_ids), (
+            f'expected {len(src_ids)} oplog rows after rerun,'
+            f' got {got}')
+    finally:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(f'drop schema if exists {schema} cascade')
-        try:
-            with psycopg.connect(pg_dsn, autocommit=False) as pg_conn:
-                register_vector(pg_conn)
-                _ensure_schema(pg_conn, schema, dim=512)
-                first = _import_oplog(sqlite_conn, pg_conn, schema)
-                second = _import_oplog(sqlite_conn, pg_conn, schema)
-                pg_conn.commit()
-            with psycopg.connect(pg_dsn, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(f'select count(*) from {schema}.oplog')
-                    got = int(cur.fetchone()[0])
-            assert first == len(src_ids)
-            assert second == len(src_ids)
-            assert got == len(src_ids), (
-                f'expected {len(src_ids)} oplog rows after rerun,'
-                f' got {got}')
-        finally:
-            with psycopg.connect(pg_dsn, autocommit=True) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(f'drop schema if exists {schema} cascade')
-    finally:
-        sqlite_conn.close()

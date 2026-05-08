@@ -2249,15 +2249,25 @@ def migrate(
 
     from memman import config
     from memman.migrate import (
-        MigrateError, SchemaState, held_drain_lock,
-        inspect_target_schemas, migrate_store_to_postgres,
-        migrate_store_to_sqlite, preflight,
+        MigrateError,
+        SchemaState,
+        _verify_destination_counts,
+        held_drain_lock,
+        inspect_target_schemas,
+        preflight,
         )
     from memman.setup.scheduler import _write_env_keys
     from memman.store.db import list_local_store_dirs, store_dir
     from memman.store.factory import (
         list_stores, resolve_store_backend, resolve_store_pg_dsn,
         )
+    from memman.store.postgres import (
+        PostgresMigrator,
+        _connection,
+        _store_schema,
+        drop_postgres_store,
+        )
+    from memman.store.sqlite import SqliteMigrator
     from memman.trace import redact_dsn
 
     data_dir = ctx.obj['data_dir']
@@ -2360,16 +2370,16 @@ def migrate(
                 ' the env file for each migrated store.')
 
         if dry_run:
+            src_migrator = SqliteMigrator(data_dir)
             for s in todo:
-                source = store_dir(data_dir, s)
                 try:
-                    res = migrate_store_to_postgres(
-                        source_dir=source, dsn=dsn, store=s,
-                        dry_run=True, state=states[s])
+                    src_migrator.preflight_source(s)
+                    payload = src_migrator.gather(s)
                     click.echo(
-                        f'{s}: insights={res.insights}'
-                        f' edges={res.edges} oplog={res.oplog}'
-                        f' meta={res.meta} (dry-run)')
+                        f'{s}: insights={len(payload.insights)}'
+                        f' edges={len(payload.edges)}'
+                        f' oplog={len(payload.oplog)}'
+                        f' meta={len(payload.meta)} (dry-run)')
                 except MigrateError as exc:
                     raise click.ClickException(f'{s}: {exc}')
             return
@@ -2380,16 +2390,32 @@ def migrate(
 
         try:
             with held_drain_lock(data_dir):
+                src_migrator = SqliteMigrator(data_dir)
+                tgt_migrator = PostgresMigrator(data_dir, dsn=dsn)
+                tgt_migrator.preflight_target(todo[0])
                 for s in todo:
-                    source = store_dir(data_dir, s)
                     try:
-                        res = migrate_store_to_postgres(
-                            source_dir=source, dsn=dsn, store=s,
-                            dry_run=False, state=states[s])
+                        src_migrator.preflight_source(s)
+                        if states[s] in (
+                                SchemaState.EMPTY,
+                                SchemaState.POPULATED):
+                            drop_postgres_store(s, dsn)
+                        payload = src_migrator.gather(s)
+                        tgt_migrator.apply(s, payload)
+                        with _connection(dsn, autocommit=True) as conn:
+                            _verify_destination_counts(
+                                conn, _store_schema(s), s,
+                                expected={
+                                    'insights': len(payload.insights),
+                                    'edges': len(payload.edges),
+                                    'oplog': len(payload.oplog),
+                                    'meta': len(payload.meta),
+                                    })
                         click.echo(
-                            f'{s}: insights={res.insights}'
-                            f' edges={res.edges} oplog={res.oplog}'
-                            f' meta={res.meta} (verified)')
+                            f'{s}: insights={len(payload.insights)}'
+                            f' edges={len(payload.edges)}'
+                            f' oplog={len(payload.oplog)}'
+                            f' meta={len(payload.meta)} (verified)')
                         _write_env_keys({
                             config.BACKEND_FOR(s): 'postgres',
                             config.PG_DSN_FOR(s): dsn,
@@ -2397,21 +2423,20 @@ def migrate(
                         click.echo(
                             f'  Wrote {config.BACKEND_FOR(s)}=postgres'
                             f' to {data_dir}/env.')
-                        from memman.setup.archive import archive_store_dir
-                        try:
-                            archive_dest = archive_store_dir(data_dir, s)
-                            if archive_dest is not None:
-                                click.echo(
-                                    f'  Archived source to'
-                                    f' {archive_dest}.')
-                        except OSError as exc:
+                        artifact = src_migrator.archive(s, data_dir)
+                        if (artifact.kind == 'filesystem'
+                                and artifact.location):
                             click.echo(
-                                f'  WARNING: could not archive source'
-                                f' for {s!r}: {exc}; leaving in place.'
-                                ' Run `memman doctor` to track.',
-                                err=True)
+                                f'  Archived source to'
+                                f' {artifact.location}.')
                     except MigrateError as exc:
                         raise click.ClickException(f'{s}: {exc}')
+                    except OSError as exc:
+                        click.echo(
+                            f'  WARNING: could not archive source'
+                            f' for {s!r}: {exc}; leaving in place.'
+                            ' Run `memman doctor` to track.',
+                            err=True)
         except MigrateError as exc:
             raise click.ClickException(str(exc))
 
@@ -2477,10 +2502,11 @@ def migrate(
         click.echo('')
         click.confirm('Proceed?', default=False, abort=True)
 
+    import tempfile
+
     from memman.embed.fingerprint import Fingerprint
     from memman.setup.archive import archive_postgres_schema
     from memman.store.db import open_db
-    from memman.store.postgres import drop_postgres_store
     from memman.store.snapshot import write_snapshot
 
     try:
@@ -2488,23 +2514,28 @@ def migrate(
             for s in todo:
                 dsn = store_dsns[s]
                 target = target_paths[s]
-                tmp = target.with_name(target.name + '.tmp')
-                if tmp.exists():
-                    click.echo(f'  Cleaning leftover {tmp}.')
-                    shutil.rmtree(tmp)
+                scratch = pathlib.Path(tempfile.mkdtemp(
+                    dir=data_dir, prefix='migrate-'))
+                (scratch / 'data').mkdir()
+                produced = scratch / 'data' / s
                 try:
-                    res = migrate_store_to_sqlite(
-                        dsn=dsn, target_dir=str(tmp), store=s)
+                    src_migrator = PostgresMigrator(data_dir, dsn=dsn)
+                    src_migrator.preflight_source(s)
+                    payload = src_migrator.gather(s)
+                    tgt_migrator = SqliteMigrator(str(scratch))
+                    tgt_migrator.preflight_target(s)
+                    tgt_migrator.apply(s, payload)
                     click.echo(
-                        f'{s}: insights={res.insights}'
-                        f' edges={res.edges} oplog={res.oplog}'
-                        f' meta={res.meta} (verified)')
+                        f'{s}: insights={len(payload.insights)}'
+                        f' edges={len(payload.edges)}'
+                        f' oplog={len(payload.oplog)}'
+                        f' meta={len(payload.meta)} (verified)')
                 except MigrateError as exc:
-                    if tmp.exists():
-                        shutil.rmtree(tmp, ignore_errors=True)
+                    shutil.rmtree(scratch, ignore_errors=True)
                     raise click.ClickException(f'{s}: {exc}')
 
-                tmp.rename(target)
+                shutil.move(str(produced), str(target))
+                shutil.rmtree(scratch, ignore_errors=True)
                 click.echo(f'  Wrote sqlite store at {target}.')
 
                 try:

@@ -60,8 +60,9 @@ def test_migrate_preserves_source_artifacts(pg_dsn, tmp_path):
     the documented operator-driven cleanup is `rm <store>/memman.db*`
     once the postgres data is verified.
     """
-    from memman.migrate import SchemaState, migrate_store_to_postgres
+    from memman.migrate import SchemaState
     from memman.store.postgres import _store_schema
+    from tests._migrate_helpers import migrate_store_to_postgres
 
     store = 'mig_preserve'
     sdir = tmp_path / store
