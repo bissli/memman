@@ -2359,6 +2359,17 @@ def migrate(
                     click.echo(
                         f'  Wrote {config.BACKEND_FOR(s)}=postgres'
                         f' to {data_dir}/env.')
+                    from memman.setup.archive import archive_store_dir
+                    try:
+                        archive_dest = archive_store_dir(data_dir, s)
+                        if archive_dest is not None:
+                            click.echo(
+                                f'  Archived source to {archive_dest}.')
+                    except OSError as exc:
+                        click.echo(
+                            f'  WARNING: could not archive source for'
+                            f' {s!r}: {exc}; leaving in place. Run'
+                            ' `memman doctor` to track.', err=True)
                 except MigrateError as exc:
                     raise click.ClickException(f'{s}: {exc}')
     except MigrateError as exc:
@@ -2368,8 +2379,8 @@ def migrate(
     click.echo(
         f'Migration complete: {len(stores)} store(s) copied to Postgres.')
     click.echo(
-        f'Source SQLite preserved at {data_dir}/data/<store>/.'
-        f' Remove with `rm <path>*` once the postgres-side data is verified.')
+        f'Sources archived to {data_dir}/archive/<store>/<YYYYMMDD>_<NN>/.'
+        f' Remove with `rm -rf` when no longer needed.')
     click.echo('')
     click.echo('Recommended next step:')
     click.echo('  memman doctor    # verify the postgres backend health')

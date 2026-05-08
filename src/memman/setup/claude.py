@@ -129,9 +129,10 @@ def _init_default_store(data_dir: str) -> None:
     from memman.embed.fingerprint import seed_if_fresh
     from memman.exceptions import ConfigError, EmbedFingerprintError
     from memman.store.db import store_dir, store_exists
-    from memman.store.factory import open_backend
+    from memman.store.factory import open_backend, resolve_store_backend
 
-    if not store_exists(data_dir, 'default'):
+    backend_kind = resolve_store_backend('default', data_dir)
+    if backend_kind == 'sqlite' and not store_exists(data_dir, 'default'):
         with open_backend('default', data_dir) as backend:
             try:
                 seed_if_fresh(backend, get_client())

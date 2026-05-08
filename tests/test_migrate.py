@@ -227,10 +227,15 @@ def test_migrate_cli_yes_flag_skips_prompt(
         assert result.exit_code == 0, result.output
         assert 'MEMMAN_BACKEND_mig_cli_yes' in result.output
         assert '(verified)' in result.output
-        assert 'source cleaned' not in result.output
+        assert 'Archived source to' in result.output
         env_text = (data_dir / 'env').read_text()
         assert 'MEMMAN_BACKEND_mig_cli_yes=postgres' in env_text
         assert f'MEMMAN_PG_DSN_mig_cli_yes={pg_dsn}' in env_text
+        archive_root = data_dir / 'archive' / 'mig_cli_yes'
+        slots = sorted(archive_root.iterdir())
+        assert len(slots) == 1, f'expected 1 archive slot, got {slots}'
+        assert (slots[0] / 'memman.db').exists()
+        assert not (data_dir / 'data' / 'mig_cli_yes').exists()
     finally:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:

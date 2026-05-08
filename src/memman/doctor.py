@@ -221,10 +221,12 @@ def check_stale_post_migrate_source(data_dir: str) -> dict[str, Any]:
         'detail': {
             'stores': stale,
             'message': (
-                'stale post-migrate SQLite source files preserved in'
-                ' postgres-routed stores. Delete with'
-                ' `rm <data_dir>/data/<store>/memman.db*` once you'
-                ' have verified the postgres-side data is intact.'),
+                'stale post-migrate SQLite source files in postgres-'
+                'routed stores. Recent migrations auto-archive into'
+                ' `<data_dir>/archive/<store>/<YYYYMMDD>_<NN>/`. For'
+                ' legacy migrations (pre-0.14.12), back-fill with'
+                ' `mv <data_dir>/data/<store> <data_dir>/archive/'
+                '<store>/<YYYYMMDD>_01`.'),
             },
         }
 
