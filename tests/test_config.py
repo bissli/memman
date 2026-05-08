@@ -22,7 +22,7 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_WORKER',
     'MEMMAN_LOG_LEVEL',
     'MEMMAN_DEFAULT_BACKEND',
-    'MEMMAN_DEFAULT_PG_DSN',
+    'MEMMAN_DEFAULT_POSTGRES_DSN',
     'OPENROUTER_API_KEY',
     'VOYAGE_API_KEY',
     'MEMMAN_OPENAI_EMBED_API_KEY',
@@ -250,7 +250,7 @@ class TestConfigSetPgDsn:
     """`memman config set-pg-dsn` assembles a libpq URI from prompts."""
 
     def test_default_writes_assembled_uri(self, tmp_path):
-        """`--default` writes MEMMAN_DEFAULT_PG_DSN built from five prompts."""
+        """`--default` writes MEMMAN_DEFAULT_POSTGRES_DSN built from five prompts."""
         runner = CliRunner()
         data_dir = str(tmp_path / 'memman')
         result = runner.invoke(
@@ -266,7 +266,7 @@ class TestConfigSetPgDsn:
         assert ':***@' in result.output
 
     def test_store_writes_per_store_key(self, tmp_path):
-        """`--store NAME` writes MEMMAN_PG_DSN_<NAME>."""
+        """`--store NAME` writes MEMMAN_POSTGRES_DSN_<NAME>."""
         runner = CliRunner()
         data_dir = str(tmp_path / 'memman')
         result = runner.invoke(
@@ -275,7 +275,7 @@ class TestConfigSetPgDsn:
             input='localhost\n5432\nmemman\n\nmemman\n')
         assert result.exit_code == 0, result.output
         parsed = config.parse_env_file(config.env_file_path(data_dir))
-        assert parsed[config.PG_DSN_FOR('work')] == (
+        assert parsed[config.env_key_for('postgres', 'DSN', 'work')] == (
             'postgresql://memman@localhost:5432/memman')
         assert config.DEFAULT_PG_DSN not in parsed
 

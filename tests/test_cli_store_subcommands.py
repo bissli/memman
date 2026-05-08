@@ -11,7 +11,7 @@ Postgres-marked tests use the `pg_dsn` fixture from
 `tests/fixtures/postgres.py`; they're skipped when psycopg /
 testcontainers are unavailable. The `_runner_for_postgres` helper
 seeds a postgres-routed store via `MEMMAN_BACKEND_<name>=postgres`
-and `MEMMAN_PG_DSN_<name>=<dsn>`.
+and `MEMMAN_POSTGRES_DSN_<name>=<dsn>`.
 """
 
 import json
@@ -38,8 +38,8 @@ def _make_runner_with_pg_store(tmp_path, pg_dsn, store_name):
         'OPENROUTER_API_KEY': 'mock-key-for-testing',
         'VOYAGE_API_KEY': 'mock-voyage-key-for-testing',
         f'MEMMAN_BACKEND_{store_name}': 'postgres',
-        f'MEMMAN_PG_DSN_{store_name}': pg_dsn,
-        'MEMMAN_DEFAULT_PG_DSN': pg_dsn,
+        f'MEMMAN_POSTGRES_DSN_{store_name}': pg_dsn,
+        'MEMMAN_DEFAULT_POSTGRES_DSN': pg_dsn,
         })
     env_path.write_text(
         '\n'.join(f'{k}={v}' for k, v in rows.items()) + '\n')

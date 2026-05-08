@@ -17,8 +17,8 @@ features today:
    avoiding a one-option confirmation prompt.
 
 The wizard writes per-store dispatch keys: `MEMMAN_DEFAULT_BACKEND`
-(and `MEMMAN_DEFAULT_PG_DSN` for postgres) plus
-`MEMMAN_BACKEND_default` (and `MEMMAN_PG_DSN_default` for postgres)
+(and `MEMMAN_DEFAULT_POSTGRES_DSN` for postgres) plus
+`MEMMAN_BACKEND_default` (and `MEMMAN_POSTGRES_DSN_default` for postgres)
 for the freshly-created `default` store.
 
 Non-TTY mode (`sys.stdin.isatty()` False or `--no-wizard`) skips all
@@ -82,7 +82,7 @@ def run_wizard(
             interactive=interactive)
         if dsn:
             out[config.DEFAULT_PG_DSN] = dsn
-            out[config.PG_DSN_FOR('default')] = dsn
+            out[config.env_key_for('postgres', 'DSN', 'default')] = dsn
 
     if interactive and not out:
         click.echo(click.style(

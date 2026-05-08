@@ -59,7 +59,7 @@ def test_migrate_cli_round_trip_to_postgres(tmp_path: Path, pg_dsn: str):
     home.mkdir()
     data_dir = home / '.memman'
     data_dir.mkdir()
-    (data_dir / 'env').write_text(f'MEMMAN_DEFAULT_PG_DSN={pg_dsn}\n')
+    (data_dir / 'env').write_text(f'MEMMAN_DEFAULT_POSTGRES_DSN={pg_dsn}\n')
     store = 'mig_cli'
 
     _seed_sqlite_store(data_dir, store)

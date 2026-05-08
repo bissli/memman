@@ -160,7 +160,7 @@ class TestDsn:
         assert out[config.DEFAULT_BACKEND] == 'postgres'
         assert out[config.DEFAULT_PG_DSN] == 'postgresql://u@h/db'
         assert out[config.BACKEND_FOR('default')] == 'postgres'
-        assert out[config.PG_DSN_FOR('default')] == 'postgresql://u@h/db'
+        assert out[config.env_key_for('postgres', 'DSN', 'default')] == 'postgresql://u@h/db'
 
     def test_pg_dsn_probe_failure_raises(
             self, monkeypatch, no_tty, tmp_path):

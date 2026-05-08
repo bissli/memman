@@ -19,7 +19,7 @@ from memman import config
 def _seed_pg_keys(env_file, store: str, dsn: str) -> None:
     """Write per-store postgres backend keys for `store`."""
     env_file(config.BACKEND_FOR(store), 'postgres')
-    env_file(config.PG_DSN_FOR(store), dsn)
+    env_file(config.env_key_for('postgres', 'DSN', store), dsn)
 
 
 def _seed_sqlite_dir(data_dir: str, store: str) -> None:
@@ -37,7 +37,7 @@ def test_resolve_store_backend_dispatches_per_store(tmp_path, env_file):
     data_dir = os.environ[config.DATA_DIR]
     env_file(config.DEFAULT_BACKEND, 'sqlite')
     env_file(config.BACKEND_FOR('shared'), 'postgres')
-    env_file(config.PG_DSN_FOR('shared'), 'postgresql://x@y/z')
+    env_file(config.env_key_for('postgres', 'DSN', 'shared'), 'postgresql://x@y/z')
 
     assert resolve_store_backend('default', data_dir) == 'sqlite'
     assert resolve_store_backend('shared', data_dir) == 'postgres'
@@ -87,7 +87,7 @@ def test_status_reports_per_store_backend_and_summary(tmp_path, env_file):
     _seed_sqlite_dir(data_dir, 'local')
     env_file(config.BACKEND_FOR('local'), 'sqlite')
     env_file(config.BACKEND_FOR('shared'), 'postgres')
-    env_file(config.PG_DSN_FOR('shared'), 'postgresql://x@y/z')
+    env_file(config.env_key_for('postgres', 'DSN', 'shared'), 'postgresql://x@y/z')
 
     r = CliRunner()
     out = r.invoke(
@@ -103,14 +103,14 @@ def test_status_reports_per_store_backend_and_summary(tmp_path, env_file):
 
 
 def test_config_show_redacts_per_store_dsn(tmp_path, env_file):
-    """`memman config show` redacts every `MEMMAN_PG_DSN_<store>` value.
+    """`memman config show` redacts every `MEMMAN_POSTGRES_DSN_<store>` value.
     """
     from click.testing import CliRunner
     from memman.cli import cli
 
     data_dir = os.environ[config.DATA_DIR]
     env_file(config.BACKEND_FOR('shared'), 'postgres')
-    env_file(config.PG_DSN_FOR('shared'), 'postgresql://secret@host/db')
+    env_file(config.env_key_for('postgres', 'DSN', 'shared'), 'postgresql://secret@host/db')
     env_file(config.DEFAULT_PG_DSN, 'postgresql://default-secret@host/db')
 
     r = CliRunner()
@@ -120,7 +120,7 @@ def test_config_show_redacts_per_store_dsn(tmp_path, env_file):
     import json
     data = json.loads(out.output)
     per_store = data.get('per_store') or data['env']
-    pg_key = config.PG_DSN_FOR('shared')
+    pg_key = config.env_key_for('postgres', 'DSN', 'shared')
     assert per_store.get(pg_key) == '***REDACTED***'
     assert data['env'].get(config.DEFAULT_PG_DSN) == '***REDACTED***'
 
@@ -142,7 +142,7 @@ def test_drain_processes_mixed_backends_in_one_batch(
     env_file(config.DEFAULT_BACKEND, 'sqlite')
     env_file(config.BACKEND_FOR(sqlite_store), 'sqlite')
     env_file(config.BACKEND_FOR(pg_store), 'postgres')
-    env_file(config.PG_DSN_FOR(pg_store), pg_dsn)
+    env_file(config.env_key_for('postgres', 'DSN', pg_store), pg_dsn)
 
     schema = _store_schema(pg_store)
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
@@ -232,7 +232,7 @@ def test_cross_backend_retry(tmp_path, env_file, pg_dsn, monkeypatch):
             f' saw {attempts_seen[0]}')
 
         env_file(config.BACKEND_FOR(store), 'postgres')
-        env_file(config.PG_DSN_FOR(store), pg_dsn)
+        env_file(config.env_key_for('postgres', 'DSN', store), pg_dsn)
         config.reset_file_cache()
 
         clock[0] += 65
@@ -278,7 +278,7 @@ def test_default_sqlite_with_work_postgres(
     data_dir = os.environ[config.DATA_DIR]
     env_file(config.DEFAULT_BACKEND, 'sqlite')
     env_file(config.BACKEND_FOR('work'), 'postgres')
-    env_file(config.PG_DSN_FOR('work'), pg_dsn)
+    env_file(config.env_key_for('postgres', 'DSN', 'work'), pg_dsn)
 
     schema = _store_schema('work')
     with psycopg.connect(pg_dsn, autocommit=True) as conn:

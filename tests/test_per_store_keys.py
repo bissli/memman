@@ -17,10 +17,10 @@ def test_backend_for_builds_namespaced_key():
 
 
 def test_pg_dsn_for_builds_namespaced_key():
-    """PG_DSN_FOR(store) -> 'MEMMAN_PG_DSN_<store>'.
+    """PG_DSN_FOR(store) -> 'MEMMAN_POSTGRES_DSN_<store>'.
     """
     from memman import config
-    assert config.PG_DSN_FOR('main') == 'MEMMAN_PG_DSN_main'
+    assert config.env_key_for('postgres', 'DSN', 'main') == 'MEMMAN_POSTGRES_DSN_main'
 
 
 def test_default_backend_constant():
@@ -28,7 +28,7 @@ def test_default_backend_constant():
     """
     from memman import config
     assert config.DEFAULT_BACKEND == 'MEMMAN_DEFAULT_BACKEND'
-    assert config.DEFAULT_PG_DSN == 'MEMMAN_DEFAULT_PG_DSN'
+    assert config.DEFAULT_PG_DSN == 'MEMMAN_DEFAULT_POSTGRES_DSN'
 
 
 def test_get_store_backend_returns_value_when_set(env_file):
@@ -44,18 +44,18 @@ def test_get_store_pg_dsn_returns_value_when_set(env_file):
     """`get_store_pg_dsn` returns the per-store DSN or None.
     """
     from memman import config
-    env_file('MEMMAN_PG_DSN_main', 'postgresql://example/x')
+    env_file('MEMMAN_POSTGRES_DSN_main', 'postgresql://example/x')
     assert config.get_store_pg_dsn('main') == 'postgresql://example/x'
     assert config.get_store_pg_dsn('other') is None
 
 
 def test_validator_accepts_per_store_pg_dsn_keys():
-    """`MEMMAN_PG_DSN_<store>` does not trip the postgres validator.
+    """`MEMMAN_POSTGRES_DSN_<store>` does not trip the postgres validator.
     """
     from memman.store.config import validate_for
     validate_for('postgres', {
-        'MEMMAN_PG_DSN_main': 'postgresql://x',
-        'MEMMAN_PG_DSN_shared': 'postgresql://y',
+        'MEMMAN_POSTGRES_DSN_main': 'postgresql://x',
+        'MEMMAN_POSTGRES_DSN_shared': 'postgresql://y',
         })
 
 
@@ -66,18 +66,18 @@ def test_validator_rejects_per_store_pg_key_with_invalid_suffix():
     from memman.store.errors import ConfigError
     with pytest.raises(ConfigError):
         validate_for('postgres', {
-            'MEMMAN_PG_DSN_/etc/passwd': 'oops',
+            'MEMMAN_POSTGRES_DSN_/etc/passwd': 'oops',
             })
 
 
 def test_validator_rejects_unknown_per_store_canonical_key():
-    """A `MEMMAN_PG_<unknown>_<store>` key is still rejected.
+    """A `MEMMAN_POSTGRES_<unknown>_<store>` key is still rejected.
     """
     from memman.store.config import validate_for
     from memman.store.errors import ConfigError
     with pytest.raises(ConfigError):
         validate_for('postgres', {
-            'MEMMAN_PG_FAKE_KEY_main': 'value',
+            'MEMMAN_POSTGRES_FAKE_KEY_main': 'value',
             })
 
 
@@ -93,12 +93,12 @@ def test_config_set_per_store_backend(mm_runner):
 
 
 def test_config_set_per_store_pg_dsn(mm_runner):
-    """`config set MEMMAN_PG_DSN_<store> <url>` writes the per-store DSN
+    """`config set MEMMAN_POSTGRES_DSN_<store> <url>` writes the per-store DSN
     without rejection.
     """
     from tests.conftest import invoke
     result = invoke(mm_runner, [
-        'config', 'set', 'MEMMAN_PG_DSN_work',
+        'config', 'set', 'MEMMAN_POSTGRES_DSN_work',
         'postgresql://localhost/x'])
     assert result.exit_code == 0, result.output
 
@@ -116,14 +116,14 @@ def test_config_set_rejects_bare_memman_backend(mm_runner):
 
 
 def test_config_set_rejects_bare_memman_pg_dsn(mm_runner):
-    """The bare canonical `MEMMAN_PG_DSN` is rejected.
+    """The bare canonical `MEMMAN_POSTGRES_DSN` is rejected.
     """
     from tests.conftest import invoke
     result = invoke(mm_runner, [
-        'config', 'set', 'MEMMAN_PG_DSN', 'postgresql://x'])
+        'config', 'set', 'MEMMAN_POSTGRES_DSN', 'postgresql://x'])
     assert result.exit_code != 0
-    assert 'MEMMAN_DEFAULT_PG_DSN' in result.output
-    assert 'MEMMAN_PG_DSN_<store>' in result.output
+    assert 'MEMMAN_DEFAULT_POSTGRES_DSN' in result.output
+    assert 'MEMMAN_POSTGRES_DSN_<store>' in result.output
 
 
 def test_config_set_rejects_unrecognized_key_with_hint(mm_runner):
@@ -135,4 +135,4 @@ def test_config_set_rejects_unrecognized_key_with_hint(mm_runner):
     assert result.exit_code != 0
     assert 'not a recognized config key' in result.output
     assert 'MEMMAN_BACKEND_<store>' in result.output
-    assert 'MEMMAN_PG_DSN_<store>' in result.output
+    assert 'MEMMAN_POSTGRES_DSN_<store>' in result.output

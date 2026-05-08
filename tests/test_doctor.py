@@ -508,7 +508,7 @@ class TestCheckPerStoreKeys:
         assert 'dsn' in pg.get('error', '').lower()
 
     def test_postgres_default_dsn_satisfies(self, tmp_path, env_file):
-        """`MEMMAN_DEFAULT_PG_DSN` covers a postgres store without a per-store DSN.
+        """`MEMMAN_DEFAULT_POSTGRES_DSN` covers a postgres store without a per-store DSN.
         """
         from memman import config
         from memman.doctor import check_per_store_keys
@@ -541,7 +541,7 @@ class TestCheckPerStoreKeys:
         Path(data_dir, 'data', 'pg_pinned').mkdir(parents=True, exist_ok=True)
         Path(data_dir, 'data', 'pg_pinned', 'memman.db').write_bytes(b'')
         env_file(config.BACKEND_FOR('pg_pinned'), 'postgres')
-        env_file(config.PG_DSN_FOR('pg_pinned'), 'postgresql://pinned@host/db')
+        env_file(config.env_key_for('postgres', 'DSN', 'pg_pinned'), 'postgresql://pinned@host/db')
         env_file(config.DEFAULT_PG_DSN, 'postgresql://default@host/db')
 
         out = check_per_store_keys(data_dir)
@@ -862,7 +862,7 @@ class TestDrainHeartbeat:
 
         store = 'hb_doctor_setup'
         env_file(f'MEMMAN_BACKEND_{store}', 'postgres')
-        env_file(f'MEMMAN_PG_DSN_{store}', pg_dsn)
+        env_file(f'MEMMAN_POSTGRES_DSN_{store}', pg_dsn)
         try:
             drop_postgres_store(store, pg_dsn)
         except Exception:
@@ -899,7 +899,7 @@ class TestDrainHeartbeat:
 
         store = 'hb_doctor_stale'
         env_file(f'MEMMAN_BACKEND_{store}', 'postgres')
-        env_file(f'MEMMAN_PG_DSN_{store}', pg_dsn)
+        env_file(f'MEMMAN_POSTGRES_DSN_{store}', pg_dsn)
         try:
             drop_postgres_store(store, pg_dsn)
         except Exception:
@@ -943,7 +943,7 @@ class TestDrainHeartbeat:
 
         store = 'hb_doctor_fresh'
         env_file(f'MEMMAN_BACKEND_{store}', 'postgres')
-        env_file(f'MEMMAN_PG_DSN_{store}', pg_dsn)
+        env_file(f'MEMMAN_POSTGRES_DSN_{store}', pg_dsn)
         try:
             drop_postgres_store(store, pg_dsn)
         except Exception:
@@ -1030,7 +1030,7 @@ class TestDoctorBackendDispatch:
         """`db_path` reports the redacted DSN, not a filesystem path."""
         store = 'doctor_dispatch'
         env_file(f'MEMMAN_BACKEND_{store}', 'postgres')
-        env_file(f'MEMMAN_PG_DSN_{store}', pg_dsn)
+        env_file(f'MEMMAN_POSTGRES_DSN_{store}', pg_dsn)
         monkeypatch.setenv('MEMMAN_STORE', store)
 
         from memman.store.postgres import drop_postgres_store

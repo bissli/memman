@@ -1,16 +1,16 @@
 """Backend-namespaced env key validation.
 
 Validates that `factory.open_backend()` rejects typo'd keys that
-fall in the active backend's namespace (`MEMMAN_PG_*` for postgres,
+fall in the active backend's namespace (`MEMMAN_POSTGRES_*` for postgres,
 `MEMMAN_SQLITE_*` for sqlite) before any connection attempt, with
 a `did you mean` hint pointing at the per-store form. Bare canonical
-keys (e.g. `MEMMAN_PG_DSN`) are also rejected -- the per-store
+keys (e.g. `MEMMAN_POSTGRES_DSN`) are also rejected -- the per-store
 routing model requires the `_<store>` suffix or the
-`MEMMAN_DEFAULT_PG_DSN` fallback. Cross-backend keys
+`MEMMAN_DEFAULT_POSTGRES_DSN` fallback. Cross-backend keys
 (`OPENROUTER_API_KEY`, `MEMMAN_DEFAULT_BACKEND`,
-`MEMMAN_DEFAULT_PG_DSN`, `MEMMAN_EMBED_PROVIDER`) are never
+`MEMMAN_DEFAULT_POSTGRES_DSN`, `MEMMAN_EMBED_PROVIDER`) are never
 scanned by either validator. Inactive-backend keys are tolerated
--- a sqlite-active install may carry `MEMMAN_PG_DSN_<store>` from
+-- a sqlite-active install may carry `MEMMAN_POSTGRES_DSN_<store>` from
 a prior postgres trial without erroring.
 """
 
@@ -20,43 +20,43 @@ from memman.store.errors import ConfigError
 
 
 class TestPostgresValidation:
-    """`PostgresBackendConfig._validate` for `MEMMAN_PG_*` keys."""
+    """`PostgresBackendConfig._validate` for `MEMMAN_POSTGRES_*` keys."""
 
     def test_per_store_key_passes(self):
-        """A per-store MEMMAN_PG_DSN_<store> passes silently.
+        """A per-store MEMMAN_POSTGRES_DSN_<store> passes silently.
         """
-        env = {'MEMMAN_PG_DSN_default': 'postgresql://localhost/x'}
+        env = {'MEMMAN_POSTGRES_DSN_default': 'postgresql://localhost/x'}
         PostgresBackendConfig._validate(env)
 
     def test_bare_pg_dsn_rejected_with_hint(self):
-        """The bare canonical MEMMAN_PG_DSN is no longer accepted.
+        """The bare canonical MEMMAN_POSTGRES_DSN is no longer accepted.
         """
-        env = {'MEMMAN_PG_DSN': 'postgresql://localhost/x'}
+        env = {'MEMMAN_POSTGRES_DSN': 'postgresql://localhost/x'}
         with pytest.raises(ConfigError) as exc:
             PostgresBackendConfig._validate(env)
         msg = str(exc.value)
-        assert 'MEMMAN_PG_DSN' in msg
-        assert 'MEMMAN_PG_DSN_<store>' in msg
+        assert 'MEMMAN_POSTGRES_DSN' in msg
+        assert 'MEMMAN_POSTGRES_DSN_<store>' in msg
 
     def test_typo_raises_with_hint(self):
-        """A typo'd MEMMAN_PG_DSL raises ConfigError with a did-you-mean
+        """A typo'd MEMMAN_POSTGRES_DSL raises ConfigError with a did-you-mean
         pointing at the per-store form.
         """
-        env = {'MEMMAN_PG_DSL': 'postgresql://localhost/x'}
+        env = {'MEMMAN_POSTGRES_DSL': 'postgresql://localhost/x'}
         with pytest.raises(ConfigError) as exc:
             PostgresBackendConfig._validate(env)
         msg = str(exc.value)
-        assert 'MEMMAN_PG_DSL' in msg
-        assert 'MEMMAN_PG_DSN_<store>' in msg
+        assert 'MEMMAN_POSTGRES_DSL' in msg
+        assert 'MEMMAN_POSTGRES_DSN_<store>' in msg
         assert 'did you mean' in msg.lower()
 
     def test_unknown_key_without_close_match(self):
-        """An unknown MEMMAN_PG_* key with no close match still errors.
+        """An unknown MEMMAN_POSTGRES_* key with no close match still errors.
         """
-        env = {'MEMMAN_PG_FOOBARBAZ': 'x'}
+        env = {'MEMMAN_POSTGRES_FOOBARBAZ': 'x'}
         with pytest.raises(ConfigError) as exc:
             PostgresBackendConfig._validate(env)
-        assert 'MEMMAN_PG_FOOBARBAZ' in str(exc.value)
+        assert 'MEMMAN_POSTGRES_FOOBARBAZ' in str(exc.value)
 
     def test_cross_backend_keys_ignored(self):
         """Cross-backend keys are not scanned by Postgres validator.
@@ -64,7 +64,7 @@ class TestPostgresValidation:
         env = {
             'OPENROUTER_API_KEY': 'k',
             'MEMMAN_DEFAULT_BACKEND': 'postgres',
-            'MEMMAN_DEFAULT_PG_DSN': 'postgresql://localhost/x',
+            'MEMMAN_DEFAULT_POSTGRES_DSN': 'postgresql://localhost/x',
             'MEMMAN_EMBED_PROVIDER': 'voyage',
             'MEMMAN_DATA_DIR': '/tmp/x',
             }
@@ -85,9 +85,9 @@ class TestSqliteValidation:
         SqliteBackendConfig._validate({})
 
     def test_postgres_keys_tolerated_when_sqlite_active(self):
-        """MEMMAN_PG_* keys are not scanned by SQLite validator.
+        """MEMMAN_POSTGRES_* keys are not scanned by SQLite validator.
         """
-        env = {'MEMMAN_PG_DSN': 'postgresql://localhost/x'}
+        env = {'MEMMAN_POSTGRES_DSN': 'postgresql://localhost/x'}
         SqliteBackendConfig._validate(env)
 
     def test_unknown_sqlite_namespaced_key_errors(self):
@@ -104,7 +104,7 @@ class TestOpenBackendIntegration:
 
     def test_open_backend_rejects_postgres_typo(
             self, monkeypatch, tmp_path):
-        """A MEMMAN_PG_DSL typo with backend=postgres errors before
+        """A MEMMAN_POSTGRES_DSL typo with backend=postgres errors before
         the connection attempt.
         """
         from memman import config
@@ -115,25 +115,25 @@ class TestOpenBackendIntegration:
         env_path = data_dir / 'env'
         env_path.write_text(
             'MEMMAN_BACKEND_default=postgres\n'
-            'MEMMAN_PG_DSN_default=postgresql://localhost/x\n'
-            'MEMMAN_PG_DSL=postgresql://localhost/x\n')
+            'MEMMAN_POSTGRES_DSN_default=postgresql://localhost/x\n'
+            'MEMMAN_POSTGRES_DSL=postgresql://localhost/x\n')
         monkeypatch.setenv('MEMMAN_DATA_DIR', str(data_dir))
         config.reset_file_cache()
 
         with pytest.raises(ConfigError) as exc:
             factory.open_backend('default', str(data_dir))
-        assert 'MEMMAN_PG_DSL' in str(exc.value)
-        assert 'MEMMAN_PG_DSN' in str(exc.value)
+        assert 'MEMMAN_POSTGRES_DSL' in str(exc.value)
+        assert 'MEMMAN_POSTGRES_DSN' in str(exc.value)
 
 
 class TestValidateAll:
     """`validate_all` runs every registered backend's namespace check."""
 
     def test_empty_suffix_rejected(self):
-        """`MEMMAN_PG_DSN_` (no suffix) is an invalid store name.
+        """`MEMMAN_POSTGRES_DSN_` (no suffix) is an invalid store name.
         """
         from memman.store.config import validate_for
-        env = {'MEMMAN_PG_DSN_': 'x'}
+        env = {'MEMMAN_POSTGRES_DSN_': 'x'}
         with pytest.raises(ConfigError):
             validate_for('postgres', env)
 
@@ -141,13 +141,13 @@ class TestValidateAll:
         """A suffix containing slashes / spaces is rejected.
         """
         from memman.store.config import validate_for
-        env = {'MEMMAN_PG_DSN_bad/name': 'x'}
+        env = {'MEMMAN_POSTGRES_DSN_bad/name': 'x'}
         with pytest.raises(ConfigError):
             validate_for('postgres', env)
 
     def test_validate_all_catches_inactive_namespace_typo(self):
         """`validate_all` runs both registered config classes, so a
-        `MEMMAN_PG_DSN_typo` key is rejected even when the active
+        `MEMMAN_POSTGRES_DSN_typo` key is rejected even when the active
         backend is sqlite.
 
         Closes the validator gap where typos in an inactive backend's
@@ -157,20 +157,20 @@ class TestValidateAll:
         from memman.store.config import validate_all
         env = {
             'MEMMAN_DEFAULT_BACKEND': 'sqlite',
-            'MEMMAN_PG_FAKE_KEY_main': 'x',
+            'MEMMAN_POSTGRES_FAKE_KEY_main': 'x',
             }
         with pytest.raises(ConfigError):
             validate_all(env)
 
     def test_validate_all_catches_inactive_postgres_typo_when_active_is_sqlite(
             self):
-        """End-to-end inactive-namespace coverage: a `MEMMAN_PG_*`
+        """End-to-end inactive-namespace coverage: a `MEMMAN_POSTGRES_*`
         typo is caught when sqlite is active.
         """
         from memman.store.config import validate_all
         env = {
             'MEMMAN_DEFAULT_BACKEND': 'sqlite',
-            'MEMMAN_PG_DSL': 'postgresql://x',
+            'MEMMAN_POSTGRES_DSL': 'postgresql://x',
             }
         with pytest.raises(ConfigError):
             validate_all(env)

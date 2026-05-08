@@ -73,7 +73,7 @@ def test_open_backend_routes_two_stores_to_two_backends(
 
     env_file('MEMMAN_BACKEND_local_one', 'sqlite')
     env_file('MEMMAN_BACKEND_pg_one', 'postgres')
-    env_file('MEMMAN_PG_DSN_pg_one', pg_dsn)
+    env_file('MEMMAN_POSTGRES_DSN_pg_one', pg_dsn)
 
     data_dir = os.environ[config.DATA_DIR]
 

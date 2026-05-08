@@ -400,7 +400,7 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
       `MEMMAN_DEFAULT_BACKEND`, then 'sqlite');
     - fail when the resolved value is not a registered backend;
     - fail when the resolved kind is `postgres` and no DSN is reachable
-      via `MEMMAN_PG_DSN_<store>` or `MEMMAN_DEFAULT_PG_DSN`.
+      via `MEMMAN_POSTGRES_DSN_<store>` or `MEMMAN_DEFAULT_POSTGRES_DSN`.
 
     Also fails the check at the top when the env file carries a bare
     `MEMMAN_BACKEND` or `MEMMAN_PG_DSN` -- both are silently ignored
@@ -465,12 +465,12 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
                 f' {", ".join(sorted(registered))}')
             _bump('fail')
         elif kind == 'postgres':
-            per_store_dsn = file_values.get(config.PG_DSN_FOR(store))
+            per_store_dsn = file_values.get(config.env_key_for('postgres', 'DSN', store))
             default_dsn = file_values.get(config.DEFAULT_PG_DSN)
             dsn = per_store_dsn or default_dsn
             if not dsn:
                 entry['error'] = (
-                    f'no DSN: set {config.PG_DSN_FOR(store)} or'
+                    f'no DSN: set {config.env_key_for("postgres", "DSN", store)} or'
                     f' {config.DEFAULT_PG_DSN}')
                 _bump('fail')
         entries.append(entry)

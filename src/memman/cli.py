@@ -143,7 +143,7 @@ def _ensure_store_backend_key(store_name: str, data_dir: str) -> None:
     if default_kind == 'postgres':
         default_dsn = file_values.get(config.DEFAULT_PG_DSN)
         if default_dsn:
-            updates[config.PG_DSN_FOR(store_name)] = default_dsn
+            updates[config.env_key_for('postgres', 'DSN', store_name)] = default_dsn
     _write_env_keys_with_flock(updates, data_dir=data_dir)
 
 
@@ -343,17 +343,18 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
     Three shapes of key are accepted:
       * any member of `config.INSTALLABLE_KEYS`
       * `MEMMAN_BACKEND_<store>` (per-store backend routing)
-      * `MEMMAN_PG_DSN_<store>` (per-store DSN)
-    Bare canonicals (`MEMMAN_BACKEND`, `MEMMAN_PG_DSN`) are rejected
-    with hints pointing at `MEMMAN_DEFAULT_*` or the per-store form.
+      * `MEMMAN_POSTGRES_DSN_<store>` (per-store DSN)
+    Bare canonicals (`MEMMAN_BACKEND`, `MEMMAN_POSTGRES_DSN`) are
+    rejected with hints pointing at `MEMMAN_DEFAULT_*` or the
+    per-store form.
     """
     bare_canonicals = {
         'MEMMAN_BACKEND': (
             'use MEMMAN_DEFAULT_BACKEND as the default backend'
             ' or MEMMAN_BACKEND_<store> for a specific store'),
-        'MEMMAN_PG_DSN': (
-            'use MEMMAN_DEFAULT_PG_DSN as the default Postgres DSN'
-            ' or MEMMAN_PG_DSN_<store> for a specific store'),
+        'MEMMAN_POSTGRES_DSN': (
+            'use MEMMAN_DEFAULT_POSTGRES_DSN as the default Postgres DSN'
+            ' or MEMMAN_POSTGRES_DSN_<store> for a specific store'),
         }
     if key in bare_canonicals:
         raise click.ClickException(
@@ -364,15 +365,15 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
     elif key.startswith('MEMMAN_BACKEND_') and valid_store_name(
             key[len('MEMMAN_BACKEND_'):]):
         pass
-    elif key.startswith('MEMMAN_PG_DSN_') and valid_store_name(
-            key[len('MEMMAN_PG_DSN_'):]):
+    elif key.startswith('MEMMAN_POSTGRES_DSN_') and valid_store_name(
+            key[len('MEMMAN_POSTGRES_DSN_'):]):
         pass
     else:
         raise click.ClickException(
             f'{key!r} is not a recognized config key. Accepted shapes:'
             ' INSTALLABLE_KEYS members,'
             ' MEMMAN_BACKEND_<store> (per-store routing),'
-            ' or MEMMAN_PG_DSN_<store> (per-store DSN).')
+            ' or MEMMAN_POSTGRES_DSN_<store> (per-store DSN).')
     from memman.setup.scheduler import _write_env_keys
     data_dir = ctx.obj['data_dir']
     _write_env_keys({key: value}, data_dir=data_dir)
@@ -382,9 +383,9 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
 
 @config_cmd.command('set-pg-dsn')
 @click.option('--store', 'store', default=None,
-              help='Per-store key: writes MEMMAN_PG_DSN_<store>.')
+              help='Per-store key: writes MEMMAN_POSTGRES_DSN_<store>.')
 @click.option('--default', 'is_default', is_flag=True,
-              help='Default fallback: writes MEMMAN_DEFAULT_PG_DSN.')
+              help='Default fallback: writes MEMMAN_DEFAULT_POSTGRES_DSN.')
 @click.pass_context
 def config_set_pg_dsn(
         ctx: click.Context, store: str | None, is_default: bool) -> None:
@@ -393,8 +394,8 @@ def config_set_pg_dsn(
     Frees the operator from hand-typing libpq URIs. Prompts for host,
     port, user, password, and dbname; assembles a `postgresql://...`
     URI (URL-encoding credentials), and persists it under either
-    `MEMMAN_DEFAULT_PG_DSN` (`--default`) or
-    `MEMMAN_PG_DSN_<store>` (`--store NAME`). Exactly one of the two
+    `MEMMAN_DEFAULT_POSTGRES_DSN` (`--default`) or
+    `MEMMAN_POSTGRES_DSN_<store>` (`--store NAME`). Exactly one of the two
     flags is required. No connectivity probe; verify with
     `memman doctor` or `memman migrate --dry-run`.
     """
@@ -422,7 +423,7 @@ def config_set_pg_dsn(
         auth = f'{auth}:{quote(password, safe="")}'
     dsn = f'postgresql://{auth}@{host}:{port}/{quote(dbname, safe="")}'
 
-    key = config.DEFAULT_PG_DSN if is_default else config.PG_DSN_FOR(store)
+    key = config.DEFAULT_PG_DSN if is_default else config.env_key_for('postgres', 'DSN', store)
     data_dir = ctx.obj['data_dir']
     _write_env_keys({key: dsn}, data_dir=data_dir)
     config.reset_file_cache()
@@ -446,7 +447,7 @@ def config_show(ctx: click.Context) -> None:
             continue
         if key.startswith('MEMMAN_BACKEND_'):
             per_store[key] = value
-        elif key.startswith('MEMMAN_PG_DSN_'):
+        elif key.startswith('MEMMAN_POSTGRES_DSN_'):
             per_store[key] = '***REDACTED***'
     out: dict = {
         'data_dir': data_dir,
@@ -2314,17 +2315,17 @@ def migrate(
             dsn = config.get(config.DEFAULT_PG_DSN)
             if not dsn:
                 raise click.UsageError(
-                    'MEMMAN_DEFAULT_PG_DSN is not set; --all requires a'
+                    'MEMMAN_DEFAULT_POSTGRES_DSN is not set; --all requires a'
                     ' default DSN. Run `memman config set-pg-dsn'
                     ' --default`, or migrate one store at a time with'
                     ' --store NAME.')
         else:
-            dsn = (config.get(config.PG_DSN_FOR(todo[0]))
+            dsn = (config.get(config.env_key_for('postgres', 'DSN', todo[0]))
                    or config.get(config.DEFAULT_PG_DSN))
             if not dsn:
                 raise click.UsageError(
                     f'no DSN for store {todo[0]!r}: set'
-                    f' {config.PG_DSN_FOR(todo[0])} or'
+                    f' {config.env_key_for("postgres", "DSN", todo[0])} or'
                     f' {config.DEFAULT_PG_DSN} (run `memman config'
                     f' set-pg-dsn --store {todo[0]}` or `--default`).')
 
@@ -2366,7 +2367,7 @@ def migrate(
             click.echo(
                 'After successful migrate,'
                 ' MEMMAN_BACKEND_<store>=postgres'
-                ' and MEMMAN_PG_DSN_<store>=<dsn> will be written to'
+                ' and MEMMAN_POSTGRES_DSN_<store>=<dsn> will be written to'
                 ' the env file for each migrated store.')
 
         if dry_run:
@@ -2418,7 +2419,7 @@ def migrate(
                             f' meta={len(payload.meta)} (verified)')
                         _write_env_keys({
                             config.BACKEND_FOR(s): 'postgres',
-                            config.PG_DSN_FOR(s): dsn,
+                            config.env_key_for('postgres', 'DSN', s): dsn,
                             }, data_dir=data_dir)
                         click.echo(
                             f'  Wrote {config.BACKEND_FOR(s)}=postgres'
@@ -2469,7 +2470,8 @@ def migrate(
         if not dsn:
             raise click.UsageError(
                 f'no postgres DSN for store {s!r}: set'
-                f' {config.PG_DSN_FOR(s)} or {config.DEFAULT_PG_DSN}.')
+                f' {config.env_key_for("postgres", "DSN", s)} or'
+                f' {config.DEFAULT_PG_DSN}.')
         store_dsns[s] = dsn
 
     target_paths: dict[str, pathlib.Path] = {
@@ -2493,7 +2495,7 @@ def migrate(
     click.echo('')
     click.echo(
         'After successful migrate, MEMMAN_BACKEND_<store>=sqlite will'
-        ' be written and MEMMAN_PG_DSN_<store> removed for each'
+        ' be written and MEMMAN_POSTGRES_DSN_<store> removed for each'
         ' migrated store. Postgres schemas will be archived to'
         f' {data_dir}/archive/<store>/<YYYYMMDD>_<NN>/dump.pgdump'
         ' and dropped.')
@@ -2550,12 +2552,12 @@ def migrate(
 
                 _write_env_keys(
                     {config.BACKEND_FOR(s): 'sqlite'},
-                    removes={config.PG_DSN_FOR(s)},
+                    removes={config.env_key_for('postgres', 'DSN', s)},
                     data_dir=data_dir)
                 click.echo(
                     f'  Wrote {config.BACKEND_FOR(s)}=sqlite to'
                     f' {data_dir}/env (removed'
-                    f' {config.PG_DSN_FOR(s)}).')
+                    f' {config.env_key_for("postgres", "DSN", s)}).')
 
                 try:
                     db = open_db(str(target))

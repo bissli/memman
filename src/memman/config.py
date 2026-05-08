@@ -52,7 +52,7 @@ DEBUG = 'MEMMAN_DEBUG'
 WORKER = 'MEMMAN_WORKER'
 LOG_LEVEL = 'MEMMAN_LOG_LEVEL'
 DEFAULT_BACKEND = 'MEMMAN_DEFAULT_BACKEND'
-DEFAULT_PG_DSN = 'MEMMAN_DEFAULT_PG_DSN'
+DEFAULT_PG_DSN = 'MEMMAN_DEFAULT_POSTGRES_DSN'
 INTERVAL = 'MEMMAN_INTERVAL'
 
 
@@ -61,9 +61,14 @@ def BACKEND_FOR(store: str) -> str:
     return f'MEMMAN_BACKEND_{store}'
 
 
-def PG_DSN_FOR(store: str) -> str:
-    """Per-store DSN env-key name: `MEMMAN_PG_DSN_<store>`."""
-    return f'MEMMAN_PG_DSN_{store}'
+def env_key_for(backend: str, key: str, store: str) -> str:
+    """Per-store env-key name for a backend descriptor key.
+
+    Returns `MEMMAN_<BACKEND>_<KEY>_<store>`. Used by the registry-
+    driven dispatch in `store.factory` so backend additions do not
+    require a new module-level helper alongside `BACKEND_FOR`.
+    """
+    return f'MEMMAN_{backend.upper()}_{key.upper()}_{store}'
 
 
 OPENROUTER_API_KEY = 'OPENROUTER_API_KEY'
@@ -259,12 +264,13 @@ def get_store_backend(
 
 def get_store_pg_dsn(
         store: str, data_dir: str | None = None) -> str | None:
-    """Read `MEMMAN_PG_DSN_<store>` from the env file; None if absent.
+    """Read `MEMMAN_POSTGRES_DSN_<store>` from the env file; None if absent.
     """
+    key = env_key_for('postgres', 'DSN', store)
     if data_dir is None:
-        return get(PG_DSN_FOR(store))
+        return get(key)
     file_values = parse_env_file(env_file_path(data_dir))
-    raw = file_values.get(PG_DSN_FOR(store))
+    raw = file_values.get(key)
     return raw or None
 
 

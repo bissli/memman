@@ -247,7 +247,7 @@ def test_migrate_cli_to_sqlite_archives_dump_and_drops_schema(
             state=SchemaState.ABSENT)
         shutil.rmtree(source)
         env_file('MEMMAN_BACKEND_' + store, 'postgres')
-        env_file('MEMMAN_PG_DSN_' + store, pg_dsn)
+        env_file('MEMMAN_POSTGRES_DSN_' + store, pg_dsn)
 
         runner = CliRunner()
         result = runner.invoke(
@@ -270,7 +270,7 @@ def test_migrate_cli_to_sqlite_archives_dump_and_drops_schema(
 
         env_text = (data_dir / 'env').read_text()
         assert f'MEMMAN_BACKEND_{store}=sqlite' in env_text
-        assert f'MEMMAN_PG_DSN_{store}=' not in env_text
+        assert f'MEMMAN_POSTGRES_DSN_{store}=' not in env_text
         assert (data_dir / 'data' / store / 'memman.db').exists()
 
         schema = _store_schema(store)
@@ -304,7 +304,7 @@ def test_migrate_cli_to_sqlite_regenerates_snapshot(
             state=SchemaState.ABSENT)
         shutil.rmtree(source)
         env_file('MEMMAN_BACKEND_' + store, 'postgres')
-        env_file('MEMMAN_PG_DSN_' + store, pg_dsn)
+        env_file('MEMMAN_POSTGRES_DSN_' + store, pg_dsn)
 
         runner = CliRunner()
         result = runner.invoke(
@@ -339,7 +339,7 @@ def test_migrate_cli_to_sqlite_errors_when_pg_dump_missing(
             state=SchemaState.ABSENT)
         shutil.rmtree(source)
         env_file('MEMMAN_BACKEND_' + store, 'postgres')
-        env_file('MEMMAN_PG_DSN_' + store, pg_dsn)
+        env_file('MEMMAN_POSTGRES_DSN_' + store, pg_dsn)
 
         real_which = shutil.which
 
@@ -383,7 +383,7 @@ def test_migrate_cli_to_sqlite_refuses_when_target_dir_exists(
             source_dir=source, dsn=pg_dsn, store=store,
             state=SchemaState.ABSENT)
         env_file('MEMMAN_BACKEND_' + store, 'postgres')
-        env_file('MEMMAN_PG_DSN_' + store, pg_dsn)
+        env_file('MEMMAN_POSTGRES_DSN_' + store, pg_dsn)
 
         runner = CliRunner()
         result = runner.invoke(
@@ -437,7 +437,7 @@ def test_migrate_cli_to_postgres_warns_when_already_postgres(
             state=SchemaState.ABSENT)
         shutil.rmtree(source)
         env_file('MEMMAN_BACKEND_' + store, 'postgres')
-        env_file('MEMMAN_PG_DSN_' + store, pg_dsn)
+        env_file('MEMMAN_POSTGRES_DSN_' + store, pg_dsn)
 
         runner = CliRunner()
         result = runner.invoke(
@@ -471,7 +471,7 @@ def test_migrate_cli_to_sqlite_drop_failure_is_warn_only(
             state=SchemaState.ABSENT)
         shutil.rmtree(source)
         env_file('MEMMAN_BACKEND_' + store, 'postgres')
-        env_file('MEMMAN_PG_DSN_' + store, pg_dsn)
+        env_file('MEMMAN_POSTGRES_DSN_' + store, pg_dsn)
 
         def fake_drop(*args, **kwargs):
             raise RuntimeError('simulated drop failure')
@@ -504,7 +504,7 @@ def test_migrate_to_postgres_explicit_flag_matches_default(
     store = 'rb_explicit_pg'
     data_dir = tmp_path / 'memman'
     _seed_sqlite_store(data_dir, store)
-    env_file('MEMMAN_DEFAULT_PG_DSN', pg_dsn)
+    env_file('MEMMAN_DEFAULT_POSTGRES_DSN', pg_dsn)
     _drop_schema(pg_dsn, store)
     try:
         runner = CliRunner()

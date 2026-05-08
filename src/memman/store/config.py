@@ -6,15 +6,15 @@ scans the input dict for keys that fall in the backend's namespace
 and raises `ConfigError` on any unknown key, with a `did you mean`
 hint when one is close.
 
-Bare canonical keys (e.g., `MEMMAN_PG_DSN`) are rejected: the
+Bare canonical keys (e.g., `MEMMAN_POSTGRES_DSN`) are rejected: the
 per-store routing model requires the per-store suffixed form
-(`MEMMAN_PG_DSN_<store>`) or the cross-store fallback
-(`MEMMAN_DEFAULT_PG_DSN`). The canonical list survives only as the
-difflib candidate set used to build the suggestion.
+(`MEMMAN_POSTGRES_DSN_<store>`) or the cross-store fallback
+(`MEMMAN_DEFAULT_POSTGRES_DSN`). The canonical list survives only
+as the difflib candidate set used to build the suggestion.
 
 Cross-backend keys (`OPENROUTER_API_KEY`, `MEMMAN_DEFAULT_BACKEND`,
-`MEMMAN_DEFAULT_PG_DSN`, `MEMMAN_EMBED_PROVIDER`, etc.) belong to
-neither dataclass and are never scanned by either validator. They
+`MEMMAN_DEFAULT_POSTGRES_DSN`, `MEMMAN_EMBED_PROVIDER`, etc.) belong
+to neither dataclass and are never scanned by either validator. They
 remain governed by the flat `INSTALLABLE_KEYS` membership check at
 `config set`.
 """
@@ -27,14 +27,14 @@ from memman.store.errors import ConfigError
 
 @dataclass
 class PostgresBackendConfig:
-    """Owns the `MEMMAN_PG_*` namespace.
+    """Owns the `MEMMAN_POSTGRES_*` namespace.
 
-    Today: `MEMMAN_PG_DSN_<store>` (per-store DSN). Add new keys
-    here as the postgres backend grows them.
+    Today: `MEMMAN_POSTGRES_DSN_<store>` (per-store DSN). Add new
+    keys here as the postgres backend grows them.
     """
 
-    NAMESPACE_PREFIX = 'MEMMAN_PG_'
-    OWNED_KEYS = frozenset({'MEMMAN_PG_DSN'})
+    NAMESPACE_PREFIX = 'MEMMAN_POSTGRES_'
+    OWNED_KEYS = frozenset({'MEMMAN_POSTGRES_DSN'})
 
     @classmethod
     def _validate(cls, env: dict) -> None:
@@ -73,12 +73,12 @@ def _validate_namespace(
     """Common namespace scan.
 
     Iterates `env` keys with the namespace prefix. Bare canonical
-    keys (members of `owned` like `MEMMAN_PG_DSN`) are rejected --
-    the per-store routing model requires the suffixed form. Per-
-    store-suffixed keys (e.g. `MEMMAN_PG_DSN_<store>`) are accepted
-    when the canonical `<owned-key>_<suffix>` form decomposes to
-    (a) a known canonical key and (b) a syntactically valid
-    store-name suffix.
+    keys (members of `owned` like `MEMMAN_POSTGRES_DSN`) are
+    rejected -- the per-store routing model requires the suffixed
+    form. Per-store-suffixed keys (e.g. `MEMMAN_POSTGRES_DSN_<store>`)
+    are accepted when the canonical `<owned-key>_<suffix>` form
+    decomposes to (a) a known canonical key and (b) a syntactically
+    valid store-name suffix.
 
     The error message includes a `did you mean` hint pulled from
     `difflib.get_close_matches`, suffixed with `_<store>` so the
@@ -118,9 +118,10 @@ def _strip_store_suffix(key: str, owned: frozenset) -> str | None:
     underscore. The suffix syntactic check is the caller's
     responsibility -- this helper only handles the canonical lookup.
 
-    Iterates owned keys longest-first so a hypothetical future second
-    canonical key that prefixes another (e.g. `MEMMAN_PG_DSN` and
-    `MEMMAN_PG_DSN_BACKUP`) matches the more specific one first.
+    Iterates owned keys longest-first so a hypothetical future
+    second canonical key that prefixes another (e.g.
+    `MEMMAN_POSTGRES_DSN` and `MEMMAN_POSTGRES_DSN_BACKUP`) matches
+    the more specific one first.
     """
     for canonical in sorted(owned, key=len, reverse=True):
         if key.startswith(canonical + '_'):
@@ -151,7 +152,7 @@ def validate_all(env: dict) -> None:
     """Validate `env` against every registered backend namespace.
 
     Catches typos in inactive-backend namespaces (e.g. a
-    `MEMMAN_PG_DSN_typo=...` while every store is sqlite-backed).
+    `MEMMAN_POSTGRES_DSN_typo=...` while every store is sqlite-backed).
     Used by `factory.open_backend` so a single open-time call covers
     both backend kinds.
     """

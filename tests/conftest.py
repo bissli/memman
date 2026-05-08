@@ -612,7 +612,7 @@ def cross_backend_runner(request, runner_kind, tmp_path, env_file, monkeypatch):
     """CliRunner whose env writes per-store keys for `<runner_kind>`.
 
     For postgres mode writes `MEMMAN_BACKEND_<store>` and
-    `MEMMAN_PG_DSN_<store>` from the session container DSN and
+    `MEMMAN_POSTGRES_DSN_<store>` from the session container DSN and
     registers a teardown that drops the per-test schema. For sqlite
     mode writes `MEMMAN_DEFAULT_BACKEND=sqlite`. Returns the same
     `(runner, data_dir)` tuple shape as the legacy `runner` fixture
@@ -632,8 +632,8 @@ def cross_backend_runner(request, runner_kind, tmp_path, env_file, monkeypatch):
         pg_dsn = request.getfixturevalue('pg_dsn')
         store_name = _safe_store_name(request.node.name)
         env_file(f'MEMMAN_BACKEND_{store_name}', 'postgres')
-        env_file(f'MEMMAN_PG_DSN_{store_name}', pg_dsn)
-        env_file('MEMMAN_DEFAULT_PG_DSN', pg_dsn)
+        env_file(f'MEMMAN_POSTGRES_DSN_{store_name}', pg_dsn)
+        env_file('MEMMAN_DEFAULT_POSTGRES_DSN', pg_dsn)
         monkeypatch.setenv('MEMMAN_STORE', store_name)
 
         def _drop_postgres_schema() -> None:

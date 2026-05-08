@@ -187,7 +187,7 @@ def test_migrate_preflight_passes_on_pgvector_database(pg_dsn):
 def test_migrate_cli_requires_confirmation_for_real_run(
         tmp_path, env_file, pg_dsn):
     """CLI aborts when no `--yes` and the prompt is not confirmed."""
-    env_file('MEMMAN_DEFAULT_PG_DSN', pg_dsn)
+    env_file('MEMMAN_DEFAULT_POSTGRES_DSN', pg_dsn)
     _seed_sqlite_store(tmp_path / 'memman', 'mig_cli')
     from memman.store.postgres import _store_schema
     schema = _store_schema('mig_cli')
@@ -209,7 +209,7 @@ def test_migrate_cli_requires_confirmation_for_real_run(
 def test_migrate_cli_yes_flag_skips_prompt(
         tmp_path, env_file, pg_dsn):
     """`--yes` runs without prompting and writes per-store backend keys."""
-    env_file('MEMMAN_DEFAULT_PG_DSN', pg_dsn)
+    env_file('MEMMAN_DEFAULT_POSTGRES_DSN', pg_dsn)
     data_dir = tmp_path / 'memman'
     _seed_sqlite_store(data_dir, 'mig_cli_yes')
     from memman.store.postgres import _store_schema
@@ -232,7 +232,7 @@ def test_migrate_cli_yes_flag_skips_prompt(
         assert 'Archived source to' in result.output
         env_text = (data_dir / 'env').read_text()
         assert 'MEMMAN_BACKEND_mig_cli_yes=postgres' in env_text
-        assert f'MEMMAN_PG_DSN_mig_cli_yes={pg_dsn}' in env_text
+        assert f'MEMMAN_POSTGRES_DSN_mig_cli_yes={pg_dsn}' in env_text
         archive_root = data_dir / 'archive' / 'mig_cli_yes'
         slots = sorted(archive_root.iterdir())
         assert len(slots) == 1, f'expected 1 archive slot, got {slots}'
@@ -246,7 +246,7 @@ def test_migrate_cli_yes_flag_skips_prompt(
 
 def test_migrate_cli_per_store_dsn_without_default(
         tmp_path, env_file, pg_dsn):
-    """`--store NAME` resolves MEMMAN_PG_DSN_<store> when DEFAULT is unset."""
+    """`--store NAME` resolves MEMMAN_POSTGRES_DSN_<store> when DEFAULT is unset."""
     data_dir = tmp_path / 'memman'
     _seed_sqlite_store(data_dir, 'mig_per_store')
     from memman.store.postgres import _store_schema
@@ -255,7 +255,7 @@ def test_migrate_cli_per_store_dsn_without_default(
         with conn.cursor() as cur:
             cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
 
-    env_file('MEMMAN_PG_DSN_mig_per_store', pg_dsn)
+    env_file('MEMMAN_POSTGRES_DSN_mig_per_store', pg_dsn)
 
     from memman.cli import cli
     runner = CliRunner()
@@ -288,14 +288,14 @@ def test_migrate_cli_per_store_missing_dsn_lists_both_keys(tmp_path):
             'migrate', '--store', 'mig_no_dsn', '--yes'],
         catch_exceptions=False)
     assert result.exit_code != 0
-    assert 'MEMMAN_PG_DSN_mig_no_dsn' in result.output
-    assert 'MEMMAN_DEFAULT_PG_DSN' in result.output
+    assert 'MEMMAN_POSTGRES_DSN_mig_no_dsn' in result.output
+    assert 'MEMMAN_DEFAULT_POSTGRES_DSN' in result.output
     assert 'set-pg-dsn' in result.output
 
 
 def test_migrate_cli_dry_run_succeeds(tmp_path, env_file, pg_dsn):
     """CLI dry-run prints plan with redacted DSN, no prompt, no writes."""
-    env_file('MEMMAN_DEFAULT_PG_DSN', pg_dsn)
+    env_file('MEMMAN_DEFAULT_POSTGRES_DSN', pg_dsn)
     _seed_sqlite_store(tmp_path / 'memman', 'mig_cli_dry')
 
     from memman.cli import cli

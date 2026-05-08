@@ -138,7 +138,7 @@ def _build_postgres_descriptor() -> BackendDescriptor:
         if not dsn:
             raise ConfigError(
                 f'no DSN for postgres-backed store {store!r};'
-                f' set {config.PG_DSN_FOR(store)} or'
+                f' set {config.env_key_for("postgres", "DSN", store)} or'
                 f' {config.DEFAULT_PG_DSN}')
         return open_postgres_backend(
             store, dsn, read_only=read_only)
@@ -153,7 +153,7 @@ def _build_postgres_descriptor() -> BackendDescriptor:
                 continue
             if key == config.DEFAULT_PG_DSN:
                 dsns.add(value)
-            elif key.startswith('MEMMAN_PG_DSN_'):
+            elif key.startswith('MEMMAN_POSTGRES_DSN_'):
                 dsns.add(value)
         if not dsns:
             return names
