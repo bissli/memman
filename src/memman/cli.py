@@ -2255,6 +2255,15 @@ def migrate(
 
     data_dir = ctx.obj['data_dir']
 
+    if shutil.which('pg_dump') is None:
+        raise click.ClickException(
+            "pg_dump not found on PATH. memman migrate requires"
+            " pg_dump regardless of direction so the postgres source"
+            " can be archived before any destructive step."
+            " Install postgresql-client:"
+            "\n  apt: sudo apt install postgresql-client"
+            "\n  brew: brew install libpq && brew link --force libpq")
+
     if not migrate_all and not store:
         raise click.UsageError('pass --store NAME or --all')
     if migrate_all and store:
@@ -2439,12 +2448,6 @@ def migrate(
         click.echo(
             '  memman doctor    # verify the postgres backend health')
         return
-
-    if shutil.which('pg_dump') is None:
-        raise click.ClickException(
-            "pg_dump not found on PATH. Install postgresql-client:"
-            "\n  apt: sudo apt install postgresql-client"
-            "\n  brew: brew install libpq && brew link --force libpq")
 
     store_dsns: dict[str, str] = {}
     for s in todo:

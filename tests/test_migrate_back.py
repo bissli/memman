@@ -381,6 +381,45 @@ def test_migrate_cli_to_sqlite_errors_when_pg_dump_missing(
         _drop_schema(pg_dsn, store)
 
 
+def test_migrate_cli_to_postgres_errors_when_pg_dump_missing(
+        tmp_path, env_file, pg_dsn, monkeypatch):
+    """Forward (sqlite -> postgres) migrate also requires pg_dump.
+
+    Reverse migration is always a possibility after a forward run; the
+    operator must have `pg_dump` available before any postgres-touching
+    migration so a roll-back path exists. The gate fires at command
+    entry, before any DB work or filesystem mutation.
+    """
+    import shutil as _shutil
+
+    from memman.cli import cli
+
+    store = 'fwd_nopgdump'
+    data_dir = tmp_path / 'memman'
+    _seed_sqlite_store(data_dir, store)
+
+    real_which = _shutil.which
+
+    def fake_which(name, *args, **kwargs):
+        if name == 'pg_dump':
+            return None
+        return real_which(name, *args, **kwargs)
+
+    monkeypatch.setattr('shutil.which', fake_which)
+    env_file('MEMMAN_DEFAULT_POSTGRES_DSN', pg_dsn)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, [
+            '--data-dir', str(data_dir),
+            'migrate', '--to', 'postgres',
+            '--store', store, '--yes'],
+        catch_exceptions=False)
+    assert result.exit_code != 0
+    assert 'pg_dump' in result.output
+    assert 'postgresql-client' in result.output
+
+
 def test_migrate_cli_to_sqlite_refuses_when_target_dir_exists(
         tmp_path, env_file, pg_dsn):
     """Pre-existing data/<store>/ guards against accidental overwrite."""
