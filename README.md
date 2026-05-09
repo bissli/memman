@@ -190,7 +190,7 @@ The hot-path/background split is universal across integrations. What changes is 
 - **Intent-aware recall** — graph beam search with RRF fusion; query intent (WHY/WHEN/ENTITY/GENERAL) controls edge weights and result ordering
 - **LLM reconciliation** — each fact classified as ADD/UPDATE/DELETE/NONE against existing memories
 - **Retention lifecycle** — importance decay, access-count boosting, immunity rules, garbage collection
-- **Pluggable embeddings** — Voyage, any OpenAI-compatible endpoint (OpenAI, OpenRouter, vLLM, LiteLLM, ...), or Ollama; vector dim is provider-defined and recorded in a per-store fingerprint. Switch providers either online via `memman embed swap` (resumable shadow-column backfill, atomic cutover) or offline via `memman embed reembed`
+- **Pluggable embeddings, per-store sovereignty** — Voyage, any OpenAI-compatible endpoint (OpenAI, OpenRouter, vLLM, LiteLLM, ...), or Ollama. Each store's `meta.embed_fingerprint` (provider/model/dim) is the runtime authority over which embedder serves that store, so one process can serve multiple stores with different embedders without env mutation. Switch a store's embedder online via `memman embed swap` (resumable shadow-column backfill, atomic cutover) or offline via `memman embed reembed`
 - **Pluggable storage backend** — SQLite by default (single-file, zero deps); Postgres + pgvector via the `memman[postgres]` extra. `memman migrate` copies a store from SQLite to Postgres in a single command (idempotent, drain-lock-guarded, dry-run support)
 
 ## FAQ

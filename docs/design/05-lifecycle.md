@@ -88,16 +88,25 @@ memman insights show <id>
 
 ## 5.5 Embedding Support
 
-Embeddings power semantic search and graph connectivity. The provider is pluggable via `MEMMAN_EMBED_PROVIDER`; vector dimensionality is provider-defined and recorded in a per-store `embed_fingerprint` so a provider/model/dim change is detected and surfaced in `memman embed status` and `memman doctor`. Switching providers happens explicitly -- either online via `memman embed swap` (resumable shadow-column backfill) or offline via `memman embed reembed`. There is never a silent migration.
+Embeddings power semantic search and graph connectivity. Vector dimensionality is provider-defined and recorded in a per-store `meta.embed_fingerprint` (provider, model, dim). Switching a store's embedder is always explicit -- online via `memman embed swap` (resumable shadow-column backfill) or offline via `memman embed reembed`. There is never a silent migration.
+
+**Per-store embedder sovereignty.** Each store's stored fingerprint is the runtime authority over which embedder client serves that store. Every consumer -- drain worker (`_StoreContext`), recall (`bound_embedder(backend)` -> `intent_aware_recall(fingerprint=...)`), snapshot writes/reads, graph rebuild, and `run_remember(ec=...)` -- binds via `embed.fingerprint.bound_embedder(backend)`, which resolves `meta.embed_fingerprint` and dispatches to `embed.registry.get_for(provider, model)`. As a result, one process can sequentially open store A on Voyage and store B on OpenAI without env mutation; `MEMMAN_EMBED_PROVIDER=voyage memman --store openai_store recall ...` succeeds.
+
+`MEMMAN_EMBED_PROVIDER`'s runtime role narrows to two cases:
+
+1. **Seeding a fresh store** -- when a store has no stored fingerprint yet, `seed_if_fresh(backend, get_client())` writes the env-active client's fingerprint into `meta.embed_fingerprint`. After that one write, the env var no longer drives runtime selection for that store.
+2. **Carrying credentials** -- providers read `VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`, etc. from process env. A store fingerprinted to a provider whose credentials are absent in the current process will fail at the embed call site (recall warns and degrades to keyword-only; drain marks the row failed via `EmbedCredentialError`).
+
+`memman embed status` reports the store's stored fingerprint and whether credentials for that fingerprint's provider are available; it does not compare against an "env-active" fingerprint (that comparison is malformed under sovereignty). `memman doctor` (`check_embed_fingerprint`) follows the same shape: pass on stored + creds-available, fail on stored-but-missing-creds, fail on populated-store-without-fingerprint (corruption).
 
 ### 5.5.1 Supported providers
 
-| `MEMMAN_EMBED_PROVIDER` | Default model             | Notes                                                                                                                         |
-| ----------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `voyage` (default)      | `voyage-3-lite` (512-dim) | Requires `VOYAGE_API_KEY`. Default; tuned thresholds (e.g., `AUTO_SEMANTIC_THRESHOLD = 0.62`) target this model.              |
-| `openai`                | `text-embedding-3-small`  | Requires `MEMMAN_OPENAI_EMBED_API_KEY` + `MEMMAN_OPENAI_EMBED_ENDPOINT`. Any OpenAI-compatible endpoint (vLLM, LiteLLM, ...). |
-| `openrouter`            | `baai/bge-m3`             | Reuses `OPENROUTER_API_KEY` + `MEMMAN_OPENROUTER_ENDPOINT`; no separate secret needed.                                        |
-| `ollama`                | `nomic-embed-text`        | Local Ollama at `MEMMAN_OLLAMA_HOST` (default `http://localhost:11434`).                                                      |
+| Provider           | Default model             | Notes                                                                                                                         |
+| ------------------ | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `voyage` (default) | `voyage-3-lite` (512-dim) | Requires `VOYAGE_API_KEY`. Default; tuned thresholds (e.g., `AUTO_SEMANTIC_THRESHOLD = 0.62`) target this model.              |
+| `openai`           | `text-embedding-3-small`  | Requires `MEMMAN_OPENAI_EMBED_API_KEY` + `MEMMAN_OPENAI_EMBED_ENDPOINT`. Any OpenAI-compatible endpoint (vLLM, LiteLLM, ...). |
+| `openrouter`       | `baai/bge-m3`             | Reuses `OPENROUTER_API_KEY` + `MEMMAN_OPENROUTER_ENDPOINT`; no separate secret needed.                                        |
+| `ollama`           | `nomic-embed-text`        | Local Ollama at `MEMMAN_OLLAMA_HOST` (default `http://localhost:11434`).                                                      |
 
 ### 5.5.2 Vector Storage
 

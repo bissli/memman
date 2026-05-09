@@ -24,7 +24,7 @@ The two-tier deferred write pipeline (`remember` is a queue-append; a scheduler-
 
 ### [5. Lifecycle & Embedding](design/05-lifecycle.md)
 
-Effective Importance (EI) decay formula, immunity rules, auto-pruning, GC commands, and pluggable embedding support (Voyage default; OpenAI-compatible, OpenRouter, Ollama).
+Effective Importance (EI) decay formula, immunity rules, auto-pruning, GC commands, and pluggable embedding support (Voyage default; OpenAI-compatible, OpenRouter, Ollama) with per-store embedder sovereignty -- each store's `meta.embed_fingerprint` is the runtime authority over its embedder client.
 
 ### [6. LLM CLI Integration](design/06-integration.md)
 

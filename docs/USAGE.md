@@ -154,7 +154,8 @@ To actually delete an insight, use `memman forget <id>`.
 ### Embedding Operations
 
 ```bash
-# Show current embedding provider, model, and per-store fingerprint
+# Show this store's bound fingerprint and whether its provider's
+# credentials are available in this process
 memman embed status
 
 # Online provider/model swap (resumable shadow-column backfill, atomic cutover)
@@ -173,7 +174,7 @@ Two switching paths:
 - **`embed swap`** is the online path. It populates `embedding_pending` (shadow column on SQLite, side column on Postgres) under the active provider while the existing column keeps serving recall, then commits an atomic cutover transaction. State machine: `backfilling → cutover → done`. Resumable via `--resume`; abortable via `--abort`. Per-store; the in-flight target is recorded in `meta.embed_swap_*` keys (deleted on completion).
 - **`embed reembed`** is the offline path: every store is rewritten in place with the current `MEMMAN_EMBED_PROVIDER`. Requires the scheduler to be **stopped** (`memman scheduler stop`) so a drain cannot race the rewrite.
 
-The per-store fingerprint (`meta.embed_fingerprint`) detects provider/model drift and surfaces it in `embed status`.
+**Per-store embedder sovereignty.** Each store's `meta.embed_fingerprint` is the runtime authority over which embedder client gets used for that store. Recall, drain, graph rebuild, and snapshot writes all bind the embedder via `bound_embedder(backend)` from the store's stored fingerprint -- not from `MEMMAN_EMBED_PROVIDER`. The env var's runtime role narrows to two cases: (a) seeding a brand-new store's fingerprint, and (b) carrying credentials that providers read from process env. As a consequence, `MEMMAN_EMBED_PROVIDER=voyage memman --store openai_store recall ...` succeeds against an OpenAI-fingerprinted store -- one process can serve many stores with different embedders without env mutation. Switching a store's embedder is always explicit (`embed swap` or `embed reembed`); there is no silent migration.
 
 ### Store Management
 
