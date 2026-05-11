@@ -377,22 +377,33 @@ class TestStatusParsing:
                                               fake_home, fake_binary, monkeypatch):
         """status() reports next_run = LastTriggerUSec + interval.
         """
-        monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
-        _record_subprocess(monkeypatch)
-        sch.install(data_dir=str(fake_home),
-                    knobs=_knobs(openrouter='x', voyage='y'),
-                    interval_seconds=900)
+        import time
+        prev_tz = os.environ.get('TZ')
+        os.environ['TZ'] = 'EST5EDT,M3.2.0,M11.1.0'
+        time.tzset()
+        try:
+            monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+            _record_subprocess(monkeypatch)
+            sch.install(data_dir=str(fake_home),
+                        knobs=_knobs(openrouter='x', voyage='y'),
+                        interval_seconds=900)
 
-        _record_subprocess(monkeypatch, responses={
-            ('systemctl', '--user', 'is-enabled'): 'enabled',
-            ('systemctl', '--user', 'is-active'): 'active',
-            ('systemctl', '--user', 'show',
-             '--property=LastTriggerUSec', '--value'):
-            'Fri 2026-04-24 14:18:58 EDT',
-            })
-        result = sch.status()
-        assert result['next_run'] is not None
-        assert result['next_run'].startswith('2026-04-24T18:33:58')
+            _record_subprocess(monkeypatch, responses={
+                ('systemctl', '--user', 'is-enabled'): 'enabled',
+                ('systemctl', '--user', 'is-active'): 'active',
+                ('systemctl', '--user', 'show',
+                 '--property=LastTriggerUSec', '--value'):
+                'Fri 2026-04-24 14:18:58 EDT',
+                })
+            result = sch.status()
+            assert result['next_run'] is not None
+            assert result['next_run'].startswith('2026-04-24T18:33:58')
+        finally:
+            if prev_tz is None:
+                os.environ.pop('TZ', None)
+            else:
+                os.environ['TZ'] = prev_tz
+            time.tzset()
 
     def test_systemd_status_next_run_when_never_fired(self,
                                                       fake_home, fake_binary, monkeypatch):
