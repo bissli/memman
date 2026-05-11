@@ -195,6 +195,17 @@ memman store remove old-project
 3. `~/.memman/active` file
 4. Falls back to `"default"`
 
+**Per-directory automatic switching.** `MEMMAN_STORE` is read from `os.environ`, so any tool that scopes env vars to a working directory will flip the active store on `cd`. Four mechanisms:
+
+| Mechanism                | Setup                                               | Scope                                                       |
+| ------------------------ | --------------------------------------------------- | ----------------------------------------------------------- |
+| `direnv` (recommended)   | `.envrc` in the project: `export MEMMAN_STORE=work` | Every shell, agent, and subprocess started in the directory |
+| `--store <name>` flag    | Pass `--store work` on every invocation             | One command; explicit, survives a missing env               |
+| Project `CLAUDE.md` rule | Instruct the agent to pass `--store work`           | Claude Code sessions only; not honored by terminal callers  |
+| `memman store use work`  | Set the global `~/.memman/active` file              | Persistent and global; last `use` wins everywhere           |
+
+Do not set `MEMMAN_DATA_DIR` per directory. The scheduler unit is installed once against `~/.memman/queue.db`; a per-directory data dir creates an isolated queue that the host scheduler never drains. Use a named store instead and let the worker dispatch per row.
+
 #### Migrating between SQLite and Postgres
 
 `memman migrate` is symmetric: `--to postgres` (default) copies a store from SQLite into Postgres; `--to sqlite` copies it back. Both directions hold the shared `drain.lock` so a scheduler-fired drain cannot race.

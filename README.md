@@ -156,6 +156,17 @@ MEMMAN_STORE=work memman recall "query"  # or use env var per-process
 
 Different agents/processes can use different stores via the `MEMMAN_STORE` environment variable.
 
+**How do I switch stores automatically per directory?**
+Set `MEMMAN_STORE` with a directory-scoped env loader like [direnv](https://direnv.net):
+
+```bash
+cd ~/projects/work
+echo 'export MEMMAN_STORE=work' > .envrc
+direnv allow
+```
+
+Every shell, agent, and subprocess started in that directory now resolves to the `work` store. For the full comparison of alternatives (`--store` flag, project `CLAUDE.md` rule, global `memman store use`) and a note on `MEMMAN_DATA_DIR`, see [USAGE.md § Stores](docs/USAGE.md#store-management).
+
 **Install scope?**
 `memman install` always installs globally at `~/.claude/` (or `~/.openclaw/`). There is no local/project mode.
 
