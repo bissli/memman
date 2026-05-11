@@ -89,9 +89,9 @@ entrypoint and leaves the backgrounded scheduler orphaned.
 
 **`queue.db` is per-container**: it lives at `$HOME/.memman/queue.db`
 inside the container and is **not** in the volume mount. A container
-restart loses any pending queue rows. This is intentional — the serve
-loop drains every `--interval` seconds, so pending rows are typically
-under one minute old.
+restart loses any pending queue rows. The serve loop drains every
+`--interval` seconds, so pending rows are typically under one minute
+old.
 
 ### 2b. Add the container skill
 

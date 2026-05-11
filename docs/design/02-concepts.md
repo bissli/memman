@@ -220,4 +220,4 @@ Resolution priority (highest to lowest):
 | `--store` flag     | One-off CLI override, scripting                               |
 | `MEMMAN_STORE` env | Per-process isolation — different agents use different stores |
 | `active` file      | Persistent user preference — `memman store use work`          |
-| `"default"`        | Zero-config — works out of the box                            |
+| `"default"`        | Zero-config fallback                                          |

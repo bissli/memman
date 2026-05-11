@@ -98,7 +98,7 @@ To add a provider:
 2. Add `PROVIDERS['<name>'] = _<name>_factory` in `client.py`, where the factory reads provider-specific env vars and returns a new client instance.
 3. Wire provider-specific env vars into `src/memman/config.py` so `enumerate_effective_config()` picks them up.
 
-Voyage is embedding-only and is deliberately NOT part of `LLMProvider`.
+Voyage is embedding-only and is not part of `LLMProvider`.
 
 ### Tests
 

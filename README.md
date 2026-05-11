@@ -30,13 +30,19 @@ memman install
 
 In a TTY, the install wizard prompts (with masked input) for `OPENROUTER_API_KEY` and `VOYAGE_API_KEY` if they are not already in the env file or the shell. Headless / CI installs need both keys exported (or pre-written into `~/.memman/env`) and should pass `--no-wizard`. After install, the env file at `~/.memman/env` (mode 0600) is the canonical source of truth; runtime never reads the shell for installable settings. Change a setting with `memman config set KEY VALUE`. See [CONTRIBUTING.md § Variable reference](CONTRIBUTING.md#variable-reference) for the full key list and [USAGE.md § Configuration](docs/USAGE.md#configuration) for the precedence model.
 
-`pipx install` puts the `memman` binary on your PATH. `memman install` wires integration into Claude Code, [OpenClaw](https://github.com/openclaw/openclaw), and/or [NanoClaw](https://github.com/qwibitai/nanoclaw):
+`pipx install` puts the `memman` binary on your PATH. `memman install` wires integration into Claude Code, [OpenClaw](https://github.com/openclaw/openclaw), and/or [NanoClaw](https://github.com/qwibitai/nanoclaw). The paths it writes:
 
-- skill file symlinked into `~/.claude/skills/memman/SKILL.md` (or equivalent)
-- lifecycle hook scripts symlinked into `~/.claude/hooks/memman/`
-- `~/.claude/settings.json` hook registrations and `Bash(memman:*)` permission
-- scheduler unit (systemd timer on Linux, launchd agent on macOS)
-- `~/.memman/logs/` directory (scheduler enrichment worker stdout/stderr)
+| Path                                                   | What                                                 | Form                            |
+| ------------------------------------------------------ | ---------------------------------------------------- | ------------------------------- |
+| `~/.claude/skills/memman/SKILL.md`                     | command reference loaded by the agent                | symlink into installed package  |
+| `~/.claude/hooks/memman/*.sh`                          | six lifecycle hook scripts                           | symlinks into installed package |
+| `~/.claude/settings.json`                              | hook registrations + `Bash(memman:*)` permission     | JSON merge                      |
+| `~/.config/systemd/user/memman-enrich.{timer,service}` | scheduler unit (Linux)                               | unit files                      |
+| `~/Library/LaunchAgents/com.memman.enrich.plist`       | scheduler agent (macOS)                              | plist                           |
+| `~/.memman/env` (mode 0600)                            | canonical config file (API keys + installable knobs) | created or updated in place     |
+| `~/.memman/logs/`                                      | scheduler enrichment worker stdout/stderr            | directory                       |
+
+OpenClaw installs swap `~/.claude/` for `~/.openclaw/`. NanoClaw runs the same paths inside the container (see below).
 
 Target a specific environment:
 
@@ -127,7 +133,7 @@ The hot-path/background split is universal across integrations. What changes is 
 
 OpenClaw sits on the same host as Claude Code: install memman once on the host and the worker is shared. The agent invokes `memman` via the `exec` tool rather than Bash-hook nudges.
 
-NanoClaw moves the hot-path boundary into the container. Agent and worker share one container; the SQLite data dir is volume-mounted from `~/.memman/data/{group}/` (rw) on the host so memory survives container restarts, and an optional `~/.memman/data/global/` is mounted read-only into every container for shared knowledge. Each WhatsApp group gets its own container and its own private store. `queue.db` is intentionally outside the volume mount — pending writes are seconds old and re-driven on the next drain tick, so a restart loses at most one cycle of unprocessed items.
+NanoClaw moves the hot-path boundary into the container. Agent and worker share one container; the SQLite data dir is volume-mounted from `~/.memman/data/{group}/` (rw) on the host so memory survives container restarts, and an optional `~/.memman/data/global/` is mounted read-only into every container for shared knowledge. Each WhatsApp group gets its own container and its own private store. `queue.db` sits outside the volume mount — pending writes are seconds old and re-driven on the next drain tick, so a restart loses at most one cycle of unprocessed items.
 
 ## Features
 
@@ -167,11 +173,8 @@ direnv allow
 
 Every shell, agent, and subprocess started in that directory now resolves to the `work` store. For the full comparison of alternatives (`--store` flag, project `CLAUDE.md` rule, global `memman store use`) and a note on `MEMMAN_DATA_DIR`, see [USAGE.md § Stores](docs/USAGE.md#store-management).
 
-**Install scope?**
-`memman install` always installs globally at `~/.claude/` (or `~/.openclaw/`). There is no local/project mode.
-
 **How do I customize the behavior?**
-The shipped `guide.md` (behavioral policy) and `SKILL.md` (command reference) live inside the installed package and update on `pipx upgrade memman`. memman does not deploy any user-override file under `~/.memman/`. To change behavior, edit the package source (editable installs pick up changes live) or propose a change upstream.
+The shipped `guide.md` (behavioral policy) and `SKILL.md` (command reference) live inside the installed package and update on `pipx upgrade memman`. To change behavior, edit the package source (editable installs pick up changes live) or propose a change upstream.
 
 **How does `memman remember` work?**
 It appends a row to `queue.db` and returns in ~50 ms. The scheduler drains every 60 s; writes become recallable after the next drain. See [Inside Claude Code vs outside](#inside-claude-code-vs-outside).

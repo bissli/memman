@@ -18,7 +18,7 @@
 
 No LLM calls. No embeddings. No similarity scan. No edges. The host session never blocks.
 
-There is no sync path: every write goes through the queue. When the scheduler is **stopped**, memman is recall-only and writes reject with a fixed error pointing at `memman scheduler start`.
+Every write goes through the queue. When the scheduler is **stopped**, memman is recall-only and writes reject with a fixed error pointing at `memman scheduler start`.
 
 ### Tier 2: background worker (scheduler-driven)
 
