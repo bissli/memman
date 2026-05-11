@@ -219,11 +219,29 @@ class TestRecall:
             assert result.exit_code == 0
             mock_ex.assert_called_once()
 
-    def test_recall_default_does_not_call_rerank(self, runner):
-        """Default recall must not run the cross-encoder reranker."""
+    def test_recall_default_runs_rerank(self, runner):
+        """Default install seeds MEMMAN_RERANK_ENABLED=true, so rerank fires."""
+        for fact in [
+                'Go uses SQLite for persistent storage',
+                'Go modules manage dependency versions',
+                'SQLite uses WAL mode for concurrent writes']:
+            invoke(runner, ['remember', fact, '--no-reconcile'])
+
+        from unittest.mock import patch
+        with patch('memman.rerank.voyage.Client.rerank',
+                   return_value=[(0, 0.9), (1, 0.5), (2, 0.1)]) as mock_re:
+            result = invoke(runner, ['recall', 'Go SQLite persistent storage'])
+            assert result.exit_code == 0
+            mock_re.assert_called_once()
+            data = json.loads(result.output)
+            assert data['meta'].get('reranked') is True
+
+    def test_recall_global_disable_skips_rerank(self, runner, env_file):
+        """MEMMAN_RERANK_ENABLED=false disables rerank globally."""
         invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage',
             '--no-reconcile'])
+        env_file('MEMMAN_RERANK_ENABLED', 'false')
 
         from unittest.mock import patch
         with patch('memman.rerank.voyage.Client.rerank',
@@ -234,26 +252,44 @@ class TestRecall:
             data = json.loads(result.output)
             assert data['meta'].get('reranked') is False
 
-    def test_recall_rerank_flag_invokes_reranker(self, runner):
-        """Recall --rerank fires the reranker on a multi-token query."""
+    def test_recall_per_store_disable_overrides_global(self, runner, env_file):
+        """MEMMAN_RERANK_ENABLED_<store>=false wins over the global default."""
+        invoke(runner, [
+            'remember', 'Go uses SQLite for persistent storage',
+            '--no-reconcile'])
+        env_file('MEMMAN_RERANK_ENABLED_default', 'false')
+
+        from unittest.mock import patch
+        with patch('memman.rerank.voyage.Client.rerank',
+                   side_effect=AssertionError('rerank called')) as mock_re:
+            result = invoke(runner, ['recall', 'Go SQLite storage'])
+            assert result.exit_code == 0
+            mock_re.assert_not_called()
+            data = json.loads(result.output)
+            assert data['meta'].get('reranked') is False
+
+    def test_recall_per_store_enable_overrides_global_disable(
+            self, runner, env_file):
+        """Per-store true beats global false."""
         for fact in [
                 'Go uses SQLite for persistent storage',
                 'Go modules manage dependency versions',
                 'SQLite uses WAL mode for concurrent writes']:
             invoke(runner, ['remember', fact, '--no-reconcile'])
+        env_file('MEMMAN_RERANK_ENABLED', 'false')
+        env_file('MEMMAN_RERANK_ENABLED_default', 'true')
 
         from unittest.mock import patch
         with patch('memman.rerank.voyage.Client.rerank',
                    return_value=[(0, 0.9), (1, 0.5), (2, 0.1)]) as mock_re:
-            result = invoke(runner, [
-                'recall', 'Go SQLite persistent storage', '--rerank'])
+            result = invoke(runner, ['recall', 'Go SQLite persistent storage'])
             assert result.exit_code == 0
             mock_re.assert_called_once()
             data = json.loads(result.output)
             assert data['meta'].get('reranked') is True
 
     def test_recall_rerank_skipped_on_short_query(self, runner):
-        """Recall --rerank auto-skips when the query has <=2 tokens."""
+        """Rerank auto-skips when the query has <=2 tokens, even with default on."""
         invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage',
             '--no-reconcile'])
@@ -262,15 +298,14 @@ class TestRecall:
         with patch('memman.rerank.voyage.Client.rerank',
                    side_effect=AssertionError('rerank called on short query')
                    ) as mock_re:
-            result = invoke(runner, ['recall', 'storage', '--rerank'])
+            result = invoke(runner, ['recall', 'storage'])
             assert result.exit_code == 0
             mock_re.assert_not_called()
             data = json.loads(result.output)
             assert data['meta'].get('reranked') is False
 
     def test_recall_rerank_failure_falls_back_gracefully(self, runner):
-        """Reranker errors must not break recall; falls back to baseline.
-        """
+        """Reranker errors must not break recall; falls back to baseline."""
         for fact in [
                 'Go uses SQLite for persistent storage',
                 'Go modules manage dependency versions']:
@@ -279,8 +314,7 @@ class TestRecall:
         from unittest.mock import patch
         with patch('memman.rerank.voyage.Client.rerank',
                    side_effect=RuntimeError('voyage 503')) as mock_re:
-            result = invoke(runner, [
-                'recall', 'Go SQLite persistent storage', '--rerank'])
+            result = invoke(runner, ['recall', 'Go SQLite persistent storage'])
             assert result.exit_code == 0
             mock_re.assert_called_once()
 

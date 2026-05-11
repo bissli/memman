@@ -12,10 +12,10 @@
 - Making architectural or design decisions
 - Writing code that touches patterns discussed in past sessions
 
-To recall: `memman recall "<query>" --limit 5 --rerank`.
+To recall: `memman recall "<query>" --limit 5`.
 Craft a focused, keyword-rich query — do not pass the raw user prompt.
-Always pass `--rerank` for the highest-quality top-K (the reranker
-auto-skips on 1-2 token queries).
+The cross-encoder reranker runs by default on multi-token queries
+(auto-skipped on 1-2 token queries).
 
 The recall response includes a `meta` object with:
 - `hint`: intent-specific reasoning guidance (always present) — use it to
@@ -23,7 +23,8 @@ The recall response includes a `meta` object with:
 - `ordering`: how results are sorted — `causal_topological` (WHY),
   `chronological` (WHEN), or `score` (ENTITY/GENERAL)
 - `reranked`: boolean — true when the cross-encoder rerank stage
-  fired (false when query was too short or `--rerank` was omitted)
+  fired (false when query was too short or rerank is disabled for
+  this store via `MEMMAN_RERANK_ENABLED_<store>=false`)
 - `sparse`: boolean, present only when results are below half the requested
   limit — signals low-confidence retrieval; consider broadening the query
 

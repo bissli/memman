@@ -93,15 +93,20 @@ memman forget <id>
 
 **Recall flags:**
 
-| Flag       | Default       | Description                                                                                                                               |
-| ---------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `--limit`  | `10`          | Max results                                                                                                                               |
-| `--intent` | (auto-detect) | Override intent: `WHY`, `WHEN`, `ENTITY`, `GENERAL`                                                                                       |
-| `--cat`    |               | Filter by category                                                                                                                        |
-| `--source` |               | Filter by source                                                                                                                          |
-| `--basic`  | `false`       | Use simple SQL LIKE matching instead of smart recall                                                                                      |
-| `--expand` | `false`       | Opt-in LLM query expansion (synonyms + entity hints)                                                                                      |
-| `--rerank` | `false`       | Cross-encoder rerank stage (provider via `MEMMAN_RERANK_PROVIDER`; default `voyage` / `rerank-2.5-lite`; auto-skips on 1-2 token queries) |
+| Flag       | Default       | Description                                          |
+| ---------- | ------------- | ---------------------------------------------------- |
+| `--limit`  | `10`          | Max results                                          |
+| `--intent` | (auto-detect) | Override intent: `WHY`, `WHEN`, `ENTITY`, `GENERAL`  |
+| `--cat`    |               | Filter by category                                   |
+| `--source` |               | Filter by source                                     |
+| `--basic`  | `false`       | Use simple SQL LIKE matching instead of smart recall |
+| `--expand` | `false`       | Opt-in LLM query expansion (synonyms + entity hints) |
+
+The cross-encoder rerank stage is on by default and auto-skips on 1-2 token
+queries. Provider is set via `MEMMAN_RERANK_PROVIDER` (default `voyage` /
+`rerank-2.5-lite`). Toggle per-store with
+`memman config set MEMMAN_RERANK_ENABLED_<store> false` or globally with
+`memman config set MEMMAN_RERANK_ENABLED false`.
 
 ### Graph operations
 
@@ -360,7 +365,7 @@ The host session never blocks on the network. Newly stored memories become recal
 2. **RRF anchor selection** — keyword + vector + recency fused with K=60.
 3. **Beam search** — intent-weighted graph traversal from anchors.
 4. **4-signal rerank** — keyword, entity, similarity, graph (intent-weighted).
-5. **Optional cross-encoder rerank** (`--rerank`) — the configured reranker (default `voyage` / `rerank-2.5-lite`) re-scores the top 100 candidates; replaces the multi-signal score for the final ordering.
+5. **Cross-encoder rerank** (on by default; toggle per-store via `MEMMAN_RERANK_ENABLED_<store>`) — the configured reranker (default `voyage` / `rerank-2.5-lite`) re-scores the top 100 candidates; replaces the multi-signal score for the final ordering. Auto-skips on 1-2 token queries.
 6. **Post-sort** — causal topological (WHY), chronological (WHEN), score (default).
 
 Inspired by [MAGMA](https://arxiv.org/abs/2601.03236). See [Design & Architecture](DESIGN.md) for the full deep dive.

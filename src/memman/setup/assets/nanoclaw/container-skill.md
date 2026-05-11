@@ -33,9 +33,12 @@ Never write to the global store — the mount is read-only.
 - No knowledge dependency beyond the current conversation
 
 ```bash
-memman recall "<query>" --limit 5 --rerank
-memman --store global --readonly recall "<query>" --limit 5 --rerank
+memman recall "<query>" --limit 5
+memman --store global --readonly recall "<query>" --limit 5
 ```
+
+The cross-encoder reranker runs by default on multi-token queries
+(auto-skipped on 1-2 token queries).
 
 Note: `--store` and `--readonly` are root-group flags and must come **before** the subcommand name (e.g. `recall`).
 
@@ -86,7 +89,7 @@ memman replace <id> "<new content>"
 ## Recalling and inspecting
 
 ```bash
-memman recall "<query>" --limit 10 --rerank           # smart recall + cross-encoder rerank
+memman recall "<query>" --limit 10                     # smart recall + cross-encoder rerank
 memman recall "<keyword>" --basic                      # fast token-only
 memman insights show <id>                              # read by ID
 ```

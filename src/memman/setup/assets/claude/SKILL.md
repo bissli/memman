@@ -32,12 +32,12 @@ and source unless you override per-flag.
 
 ## Recalling what you know
 
-Recall: vector + graph traversal + cross-encoder reranker. Always pass
-`--rerank` for the highest-quality top-K. The reranker auto-skips on
-1-2 token queries.
+Recall: vector + graph traversal + cross-encoder reranker. Reranker
+runs by default on multi-token queries and auto-skips on 1-2 token
+queries.
 
 ```bash
-memman recall "<query>" --limit 10 --rerank
+memman recall "<query>" --limit 10
 ```
 
 Add `--intent WHY|WHEN|ENTITY` to bias the ranking when intent is

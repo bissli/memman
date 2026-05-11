@@ -47,6 +47,7 @@ LLM_MODEL_SLOW_CANONICAL = 'MEMMAN_LLM_MODEL_SLOW_CANONICAL'
 LLM_MODEL_SLOW_METADATA = 'MEMMAN_LLM_MODEL_SLOW_METADATA'
 EMBED_PROVIDER = 'MEMMAN_EMBED_PROVIDER'
 RERANK_PROVIDER = 'MEMMAN_RERANK_PROVIDER'
+RERANK_ENABLED = 'MEMMAN_RERANK_ENABLED'
 OPENROUTER_ENDPOINT = 'MEMMAN_OPENROUTER_ENDPOINT'
 DEBUG = 'MEMMAN_DEBUG'
 WORKER = 'MEMMAN_WORKER'
@@ -59,6 +60,11 @@ INTERVAL = 'MEMMAN_INTERVAL'
 def BACKEND_FOR(store: str) -> str:
     """Per-store backend env-key name: `MEMMAN_BACKEND_<store>`."""
     return f'MEMMAN_BACKEND_{store}'
+
+
+def RERANK_ENABLED_FOR(store: str) -> str:
+    """Per-store rerank-toggle env key: `MEMMAN_RERANK_ENABLED_<store>`."""
+    return f'MEMMAN_RERANK_ENABLED_{store}'
 
 
 def env_key_for(backend: str, key: str, store: str) -> str:
@@ -100,6 +106,7 @@ INSTALLABLE_KEYS = (
     LLM_MODEL_SLOW_METADATA,
     EMBED_PROVIDER,
     RERANK_PROVIDER,
+    RERANK_ENABLED,
     OPENROUTER_ENDPOINT,
     LOG_LEVEL,
     OPENAI_EMBED_API_KEY,
@@ -128,6 +135,7 @@ INSTALL_DEFAULTS: dict[str, str] = {
     LLM_MODEL_SLOW_METADATA: 'anthropic/claude-sonnet-4.6',
     EMBED_PROVIDER: 'voyage',
     RERANK_PROVIDER: 'voyage',
+    RERANK_ENABLED: 'true',
     OPENROUTER_ENDPOINT: 'https://openrouter.ai/api/v1',
     LOG_LEVEL: 'WARNING',
     OPENAI_EMBED_ENDPOINT: 'https://api.openai.com',
@@ -260,6 +268,25 @@ def get_store_backend(
     file_values = parse_env_file(env_file_path(data_dir))
     raw = file_values.get(BACKEND_FOR(store))
     return raw or None
+
+
+def get_store_rerank_enabled(
+        store: str, data_dir: str | None = None) -> bool | None:
+    """Read `MEMMAN_RERANK_ENABLED_<store>` from the env file; None if absent.
+
+    Read-only helper -- no fallback to the global `MEMMAN_RERANK_ENABLED`.
+    Callers that want default-fallback behavior compose
+    `get_store_rerank_enabled(store) ?? get_bool(RERANK_ENABLED, default=True)`
+    explicitly so the data flow stays visible.
+    """
+    key = RERANK_ENABLED_FOR(store)
+    if data_dir is None:
+        raw = get(key)
+    else:
+        raw = parse_env_file(env_file_path(data_dir)).get(key) or None
+    if raw is None or raw == '':
+        return None
+    return raw.strip().lower() in TRUTHY
 
 
 def get_store_pg_dsn(

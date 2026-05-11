@@ -312,10 +312,11 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
     flags remain sticky-seed (they never override an existing file
     value); `config set` is the explicit override path.
 
-    Three shapes of key are accepted:
+    Four shapes of key are accepted:
       * any member of `config.INSTALLABLE_KEYS`
       * `MEMMAN_BACKEND_<store>` (per-store backend routing)
       * `MEMMAN_POSTGRES_DSN_<store>` (per-store DSN)
+      * `MEMMAN_RERANK_ENABLED_<store>` (per-store rerank toggle)
     Bare canonicals (`MEMMAN_BACKEND`, `MEMMAN_POSTGRES_DSN`) are
     rejected with hints pointing at `MEMMAN_DEFAULT_*` or the
     per-store form.
@@ -340,12 +341,16 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
     elif key.startswith('MEMMAN_POSTGRES_DSN_') and valid_store_name(
             key[len('MEMMAN_POSTGRES_DSN_'):]):
         pass
+    elif key.startswith('MEMMAN_RERANK_ENABLED_') and valid_store_name(
+            key[len('MEMMAN_RERANK_ENABLED_'):]):
+        pass
     else:
         raise click.ClickException(
             f'{key!r} is not a recognized config key. Accepted shapes:'
             ' INSTALLABLE_KEYS members,'
             ' MEMMAN_BACKEND_<store> (per-store routing),'
-            ' or MEMMAN_POSTGRES_DSN_<store> (per-store DSN).')
+            ' MEMMAN_POSTGRES_DSN_<store> (per-store DSN),'
+            ' or MEMMAN_RERANK_ENABLED_<store> (per-store rerank toggle).')
     from memman.setup.scheduler import _write_env_keys
     data_dir = ctx.obj['data_dir']
     _write_env_keys({key: value}, data_dir=data_dir)
@@ -1117,21 +1122,21 @@ def _process_queue_row(
 @click.option('--intent', default='', help='Override intent')
 @click.option('--expand', 'expand', is_flag=True, default=False,
               help='Run LLM query expansion before retrieval (off by default)')
-@click.option('--rerank', 'rerank', is_flag=True, default=False,
-              help='Apply Voyage cross-encoder reranker on a 100-doc '
-                   'shortlist; auto-skipped on queries of 2 tokens or fewer')
 @click.pass_context
 def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
            limit: int, source: str, basic: bool,
-           intent: str, expand: bool, rerank: bool) -> None:
+           intent: str, expand: bool) -> None:
     """Retrieve insights by keyword."""
-    from memman.embed.fingerprint import (
-        assert_fingerprint_unchanged_for_sync, bound_embedder,
-        stored_fingerprint)
+    from memman.embed.fingerprint import assert_fingerprint_unchanged_for_sync
+    from memman.embed.fingerprint import bound_embedder, stored_fingerprint
     from memman.llm.extract import expand_query
     from memman.search.intent import intent_from_string
     from memman.search.recall import intent_aware_recall
     keyword_str = ' '.join(keyword)
+    store_name = _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store'])
+    per_store_rerank = config.get_store_rerank_enabled(store_name)
+    rerank = (per_store_rerank if per_store_rerank is not None
+              else config.get_bool(config.RERANK_ENABLED, default=True))
     with _active_backend(ctx) as backend:
         if basic:
             results = backend.nodes.query(
@@ -2231,25 +2236,15 @@ def migrate(
     import shutil
 
     from memman import config
-    from memman.migrate import (
-        MigrateError,
-        SchemaState,
-        _verify_destination_counts,
-        held_drain_lock,
-        inspect_target_schemas,
-        preflight,
-        )
+    from memman.migrate import MigrateError, SchemaState
+    from memman.migrate import _verify_destination_counts, held_drain_lock
+    from memman.migrate import inspect_target_schemas, preflight
     from memman.setup.scheduler import _write_env_keys
     from memman.store.db import list_local_store_dirs, store_dir
-    from memman.store.factory import (
-        list_stores, resolve_store_backend, resolve_store_pg_dsn,
-        )
-    from memman.store.postgres import (
-        PostgresMigrator,
-        _connection,
-        _store_schema,
-        drop_postgres_store,
-        )
+    from memman.store.factory import list_stores, resolve_store_backend
+    from memman.store.factory import resolve_store_pg_dsn
+    from memman.store.postgres import PostgresMigrator, _connection
+    from memman.store.postgres import _store_schema, drop_postgres_store
     from memman.store.sqlite import SqliteMigrator
     from memman.trace import redact_dsn
 
@@ -2257,12 +2252,12 @@ def migrate(
 
     if shutil.which('pg_dump') is None:
         raise click.ClickException(
-            "pg_dump not found on PATH. memman migrate requires"
-            " pg_dump regardless of direction so the postgres source"
-            " can be archived before any destructive step."
-            " Install postgresql-client:"
-            "\n  apt: sudo apt install postgresql-client"
-            "\n  brew: brew install libpq && brew link --force libpq")
+            'pg_dump not found on PATH. memman migrate requires'
+            ' pg_dump regardless of direction so the postgres source'
+            ' can be archived before any destructive step.'
+            ' Install postgresql-client:'
+            '\n  apt: sudo apt install postgresql-client'
+            '\n  brew: brew install libpq && brew link --force libpq')
 
     if not migrate_all and not store:
         raise click.UsageError('pass --store NAME or --all')
@@ -2388,9 +2383,9 @@ def migrate(
                 for s in todo:
                     try:
                         src_migrator.preflight_source(s)
-                        if states[s] in (
+                        if states[s] in {
                                 SchemaState.EMPTY,
-                                SchemaState.POPULATED):
+                                SchemaState.POPULATED}:
                             drop_postgres_store(s, dsn)
                         payload = src_migrator.gather(s)
                         tgt_migrator.apply(s, payload)
@@ -2493,7 +2488,6 @@ def migrate(
 
     from memman.embed.fingerprint import Fingerprint
     from memman.setup.archive import archive_postgres_schema
-    from memman.store.db import open_db
     from memman.store.snapshot import write_snapshot
 
     try:
@@ -2959,7 +2953,6 @@ def _reembed_one_store(
     """
     from memman.embed.fingerprint import write_fingerprint
     from memman.graph.engine import reindex_auto_edges
-    from memman.store.db import open_db
     from memman.store.node import iter_for_reembed
     from memman.store.sqlite import SqliteBackend
 

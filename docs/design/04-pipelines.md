@@ -176,7 +176,7 @@ Embeddings are Nd vectors from the store's bound provider (dim is provider-defin
 
 ### Step 4b: Cross-encoder rerank
 
-When the caller passes `--rerank` and the query has more than `MIN_RERANK_TOKENS` (default 2) whitespace tokens, the top `RERANK_SHORTLIST` (default 100) candidates from Step 4 are re-scored by the configured cross-encoder reranker (`MEMMAN_RERANK_PROVIDER`; current default `voyage` with model `rerank-2.5-lite`), and the rerank score replaces the multi-signal score for the final ordering. The skill files instruct LLM agents to always pass `--rerank` on natural-language queries.
+Rerank is on by default. The decision to run is resolved at recall time per call from config: `MEMMAN_RERANK_ENABLED_<store>` (per-store override) falls back to `MEMMAN_RERANK_ENABLED` (global default, `true` post-install). When enabled and the query has more than `MIN_RERANK_TOKENS` (default 2) whitespace tokens, the top `RERANK_SHORTLIST` (default 100) candidates from Step 4 are re-scored by the configured cross-encoder reranker (`MEMMAN_RERANK_PROVIDER`; current default `voyage` with model `rerank-2.5-lite`), and the rerank score replaces the multi-signal score for the final ordering. Operators disable rerank for a noisy store with `memman config set MEMMAN_RERANK_ENABLED_<store> false`.
 
 Bi-encoder retrieval (Steps 1–4) embeds the query and each insight independently and ranks by cosine plus the four signals. A cross-encoder reads `(query, content)` together with full attention and outputs a relevance score directly, so it resolves cases where bi-encoder cosine misses the right answer despite low token overlap.
 
@@ -184,7 +184,7 @@ Failures (timeouts, non-200 responses) are caught and logged; the baseline order
 
 ### Empirical evidence
 
-Two evaluations led to shipping rerank behind `--rerank` and having `SKILL.md` always pass it. Phase 1 (12 queries × 1 store, no labels) ruled out cheap alternatives: bumping `ANCHOR_TOP_K`, retuning weights, and LLM query expansion none closed the gap. Phase 2 (90 queries × 3 stores, ~4500 graded relevance labels via Haiku 4.5 on a 0–3 scale) measured the lift against ground truth.
+Two evaluations led to shipping rerank as the default with a per-store opt-out. Phase 1 (12 queries × 1 store, no labels) ruled out cheap alternatives: bumping `ANCHOR_TOP_K`, retuning weights, and LLM query expansion none closed the gap. Phase 2 (90 queries × 3 stores, ~4500 graded relevance labels via Haiku 4.5 on a 0–3 scale) measured the lift against ground truth.
 
 | Headline metric                                           | baseline | rerank           | Δ          |
 | --------------------------------------------------------- | --------: | ----------------: | ----------: |
@@ -239,7 +239,7 @@ memman calls LLMs at write time (extraction, reconciliation, enrichment, causal 
 
 Two principles:
 
-1. **Keep slow work off the hot path.** The write path defers LLM work to the scheduler drain (Tier 2 in 4.1). The read path is embedding-only at the bare-CLI level, with `--expand` (LLM query expansion) and `--rerank` (cross-encoder reranking) as explicit flags; LLM agents pass `--rerank` per `SKILL.md`. Where LLM judgment is unavoidable, the output is tagged with what produced it and re-runnable.
+1. **Keep slow work off the hot path.** The write path defers LLM work to the scheduler drain (Tier 2 in 4.1). The read path is embedding-only at the bare-CLI level. LLM query expansion is opt-in via `--expand`; the cross-encoder reranker is on by default but gated by the per-store config knob `MEMMAN_RERANK_ENABLED_<store>` (no CLI flag — the model never sees it). Where LLM judgment is unavoidable, the output is tagged with what produced it and re-runnable.
 2. **Provenance + re-run beats deterministic-rule replacement.** Hard rules (length thresholds, importance clamps, similarity cutoffs) calcify with one model's behavior baked in. Provenance + re-run tracks what produced each row and re-derives when inputs change. Same precedent as the embed-fingerprint mechanism.
 
 ### Invalidation hooks
