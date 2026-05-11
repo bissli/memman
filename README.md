@@ -93,6 +93,9 @@ NanoClaw moves the hot-path boundary into the container. Agent and worker share 
 
 ## Install
 
+> [!IMPORTANT]
+> **memman calls external LLM and embedding APIs in the background and requires your own developer API keys.** A Claude Pro / Max or ChatGPT Plus subscription does **not** grant API access — those are chat-app subscriptions, billed separately from the pay-as-you-go developer APIs memman uses for fact extraction and embeddings. Any registered provider works (OpenRouter, OpenAI-compatible endpoints, Voyage, Ollama, ...).
+
 ```bash
 pipx install memman
 # or, with the optional Postgres backend:
