@@ -1455,12 +1455,21 @@ class TestIntraBatchDedup:
                          'variable names to prevent unintended shadowing of '
                          'options object properties.')])
         assert result.exit_code == 0, result.output
+        from memman.store.db import open_read_only, store_dir
         raw = json.loads(result.output)
-        facts = raw['facts']
-        stored = [f for f in facts if f['action'] != 'skipped']
-        assert len(stored) == 1, (
+        queue_id = raw['queue_id']
+        _, data_dir = runner
+        db = open_read_only(store_dir(data_dir, raw['store']))
+        try:
+            rows = db._query(
+                'SELECT id FROM insights WHERE source = ?'
+                ' AND deleted_at IS NULL', (f'queue:{queue_id}',)
+                ).fetchall()
+        finally:
+            db.close()
+        assert len(rows) == 1, (
             f'expected 1 stored fact from single thought, got '
-            f'{len(stored)}: {json.dumps(facts, indent=2)}')
+            f'{len(rows)}: queue_id={queue_id}')
 
     def test_two_updates_same_target_no_duplicate(self, runner):
         """Sibling UPDATEs must not create duplicates from stale candidates."""

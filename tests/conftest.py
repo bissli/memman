@@ -55,7 +55,16 @@ def _isolate_env(tmp_path, monkeypatch, request):
     if 'tests/e2e/' in str(request.node.fspath):
         yield
         return
+    import os
     from memman import config
+    live_mode = request.config.getoption('--live')
+    real_secrets = {}
+    if live_mode:
+        for key in ('OPENROUTER_API_KEY', 'VOYAGE_API_KEY',
+                    'MEMMAN_OPENAI_EMBED_API_KEY'):
+            val = os.environ.get(key)
+            if val:
+                real_secrets[key] = val
     data_dir = tmp_path / 'memman'
     monkeypatch.setenv('MEMMAN_DATA_DIR', str(data_dir))
     monkeypatch.delenv('MEMMAN_STORE', raising=False)
@@ -65,8 +74,11 @@ def _isolate_env(tmp_path, monkeypatch, request):
     monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
     monkeypatch.delenv('VOYAGE_API_KEY', raising=False)
     monkeypatch.delenv('MEMMAN_OPENAI_EMBED_API_KEY', raising=False)
+    if live_mode and real_secrets:
+        for key, val in real_secrets.items():
+            monkeypatch.setenv(key, val)
     if 'no_default_env' not in request.keywords:
-        _write_default_env_file(data_dir)
+        _write_default_env_file(data_dir, real_secrets=real_secrets or None)
     config.reset_file_cache()
     from memman.embed import registry as _embed_registry
     _embed_registry.reset_for_tests()
@@ -119,21 +131,24 @@ def env_file():
     return _set_env_file_value
 
 
-def _write_default_env_file(data_dir):
+def _write_default_env_file(data_dir, real_secrets=None):
     """Seed `<data_dir>/env` with `INSTALL_DEFAULTS` for tests.
 
     Mirrors a post-install state so runtime call sites (which use
-    `config.require`) resolve cleanly. Also seeds mock API key values
-    for `OPENROUTER_API_KEY` and `VOYAGE_API_KEY` since the runtime
-    resolver no longer consults `os.environ` -- the keys must live in
-    the env file. Tests that need the broken state opt out via
+    `config.require`) resolve cleanly. By default seeds mock API key
+    values since the runtime resolver no longer consults `os.environ`
+    -- the keys must live in the env file. Pass `real_secrets={...}`
+    (from `--live` mode) to seed real credentials captured from the
+    shell instead. Tests that need the broken state opt out via
     `@pytest.mark.no_default_env`.
     """
     from memman import config
     data_dir.mkdir(parents=True, exist_ok=True)
     path = data_dir / config.ENV_FILENAME
-    rows = list(config.INSTALL_DEFAULTS.items()) + list(
-        _TEST_MOCK_SECRETS.items())
+    secrets = dict(_TEST_MOCK_SECRETS)
+    if real_secrets:
+        secrets.update(real_secrets)
+    rows = list(config.INSTALL_DEFAULTS.items()) + list(secrets.items())
     contents = '\n'.join(f'{k}={v}' for k, v in rows) + '\n'
     path.write_text(contents)
     path.chmod(0o600)
