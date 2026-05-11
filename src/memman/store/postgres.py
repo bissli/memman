@@ -2072,10 +2072,11 @@ def _resolve_active_dim(expected_dim: int | None = None) -> int:
         return int(expected_dim)
     try:
         from memman.embed.fingerprint import seed_default_fingerprint
+        from memman.exceptions import ConfigError as RuntimeConfigError
         active = seed_default_fingerprint()
         if active.dim > 0:
             return int(active.dim)
-    except (ConfigError, ImportError) as exc:
+    except (RuntimeConfigError, ImportError) as exc:
         logger.warning(
             f'active fingerprint resolution failed; '
             f'using {EMBEDDING_DIM}-dim default: {exc}')
