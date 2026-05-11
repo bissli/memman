@@ -8,8 +8,10 @@ confirmation flow, and the per-store env-key write
 
 from pathlib import Path
 
-import psycopg
 import pytest
+
+psycopg = pytest.importorskip('psycopg')
+
 from click.testing import CliRunner
 
 pytestmark = pytest.mark.postgres

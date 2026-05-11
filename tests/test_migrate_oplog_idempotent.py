@@ -11,8 +11,10 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-import psycopg
 import pytest
+
+psycopg = pytest.importorskip('psycopg')
+
 from memman.store.db import _BASELINE_SCHEMA
 
 pytestmark = pytest.mark.postgres

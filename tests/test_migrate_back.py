@@ -12,8 +12,10 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-import psycopg
 import pytest
+
+psycopg = pytest.importorskip('psycopg')
+
 from click.testing import CliRunner
 
 pytestmark = pytest.mark.postgres

@@ -5,8 +5,13 @@ import struct
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import psycopg
 import pytest
+
+try:
+    import psycopg
+except ImportError:
+    psycopg = None
+
 from click.testing import CliRunner
 from memman.cli import cli
 from memman.doctor import check_drain_heartbeat, check_env_completeness

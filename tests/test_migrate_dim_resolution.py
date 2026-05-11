@@ -12,8 +12,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
-import psycopg
 import pytest
+
+psycopg = pytest.importorskip('psycopg')
+
 from memman.store.db import _BASELINE_SCHEMA
 
 

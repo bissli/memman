@@ -7,8 +7,10 @@ and abort cleanup. Recall is expected to keep working throughout
 because the reads continue to hit `embedding` until cutover commits.
 """
 
-import psycopg
 import pytest
+
+psycopg = pytest.importorskip('psycopg')
+
 from memman.embed.fingerprint import Fingerprint, stored_fingerprint
 from memman.embed.fingerprint import write_fingerprint
 from memman.embed.swap import STATE_DONE, SwapPlan, abort_swap, run_swap

@@ -19,8 +19,11 @@ runs are unaffected.
 import random
 import threading
 
-import psycopg
 import pytest
+
+psycopg = pytest.importorskip('psycopg')
+pytest.importorskip('pgvector')
+
 from memman.store.model import Insight
 from memman.store.postgres import EMBEDDING_DIM, _ensure_baseline_schema
 from memman.store.postgres import _ensure_hnsw_index, _store_schema

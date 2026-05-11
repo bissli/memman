@@ -25,10 +25,22 @@ try:
     import psycopg  # noqa: F401
     import testcontainers.postgres  # noqa: F401
     pytest_plugins = ['tests.fixtures.postgres']
+    _POSTGRES_AVAILABLE = True
 except ImportError:
     pytest_plugins = ()
+    _POSTGRES_AVAILABLE = False
 
 EMBEDDING_DIM = 512
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Auto-skip @pytest.mark.postgres tests when psycopg is not installed."""
+    if _POSTGRES_AVAILABLE:
+        return
+    skip_pg = pytest.mark.skip(reason='postgres extras not installed')
+    for item in items:
+        if 'postgres' in item.keywords:
+            item.add_marker(skip_pg)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
