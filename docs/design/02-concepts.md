@@ -6,9 +6,7 @@
 
 ![Insight & Edge Data Model](../diagrams/08-insight-edge-datamodel.drawio.png)
 
-## 2.1 Insight (Memory Node)
-
-An Insight is the fundamental memory unit in MemMan. Each insight represents an independent piece of knowledge:
+## 2.1 Insight (memory node)
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -26,7 +24,7 @@ An Insight is the fundamental memory unit in MemMan. Each insight represents an 
 └──────────────────────────────────────────────┘
 ```
 
-**Categories** are divided into six types that help distinguish the nature of a memory:
+Six categories distinguish the nature of a memory:
 
 | Category     | Meaning                          | Example                                             |
 | ------------ | -------------------------------- | --------------------------------------------------- |
@@ -35,18 +33,18 @@ An Insight is the fundamental memory unit in MemMan. Each insight represents an 
 | `fact`       | Objective fact                   | "API rate limit is 100 req/s"                       |
 | `insight`    | Reasoning conclusion             | "Beam search is more suitable than full BFS for..." |
 | `context`    | Project context                  | "Phase 3 completed, 118 tests passing"              |
-| `general`    | General                          | Content that doesn't fit the above categories       |
+| `general`    | General                          | Content that doesn't fit the above                  |
 
-**Importance** ranges from 2 to 5 and affects retrieval ranking and lifecycle. The CLI accepts `--imp 1` but the LLM extraction pipeline floors it at 2 — `1` is reserved for raw `--no-reconcile` writes only:
+Importance ranges from 2 to 5 and affects retrieval ranking and lifecycle. The CLI accepts `--imp 1`, but the LLM extraction pipeline floors it at 2 — `1` is reserved for raw `--no-reconcile` writes only.
 
-- **5**: Critical decision, never automatically cleaned up
-- **4**: Important fact, immune to auto-pruning
-- **3**: Standard memory (default `--imp`)
-- **2**: Low priority / passing mention (effective floor for extracted facts)
+- **5**: critical decision, never automatically cleaned up
+- **4**: important fact, immune to auto-pruning
+- **3**: standard memory (default `--imp`)
+- **2**: low priority / passing mention (effective floor for extracted facts)
 
-## 2.2 Edge (Relationship)
+## 2.2 Edge (relationship)
 
-An Edge connects two insights, representing their relationship. Each edge contains:
+An Edge connects two insights:
 
 ```
 ┌────────────────────────────────────────────┐
@@ -60,16 +58,16 @@ An Edge connects two insights, representing their relationship. Each edge contai
 └────────────────────────────────────────────┘
 ```
 
-The four edge types form the foundation of the MAGMA four-graph model, detailed in [Graph Model & Theory](03-graph-model.md).
+The four edge types form the MAGMA four-graph model, detailed in [Graph Model](03-graph-model.md).
 
-## 2.3 Database Schema
+## 2.3 Database schema
 
-Each named store is physically isolated via its own storage backend, chosen per store via `MEMMAN_BACKEND_<store>` (falling back to `MEMMAN_DEFAULT_BACKEND` when unset):
+Each named store is physically isolated via its own backend, chosen per store via `MEMMAN_BACKEND_<store>` (falling back to `MEMMAN_DEFAULT_BACKEND` when unset):
 
 - **SQLite (default)** — one `~/.memman/data/<store>/memman.db` file per store, in WAL mode (concurrent reads + serial writer). Schema source of truth: `_BASELINE_SCHEMA` in `src/memman/store/db.py`.
-- **Postgres** — one Postgres schema per store (`store_<name>`) sharing one database; `pgvector` provides the `vector(N)` column type. Schema source of truth: `PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py`. The backend is enabled with the `memman[postgres]` install extra.
+- **Postgres** — one Postgres schema per store (`store_<name>`) sharing one database; `pgvector` provides the `vector(N)` column type. Schema source of truth: `PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py`. Enabled with the `memman[postgres]` install extra.
 
-Backend choice is per-store, so a `work` store on Postgres can coexist with a `default` store on SQLite under the same data dir. `memman migrate <store>` is symmetric (`--to postgres` / `--to sqlite`) and flips `MEMMAN_BACKEND_<store>` accordingly; `MEMMAN_DEFAULT_BACKEND` only changes what newly-created stores fall back to. See [Migrating between SQLite and Postgres](../USAGE.md#migrating-between-sqlite-and-postgres) for the operator workflow.
+Backend choice is per-store, so a `work` store on Postgres can coexist with a `default` store on SQLite under the same data dir. `memman migrate <store>` is symmetric (`--to postgres` / `--to sqlite`) and flips `MEMMAN_BACKEND_<store>` accordingly; `MEMMAN_DEFAULT_BACKEND` only changes what newly-created stores fall back to. See [Migrating between SQLite and Postgres](../USAGE.md#migrating-between-sqlite-and-postgres).
 
 The logical column layout below is shared between backends; the type translations are SQLite `TEXT`/`BLOB` ↔ Postgres `TIMESTAMPTZ`/`JSONB`/`vector(N)`.
 
@@ -107,25 +105,13 @@ meta (
 )
 ```
 
-**Provenance columns** (`prompt_version`, `model_id`, `embedding_model`)
-record which LLM and embedding model produced each insight. They power
-`memman embed reembed` and `memman graph rebuild` decisions when models
-or prompts change.
-
-**Insight dataclass vs DB schema.** The `Insight` dataclass in
-`src/memman/store/model.py` is a subset of the DB schema — it holds the
-identity, content, category, importance, entities, source,
-timestamps (including `linked_at` and `enriched_at` lifecycle stamps),
-access bookkeeping, effective_importance, and provenance columns. The
-enrichment payload (`embedding`, `keywords`, `summary`,
-`semantic_facts`) lives in the DB only and is read/written through
-SQL helpers, not via the dataclass.
+Provenance columns (`prompt_version`, `model_id`, `embedding_model`) record which LLM and embedding model produced each insight. They power `memman embed reembed` and `memman graph rebuild` when models or prompts change.
 
 ---
 
-## 2.4 System Architecture
+## 2.4 System architecture
 
-MemMan's architecture is divided into five layers:
+memman's architecture is divided into five layers:
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
@@ -161,8 +147,7 @@ MemMan's architecture is divided into five layers:
 └───────────────────────────────────────────────────────────────┘
 ```
 
-
-**Project code structure:**
+Project code structure:
 
 ```
 memman/
@@ -191,7 +176,7 @@ memman/
 └── Makefile
 ```
 
-## 2.5 Data Directory Layout
+## 2.5 Data directory layout
 
 ```
 ~/.memman/
@@ -212,27 +197,23 @@ memman/
         └── memman.db
 ```
 
-**Isolation boundary**: Each store is fully independent — insights, edges, and oplog do not cross stores. On SQLite this is one `memman.db` per store; on Postgres it is one `store_<name>` schema per store inside one shared database. Shipped assets (`guide.md`, `SKILL.md`) live inside the installed package and are read via `importlib.resources`; nothing memman deploys lives under `~/.memman/`. `~/.memman/` is strictly user state: memory data, API keys, caches, logs, queued work.
+Each store is fully independent — insights, edges, and oplog do not cross stores. On SQLite this is one `memman.db` per store; on Postgres it is one `store_<name>` schema per store inside one shared database. Shipped assets (`guide.md`, `SKILL.md`) live inside the installed package and are read via `importlib.resources`; nothing memman deploys lives under `~/.memman/`. `~/.memman/` is user state: memory data, API keys, caches, logs, queued work.
 
-**Backend lifecycle**: `Backend` is a context manager (`__enter__`/`__exit__`); CLI and pipeline call sites open it via `with open_backend(store, data_dir) as backend:` so the underlying connection (SQLite handle or Postgres pool checkout) is released deterministically. The `BaseNodeStore` mixin in `src/memman/store/base.py` holds default Python-side computations (effective-importance recomputation, low-retention candidate scoring) shared by both `SqliteNodeStore` and `PostgresNodeStore`.
+`Backend` is a context manager; CLI and pipeline call sites open it via `with open_backend(store, data_dir) as backend:` so the SQLite handle or Postgres pool checkout releases deterministically. `BaseNodeStore` in `src/memman/store/base.py` holds Python-side computations (effective-importance recomputation, low-retention candidate scoring) shared by both backends.
 
-When a store routes to Postgres (`MEMMAN_BACKEND_<store>=postgres`), its `~/.memman/data/<store>/memman.db` file is not used at runtime — store rows live in `store_<name>` and drain heartbeats in `store_<name>.worker_runs`. The deferred-write queue is always SQLite at `~/.memman/queue.db` regardless of any store's backend. The SQLite store file remains on disk after `memman migrate <store>` as a durable fallback; the operator removes it manually after verifying the new backend with `memman doctor`.
+When a store routes to Postgres, its `~/.memman/data/<store>/memman.db` file is unused at runtime — rows live in `store_<name>` and drain heartbeats in `store_<name>.worker_runs`. The deferred-write queue is always SQLite at `~/.memman/queue.db`. The SQLite store file remains on disk after `memman migrate <store>` as a durable fallback; the operator removes it after verifying the new backend with `memman doctor`.
 
-## 2.6 Store Isolation
+## 2.6 Store isolation
 
-MemMan supports named stores for lightweight data isolation between different agents, projects, or scenarios.
+memman supports named stores for data isolation between different agents, projects, or scenarios.
 
-**Why named stores instead of just `--data-dir`?**
+**Why named stores instead of just `--data-dir`?** `--data-dir` overrides the entire base directory — a blunt instrument that requires callers to manage full paths. Named stores give semantic clarity (`MEMMAN_STORE=work` vs `--data-dir ~/.memman-work`) and work naturally with environment variables, the standard isolation mechanism for concurrent processes.
 
-`--data-dir` overrides the entire base directory — a blunt instrument that requires the caller to manage full paths. Named stores provide semantic clarity (`MEMMAN_STORE=work` vs `--data-dir ~/.memman-work`) and work naturally with environment variables, which are the standard isolation mechanism for concurrent processes.
-
-**Resolution priority** (highest to lowest):
+Resolution priority (highest to lowest):
 
 ```
 --store flag  >  MEMMAN_STORE env  >  ~/.memman/active file  >  "default"
 ```
-
-This layered design serves different scenarios:
 
 | Mechanism          | Scenario                                                      |
 | ------------------ | ------------------------------------------------------------- |
@@ -240,5 +221,3 @@ This layered design serves different scenarios:
 | `MEMMAN_STORE` env | Per-process isolation — different agents use different stores |
 | `active` file      | Persistent user preference — `memman store use work`          |
 | `"default"`        | Zero-config — works out of the box                            |
-
-**Design principle — lightweight and bounded**: Store isolation addresses a necessary data separation concern without growing into a multi-tenant system. There are no access controls, no cross-store queries, no store metadata beyond the name. This keeps the feature bounded — MemMan is a memory daemon, not a knowledge base platform.

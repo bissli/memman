@@ -1,42 +1,32 @@
 # Contributing to memman
 
-memman is a single-user CLI memory daemon. The default storage backend is SQLite; Postgres is supported as an optional backend (`memman[postgres]` extra). This file covers the short list of conventions that aren't obvious from the code.
+memman is a single-user CLI memory daemon. SQLite is the default backend; Postgres is available via the `memman[postgres]` extra.
 
 ## Development setup
 
 ```bash
 make dev           # poetry install (editable)
-make test          # run the unit/integration suite (pytest)
-make e2e           # run the end-to-end pytest suite against real DBs
+make test          # unit/integration suite (pytest)
+make e2e           # end-to-end suite against real DBs
 ```
 
 The project uses Poetry; run commands via `poetry run <cmd>` or inside `poetry shell`.
 
 ## Configuration
 
-memman resolves env vars from a single canonical source at runtime: `<MEMMAN_DATA_DIR>/env`, a `KEY=VALUE` file at mode 0600 (default `~/.memman/env`). Shell environment variables are NOT consulted at runtime for installable settings, so a stale shell export cannot silently override the file. There is no code-default fallback at runtime. Defaults live in `config.INSTALL_DEFAULTS` and are consumed only by `memman install`, which writes them to the env file when the file lacks a value. If a key is missing from the file, the resolver returns `None` and the caller raises a `ConfigError` with "run `memman install`" guidance.
+The operator-facing model (env file location, install precedence, override path) lives in [USAGE.md § Configuration](docs/USAGE.md#configuration). The contributor-side facts:
 
-`memman install` performs a one-time pull from the current shell into the env file. Precedence per key: existing file value > wizard prompt (TTY only) > `os.environ` > OpenRouter `/models` resolver (FAST/SLOW only) > `INSTALL_DEFAULTS`. Existing file values are sticky -- a later shell export never overrides them on reinstall, so there is no override path through install. Mandatory secrets (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`) must be present in the file, the shell, or be supplied via the wizard prompt; install fails loud otherwise. After install, interactive `memman recall`, `memman doctor`, and the scheduler-driven worker all read from the file; the keys never need to be re-exported in subsequent shells.
-
-Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`) are read directly from `os.environ` by their owners -- they are deliberately excluded from the env-file model.
-
-The install wizard adds three flags: `--backend [sqlite|postgres]` selects the storage backend (sqlite default; postgres hidden until the `memman[postgres]` extra and the `memman.backend.postgres` module are both available); `--pg-dsn URL` provides the Postgres DSN non-interactively; `--no-wizard` disables prompts so flags + defaults drive the install. Conflicts between an `INSTALLABLE_KEYS` flag and an existing env-file value are rejected loudly with the exact `memman config set ...` command to run -- install never silently swallows a flag.
-
-`memman config set KEY VALUE` is the explicit override path. Use it to change an `INSTALLABLE_KEYS` value after initial install (switching backends, rotating an API key, updating a DSN). The install command stays sticky-seed by design; `config set` is the unambiguous "I'm changing my mind" verb.
-
-`memman uninstall` strips the secret keys (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`, `MEMMAN_DEFAULT_POSTGRES_DSN`, and any per-store `MEMMAN_POSTGRES_DSN_<store>`) from the env file but keeps non-secret settings (including `MEMMAN_DEFAULT_BACKEND` and any `MEMMAN_BACKEND_<store>` routes), so a later `memman install` resurrects model/provider/backend preferences without re-export.
-
-`memman doctor` includes an `env_completeness` check that warns when a new `INSTALLABLE_KEYS` entry is missing, plus an `optional_extras` check that reports which `memman[extras]` install groups (e.g., `postgres`) resolve at runtime.
+- Defaults live in `config.INSTALL_DEFAULTS` and are written to `<MEMMAN_DATA_DIR>/env` by `memman install` only — there is no code-default fallback at runtime. If a key is missing from the env file, the resolver returns `None` and the caller raises `ConfigError` with `run memman install` guidance.
+- Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`) are read directly from `os.environ` and excluded from the env-file model.
+- `memman doctor` has an `env_completeness` check that warns when a new `INSTALLABLE_KEYS` entry is missing, and an `optional_extras` check that reports which `memman[extras]` install groups resolve at runtime.
 
 ### Variable reference
 
 The `Type` column distinguishes how each variable is sourced:
 
-- `required` — must be present in the env file before any command runs (`memman install` prompts for these in TTY mode and refuses to finish without them).
-- `installed` — optional INSTALLABLE_KEYS; seeded by `memman install` from defaults or a one-time shell pull, then read from the env file at runtime. Override later with `memman config set KEY VALUE`.
+- `required` — must be present in the env file before any command runs (`memman install` prompts for these in TTY mode and fails otherwise).
+- `installed` — optional INSTALLABLE_KEYS; seeded by `memman install` from defaults or a one-time shell pull, then read from the env file. Override later with `memman config set KEY VALUE`.
 - `process` — never persisted; read directly from `os.environ` by the component that owns them.
-
-Set an `installed` variable in your shell before `memman install` and it lands in the env file. `memman doctor` shows the resolved value and which layer it came from. Run `memman doctor` to probe both providers with cheap calls (the `llm_probe` and `embed_probe` checks).
 
 | Variable                          | Type      | Purpose                                                                                                                                                                                          |
 | --------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -55,10 +45,10 @@ Set an `installed` variable in your shell before `memman install` and it lands i
 | `MEMMAN_OPENROUTER_EMBED_MODEL`   | installed | Model id for the OpenRouter embed provider (`MEMMAN_EMBED_PROVIDER=openrouter`). Default `baai/bge-m3`. Reuses `OPENROUTER_API_KEY` and `MEMMAN_OPENROUTER_ENDPOINT`; no separate secret needed. |
 | `MEMMAN_OLLAMA_HOST`              | installed | Ollama host URL (default `http://localhost:11434`).                                                                                                                                              |
 | `MEMMAN_OLLAMA_EMBED_MODEL`       | installed | Ollama embedding model name (default `nomic-embed-text`).                                                                                                                                        |
-| `MEMMAN_DEFAULT_BACKEND`          | installed | Fallback storage backend for stores without an explicit per-store override (`sqlite` default, `postgres` requires the `memman[postgres]` extra).                                                 |
-| `MEMMAN_DEFAULT_POSTGRES_DSN`     | installed | Fallback Postgres DSN (`postgresql://...`) used when no `MEMMAN_POSTGRES_DSN_<store>` is set; secret. Stripped from the env file on `memman uninstall`.                                          |
+| `MEMMAN_DEFAULT_BACKEND`          | installed | Fallback storage backend for stores without an explicit per-store override (`sqlite` default; `postgres` requires the `memman[postgres]` extra).                                                 |
+| `MEMMAN_DEFAULT_POSTGRES_DSN`     | installed | Fallback Postgres DSN (`postgresql://...`); secret. Stripped on `memman uninstall`.                                                                                                              |
 | `MEMMAN_BACKEND_<store>`          | installed | Per-store backend override (e.g., `MEMMAN_BACKEND_work=postgres`). Not seeded by `install`; set via `memman config set` or written by `memman migrate <store>`.                                  |
-| `MEMMAN_POSTGRES_DSN_<store>`     | installed | Per-store Postgres DSN override; secret. Stripped from the env file on `memman uninstall`.                                                                                                       |
+| `MEMMAN_POSTGRES_DSN_<store>`     | installed | Per-store Postgres DSN override; secret. Stripped on `memman uninstall`.                                                                                                                         |
 | `MEMMAN_RERANK_PROVIDER`          | installed | Cross-encoder rerank provider (default `voyage`). Used when callers pass `memman recall --rerank`.                                                                                               |
 | `MEMMAN_VOYAGE_RERANK_MODEL`      | installed | Voyage rerank model id (default `rerank-2.5-lite`).                                                                                                                                              |
 | `MEMMAN_DATA_DIR`                 | process   | Locates the env file itself; persisting it inside the file is circular.                                                                                                                          |
@@ -71,11 +61,11 @@ Set an `installed` variable in your shell before `memman install` and it lands i
 
 ### Schema sources of truth
 
-memman has one schema source of truth per backend. Both are additive-only: column additions and new indexes only -- never `DROP COLUMN`, `RENAME`, `DROP TABLE`, `TRUNCATE`, or column-type/nullability changes.
+Both backends use one schema source of truth per backend, additive-only: column additions and new indexes only — never `DROP COLUMN`, `RENAME`, `DROP TABLE`, `TRUNCATE`, or column-type/nullability changes.
 
-**SQLite** -- `_BASELINE_SCHEMA` in `src/memman/store/db.py` (per-store DB) and `src/memman/queue.py` (queue DB). There is no `PRAGMA user_version` ladder. Fresh databases are created via `CREATE TABLE IF NOT EXISTS`; existing stores get one-off `ALTER TABLE` invocations against `~/.memman/data/*/memman.db` and `~/.memman/queue.db` if the change is in queue schema.
+**SQLite** — `_BASELINE_SCHEMA` in `src/memman/store/db.py` (per-store DB) and `src/memman/queue.py` (queue DB). No `PRAGMA user_version` ladder. Fresh databases are created via `CREATE TABLE IF NOT EXISTS`; existing stores get one-off `ALTER TABLE` invocations against `~/.memman/data/*/memman.db` and `~/.memman/queue.db`.
 
-**Postgres** -- `PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py` creates per-store schemas (`store_<name>`), each carrying its own `worker_runs` table for drain heartbeats. The deferred-write queue is always SQLite (`<data_dir>/queue.db`); Postgres has no shared queue schema. There is no migration ladder: the baseline is the only schema source. Existing stores receive one-off `ALTER TABLE` invocations against the live Postgres server when a column is added.
+**Postgres** — `PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py` creates per-store schemas (`store_<name>`), each carrying its own `worker_runs` table for drain heartbeats. The deferred-write queue is always SQLite (`<data_dir>/queue.db`); Postgres has no shared queue schema. Existing stores receive one-off `ALTER TABLE` invocations against the live Postgres server when a column is added.
 
 When a schema change is needed:
 
@@ -87,16 +77,16 @@ Do not add a SQLite or Postgres migration ladder; only additive ALTERs are permi
 
 ### Migrating between SQLite and Postgres
 
-`memman migrate` (in the `src/memman/migrate/` package) is symmetric: `--to postgres` (default) copies a store from SQLite into Postgres; `--to sqlite` copies it back. Both directions are copy-only on the source side and idempotent (`ON CONFLICT (id) DO NOTHING` on the `insights` insert path so an interrupted run is safely re-runnable). The two migrators (`SqliteMigrator`, `PostgresMigrator`) extend a common `Migrator` ABC and are dispatched from a `BACKENDS` registry, so adding a new RDBMS backend means implementing the ABC, not forking the CLI.
-
-Operationally:
+Operational details:
 
 - A preflight verifies `select 1`, the `pgvector` extension, and `CREATE` privilege on the Postgres side.
 - The shared `~/.memman/drain.lock` is held for the duration so a scheduler-fired drain cannot race the source reader.
 - Per-store work runs inside one transaction (`autocommit=False` on Postgres); any failure rolls back.
-- Per-store schemas are inspected up front and classified ABSENT / EMPTY / POPULATED. The plan is echoed (with the DSN password redacted) and the user must confirm; `--yes` skips the prompt. `--dry-run` is supported only with `--to postgres`.
+- Per-store schemas are inspected up front and classified ABSENT / EMPTY / POPULATED. The plan is echoed (with the DSN password redacted) and confirmed; `--yes` skips the prompt. `--dry-run` is supported only with `--to postgres`.
 - For `--to sqlite`, the Postgres `store_<name>` schema is dumped under `<data_dir>/archive/` before being dropped, so the source remains recoverable.
 - On success `MEMMAN_BACKEND_<store>` is flipped to the target backend. Revert without re-migrating data via `memman config set MEMMAN_BACKEND_<store> <backend>` (or unset the key to fall back to `MEMMAN_DEFAULT_BACKEND`).
+
+The two migrators (`SqliteMigrator`, `PostgresMigrator`) extend a common `Migrator` ABC and dispatch from a `BACKENDS` registry; adding a new RDBMS backend means implementing the ABC, not forking the CLI.
 
 ### Adding an LLM provider
 
@@ -117,6 +107,6 @@ Voyage is embedding-only and is deliberately NOT part of `LLMProvider`.
 
 ## Filing changes
 
-- No deprecated code / backward-compat shims. When a name changes, delete the old reader in the same commit.
-- Keep `src/memman/config.py` as the canonical list of env vars — do not introduce scattered `os.environ.get('NEW_VAR')` call sites.
+- No deprecated code or backward-compat shims. When a name changes, delete the old reader in the same commit.
+- Keep `src/memman/config.py` as the canonical list of env vars — no scattered `os.environ.get('NEW_VAR')` call sites.
 - Match existing CLI output conventions: most subcommands emit flat JSON via `_json_out(...)`. Recall wraps in `{results, meta}`.

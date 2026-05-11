@@ -4,36 +4,32 @@
 
 ---
 
-## 1.1 The Amnesia Problem
+## 1.1 The amnesia problem
 
-LLM agents suffer from three memory deficiencies:
+LLM agents lose context three ways:
 
-- **Context compression loss**: After compaction or automatic compression, prior decisions and context are lost
-- **Cross-session forgetting**: Each new session starts from scratch
-- **Long-session decay**: Once the context window fills, early information is pushed out of attention range
+- **Context compression loss**: after compaction, prior decisions and context disappear from the active window.
+- **Cross-session forgetting**: each new session starts from scratch.
+- **Long-session decay**: once the context window fills, early information falls out of attention range.
 
-Users must repeatedly restate preferences, re-explain project context, and re-derive conclusions already reached.
+The result: users restate preferences, re-explain project context, and re-derive conclusions they already reached.
 
-## 1.2 MemMan's Goal
+## 1.2 Scope
 
-Make an LLM remember decisions, preferences, and project context across arbitrarily many sessions.
-
-MemMan is not a library embedded within an agent framework. It is a standalone memory engine — callable via the command line by Claude Code, Cursor, or any LLM CLI.
+Persist decisions, preferences, and project context across sessions. memman is a CLI, not a library. Any LLM CLI that can shell out can call it.
 
 ---
 
-## 1.3 LLM-Supervised Pattern
+## 1.3 LLM-Supervised pattern
 
-Traditional LLM memory systems (such as Mem0 and the original MAGMA implementation) embed a small LLM inside the pipeline to handle memory operations — entity extraction, conflict detection, causal reasoning. This is the **LLM-Embedded** pattern.
-
-MemMan adopts the **LLM-Supervised** pattern:
+Mem0 and the MAGMA reference implementation embed an LLM inside the memory pipeline for extraction, conflict detection, and causal reasoning. Call this the LLM-Embedded pattern. memman adopts a different one:
 
 | Pattern            | Where is the LLM               | What does the LLM do                                                 | Representative        |
 | ------------------ | ------------------------------ | -------------------------------------------------------------------- | --------------------- |
 | **LLM-Embedded**   | Inside the pipeline            | Executor (extraction, classification, reasoning)                     | Mem0, MAGMA           |
 | **File Injection** | Reads file at session start    | None — static file loaded into context window                        | Claude Code CLAUDE.md |
 | **MCP Server**     | Tool provider via MCP protocol | Exposes memory operations as MCP tools for the host LLM              | MemCP                 |
-| **LLM-Supervised** | Outside the pipeline           | Supervisor (reviews candidates, makes judgments, decides trade-offs) | MemMan                |
+| **LLM-Supervised** | Outside the pipeline           | Supervisor (reviews candidates, makes judgments, decides trade-offs) | memman                |
 
 Responsibilities split into two tiers:
 
@@ -42,29 +38,22 @@ Responsibilities split into two tiers:
 | **Binary**   | Deterministic computation | Storage, graph indexing, keyword search, vector math, decay formulas, auto-pruning |
 | **Host LLM** | High-level judgment       | Decides what to remember, when to recall, which links to create, what to forget    |
 
-Haiku handles pipeline intelligence (fact extraction, reconciliation, enrichment, causal inference, query expansion). The host LLM decides *when* and *what* to remember — it does not execute pipeline steps directly.
-
 The same binary + skill works across Claude Code, Cursor, or any LLM CLI. Swapping the host LLM requires no changes to the binary.
 
-## 1.4 Theoretical Foundations
+## 1.4 Theoretical foundations
 
-MemMan's design draws on two directly implemented papers.
+memman draws on two directly implemented papers.
 
-**MAGMA: Four-Graph Memory Architecture**
+**MAGMA: four-graph memory architecture.**
+[MAGMA](https://arxiv.org/abs/2601.03236) (Jiang et al., 2025) provides the data model and retrieval algorithms. Its central claim: a single edge type (e.g., vector similarity) is insufficient because different query intents demand different relational perspectives. memman inherits MAGMA's four-graph architecture (temporal, entity, causal, semantic) and intent-adaptive retrieval, and adopts the hyperparameter values from Table 5: anchor top-K (20), RRF constant (60), structural/semantic coefficients (λ1=1.0, λ2=0.3–0.7), max traversal depth (5), similarity threshold range (0.10–0.30). These values are documented inline in [Pipelines](04-pipelines.md) and [Graph Model](03-graph-model.md).
 
-The [MAGMA](https://arxiv.org/abs/2601.03236) paper (Jiang et al., 2025) provides the data model and retrieval algorithms. Its key contribution: a single edge type (e.g., vector similarity) is insufficient for memory — different query intents require different relational perspectives. MAGMA's four-graph architecture (temporal, entity, causal, semantic) with intent-adaptive retrieval and multi-signal fusion gives MemMan its graph model and recall pipeline.
+**RRF: Reciprocal Rank Fusion.**
+The [RRF paper](https://dl.acm.org/doi/10.1145/1571941.1572114) (Cormack, Clarke & Buttcher, SIGIR 2009) provides the multi-signal fusion algorithm used in anchor selection. memman uses the exact `1/(k + rank)` formula with k=60, fusing keyword, vector, and recency signals into one composite ranking.
 
-MAGMA also provides specific hyperparameter values adopted by MemMan. See Table 5 of the MAGMA paper for: anchor top-K (20), RRF constant (60), structural/semantic coefficients (λ1=1.0, λ2=0.3–0.7), max traversal depth (5), and similarity threshold range (0.10–0.30). These values are documented inline in [Pipelines](04-pipelines.md) and [Graph Model](03-graph-model.md).
+**Engineering choices.**
+The pipeline uses three LLM role slots (recall fast path, worker canonical, worker metadata); see [§ LLM routing](04-pipelines.md#llm-routing) for the model assignments and cost-tuning rationale. The write path uses LLM reconciliation (ADD/UPDATE/DELETE/NONE) instead of threshold-based comparison. The lifecycle is hook-driven: remember → reconcile → enrich → auto-prune.
 
-**RRF: Reciprocal Rank Fusion**
-
-The [RRF paper](https://dl.acm.org/doi/10.1145/1571941.1572114) (Cormack, Clarke & Buttcher, SIGIR 2009) provides the multi-signal fusion algorithm used in recall anchor selection. MemMan uses the exact `1/(k + rank)` formula with k=60, fusing keyword, vector, and recency signals into a composite anchor ranking.
-
-**MemMan's Engineering Choices**
-
-MemMan splits LLM work across three role slots: Haiku for the recall-time fast path (query expansion, doctor probe), Sonnet for the worker's canonical-content path (`slow_canonical`: fact extraction, reconciliation), and Sonnet for the worker's derived-metadata path (`slow_metadata`: enrichment summaries/keywords, causal-edge inference). The metadata role can be tuned to a cheaper model independently of the load-bearing extraction prompt. The host LLM handles higher-level judgment (what to remember, when to recall). The write path uses LLM reconciliation (ADD/UPDATE/DELETE/NONE) instead of threshold-based comparison. The lifecycle is hook-driven: remember → reconcile → enrich → auto-prune.
-
-Where MAGMA's reference implementation is a Python library with in-memory NetworkX graphs, MemMan persists everything in SQLite with a complete write-back lifecycle. The system is exposed through CLI commands — constrained, but auditable, portable, and sandboxed.
+Where MAGMA's reference implementation is a Python library with in-memory NetworkX graphs, memman persists everything in SQLite (or Postgres + pgvector) with a complete write-back lifecycle and exposes the system through CLI commands — auditable, portable, sandboxed.
 
 ![LLM-Supervised Architecture](../diagrams/05-llm-supervised.drawio.png)
 
@@ -72,41 +61,41 @@ Where MAGMA's reference implementation is a Python library with in-memory Networ
 
 ---
 
-## 1.5 Design Decisions & Trade-offs
+## 1.5 Design decisions & trade-offs
 
-### Why LLM-Supervised Instead of an Embedded LLM?
+### Why LLM-Supervised instead of an embedded LLM?
 
-| Dimension          | LLM-Embedded (Mem0, etc.) | LLM-Supervised (MemMan)                                                       |
-| ------------------ | ------------------------- | ----------------------------------------------------------------------------- |
-| LLM Capability     | Same model for everything | Host LLM + Haiku for pipeline                                                 |
-| Pipeline LLM       | Same model for everything | Haiku for extraction, reconciliation, expansion, enrichment, causal inference |
-| Network Dependency | Required                  | Required (OpenRouter + Voyage APIs)                                           |
-| Swappability       | API-bound                 | Any LLM CLI                                                                   |
+| Dimension          | LLM-Embedded (Mem0, etc.) | LLM-Supervised (memman)                                                                                  |
+| ------------------ | ------------------------- | -------------------------------------------------------------------------------------------------------- |
+| LLM capability     | One model for everything  | Host LLM + Haiku/Sonnet split for pipeline                                                               |
+| Pipeline LLM       | One model for everything  | Haiku for recall fast path; Sonnet for extraction/reconciliation; Sonnet for enrichment/causal inference |
+| Network dependency | Required                  | Required (OpenRouter + Voyage APIs)                                                                      |
+| Swappability       | API-bound                 | Any LLM CLI                                                                                              |
 
-### Why SQLite WAL Instead of an Embedded Graph Database?
+### Why SQLite WAL instead of an embedded graph database?
 
-- **Single-file deployment**: one `.db` file per store — easy to manage and backup
-- **ACID transactions**: Atomicity guarantee for the remember pipeline
-- **WAL concurrency**: Supports simultaneous hook reads and CLI writes
-- **Zero external dependencies**: No Redis/Neo4j/Qdrant required
-- **Store isolation**: Named stores (`~/.memman/data/<name>/memman.db`) provide lightweight data isolation via `MEMMAN_STORE` env var
+- **Single-file deployment**: one `.db` file per store, easy to manage and back up.
+- **ACID transactions**: atomicity for the remember pipeline.
+- **WAL concurrency**: simultaneous hook reads and CLI writes.
+- **Zero external dependencies**: no Redis/Neo4j/Qdrant required.
+- **Store isolation**: named stores (`~/.memman/data/<name>/memman.db`) give data isolation via the `MEMMAN_STORE` env var.
 
-### Why Beam Search Instead of Full BFS?
+### Why beam search instead of full BFS?
 
-- **Budget control**: MaxVisited parameter prevents graph explosion
-- **Intent-adaptive**: Different intents use different beam widths and depths
-- **Quality assurance**: Only the highest-scoring candidates are retained at each level, similar to pruning
+- **Budget control**: MaxVisited prevents graph explosion.
+- **Intent-adaptive**: different intents use different beam widths and depths.
+- **Quality assurance**: only the highest-scoring candidates survive each level.
 
-### Why Soft Delete?
+### Why soft delete?
 
-- Preserves audit trail
-- Supports "undo" (recovering accidental deletions)
-- Simplifies cascade cleanup
-- Query consistency (`WHERE deleted_at IS NULL`)
+- Preserves audit trail.
+- Supports undo (recovering accidental deletions).
+- Simplifies cascade cleanup.
+- Query consistency (`WHERE deleted_at IS NULL`).
 
-### Key Deviations from the MAGMA Paper
+### Key deviations from the MAGMA paper
 
-| Aspect            | MAGMA Paper                                        | MemMan Implementation                                                                                                                                                                       |
+| Aspect            | MAGMA Paper                                        | memman Implementation                                                                                                                                                                       |
 | ----------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Transition Score  | `exp(λ1·φ + λ2·sim)` (Eq. 5) — exponential wrapper | Linear `λ1·structural + λ2·semantic` — better discrimination (`exp` compresses score ratios; irrelevant edges with zero structural+semantic contribution score `exp(0) = 1.0` instead of 0) |
 | Depth Decay       | `score_v = score_u · γ + s_uv` (Alg. 1) — decay γ  | No decay — accumulative scoring. Mitigated by bounded depth (4-5), beam pruning, and min-max normalized multi-factor re-ranking. γ is unspecified in the paper                              |
@@ -122,21 +111,19 @@ Where MAGMA's reference implementation is a Python library with in-memory Networ
 | Quality Review    | Slow-path LLM refinement (Alg. 3)                  | Pattern-based quality warnings + `memman insights review`                                                                                                                                   |
 | Deployment        | Python library                                     | Python package (CLI)                                                                                                                                                                        |
 
-MemMan retains MAGMA's **architectural skeleton** (four-graph separation, intent-adaptive retrieval, multi-signal fusion) while using Haiku for pipeline intelligence (fact extraction, reconciliation, query expansion, enrichment, causal inference) and the host LLM for high-level judgment.
-
 ## 1.6 Pluggability
 
-Any LLM CLI can interact with MemMan through the CLI protocol today (agent-side pluggability). On the storage side, the engine is split behind a backend Protocol so the same beam-search / RRF / lifecycle code runs over either of two ACID-aware backends.
+Any LLM CLI interacts with memman through the CLI protocol (agent-side pluggability). On the storage side, the engine sits behind a backend Protocol so the same beam-search / RRF / lifecycle code runs over either of two ACID-aware backends.
 
-### Storage-Side Pluggability
+### Storage-side pluggability
 
 | Backend  | Install                          | Topology                                                              | Vector storage                               |
 | -------- | -------------------------------- | --------------------------------------------------------------------- | -------------------------------------------- |
 | SQLite   | default                          | One `memman.db` per store under `~/.memman/data/<store>/`             | float64 BLOB in `insights.embedding`         |
 | Postgres | `pip install 'memman[postgres]'` | One Postgres schema per store (`store_<name>`); shared `queue` schema | `pgvector` `vector(N)` (float32; HNSW index) |
 
-Backend selection is per-store: `MEMMAN_BACKEND_<store>` (with `MEMMAN_DEFAULT_BACKEND` as fallback) chooses sqlite or postgres for that store, and `MEMMAN_POSTGRES_DSN_<store>` (with `MEMMAN_DEFAULT_POSTGRES_DSN` as fallback) provides the connection string. Different stores under one `~/.memman/data/` can sit on different backends -- a `work` store on Postgres can coexist with a `default` store on SQLite.
+Backend selection is per-store. `MEMMAN_BACKEND_<store>` (with `MEMMAN_DEFAULT_BACKEND` as fallback) chooses sqlite or postgres for that store; `MEMMAN_POSTGRES_DSN_<store>` (with `MEMMAN_DEFAULT_POSTGRES_DSN` as fallback) provides the connection string. Different stores under one `~/.memman/data/` can sit on different backends — a `work` store on Postgres can coexist with a `default` store on SQLite.
 
-The graph-aware abstraction landed at the storage Protocol layer (`src/memman/store/backend.py`): node/edge access, drain-lock primitives, and queue verbs are virtualized so beam search and RRF fusion remain shared. SQLite-specific concerns (`PRAGMA`, `WAL`, BLOB serialization) and Postgres-specific concerns (pgvector adapters, schema-per-store, advisory locks) are encapsulated inside their respective implementations. Each backend has a single baseline schema (`_BASELINE_SCHEMA` / `PG_BASELINE_SCHEMA`) -- there is no in-place migration ladder.
+The graph-aware abstraction landed at the storage Protocol layer (`src/memman/store/backend.py`): node/edge access, drain-lock primitives, and queue verbs are virtualized so beam search and RRF fusion remain shared. SQLite-specific concerns (`PRAGMA`, `WAL`, BLOB serialization) and Postgres-specific concerns (pgvector adapters, schema-per-store, advisory locks) stay inside their respective implementations. Each backend has a single baseline schema (`_BASELINE_SCHEMA` / `PG_BASELINE_SCHEMA`); there is no in-place migration ladder.
 
-`memman migrate <store>` is the operator-facing path between backends: symmetric (`--to postgres` default; `--to sqlite` to reverse), copy-only on the source side, idempotent (`ON CONFLICT (id) DO NOTHING`), drain-lock-guarded, with `--dry-run` (forward only) and an interactive plan + `click.confirm` flow (`--yes` for non-interactive). Stores whose target schema already exists are dropped and recreated; the per-store state (`ABSENT` / `EMPTY` / `POPULATED`) is echoed in the plan. On success `MEMMAN_BACKEND_<store>` is flipped to the target backend so the next drain routes that store to the new database; other stores are unaffected. The two migrators (`SqliteMigrator`, `PostgresMigrator`) extend a common `Migrator` ABC and are dispatched from a `BACKENDS` registry, so adding a new RDBMS backend means implementing the ABC, not forking the CLI. See [USAGE.md](../USAGE.md#migrating-between-sqlite-and-postgres) for the operator workflow.
+`memman migrate <store>` is the operator path between backends. See [USAGE.md](../USAGE.md#migrating-between-sqlite-and-postgres) for the workflow and [CONTRIBUTING.md](../../CONTRIBUTING.md#migrating-between-sqlite-and-postgres) for the implementation outline.

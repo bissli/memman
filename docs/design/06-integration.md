@@ -6,85 +6,42 @@
 
 ![Integration Architecture](../diagrams/07-three-layer-integration.drawio.png)
 
-MemMan integrates with LLM CLIs through lifecycle hooks, a skill file, and a behavioral guide. Claude Code's [hook system](https://docs.anthropic.com/en/docs/claude-code/hooks) is the reference implementation — all components are deployed automatically via `memman install`.
+memman ships three integration assets: lifecycle hooks, a skill file, and a behavioral guide. `memman install` deploys all three. Claude Code's [hook system](https://docs.anthropic.com/en/docs/claude-code/hooks) is the reference platform.
 
-## 6.1 Integration Architecture
+## 6.1 Integration architecture
 
-Six hooks drive the memory lifecycle:
+Lifecycle order within a session:
 
-```
-Session starts
-    │
-    ▼
-  Prime (SessionStart) ─── prime.sh ──→ load guide.md (memory execution manual)
-    │
-    ▼
-  User sends message
-    │
-    ▼
-  Remind (UserPromptSubmit) ─── user_prompt.sh ──→ remind agent to recall & remember
-    │
-    ▼
-  Skill (SKILL.md) ── command syntax reference (auto-discovered)
-    │
-    ▼
-  LLM generates response (following guide.md behavioral rules)
-    │
-    ▼
-  Nudge (Stop) ─── stop.sh ──→ remind agent to remember
-    │
-    ▼
-  (when context compacts)
-  Compact (PreCompact) ─── compact.sh ──→ flag file for post-compact recall
-    │
-    ▼
-  (before invoking the Task tool)
-  Recall (PreToolUse) ─── task_recall.sh ──→ remind agent to recall before delegation
-    │
-    ▼
-  (before exiting plan mode)
-  ExitPlan (PreToolUse) ─── exit_plan.sh ──→ prompt memory storage before transition
-```
+1. **Session start** — `prime.sh` (SessionStart) loads `guide.md` (the memory execution manual).
+2. **Every user message** — `user_prompt.sh` (UserPromptSubmit) reminds the agent to recall and remember.
+3. The LLM responds; `SKILL.md` is auto-discovered for command syntax; `guide.md` rules apply.
+4. **Before sub-agent delegation** — `task_recall.sh` (PreToolUse on Task) reminds the agent to recall first.
+5. **Before plan exit** — `exit_plan.sh` (PreToolUse on ExitPlanMode) prompts memory storage before the transition.
+6. **Turn end** — `stop.sh` (Stop) reminds the agent to evaluate "remember?".
+7. **Context compacted** (asynchronous) — `compact.sh` (PreCompact) writes a flag file; the next `SessionStart` reads it for post-compact recall.
 
-Three layers work together:
+Three assets, three jobs:
 
-| Layer     | What                                                                        | Where                                       | Role                                                                                                                                                |
-| --------- | --------------------------------------------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Hooks** | Shell scripts triggered by Claude Code lifecycle events                     | `.claude/hooks/memman/`                     | Prime (guide), Remind (recall & remember), Nudge (remember), Compact (pre-compact bridge), Recall (pre-delegation), ExitPlan (plan-mode transition) |
-| **Skill** | `SKILL.md` — command reference in Claude Code skill format                  | `.claude/skills/memman/`                    | Teaches the LLM *how* to use memman commands                                                                                                        |
-| **Guide** | `guide.md` — detailed execution manual for recall, remember, and delegation | Installed package (read via `memman guide`) | Teaches the LLM *when* to recall, *what* to remember, and *how* to delegate                                                                         |
+| Layer     | What                                                               | Where                                       | Role                                                                                                                                                |
+| --------- | ------------------------------------------------------------------ | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Hooks** | Shell scripts triggered by Claude Code lifecycle events            | `.claude/hooks/memman/`                     | Prime (guide), Remind (recall & remember), Nudge (remember), Compact (pre-compact bridge), Recall (pre-delegation), ExitPlan (plan-mode transition) |
+| **Skill** | `SKILL.md` — command reference in Claude Code skill format         | `.claude/skills/memman/`                    | Teaches the LLM *how* to use memman commands                                                                                                        |
+| **Guide** | `guide.md` — execution manual for recall, remember, and delegation | Installed package (read via `memman guide`) | Teaches the LLM *when* to recall, *what* to remember, and *how* to delegate                                                                         |
 
-## 6.2 Hook Details
+## 6.2 Hook details
 
-Claude Code fires hooks at specific lifecycle events. MemMan registers up to six, each with a distinct role in the memory lifecycle:
+| Hook     | Event                     | Script                | Role                                    |
+| -------- | ------------------------- | --------------------- | --------------------------------------- |
+| Prime    | SessionStart              | prime.sh              | Inject guide + compact-recall hint      |
+| Remind   | UserPromptSubmit          | user_prompt.sh        | Recall reminder                         |
+| Nudge    | Stop                      | stop.sh               | Block-decision JSON; "remember?" prompt |
+| Compact  | PreCompact + SessionStart | compact.sh + prime.sh | Flag-file relay across compaction       |
+| Recall   | PreToolUse (Task)         | task_recall.sh        | Pre-delegation recall reminder          |
+| ExitPlan | PreToolUse (ExitPlanMode) | exit_plan.sh          | Pre-execute storage reminder            |
 
-**Prime (SessionStart) — `prime.sh`**
+Prime, Remind, Recall, and ExitPlan are plain `echo` shims to the agent; their bodies are visible in the package source. Two hooks need explanation:
 
-Runs once when a session starts. Delegates to `memman prime`, which emits the status line, a compact-recall hint when `SessionStart.source == 'compact'`, and the shipped behavioral guide via `importlib.resources`:
-
-```bash
-if ! command -v memman >/dev/null 2>&1; then
-  echo "[memman] Warning: memman not on PATH; hooks inactive."
-  exit 0
-fi
-echo "$INPUT" | memman prime
-```
-
-The hook's stdout is injected into the agent's context before the first user turn. The guide content (recall/remember policy, phase awareness, Tier A/B rules) sets behavior for the entire session.
-
-**Remind (UserPromptSubmit) — `user_prompt.sh`**
-
-Runs on every user message. A lightweight prompt that reminds the agent to evaluate whether recall and remember are needed before starting work:
-
-```bash
-echo '[memman] Recall: run memman recall "<focused query>" --limit 5 unless topic is already in context. After responding, evaluate: remember needed?'
-```
-
-The agent decides whether to act on this reminder based on the guide.md rules — it is a suggestion, not forced execution.
-
-**Nudge (Stop) — `stop.sh`**
-
-Runs after each LLM response. Returns a `decision: block` JSON so the agent gets one more turn to evaluate memory. Directive-aware: prompts the agent to store if a user preference, decision, or conclusion emerged. Fires once per user turn (gated by a `stop_fired/` directory lock) and stays silent when `stop_hook_active` is true (preventing infinite loops). Simplified excerpt:
+**Stop hook — block-decision JSON contract.** Returns `decision: block` so the agent gets one more turn to evaluate memory. Directive-aware: prompts the agent to store if a user preference, decision, or conclusion emerged. Fires once per user turn (gated by a `stop_fired/` directory lock) and stays silent when `stop_hook_active` is true (preventing infinite loops):
 
 ```bash
 INPUT=$(cat)
@@ -96,15 +53,13 @@ cat <<'EOF'
 EOF
 ```
 
-**Compact (PreCompact + SessionStart) — `compact.sh` + `prime.sh` (optional)**
+**Compact hook — two-part flag-file relay.** PreCompact cannot inject context into the agent's conversation (stdout is verbose-mode only), so the solution uses a flag file:
 
-A two-part bridge that preserves memory context across context compaction. PreCompact cannot inject context into the agent's conversation (stdout is verbose-mode only), so the solution uses a flag file relay:
+1. `compact.sh` fires at PreCompact — writes a flag file to `~/.memman/compact/<session_id>.json` with the trigger type and timestamp.
+2. After compaction, Claude Code fires SessionStart with `source=compact`.
+3. `prime.sh` detects `source=compact`, reads the flag file for enrichment, and injects a recall instruction the agent can see.
 
-1. `compact.sh` fires at PreCompact — writes a flag file to `~/.memman/compact/<session_id>.json` with the trigger type and timestamp
-2. After compaction, Claude Code fires SessionStart with `source=compact`
-3. `prime.sh` detects `source=compact`, reads the flag file for enrichment, and injects a recall instruction the agent can see
-
-The design is defensively layered — `prime.sh` detects compaction from the SessionStart `source` field regardless of whether `compact.sh` ran. The flag file enriches the message with trigger type but is not required.
+`prime.sh` detects compaction from the SessionStart `source` field regardless of whether `compact.sh` ran; the flag file enriches the message with trigger type but is not required.
 
 ```bash
 # compact.sh (PreCompact) — writes flag file
@@ -118,28 +73,11 @@ if [ "$SOURCE" = "compact" ]; then
 fi
 ```
 
-**Recall (PreToolUse) — `task_recall.sh` (optional)**
-
-Fires before the agent delegates to a sub-agent. Reminds the agent to recall relevant context before delegation, ensuring sub-agents receive informed prompts:
-
-```bash
-echo "[memman] Before delegating: recall relevant context first (memman recall \"<query>\" --limit 5) unless already done for this topic."
-```
-
-**ExitPlan (PreToolUse) — `exit_plan.sh` (optional)**
-
-Fires before the agent exits plan mode. Outputs an advisory reminder to store memories before the plan-to-execute transition. Non-blocking — the agent always proceeds:
-
-```bash
-echo "[memman] Plan-to-execute transition: store any conclusions, decisions, or preferences from this planning session via Bash (memman remember ...) before proceeding."
-exit 0
-```
-
 Stale `stop_fired/` directories (older than 2 hours) are cleaned up by `prime.sh` at session start.
 
-## 6.3 Automated Setup
+## 6.3 Automated setup
 
-`memman install` deploys everything via symlinks to the installed package, so `pipx upgrade memman` refreshes hook scripts and SKILL.md automatically — no re-run needed:
+`memman install` deploys everything via symlinks into the installed package, so `pipx upgrade memman` refreshes hook scripts and SKILL.md automatically:
 
 ```
 $ memman install
@@ -174,56 +112,33 @@ Deployment model:
 - `~/.claude/hooks/memman/*.sh` → symlinks into the same package path. `prime.sh` is a thin shim that delegates to `memman prime` (status + compact hint + guide in one Python call).
 - Shipped `guide.md` is never deployed to disk — `memman guide` reads it from the package via `importlib.resources` every time `prime.sh` fires.
 
-`pipx upgrade memman` refreshes hook scripts and `SKILL.md` automatically through the symlinks; `guide.md` is read live from the new package version. Asset-only changes propagate without any re-install step.
+`pipx upgrade memman` refreshes hook scripts and `SKILL.md` through the symlinks; `guide.md` reads live from the new package. Asset-only changes propagate without re-install.
 
-Key install options:
+See [USAGE.md § Install / Uninstall](../USAGE.md#install--uninstall) for the full flag matrix.
 
-| Command / Flag                                           | Effect                                                                                                                                 |
-| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `memman install --target claude-code`                    | Install into `~/.claude/` only                                                                                                         |
-| `memman install --target openclaw`                       | Install into `~/.openclaw/` only                                                                                                       |
-| `memman install --target nanoclaw`                       | Install into `~/.nanoclaw/` only                                                                                                       |
-| `memman install --backend sqlite` / `--backend postgres` | Pick the storage backend without prompting (postgres requires the `memman[postgres]` extra).                                           |
-| `memman install --pg-dsn URL`                            | Provide the Postgres DSN for non-interactive installs.                                                                                 |
-| `memman install --no-wizard`                             | Disable interactive prompts; flags + defaults only.                                                                                    |
-| `memman config set KEY VALUE`                            | Explicit override path (e.g., `MEMMAN_DEFAULT_BACKEND postgres` or `MEMMAN_BACKEND_<store> postgres`); bypasses sticky-seed semantics. |
-| `memman uninstall`                                       | Remove all memman integrations                                                                                                         |
-| `memman uninstall --target <name>`                       | Remove from a single environment                                                                                                       |
+**Wizard backend prompt.** In a TTY without `OPENROUTER_API_KEY` / `VOYAGE_API_KEY` set, the install wizard prompts for each missing mandatory secret with masked input. The backend selector appears when the `memman[postgres]` extra is installed (psycopg + pgvector importable); without it, sqlite is the only path and the wizard short-circuits the backend prompt. When postgres is selected, the wizard writes `MEMMAN_DEFAULT_BACKEND=postgres` and `MEMMAN_BACKEND_default=postgres` plus the per-store DSN (`MEMMAN_POSTGRES_DSN_default`), probes the DSN with `psycopg.connect`, verifies the `pgvector` extension, and (for non-localhost DSNs) emits a hint about PgBouncer transaction pooling.
 
-When run in a TTY without `OPENROUTER_API_KEY` / `VOYAGE_API_KEY` set, the install wizard prompts for each missing mandatory secret with masked input. The backend selector appears when the `memman[postgres]` extra is installed (psycopg + pgvector importable); when only the default extras are present, sqlite is the only path and the wizard short-circuits the backend prompt entirely. When postgres is selected, the wizard writes `MEMMAN_DEFAULT_BACKEND=postgres` and `MEMMAN_BACKEND_default=postgres` plus the per-store DSN (`MEMMAN_POSTGRES_DSN_default`), probes the DSN with `psycopg.connect`, verifies the `pgvector` extension is present, and (for non-localhost DSNs) emits a hint about PgBouncer transaction pooling. Existing SQLite stores are not touched by `memman install` — to copy a specific store into the new Postgres backend, run `memman migrate --store NAME` (or `--all`); the command echoes a plan and prompts for confirmation, then writes `MEMMAN_BACKEND_<store>=postgres` per migrated store on success. See [USAGE.md](../USAGE.md#migrating-between-sqlite-and-postgres).
+**SQLite stores not touched.** `memman install` does not migrate existing SQLite stores into a newly-selected Postgres backend. To move a specific store, run `memman migrate --store NAME` (or `--all`); the command echoes a plan, prompts for confirmation, and writes `MEMMAN_BACKEND_<store>=postgres` per migrated store on success. See [USAGE.md § Migrating between SQLite and Postgres](../USAGE.md#migrating-between-sqlite-and-postgres).
 
-Backend-switch semantics: backend choice is per-store via `MEMMAN_BACKEND_<store>` (with `MEMMAN_DEFAULT_BACKEND` as the fallback for unrouted stores), so a `work` store on Postgres can coexist with a `default` store on SQLite under the same data dir. `memman migrate` is symmetric (`--to postgres` / `--to sqlite`), with the reverse direction dumping the Postgres schema to `<data_dir>/archive/` before dropping it. `~/.memman/active` continues to hold a store-name string regardless of backend. Conflicts between an `INSTALLABLE_KEYS` flag and an existing env-file value are rejected loudly with the exact `memman config set ...` command to run -- install never silently swallows a flag.
-
-`memman uninstall` strips secret keys (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`, `MEMMAN_DEFAULT_POSTGRES_DSN`, and any `MEMMAN_POSTGRES_DSN_<store>`) from `~/.memman/env` while preserving non-secret model/provider/backend settings, so a later `memman install` resurrects preferences (including `MEMMAN_DEFAULT_BACKEND` and any `MEMMAN_BACKEND_<store>` routes) without re-export. The memory store, queue, and scheduler logs under `~/.memman/` are untouched. To fully remove the binary: `pipx uninstall memman`.
+**Configure after install.** Conflicts between an `INSTALLABLE_KEYS` flag and an existing env-file value are rejected with the exact `memman config set ...` command to run — install never silently swallows a flag. `memman uninstall` strips secret keys (`OPENROUTER_API_KEY`, `VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`, `MEMMAN_DEFAULT_POSTGRES_DSN`, and any `MEMMAN_POSTGRES_DSN_<store>`) while preserving non-secret settings, so a later `memman install` resurrects preferences without re-export. The memory store, queue, and scheduler logs under `~/.memman/` are untouched. To remove the binary: `pipx uninstall memman`.
 
 The Prime hook is always installed. Remind, Nudge, Compact, Recall, and ExitPlan hooks are optional (all enabled by default).
 
-## 6.4 Direct-Bash Invocation (No Sub-Agent)
+## 6.4 Direct-Bash invocation (no sub-agent)
 
-The host agent calls `memman remember` directly via Bash in the same turn —
-no sub-agent, no Task delegation, no context isolation. This is intentional:
+The host agent calls `memman remember` via Bash in the same turn. No sub-agent, no Task delegation, no context isolation. Three reasons:
 
-- **The binary is a fast queue-append** (~50 ms). The cost that would
-  justify offloading to a sub-agent (LLM extraction, embedding, edge
-  inference) doesn't run in-band — it runs in the scheduler worker
-  out of band. The host turn pays only the queue-append latency.
-- **The host LLM already holds the context** needed to choose the right
-  `--cat`, `--imp`, `--entities`, and to dereference anaphora before
-  storing. A sub-agent would pay tokens to re-read context the host
-  already has.
-- **One-way visibility** (writes are not recallable in the same turn)
-  means there's no callback the sub-agent could provide that the host
-  couldn't get itself. Recall remains a separate Bash call.
+- **The binary is a fast queue-append** (~50 ms). The cost that would justify offloading to a sub-agent (LLM extraction, embedding, edge inference) does not run in-band — it runs in the scheduler worker out of band. The host turn pays only the queue-append latency.
+- **The host LLM already holds the context** needed to choose the right `--cat`, `--imp`, `--entities`, and to dereference anaphora before storing. A sub-agent would pay tokens to re-read context the host already has.
+- **One-way visibility** (writes are not recallable in the same turn) means there is no callback the sub-agent could provide that the host could not get itself. Recall remains a separate Bash call.
 
-The shipped `guide.md` enforces this rule explicitly: *"call `memman
-remember "<self-contained text>"` directly via Bash in your current
-turn. No sub-agent delegation."*
+The shipped `guide.md` enforces this explicitly: *"call `memman remember "<self-contained text>"` directly via Bash in your current turn. No sub-agent delegation."*
 
-## 6.5 Adapting to Other LLM CLIs
+## 6.5 Adapting to other LLM CLIs
 
 For CLIs with hook support, replicate the Claude Code pattern: register lifecycle hooks that call memman commands, deploy the skill file, and provide the behavioral guide.
 
 For CLIs without hook support, merge the recall/remember guidance into the corresponding system prompt or rules file:
 
-- OpenClaw -> `memman install --target openclaw` deploys skill + guide, but hooks require manual plugin configuration
-- Others -> System prompt / rules file
+- OpenClaw — `memman install --target openclaw` deploys skill + guide; hooks require manual plugin configuration.
+- Others — system prompt / rules file.
