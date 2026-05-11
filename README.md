@@ -22,9 +22,9 @@ See [Design & Architecture](docs/DESIGN.md) for details.
 ## Install
 
 ```bash
-pipx install git+https://github.com/bissli/memman.git
+pipx install memman
 # or, with the optional Postgres backend:
-# pipx install 'git+https://github.com/bissli/memman.git#egg=memman[postgres]'
+# pipx install 'memman[postgres]'
 memman install
 ```
 

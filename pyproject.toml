@@ -5,6 +5,21 @@ description = "Persistent memory for LLM agents"
 authors = ["bissli"]
 license = "MIT"
 readme = "README.md"
+homepage = "https://github.com/bissli/memman"
+repository = "https://github.com/bissli/memman"
+keywords = ["llm", "memory", "agents", "rag", "embeddings", "knowledge-graph"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    ]
 packages = [{include = "memman", from = "src"}, {include = "scripts"}]
 include = ["src/memman/setup/assets/**/*"]
 
