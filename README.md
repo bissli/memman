@@ -19,61 +19,6 @@
 
 See [Design & Architecture](docs/DESIGN.md) for details.
 
-## Install
-
-```bash
-pipx install memman
-# or, with the optional Postgres backend:
-# pipx install 'memman[postgres]'
-memman install
-```
-
-In a TTY, the install wizard prompts (with masked input) for `OPENROUTER_API_KEY` and `VOYAGE_API_KEY` if they are not already in the env file or the shell. Headless / CI installs need both keys exported (or pre-written into `~/.memman/env`) and should pass `--no-wizard`. After install, the env file at `~/.memman/env` (mode 0600) is the canonical source of truth; runtime never reads the shell for installable settings. Change a setting with `memman config set KEY VALUE`. See [CONTRIBUTING.md § Variable reference](CONTRIBUTING.md#variable-reference) for the full key list and [USAGE.md § Configuration](docs/USAGE.md#configuration) for the precedence model.
-
-`pipx install` puts the `memman` binary on your PATH. `memman install` wires integration into Claude Code, [OpenClaw](https://github.com/openclaw/openclaw), and/or [NanoClaw](https://github.com/qwibitai/nanoclaw). The paths it writes:
-
-| Path                                                   | What                                                 | Form                            |
-| ------------------------------------------------------ | ---------------------------------------------------- | ------------------------------- |
-| `~/.claude/skills/memman/SKILL.md`                     | command reference loaded by the agent                | symlink into installed package  |
-| `~/.claude/hooks/memman/*.sh`                          | six lifecycle hook scripts                           | symlinks into installed package |
-| `~/.claude/settings.json`                              | hook registrations + `Bash(memman:*)` permission     | JSON merge                      |
-| `~/.config/systemd/user/memman-enrich.{timer,service}` | scheduler unit (Linux)                               | unit files                      |
-| `~/Library/LaunchAgents/com.memman.enrich.plist`       | scheduler agent (macOS)                              | plist                           |
-| `~/.memman/env` (mode 0600)                            | canonical config file (API keys + installable knobs) | created or updated in place     |
-| `~/.memman/logs/`                                      | scheduler enrichment worker stdout/stderr            | directory                       |
-
-OpenClaw installs swap `~/.claude/` for `~/.openclaw/`. NanoClaw runs the same paths inside the container (see below).
-
-Target a specific environment:
-
-```bash
-memman install --target openclaw
-memman install --target claude-code
-```
-
-For NanoClaw (agents inside Linux containers), install memman on the host as above, then run the `/add-memman` skill in your NanoClaw project — it modifies the Dockerfile, adds a container skill, and wires volume mounts. Each WhatsApp group gets its own isolated store, with optional global shared memory (read-only).
-
-Start a new Claude Code session (or restart the OpenClaw gateway) to activate.
-
-For editable installs and the test suite, see [Development](#development).
-
-## Updating
-
-```bash
-pipx upgrade memman
-```
-
-Hook scripts and `SKILL.md` are symlinks into the installed package, so they refresh automatically. `guide.md` is read live from the package via `importlib.resources`. Asset-only changes propagate without re-running `memman install`.
-
-## Uninstall
-
-```bash
-memman uninstall            # remove hooks, skill, settings entries, scheduler unit
-pipx uninstall memman       # remove the memman binary
-```
-
-Either can run alone. `memman uninstall` never deletes anything under `~/.memman/` — your memory store, API keys, and scheduler logs all survive.
-
 ## How it works
 
 Once installed, the agent runs memman, not the user. Claude Code [hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) (or, for OpenClaw, a `before_prompt_build` plugin) fire on session start, prompt submit, and stop; each reminds the agent to recall before responding and remember after.
@@ -145,6 +90,61 @@ NanoClaw moves the hot-path boundary into the container. Agent and worker share 
 - **Retention lifecycle** — importance decay, access-count boosting, immunity rules, garbage collection.
 - **Pluggable embeddings, per-store sovereignty** — Voyage, any OpenAI-compatible endpoint (OpenAI, OpenRouter, vLLM, LiteLLM, ...), or Ollama. Each store's `meta.embed_fingerprint` is the runtime authority over its embedder, so one process can serve multiple stores with different embedders. Switch online via `memman embed swap` or offline via `memman embed reembed`.
 - **Pluggable storage backend** — SQLite by default; Postgres + pgvector via the `memman[postgres]` extra. `memman migrate` copies a store between backends in a single command (idempotent, drain-lock-guarded, dry-run support).
+
+## Install
+
+```bash
+pipx install memman
+# or, with the optional Postgres backend:
+# pipx install 'memman[postgres]'
+memman install
+```
+
+In a TTY, the install wizard prompts (with masked input) for `OPENROUTER_API_KEY` and `VOYAGE_API_KEY` if they are not already in the env file or the shell. Headless / CI installs need both keys exported (or pre-written into `~/.memman/env`) and should pass `--no-wizard`. After install, the env file at `~/.memman/env` (mode 0600) is the canonical source of truth; runtime never reads the shell for installable settings. Change a setting with `memman config set KEY VALUE`. See [CONTRIBUTING.md § Variable reference](CONTRIBUTING.md#variable-reference) for the full key list and [USAGE.md § Configuration](docs/USAGE.md#configuration) for the precedence model.
+
+`pipx install` puts the `memman` binary on your PATH. `memman install` wires integration into Claude Code, [OpenClaw](https://github.com/openclaw/openclaw), and/or [NanoClaw](https://github.com/qwibitai/nanoclaw). The paths it writes:
+
+| Path                                                   | What                                                 | Form                            |
+| ------------------------------------------------------ | ---------------------------------------------------- | ------------------------------- |
+| `~/.claude/skills/memman/SKILL.md`                     | command reference loaded by the agent                | symlink into installed package  |
+| `~/.claude/hooks/memman/*.sh`                          | six lifecycle hook scripts                           | symlinks into installed package |
+| `~/.claude/settings.json`                              | hook registrations + `Bash(memman:*)` permission     | JSON merge                      |
+| `~/.config/systemd/user/memman-enrich.{timer,service}` | scheduler unit (Linux)                               | unit files                      |
+| `~/Library/LaunchAgents/com.memman.enrich.plist`       | scheduler agent (macOS)                              | plist                           |
+| `~/.memman/env` (mode 0600)                            | canonical config file (API keys + installable knobs) | created or updated in place     |
+| `~/.memman/logs/`                                      | scheduler enrichment worker stdout/stderr            | directory                       |
+
+OpenClaw installs swap `~/.claude/` for `~/.openclaw/`. NanoClaw runs the same paths inside the container (see [OpenClaw and NanoClaw](#openclaw-and-nanoclaw--same-split-different-topology) above).
+
+Target a specific environment:
+
+```bash
+memman install --target openclaw
+memman install --target claude-code
+```
+
+For NanoClaw (agents inside Linux containers), install memman on the host as above, then run the `/add-memman` skill in your NanoClaw project — it modifies the Dockerfile, adds a container skill, and wires volume mounts. Each WhatsApp group gets its own isolated store, with optional global shared memory (read-only).
+
+Start a new Claude Code session (or restart the OpenClaw gateway) to activate.
+
+For editable installs and the test suite, see [Development](#development).
+
+## Updating
+
+```bash
+pipx upgrade memman
+```
+
+Hook scripts and `SKILL.md` are symlinks into the installed package, so they refresh automatically. `guide.md` is read live from the package via `importlib.resources`. Asset-only changes propagate without re-running `memman install`.
+
+## Uninstall
+
+```bash
+memman uninstall            # remove hooks, skill, settings entries, scheduler unit
+pipx uninstall memman       # remove the memman binary
+```
+
+Either can run alone. `memman uninstall` never deletes anything under `~/.memman/` — your memory store, API keys, and scheduler logs all survive.
 
 ## FAQ
 
