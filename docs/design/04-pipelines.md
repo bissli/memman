@@ -34,7 +34,7 @@ Per-blob processing inside `_process_queue_row`:
 2. **Idempotency check** — if the target store already has any insight with `source='queue:<id>'`, skip and mark done (crash-recovery after partial commit).
 3. **Quality gate** — regex-based `check_content_quality()` rejects transient patterns.
 4. **LLM fact extraction** — decomposes into 1–5 atomic facts with category/importance/entities.
-5. **Per-fact**: embed (Voyage), keyword + cosine similarity scan, `reconcile_memories` → ADD/UPDATE/DELETE/NONE, insert/update, fast edges.
+5. **Per-fact**: embed via the store's bound provider, keyword + cosine similarity scan, `reconcile_memories` → ADD/UPDATE/DELETE/NONE, insert/update, fast edges.
 6. **Parallel enrichment + causal inference** (ThreadPoolExecutor, 2 workers).
 7. **Re-embed** with enriched keywords; rebuild auto edges.
 8. `mark_done(queue_id)` on success, or `mark_failed` (retry up to 5 times across stale-claim windows before status='failed').
@@ -83,7 +83,7 @@ All three are populated by `memman install`, which queries OpenRouter's `/models
 - **entities**: entities mentioned or implied in the query
 - **intent**: WHY / WHEN / ENTITY / GENERAL (can override regex detection)
 
-Expansion runs only when the user passes `--expand`. By default the raw query is embedded directly. Expansion is gated because the LLM has no domain scope and can pull the candidate pool toward general-knowledge synonyms that recency-aware rerank (Step 4) then amplifies. Voyage embeddings already capture most synonym intent; recency does the rest. See § 4.3.
+Expansion runs only when the user passes `--expand`. By default the raw query is embedded directly. Expansion is gated because the LLM has no domain scope and can pull the candidate pool toward general-knowledge synonyms that recency-aware rerank (Step 4) then amplifies. Modern embedding models already capture most synonym intent; recency does the rest. See § 4.3.
 
 ### Step 1: Intent detection
 
@@ -172,11 +172,11 @@ final = w_kw·keyword + w_ent·entity + w_sim·similarity + w_gr·graph
 - **Beam / Depth / MaxVis**: max depth 5 (WHY/WHEN) is from MAGMA Table 5. WHY gets beam width 15 (50% wider than the base 10) because causal chains typically span more hops. GENERAL gets `MaxVis=500` (matching WHY) because unknown intent should not restrict exploration. WHEN/ENTITY get 400 as a moderate budget — their primary edges (temporal/entity) form shorter chains.
 - **KW / Ent / Sim / Graph**: extends MAGMA's intent-adaptive philosophy (which steers beam search via edge type weights) into the final reranking stage. MAGMA does not define a separate reranking stage — this is memman's extension.
 
-Embeddings are Voyage AI 512-dim vectors. The expanded query from Step 0 is embedded for vector search and reranking.
+Embeddings are Nd vectors from the store's bound provider (dim is provider-defined; current default is `voyage-3-lite`, 512-dim). The expanded query from Step 0 is embedded for vector search and reranking.
 
 ### Step 4b: Cross-encoder rerank
 
-When the caller passes `--rerank` and the query has more than `MIN_RERANK_TOKENS` (default 2) whitespace tokens, the top `RERANK_SHORTLIST` (default 100) candidates from Step 4 are re-scored by Voyage's `rerank-2.5-lite` cross-encoder, and the rerank score replaces the multi-signal score for the final ordering. The skill files instruct LLM agents to always pass `--rerank` on natural-language queries.
+When the caller passes `--rerank` and the query has more than `MIN_RERANK_TOKENS` (default 2) whitespace tokens, the top `RERANK_SHORTLIST` (default 100) candidates from Step 4 are re-scored by the configured cross-encoder reranker (`MEMMAN_RERANK_PROVIDER`; current default `voyage` with model `rerank-2.5-lite`), and the rerank score replaces the multi-signal score for the final ordering. The skill files instruct LLM agents to always pass `--rerank` on natural-language queries.
 
 Bi-encoder retrieval (Steps 1–4) embeds the query and each insight independently and ranks by cosine plus the four signals. A cross-encoder reads `(query, content)` together with full attention and outputs a relevance score directly, so it resolves cases where bi-encoder cosine misses the right answer despite low token overlap.
 

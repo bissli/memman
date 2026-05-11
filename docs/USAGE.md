@@ -93,15 +93,15 @@ memman forget <id>
 
 **Recall flags:**
 
-| Flag       | Default       | Description                                                                                       |
-| ---------- | ------------- | ------------------------------------------------------------------------------------------------- |
-| `--limit`  | `10`          | Max results                                                                                       |
-| `--intent` | (auto-detect) | Override intent: `WHY`, `WHEN`, `ENTITY`, `GENERAL`                                               |
-| `--cat`    |               | Filter by category                                                                                |
-| `--source` |               | Filter by source                                                                                  |
-| `--basic`  | `false`       | Use simple SQL LIKE matching instead of smart recall                                              |
-| `--expand` | `false`       | Opt-in LLM query expansion (synonyms + entity hints)                                              |
-| `--rerank` | `false`       | Cross-encoder rerank stage (Voyage `rerank-2.5-lite` by default; auto-skips on 1-2 token queries) |
+| Flag       | Default       | Description                                                                                                                               |
+| ---------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `--limit`  | `10`          | Max results                                                                                                                               |
+| `--intent` | (auto-detect) | Override intent: `WHY`, `WHEN`, `ENTITY`, `GENERAL`                                                                                       |
+| `--cat`    |               | Filter by category                                                                                                                        |
+| `--source` |               | Filter by source                                                                                                                          |
+| `--basic`  | `false`       | Use simple SQL LIKE matching instead of smart recall                                                                                      |
+| `--expand` | `false`       | Opt-in LLM query expansion (synonyms + entity hints)                                                                                      |
+| `--rerank` | `false`       | Cross-encoder rerank stage (provider via `MEMMAN_RERANK_PROVIDER`; default `voyage` / `rerank-2.5-lite`; auto-skips on 1-2 token queries) |
 
 ### Graph operations
 
@@ -168,7 +168,7 @@ Two switching paths:
 - **`embed swap`** is the online path. It populates `embedding_pending` (shadow column on SQLite, side column on Postgres) under the active provider while the existing column keeps serving recall, then commits an atomic cutover transaction. State machine: `backfilling → cutover → done`. Resumable via `--resume`; abortable via `--abort`. Per-store; the in-flight target is recorded in `meta.embed_swap_*` keys (deleted on completion).
 - **`embed reembed`** is the offline path: every store is rewritten in place with the current `MEMMAN_EMBED_PROVIDER`. Requires the scheduler to be **stopped** (`memman scheduler stop`).
 
-**Per-store embedder sovereignty.** Each store's `meta.embed_fingerprint` is the runtime authority over its embedder. Recall, drain, graph rebuild, and snapshot writes all bind the embedder from the store's fingerprint, not from `MEMMAN_EMBED_PROVIDER`. One process can sequentially open store A on Voyage and store B on OpenAI without env mutation — `MEMMAN_EMBED_PROVIDER=voyage memman --store openai_store recall ...` succeeds against an OpenAI-fingerprinted store. Switching a store's embedder is explicit (`embed swap` or `embed reembed`); there is no silent migration. Implementation details: [05-lifecycle.md § 5.5](design/05-lifecycle.md#55-embedding-support).
+**Per-store embedder sovereignty.** Each store's `meta.embed_fingerprint` is the runtime authority over its embedder. Recall, drain, graph rebuild, and snapshot writes all bind the embedder from the store's fingerprint, not from `MEMMAN_EMBED_PROVIDER`. One process can sequentially open two stores fingerprinted to different providers without env mutation — e.g., `MEMMAN_EMBED_PROVIDER=voyage memman --store openai_store recall ...` succeeds against an OpenAI-fingerprinted store. Switching a store's embedder is explicit (`embed swap` or `embed reembed`); there is no silent migration. Implementation details: [05-lifecycle.md § 5.5](design/05-lifecycle.md#55-embedding-support).
 
 ### Store management
 
@@ -360,7 +360,7 @@ The host session never blocks on the network. Newly stored memories become recal
 2. **RRF anchor selection** — keyword + vector + recency fused with K=60.
 3. **Beam search** — intent-weighted graph traversal from anchors.
 4. **4-signal rerank** — keyword, entity, similarity, graph (intent-weighted).
-5. **Optional cross-encoder rerank** (`--rerank`) — Voyage `rerank-2.5-lite` re-scores the top 100 candidates; replaces the multi-signal score for the final ordering.
+5. **Optional cross-encoder rerank** (`--rerank`) — the configured reranker (default `voyage` / `rerank-2.5-lite`) re-scores the top 100 candidates; replaces the multi-signal score for the final ordering.
 6. **Post-sort** — causal topological (WHY), chronological (WHEN), score (default).
 
 Inspired by [MAGMA](https://arxiv.org/abs/2601.03236). See [Design & Architecture](DESIGN.md) for the full deep dive.

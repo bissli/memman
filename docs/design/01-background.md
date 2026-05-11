@@ -65,12 +65,12 @@ Where MAGMA's reference implementation is a Python library with in-memory Networ
 
 ### Why LLM-Supervised instead of an embedded LLM?
 
-| Dimension          | LLM-Embedded (Mem0, etc.) | LLM-Supervised (memman)                                                                                  |
-| ------------------ | ------------------------- | -------------------------------------------------------------------------------------------------------- |
-| LLM capability     | One model for everything  | Host LLM + Haiku/Sonnet split for pipeline                                                               |
-| Pipeline LLM       | One model for everything  | Haiku for recall fast path; Sonnet for extraction/reconciliation; Sonnet for enrichment/causal inference |
-| Network dependency | Required                  | Required (OpenRouter + Voyage APIs)                                                                      |
-| Swappability       | API-bound                 | Any LLM CLI                                                                                              |
+| Dimension          | LLM-Embedded (Mem0, etc.) | LLM-Supervised (memman)                                                                                                                                              |
+| ------------------ | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| LLM capability     | One model for everything  | Host LLM + three-role pipeline split (fast / slow_canonical / slow_metadata; each model tunable)                                                                     |
+| Pipeline LLM       | One model for everything  | `fast` for recall expansion; `slow_canonical` for extraction/reconciliation; `slow_metadata` for enrichment/causal inference (each tunable via `MEMMAN_LLM_MODEL_*`) |
+| Network dependency | Required                  | Required (LLM + embedding provider APIs)                                                                                                                             |
+| Swappability       | API-bound                 | Any LLM CLI                                                                                                                                                          |
 
 ### Why SQLite WAL instead of an embedded graph database?
 
@@ -102,12 +102,12 @@ Where MAGMA's reference implementation is a Python library with in-memory Networ
 | RRF Weighting     | `w_keyword (Fusion): 2.0-5.0` (Table 5)            | Standard unweighted RRF — all three signals (keyword, vector, recency) contribute equally via `1/(k + rank)`                                                                                |
 | Traversal Budget  | `Max Nodes: 200` (Table 5)                         | 400-500 (intent-dependent). Flat node hierarchy (insights only, no episodes/narratives) requires a larger budget for equivalent coverage                                                    |
 | Intent Types      | {Why, When, Entity} — 3 types                      | Adds GENERAL (uniform 0.25 weights) as a 4th intent for queries that don't match specific patterns                                                                                          |
-| Entity Extraction | LLM-driven full pipeline                           | LLM-based: `extract_facts` runs against `slow_canonical` (Sonnet); `enrich_with_llm` runs against `slow_metadata` (Sonnet, separately tunable)                                              |
+| Entity Extraction | LLM-driven full pipeline                           | LLM-based: `extract_facts` runs against `slow_canonical`; `enrich_with_llm` runs against `slow_metadata` (each role separately tunable via `MEMMAN_LLM_MODEL_*`)                            |
 | Causal Reasoning  | Embedded prompt chain                              | LLM causal inference (`infer_llm_causal_edges`) via ThreadPoolExecutor                                                                                                                      |
 | Deduplication     | Not addressed                                      | LLM reconciliation (ADD/UPDATE/DELETE/NONE)                                                                                                                                                 |
 | Node Types        | EVENT, EPISODE, SESSION, NARRATIVE                 | Insight only (flat)                                                                                                                                                                         |
 | Storage           | NetworkX (in-memory)                               | SQLite (persistent)                                                                                                                                                                         |
-| Embeddings        | FAISS + OpenAI                                     | Voyage AI (voyage-3-lite, 512-dim)                                                                                                                                                          |
+| Embeddings        | FAISS + OpenAI                                     | Pluggable provider registry (current default: `voyage-3-lite`, 512-dim); per-store `meta.embed_fingerprint` binds at runtime                                                                |
 | Quality Review    | Slow-path LLM refinement (Alg. 3)                  | Pattern-based quality warnings + `memman insights review`                                                                                                                                   |
 | Deployment        | Python library                                     | Python package (CLI)                                                                                                                                                                        |
 

@@ -88,7 +88,7 @@ NanoClaw moves the hot-path boundary into the container. Agent and worker share 
 - **Intent-aware recall** — graph beam search with RRF fusion; query intent (WHY/WHEN/ENTITY/GENERAL) controls edge weights and result ordering.
 - **LLM reconciliation** — each fact classified as ADD/UPDATE/DELETE/NONE against existing memories.
 - **Retention lifecycle** — importance decay, access-count boosting, immunity rules, garbage collection.
-- **Pluggable embeddings, per-store sovereignty** — Voyage, any OpenAI-compatible endpoint (OpenAI, OpenRouter, vLLM, LiteLLM, ...), or Ollama. Each store's `meta.embed_fingerprint` is the runtime authority over its embedder, so one process can serve multiple stores with different embedders. Switch online via `memman embed swap` or offline via `memman embed reembed`.
+- **Pluggable embeddings, per-store sovereignty** — registered providers include `voyage`, `openai` (any OpenAI-compatible endpoint: OpenAI, vLLM, LiteLLM, ...), `openrouter`, and `ollama`. Each store's `meta.embed_fingerprint` is the runtime authority over its embedder, so one process can serve multiple stores with different embedders. Switch online via `memman embed swap` or offline via `memman embed reembed`.
 - **Pluggable storage backend** — SQLite by default; Postgres + pgvector via the `memman[postgres]` extra. `memman migrate` copies a store between backends in a single command (idempotent, drain-lock-guarded, dry-run support).
 
 ## Install

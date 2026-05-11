@@ -24,7 +24,7 @@ Edge metadata is JSON:
 - causal:   `{"created_by": "llm", "confidence": 0.80, "sub_type": "causes", "rationale": "..."}`
 - semantic: `{"created_by": "auto", "cosine": "0.8234"}`
 
-> **Threshold recalibration.** `AUTO_SEMANTIC_THRESHOLD = 0.62` is calibrated for Voyage `voyage-3-lite` 512-dim embeddings (verified empirically: pairs above 0.62 are genuine topical links; noise begins ~0.50). Different embedding models produce different similarity distributions. When switching providers, compute all pairwise cosines, inspect quality bands, and pick the cutoff where noise begins. There is no reliable formula.
+> **Threshold recalibration.** `AUTO_SEMANTIC_THRESHOLD = 0.62` was calibrated against the current default embedding model (`voyage-3-lite`, 512-dim) — pairs above 0.62 are genuine topical links; noise begins ~0.50. Different embedding models produce different similarity distributions. When switching providers, compute all pairwise cosines, inspect quality bands, and pick the cutoff where noise begins. There is no reliable formula.
 
 > **Causal candidate-pool rationale.** The 2-hop BFS + recent-insights union keeps the LLM's input bounded while surfacing both topologically near (recently linked) and temporally near candidates. The 15% token overlap floor and `LLM_CONFIDENCE_FLOOR = 0.75` together reject incidental token overlap and uncertain LLM judgments.
 

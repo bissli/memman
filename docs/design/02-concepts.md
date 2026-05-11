@@ -114,37 +114,39 @@ Provenance columns (`prompt_version`, `model_id`, `embedding_model`) record whic
 memman's architecture is divided into five layers:
 
 ```
-┌───────────────────────────────────────────────────────────────┐
-│  Integration Layer    Hook / Skill / Guide                    │
+┌────────────────────────────────────────────────────────────────┐
+│  Integration Layer    Hook / Skill / Guide                     │
 ├──────────────────────────────────────────────────────────────┤
-│  CLI Layer            remember · recall · replace · forget    │
-│                       prime · status · doctor · install       │
-│                       graph · scheduler · insights · store    │
-│                       embed · log · config                    │
+│  CLI Layer            remember · recall · replace · forget     │
+│                       prime · status · doctor · install        │
+│                       graph · scheduler · insights · store     │
+│                       embed · log · config                     │
 ├──────────────────────────────────────────────────────────────┤
-│  Pipeline             pipeline/ (remember, drain worker)      │
+│  Pipeline             pipeline/ (remember, drain worker)       │
 ├──────────────────────────────────────────────────────────────┤
-│  Core Engine          search/ (recall, intent, keyword,       │
-│                                quality)                       │
-│                       graph/  (temporal, entity, causal,      │
-│                                semantic, engine, bfs,         │
-│                                enrichment)                    │
-│                       embed/  (voyage, openai_compat,         │
-│                                openrouter, ollama, vector)    │
-│                       llm/    (client, extract,               │
-│                                openrouter_client,             │
-│                                openrouter_models)             │
+│  Core Engine          search/ (recall, intent, keyword,        │
+│                                quality)                        │
+│                       graph/  (temporal, entity, causal,       │
+│                                semantic, engine, bfs,          │
+│                                enrichment)                     │
+│                       embed/  (voyage, openai_compat,          │
+│                                openrouter, ollama, vector)     │
+│                       llm/    (client, extract,                │
+│                                openrouter_client,              │
+│                                openrouter_models)              │
 ├──────────────────────────────────────────────────────────────┤
-│  Storage Layer        store/   (backend, base, factory, db,   │
-│                                node, edge, oplog, model,      │
-│                                snapshot, sqlite, postgres)    │
-│                       queue.py (deferred-write queue)         │
-│                       migrate.py (SQLite -> Postgres copy)    │
+│  Storage Layer        store/   (backend, base, factory, db,    │
+│                                node, edge, oplog, model,       │
+│                                snapshot, sqlite, postgres)     │
+│                       queue.py (deferred-write queue)          │
+│                       migrate.py (SQLite -> Postgres copy)     │
 ├──────────────────────────────────────────────────────────────┤
-│  External             OpenRouter (LLM, Anthropic Haiku/Sonnet)│
-│                       Voyage AI (embeddings, default)         │
-│                       Postgres + pgvector (optional backend)  │
-└───────────────────────────────────────────────────────────────┘
+│  External             LLM provider (default: OpenRouter;       │
+│                         models per role via MEMMAN_LLM_MODEL_*)│
+│                       Embed provider (per-store; voyage /      │
+│                         openai / openrouter / ollama)          │
+│                       Postgres + pgvector (optional backend)   │
+└────────────────────────────────────────────────────────────────┘
 ```
 
 Project code structure:
@@ -166,7 +168,7 @@ memman/
 │   ├── graph/                # MAGMA four-graph implementation
 │   ├── search/               # Retrieval algorithms
 │   ├── embed/                # Pluggable embedding providers
-│   ├── rerank/               # Cross-encoder rerank (Voyage)
+│   ├── rerank/               # Cross-encoder rerank (pluggable)
 │   ├── llm/                  # LLM client + extraction/reconciliation
 │   └── setup/                # LLM CLI integration + install wizard
 ├── scripts/

@@ -16,7 +16,7 @@
           <mxGeometry x="80" y="100" width="280" height="50" as="geometry" />
         </mxCell>
 
-        <mxCell id="r_validate" value="Validate args&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;importance ∈ [1,5]&lt;br&gt;content ≤ 8000 chars&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_validate" value="Validate args&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;importance ∈ [1,5] (CLI) ;&lt;br&gt;extracted facts floored to [2,5]&lt;br&gt;content ≤ 8000 chars&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="400" y="100" width="180" height="50" as="geometry" />
         </mxCell>
 
@@ -94,7 +94,7 @@
           <mxGeometry x="80" y="740" width="940" height="160" as="geometry" />
         </mxCell>
 
-        <mxCell id="r_embed" value="Embed (Voyage 512d default;&lt;br&gt;openai / openrouter / ollama optional)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;serialize_vector → BLOB&lt;br&gt;dim × 8 bytes&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_embed" value="Embed via active provider&lt;br&gt;(per-store fingerprint binds)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;serialize_vector → BLOB&lt;br&gt;dim × 8 bytes (provider-defined)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="100" y="775" width="200" height="80" as="geometry" />
         </mxCell>
 
