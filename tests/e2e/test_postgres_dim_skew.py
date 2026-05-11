@@ -12,8 +12,10 @@ Two related guarantees on top of the historical 512-dim hardcode:
 
 from __future__ import annotations
 
-import psycopg
 import pytest
+
+psycopg = pytest.importorskip('psycopg')
+
 from memman.store.errors import BackendError
 from memman.store.postgres import _assert_vector_dim_matches
 from memman.store.postgres import _ensure_baseline_schema, _store_schema

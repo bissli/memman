@@ -9,8 +9,10 @@ purge happens via `factory.drop_store` (covered separately).
 
 from __future__ import annotations
 
-import psycopg
 import pytest
+
+psycopg = pytest.importorskip('psycopg')
+
 from memman.store.model import Insight
 from memman.store.postgres import _store_schema, drop_postgres_store
 from memman.store.postgres import open_postgres_backend

@@ -14,8 +14,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import psycopg
 import pytest
+
+psycopg = pytest.importorskip('psycopg')
+
 from memman.store.model import Insight
 from memman.store.postgres import _store_schema, drop_postgres_store
 from memman.store.postgres import open_postgres_backend

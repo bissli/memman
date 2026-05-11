@@ -14,8 +14,9 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-import psycopg
 import pytest
+
+psycopg = pytest.importorskip('psycopg')
 
 pytestmark = [pytest.mark.e2e_cli, pytest.mark.postgres]
 

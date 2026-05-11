@@ -39,7 +39,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install poetry && poetry install
+        run: pip install poetry && poetry install --extras postgres
 
       - name: Run CLI e2e tests
         env:
@@ -60,7 +60,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install poetry && poetry install
+        run: pip install poetry && poetry install --extras postgres
 
       - name: Run containerized e2e tests
         env:

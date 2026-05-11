@@ -16,8 +16,10 @@ Two guarantees covered:
 
 from __future__ import annotations
 
-import psycopg
 import pytest
+
+psycopg = pytest.importorskip('psycopg')
+
 from memman.store.postgres import _open_connection, _store_schema
 from memman.store.postgres import drop_postgres_store, open_postgres_backend
 from tests.e2e.conftest import _safe
