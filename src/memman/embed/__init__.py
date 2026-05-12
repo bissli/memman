@@ -98,6 +98,8 @@ PROVIDERS: dict[str, Callable[[], EmbeddingProvider]] = {
     'ollama': _ollama_factory,
     }
 
+SUPPORTED_EMBED_PROVIDERS = ('voyage', 'openai', 'openrouter')
+
 
 def get_client() -> EmbeddingProvider:
     """Return the embed client for the configured provider.

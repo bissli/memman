@@ -2,7 +2,7 @@
 
 OpenRouter exposes an OpenAI-schema `/embeddings` endpoint. Unlike the
 generic `openai_compat` provider, this one shares its endpoint and
-API key with the LLM client (`OPENROUTER_API_KEY`,
+API key with the LLM client (`MEMMAN_OPENROUTER_API_KEY`,
 `MEMMAN_OPENROUTER_ENDPOINT`), so the user does not duplicate
 credentials when running OpenRouter for both modalities. The model id
 lives in `MEMMAN_OPENROUTER_EMBED_MODEL` and ships a

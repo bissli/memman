@@ -63,7 +63,7 @@ def live_keys() -> dict[str, str]:
     """
     require = os.environ.get('MEMMAN_E2E_REQUIRE_LIVE') == '1'
     keys = {}
-    for name in ('OPENROUTER_API_KEY', 'VOYAGE_API_KEY'):
+    for name in ('MEMMAN_OPENROUTER_API_KEY', 'MEMMAN_VOYAGE_API_KEY'):
         val = os.environ.get(name)
         if not val or val == 'mock-key-for-testing':
             msg = f'{name} not set; live e2e test cannot run'

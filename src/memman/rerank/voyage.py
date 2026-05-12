@@ -1,7 +1,7 @@
 """Voyage AI cross-encoder reranker client.
 
 Mirrors `memman.embed.voyage.Client` for embeddings: API key from
-`VOYAGE_API_KEY`, model from `MEMMAN_VOYAGE_RERANK_MODEL` (default
+`MEMMAN_VOYAGE_API_KEY`, model from `MEMMAN_VOYAGE_RERANK_MODEL` (default
 `rerank-2.5-lite`), shared httpx session via `_http.get_session`.
 """
 

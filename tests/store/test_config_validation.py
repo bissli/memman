@@ -62,7 +62,7 @@ class TestPostgresValidation:
         """Cross-backend keys are not scanned by Postgres validator.
         """
         env = {
-            'OPENROUTER_API_KEY': 'k',
+            'MEMMAN_OPENROUTER_API_KEY': 'k',
             'MEMMAN_DEFAULT_BACKEND': 'postgres',
             'MEMMAN_DEFAULT_POSTGRES_DSN': 'postgresql://localhost/x',
             'MEMMAN_EMBED_PROVIDER': 'voyage',

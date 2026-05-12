@@ -815,10 +815,10 @@ class TestHardening:
         from memman.exceptions import ConfigError
 
         r, data_dir = runner
-        monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
+        monkeypatch.delenv('MEMMAN_OPENROUTER_API_KEY', raising=False)
 
         def _raise(role):
-            raise ConfigError('OPENROUTER_API_KEY must be set')
+            raise ConfigError('MEMMAN_OPENROUTER_API_KEY must be set')
         monkeypatch.setattr(
             'memman.llm.client.get_llm_client', _raise)
 
@@ -831,7 +831,7 @@ class TestHardening:
             None)
         assert llm_check is not None
         assert llm_check['status'] == 'fail'
-        assert 'OPENROUTER_API_KEY' in llm_check['detail']['error']
+        assert 'MEMMAN_OPENROUTER_API_KEY' in llm_check['detail']['error']
 
     def test_doctor_reports_probes_pass_under_mocks(self, runner):
         """With the autouse mocks both LLM and embed probes pass."""

@@ -89,33 +89,33 @@ class TestVoyageClient:
         monkeypatch.setattr(VoyageClient, 'embed', _original_voyage_embed)
         monkeypatch.setattr(VoyageClient, 'embed_batch', _original_voyage_embed_batch)
         monkeypatch.setattr(VoyageClient, 'available', _original_voyage_available)
-        monkeypatch.setenv('VOYAGE_API_KEY', 'test-key-123')
+        monkeypatch.setenv('MEMMAN_VOYAGE_API_KEY', 'test-key-123')
         return VoyageClient()
 
     def test_api_key_from_env_file(self, env_file):
         """Client reads VOYAGE_API_KEY from the env file."""
-        env_file('VOYAGE_API_KEY', 'real-test-key')
+        env_file('MEMMAN_VOYAGE_API_KEY', 'real-test-key')
         client = VoyageClient()
         assert client._api_key == 'real-test-key'
 
     @pytest.mark.no_default_env
     def test_missing_api_key_raises(self, env_file):
         """Client raises ConfigError when VOYAGE_API_KEY is absent from file."""
-        env_file('VOYAGE_API_KEY', None)
-        with pytest.raises(ConfigError, match='VOYAGE_API_KEY'):
+        env_file('MEMMAN_VOYAGE_API_KEY', None)
+        with pytest.raises(ConfigError, match='MEMMAN_VOYAGE_API_KEY'):
             VoyageClient()
 
     @pytest.mark.no_default_env
     def test_no_key_raises_at_construction(self, env_file):
         """Construction raises before available() can be called."""
-        env_file('VOYAGE_API_KEY', None)
+        env_file('MEMMAN_VOYAGE_API_KEY', None)
         with pytest.raises(ConfigError):
             VoyageClient()
 
     def test_available_is_memoized(self, monkeypatch):
         """available() calls the HTTP probe at most once per instance."""
         monkeypatch.setattr(VoyageClient, 'available', _original_voyage_available)
-        monkeypatch.setenv('VOYAGE_API_KEY', 'probe-key')
+        monkeypatch.setenv('MEMMAN_VOYAGE_API_KEY', 'probe-key')
         calls = {'n': 0}
 
         def _mock_post(url, headers=None, json=None, timeout=None):
@@ -187,7 +187,7 @@ class TestVoyageClient:
 
     def test_bearer_token(self, env_file):
         """Authorization header uses Bearer token."""
-        env_file('VOYAGE_API_KEY', 'my-key')
+        env_file('MEMMAN_VOYAGE_API_KEY', 'my-key')
         client = VoyageClient()
         headers = client._headers()
         assert headers['Authorization'] == 'Bearer my-key'
@@ -196,7 +196,7 @@ class TestVoyageClient:
     def test_unavailable_message_includes_env_var(self):
         """Unavailable message mentions VOYAGE_API_KEY."""
         client = VoyageClient()
-        assert 'VOYAGE_API_KEY' in client.unavailable_message()
+        assert 'MEMMAN_VOYAGE_API_KEY' in client.unavailable_message()
 
 
 def _seed_openrouter_keys(env_file):
