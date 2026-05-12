@@ -131,8 +131,7 @@ memman's architecture is divided into five layers:
 │                                enrichment)                     │
 │                       embed/  (voyage, openai_compat,          │
 │                                openrouter, ollama, vector)     │
-│                       llm/    (client, extract,                │
-│                                openrouter_client,              │
+│                       llm/    (client, extract, shared,        │
 │                                openrouter_models)              │
 ├──────────────────────────────────────────────────────────────┤
 │  Storage Layer        store/   (backend, base, factory, db,    │
@@ -141,8 +140,9 @@ memman's architecture is divided into five layers:
 │                       queue.py (deferred-write queue)          │
 │                       migrate.py (SQLite -> Postgres copy)     │
 ├──────────────────────────────────────────────────────────────┤
-│  External             LLM provider (default: OpenRouter;       │
-│                         models per role via MEMMAN_LLM_MODEL_*)│
+│  External             LLM endpoint (OpenAI-compat URL via      │
+│                         MEMMAN_LLM_ENDPOINT; per-role models   │
+│                         via MEMMAN_LLM_MODEL_*)                │
 │                       Embed provider (per-store; voyage /      │
 │                         openai / openrouter / ollama)          │
 │                       Postgres + pgvector (optional backend)   │

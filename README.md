@@ -103,7 +103,7 @@ pipx install memman
 memman install
 ```
 
-In a TTY, the install wizard prompts for the LLM endpoint URL (default `https://openrouter.ai/api/v1`) and, with masked input, for `MEMMAN_LLM_API_KEY` (the bearer token for that endpoint) plus `VOYAGE_API_KEY`. Loopback LLM endpoints (Ollama, local vLLM/LiteLLM) may leave the API key blank. Headless / CI installs need the keys exported (or pre-written into `~/.memman/env`) and should pass `--no-wizard`. After install, the env file at `~/.memman/env` (mode 0600) is the canonical source of truth; runtime never reads the shell for installable settings. Change a setting with `memman config set KEY VALUE`. See [CONTRIBUTING.md § Variable reference](CONTRIBUTING.md#variable-reference) for the full key list and [USAGE.md § Configuration](docs/USAGE.md#configuration) for the precedence model.
+In a TTY, the install wizard prompts for the LLM endpoint URL (default `https://openrouter.ai/api/v1`) and, with masked input, for `MEMMAN_LLM_API_KEY` (the bearer token for that endpoint) plus `MEMMAN_VOYAGE_API_KEY`. Loopback LLM endpoints (Ollama, local vLLM/LiteLLM) may leave the API key blank. Headless / CI installs need the keys exported (or pre-written into `~/.memman/env`) and should pass `--no-wizard`. After install, the env file at `~/.memman/env` (mode 0600) is the canonical source of truth; runtime never reads the shell for installable settings. Change a setting with `memman config set KEY VALUE`. See [CONTRIBUTING.md § Variable reference](CONTRIBUTING.md#variable-reference) for the full key list and [USAGE.md § Configuration](docs/USAGE.md#configuration) for the precedence model.
 
 Switching LLM providers is a one-env-var edit:
 
@@ -214,7 +214,7 @@ memman install      # deploy integration
 memman uninstall    # remove integration
 ```
 
-**Dependencies**: Python 3.11+, Click, httpx, cachetools, tqdm, numpy. **Required at runtime**: an LLM provider API key and an embedding provider API key. Defaults today are `OPENROUTER_API_KEY` for inference and `VOYAGE_API_KEY` for embeddings; both providers are pluggable. See [USAGE.md § Configuration](docs/USAGE.md#configuration) for the current set of supported providers.
+**Dependencies**: Python 3.11+, Click, httpx, cachetools, tqdm, numpy. **Required at runtime**: an LLM bearer token (`MEMMAN_LLM_API_KEY`) for the configured OpenAI-compatible endpoint, and an embedding provider key (`MEMMAN_VOYAGE_API_KEY` by default). The LLM side is swapped by setting `MEMMAN_LLM_ENDPOINT` to any OpenAI-compatible URL (OpenRouter, OpenAI, Anthropic via its `/v1` shim, Ollama, vLLM, LiteLLM); the embed side is pluggable across registered providers. See [USAGE.md § Configuration](docs/USAGE.md#configuration) for the current set of supported providers.
 
 ## Documentation
 

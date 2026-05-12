@@ -43,13 +43,15 @@ Edge upserts and embed/LLM call sites no longer swallow exceptions; failures (co
 
 ### LLM routing
 
-Both the session path (`memman recall` query expansion) and the scheduler path route through OpenRouter. They use three role slots:
+Both the session path (`memman recall` query expansion) and the scheduler path go through a single `MemmanLLMClient` that posts to the OpenAI-compatible `/chat/completions` endpoint configured via `MEMMAN_LLM_ENDPOINT` (default `https://openrouter.ai/api/v1`). Switching providers is one env edit — any vendor exposing an OpenAI-compat shim (OpenRouter, OpenAI, Anthropic, Google, Ollama, vLLM, LiteLLM, ...) is reachable without code changes. The client speaks one wire protocol; there are no per-vendor subclasses.
+
+Three role slots key off the configured endpoint:
 
 - `MEMMAN_LLM_MODEL_FAST` — recall hot path and `doctor`'s connectivity probe.
 - `MEMMAN_LLM_MODEL_SLOW_CANONICAL` — worker's canonical-content path (fact extraction, reconciliation).
 - `MEMMAN_LLM_MODEL_SLOW_METADATA` — worker's derived-metadata path (enrichment summaries/keywords, causal-edge inference).
 
-All three are populated by `memman install`, which queries OpenRouter's `/models` endpoint once per role and writes the resolved id to `~/.memman/env`. Runtime never queries the model inventory; it reads the persisted id and sends it through unchanged. Re-run `memman install` to bump to a current version when a new model family ships. Splitting the slow worker into `_CANONICAL` and `_METADATA` lets enrichment cost be tuned (e.g., a cheaper metadata model) independently of the load-bearing extraction prompt.
+For OpenRouter endpoints, `memman install` queries `/v1/models` once per role and writes the resolved id to `~/.memman/env`. For any non-OpenRouter endpoint the install wizard prompts for each slug interactively (vendor-native model ids like `gpt-4o-mini` or `qwen2.5:7b` don't share OpenRouter's `provider/model` slug shape and cannot be auto-resolved). Runtime never queries the model inventory; it reads the persisted id and sends it through unchanged. Re-run `memman install` to bump to a current version when a new model family ships. Splitting the slow worker into `_CANONICAL` and `_METADATA` lets enrichment cost be tuned (e.g., a cheaper metadata model) independently of the load-bearing extraction prompt.
 
 ### Operational controls
 
