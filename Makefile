@@ -3,13 +3,16 @@ DIAGRAMS   := docs/diagrams
 DRAWIO_SRC := $(wildcard $(DIAGRAMS)/*.drawio)
 DRAWIO_PNG := $(DRAWIO_SRC:.drawio=.drawio.png)
 
-.PHONY: test typecheck e2e e2e-cli e2e-container clean dev diagrams
+.PHONY: test test-live typecheck e2e e2e-cli e2e-container clean dev diagrams
 
 dev:
 	poetry install
 
 test:
 	poetry run pytest tests/ -v --ignore=tests/e2e
+
+test-live:
+	poetry run pytest tests/ --live --ignore=tests/e2e -n 16
 
 typecheck:
 	poetry run mypy --strict --ignore-missing-imports \
