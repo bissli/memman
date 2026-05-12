@@ -103,7 +103,22 @@ pipx install memman
 memman install
 ```
 
-In a TTY, the install wizard prompts (with masked input) for `OPENROUTER_API_KEY` and `VOYAGE_API_KEY` if they are not already in the env file or the shell. Headless / CI installs need both keys exported (or pre-written into `~/.memman/env`) and should pass `--no-wizard`. After install, the env file at `~/.memman/env` (mode 0600) is the canonical source of truth; runtime never reads the shell for installable settings. Change a setting with `memman config set KEY VALUE`. See [CONTRIBUTING.md § Variable reference](CONTRIBUTING.md#variable-reference) for the full key list and [USAGE.md § Configuration](docs/USAGE.md#configuration) for the precedence model.
+In a TTY, the install wizard prompts for the LLM endpoint URL (default `https://openrouter.ai/api/v1`) and, with masked input, for `MEMMAN_LLM_API_KEY` (the bearer token for that endpoint) plus `VOYAGE_API_KEY`. Loopback LLM endpoints (Ollama, local vLLM/LiteLLM) may leave the API key blank. Headless / CI installs need the keys exported (or pre-written into `~/.memman/env`) and should pass `--no-wizard`. After install, the env file at `~/.memman/env` (mode 0600) is the canonical source of truth; runtime never reads the shell for installable settings. Change a setting with `memman config set KEY VALUE`. See [CONTRIBUTING.md § Variable reference](CONTRIBUTING.md#variable-reference) for the full key list and [USAGE.md § Configuration](docs/USAGE.md#configuration) for the precedence model.
+
+Switching LLM providers is a one-env-var edit:
+
+```bash
+# OpenAI direct
+memman config set MEMMAN_LLM_ENDPOINT https://api.openai.com/v1
+memman config set MEMMAN_LLM_API_KEY sk-...
+
+# Anthropic via its OpenAI-compat shim
+memman config set MEMMAN_LLM_ENDPOINT https://api.anthropic.com/v1
+memman config set MEMMAN_LLM_API_KEY sk-ant-...
+
+# Local Ollama (no API key)
+memman config set MEMMAN_LLM_ENDPOINT http://localhost:11434/v1
+```
 
 `pipx install` puts the `memman` binary on your PATH. `memman install` wires integration into Claude Code, [OpenClaw](https://github.com/openclaw/openclaw), and/or [NanoClaw](https://github.com/qwibitai/nanoclaw). The paths it writes:
 
