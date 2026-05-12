@@ -1,15 +1,22 @@
 """Interactive install wizard for `memman install`.
 
-Pure-click TUI -- no questionary / prompt_toolkit. Two visible
+Pure-click TUI -- no questionary / prompt_toolkit. Three visible
 features today:
 
-1. Mandatory-secret prompting. When `OPENROUTER_API_KEY` or
-   `VOYAGE_API_KEY` is missing from both the env file and the shell,
-   prompt with masked input. Eliminates the README's
-   `export X=...; export Y=...; memman install` ceremony for
-   first-time installs in a TTY.
+1. LLM endpoint selection. memman speaks one wire protocol (OpenAI's
+   `/chat/completions`). The wizard prompts for a single endpoint URL
+   (`MEMMAN_LLM_ENDPOINT`); OpenRouter is the default, and any other
+   OpenAI-compat endpoint (Anthropic at `/v1`, OpenAI, Gemini's
+   OpenAI shim, Ollama, vLLM, LiteLLM, ...) is accepted. For non-OR
+   endpoints the wizard also prompts for the three role-specific model
+   slugs (no shared model catalog exists for non-OR vendors).
 
-2. Backend selection (sqlite | postgres). Postgres is hidden until
+2. Mandatory-secret prompting. The embed provider's API key (when one
+   is required) and the LLM endpoint's API key (required for any
+   non-loopback endpoint) are prompted with masked input when missing
+   from both the env file and the shell.
+
+3. Backend selection (sqlite | postgres). Postgres is hidden until
    the `memman[postgres]` extras are importable AND the
    `memman.store.postgres` module exists. Until both checks pass,
    only sqlite is selectable -- the wizard skips the prompt entirely
@@ -30,14 +37,23 @@ is invoked, with a clear message pointing at `memman config set`.
 
 from __future__ import annotations
 
+import os
 import sys
 from importlib.util import find_spec
 
 import click
 from memman import config, extras
+from memman.embed import SUPPORTED_EMBED_PROVIDERS
 
 DSN_MAX_ATTEMPTS = 3
 DSN_PROBE_TIMEOUT_SEC = 5
+ENDPOINT_MAX_ATTEMPTS = 3
+API_KEY_MAX_ATTEMPTS = 3
+MODEL_SLUG_PROMPTS: tuple[tuple[str, str], ...] = (
+    ('fast', 'MEMMAN_LLM_MODEL_FAST'),
+    ('slow canonical', 'MEMMAN_LLM_MODEL_SLOW_CANONICAL'),
+    ('slow metadata', 'MEMMAN_LLM_MODEL_SLOW_METADATA'),
+    )
 
 
 def run_wizard(
@@ -45,6 +61,8 @@ def run_wizard(
         *,
         backend: str | None = None,
         pg_dsn: str | None = None,
+        llm_endpoint: str | None = None,
+        embed_provider: str | None = None,
         no_wizard: bool = False) -> dict[str, str]:
     """Drive the install wizard and return values to merge into the env file.
 
@@ -57,6 +75,8 @@ def run_wizard(
         data_dir: base data directory; the env file lives at <data_dir>/env.
         backend: explicit `--backend` flag value, or None when unset.
         pg_dsn: explicit `--pg-dsn` flag value, or None when unset.
+        llm_endpoint: explicit `--llm-endpoint` flag value, or None.
+        embed_provider: explicit `--embed-provider` flag value, or None.
         no_wizard: when True, skip all prompts (use flags + defaults).
 
     Returns
@@ -68,7 +88,23 @@ def run_wizard(
     file_values = config.parse_env_file(config.env_file_path(data_dir))
 
     out: dict[str, str] = {}
-    out.update(_collect_secrets(file_values, interactive=interactive))
+
+    endpoint, endpoint_user_supplied = _select_llm_endpoint(
+        flag=llm_endpoint, file_values=file_values, interactive=interactive)
+    if endpoint_user_supplied:
+        out[config.LLM_ENDPOINT] = endpoint
+
+    chosen_embed, embed_user_supplied = _select_embed_provider(
+        flag=embed_provider, file_values=file_values, interactive=interactive)
+    if embed_user_supplied:
+        out[config.EMBED_PROVIDER] = chosen_embed
+
+    out.update(_collect_secrets(
+        file_values, embed=chosen_embed, interactive=interactive))
+    out.update(_collect_llm_api_key(
+        file_values, endpoint=endpoint, interactive=interactive))
+    out.update(_collect_llm_model_slugs(
+        file_values, endpoint=endpoint, interactive=interactive))
 
     chosen_backend, backend_was_user_supplied = _select_backend(
         backend=backend, file_values=file_values, interactive=interactive)
@@ -94,19 +130,21 @@ def run_wizard(
 def _collect_secrets(
         file_values: dict[str, str],
         *,
+        embed: str,
         interactive: bool) -> dict[str, str]:
-    """Prompt for missing mandatory secrets when running interactively.
+    """Prompt for missing embed-side mandatory secrets when interactive.
 
     Skips a key when the file already has it OR when the shell exports
     it (which would seed the file via `collect_install_knobs` anyway).
     Non-interactive runs return an empty dict and let the existing
-    prereq check raise `OPENROUTER_API_KEY is required ...`.
+    prereq check raise `<KEY> is required ...`. The set of mandatory
+    keys is computed from `required_install_keys(embed)`; experimental
+    providers return an empty set (no prompts).
     """
-    import os
     out: dict[str, str] = {}
     if not interactive:
         return out
-    for key in config.MANDATORY_INSTALL_KEYS:
+    for key in sorted(config.required_install_keys(embed)):
         if file_values.get(key, '').strip():
             continue
         if os.environ.get(key, '').strip():
@@ -117,6 +155,196 @@ def _collect_secrets(
             f'  {key}', hide_input=True, confirmation_prompt=False)
         out[key] = value.strip()
     return out
+
+
+def _select_llm_endpoint(
+        *,
+        flag: str | None,
+        file_values: dict[str, str],
+        interactive: bool) -> tuple[str, bool]:
+    """Resolve the LLM endpoint URL and report whether the user supplied it.
+
+    Returns `(endpoint, user_supplied)`. `user_supplied` is True when
+    the value came from `--llm-endpoint` or an interactive prompt --
+    i.e., something the wizard should persist to the env file as
+    `MEMMAN_LLM_ENDPOINT`. False when the value already lived in the
+    file or when the wizard is just naming the default headlessly (in
+    which case `INSTALL_DEFAULTS` writes it later in the install flow).
+    """
+    if flag:
+        if not _is_http_url(flag):
+            raise click.ClickException(
+                f'--llm-endpoint must start with http:// or https://;'
+                f' got {flag!r}')
+        return flag, True
+    existing = file_values.get(config.LLM_ENDPOINT, '').strip()
+    if existing:
+        return existing, False
+    default = config.INSTALL_DEFAULTS[config.LLM_ENDPOINT]
+    if not interactive:
+        return default, False
+    click.echo('')
+    click.echo(click.style('Choose an LLM endpoint URL:', bold=True))
+    click.echo(click.style(
+        '  OpenRouter is the default; any OpenAI-compatible endpoint works'
+        ' (Anthropic at /v1, OpenAI, Gemini /v1beta/openai, Ollama, ...).',
+        dim=True))
+    for attempt in range(1, ENDPOINT_MAX_ATTEMPTS + 1):
+        candidate = click.prompt(
+            '  LLM endpoint URL', default=default,
+            show_default=True).strip()
+        if _is_http_url(candidate):
+            return candidate, True
+        click.echo(click.style(
+            '  endpoint must start with http:// or https://', fg='red'))
+        if attempt == ENDPOINT_MAX_ATTEMPTS:
+            raise click.ClickException(
+                'gave up resolving a valid endpoint URL after'
+                f' {ENDPOINT_MAX_ATTEMPTS} attempts')
+    raise click.ClickException('unreachable')
+
+
+def _is_http_url(value: str) -> bool:
+    """Lightweight `http(s)://` prefix check used by the endpoint prompt."""
+    lowered = value.lower()
+    return lowered.startswith(('http://', 'https://'))
+
+
+def _collect_llm_api_key(
+        file_values: dict[str, str],
+        *,
+        endpoint: str,
+        interactive: bool) -> dict[str, str]:
+    """Prompt for `MEMMAN_LLM_API_KEY` when interactive and not already set.
+
+    Loopback endpoints (Ollama, local vLLM, LiteLLM proxy) may omit the
+    key; non-loopback endpoints re-prompt up to `API_KEY_MAX_ATTEMPTS`
+    times if the user enters a blank value before refusing the install.
+    When the endpoint is OpenRouter and `MEMMAN_OPENROUTER_API_KEY` is
+    already present, `collect_install_knobs` auto-fills `LLM_API_KEY`
+    from it -- the wizard skips the prompt in that case.
+    """
+    out: dict[str, str] = {}
+    if not interactive:
+        return out
+    if file_values.get(config.LLM_API_KEY, '').strip():
+        return out
+    if os.environ.get(config.LLM_API_KEY, '').strip():
+        return out
+    if (config.is_openrouter_endpoint(endpoint)
+            and (file_values.get(config.OPENROUTER_API_KEY, '').strip()
+                 or os.environ.get(config.OPENROUTER_API_KEY, '').strip())):
+        return out
+    loopback = config.is_loopback_endpoint(endpoint)
+    click.echo('')
+    if loopback:
+        click.echo(click.style(
+            f'{config.LLM_API_KEY} (optional for loopback endpoint;'
+            ' leave blank to skip).', dim=True))
+        value = click.prompt(
+            f'  {config.LLM_API_KEY}',
+            default='', show_default=False,
+            hide_input=True, confirmation_prompt=False).strip()
+        if value:
+            out[config.LLM_API_KEY] = value
+        return out
+    click.echo(click.style(
+        f'{config.LLM_API_KEY} is required for non-loopback endpoints.',
+        fg='yellow'))
+    for attempt in range(1, API_KEY_MAX_ATTEMPTS + 1):
+        value = click.prompt(
+            f'  {config.LLM_API_KEY}',
+            hide_input=True, confirmation_prompt=False).strip()
+        if value:
+            out[config.LLM_API_KEY] = value
+            return out
+        click.echo(click.style(
+            '  API key is required for non-loopback endpoints', fg='red'))
+        if attempt == API_KEY_MAX_ATTEMPTS:
+            raise click.ClickException(
+                f'gave up collecting {config.LLM_API_KEY} after'
+                f' {API_KEY_MAX_ATTEMPTS} attempts')
+    return out
+
+
+def _collect_llm_model_slugs(
+        file_values: dict[str, str],
+        *,
+        endpoint: str,
+        interactive: bool) -> dict[str, str]:
+    """Prompt for the three role-model slugs when the endpoint is non-OR.
+
+    OpenRouter endpoints rely on `collect_install_knobs` plus the
+    `openrouter_models` resolver to fill role slugs from OR's catalog.
+    Any other endpoint has no shared catalog memman can introspect, so
+    the wizard prompts interactively for each missing slug.
+    Non-interactive non-OR installs leave the slugs unset; the user is
+    expected to set them via `memman config set` or shell env.
+    """
+    out: dict[str, str] = {}
+    if config.is_openrouter_endpoint(endpoint):
+        return out
+    if not interactive:
+        return out
+    click.echo('')
+    click.echo(click.style(
+        'Non-OpenRouter endpoint: enter the three model slugs to use.',
+        bold=True))
+    click.echo(click.style(
+        '  These pass through verbatim to /chat/completions; consult the'
+        " vendor's docs for valid ids.", dim=True))
+    for label, env_key in MODEL_SLUG_PROMPTS:
+        if file_values.get(env_key, '').strip():
+            continue
+        if os.environ.get(env_key, '').strip():
+            continue
+        for attempt in range(1, ENDPOINT_MAX_ATTEMPTS + 1):
+            value = click.prompt(f'  {label} model slug').strip()
+            if value:
+                out[env_key] = value
+                break
+            click.echo(click.style(
+                '  model slug cannot be blank', fg='red'))
+            if attempt == ENDPOINT_MAX_ATTEMPTS:
+                raise click.ClickException(
+                    f'gave up collecting {env_key} after'
+                    f' {ENDPOINT_MAX_ATTEMPTS} attempts')
+    return out
+
+
+def _select_embed_provider(
+        *,
+        flag: str | None,
+        file_values: dict[str, str],
+        interactive: bool) -> tuple[str, bool]:
+    """Resolve the embed provider and report whether the user supplied it.
+
+    Returns `(chosen, user_supplied)`. `user_supplied` is True when the
+    value came from a `--embed-provider` flag or an interactive prompt --
+    i.e., something the wizard should persist to the env file as
+    `MEMMAN_EMBED_PROVIDER`. False when the value already lived in the
+    file or when the wizard is just naming the default headlessly (in
+    which case `INSTALL_DEFAULTS` writes it later in the install flow).
+    """
+    if flag:
+        return flag, True
+    existing = file_values.get(config.EMBED_PROVIDER, '').strip()
+    if existing:
+        if existing not in SUPPORTED_EMBED_PROVIDERS and interactive:
+            click.echo(click.style(
+                f'  note: {config.EMBED_PROVIDER}={existing!r} is an'
+                ' experimental provider; doctor will warn.', dim=True))
+        return existing, False
+    default = config.INSTALL_DEFAULTS[config.EMBED_PROVIDER]
+    if not interactive:
+        return default, False
+    click.echo('')
+    click.echo(click.style('Choose an embed provider:', bold=True))
+    chosen = click.prompt(
+        '  embed provider',
+        type=click.Choice(list(SUPPORTED_EMBED_PROVIDERS)),
+        default=default, show_choices=True, show_default=True)
+    return chosen, True
 
 
 def _select_backend(

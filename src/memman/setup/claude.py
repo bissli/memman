@@ -224,6 +224,8 @@ def _validate_target(target: str) -> None:
 def run_install(data_dir: str, target: str = '',
                 backend: str | None = None,
                 pg_dsn: str | None = None,
+                llm_endpoint: str | None = None,
+                embed_provider: str | None = None,
                 no_wizard: bool = False) -> None:
     """Install memman integration. Called by the `memman install` command.
 
@@ -232,21 +234,24 @@ def run_install(data_dir: str, target: str = '',
     1. Validate target.
     2. Reject flag-vs-file conflicts loudly (no silent override).
     3. Detect LLM-CLI environments.
-    4. Run the wizard (secret prompts + backend selector + DSN). Merge
-       its output into the env file via `_write_env_keys` BEFORE the
-       prereq check so any wizard-collected secret is visible to
-       `collect_install_knobs`.
+    4. Run the wizard (endpoint + provider selectors + secret prompts +
+       backend selector + DSN). Merge its output into the env file via
+       `_write_env_keys` BEFORE the prereq check so any wizard-
+       collected secret is visible to `collect_install_knobs`.
     5. Check prereqs (platform / binary / mandatory secrets).
     6. Install CLI integration + scheduler unit.
     """
     _validate_target(target)
     _reject_flag_file_conflicts(
-        data_dir=data_dir, backend=backend, pg_dsn=pg_dsn)
+        data_dir=data_dir, backend=backend, pg_dsn=pg_dsn,
+        llm_endpoint=llm_endpoint, embed_provider=embed_provider)
     envs = detect_environments()
     from memman.setup import wizard as _wizard_mod
     from memman.setup.scheduler import _write_env_keys
     wizard_out = _wizard_mod.run_wizard(
-        data_dir, backend=backend, pg_dsn=pg_dsn, no_wizard=no_wizard)
+        data_dir, backend=backend, pg_dsn=pg_dsn,
+        llm_endpoint=llm_endpoint, embed_provider=embed_provider,
+        no_wizard=no_wizard)
     if wizard_out:
         _write_env_keys(wizard_out, data_dir=data_dir)
         config.reset_file_cache()
@@ -258,7 +263,9 @@ def _reject_flag_file_conflicts(
         *,
         data_dir: str,
         backend: str | None,
-        pg_dsn: str | None) -> None:
+        pg_dsn: str | None,
+        llm_endpoint: str | None = None,
+        embed_provider: str | None = None) -> None:
     """Exit 1 when a flag value conflicts with the env file's current value.
 
     The env-file canonical model means install flags are sticky-seed:
@@ -270,6 +277,8 @@ def _reject_flag_file_conflicts(
     pairs: list[tuple[str, str | None]] = [
         (config.DEFAULT_BACKEND, backend),
         (config.DEFAULT_PG_DSN, pg_dsn),
+        (config.LLM_ENDPOINT, llm_endpoint),
+        (config.EMBED_PROVIDER, embed_provider),
         ]
     for key, flag_value in pairs:
         if flag_value is None:

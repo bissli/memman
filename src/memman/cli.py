@@ -25,6 +25,7 @@ from memman.store.db import store_exists, valid_store_name, write_active
 from memman.store.factory import known_backends, list_stores
 
 _BACKEND_CHOICES = sorted(known_backends())
+from memman.embed import SUPPORTED_EMBED_PROVIDERS as _EMBED_PROVIDER_CHOICES
 from memman.store.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge
 from memman.store.model import Insight, format_timestamp, is_immune
 from memman.store.sqlite import open_ro_db
@@ -1647,20 +1648,46 @@ def _scheduler_emit(result: dict, text_output: bool) -> None:
                     ' systemd/launchd). Default: 60. For sub-minute'
                     ' intervals, use serve mode instead'
                     ' (`memman scheduler serve --interval N`).'))
+@click.option('--llm-endpoint', type=str, default=None,
+              help='LLM endpoint URL to seed into the env file.')
+@click.option('--embed-provider',
+              type=click.Choice(list(_EMBED_PROVIDER_CHOICES)),
+              default=None,
+              help='Embed provider to seed into the env file.')
 @click.pass_context
-def scheduler_install(ctx: click.Context, interval: int | None) -> None:
+def scheduler_install(ctx: click.Context, interval: int | None,
+                      llm_endpoint: str | None,
+                      embed_provider: str | None) -> None:
     """Install the scheduler unit only (no agent integration).
 
-    Reads OPENROUTER_API_KEY and VOYAGE_API_KEY from env and writes them
-    to ~/.memman/env (mode 600), then installs the systemd timer or
-    launchd plist that runs the worker every interval. For full agent-
-    integration setup (hooks, skill, scheduler), use `memman install`.
+    Reads the API keys required by the configured endpoint + embed
+    provider (e.g., MEMMAN_LLM_API_KEY + MEMMAN_VOYAGE_API_KEY for the
+    default OpenRouter + voyage pair) from env and writes them to
+    ~/.memman/env (mode 600), then installs the systemd timer or
+    launchd plist that runs the worker every interval. For full
+    agent-integration setup (hooks, skill, scheduler), use
+    `memman install`.
     """
     from memman.exceptions import ConfigError
-    from memman.setup.scheduler import DEFAULT_INTERVAL_SECONDS, install
+    from memman.setup.claude import _reject_flag_file_conflicts
+    from memman.setup.scheduler import DEFAULT_INTERVAL_SECONDS
+    from memman.setup.scheduler import _write_env_keys, install
+
+    data_dir = ctx.obj['data_dir']
+    _reject_flag_file_conflicts(
+        data_dir=data_dir, backend=None, pg_dsn=None,
+        llm_endpoint=llm_endpoint, embed_provider=embed_provider)
+    endpoint_seed: dict[str, str] = {}
+    if llm_endpoint:
+        endpoint_seed[config.LLM_ENDPOINT] = llm_endpoint
+    if embed_provider:
+        endpoint_seed[config.EMBED_PROVIDER] = embed_provider
+    if endpoint_seed:
+        _write_env_keys(endpoint_seed, data_dir=data_dir)
+        config.reset_file_cache()
 
     try:
-        knobs = config.collect_install_knobs(ctx.obj['data_dir'])
+        knobs = config.collect_install_knobs(data_dir)
     except ConfigError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -1671,7 +1698,7 @@ def scheduler_install(ctx: click.Context, interval: int | None) -> None:
             ' For sub-minute intervals, set MEMMAN_SCHEDULER_KIND=serve'
             ' and run `memman scheduler serve --interval N` instead.')
     try:
-        result = install(ctx.obj['data_dir'], knobs, seconds)
+        result = install(data_dir, knobs, seconds)
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
     _json_out(result)
@@ -2179,11 +2206,18 @@ def insights_show(ctx: click.Context, id: str) -> None:
 @click.option('--pg-dsn', default=None,
               help='Postgres DSN (postgresql://...); required with'
                    ' --backend postgres in non-interactive mode.')
+@click.option('--llm-endpoint', type=str, default=None,
+              help='LLM endpoint URL; bypasses the wizard prompt when set.')
+@click.option('--embed-provider',
+              type=click.Choice(list(_EMBED_PROVIDER_CHOICES)),
+              default=None,
+              help='Embed provider; bypasses the wizard prompt when set.')
 @click.option('--no-wizard', is_flag=True,
               help='Disable interactive prompts; flags + defaults only.')
 @click.pass_context
 def install(ctx: click.Context, target: str, backend: str | None,
-            pg_dsn: str | None, no_wizard: bool) -> None:
+            pg_dsn: str | None, llm_endpoint: str | None,
+            embed_provider: str | None, no_wizard: bool) -> None:
     """Install memman integration: skill, hooks, scheduler."""
     from memman.setup.claude import run_install
     run_install(
@@ -2191,6 +2225,8 @@ def install(ctx: click.Context, target: str, backend: str | None,
         target=target,
         backend=backend,
         pg_dsn=pg_dsn,
+        llm_endpoint=llm_endpoint,
+        embed_provider=embed_provider,
         no_wizard=no_wizard)
 
 
