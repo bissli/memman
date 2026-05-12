@@ -1,11 +1,10 @@
 """Shared HTTP utilities for memman provider clients.
 
-Each subsystem (one OpenRouter LLM client, three embed clients,
-optionally a fourth) used to carry its own copy of the lazy
-`httpx.Client` initialization pattern. They live here now, keyed by
-caller name so each subsystem still gets its own connection pool —
-debug tracing relies on per-subsystem identifiability and we don't
-want a 429 from one provider to wedge another.
+Per-subsystem `httpx.Client` pools (`get_session`) so each provider gets
+its own connection pool; debug tracing keys events by subsystem name
+and one provider's 429 should not wedge another. `post_with_retry`
+implements the canonical retry policy used by both the LLM client and
+the embed clients (Voyage, OpenAI-compat, OpenRouter-embed, Ollama).
 """
 
 import logging
@@ -17,7 +16,8 @@ logger = logging.getLogger('memman')
 
 _SESSIONS: dict[str, httpx.Client] = {}
 
-RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+ENRICHMENT_TIMEOUT = 10.0
+RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504, 529})
 RETRY_BACKOFF = (1.0, 2.0, 4.0)
 MAX_RETRIES = 3
 

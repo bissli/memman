@@ -1,19 +1,13 @@
-"""Provider-agnostic helpers used by every LLM client.
+"""JSON parsing helpers for LLM responses.
 
-JSON parsing (tolerant of code fences), retry policy constants, and a
-`_safe_json` helper for trace logging. Concrete provider classes
-(OpenRouter, and future Gemini/Groq/OpenAI-compat entries) import
-from here so they don't depend on each other.
+The LLM client class lives in `client.py`. HTTP retry/timeout policy
+lives in `memman._http` (the single source of truth for HTTP policy
+shared between LLM and embed paths).
 """
 
 import json
 
 import httpx
-
-ENRICHMENT_TIMEOUT = 10.0
-MAX_RETRIES = 3
-RETRY_BACKOFF = (1.0, 2.0)
-RETRYABLE_STATUS_CODES = (429, 500, 502, 503, 529)
 
 
 def strip_code_fences(raw: str) -> str:
