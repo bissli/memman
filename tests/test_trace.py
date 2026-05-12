@@ -17,7 +17,7 @@ from pathlib import Path
 import httpx
 import pytest
 from memman import trace
-from memman.llm.openrouter_client import OpenRouterClient
+from memman.llm.client import MemmanLLMClient
 
 
 @pytest.fixture
@@ -229,10 +229,9 @@ class TestRedaction:
 
 
 @pytest.mark.no_mock_llm
-def test_openrouter_complete_emits_request_and_response(
+def test_llm_complete_emits_request_and_response(
         fake_home, debug_on, monkeypatch):
-    """OpenRouterClient.complete emits llm_request and llm_response in order.
-    """
+    """MemmanLLMClient.complete emits llm_request and llm_response in order."""
     def _fake_post(url, headers=None, json=None, timeout=None):
         return httpx.Response(
             200,
@@ -240,15 +239,14 @@ def test_openrouter_complete_emits_request_and_response(
             json={'choices': [{'message': {'content': 'hi'}}]})
 
     from memman import _http
-    from memman.llm import openrouter_client as or_mod
+    from memman.llm import client as llm_client_mod
     monkeypatch.setitem(
-        _http._SESSIONS, or_mod.__name__,
+        _http._SESSIONS, llm_client_mod.__name__,
         type('FakeClient', (), {'post': staticmethod(_fake_post)})())
     trace.setup()
-    client = OpenRouterClient(
+    client = MemmanLLMClient(
         endpoint='https://openrouter.ai/api/v1',
         api_key='fake-secret-key',
-        role_env_var='MEMMAN_LLM_MODEL_FAST',
         model='anthropic/claude-haiku-4.5')
     out = client.complete('sys', 'user')
     assert out == 'hi'
@@ -264,11 +262,11 @@ def test_openrouter_complete_emits_request_and_response(
     assert req_idx < resp_idx
 
     req = events[req_idx]
-    assert req['provider'] == 'openrouter'
+    assert req['endpoint'] == 'https://openrouter.ai/api/v1'
     assert req['headers']['Authorization'] == '***REDACTED***'
     assert req['body']['model'] == 'anthropic/claude-haiku-4.5'
 
     resp = events[resp_idx]
-    assert resp['provider'] == 'openrouter'
+    assert resp['endpoint'] == 'https://openrouter.ai/api/v1'
     assert resp['status'] == 200
     assert resp['body']['choices'][0]['message']['content'] == 'hi'

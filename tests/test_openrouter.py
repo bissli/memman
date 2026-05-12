@@ -1,11 +1,11 @@
-"""Unit tests for the OpenRouter client and install-time model resolver."""
+"""Unit tests for the OpenRouter install-time model resolver."""
 
 import pytest
 from memman.exceptions import ConfigError
 from memman.llm import openrouter_models as om
-from memman.llm.openrouter_client import OpenRouterClient
+from memman.llm.client import MemmanLLMClient
 
-_REAL_RESOLVE = om.resolve_latest_in_family
+_REAL_RESOLVE = om.resolve_latest_for_role
 
 SAMPLE_MODELS = [
     {'id': 'anthropic/claude-haiku-4.5'},
@@ -13,61 +13,53 @@ SAMPLE_MODELS = [
     {'id': 'anthropic/claude-3-haiku'},
     {'id': 'anthropic/claude-sonnet-4.6'},
     {'id': 'anthropic/claude-sonnet-4.5'},
-    {'id': 'openai/gpt-5-mini'},
     {'id': 'meta-llama/llama-4-maverick'},
     ]
 
 
 @pytest.fixture(autouse=True)
 def _undo_global_resolver_mock(monkeypatch):
-    """Restore the real `resolve_latest_in_family` for these tests.
-
-    `tests/conftest.py::_mock_apis` patches the resolver to a fake for
-    install-path tests; here we want the real implementation so tests
-    can patch `_fetch_models` directly. The original is captured at
-    module import time.
-    """
+    """Restore the real `resolve_latest_for_role` for these tests."""
     monkeypatch.setattr(
-        'memman.llm.openrouter_models.resolve_latest_in_family',
+        'memman.llm.openrouter_models.resolve_latest_for_role',
         _REAL_RESOLVE)
     om.clear_cache()
     yield
     om.clear_cache()
 
 
-def test_resolve_haiku_picks_highest_version(monkeypatch):
+def test_fast_picks_latest_haiku(monkeypatch):
     monkeypatch.setattr(om, '_fetch_models', lambda *a, **k: SAMPLE_MODELS)
-    assert om.resolve_latest_in_family(
-        'k', 'https://openrouter.ai/api/v1', 'haiku') == \
-        'anthropic/claude-haiku-4.5'
+    assert om.resolve_latest_for_role('fast') == 'anthropic/claude-haiku-4.5'
 
 
-def test_resolve_sonnet_picks_highest_version(monkeypatch):
+def test_slow_picks_latest_sonnet(monkeypatch):
     monkeypatch.setattr(om, '_fetch_models', lambda *a, **k: SAMPLE_MODELS)
-    assert om.resolve_latest_in_family(
-        'k', 'https://openrouter.ai/api/v1', 'sonnet') == \
-        'anthropic/claude-sonnet-4.6'
+    assert om.resolve_latest_for_role('slow') == 'anthropic/claude-sonnet-4.6'
 
 
-def test_resolve_returns_none_when_family_absent(monkeypatch):
+def test_unknown_role_returns_none(monkeypatch):
+    monkeypatch.setattr(om, '_fetch_models', lambda *a, **k: SAMPLE_MODELS)
+    assert om.resolve_latest_for_role('bogus') is None
+
+
+def test_returns_none_when_no_match(monkeypatch):
     monkeypatch.setattr(om, '_fetch_models', lambda *a, **k: [
-        {'id': 'openai/gpt-5-mini'}])
-    assert om.resolve_latest_in_family(
-        'k', 'https://openrouter.ai/api/v1', 'haiku') is None
+        {'id': 'meta-llama/llama-4-maverick'}])
+    assert om.resolve_latest_for_role('fast') is None
 
 
-def test_resolve_returns_none_on_network_failure(monkeypatch):
+def test_returns_none_on_network_failure(monkeypatch):
     import httpx
 
     def boom(*a, **k):
         raise httpx.ConnectError('no route')
 
     monkeypatch.setattr(om, '_fetch_models', boom)
-    assert om.resolve_latest_in_family(
-        'k', 'https://openrouter.ai/api/v1', 'haiku') is None
+    assert om.resolve_latest_for_role('fast') is None
 
 
-def test_resolve_caches_within_session(monkeypatch):
+def test_caches_within_session(monkeypatch):
     calls = {'n': 0}
 
     def counting(*a, **k):
@@ -75,11 +67,43 @@ def test_resolve_caches_within_session(monkeypatch):
         return SAMPLE_MODELS
 
     monkeypatch.setattr(om, '_fetch_models', counting)
-    om.resolve_latest_in_family(
-        'k', 'https://openrouter.ai/api/v1', 'haiku')
-    om.resolve_latest_in_family(
-        'k', 'https://openrouter.ai/api/v1', 'haiku')
+    om.resolve_latest_for_role('fast')
+    om.resolve_latest_for_role('fast')
     assert calls['n'] == 1
+
+
+def test_fetch_models_sends_no_authorization(monkeypatch):
+    """OR's /models is public; memman must not send an Authorization header."""
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {'data': SAMPLE_MODELS}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, **kwargs):
+            captured['url'] = url
+            captured['headers'] = kwargs.get('headers')
+            return _Resp()
+
+    monkeypatch.setattr('memman.llm.openrouter_models.httpx.Client', _Client)
+    om._fetch_models('https://openrouter.ai/api/v1')
+    assert captured['headers'] is None or 'Authorization' not in (
+        captured['headers'] or {})
 
 
 def test_version_sort_key_orders_correctly():
@@ -92,20 +116,18 @@ def test_version_sort_key_suffix_outranks_base():
         om._version_sort_key('anthropic/claude-haiku-4.5')
 
 
-def test_openrouter_client_requires_model():
-    with pytest.raises(ConfigError, match='is empty'):
-        OpenRouterClient(
+def test_llm_client_requires_model():
+    with pytest.raises(ConfigError, match='model is empty'):
+        MemmanLLMClient(
             'https://openrouter.ai/api/v1',
             'sk-or-test',
-            role_env_var='MEMMAN_LLM_MODEL_FAST',
             model='')
 
 
-def test_openrouter_client_accepts_model():
-    client = OpenRouterClient(
+def test_llm_client_accepts_model():
+    client = MemmanLLMClient(
         'https://openrouter.ai/api/v1',
         'sk-or-test',
-        role_env_var='MEMMAN_LLM_MODEL_FAST',
         model='anthropic/claude-haiku-4.5')
     assert client.model == 'anthropic/claude-haiku-4.5'
     assert client.endpoint == 'https://openrouter.ai/api/v1'

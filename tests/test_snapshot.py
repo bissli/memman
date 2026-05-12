@@ -136,8 +136,10 @@ def test_recall_consumes_snapshot_when_present(tmp_path):
     r = CliRunner()
     data_dir = str(tmp_path / 'data')
 
+    seed_content = (
+        'alpha telemetry stream uses gzip compression with a 64KB batch size')
     seed_result = r.invoke(
-        cli, ['--data-dir', data_dir, 'remember', 'alpha topic'])
+        cli, ['--data-dir', data_dir, 'remember', seed_content])
     assert seed_result.exit_code == 0, seed_result.output
     drain_result = r.invoke(
         cli, ['--data-dir', data_dir, 'scheduler', 'drain', '--pending'])
@@ -151,7 +153,7 @@ def test_recall_consumes_snapshot_when_present(tmp_path):
     assert snap_path.exists(), 'drain should write a recall snapshot'
 
     recall_result = r.invoke(
-        cli, ['--data-dir', data_dir, 'recall', 'alpha'])
+        cli, ['--data-dir', data_dir, 'recall', 'alpha telemetry'])
     assert recall_result.exit_code == 0, recall_result.output
     payload = json.loads(recall_result.output)
     contents = [hit['insight']['content'] for hit in payload['results']]
@@ -162,7 +164,9 @@ def test_recall_falls_back_when_snapshot_absent(tmp_path):
     """Deleting the snapshot file forces a clean fallback to SQL."""
     r = CliRunner()
     data_dir = str(tmp_path / 'data')
-    r.invoke(cli, ['--data-dir', data_dir, 'remember', 'gamma topic'])
+    seed_content = (
+        'gamma compliance audit runs quarterly under SOC2 type II controls')
+    r.invoke(cli, ['--data-dir', data_dir, 'remember', seed_content])
     r.invoke(cli, ['--data-dir', data_dir, 'scheduler', 'drain', '--pending'])
 
     from memman.store.db import read_active
@@ -171,5 +175,5 @@ def test_recall_falls_back_when_snapshot_absent(tmp_path):
     delete_snapshot(_store_dir(data_dir, name))
 
     recall_result = r.invoke(
-        cli, ['--data-dir', data_dir, 'recall', 'gamma'])
+        cli, ['--data-dir', data_dir, 'recall', 'gamma compliance'])
     assert recall_result.exit_code == 0, recall_result.output

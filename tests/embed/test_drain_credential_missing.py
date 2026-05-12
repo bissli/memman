@@ -75,6 +75,11 @@ class TestCredentialMissingFailureMode:
             self, tmp_path, _registered_unfunded):
         """A queued row for a credentialed-out store lands in `failed`
         with an EmbedCredentialError reason in `last_error`.
+
+        The remember content must be substantive enough that real LLM
+        extraction yields at least one fact -- otherwise the drain
+        completes without attempting to embed, hides the credential
+        error, and the row falls through to 'done'.
         """
         runner = CliRunner()
         sdir = store_dir(str(tmp_path), 'unfunded')
@@ -83,7 +88,9 @@ class TestCredentialMissingFailureMode:
 
         result = runner.invoke(cli, [
             '--data-dir', str(tmp_path), '--store', 'unfunded',
-            'remember', 'note for absent creds'])
+            'remember',
+            'Production Redis instance evicts keys via the allkeys-lfu'
+            ' policy with a 16GB memory budget per shard.'])
         assert result.exit_code == 0, result.output
 
         drain_result = runner.invoke(cli, [

@@ -29,9 +29,9 @@ def _knobs(openrouter: str = 'sk-or-test',
            **extra: str) -> dict[str, str]:
     """Build the install-time knobs dict used by `sch.install`."""
     base = {
-        'MEMMAN_LLM_PROVIDER': 'openrouter',
-        'OPENROUTER_API_KEY': openrouter,
-        'VOYAGE_API_KEY': voyage,
+        'MEMMAN_LLM_ENDPOINT': 'https://openrouter.ai/api/v1',
+        'MEMMAN_OPENROUTER_API_KEY': openrouter,
+        'MEMMAN_VOYAGE_API_KEY': voyage,
         }
     base.update(extra)
     return base
@@ -149,7 +149,7 @@ class TestInstall:
         contents = env_path.read_text()
         assert 'OPENROUTER_API_KEY=sk-or-fake' in contents
         assert 'VOYAGE_API_KEY=vk-fake' in contents
-        assert 'MEMMAN_LLM_PROVIDER=openrouter' in contents
+        assert 'MEMMAN_LLM_ENDPOINT=https://openrouter.ai/api/v1' in contents
         mode = stat.S_IMODE(os.stat(env_path).st_mode)
         assert mode == 0o600
 
@@ -162,13 +162,14 @@ class TestInstall:
         env_path = fake_home / '.memman' / 'env'
         env_path.parent.mkdir(parents=True, exist_ok=True)
         env_path.write_text(
-            'SOMETHING_ELSE=keep\nMEMMAN_LLM_PROVIDER=anthropic\n')
+            'SOMETHING_ELSE=keep\n'
+            'MEMMAN_LLM_ENDPOINT=https://api.openai.com/v1\n')
 
         sch.install(data_dir=str(fake_home / '.memman'),
                     knobs=_knobs(openrouter='sk-or-new', voyage='vk-new'))
         contents = env_path.read_text()
         assert 'SOMETHING_ELSE=keep' in contents
-        assert 'MEMMAN_LLM_PROVIDER=openrouter' in contents
+        assert 'MEMMAN_LLM_ENDPOINT=https://openrouter.ai/api/v1' in contents
         assert 'OPENROUTER_API_KEY=sk-or-new' in contents
         assert 'VOYAGE_API_KEY=vk-new' in contents
 
@@ -222,7 +223,7 @@ class TestDebugState:
         env_path = fake_home / '.memman' / 'env'
         env_path.parent.mkdir(parents=True, exist_ok=True)
         original = (
-            'MEMMAN_LLM_PROVIDER=openrouter\n'
+            'MEMMAN_LLM_ENDPOINT=https://openrouter.ai/api/v1\n'
             'OPENROUTER_API_KEY=sk-x\n'
             'VOYAGE_API_KEY=vk-y\n')
         env_path.write_text(original)
@@ -826,7 +827,8 @@ def _install_env_full(data_dir):
     install_env_factory(
         data_dir,
         **{
-            config.LLM_PROVIDER: 'openrouter',
+            config.LLM_ENDPOINT: 'https://openrouter.ai/api/v1',
+            config.LLM_API_KEY: 'sk-llm-installed',
             config.LLM_MODEL_FAST: 'anthropic/claude-haiku-4.5',
             config.LLM_MODEL_SLOW_CANONICAL: 'anthropic/claude-sonnet-4.6',
             config.EMBED_PROVIDER: 'voyage',
@@ -857,7 +859,9 @@ class TestUninstall:
         assert config.VOYAGE_API_KEY not in contents
         assert config.OPENAI_EMBED_API_KEY not in contents
         assert config.DEFAULT_PG_DSN not in contents
-        assert f'{config.LLM_PROVIDER}=openrouter' in contents
+        assert config.LLM_API_KEY not in contents
+        assert (f'{config.LLM_ENDPOINT}=https://openrouter.ai/api/v1'
+                in contents)
         assert config.LLM_MODEL_FAST in contents
         assert config.EMBED_PROVIDER in contents
         assert f'{config.DEFAULT_BACKEND}=postgres' in contents

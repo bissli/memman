@@ -5,7 +5,7 @@ Dual-mode API mocking: mocked by default, real APIs with --live flag.
     pytest                    # fast, mocked LLM + embeddings
     pytest --live             # real Haiku + Voyage APIs (slow, needs keys)
 
-Mock mode patches `OpenRouterClient.complete` and `voyage.Client.embed`
+Mock mode patches `MemmanLLMClient.complete` and `voyage.Client.embed`
 at the HTTP layer, so all extraction/reconciliation/expansion logic
 still runs with realistic canned responses. This exercises the real
 code paths.
@@ -68,24 +68,40 @@ def _isolate_env(tmp_path, monkeypatch, request):
         yield
         return
     import os
+
     from memman import config
     live_mode = request.config.getoption('--live')
     real_secrets = {}
     if live_mode:
-        for key in ('OPENROUTER_API_KEY', 'VOYAGE_API_KEY',
-                    'MEMMAN_OPENAI_EMBED_API_KEY'):
+        live_keys = (
+            'MEMMAN_OPENROUTER_API_KEY', 'MEMMAN_VOYAGE_API_KEY',
+            'MEMMAN_OPENAI_EMBED_API_KEY',
+            'MEMMAN_LLM_API_KEY', 'MEMMAN_LLM_ENDPOINT',
+            )
+        for key in live_keys:
             val = os.environ.get(key)
             if val:
                 real_secrets[key] = val
+        home_env = Path.home() / '.memman' / config.ENV_FILENAME
+        if home_env.exists():
+            home_values = config.parse_env_file(home_env)
+            for key in live_keys:
+                if key in real_secrets:
+                    continue
+                val = home_values.get(key)
+                if val:
+                    real_secrets[key] = val
     data_dir = tmp_path / 'memman'
     monkeypatch.setenv('MEMMAN_DATA_DIR', str(data_dir))
     monkeypatch.delenv('MEMMAN_STORE', raising=False)
     monkeypatch.delenv('MEMMAN_DEBUG', raising=False)
     monkeypatch.delenv('MEMMAN_WORKER', raising=False)
     monkeypatch.delenv('MEMMAN_SCHEDULER_KIND', raising=False)
-    monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
-    monkeypatch.delenv('VOYAGE_API_KEY', raising=False)
+    monkeypatch.delenv('MEMMAN_OPENROUTER_API_KEY', raising=False)
+    monkeypatch.delenv('MEMMAN_VOYAGE_API_KEY', raising=False)
     monkeypatch.delenv('MEMMAN_OPENAI_EMBED_API_KEY', raising=False)
+    monkeypatch.delenv('MEMMAN_LLM_API_KEY', raising=False)
+    monkeypatch.delenv('MEMMAN_LLM_ENDPOINT', raising=False)
     if live_mode and real_secrets:
         for key, val in real_secrets.items():
             monkeypatch.setenv(key, val)
@@ -100,8 +116,9 @@ def _isolate_env(tmp_path, monkeypatch, request):
 
 
 _TEST_MOCK_SECRETS = {
-    'OPENROUTER_API_KEY': 'mock-key-for-testing',
-    'VOYAGE_API_KEY': 'mock-voyage-key-for-testing',
+    'MEMMAN_OPENROUTER_API_KEY': 'mock-key-for-testing',
+    'MEMMAN_VOYAGE_API_KEY': 'mock-voyage-key-for-testing',
+    'MEMMAN_LLM_API_KEY': 'mock-llm-api-key-for-testing',
     }
 
 
@@ -159,7 +176,13 @@ def _write_default_env_file(data_dir, real_secrets=None):
     path = data_dir / config.ENV_FILENAME
     secrets = dict(_TEST_MOCK_SECRETS)
     if real_secrets:
+        if (config.LLM_API_KEY not in real_secrets
+                and 'MEMMAN_OPENROUTER_API_KEY' in real_secrets):
+            secrets.pop(config.LLM_API_KEY, None)
         secrets.update(real_secrets)
+    if (config.LLM_API_KEY not in secrets
+            and 'MEMMAN_OPENROUTER_API_KEY' in secrets):
+        secrets[config.LLM_API_KEY] = secrets['MEMMAN_OPENROUTER_API_KEY']
     rows = list(config.INSTALL_DEFAULTS.items()) + list(secrets.items())
     contents = '\n'.join(f'{k}={v}' for k, v in rows) + '\n'
     path.write_text(contents)
@@ -315,13 +338,13 @@ def _autoseed_fingerprint(request, monkeypatch):
 def _mock_apis(request, monkeypatch):
     """Mock LLM and embedding HTTP calls unless --live is set.
 
-    Patches at the method layer: OpenRouterClient.complete returns
+    Patches at the method layer: MemmanLLMClient.complete returns
     realistic JSON that the real extract/reconcile/expand code parses.
     Voyage embed returns a deterministic content-hash vector.
-    `openrouter_models.resolve_latest_in_family` is stubbed to a fixed
+    `openrouter_models.resolve_latest_for_role` is stubbed to a fixed
     id so install-path tests never hit the network.
 
-    Tests that exercise the real OpenRouterClient.complete method
+    Tests that exercise the real MemmanLLMClient.complete method
     should mark themselves with `@pytest.mark.no_mock_llm` to skip
     the method-level patch while keeping the resolver and embedding
     stubs in place.
@@ -333,11 +356,16 @@ def _mock_apis(request, monkeypatch):
 
     if 'no_mock_llm' not in request.keywords:
         monkeypatch.setattr(
-            'memman.llm.openrouter_client.OpenRouterClient.complete',
+            'memman.llm.client.MemmanLLMClient.complete',
             _mock_llm_complete)
+
+    def _stub_resolve_role(role, endpoint='https://openrouter.ai/api/v1'):
+        family = 'haiku' if role == 'fast' else 'sonnet'
+        return f'anthropic/claude-{family}-4.5'
+
     monkeypatch.setattr(
-        'memman.llm.openrouter_models.resolve_latest_in_family',
-        lambda api_key, endpoint, family: f'anthropic/claude-{family}-4.5')
+        'memman.llm.openrouter_models.resolve_latest_for_role',
+        _stub_resolve_role)
     monkeypatch.setattr(
         'memman.embed.voyage.Client.embed', _mock_embed)
     monkeypatch.setattr(

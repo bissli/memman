@@ -42,19 +42,23 @@ def test_forget_then_replace_race(runner):
     """
     r, data_dir = runner
 
+    original_content = (
+        'Postgres VACUUM ANALYZE runs nightly at 03:00 UTC via pg_cron')
+    replacement_content = (
+        'Postgres VACUUM ANALYZE moved to weekly Sunday 02:00 UTC via pg_cron')
     add_result = r.invoke(
-        cli, ['--data-dir', data_dir, 'remember', 'original content here'])
+        cli, ['--data-dir', data_dir, 'remember', original_content])
     assert add_result.exit_code == 0, add_result.output
     drain_result = r.invoke(
         cli, ['--data-dir', data_dir, 'scheduler', 'drain', '--pending'])
     assert drain_result.exit_code == 0, drain_result.output
 
     recall_pre = _invoke(
-        r, data_dir, 'recall', 'original content here', '--basic')
+        r, data_dir, 'recall', 'VACUUM ANALYZE', '--basic')
     assert recall_pre['results'], 'remember + drain failed to land insight'
     original_id = recall_pre['results'][0]['id']
 
-    _invoke(r, data_dir, 'replace', original_id, 'replacement content')
+    _invoke(r, data_dir, 'replace', original_id, replacement_content)
     _invoke(r, data_dir, 'forget', original_id)
 
     drain_result = r.invoke(
@@ -66,7 +70,7 @@ def test_forget_then_replace_race(runner):
         f'queue rows failed unexpectedly: {failed_out!r}')
 
     recall_post = _invoke(
-        r, data_dir, 'recall', 'replacement content', '--basic')
+        r, data_dir, 'recall', 'VACUUM ANALYZE', '--basic')
     contents = [hit['content'] for hit in recall_post.get('results', [])]
-    assert any('replacement content' in c for c in contents), contents
-    assert all('original content here' not in c for c in contents), contents
+    assert any('Sunday' in c or 'weekly' in c for c in contents), contents
+    assert all('03:00 UTC' not in c for c in contents), contents

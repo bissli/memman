@@ -6,7 +6,7 @@ fixes. Run in isolation:
 
     pytest tests/test_prompt_live.py --live
 
-These tests require OPENROUTER_API_KEY and make real API calls.
+These tests require MEMMAN_OPENROUTER_API_KEY and make real API calls.
 """
 
 import pytest
@@ -18,9 +18,16 @@ pytestmark = pytest.mark.skipif(
     reason='requires --live for real LLM calls')
 
 
-@pytest.fixture(scope='module')
+@pytest.fixture
 def llm_client():
-    """Shared LLM client for all tests in this module."""
+    """LLM client for live tests.
+
+    Function-scoped so the autouse `_isolate_env` fixture (which seeds
+    the env file with `--live` real_secrets merged on top) has already
+    run before this fixture builds the client.
+    """
+    from memman.llm.client import reset_role_cache
+    reset_role_cache()
     return get_llm_client('slow_canonical')
 
 

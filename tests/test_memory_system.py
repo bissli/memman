@@ -282,13 +282,19 @@ class TestDeduplication:
         """Without --no-reconcile, similar content triggers reconciliation.
 
         Real LLM decides action — may be add/update/none/delete/skipped.
-        'skipped' means LLM found the info already captured (valid).
+        Under the queue+drain architecture, the user-facing return is
+        always 'queued'; `parse_remember` looks up the post-drain row by
+        `source = queue:<id>` and returns action='add' when a fresh row
+        was inserted. When the LLM reconciles as UPDATE/DELETE/NONE/
+        SKIPPED, no row with that source exists and `parse_remember`
+        falls through to the raw `{action: 'queued', ...}` payload —
+        which is a valid reconciliation outcome, not a failure.
         """
         text = 'Go error handling with sentinel values and wrapping'
         remember(runner, text, no_reconcile=True)
         second = remember(runner, text)
         assert second['action'] in {
-            'add', 'update', 'none', 'delete', 'skipped'}
+            'add', 'update', 'none', 'delete', 'skipped', 'queued'}
 
     def test_different_content_added(self, runner):
         """Genuinely different content is added via reconciliation."""
@@ -314,10 +320,17 @@ class TestGraphTraversal:
         assert b['id'] in result.output
 
     def test_related_respects_edge_type_filter(self, runner):
-        """Edge type filter includes matching, excludes non-matching."""
+        """Edge type filter includes matching, excludes non-matching.
+
+        Anchors use textually distant content so the auto-semantic
+        edge generator (AUTO_SEMANTIC_THRESHOLD=0.62) does not fire on
+        real Voyage embeddings — otherwise the explicit causal edge we
+        add would be shadowed by an automatic semantic edge between the
+        same pair.
+        """
         a = remember(runner, 'chose SQLite because embedded serverless',
                      no_reconcile=True)
-        b = remember(runner, 'SQLite enables single-file deployment',
+        b = remember(runner, 'preferred color is emerald green',
                      no_reconcile=True)
         invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'causal'])
 

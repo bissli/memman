@@ -30,7 +30,7 @@ pytestmark = pytest.mark.e2e_cli
 
 
 _BASE_ENV_LINES = (
-    'MEMMAN_LLM_PROVIDER=openrouter',
+    'MEMMAN_LLM_ENDPOINT=https://openrouter.ai/api/v1',
     'MEMMAN_LLM_MODEL_FAST=anthropic/claude-haiku-4.5',
     'MEMMAN_LLM_MODEL_SLOW_CANONICAL=anthropic/claude-sonnet-4.6',
     'MEMMAN_LLM_MODEL_SLOW_METADATA=anthropic/claude-sonnet-4.6',
@@ -64,9 +64,14 @@ def home_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     (dot / 'scheduler.state').chmod(0o600)
     (dot / 'cache').mkdir(exist_ok=True)
     lines = list(_BASE_ENV_LINES)
-    for k in ('OPENROUTER_API_KEY', 'VOYAGE_API_KEY'):
-        v = os.environ.get(k) or 'placeholder-for-non-live-tests'
-        lines.append(f'{k}={v}')
+    or_key = (os.environ.get('MEMMAN_OPENROUTER_API_KEY')
+              or 'placeholder-for-non-live-tests')
+    voyage_key = (os.environ.get('MEMMAN_VOYAGE_API_KEY')
+                  or 'placeholder-for-non-live-tests')
+    llm_key = os.environ.get('MEMMAN_LLM_API_KEY') or or_key
+    lines.append(f'MEMMAN_OPENROUTER_API_KEY={or_key}')
+    lines.append(f'MEMMAN_VOYAGE_API_KEY={voyage_key}')
+    lines.append(f'MEMMAN_LLM_API_KEY={llm_key}')
     (dot / 'env').write_text('\n'.join(lines) + '\n')
     return home
 

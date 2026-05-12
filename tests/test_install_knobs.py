@@ -7,15 +7,16 @@ from memman.exceptions import ConfigError
 
 @pytest.fixture
 def stub_resolver(monkeypatch):
-    """Stub resolve_latest_in_family so tests don't hit the network."""
+    """Stub resolve_latest_for_role so tests don't hit the network."""
     calls = []
 
-    def fake(api_key, endpoint, family):
-        calls.append((api_key, endpoint, family))
+    def fake(role, endpoint='https://openrouter.ai/api/v1'):
+        calls.append((role, endpoint))
+        family = 'haiku' if role == 'fast' else 'sonnet'
         return f'anthropic/claude-{family}-4.5'
 
     monkeypatch.setattr(
-        'memman.llm.openrouter_models.resolve_latest_in_family', fake)
+        'memman.llm.openrouter_models.resolve_latest_for_role', fake)
     return calls
 
 
@@ -37,7 +38,7 @@ class TestCollectInstallKnobs:
             f'{config.OPENROUTER_API_KEY}=file-or-key\n'
             f'{config.VOYAGE_API_KEY}=file-vy-key\n'
             f'{config.LLM_MODEL_FAST}=file/haiku-pin\n'
-            f'{config.LLM_PROVIDER}=openrouter\n')
+            f'{config.LLM_ENDPOINT}=https://openrouter.ai/api/v1\n')
         monkeypatch.setenv(config.DATA_DIR, str(data_dir))
         monkeypatch.setenv(config.LLM_MODEL_FAST, 'env/haiku-OVERRIDE')
         monkeypatch.setenv(config.OPENROUTER_API_KEY, 'env-or-OVERRIDE')
@@ -71,7 +72,7 @@ class TestCollectInstallKnobs:
             f'{config.LLM_MODEL_SLOW_METADATA}=file/sonnet-pinned\n'
             f'{config.OPENROUTER_API_KEY}=file-or-key\n'
             f'{config.VOYAGE_API_KEY}=file-vy-key\n'
-            f'{config.LLM_PROVIDER}=openrouter\n')
+            f'{config.LLM_ENDPOINT}=https://openrouter.ai/api/v1\n')
         monkeypatch.setenv(config.DATA_DIR, str(data_dir))
         monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
         monkeypatch.delenv(config.LLM_MODEL_SLOW_CANONICAL, raising=False)
@@ -94,13 +95,13 @@ class TestCollectInstallKnobs:
         (data_dir / config.ENV_FILENAME).write_text(
             f'{config.OPENROUTER_API_KEY}=or-key\n'
             f'{config.VOYAGE_API_KEY}=vy-key\n'
-            f'{config.LLM_PROVIDER}=openrouter\n')
+            f'{config.LLM_ENDPOINT}=https://openrouter.ai/api/v1\n')
         monkeypatch.setenv(config.DATA_DIR, str(data_dir))
         config.reset_file_cache()
         knobs = config.collect_install_knobs(str(data_dir))
-        families = [c[2] for c in stub_resolver]
-        assert 'haiku' in families
-        assert 'sonnet' in families
+        roles = [c[0] for c in stub_resolver]
+        assert 'fast' in roles
+        assert 'slow' in roles
         assert knobs[config.LLM_MODEL_FAST] == 'anthropic/claude-haiku-4.5'
         assert knobs[config.LLM_MODEL_SLOW_CANONICAL] == 'anthropic/claude-sonnet-4.5'
 
@@ -114,7 +115,7 @@ class TestCollectInstallKnobs:
             f'{config.VOYAGE_API_KEY}=vy-key\n')
         monkeypatch.setenv(config.DATA_DIR, str(data_dir))
         monkeypatch.setattr(
-            'memman.llm.openrouter_models.resolve_latest_in_family',
+            'memman.llm.openrouter_models.resolve_latest_for_role',
             lambda *a, **k: None)
         config.reset_file_cache()
         knobs = config.collect_install_knobs(str(data_dir))
@@ -122,13 +123,13 @@ class TestCollectInstallKnobs:
             config.INSTALL_DEFAULTS[config.LLM_MODEL_FAST]
 
     def test_missing_mandatory_secret_raises(self, tmp_path, monkeypatch):
-        """ConfigError when a mandatory secret is in neither file nor env."""
+        """ConfigError when the embed provider's mandatory secret is missing."""
         data_dir = str(tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, data_dir)
         monkeypatch.delenv(config.OPENROUTER_API_KEY, raising=False)
         monkeypatch.delenv(config.VOYAGE_API_KEY, raising=False)
         config.reset_file_cache()
-        with pytest.raises(ConfigError, match='OPENROUTER_API_KEY'):
+        with pytest.raises(ConfigError, match='MEMMAN_VOYAGE_API_KEY'):
             config.collect_install_knobs(data_dir)
 
     def test_backend_default_is_sqlite(

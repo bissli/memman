@@ -158,12 +158,11 @@ class TestLLMCausalInference:
         assert result == []
         mock_client.complete.assert_called_once()
 
-    def test_missing_provider_key_raises(self, env_file):
-        """Without OPENROUTER_API_KEY set, get_llm_client raises ConfigError."""
+    def test_missing_endpoint_raises(self, env_file):
+        """Without MEMMAN_LLM_ENDPOINT set, get_llm_client raises ConfigError."""
         from memman.exceptions import ConfigError
         from memman.llm.client import reset_role_cache
-        env_file('MEMMAN_LLM_PROVIDER', None)
-        env_file('OPENROUTER_API_KEY', None)
+        env_file('MEMMAN_LLM_ENDPOINT', None)
         reset_role_cache()
         with pytest.raises(ConfigError):
             get_llm_client('slow_canonical')

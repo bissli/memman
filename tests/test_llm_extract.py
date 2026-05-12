@@ -38,32 +38,34 @@ class TestSlowRoleSplit:
     """
 
     def test_canonical_and_metadata_resolve_independently(self, env_file):
+        from memman.config import LLM_API_KEY, LLM_ENDPOINT
         from memman.config import LLM_MODEL_SLOW_CANONICAL
-        from memman.config import LLM_MODEL_SLOW_METADATA, OPENROUTER_API_KEY
-        from memman.config import OPENROUTER_ENDPOINT
-        from memman.llm.openrouter_client import get_openrouter_client
-        env_file(OPENROUTER_API_KEY, 'k')
-        env_file(OPENROUTER_ENDPOINT, 'https://x')
+        from memman.config import LLM_MODEL_SLOW_METADATA
+        from memman.llm.client import get_llm_client, reset_role_cache
+        env_file(LLM_ENDPOINT, 'https://openrouter.ai/api/v1')
+        env_file(LLM_API_KEY, 'k')
         env_file(LLM_MODEL_SLOW_CANONICAL, 'anthropic/sonnet')
         env_file(LLM_MODEL_SLOW_METADATA, 'anthropic/haiku')
-        canonical = get_openrouter_client('slow_canonical')
-        metadata = get_openrouter_client('slow_metadata')
+        reset_role_cache()
+        canonical = get_llm_client('slow_canonical')
+        metadata = get_llm_client('slow_metadata')
         assert canonical.model == 'anthropic/sonnet'
         assert metadata.model == 'anthropic/haiku'
 
     def test_unset_metadata_var_raises(self, env_file):
         import pytest
+        from memman.config import LLM_API_KEY, LLM_ENDPOINT
         from memman.config import LLM_MODEL_SLOW_CANONICAL
-        from memman.config import LLM_MODEL_SLOW_METADATA, OPENROUTER_API_KEY
-        from memman.config import OPENROUTER_ENDPOINT
+        from memman.config import LLM_MODEL_SLOW_METADATA
         from memman.exceptions import ConfigError
-        from memman.llm.openrouter_client import get_openrouter_client
-        env_file(OPENROUTER_API_KEY, 'k')
-        env_file(OPENROUTER_ENDPOINT, 'https://x')
+        from memman.llm.client import get_llm_client, reset_role_cache
+        env_file(LLM_ENDPOINT, 'https://openrouter.ai/api/v1')
+        env_file(LLM_API_KEY, 'k')
         env_file(LLM_MODEL_SLOW_CANONICAL, 'anthropic/sonnet')
         env_file(LLM_MODEL_SLOW_METADATA, None)
+        reset_role_cache()
         with pytest.raises(ConfigError):
-            get_openrouter_client('slow_metadata')
+            get_llm_client('slow_metadata')
 
 
 class FakeLLMClient:

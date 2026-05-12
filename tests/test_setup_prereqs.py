@@ -16,10 +16,20 @@ def _write_keys(data_dir, openrouter=None, voyage=None):
 
 @pytest.fixture
 def all_prereqs_ok(monkeypatch):
-    """Patch platform + binary checks to pass; API keys still need env setup."""
+    """Patch platform + binary checks to pass; API keys still need env setup.
+
+    Also clears live-mode shell env vars so prereq tests see exactly what
+    `_write_keys` puts in the test's env file -- otherwise `--live` mode
+    leaks real OR/Voyage keys into `collect_install_knobs`'s install-time
+    shell seed step and the "missing key fails loud" assertion breaks.
+    """
     monkeypatch.setattr(setup_claude, 'detect_scheduler', lambda: 'systemd')
     monkeypatch.setattr(setup_claude, 'memman_binary_path',
                         lambda: '/fake/bin/memman')
+    for key in ('MEMMAN_OPENROUTER_API_KEY', 'MEMMAN_VOYAGE_API_KEY',
+                'MEMMAN_OPENAI_EMBED_API_KEY',
+                'MEMMAN_LLM_API_KEY', 'MEMMAN_LLM_ENDPOINT'):
+        monkeypatch.delenv(key, raising=False)
 
 
 class TestPrereqs:
@@ -46,15 +56,11 @@ class TestPrereqs:
         with pytest.raises(click.ClickException, match='memman binary'):
             setup_claude.run_install(data_dir=str(tmp_path))
 
-    @pytest.mark.parametrize(('present_key', 'missing_key'), [
-        ('voyage', 'OPENROUTER_API_KEY'),
-        ('openrouter', 'VOYAGE_API_KEY'),
-    ])
-    def test_missing_api_key_fails_loud(
-            self, all_prereqs_ok, tmp_path, present_key, missing_key):
-        """run_install raises when a mandatory API key is absent."""
-        _write_keys(tmp_path, **{present_key: 'x'})
-        with pytest.raises(click.ClickException, match=missing_key):
+    def test_missing_embed_api_key_fails_loud(
+            self, all_prereqs_ok, tmp_path):
+        """run_install raises when the embed provider's API key is absent."""
+        _write_keys(tmp_path, openrouter='x')
+        with pytest.raises(click.ClickException, match='MEMMAN_VOYAGE_API_KEY'):
             setup_claude.run_install(data_dir=str(tmp_path))
 
     def test_uninstall_skips_prereq_checks(self, monkeypatch, tmp_path):
@@ -79,6 +85,10 @@ class TestPrereqs:
         monkeypatch.setattr(setup_claude, 'detect_scheduler', lambda: 'systemd')
         monkeypatch.setattr(setup_claude, 'memman_binary_path',
                             lambda: '/fake/bin/memman')
+        for key in ('MEMMAN_OPENROUTER_API_KEY', 'MEMMAN_VOYAGE_API_KEY',
+                    'MEMMAN_OPENAI_EMBED_API_KEY',
+                    'MEMMAN_LLM_API_KEY', 'MEMMAN_LLM_ENDPOINT'):
+            monkeypatch.delenv(key, raising=False)
         before = sorted(p for p in tmp_path.rglob('*'))
 
         with pytest.raises(click.ClickException):

@@ -22,7 +22,8 @@ def _strip_default_secrets(monkeypatch, data_dir):
     """Remove the conftest-seeded mock secrets from the test env file."""
     path = config.env_file_path(str(data_dir))
     parsed = config.parse_env_file(path)
-    for key in (config.OPENROUTER_API_KEY, config.VOYAGE_API_KEY):
+    for key in (config.OPENROUTER_API_KEY, config.VOYAGE_API_KEY,
+                config.LLM_API_KEY):
         parsed.pop(key, None)
     contents = '\n'.join(f'{k}={v}' for k, v in parsed.items()) + '\n'
     path.write_text(contents)
@@ -88,25 +89,27 @@ class TestSecretPrompts:
         monkeypatch.setenv(config.DATA_DIR, str(tmp_path / 'memman'))
         monkeypatch.delenv(config.OPENROUTER_API_KEY, raising=False)
         monkeypatch.delenv(config.VOYAGE_API_KEY, raising=False)
+        monkeypatch.delenv(config.LLM_API_KEY, raising=False)
 
-        inputs = iter(['fresh-or-key', 'fresh-vy-key'])
+        inputs = iter(['fresh-vy-key', 'fresh-llm-key'])
         monkeypatch.setattr(
             'memman.setup.wizard.click.prompt',
             lambda *a, **kw: next(inputs))
         out = wizard.run_wizard(str(tmp_path / 'memman'))
-        assert out[config.OPENROUTER_API_KEY] == 'fresh-or-key'
         assert out[config.VOYAGE_API_KEY] == 'fresh-vy-key'
+        assert out[config.LLM_API_KEY] == 'fresh-llm-key'
 
     def test_secrets_prompt_skipped_when_present_in_file(
             self, tty, tmp_path):
-        """Wizard does not prompt when both secrets are already in the file.
+        """Wizard does not prompt when secrets are already in the file.
 
-        The autouse `_isolate_env` fixture seeds both secrets, so a default
+        The autouse `_isolate_env` fixture seeds the secrets, so a default
         test environment should not trigger any secret prompt.
         """
         out = wizard.run_wizard(str(tmp_path / 'memman'))
         assert config.OPENROUTER_API_KEY not in out
         assert config.VOYAGE_API_KEY not in out
+        assert config.LLM_API_KEY not in out
 
     def test_secrets_prompt_skipped_when_shell_has_them(
             self, tmp_path, monkeypatch):
@@ -121,6 +124,7 @@ class TestSecretPrompts:
         monkeypatch.setenv(config.DATA_DIR, str(tmp_path / 'memman'))
         monkeypatch.setenv(config.OPENROUTER_API_KEY, 'shell-or')
         monkeypatch.setenv(config.VOYAGE_API_KEY, 'shell-vy')
+        monkeypatch.setenv(config.LLM_API_KEY, 'shell-llm')
 
         def _should_not_be_called(*a, **kw):
             raise AssertionError('wizard prompted when shell already had values')
@@ -130,6 +134,7 @@ class TestSecretPrompts:
         out = wizard.run_wizard(str(tmp_path / 'memman'))
         assert config.OPENROUTER_API_KEY not in out
         assert config.VOYAGE_API_KEY not in out
+        assert config.LLM_API_KEY not in out
 
 
 class TestDsn:

@@ -1735,7 +1735,7 @@ class TestHotPathPurity:
             self, runner_with_seed, monkeypatch):
         """`forget` is pure SQL: no LLM, no embed."""
         monkeypatch.setattr(
-            'memman.llm.openrouter_client.OpenRouterClient.complete',
+            'memman.llm.client.MemmanLLMClient.complete',
             self._make_failing_complete)
         monkeypatch.setattr(
             'memman.embed.voyage.Client.embed', self._make_failing_embed)
@@ -1748,7 +1748,7 @@ class TestHotPathPurity:
             self, runner_with_seed, monkeypatch):
         """`graph link` is pure SQL."""
         monkeypatch.setattr(
-            'memman.llm.openrouter_client.OpenRouterClient.complete',
+            'memman.llm.client.MemmanLLMClient.complete',
             self._make_failing_complete)
         monkeypatch.setattr(
             'memman.embed.voyage.Client.embed', self._make_failing_embed)
@@ -1762,7 +1762,7 @@ class TestHotPathPurity:
             self, runner_with_seed, monkeypatch):
         """`insights protect` is pure SQL."""
         monkeypatch.setattr(
-            'memman.llm.openrouter_client.OpenRouterClient.complete',
+            'memman.llm.client.MemmanLLMClient.complete',
             self._make_failing_complete)
         monkeypatch.setattr(
             'memman.embed.voyage.Client.embed', self._make_failing_embed)

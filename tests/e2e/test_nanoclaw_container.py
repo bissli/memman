@@ -89,7 +89,8 @@ def _setup_mount(parent: Path, group: str) -> Path:
 
 
 _BASE_ENV = (
-    'MEMMAN_LLM_PROVIDER=openrouter\n'
+    'MEMMAN_LLM_ENDPOINT=https://openrouter.ai/api/v1\n'
+    'MEMMAN_LLM_API_KEY=placeholder-for-non-live-tests\n'
     'MEMMAN_LLM_MODEL_FAST=anthropic/claude-haiku-4.5\n'
     'MEMMAN_LLM_MODEL_SLOW_CANONICAL=anthropic/claude-sonnet-4.6\n'
     'MEMMAN_LLM_MODEL_SLOW_METADATA=anthropic/claude-sonnet-4.6\n'
@@ -98,8 +99,8 @@ _BASE_ENV = (
     'MEMMAN_OPENROUTER_ENDPOINT=https://openrouter.ai/api/v1\n'
     'MEMMAN_VOYAGE_RERANK_MODEL=rerank-2.5-lite\n'
     'MEMMAN_DEFAULT_BACKEND=sqlite\n'
-    'OPENROUTER_API_KEY=placeholder-for-non-live-tests\n'
-    'VOYAGE_API_KEY=placeholder-for-non-live-tests\n')
+    'MEMMAN_OPENROUTER_API_KEY=placeholder-for-non-live-tests\n'
+    'MEMMAN_VOYAGE_API_KEY=placeholder-for-non-live-tests\n')
 
 
 def _write_env_file(container_id: str, body: str) -> None:
@@ -122,12 +123,16 @@ def _seed_env_file(container_id: str,
     OpenRouter + Voyage credentials before running the drain.
     """
     if keys:
+        or_key = keys['MEMMAN_OPENROUTER_API_KEY']
         body = _BASE_ENV.replace(
-            'OPENROUTER_API_KEY=placeholder-for-non-live-tests',
-            f'OPENROUTER_API_KEY={keys["OPENROUTER_API_KEY"]}',
+            'MEMMAN_OPENROUTER_API_KEY=placeholder-for-non-live-tests',
+            f'MEMMAN_OPENROUTER_API_KEY={or_key}',
             ).replace(
-            'VOYAGE_API_KEY=placeholder-for-non-live-tests',
-            f'VOYAGE_API_KEY={keys["VOYAGE_API_KEY"]}',
+            'MEMMAN_VOYAGE_API_KEY=placeholder-for-non-live-tests',
+            f'MEMMAN_VOYAGE_API_KEY={keys["MEMMAN_VOYAGE_API_KEY"]}',
+            ).replace(
+            'MEMMAN_LLM_API_KEY=placeholder-for-non-live-tests',
+            f'MEMMAN_LLM_API_KEY={or_key}',
             )
     else:
         body = _BASE_ENV
@@ -150,7 +155,7 @@ def nanoclaw_run(nanoclaw_image: str, tmp_path: Path):
         if extra_mounts:
             mounts.extend(extra_mounts)
         env = dict(env or {})
-        for k in ('OPENROUTER_API_KEY', 'VOYAGE_API_KEY'):
+        for k in ('MEMMAN_OPENROUTER_API_KEY', 'MEMMAN_VOYAGE_API_KEY'):
             v = os.environ.get(k)
             if v:
                 env.setdefault(k, v)

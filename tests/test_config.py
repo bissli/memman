@@ -10,7 +10,8 @@ from memman.cli import cli
 ALL_EXPECTED_NAMES = {
     'MEMMAN_DATA_DIR',
     'MEMMAN_STORE',
-    'MEMMAN_LLM_PROVIDER',
+    'MEMMAN_LLM_ENDPOINT',
+    'MEMMAN_LLM_API_KEY',
     'MEMMAN_LLM_MODEL_FAST',
     'MEMMAN_LLM_MODEL_SLOW_CANONICAL',
     'MEMMAN_LLM_MODEL_SLOW_METADATA',
@@ -24,8 +25,8 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_LOG_LEVEL',
     'MEMMAN_DEFAULT_BACKEND',
     'MEMMAN_DEFAULT_POSTGRES_DSN',
-    'OPENROUTER_API_KEY',
-    'VOYAGE_API_KEY',
+    'MEMMAN_OPENROUTER_API_KEY',
+    'MEMMAN_VOYAGE_API_KEY',
     'MEMMAN_OPENAI_EMBED_API_KEY',
     'MEMMAN_OPENAI_EMBED_ENDPOINT',
     'MEMMAN_OPENAI_EMBED_MODEL',
@@ -36,9 +37,83 @@ ALL_EXPECTED_NAMES = {
     }
 
 
-def test_mandatory_keys_subset_of_installable():
-    """MANDATORY_INSTALL_KEYS must be a subset of INSTALLABLE_KEYS."""
-    assert set(config.MANDATORY_INSTALL_KEYS) <= set(config.INSTALLABLE_KEYS)
+def test_required_install_keys_returns_subset_of_installable():
+    """required_install_keys output stays within INSTALLABLE_KEYS for every
+    embed provider.
+    """
+    for embed in ('voyage', 'openai', 'openrouter'):
+        keys = config.required_install_keys(embed)
+        assert keys <= set(config.INSTALLABLE_KEYS)
+
+
+def test_required_install_keys_picks_curated_secrets():
+    """Each curated embed provider maps to the API key install must verify."""
+    assert config.required_install_keys('voyage') == {config.VOYAGE_API_KEY}
+    assert config.required_install_keys('openai') == {
+        config.OPENAI_EMBED_API_KEY}
+    assert config.required_install_keys('openrouter') == {
+        config.OPENROUTER_API_KEY}
+
+
+def test_required_install_keys_experimental_returns_empty():
+    """Experimental embed providers return an empty set."""
+    assert config.required_install_keys('cohere') == set()
+
+
+class TestIsOpenrouterEndpoint:
+    """`config.is_openrouter_endpoint` matches OR hosts robustly."""
+
+    def test_canonical_url(self):
+        assert config.is_openrouter_endpoint(
+            'https://openrouter.ai/api/v1') is True
+
+    def test_trailing_slash(self):
+        assert config.is_openrouter_endpoint(
+            'https://openrouter.ai/api/v1/') is True
+
+    def test_http_scheme(self):
+        assert config.is_openrouter_endpoint(
+            'http://openrouter.ai/api/v1') is True
+
+    def test_regional_subdomain(self):
+        assert config.is_openrouter_endpoint(
+            'https://eu.openrouter.ai/api/v1') is True
+
+    def test_www_prefix(self):
+        assert config.is_openrouter_endpoint(
+            'https://www.openrouter.ai/api/v1') is True
+
+    def test_other_endpoints_are_not_or(self):
+        assert config.is_openrouter_endpoint(
+            'https://api.openai.com/v1') is False
+        assert config.is_openrouter_endpoint(
+            'https://api.anthropic.com/v1') is False
+        assert config.is_openrouter_endpoint(
+            'http://localhost:11434/v1') is False
+
+
+class TestIsLoopbackEndpoint:
+    """`config.is_loopback_endpoint` matches the standard loopback hosts."""
+
+    def test_localhost(self):
+        assert config.is_loopback_endpoint(
+            'http://localhost:11434/v1') is True
+
+    def test_loopback_ipv4(self):
+        assert config.is_loopback_endpoint('http://127.0.0.1:1234') is True
+
+    def test_loopback_ipv6(self):
+        assert config.is_loopback_endpoint('http://[::1]:11434/v1') is True
+
+    def test_dotted_localhost_subdomain(self):
+        assert config.is_loopback_endpoint(
+            'http://api.localhost:1234') is True
+
+    def test_remote_endpoint_is_not_loopback(self):
+        assert config.is_loopback_endpoint(
+            'https://api.openai.com/v1') is False
+        assert config.is_loopback_endpoint(
+            'https://openrouter.ai/api/v1') is False
 
 
 def test_secret_vars_subset_of_installable():
@@ -73,7 +148,8 @@ def test_constants_match_expected_names():
     """Every env var the rest of the codebase uses has a constant here.
     """
     actual = {
-        config.DATA_DIR, config.STORE, config.LLM_PROVIDER,
+        config.DATA_DIR, config.STORE,
+        config.LLM_ENDPOINT, config.LLM_API_KEY,
         config.LLM_MODEL_FAST,
         config.LLM_MODEL_SLOW_CANONICAL,
         config.LLM_MODEL_SLOW_METADATA,
@@ -153,11 +229,11 @@ def test_enumerate_returns_all_known_vars(monkeypatch):
 def test_enumerate_reflects_current_env(env_file):
     """enumerate_effective_config() returns live values for set vars.
     """
-    env_file(config.LLM_PROVIDER, 'openrouter')
+    env_file(config.LLM_ENDPOINT, 'https://openrouter.ai/api/v1')
     env_file(config.LLM_MODEL_FAST, 'anthropic/claude-haiku-4.5')
     env_file(config.LLM_MODEL_SLOW_CANONICAL, 'anthropic/claude-sonnet-4.6')
     out = config.enumerate_effective_config()
-    assert out[config.LLM_PROVIDER] == 'openrouter'
+    assert out[config.LLM_ENDPOINT] == 'https://openrouter.ai/api/v1'
     assert out[config.LLM_MODEL_FAST] == 'anthropic/claude-haiku-4.5'
     assert out[config.LLM_MODEL_SLOW_CANONICAL] == 'anthropic/claude-sonnet-4.6'
 
@@ -234,7 +310,7 @@ class TestConfigSet:
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(
-            f'{config.LLM_PROVIDER}=openrouter\n'
+            f'{config.LLM_ENDPOINT}=https://openrouter.ai/api/v1\n'
             f'{config.OPENROUTER_API_KEY}=keep-me\n'
             f'{config.DEFAULT_BACKEND}=sqlite\n')
         runner = CliRunner()
@@ -244,7 +320,7 @@ class TestConfigSet:
         assert result.exit_code == 0, result.output
         parsed = config.parse_env_file(config.env_file_path(str(data_dir)))
         assert parsed[config.DEFAULT_BACKEND] == 'postgres'
-        assert parsed[config.LLM_PROVIDER] == 'openrouter'
+        assert parsed[config.LLM_ENDPOINT] == 'https://openrouter.ai/api/v1'
         assert parsed[config.OPENROUTER_API_KEY] == 'keep-me'
 
 
