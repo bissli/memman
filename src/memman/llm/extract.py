@@ -5,7 +5,7 @@ import re
 
 import cachetools
 from memman import config, trace
-from memman.llm.client import LLMProvider
+from memman.llm.client import MemmanLLMClient
 from memman.llm.shared import parse_json_response
 
 logger = logging.getLogger('memman')
@@ -174,7 +174,7 @@ QUERY_EXPANSION_SYSTEM = (
 
 
 def extract_facts(
-        llm_client: LLMProvider,
+        llm_client: MemmanLLMClient,
         content: str) -> list[dict]:
     """Extract atomic facts via LLM.
 
@@ -265,7 +265,7 @@ def _passthrough_fact(
 
 
 def reconcile_memories(
-        llm_client: LLMProvider,
+        llm_client: MemmanLLMClient,
         facts: list[dict],
         existing_memories: list[tuple[str, str]]) -> list[dict]:
     """Compare facts against existing memories via LLM.
@@ -395,7 +395,7 @@ def reset_expand_cache() -> None:
 
 
 def expand_query(
-        llm_client: LLMProvider,
+        llm_client: MemmanLLMClient,
         query: str) -> dict:
     """Expand recall query with synonyms and related terms.
 

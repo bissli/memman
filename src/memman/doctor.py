@@ -349,6 +349,7 @@ def check_env_completeness() -> dict[str, Any]:
 
     optional_secrets = {
         config.OPENAI_EMBED_API_KEY,
+        config.LLM_API_KEY,
         }
     default_backend = parsed.get(config.DEFAULT_BACKEND, 'sqlite')
     optional_unless_default_postgres = set()

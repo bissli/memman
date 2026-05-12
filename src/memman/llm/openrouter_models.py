@@ -1,13 +1,19 @@
 """OpenRouter model resolution at install time.
 
-`memman install` calls `resolve_latest_in_family` once per role to pick
-the current latest haiku/sonnet from OpenRouter's full model inventory.
-The resolved id is written to `~/.memman/env`; runtime reads from the
-file. No runtime queries against OpenRouter, no on-disk cache.
+`memman install` calls `resolve_latest_for_role` once per role to pick
+the current latest slug from OpenRouter's `/v1/models` endpoint when
+the configured LLM endpoint points at OpenRouter. The endpoint is
+public (no API key required) and the resolved id is written to
+`~/.memman/env`; runtime reads from the file. No runtime queries
+against OpenRouter, no on-disk cache.
 
-The TTL cache exists only to dedupe the two intra-install calls
-(`family='haiku'` and `family='sonnet'`) and to absorb a trivial retry
-during a single install command.
+The wire-format ids returned here keep OR's `vendor/slug` prefix
+unchanged -- non-OR endpoints handle their own slugs via the wizard's
+interactive prompt rather than this resolver.
+
+The TTL cache exists only to dedupe the three intra-install calls
+(one per LLM role) and to absorb a trivial retry during a single
+install command.
 """
 
 import logging
@@ -23,18 +29,19 @@ logger = logging.getLogger('memman')
 MODELS_PATH = '/models'
 FETCH_TIMEOUT_SECONDS = 10.0
 DEFAULT_TTL_SECONDS = 3600
+DEFAULT_ENDPOINT = 'https://openrouter.ai/api/v1'
 
 _inventory_cache: cachetools.TTLCache = cachetools.TTLCache(
-    maxsize=4, ttl=DEFAULT_TTL_SECONDS)
+    maxsize=8, ttl=DEFAULT_TTL_SECONDS)
 
 
 def _version_sort_key(model_id: str) -> tuple:
-    """Extract a sortable tuple from an Anthropic model id.
+    """Extract a sortable tuple from a vendor-prefixed model id.
 
-    Handles `claude-haiku-4.5`, `claude-sonnet-10.0`, `claude-haiku-4.5-v2`.
-    Returns a tuple sorting newer-first under descending sort.
-    Non-numeric suffixes (e.g. `-v2`) outrank the bare base when both
-    parse to the same numeric tuple.
+    Handles `claude-haiku-4.5`, `claude-sonnet-10.0`,
+    `claude-haiku-4.5-v2`. Returns a tuple sorting newer-first under
+    descending sort. Non-numeric suffixes (e.g. `-v2`) outrank the
+    bare base when both parse to the same numeric tuple.
     """
     tail = model_id.split('/', 1)[-1].lower()
     nums = tuple(int(n) for n in re.findall(r'\d+', tail))
@@ -42,15 +49,19 @@ def _version_sort_key(model_id: str) -> tuple:
     return (nums, 1 if has_suffix else 0, model_id)
 
 
-def _fetch_models(api_key: str, endpoint: str) -> list[dict]:
-    """GET the full model list from OpenRouter."""
+_ROLE_PATTERNS: dict[str, re.Pattern] = {
+    'fast': re.compile(r'^anthropic/claude-haiku-\d'),
+    'slow': re.compile(r'^anthropic/claude-sonnet-\d'),
+    }
+
+
+def _fetch_models(endpoint: str) -> list[dict]:
+    """GET the public model list from OpenRouter (no auth required)."""
     url = f'{endpoint.rstrip("/")}{MODELS_PATH}'
     trace.event('openrouter_models_request', url=url)
-    headers = {'Authorization': f'Bearer {api_key}'}
     t0 = time.monotonic()
     with httpx.Client() as client:
-        resp = client.get(
-            url, headers=headers, timeout=FETCH_TIMEOUT_SECONDS)
+        resp = client.get(url, timeout=FETCH_TIMEOUT_SECONDS)
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     resp.raise_for_status()
     payload = resp.json()
@@ -66,36 +77,37 @@ def _fetch_models(api_key: str, endpoint: str) -> list[dict]:
     return data
 
 
-def resolve_latest_in_family(
-        api_key: str, endpoint: str, family: str) -> str | None:
-    """Return the latest Anthropic model id matching `family`, or None.
+def resolve_latest_for_role(
+        role: str, endpoint: str = DEFAULT_ENDPOINT) -> str | None:
+    """Return the latest OR-formatted model slug for `role`, or None.
 
-    `family` is a substring like `'haiku'` or `'sonnet'` (case-insensitive).
-    Picks the highest-versioned `anthropic/...` id whose tail contains
-    the family substring. Returns None on any network or parse failure
-    so the caller (install) can fall back to its hard-coded default.
+    `role` is `'fast'` or `'slow'`. Returns None when no rule exists,
+    when OR's catalog has no match, or when the network call fails --
+    the caller falls back to `INSTALL_DEFAULTS`. Only fires when the
+    install endpoint points at OpenRouter (callers guard via
+    `config.is_openrouter_endpoint`).
     """
-    cache_key = (endpoint, family.lower())
+    pattern = _ROLE_PATTERNS.get(role)
+    if pattern is None:
+        return None
+    cache_key = (endpoint, role)
     cached = _inventory_cache.get(cache_key)
     if cached is not None:
         return cached
 
     try:
-        models = _fetch_models(api_key, endpoint)
+        models = _fetch_models(endpoint)
     except (httpx.HTTPError, RuntimeError) as exc:
         logger.warning(
             f'openrouter /models fetch failed ({exc}); '
-            f'cannot resolve latest {family!r}')
+            f'cannot resolve latest {role!r}')
         return None
 
     candidates: list[str] = []
     seen: set[str] = set()
-    needle = family.lower()
     for entry in models:
         mid = entry.get('id') or entry.get('model_id') or ''
-        if not mid.startswith('anthropic/'):
-            continue
-        if needle not in mid.lower():
+        if not pattern.match(mid):
             continue
         if mid in seen:
             continue
@@ -103,8 +115,7 @@ def resolve_latest_in_family(
         candidates.append(mid)
 
     if not candidates:
-        logger.warning(
-            f'no anthropic/{family} model in openrouter inventory')
+        logger.warning(f'no {role!r} match in openrouter inventory')
         return None
 
     candidates.sort(key=_version_sort_key, reverse=True)

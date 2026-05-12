@@ -41,7 +41,8 @@ from typing import Any
 
 DATA_DIR = 'MEMMAN_DATA_DIR'
 STORE = 'MEMMAN_STORE'
-LLM_PROVIDER = 'MEMMAN_LLM_PROVIDER'
+LLM_ENDPOINT = 'MEMMAN_LLM_ENDPOINT'
+LLM_API_KEY = 'MEMMAN_LLM_API_KEY'
 LLM_MODEL_FAST = 'MEMMAN_LLM_MODEL_FAST'
 LLM_MODEL_SLOW_CANONICAL = 'MEMMAN_LLM_MODEL_SLOW_CANONICAL'
 LLM_MODEL_SLOW_METADATA = 'MEMMAN_LLM_MODEL_SLOW_METADATA'
@@ -77,8 +78,8 @@ def env_key_for(backend: str, key: str, store: str) -> str:
     return f'MEMMAN_{backend.upper()}_{key.upper()}_{store}'
 
 
-OPENROUTER_API_KEY = 'OPENROUTER_API_KEY'
-VOYAGE_API_KEY = 'VOYAGE_API_KEY'
+OPENROUTER_API_KEY = 'MEMMAN_OPENROUTER_API_KEY'
+VOYAGE_API_KEY = 'MEMMAN_VOYAGE_API_KEY'
 
 OPENAI_EMBED_API_KEY = 'MEMMAN_OPENAI_EMBED_API_KEY'
 OPENAI_EMBED_ENDPOINT = 'MEMMAN_OPENAI_EMBED_ENDPOINT'
@@ -95,12 +96,14 @@ TRUTHY = frozenset({'1', 'true', 'yes', 'on'})
 SECRET_VARS = frozenset({
     OPENROUTER_API_KEY,
     VOYAGE_API_KEY,
+    LLM_API_KEY,
     OPENAI_EMBED_API_KEY,
     DEFAULT_PG_DSN,
     })
 
 INSTALLABLE_KEYS = (
-    LLM_PROVIDER,
+    LLM_ENDPOINT,
+    LLM_API_KEY,
     LLM_MODEL_FAST,
     LLM_MODEL_SLOW_CANONICAL,
     LLM_MODEL_SLOW_METADATA,
@@ -123,13 +126,55 @@ INSTALLABLE_KEYS = (
     INTERVAL,
     )
 
-MANDATORY_INSTALL_KEYS = (
-    OPENROUTER_API_KEY,
-    VOYAGE_API_KEY,
-    )
+
+def required_install_keys(embed: str) -> set[str]:
+    """Return the API-key env vars install must populate for the embed provider.
+
+    LLM-side authentication is endpoint-driven; the wizard enforces the
+    "API key required for non-loopback endpoints" rule directly during
+    install rather than at this config layer. Experimental embed
+    providers return an empty set (doctor warns separately).
+    """
+    keys: set[str] = set()
+    if embed == 'openrouter':
+        keys.add(OPENROUTER_API_KEY)
+    if embed == 'voyage':
+        keys.add(VOYAGE_API_KEY)
+    if embed == 'openai':
+        keys.add(OPENAI_EMBED_API_KEY)
+    return keys
+
+
+def is_openrouter_endpoint(url: str) -> bool:
+    """Return True when `url` points at the OpenRouter API.
+
+    Normalizes the URL: parses with `urlparse`, lowercases the host,
+    strips a leading `www.`, and matches `openrouter.ai` or any
+    `*.openrouter.ai` subdomain (regional shards like `eu.openrouter.ai`).
+    Resilient to trailing slash and scheme variation.
+    """
+    from urllib.parse import urlparse
+    host = urlparse(url).hostname or ''
+    host = host.lower().removeprefix('www.')
+    return host == 'openrouter.ai' or host.endswith('.openrouter.ai')
+
+
+def is_loopback_endpoint(url: str) -> bool:
+    """Return True when `url` resolves to the local machine.
+
+    Used by the wizard to decide whether to require `MEMMAN_LLM_API_KEY`
+    on install: loopback endpoints (Ollama, local vLLM, LiteLLM proxy)
+    typically do not need auth.
+    """
+    from urllib.parse import urlparse
+    host = (urlparse(url).hostname or '').lower()
+    if host in {'localhost', '127.0.0.1', '::1'}:
+        return True
+    return host.endswith('.localhost')
+
 
 INSTALL_DEFAULTS: dict[str, str] = {
-    LLM_PROVIDER: 'openrouter',
+    LLM_ENDPOINT: 'https://openrouter.ai/api/v1',
     LLM_MODEL_FAST: 'anthropic/claude-haiku-4.5',
     LLM_MODEL_SLOW_CANONICAL: 'anthropic/claude-sonnet-4.6',
     LLM_MODEL_SLOW_METADATA: 'anthropic/claude-sonnet-4.6',
@@ -373,16 +418,48 @@ def effective_source(name: str) -> str:
     return 'unset'
 
 
+_LLM_ROLE_KEYS: tuple[tuple[str, str], ...] = (
+    (LLM_MODEL_FAST, 'fast'),
+    (LLM_MODEL_SLOW_CANONICAL, 'slow'),
+    (LLM_MODEL_SLOW_METADATA, 'slow'),
+    )
+
+
+def _resolve_llm_role_slugs(
+        knobs: dict[str, str],
+        needs_resolve: set[str],
+        endpoint: str) -> None:
+    """Populate the three LLM role slugs from OpenRouter's public catalog.
+
+    Fires only when `endpoint` points at OpenRouter; each role is
+    resolved against OR's `/v1/models` endpoint (no auth required).
+    Non-OR endpoints are handled by the wizard's interactive
+    model-slug prompt: the role keys stay in `needs_resolve` here
+    and are required to be filled by either the file, the shell, or
+    the wizard before install completes.
+    """
+    if not is_openrouter_endpoint(endpoint):
+        return
+    from memman.llm.openrouter_models import resolve_latest_for_role
+    for env_key, role in _LLM_ROLE_KEYS:
+        if env_key not in needs_resolve:
+            continue
+        resolved = resolve_latest_for_role(role, endpoint)
+        if resolved:
+            knobs[env_key] = resolved
+            needs_resolve.discard(env_key)
+
+
 def collect_install_knobs(data_dir: str) -> dict[str, str]:
     """Build the dict of values to persist to `~/.memman/env` at install.
 
     Precedence per key: existing env file > `os.environ` > OpenRouter
-    live resolver (FAST/SLOW only) > `INSTALL_DEFAULTS`. The shell
-    environment is consulted at install time only as a one-time seed
-    for keys missing from the file -- existing file values are sticky
-    and a later shell export never overrides them. Once written,
-    runtime resolution reads only the file (`config.get` does not
-    consult `os.environ` for installable keys).
+    live resolver (FAST/SLOW only, OR endpoint only) > `INSTALL_DEFAULTS`.
+    The shell environment is consulted at install time only as a
+    one-time seed for keys missing from the file -- existing file
+    values are sticky and a later shell export never overrides them.
+    Once written, runtime resolution reads only the file (`config.get`
+    does not consult `os.environ` for installable keys).
 
     Raises `ConfigError` (via the caller's import) when a mandatory
     secret is missing from both the file and the shell env.
@@ -404,30 +481,21 @@ def collect_install_knobs(data_dir: str) -> dict[str, str]:
             continue
         needs_resolve.add(key)
 
-    provider = knobs.get(LLM_PROVIDER) or INSTALL_DEFAULTS.get(LLM_PROVIDER)
-    if provider == 'openrouter':
-        from memman.llm.openrouter_models import resolve_latest_in_family
-        api_key = knobs.get(OPENROUTER_API_KEY, '')
-        endpoint = (
-            knobs.get(OPENROUTER_ENDPOINT)
-            or INSTALL_DEFAULTS[OPENROUTER_ENDPOINT])
-        for role_key, family in (
-                (LLM_MODEL_FAST, 'haiku'),
-                (LLM_MODEL_SLOW_CANONICAL, 'sonnet'),
-                (LLM_MODEL_SLOW_METADATA, 'sonnet')):
-            if role_key not in needs_resolve or not api_key:
-                continue
-            resolved = resolve_latest_in_family(api_key, endpoint, family)
-            if resolved:
-                knobs[role_key] = resolved
-                needs_resolve.discard(role_key)
+    endpoint = knobs.get(LLM_ENDPOINT) or INSTALL_DEFAULTS[LLM_ENDPOINT]
+    _resolve_llm_role_slugs(knobs, needs_resolve, endpoint)
 
     for key in list(needs_resolve):
         if key in INSTALL_DEFAULTS:
             knobs[key] = INSTALL_DEFAULTS[key]
             needs_resolve.discard(key)
 
-    for required in MANDATORY_INSTALL_KEYS:
+    if (not knobs.get(LLM_API_KEY)
+            and is_openrouter_endpoint(knobs.get(LLM_ENDPOINT, ''))
+            and knobs.get(OPENROUTER_API_KEY)):
+        knobs[LLM_API_KEY] = knobs[OPENROUTER_API_KEY]
+
+    chosen_embed = knobs.get(EMBED_PROVIDER) or INSTALL_DEFAULTS[EMBED_PROVIDER]
+    for required in sorted(required_install_keys(chosen_embed)):
         if not knobs.get(required):
             raise ConfigError(
                 f'{required} is required; export it or add it to'

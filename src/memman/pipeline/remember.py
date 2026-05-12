@@ -35,7 +35,7 @@ from memman.graph.enrichment import build_enriched_text, enrich_with_llm
 from memman.graph.entity import create_entity_edges
 from memman.graph.semantic import create_semantic_edges
 from memman.llm import extract as llm_extract
-from memman.llm.client import LLMProvider, get_llm_client
+from memman.llm.client import MemmanLLMClient, get_llm_client
 from memman.search.keyword import keyword_search
 from memman.search.quality import check_content_quality
 from memman.store.backend import Backend
@@ -103,7 +103,7 @@ def run_remember(
         embed_cache: dict[str, list[float]] | None = None,
         insights_by_id: dict[str, Insight] | None = None,
         executor: ThreadPoolExecutor | None = None,
-        llm_client: LLMProvider | None = None,
+        llm_client: MemmanLLMClient | None = None,
         ) -> dict[str, Any]:
     """Run the full remember pipeline and return the result dict.
 

@@ -13,7 +13,7 @@ from memman.graph.semantic import AUTO_SEMANTIC_THRESHOLD
 from memman.graph.semantic import create_semantic_edges
 from memman.graph.temporal import MAX_PROXIMITY_EDGES, MIN_PROXIMITY_WEIGHT
 from memman.graph.temporal import TEMPORAL_WINDOW_HOURS, create_temporal_edge
-from memman.llm.client import LLMProvider
+from memman.llm.client import MemmanLLMClient
 from memman.store.backend import Backend
 from memman.store.model import Edge, Insight
 
@@ -38,8 +38,8 @@ MAX_LINK_BATCH = 20
 def link_pending(
         backend: Backend,
         embed_cache: dict[str, list[float]] | None = None,
-        llm_client: LLMProvider | None = None,
-        metadata_llm_client: LLMProvider | None = None,
+        llm_client: MemmanLLMClient | None = None,
+        metadata_llm_client: MemmanLLMClient | None = None,
         embed_client: EmbeddingProvider | None = None,
         max_batch: int = MAX_LINK_BATCH,
         on_progress: Callable[[str, Insight], None] | None = None,
