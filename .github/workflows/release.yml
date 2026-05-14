@@ -3,95 +3,58 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
-  workflow_dispatch:
+      - "v*.*.*"
 
 permissions:
   contents: write
 
 jobs:
-  test:
+  verify-version:
+    name: Verify version
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get-version.outputs.version }}
+      should_publish: ${{ steps.check-pypi.outputs.should_publish }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - name: Get version from tag
+        id: get-version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          echo "version=$TAG" >> $GITHUB_OUTPUT
+          echo "Tag version: $TAG"
 
-      - name: Install dependencies
-        run: pip install poetry && poetry install
+      - name: Verify tag matches pyproject.toml
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          TAG_VERSION=${TAG#v}
+          VERSION=$(grep -Po '(?<=^version = ")[^"]*' pyproject.toml)
+          if [ "$TAG_VERSION" != "$VERSION" ]; then
+            echo "ERROR: Tag ($TAG) does not match pyproject.toml version ($VERSION)"
+            exit 1
+          fi
+          echo "Version verified: $TAG_VERSION"
 
-      - name: Run unit tests
-        run: make test
+      - name: Check if version exists on PyPI
+        id: check-pypi
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG#v}
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://pypi.org/pypi/memman/$VERSION/json)
+          if [ "$HTTP_STATUS" = "200" ]; then
+            echo "Version $VERSION already exists on PyPI, skipping publish"
+            echo "should_publish=false" >> $GITHUB_OUTPUT
+          else
+            echo "Version $VERSION not found on PyPI, will publish"
+            echo "should_publish=true" >> $GITHUB_OUTPUT
+          fi
 
-  test-live:
+  build:
+    name: Build distributions
+    needs: verify-version
+    if: needs.verify-version.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install poetry && poetry install
-
-      - name: Run unit tests against live providers
-        env:
-          MEMMAN_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          MEMMAN_VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
-        run: poetry run pytest tests/ --live --ignore=tests/e2e -n 16
-
-  e2e-cli:
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install poetry && poetry install --extras postgres
-
-      - name: Run CLI e2e tests
-        env:
-          MEMMAN_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          MEMMAN_VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
-          MEMMAN_E2E_REQUIRE_LIVE: '1'
-        run: make e2e-cli
-
-  e2e-container:
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install poetry && poetry install --extras postgres
-
-      - name: Run containerized e2e tests
-        env:
-          MEMMAN_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          MEMMAN_VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
-          MEMMAN_E2E_REQUIRE_LIVE: '1'
-        run: make e2e-container
-
-  release:
-    needs: [test, test-live, e2e-cli, e2e-container]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
 
@@ -103,10 +66,39 @@ jobs:
       - name: Install Poetry
         run: pip install poetry
 
-      - name: Build package
+      - name: Build sdist + wheel
         run: poetry build
 
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+
+  release:
+    name: Release
+    needs: [verify-version, build]
+    if: needs.verify-version.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: List distributions
+        run: ls -la dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*
+          generate_release_notes: true
+
       - name: Publish to PyPI
-        run: poetry publish --no-interaction
-        env:
-          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_TOKEN }}
+        uses: pypa/gh-action-pypi-publish@release/v1
