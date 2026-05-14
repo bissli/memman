@@ -22,6 +22,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from types import TracebackType
 from typing import Any, ClassVar, Self
 
 from memman.embed.fingerprint import Fingerprint
@@ -41,8 +42,8 @@ from memman.store.base import BaseNodeStore
 from memman.store.db import DB
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
 from memman.store.model import NodeStats, OpLogEntry, OpLogStats
-from memman.store.model import ProvenanceCount, ReembedRow, format_timestamp
-from memman.store.model import parse_timestamp
+from memman.store.model import ProvenanceCount, ReembedRow, WorkerRun
+from memman.store.model import format_timestamp, parse_timestamp
 
 logger = logging.getLogger('memman')
 
@@ -699,7 +700,7 @@ class SqliteBackend(Backend):
         """No-op for SQLite mode."""
         return
 
-    def recent_runs(self, *, limit: int) -> list:
+    def recent_runs(self, *, limit: int) -> list[WorkerRun]:
         """No-op: SQLite drain has no per-store worker_runs table."""
         return []
 
@@ -709,7 +710,11 @@ class SqliteBackend(Backend):
     def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None) -> None:
         self.close()
 
 

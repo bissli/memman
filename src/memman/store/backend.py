@@ -31,6 +31,7 @@ Distributed-shaping commitments baked into this Protocol surface:
 import re
 from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
 from memman.store.errors import ConfigError
@@ -685,7 +686,11 @@ class Backend(Protocol):
         """Return self so `with open_backend(...) as backend:` works."""
         ...
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None) -> None:
         """Close the backend on context exit."""
         ...
 

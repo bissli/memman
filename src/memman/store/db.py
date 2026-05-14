@@ -6,6 +6,7 @@ import re
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
+from types import TracebackType
 from typing import Any, Self
 
 logger = logging.getLogger('memman')
@@ -95,7 +96,11 @@ class DB:
     def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None) -> None:
         self.close()
 
     def _exec(

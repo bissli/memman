@@ -28,6 +28,7 @@ from collections import deque
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from memman.embed.fingerprint import Fingerprint
@@ -2052,7 +2053,11 @@ where table_schema = %s and table_name = %s
     def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            tb: TracebackType | None) -> None:
         self.close()
 
 
