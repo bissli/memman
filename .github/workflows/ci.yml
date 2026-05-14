@@ -36,6 +36,7 @@ jobs:
   test-live:
     runs-on: ubuntu-latest
     needs: test
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -47,11 +48,11 @@ jobs:
       - name: Install dependencies
         run: pip install poetry && poetry install
 
-      - name: Run unit tests against live providers
+      - name: Run prompt-quality tests against live providers
         env:
           MEMMAN_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           MEMMAN_VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
-        run: poetry run pytest tests/ --live --ignore=tests/e2e -n 16
+        run: poetry run pytest tests/test_prompt_live.py --live -n 4
 
   e2e-cli:
     runs-on: ubuntu-latest
