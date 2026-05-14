@@ -96,12 +96,59 @@ Embeddings power semantic search and graph connectivity. Vector dimensionality i
 
 ### 5.5.1 Supported providers
 
-| Provider           | Default model             | Notes                                                                                                                         |
-| ------------------ | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `voyage` (default) | `voyage-3-lite` (512-dim) | Requires `MEMMAN_VOYAGE_API_KEY`. Default; tuned thresholds (e.g., `AUTO_SEMANTIC_THRESHOLD = 0.62`) target this model.       |
-| `openai`           | `text-embedding-3-small`  | Requires `MEMMAN_OPENAI_EMBED_API_KEY` + `MEMMAN_OPENAI_EMBED_ENDPOINT`. Any OpenAI-compatible endpoint (vLLM, LiteLLM, ...). |
-| `openrouter`       | `baai/bge-m3`             | Reuses `MEMMAN_OPENROUTER_API_KEY` + `MEMMAN_OPENROUTER_ENDPOINT`; no separate secret needed.                                 |
-| `ollama`           | `nomic-embed-text`        | Local Ollama at `MEMMAN_OLLAMA_HOST` (default `http://localhost:11434`).                                                      |
+| Provider     | Default model             | Notes                                                                                                                                    |
+| ------------ | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `voyage`     | `voyage-3-lite` (512-dim) | Requires `MEMMAN_VOYAGE_API_KEY`. `AUTO_SEMANTIC_THRESHOLD` auto-resolved per `(provider, model, surface)` -- see `embed/thresholds.py`. |
+| `openai`     | `text-embedding-3-small`  | Requires `MEMMAN_OPENAI_EMBED_API_KEY` + `MEMMAN_OPENAI_EMBED_ENDPOINT`. Any OpenAI-compatible endpoint (vLLM, LiteLLM, ...).            |
+| `openrouter` | `baai/bge-m3`             | Reuses `MEMMAN_OPENROUTER_API_KEY` + `MEMMAN_OPENROUTER_ENDPOINT`; no separate secret needed.                                            |
+| `ollama`     | `nomic-embed-text`        | Local Ollama at `MEMMAN_OLLAMA_HOST` (default `http://localhost:11434`).                                                                 |
+
+The wizard ships defaulted to `voyage`; any of the four is selectable.
+
+### 5.5.1a Calibrated embedding models
+
+The shipped `_thresholds_generated.py` covers these `(provider, model)` pairs with surface-specific `AUTO_SEMANTIC_THRESHOLD` values. A store using one of these pairs gets the calibrated threshold automatically based on its `MEMMAN_SURFACE_<store>` setting (default `code`).
+
+| Provider     | Model                                     | code  | claw  |
+| ------------ | ----------------------------------------- | -----: | -----: |
+| `voyage`     | `voyage-3-lite`                           | 0.645 | 0.497 |
+| `voyage`     | `voyage-3`                                | 0.591 | 0.524 |
+| `voyage`     | `voyage-3-large`                          | 0.777 | 0.681 |
+| `voyage`     | `voyage-code-3`                           | 0.790 | 0.795 |
+| `voyage`     | `voyage-finance-2`                        | 0.654 | 0.688 |
+| `voyage`     | `voyage-law-2`                            | 0.625 | 0.611 |
+| `voyage`     | `voyage-multilingual-2`                   | 0.602 | 0.680 |
+| `openrouter` | `openai/text-embedding-3-small`           | 0.630 | 0.613 |
+| `openrouter` | `openai/text-embedding-3-large`           | 0.625 | 0.636 |
+| `openrouter` | `baai/bge-m3`                             | 0.662 | 0.687 |
+| `openrouter` | `baai/bge-large-en-v1.5`                  | 0.738 | 0.712 |
+| `openrouter` | `intfloat/e5-large-v2`                    | 0.856 | 0.845 |
+| `openrouter` | `intfloat/multilingual-e5-large`          | 0.967 | 0.962 |
+| `openrouter` | `qwen/qwen3-embedding-8b`                 | 0.639 | 0.783 |
+| `openrouter` | `sentence-transformers/all-MiniLM-L6-v2`  | 0.569 | 0.591 |
+| `openrouter` | `sentence-transformers/all-mpnet-base-v2` | 0.610 | 0.669 |
+| `ollama`     | `nomic-embed-text`                        | 0.738 | 0.744 |
+| `ollama`     | `mxbai-embed-large`                       | 0.748 | 0.700 |
+| `ollama`     | `all-minilm`                              | 0.558 | 0.568 |
+| `ollama`     | `snowflake-arctic-embed`                  | 0.704 | 0.752 |
+
+### 5.5.1b Models not on the calibrated list
+
+A store fingerprinted to a `(provider, model)` triple outside the table above falls back to the **surface-wide median** of the calibrated values for that surface — empirically the lowest-error single-constant rule (mean nDCG@5 loss ~0.014 vs the calibrated optimum on the shipped triples, max ~0.08).
+
+| Surface | Fallback threshold |
+| ------- | ------------------: |
+| `code`  | 0.6495             |
+| `claw`  | 0.6840             |
+
+`memman doctor`'s `embed_threshold` check warns when an uncalibrated triple is in use and reports `source: 'surface_median'` plus the fallback value in the detail payload.
+
+Operators with a quality-critical store can override the fallback by setting `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>` in `~/.memman/env`. Accepted values:
+
+- A float in `(0.0, 1.0)`: an explicit cosine cutoff for this store.
+- The sentinel `skip` (also accepted: `none`): disable semantic-edge creation for this store regardless of the model.
+
+`memman config set MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store> 0.72` (or `skip`) is the supported way to write it. The override takes precedence over both the calibrated table and the median fallback.
 
 ### 5.5.2 Vector storage
 
@@ -110,7 +157,7 @@ Vector serialization depends on the active storage backend for the store (`MEMMA
 - **SQLite** — little-endian float64 BLOB stored in `insights.embedding`; bytes per row = 8 × provider dim (e.g., a 512-dim model writes 4096 bytes).
 - **Postgres** — `pgvector` `vector(N)` typed column, persisted as float32 (HNSW-indexed). The migrate path (`PostgresMigrator` in `src/memman/store/postgres.py`) casts SQLite float64 BLOBs to `numpy.float32` before binding to avoid silent rounding by psycopg.
 
-> **Threshold recalibration.** `AUTO_SEMANTIC_THRESHOLD = 0.62` was calibrated against the current default embed model (`voyage-3-lite`). Different providers and dimensionalities produce different similarity distributions; if you switch provider, recalibrate from observed pairwise distributions.
+> **Threshold resolution.** `AUTO_SEMANTIC_THRESHOLD` is resolved at runtime in this precedence order: (1) per-store env override `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>`; (2) calibrated table lookup `(provider, model, surface)` via `memman.embed.thresholds.resolve`; (3) surface-wide median fallback via `thresholds.resolve_with_fallback`. Surface is a closed set `{'code', 'claw'}` resolved per store via `MEMMAN_SURFACE_<store>` (default `'code'`). The fallback path always returns a usable float, so uncalibrated triples still produce semantic edges -- just at a bounded-but-not-optimal threshold; `memman doctor`'s `embed_threshold` check reports the `source` (`calibrated`, `surface_median`, `override`, or `override_skip`). **After upgrading memman, run `memman graph rebuild` for each store** to recompute semantic edges at the active per-surface threshold for its `meta.embed_fingerprint`. Without rebuild, only new insights flowing through `link_pending` get the corrected threshold; existing edges stay at their built-time value.
 
 ### 5.5.3 Embedding in the pipeline
 

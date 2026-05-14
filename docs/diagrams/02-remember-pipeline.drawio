@@ -120,7 +120,7 @@
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <mxCell id="r_fast" value="&lt;b&gt;Fast edges&lt;/b&gt; (per fact)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;temporal (backbone + 4h proximity, MAX_PROXIMITY_EDGES=5) ·&lt;br&gt;entity (IDF-weighted, MAX_ENTITY_LINKS=5/entity, MAX_TOTAL_ENTITY_EDGES=50) ·&lt;br&gt;semantic (cos ≥ AUTO_SEMANTIC_THRESHOLD=0.62, MAX_AUTO_SEMANTIC_EDGES=3)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_fast" value="&lt;b&gt;Fast edges&lt;/b&gt; (per fact)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;temporal (backbone + 4h proximity, MAX_PROXIMITY_EDGES=5) ·&lt;br&gt;entity (IDF-weighted, MAX_ENTITY_LINKS=5/entity, MAX_TOTAL_ENTITY_EDGES=50) ·&lt;br&gt;semantic (cos ≥ AUTO_SEMANTIC_THRESHOLD per (provider, model, surface), MAX_AUTO_SEMANTIC_EDGES=3)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="80" y="920" width="940" height="65" as="geometry" />
         </mxCell>
 

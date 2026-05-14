@@ -184,21 +184,9 @@ Bi-encoder retrieval (Steps 1–4) embeds the query and each insight independent
 
 Failures (timeouts, non-200 responses) are caught and logged; the baseline ordering is returned unchanged with `meta.reranked = false`. The 1-2 token query gate skips rerank when there is too little query signal for the cross-encoder to use.
 
-### Empirical evidence
+### Why rerank is on by default
 
-Two evaluations led to shipping rerank as the default with a per-store opt-out. Phase 1 (12 queries × 1 store, no labels) ruled out cheap alternatives: bumping `ANCHOR_TOP_K`, retuning weights, and LLM query expansion none closed the gap. Phase 2 (90 queries × 3 stores, ~4500 graded relevance labels via Haiku 4.5 on a 0–3 scale) measured the lift against ground truth.
-
-| Headline metric                                           | baseline | rerank           | Δ          |
-| --------------------------------------------------------- | --------: | ----------------: | ----------: |
-| nDCG@5 (combined)                                         | 0.648    | **0.788**        | **+0.140** |
-| Recall@5                                                  | 0.573    | **0.695**        | +0.122     |
-| MRR                                                       | 0.759    | **0.835**        | +0.076     |
-| P@1                                                       | 0.711    | **0.789**        | +0.078     |
-| Mean P@5 (fraction of top-5 with rel ≥ 2)                 | 0.476    | **0.556**        | +0.080     |
-| Queries where rerank wins / ties / loses                  | —        | **56 / 12 / 22** | —          |
-| Queries where rerank loses a rel=3 (directly-answers) doc | —        | **0**            | —          |
-
-Rerank helps most where the bi-encoder is weakest: +0.40 nDCG@5 on the 22 weak-baseline queries vs +0.06 on the 44 already-strong ones. All three stores show the same shape. WHY/WHEN intents — predicted to regress — gained the most (+0.097 / +0.351) because their bi-encoder baselines were the weakest to begin with.
+Rerank is enabled by default because a labeled-corpus evaluation showed it lifts retrieval quality where the bi-encoder is weakest, with no observed regression on the kinds of queries it was predicted to hurt. WHY and WHEN intents — initially predicted to regress under cross-encoder reranking — gained the most, because their bi-encoder baselines were the weakest. The per-store `MEMMAN_RERANK_ENABLED_<store>` knob exists for operators whose corpora prove to be exceptions.
 
 ### Step 5: WHY post-processing — causal topological sort
 

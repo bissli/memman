@@ -97,7 +97,7 @@
         <mxCell id="a_ent" value="&lt;b&gt;entity.py&lt;/b&gt;&lt;br&gt;LLM-extracted&lt;br&gt;IDF-weighted" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6F3FF;strokeColor=#6c8ebf;" vertex="1" parent="1">
           <mxGeometry x="620" y="395" width="100" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="a_sem" value="&lt;b&gt;semantic.py&lt;/b&gt;&lt;br&gt;auto: cos≥0.62" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
+        <mxCell id="a_sem" value="&lt;b&gt;semantic.py&lt;/b&gt;&lt;br&gt;auto: cos≥AUTO_SEMANTIC_THRESHOLD" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
           <mxGeometry x="510" y="455" width="100" height="50" as="geometry" />
         </mxCell>
         <mxCell id="a_cau" value="&lt;b&gt;causal.py&lt;/b&gt;&lt;br&gt;LLM inference&lt;br&gt;(parallel)" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#FFE6E6;strokeColor=#b85450;" vertex="1" parent="1">

@@ -103,10 +103,10 @@ memman forget <id>
 | `--expand` | `false`       | Opt-in LLM query expansion (synonyms + entity hints) |
 
 The cross-encoder rerank stage is on by default and auto-skips on 1-2 token
-queries. Provider is set via `MEMMAN_RERANK_PROVIDER` (default `voyage` /
-`rerank-2.5-lite`). Toggle per-store with
-`memman config set MEMMAN_RERANK_ENABLED_<store> false` or globally with
-`memman config set MEMMAN_RERANK_ENABLED false`.
+queries. Provider is selected via `MEMMAN_RERANK_PROVIDER` (any registered
+rerank provider; ships defaulted to `voyage` / `rerank-2.5-lite`). Toggle
+per-store with `memman config set MEMMAN_RERANK_ENABLED_<store> false` or
+globally with `memman config set MEMMAN_RERANK_ENABLED false`.
 
 ### Graph operations
 
@@ -174,6 +174,29 @@ Two switching paths:
 - **`embed reembed`** is the offline path: every store is rewritten in place with the current `MEMMAN_EMBED_PROVIDER`. Requires the scheduler to be **stopped** (`memman scheduler stop`).
 
 **Per-store embedder sovereignty.** Each store's `meta.embed_fingerprint` is the runtime authority over its embedder. Recall, drain, graph rebuild, and snapshot writes all bind the embedder from the store's fingerprint, not from `MEMMAN_EMBED_PROVIDER`. One process can sequentially open two stores fingerprinted to different providers without env mutation — e.g., `MEMMAN_EMBED_PROVIDER=voyage memman --store openai_store recall ...` succeeds against an OpenAI-fingerprinted store. Switching a store's embedder is explicit (`embed swap` or `embed reembed`); there is no silent migration. Implementation details: [05-lifecycle.md § 5.5](design/05-lifecycle.md#55-embedding-support).
+
+#### Using an embedding model not on the calibrated list
+
+The shipped `_thresholds_generated.py` covers 20 `(provider, model)` pairs across `voyage`, `openrouter`, and `ollama` (see [05-lifecycle.md § 5.5.1a](design/05-lifecycle.md#551a-calibrated-embedding-models)). A store bound to a model outside that list falls back to the surface-wide median (`code` = 0.6495, `claw` = 0.6840) and `memman doctor` reports `embed_threshold: warn` with `source: surface_median`. Semantic edges still get created — the fallback is bounded (mean nDCG@5 loss ~0.014 vs calibrated on the shipped triples).
+
+Operators with a quality-critical store running an uncalibrated model can set a per-store override:
+
+```bash
+# Set an explicit cosine cutoff (float in (0.0, 1.0))
+memman config set MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store> 0.72
+
+# Or disable semantic-edge creation entirely for this store
+memman config set MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store> skip
+
+# Inspect the active source for a store
+memman doctor               # embed_threshold detail shows source
+```
+
+The override takes precedence over both the calibrated table and the median fallback. Doctor validates the value: numeric must be in `(0.0, 1.0)`; sentinels `skip` and `none` disable edges; anything else fails the check.
+
+**Upgrading from a version with a single shared `AUTO_SEMANTIC_THRESHOLD`.** Existing stores keep working after the upgrade (no schema migration). Newly remembered insights are linked at the per-fingerprint calibrated threshold, but pre-existing semantic edges keep whatever weights they were created with — so two insights inserted before the upgrade may show a different edge population than two near-identical insights inserted after. To rebalance the whole store at the current threshold, run `memman graph rebuild <store>`. This is optional; existing edges remain valid.
+
+
 
 ### Store management
 
@@ -297,7 +320,7 @@ The full variable list lives in [CONTRIBUTING.md § Variable reference](../CONTR
 
 ### Install wizard
 
-Run `memman install` in a TTY to get the interactive wizard. It first prompts for the LLM endpoint URL (default `https://openrouter.ai/api/v1`); for OpenRouter endpoints it auto-resolves the three role model slugs (`MEMMAN_LLM_MODEL_FAST` / `_SLOW_CANONICAL` / `_SLOW_METADATA`) against `/v1/models`, for any other endpoint it prompts for each slug interactively. It then prompts (with masked input) for `MEMMAN_LLM_API_KEY` (required for non-loopback endpoints; loopback endpoints like Ollama may leave it blank) and `MEMMAN_VOYAGE_API_KEY` (required when `MEMMAN_EMBED_PROVIDER=voyage`, the default). It also offers a backend selector (sqlite/postgres) when the `memman[postgres]` extra is installed; the wizard probes the DSN, verifies the `pgvector` extension, and (for non-localhost DSNs) emits a hint about PgBouncer transaction pooling. Headless installs bypass the wizard:
+Run `memman install` in a TTY to get the interactive wizard. It prompts for the LLM endpoint URL (any OpenAI-compatible endpoint; ships defaulted to `https://openrouter.ai/api/v1`); for OpenRouter endpoints it auto-resolves the three role model slugs (`MEMMAN_LLM_MODEL_FAST` / `_SLOW_CANONICAL` / `_SLOW_METADATA`) against `/v1/models`, for any other endpoint it prompts for each slug interactively. It then prompts (masked input) for `MEMMAN_LLM_API_KEY` (required for non-loopback endpoints; loopback endpoints like Ollama may leave it blank), then for the embedding provider (any registered provider; ships defaulted to `voyage`) and the matching key for that provider (e.g. `MEMMAN_VOYAGE_API_KEY` for voyage, `MEMMAN_OPENAI_EMBED_API_KEY` for openai; openrouter reuses the LLM key). It also offers a backend selector (sqlite/postgres) when the `memman[postgres]` extra is installed; the wizard probes the DSN, verifies the `pgvector` extension, and (for non-localhost DSNs) emits a hint about PgBouncer transaction pooling. Headless installs bypass the wizard:
 
 - `--backend [sqlite|postgres]` — explicit backend choice; required in non-interactive mode if you want anything other than sqlite.
 - `--pg-dsn URL` — Postgres DSN; required with `--backend postgres` in non-interactive mode. The DSN may omit the password to use `~/.pgpass`, `PGSERVICE`, or `PGPASSWORD`.

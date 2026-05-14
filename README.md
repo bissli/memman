@@ -103,22 +103,54 @@ pipx install memman
 memman install
 ```
 
-In a TTY, the install wizard prompts for the LLM endpoint URL (default `https://openrouter.ai/api/v1`) and, with masked input, for `MEMMAN_LLM_API_KEY` (the bearer token for that endpoint) plus `MEMMAN_VOYAGE_API_KEY`. Loopback LLM endpoints (Ollama, local vLLM/LiteLLM) may leave the API key blank. Headless / CI installs need the keys exported (or pre-written into `~/.memman/env`) and should pass `--no-wizard`. After install, the env file at `~/.memman/env` (mode 0600) is the canonical source of truth; runtime never reads the shell for installable settings. Change a setting with `memman config set KEY VALUE`. See [CONTRIBUTING.md § Variable reference](CONTRIBUTING.md#variable-reference) for the full key list and [USAGE.md § Configuration](docs/USAGE.md#configuration) for the precedence model.
+In a TTY, the install wizard prompts for an LLM endpoint URL and an embedding provider, then collects the keys each one needs (masked input). Pre-seeded defaults are accepted with Enter, but any registered provider works equally well — see [Provider setup](#provider-setup) below for the full list. Loopback LLM endpoints (Ollama, local vLLM/LiteLLM) may leave the API key blank. Headless / CI installs need the keys exported (or pre-written into `~/.memman/env`) and should pass `--no-wizard`. After install, the env file at `~/.memman/env` (mode 0600) is the canonical source of truth; runtime never reads the shell for installable settings. Change a setting with `memman config set KEY VALUE`. See [CONTRIBUTING.md § Variable reference](CONTRIBUTING.md#variable-reference) for the full key list and [USAGE.md § Configuration](docs/USAGE.md#configuration) for the precedence model.
 
-Switching LLM providers is a one-env-var edit:
+### Provider setup
+
+memman talks to two external services: an **LLM** (fact extraction, reconciliation, enrichment, query expansion) and an **embedding provider** (vector search, graph connectivity). Both are pluggable; the embed side is also per-store via `meta.embed_fingerprint`.
+
+#### LLM providers
+
+The LLM client speaks OpenAI-compatible `/chat/completions` against whichever endpoint you configure. Any vendor exposing an OpenAI-compat shim is reachable without code changes.
+
+| Provider                | Endpoint                       | Key (`MEMMAN_LLM_API_KEY`) |
+| ----------------------- | ------------------------------ | -------------------------- |
+| OpenRouter              | `https://openrouter.ai/api/v1` | `sk-or-...`                |
+| OpenAI                  | `https://api.openai.com/v1`    | `sk-...`                   |
+| Anthropic (OpenAI shim) | `https://api.anthropic.com/v1` | `sk-ant-...`               |
+| Ollama (local)          | `http://localhost:11434/v1`    | blank                      |
+| vLLM / LiteLLM          | your endpoint                  | as required                |
+
+Switching is a one-env-var edit:
 
 ```bash
-# OpenAI direct
 memman config set MEMMAN_LLM_ENDPOINT https://api.openai.com/v1
 memman config set MEMMAN_LLM_API_KEY sk-...
-
-# Anthropic via its OpenAI-compat shim
-memman config set MEMMAN_LLM_ENDPOINT https://api.anthropic.com/v1
-memman config set MEMMAN_LLM_API_KEY sk-ant-...
-
-# Local Ollama (no API key)
-memman config set MEMMAN_LLM_ENDPOINT http://localhost:11434/v1
 ```
+
+Model slugs per role (`MEMMAN_LLM_MODEL_FAST` / `_SLOW_CANONICAL` / `_SLOW_METADATA`) are auto-resolved against `/v1/models` for OpenRouter endpoints; for any other endpoint, re-run `memman install` and the wizard prompts for each slug interactively.
+
+#### Embedding providers
+
+Four embed providers are registered. Each store records its active `(provider, model, dim)` triple in `meta.embed_fingerprint` so one process can serve multiple stores fingerprinted to different providers.
+
+| Provider     | Default model            | Key                                                               |
+| ------------ | ------------------------ | ----------------------------------------------------------------- |
+| `voyage`     | `voyage-3-lite` (512d)   | `MEMMAN_VOYAGE_API_KEY`                                           |
+| `openai`     | `text-embedding-3-small` | `MEMMAN_OPENAI_EMBED_API_KEY` + `MEMMAN_OPENAI_EMBED_ENDPOINT`    |
+| `openrouter` | `baai/bge-m3` (1024d)    | reuses `MEMMAN_OPENROUTER_API_KEY` + `MEMMAN_OPENROUTER_ENDPOINT` |
+| `ollama`     | `nomic-embed-text`       | local; `MEMMAN_OLLAMA_HOST` (default `http://localhost:11434`)    |
+
+20 `(provider, model)` pairs across `voyage`, `openrouter`, and `ollama` ship with a per-surface calibrated `AUTO_SEMANTIC_THRESHOLD` — see [docs/design/05-lifecycle.md § 5.5.1a](docs/design/05-lifecycle.md#551a-calibrated-embedding-models) for the table. A store on any other `(provider, model)` falls back to the surface-wide median (bounded mean nDCG@5 loss ~0.014 against the calibrated triples).
+
+Switch on a new install:
+
+```bash
+memman config set MEMMAN_EMBED_PROVIDER openai
+memman config set MEMMAN_OPENAI_EMBED_API_KEY sk-...
+```
+
+Switch a populated store: online via `memman embed swap --to <model> --provider <name>` (resumable, atomic cutover) or offline via `memman embed reembed` (requires `memman scheduler stop`). See [USAGE.md § Embedding operations](docs/USAGE.md#embedding-operations).
 
 `pipx install` puts the `memman` binary on your PATH. `memman install` wires integration into Claude Code, [OpenClaw](https://github.com/openclaw/openclaw), and/or [NanoClaw](https://github.com/qwibitai/nanoclaw). The paths it writes:
 
@@ -214,7 +246,7 @@ memman install      # deploy integration
 memman uninstall    # remove integration
 ```
 
-**Dependencies**: Python 3.11+, Click, httpx, cachetools, tqdm, numpy. **Required at runtime**: an LLM bearer token (`MEMMAN_LLM_API_KEY`) for the configured OpenAI-compatible endpoint, and an embedding provider key (`MEMMAN_VOYAGE_API_KEY` by default). The LLM side is swapped by setting `MEMMAN_LLM_ENDPOINT` to any OpenAI-compatible URL (OpenRouter, OpenAI, Anthropic via its `/v1` shim, Ollama, vLLM, LiteLLM); the embed side is pluggable across registered providers. See [USAGE.md § Configuration](docs/USAGE.md#configuration) for the current set of supported providers.
+**Dependencies**: Python 3.11+, Click, httpx, cachetools, tqdm, numpy. **Required at runtime**: a key for the configured LLM endpoint (`MEMMAN_LLM_API_KEY`) and a key for the active embedding provider (env var varies — see [Provider setup](#provider-setup)). Both sides are pluggable via one env-var edit. See [USAGE.md § Configuration](docs/USAGE.md#configuration) for the precedence model.
 
 ## Documentation
 
