@@ -32,8 +32,22 @@ class Client:
         self._availability_cache: bool | None = None
 
     def prepare(self) -> None:
-        """No-op: Voyage's dim is fixed at construction."""
-        return
+        """Populate `dim` by probing the API if it's not already known.
+
+        Default voyage-3-lite has its dim baked in at construction, so
+        the common path is a no-op. Non-default models routed via
+        `registry.get_for` reset `dim` to 0 (they have different
+        dimensionalities -- voyage-3 returns 1024, voyage-3-large
+        returns 1024, etc.); a single test embed populates the actual
+        dim for those callers.
+        """
+        if self.dim:
+            return
+        try:
+            vec = self.embed('test')
+            self.dim = len(vec)
+        except Exception:
+            return
 
     def _headers(self) -> dict[str, str]:
         """Build request headers with auth."""

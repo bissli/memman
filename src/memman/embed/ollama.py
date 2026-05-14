@@ -4,10 +4,10 @@ Talks to a local Ollama server's `/api/embeddings` endpoint. Host and
 model are read from the env-or-file resolver (populated at install
 time from `INSTALL_DEFAULTS`).
 
-`dim` is discovered from the first successful embed call.
-
-Suggested semantic threshold (0.70) is a starting point only —
-empirical recalibration on real data is required.
+`dim` is discovered from the first successful embed call. The semantic
+threshold is auto-resolved per-(provider, model) from
+`memman.embed.thresholds`; uncalibrated models skip semantic-edge
+creation rather than apply a wrong-model default.
 """
 
 import logging
@@ -36,6 +36,11 @@ class Client:
         self.model = model
         self.dim = 0
         self._availability_cache: bool | None = None
+        raw_max = config.get(config.OLLAMA_MAX_INPUT_CHARS) or '1500'
+        try:
+            self.max_input_chars = int(raw_max)
+        except ValueError:
+            self.max_input_chars = 1500
 
     def prepare(self) -> None:
         """Probe the host with a 1-token embed and cache `dim`.
@@ -66,7 +71,18 @@ class Client:
         return result
 
     def embed(self, text: str) -> list[float]:
-        """Generate embedding for text via Ollama API."""
+        """Generate embedding for text via Ollama API.
+
+        Ollama's embedding runner crashes (returns HTTP 500 with an EOF
+        error) on long inputs, even when the model's context window
+        would accommodate them -- the failure point is content-dependent
+        and unrelated to `num_ctx`. Voyage/OpenAI/OpenRouter handle this
+        server-side; ollama does not, so we truncate client-side to a
+        configurable safe limit before sending.
+        """
+        original_len = len(text)
+        if original_len > self.max_input_chars:
+            text = text[:self.max_input_chars]
         url = f'{self.host}/api/embeddings'
         body = {'model': self.model, 'prompt': text}
         trace.event(
@@ -74,7 +90,9 @@ class Client:
             provider='ollama',
             url=url,
             model=self.model,
-            input_len=len(text))
+            input_len=len(text),
+            original_len=original_len,
+            truncated=original_len > self.max_input_chars)
         t0 = time.monotonic()
         resp = post_with_retry(
             get_session(__name__), url, json=body, timeout=30.0)
