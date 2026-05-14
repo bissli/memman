@@ -37,7 +37,8 @@ from memman.store.backend import Backend
 @contextmanager
 def active_store(
         *, data_dir: str, store: str,
-        unchecked: bool = False) -> Iterator[Backend]:
+        unchecked: bool = False,
+        reindex_on_open: bool = True) -> Iterator[Backend]:
     """Yield the active Backend for one operation.
 
     Dispatches on the per-store keys (`MEMMAN_BACKEND_<store>` with
@@ -56,6 +57,11 @@ def active_store(
             `_resolve_store_name` before invoking this helper).
         unchecked: when True, skip seed/assert/reindex. Used by
             diagnostics that must run against a stale or fresh store.
+        reindex_on_open: when False, skip the constants-hash reindex
+            check on open while still running the fingerprint
+            seed/assert. Used by recall to keep a potentially-long
+            reindex off the user-facing hot path; the drainer's
+            maintenance pass picks up the drift instead.
 
     Raises
         click.ClickException: when the fingerprint check or backend
@@ -76,7 +82,8 @@ def active_store(
         raise click.ClickException(str(exc)) from exc
     try:
         if not unchecked:
-            reindex_if_constants_changed(backend, store_name=store)
+            if reindex_on_open:
+                reindex_if_constants_changed(backend, store_name=store)
             try:
                 fp_mod.seed_if_fresh(backend, get_client())
                 fp_mod.bound_embedder(backend)

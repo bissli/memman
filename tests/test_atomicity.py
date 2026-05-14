@@ -46,9 +46,13 @@ def _wrap_backend_open(monkeypatch):
     orig_active = session_mod.active_store
 
     @contextmanager
-    def wrapped(*, data_dir: str, store: str, unchecked: bool = False):
+    def wrapped(*, data_dir: str, store: str,
+                unchecked: bool = False,
+                reindex_on_open: bool = True):
         with orig_active(
-                data_dir=data_dir, store=store, unchecked=unchecked) as backend:
+                data_dir=data_dir, store=store,
+                unchecked=unchecked,
+                reindex_on_open=reindex_on_open) as backend:
             orig_tx = backend.transaction
 
             @contextmanager

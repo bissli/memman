@@ -249,9 +249,13 @@ def _resolve_semantic_threshold(
     return threshold
 
 
+REINDEX_CHUNK_SIZE = 10
+
+
 def reindex_auto_edges(
         backend: Backend, dry_run: bool = False,
-        store_name: str | None = None) -> dict[str, int]:
+        store_name: str | None = None,
+        chunk_size: int = REINDEX_CHUNK_SIZE) -> dict[str, int]:
     """Delete auto-created edges and re-create semantic/entity edges.
 
     Heuristic causal edges are deleted (replaced by LLM in Tier 3).
@@ -259,6 +263,20 @@ def reindex_auto_edges(
 
     `store_name` plumbs through to `_resolve_semantic_threshold` for
     per-store surface dispatch; None resolves the code-surface default.
+
+    Chunking: the per-insight delete-then-create loop runs in
+    transactions of `chunk_size` insights so each lock-hold stays
+    sub-second. A reader (e.g. recall on the hot path) waiting on the
+    write lock sees at most ~200-400ms of blocking per chunk, well
+    inside the 5s `busy_timeout`. The bulk deletes of `semantic`,
+    `entity`, `causal`, and low-weight temporal edges happen in a
+    short global pre-pass; per-chunk per-insight delete-then-create
+    is idempotent because `backend.edges.upsert` is additive.
+
+    Crash semantics: if reindex crashes mid-chunk, the caller's
+    `reindex_if_constants_changed` will NOT stamp the new
+    constants_hash, so the next drain retries. Per-insight
+    delete-then-create makes the retry idempotent.
     """
     semantic_threshold = _resolve_semantic_threshold(
         backend, store_name=store_name)
@@ -291,54 +309,47 @@ def reindex_auto_edges(
         return dry_stats
 
     stats: dict[str, int] = {
-        'semantic_deleted': 0,
-        'entity_deleted': 0,
-        'temporal_pruned': 0,
-        'causal_deleted': 0,
+        'semantic_deleted': semantic_del,
+        'entity_deleted': entity_del,
+        'temporal_pruned': temporal_del,
+        'causal_deleted': causal_del,
         'semantic_created': 0,
         'entity_created': 0,
         }
 
-    def tx_body() -> None:
+    with backend.transaction(), backend.write_lock('reindex'):
         backend.edges.delete_auto_by_type('semantic')
-        stats['semantic_deleted'] = semantic_del
-
         backend.edges.delete_auto_by_type('entity')
-        stats['entity_deleted'] = entity_del
-
         backend.edges.delete_low_weight_temporal_proximity(
             min_weight=MIN_PROXIMITY_WEIGHT)
-        stats['temporal_pruned'] = temporal_del
-
         backend.edges.delete_auto_by_type('causal')
-        stats['causal_deleted'] = causal_del
 
-        insights = backend.nodes.get_all_active()
-        if not insights:
-            return
-
+    insights = backend.nodes.get_all_active()
+    if insights:
         embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
+        for start in range(0, len(insights), chunk_size):
+            chunk = insights[start:start + chunk_size]
+            with backend.transaction(), backend.write_lock('reindex'):
+                for insight in chunk:
+                    backend.edges.delete_auto_for_node(
+                        insight.id, 'semantic')
+                    backend.edges.delete_auto_for_node(
+                        insight.id, 'entity')
+                    create_entity_edges(backend, insight)
+                    create_semantic_edges(
+                        backend, insight, embed_cache,
+                        threshold=semantic_threshold)
 
-        for insight in insights:
-            stats['entity_created'] += create_entity_edges(
-                backend, insight)
-            stats['semantic_created'] += create_semantic_edges(
-                backend, insight, embed_cache,
-                threshold=semantic_threshold)
-
+    with backend.transaction(), backend.write_lock('reindex'):
         stats['entity_created'] = backend.edges.count_auto_by_type(
             'entity')
         stats['semantic_created'] = backend.edges.count_auto_by_type(
             'semantic')
-
         backend.nodes.clear_linked_at()
-
         backend.oplog.log(
             operation='reindex', insight_id='',
             detail=json.dumps(stats))
 
-    with backend.transaction(), backend.write_lock('reindex'):
-        tx_body()
     return stats
 
 

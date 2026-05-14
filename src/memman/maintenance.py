@@ -3,7 +3,11 @@
 Steps:
 1. `queue.purge_done` -- drop completed queue rows.
 2. `queue.purge_worker_runs` -- prune the heartbeat ledger.
-3. Per touched store with rows_processed > 0:
+3. All-stores pass: `reindex_if_constants_changed` for every store
+   on disk (touched or not). Hash matches -> O(1) no-op; drift
+   triggers the chunked reindex here, asynchronously from any user
+   recall on the hot path.
+4. Per touched store with rows_processed > 0:
    - `trim_oplog_by_age` (once per drain, not per row).
    - `link_pending` with a small batch cap so a backlog of pending
      enrichments cannot blow the maintenance budget.
@@ -68,6 +72,9 @@ def run_maintenance(
     except Exception:
         logger.exception('maintenance: retry_stale failed')
 
+    _reindex_all_stores_if_drift(
+        data_dir, store_contexts, deadline_monotonic)
+
     for store_name in touched_stores:
         if time.monotonic() >= deadline_monotonic:
             logger.debug(
@@ -83,6 +90,55 @@ def run_maintenance(
         except Exception:
             logger.exception(
                 f'maintenance: snapshot write failed for {store_name!r}')
+
+
+def _reindex_all_stores_if_drift(
+        data_dir: str,
+        store_contexts: dict[str, Any],
+        deadline_monotonic: float) -> None:
+    """Reindex auto-edges for every on-disk store whose constants hash drifted.
+
+    Touched stores reuse the open `ctx.backend`; untouched stores are
+    opened transiently with `unchecked=True` so a missing fingerprint
+    (fresh store with no data) is not fatal. Hash-compare is O(1)
+    when nothing has drifted; the chunked reindex only fires on the
+    rare drift event (e.g. after a constants-table edit on deploy).
+    """
+    from memman.graph.engine import reindex_if_constants_changed
+    from memman.session import active_store
+    from memman.store.factory import list_stores
+
+    try:
+        stores = list_stores(data_dir)
+    except Exception:
+        logger.exception('maintenance: list_stores failed')
+        return
+
+    for store_name in stores:
+        if time.monotonic() >= deadline_monotonic:
+            logger.debug(
+                'maintenance: deadline reached mid all-stores reindex pass')
+            return
+        ctx = store_contexts.get(store_name)
+        if ctx is not None:
+            try:
+                reindex_if_constants_changed(
+                    ctx.backend, store_name=store_name)
+            except Exception:
+                logger.exception(
+                    f'maintenance: reindex_if_constants_changed failed'
+                    f' for touched store {store_name!r}')
+            continue
+        try:
+            with active_store(
+                    data_dir=data_dir, store=store_name,
+                    unchecked=True) as backend:
+                reindex_if_constants_changed(
+                    backend, store_name=store_name)
+        except Exception:
+            logger.exception(
+                f'maintenance: reindex_if_constants_changed failed'
+                f' for quiet store {store_name!r}')
 
 
 def _run_per_store_maintenance(

@@ -11,6 +11,7 @@ import logging.handlers
 import os
 import pathlib
 import re
+import sqlite3
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -166,7 +167,9 @@ def _get_llm_client_or_fail(role: str):
         raise click.ClickException(str(exc)) from exc
 
 
-def _active_backend(ctx: click.Context, *, unchecked: bool = False):
+def _active_backend(
+        ctx: click.Context, *,
+        unchecked: bool = False, reindex_on_open: bool = True):
     """Click adapter around `memman.session.active_store`.
 
     Resolves data_dir and the active store name from the click context
@@ -177,12 +180,17 @@ def _active_backend(ctx: click.Context, *, unchecked: bool = False):
 
     Pass `unchecked=True` from diagnostics (`doctor`, `embed status`)
     that must run against a stale or fresh store without tripping the
-    fingerprint assert.
+    fingerprint assert. Pass `reindex_on_open=False` from recall so the
+    on-open constants-hash reindex (potentially seconds of cosine work)
+    stays off the user-facing hot path; the drainer's maintenance pass
+    repairs drift instead.
     """
     from memman.session import active_store
     data_dir = ctx.obj['data_dir']
     name = _resolve_store_name(data_dir, ctx.obj['store'])
-    return active_store(data_dir=data_dir, store=name, unchecked=unchecked)
+    return active_store(
+        data_dir=data_dir, store=name,
+        unchecked=unchecked, reindex_on_open=reindex_on_open)
 
 
 def _parse_since(since: str) -> str:
@@ -1195,18 +1203,24 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
     per_store_rerank = config.get_store_rerank_enabled(store_name)
     rerank = (per_store_rerank if per_store_rerank is not None
               else config.get_bool(config.RERANK_ENABLED, default=True))
-    with _active_backend(ctx) as backend:
+    with _active_backend(ctx, reindex_on_open=False) as backend:
         if basic:
             results = backend.nodes.query(
                 keyword=keyword_str, category=cat,
                 source=source, limit=limit)
-            with backend.transaction():
-                for r in results:
-                    backend.nodes.increment_access_count(r.id)
-                    r.access_count += 1
-                backend.oplog.log(
-                    operation='recall:basic', insight_id='',
-                    detail=f'q={keyword_str} hits={len(results)}')
+            for r in results:
+                r.access_count += 1
+            try:
+                with backend.transaction():
+                    for r in results:
+                        backend.nodes.increment_access_count(r.id)
+                    backend.oplog.log(
+                        operation='recall:basic', insight_id='',
+                        detail=f'q={keyword_str} hits={len(results)}')
+            except sqlite3.OperationalError as exc:
+                logger.debug(
+                    'recall_bookkeep_skipped basic q=%r: %s',
+                    keyword_str, exc)
             _json_out({
                 'results': [_insight_to_dict(r) for r in results],
                 'meta': {'basic': True},
@@ -1268,14 +1282,20 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                  'gr': round(r['signals']['graph'], 3),
                  'ent': round(r['signals']['entity'], 3)}
                 for r in resp['results']]
-        with backend.transaction():
-            for r in resp['results']:
-                backend.nodes.increment_access_count(r['insight'].id)
-                r['insight'].access_count += 1
-            backend.oplog.log(
-                operation='recall-detail', insight_id='',
-                detail=json.dumps({'intent': resp['meta']['intent'],
-                                   'q': keyword_str[:80], 'hits': hits}))
+        for r in resp['results']:
+            r['insight'].access_count += 1
+        try:
+            with backend.transaction():
+                for r in resp['results']:
+                    backend.nodes.increment_access_count(r['insight'].id)
+                backend.oplog.log(
+                    operation='recall-detail', insight_id='',
+                    detail=json.dumps({'intent': resp['meta']['intent'],
+                                       'q': keyword_str[:80], 'hits': hits}))
+        except sqlite3.OperationalError as exc:
+            logger.debug(
+                'recall_bookkeep_skipped detail q=%r: %s',
+                keyword_str, exc)
 
         out = {
             'results': [
