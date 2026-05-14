@@ -1,24 +1,51 @@
 [tool.poetry]
 name = "memman"
-version = "0.15.4"
-description = "Persistent memory for LLM agents"
+version = "0.15.5"
+description = "LLM-supervised persistent memory for AI agents - intent-aware graph recall, RAG, and pluggable embeddings for Claude Code, OpenClaw, and NanoClaw."
 authors = ["bissli"]
 license = "MIT"
 readme = "README.md"
 homepage = "https://github.com/bissli/memman"
 repository = "https://github.com/bissli/memman"
-keywords = ["llm", "memory", "agents", "rag", "embeddings", "knowledge-graph"]
+documentation = "https://github.com/bissli/memman/blob/master/docs/DESIGN.md"
+keywords = [
+    "ai",
+    "ai-agents",
+    "agent-memory",
+    "agents",
+    "llm",
+    "memory",
+    "long-term-memory",
+    "rag",
+    "embeddings",
+    "vector-search",
+    "semantic-search",
+    "knowledge-graph",
+    "claude",
+    "claude-code",
+    "anthropic",
+    "openai",
+    "pgvector",
+    ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
     "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing :: Indexing",
+    "Typing :: Typed",
     ]
 packages = [{include = "memman", from = "src"}, {include = "scripts"}]
 include = ["src/memman/setup/assets/**/*"]
