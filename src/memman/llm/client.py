@@ -85,13 +85,19 @@ class MemmanLLMClient:
         self.timeout = timeout
         self.extra_headers = dict(extra_headers) if extra_headers else {}
 
-    def complete(self, system: str, user: str) -> str:
-        """Send a chat-completion request."""
+    def complete(self, system: str, user: str, *,
+                 temperature: float | None = None) -> str:
+        """Send a chat-completion request.
+
+        `temperature`: pass a float (typically 0.0) to pin sampling and
+        get deterministic outputs across runs. When None, the provider's
+        default temperature is used.
+        """
         headers: dict[str, str] = {'Content-Type': 'application/json'}
         if self.api_key:
             headers['Authorization'] = f'Bearer {self.api_key}'
         headers.update(self.extra_headers)
-        body = {
+        body: dict = {
             'model': self.model,
             'max_tokens': self.max_tokens,
             'messages': [
@@ -99,6 +105,8 @@ class MemmanLLMClient:
                 {'role': 'user', 'content': user},
                 ],
             }
+        if temperature is not None:
+            body['temperature'] = temperature
 
         url = f'{self.endpoint}/chat/completions'
         for attempt in range(MAX_RETRIES):

@@ -232,7 +232,10 @@ def intent_aware_recall(
         limit: int, *,
         fingerprint: 'Fingerprint',
         intent_override: str | None = None,
-        rerank: bool = False) -> dict[str, Any]:
+        rerank: bool = False,
+        rerank_weights_override: dict[
+            str, tuple[float, float, float, float]] | None = None,
+        ) -> dict[str, Any]:
     """Perform MAGMA-aligned intent-aware retrieval.
 
     Loads the worker-materialized snapshot when present and consumes
@@ -245,6 +248,11 @@ def intent_aware_recall(
     are re-scored by Voyage rerank-2.5-lite and the rerank score
     replaces the final ordering. On reranker failure the baseline
     ordering is preserved.
+
+    `rerank_weights_override`, when set, reads the intent's
+    `(w_kw, w_ent, w_sim, w_gr)` tuple from the override dict instead of
+    module-level `RERANK_WEIGHTS`; otherwise `RERANK_WEIGHTS` is
+    authoritative.
     """
     if intent_override:
         intent = intent_override
@@ -447,7 +455,10 @@ def intent_aware_recall(
         c['sim_score'] = sim_score
         c['graph_score'] = graph_score
 
-    w_kw, w_ent, w_sim, w_gr = RERANK_WEIGHTS.get(
+    rerank_table = (rerank_weights_override
+                    if rerank_weights_override is not None
+                    else RERANK_WEIGHTS)
+    w_kw, w_ent, w_sim, w_gr = rerank_table.get(
         intent, RERANK_WEIGHTS['GENERAL'])
 
     results: list[dict[str, Any]] = []

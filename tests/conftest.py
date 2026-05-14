@@ -380,8 +380,13 @@ def _mock_apis(request, monkeypatch):
     llm_extract_mod.reset_expand_cache()
 
 
-def _mock_llm_complete(self: object, system: str, user: str) -> str:
-    """Route to appropriate mock based on system prompt content."""
+def _mock_llm_complete(self: object, system: str, user: str,
+                       **kwargs: object) -> str:
+    """Route to appropriate mock based on system prompt content.
+
+    Accepts and ignores keyword args (e.g. `temperature`) so callers
+    that pass them for reproducibility don't break the mock.
+    """
     if 'Extract atomic facts' in system:
         return _mock_fact_extraction(user)
     if 'Compare new facts' in system:

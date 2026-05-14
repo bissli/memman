@@ -284,3 +284,77 @@ class TestRecallRanking:
             limit=5, intent_override='GENERAL',
             fingerprint=stored_fingerprint(backend))
         assert 'sparse' not in result['meta']
+
+    def test_rerank_weights_override_shipped_matches_default(self, backend):
+        """Passing `RERANK_WEIGHTS` as override produces identical scores.
+
+        Establishes that the override path with the default values is a
+        no-op against the production path.
+        """
+        for i in range(5):
+            backend.nodes.insert(make_insight(
+                id=f'ovr-shipped-{i}',
+                content=f'common keyword topic alpha {i}'))
+        baseline = intent_aware_recall(
+            backend, query='common keyword topic alpha',
+            query_vec=None, query_entities=[],
+            limit=5, intent_override='WHEN',
+            fingerprint=stored_fingerprint(backend))
+        with_override = intent_aware_recall(
+            backend, query='common keyword topic alpha',
+            query_vec=None, query_entities=[],
+            limit=5, intent_override='WHEN',
+            fingerprint=stored_fingerprint(backend),
+            rerank_weights_override=dict(RERANK_WEIGHTS))
+        baseline_order = [r['insight'].id for r in baseline['results']]
+        override_order = [r['insight'].id for r in with_override['results']]
+        assert baseline_order == override_order
+        for a, b in zip(baseline['results'], with_override['results']):
+            assert abs(a['score'] - b['score']) < 1e-9
+
+    def test_rerank_weights_override_changes_ordering(self, backend):
+        """An exaggerated override re-orders results.
+
+        Confirms the override is actually consulted, not silently ignored.
+        Two insights have identical keyword match on the query tokens;
+        one carries an entity that matches the query's entity set. Under
+        a keyword-only weighting they score equally; under an
+        entity-only weighting the entity-bearing one wins.
+        """
+        backend.nodes.insert(make_insight(
+            id='ovr-a', content='alpha beta gamma topic',
+            importance=1))
+        backend.nodes.insert(make_insight(
+            id='ovr-b', content='alpha beta gamma topic',
+            importance=1, entities=['Voyage']))
+        kw_dominant = {
+            'WHEN': (1.0, 0.0, 0.0, 0.0),
+            'WHY': (1.0, 0.0, 0.0, 0.0),
+            'ENTITY': (1.0, 0.0, 0.0, 0.0),
+            'GENERAL': (1.0, 0.0, 0.0, 0.0),
+            }
+        ent_dominant = {
+            'WHEN': (0.0, 1.0, 0.0, 0.0),
+            'WHY': (0.0, 1.0, 0.0, 0.0),
+            'ENTITY': (0.0, 1.0, 0.0, 0.0),
+            'GENERAL': (0.0, 1.0, 0.0, 0.0),
+            }
+        kw_resp = intent_aware_recall(
+            backend, query='alpha beta gamma topic',
+            query_vec=None, query_entities=['Voyage'],
+            limit=5, intent_override='GENERAL',
+            fingerprint=stored_fingerprint(backend),
+            rerank_weights_override=kw_dominant)
+        ent_resp = intent_aware_recall(
+            backend, query='alpha beta gamma topic',
+            query_vec=None, query_entities=['Voyage'],
+            limit=5, intent_override='GENERAL',
+            fingerprint=stored_fingerprint(backend),
+            rerank_weights_override=ent_dominant)
+        kw_scores = {r['insight'].id: r['score']
+                     for r in kw_resp['results']}
+        ent_scores = {r['insight'].id: r['score']
+                      for r in ent_resp['results']}
+        assert kw_scores['ovr-a'] == pytest.approx(
+            kw_scores['ovr-b'], abs=1e-9)
+        assert ent_scores['ovr-b'] > ent_scores['ovr-a']
