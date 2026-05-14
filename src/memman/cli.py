@@ -1208,12 +1208,11 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
             results = backend.nodes.query(
                 keyword=keyword_str, category=cat,
                 source=source, limit=limit)
-            for r in results:
-                r.access_count += 1
             try:
                 with backend.transaction():
                     for r in results:
                         backend.nodes.increment_access_count(r.id)
+                        r.access_count += 1
                     backend.oplog.log(
                         operation='recall:basic', insight_id='',
                         detail=f'q={keyword_str} hits={len(results)}')
@@ -1282,12 +1281,11 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                  'gr': round(r['signals']['graph'], 3),
                  'ent': round(r['signals']['entity'], 3)}
                 for r in resp['results']]
-        for r in resp['results']:
-            r['insight'].access_count += 1
         try:
             with backend.transaction():
                 for r in resp['results']:
                     backend.nodes.increment_access_count(r['insight'].id)
+                    r['insight'].access_count += 1
                 backend.oplog.log(
                     operation='recall-detail', insight_id='',
                     detail=json.dumps({'intent': resp['meta']['intent'],
