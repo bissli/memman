@@ -68,6 +68,27 @@ def RERANK_ENABLED_FOR(store: str) -> str:
     return f'MEMMAN_RERANK_ENABLED_{store}'
 
 
+def SURFACE_FOR(store: str) -> str:
+    """Per-store surface env-key name: `MEMMAN_SURFACE_<store>`."""
+    return f'MEMMAN_SURFACE_{store}'
+
+
+def AUTO_THRESHOLD_FOR(store: str) -> str:
+    """Per-store auto-threshold env-key name.
+
+    Returns `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>`. Operator override
+    for the cosine cutoff that gates auto-semantic-edge creation. The
+    value is either a float in `(0.0, 1.0)` or the sentinel `'skip'`
+    (also accepted: `'none'`), the latter meaning "do not create
+    semantic edges for this store regardless of model".
+    """
+    return f'MEMMAN_AUTO_SEMANTIC_THRESHOLD_{store}'
+
+
+SURFACE_VALUES: frozenset[str] = frozenset({'code', 'claw'})
+AUTO_THRESHOLD_SENTINELS: frozenset[str] = frozenset({'skip', 'none'})
+
+
 def env_key_for(backend: str, key: str, store: str) -> str:
     """Per-store env-key name for a backend descriptor key.
 
@@ -316,6 +337,62 @@ def get_store_backend(
     file_values = parse_env_file(env_file_path(data_dir))
     raw = file_values.get(BACKEND_FOR(store))
     return raw or None
+
+
+def get_store_surface(
+        store: str, data_dir: str | None = None) -> str:
+    """Resolve the surface (`'code'` or `'claw'`) for `store`.
+
+    Reads `MEMMAN_SURFACE_<store>` from the env file; falls back to
+    `'code'` when the key is unset, missing, or set to a value outside
+    `SURFACE_VALUES`. Pairs with `memman.embed.thresholds.resolve(...,
+    surface=...)` so a store without an explicit surface lands on the
+    code-surface threshold row.
+
+    Invalid values (e.g. `'foo'`) silently default to `'code'` here;
+    `memman doctor`'s `check_per_store_keys` is the surface-validation
+    entry point and is where operators see the error.
+    """
+    key = SURFACE_FOR(store)
+    if data_dir is None:
+        raw = get(key)
+    else:
+        raw = parse_env_file(env_file_path(data_dir)).get(key) or None
+    if raw is None:
+        return 'code'
+    value = raw.strip().lower()
+    return value if value in SURFACE_VALUES else 'code'
+
+
+def get_store_auto_threshold(
+        store: str,
+        data_dir: str | None = None) -> float | str | None:
+    """Read the per-store AUTO_SEMANTIC_THRESHOLD override.
+
+    Returns `None` when unset; the literal `'skip'` when the operator
+    set `skip` or `none` to disable semantic edges for this store; a
+    float when the operator set a numeric override.
+
+    Raises `ValueError` if the value is neither a recognized sentinel
+    nor a float in `(0.0, 1.0)`. Doctor's `check_per_store_keys`
+    catches that and reports the error to the operator.
+    """
+    key = AUTO_THRESHOLD_FOR(store)
+    if data_dir is None:
+        raw = get(key)
+    else:
+        raw = parse_env_file(env_file_path(data_dir)).get(key) or None
+    if raw is None or raw.strip() == '':
+        return None
+    value = raw.strip().lower()
+    if value in AUTO_THRESHOLD_SENTINELS:
+        return 'skip'
+    parsed = float(value)
+    if not 0.0 < parsed < 1.0:
+        raise ValueError(
+            f'{key}={raw!r} is out of range; must be a float in (0.0, 1.0)'
+            f' or one of {sorted(AUTO_THRESHOLD_SENTINELS)}')
+    return parsed
 
 
 def get_store_rerank_enabled(

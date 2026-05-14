@@ -39,7 +39,7 @@ from memman.migrate import PendingReembed, SwapState, sanitize_identifier
 from memman.store.backend import Backend, EdgeStore, MetaStore, NodeStore
 from memman.store.backend import Oplog, RecallSession, _check_identifier
 from memman.store.base import BaseNodeStore
-from memman.store.errors import BackendError, ConfigError
+from memman.store.errors import BackendError
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
 from memman.store.model import NodeStats, OpLogEntry, OpLogStats
 from memman.store.model import ProvenanceCount, ReembedRow, WorkerRun
@@ -1783,7 +1783,7 @@ class PostgresBackend(Backend):
 
     @contextmanager
     def recall_session(
-            self, fingerprint: 'Fingerprint',
+            self, fingerprint: Fingerprint,
             ) -> Iterator[PostgresRecallSession]:
         del fingerprint
         session = PostgresRecallSession(self._dsn, self._schema)

@@ -124,6 +124,14 @@ def run_wizard(
         click.echo(click.style(
             'wizard: using existing env-file values', dim=True))
 
+    if interactive:
+        click.echo(click.style(
+            "note: default surface is 'code'; if you primarily store"
+            ' agent/Claw-register content, set'
+            ' MEMMAN_SURFACE_<store>=claw via `memman config set`'
+            ' (see `memman doctor` for the per-store calibration source).',
+            dim=True))
+
     return out
 
 

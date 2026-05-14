@@ -119,7 +119,8 @@ def _run_per_store_maintenance(
             embed_cache=ctx.embed_cache,
             llm_client=ctx.llm_client,
             embed_client=ctx.ec,
-            max_batch=MAINTENANCE_LINK_PENDING_MAX)
+            max_batch=MAINTENANCE_LINK_PENDING_MAX,
+            store_name=store_name)
         if processed:
             logger.debug(
                 f'maintenance: link_pending processed {processed} insights'

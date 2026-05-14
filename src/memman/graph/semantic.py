@@ -1,23 +1,31 @@
 """Semantic edge creation and candidate discovery.
 
-AUTO_SEMANTIC_THRESHOLD is model-specific. If the embedding model changes,
-recalibrate by computing all pairwise cosine similarities and inspecting
-quality at each band. See docs/design/04-graph-model.md.
+Callers pass a per-(provider, model, surface) calibrated value resolved
+via `memman.graph.engine._resolve_semantic_threshold`. Passing
+`threshold=None` short-circuits to zero edges, which is how uncalibrated
+fingerprints opt out of auto-semantic-edge creation.
 """
 
 from memman.embed.vector import cosine_similarity
 from memman.store.backend import Backend
 from memman.store.model import Edge, Insight, format_float
 
-AUTO_SEMANTIC_THRESHOLD = 0.62
 MAX_AUTO_SEMANTIC_EDGES = 3
 
 
 def create_semantic_edges(
         backend: Backend, insight: Insight,
         embed_cache: dict[str, list[float]] | None = None,
-        dry_run: bool = False) -> int:
-    """Auto-create semantic edges for insights with high cosine similarity."""
+        dry_run: bool = False,
+        threshold: float | None = None) -> int:
+    """Auto-create semantic edges for insights with high cosine similarity.
+
+    `threshold` is the cosine cutoff. `None` (the default) means the
+    calling fingerprint is uncalibrated; the function short-circuits to
+    zero edges rather than apply a wrong-model default.
+    """
+    if threshold is None:
+        return 0
     if embed_cache is None:
         embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
     if not embed_cache:
@@ -32,7 +40,7 @@ def create_semantic_edges(
         if eid == insight.id:
             continue
         cos_sim = cosine_similarity(insight_vec, other_vec)
-        if cos_sim >= AUTO_SEMANTIC_THRESHOLD:
+        if cos_sim >= threshold:
             scored.append((eid, cos_sim))
 
     if not scored:

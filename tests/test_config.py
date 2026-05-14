@@ -32,6 +32,7 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_OPENAI_EMBED_MODEL',
     'MEMMAN_OLLAMA_HOST',
     'MEMMAN_OLLAMA_EMBED_MODEL',
+    'MEMMAN_OLLAMA_MAX_INPUT_CHARS',
     'MEMMAN_OPENROUTER_EMBED_MODEL',
     'MEMMAN_INTERVAL',
     }
@@ -166,6 +167,7 @@ def test_constants_match_expected_names():
         config.OPENAI_EMBED_MODEL,
         config.OLLAMA_HOST,
         config.OLLAMA_EMBED_MODEL,
+        config.OLLAMA_MAX_INPUT_CHARS,
         config.OPENROUTER_EMBED_MODEL,
         config.DEFAULT_BACKEND,
         config.DEFAULT_PG_DSN,
@@ -190,6 +192,87 @@ def test_get_bool_falsy_values(env_file):
     for val in ['0', 'false', 'no', 'off', '', 'garbage']:
         env_file(config.LOG_LEVEL, val)
         assert config.get_bool(config.LOG_LEVEL) is False
+
+
+def test_auto_threshold_for_returns_per_store_key():
+    """`AUTO_THRESHOLD_FOR(store)` produces the canonical env-key name.
+    """
+    assert config.AUTO_THRESHOLD_FOR('mystore') == \
+        'MEMMAN_AUTO_SEMANTIC_THRESHOLD_mystore'
+
+
+def test_get_store_auto_threshold_unset_returns_none(env_file):
+    """No per-store key set -> None (defer to calibrated / fallback).
+    """
+    env_file(config.AUTO_THRESHOLD_FOR('s1'), None)
+    assert config.get_store_auto_threshold('s1') is None
+
+
+def test_get_store_auto_threshold_numeric(env_file):
+    """A numeric value is parsed to float.
+    """
+    env_file(config.AUTO_THRESHOLD_FOR('s2'), '0.72')
+    assert config.get_store_auto_threshold('s2') == 0.72
+
+
+def test_get_store_auto_threshold_skip_sentinel(env_file):
+    """`skip` is a sentinel meaning 'do not emit semantic edges'.
+    """
+    env_file(config.AUTO_THRESHOLD_FOR('s3'), 'skip')
+    assert config.get_store_auto_threshold('s3') == 'skip'
+
+
+def test_get_store_auto_threshold_none_sentinel(env_file):
+    """`none` is an alias for `skip`.
+    """
+    env_file(config.AUTO_THRESHOLD_FOR('s4'), 'none')
+    assert config.get_store_auto_threshold('s4') == 'skip'
+
+
+def test_get_store_auto_threshold_invalid_raises(env_file):
+    """Non-numeric, non-sentinel values raise ValueError.
+    """
+    env_file(config.AUTO_THRESHOLD_FOR('s5'), 'not-a-number')
+    with pytest.raises(ValueError):
+        config.get_store_auto_threshold('s5')
+
+
+def test_get_store_auto_threshold_out_of_range_raises(env_file):
+    """Values outside (0.0, 1.0) raise ValueError -- cosine cutoffs only.
+    """
+    env_file(config.AUTO_THRESHOLD_FOR('s6'), '1.5')
+    with pytest.raises(ValueError):
+        config.get_store_auto_threshold('s6')
+
+
+def test_get_store_auto_threshold_boundary_zero_raises(env_file):
+    """Exactly 0.0 raises -- the bound is strictly exclusive.
+    """
+    env_file(config.AUTO_THRESHOLD_FOR('zerobound'), '0.0')
+    with pytest.raises(ValueError):
+        config.get_store_auto_threshold('zerobound')
+
+
+def test_get_store_auto_threshold_boundary_one_raises(env_file):
+    """Exactly 1.0 raises -- the bound is strictly exclusive.
+    """
+    env_file(config.AUTO_THRESHOLD_FOR('onebound'), '1.0')
+    with pytest.raises(ValueError):
+        config.get_store_auto_threshold('onebound')
+
+
+def test_get_store_auto_threshold_whitespace_returns_none(env_file):
+    """Whitespace-only value is treated as unset, not as malformed.
+    """
+    env_file(config.AUTO_THRESHOLD_FOR('blank'), '   ')
+    assert config.get_store_auto_threshold('blank') is None
+
+
+def test_get_store_auto_threshold_scientific_notation(env_file):
+    """Scientific notation (`5e-1`) parses to a float in range.
+    """
+    env_file(config.AUTO_THRESHOLD_FOR('sci'), '5e-1')
+    assert config.get_store_auto_threshold('sci') == 0.5
 
 
 def test_is_worker_detects_worker_env(monkeypatch):
@@ -322,6 +405,146 @@ class TestConfigSet:
         assert parsed[config.DEFAULT_BACKEND] == 'postgres'
         assert parsed[config.LLM_ENDPOINT] == 'https://openrouter.ai/api/v1'
         assert parsed[config.OPENROUTER_API_KEY] == 'keep-me'
+
+    def test_writes_per_store_auto_threshold_numeric(self, tmp_path):
+        """`MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>=0.55` writes to env file.
+        """
+        runner = CliRunner()
+        data_dir = str(tmp_path / 'memman')
+        key = config.AUTO_THRESHOLD_FOR('mystore')
+        result = runner.invoke(
+            cli, ['--data-dir', data_dir, 'config', 'set', key, '0.55'])
+        assert result.exit_code == 0, result.output
+        parsed = config.parse_env_file(config.env_file_path(data_dir))
+        assert parsed[key] == '0.55'
+
+    def test_writes_per_store_auto_threshold_skip_sentinel(self, tmp_path):
+        """`MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>=skip` writes to env file.
+        """
+        runner = CliRunner()
+        data_dir = str(tmp_path / 'memman')
+        key = config.AUTO_THRESHOLD_FOR('noedges')
+        result = runner.invoke(
+            cli, ['--data-dir', data_dir, 'config', 'set', key, 'skip'])
+        assert result.exit_code == 0, result.output
+        parsed = config.parse_env_file(config.env_file_path(data_dir))
+        assert parsed[key] == 'skip'
+
+    def test_rejects_per_store_auto_threshold_garbage(self, tmp_path):
+        """A non-numeric, non-sentinel value is rejected by `config set`."""
+        runner = CliRunner()
+        data_dir = str(tmp_path / 'memman')
+        key = config.AUTO_THRESHOLD_FOR('badval')
+        result = runner.invoke(
+            cli, ['--data-dir', data_dir, 'config', 'set', key, 'garbage'])
+        assert result.exit_code != 0
+        assert 'must be a float' in result.output
+
+    def test_rejects_per_store_auto_threshold_out_of_range(self, tmp_path):
+        """A float outside (0.0, 1.0) is rejected by `config set`."""
+        runner = CliRunner()
+        data_dir = str(tmp_path / 'memman')
+        key = config.AUTO_THRESHOLD_FOR('oor')
+        result = runner.invoke(
+            cli, ['--data-dir', data_dir, 'config', 'set', key, '1.5'])
+        assert result.exit_code != 0
+        assert 'out of range' in result.output
+
+    def test_rejects_invalid_surface(self, tmp_path):
+        """`MEMMAN_SURFACE_<store>=legal` is rejected (closed set)."""
+        runner = CliRunner()
+        data_dir = str(tmp_path / 'memman')
+        key = config.SURFACE_FOR('wrong')
+        result = runner.invoke(
+            cli, ['--data-dir', data_dir, 'config', 'set', key, 'legal'])
+        assert result.exit_code != 0
+        assert 'must be one of' in result.output
+
+    def test_get_store_surface_silently_falls_back_on_invalid(self, tmp_path):
+        """An invalid surface value in the env file returns 'code'
+        instead of raising. Validation happens in `memman doctor`;
+        the read-side helper must stay total so recall does not blow
+        up on a misconfigured store.
+        """
+        data_dir = tmp_path / 'memman'
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / config.ENV_FILENAME).write_text(
+            f'{config.SURFACE_FOR("bogus")}=legal\n')
+        assert config.get_store_surface(
+            'bogus', data_dir=str(data_dir)) == 'code'
+
+
+class TestConfigGet:
+    """`memman config get KEY` prints env-file values, exits 1 on unset."""
+
+    def test_get_returns_value(self, tmp_path):
+        """`config get` echoes the stored value for a set key."""
+        data_dir = tmp_path / 'memman'
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / config.ENV_FILENAME).write_text(
+            f'{config.DEFAULT_BACKEND}=sqlite\n')
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ['--data-dir', str(data_dir), 'config', 'get',
+                  config.DEFAULT_BACKEND])
+        assert result.exit_code == 0, result.output
+        assert 'sqlite' in result.output
+
+    def test_get_exits_nonzero_for_unset_key(self, tmp_path):
+        """`config get` exits 1 with a message when the key is unset."""
+        data_dir = tmp_path / 'memman'
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / config.ENV_FILENAME).write_text('')
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ['--data-dir', str(data_dir), 'config', 'get',
+                  config.DEFAULT_BACKEND])
+        assert result.exit_code != 0
+        assert 'is not set' in result.output
+
+    def test_get_redacts_api_key(self, tmp_path):
+        """API key values do not echo plaintext via `config get`."""
+        data_dir = tmp_path / 'memman'
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / config.ENV_FILENAME).write_text(
+            f'{config.OPENROUTER_API_KEY}=secret-token-xyz\n')
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ['--data-dir', str(data_dir), 'config', 'get',
+                  config.OPENROUTER_API_KEY])
+        assert result.exit_code == 0
+        assert 'secret-token-xyz' not in result.output
+
+
+class TestConfigShowSurfaceAndAutoThreshold:
+    """`config show` surfaces per-store SURFACE_ and AUTO_SEMANTIC_THRESHOLD_ keys."""
+
+    def test_show_includes_per_store_surface(self, tmp_path):
+        """`MEMMAN_SURFACE_<store>` appears in per_store output."""
+        data_dir = tmp_path / 'memman'
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / config.ENV_FILENAME).write_text(
+            f'{config.SURFACE_FOR("mystore")}=claw\n')
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ['--data-dir', str(data_dir), 'config', 'show'])
+        assert result.exit_code == 0, result.output
+        assert 'MEMMAN_SURFACE_mystore' in result.output
+        assert 'claw' in result.output
+
+    def test_show_includes_per_store_auto_threshold(self, tmp_path):
+        """`MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>` appears in per_store output.
+        """
+        data_dir = tmp_path / 'memman'
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / config.ENV_FILENAME).write_text(
+            f'{config.AUTO_THRESHOLD_FOR("tuned")}=0.72\n')
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ['--data-dir', str(data_dir), 'config', 'show'])
+        assert result.exit_code == 0, result.output
+        assert 'MEMMAN_AUTO_SEMANTIC_THRESHOLD_tuned' in result.output
+        assert '0.72' in result.output
 
 
 class TestConfigSetPgDsn:

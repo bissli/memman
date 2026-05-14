@@ -573,6 +573,151 @@ class TestCheckPerStoreKeys:
                  if s['store'] is not None]
         assert 'declared_only' in names
 
+    def test_surface_unset_defaults_to_code_without_warn(
+            self, tmp_path, env_file):
+        """A store with no MEMMAN_SURFACE_<store> key passes; surface='code'.
+
+        The runtime default in `config.get_store_surface` is `'code'`,
+        so an unset key is the canonical state for operator stores --
+        no warn, no error.
+        """
+        from memman import config
+        from memman.doctor import check_per_store_keys
+
+        data_dir = str(tmp_path / 'memman')
+        Path(data_dir, 'data', 'unset').mkdir(parents=True, exist_ok=True)
+        Path(data_dir, 'data', 'unset', 'memman.db').write_bytes(b'')
+        env_file(config.BACKEND_FOR('unset'), 'sqlite')
+
+        out = check_per_store_keys(data_dir)
+        assert out['status'] == 'pass'
+        match = next(s for s in out['detail']['stores']
+                     if s['store'] == 'unset')
+        assert match['surface'] == 'code'
+        assert match['surface_source'] == 'default'
+        assert match.get('error') is None
+
+    def test_surface_set_claw_passes(self, tmp_path, env_file):
+        """`MEMMAN_SURFACE_<store>=claw` -> pass with surface='claw'.
+        """
+        from memman import config
+        from memman.doctor import check_per_store_keys
+
+        data_dir = str(tmp_path / 'memman')
+        Path(data_dir, 'data', 'agent').mkdir(parents=True, exist_ok=True)
+        Path(data_dir, 'data', 'agent', 'memman.db').write_bytes(b'')
+        env_file(config.BACKEND_FOR('agent'), 'sqlite')
+        env_file(config.SURFACE_FOR('agent'), 'claw')
+
+        out = check_per_store_keys(data_dir)
+        assert out['status'] == 'pass'
+        match = next(s for s in out['detail']['stores']
+                     if s['store'] == 'agent')
+        assert match['surface'] == 'claw'
+        assert match['surface_source'] == 'per_store'
+        assert match.get('error') is None
+
+    def test_surface_invalid_value_fails(self, tmp_path, env_file):
+        """`MEMMAN_SURFACE_<store>=legal` -> fail (outside closed set).
+        """
+        from memman import config
+        from memman.doctor import check_per_store_keys
+
+        data_dir = str(tmp_path / 'memman')
+        Path(data_dir, 'data', 'badsurf').mkdir(parents=True, exist_ok=True)
+        Path(data_dir, 'data', 'badsurf', 'memman.db').write_bytes(b'')
+        env_file(config.BACKEND_FOR('badsurf'), 'sqlite')
+        env_file(config.SURFACE_FOR('badsurf'), 'legal')
+
+        out = check_per_store_keys(data_dir)
+        assert out['status'] == 'fail'
+        match = next(s for s in out['detail']['stores']
+                     if s['store'] == 'badsurf')
+        assert 'invalid' in match['error'].lower()
+        assert 'legal' in match['error'].lower()
+
+    def test_auto_threshold_override_numeric_passes(
+            self, tmp_path, env_file):
+        """`MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>=0.72` is reported as
+        a numeric override with source 'override'.
+        """
+        from memman import config
+        from memman.doctor import check_per_store_keys
+
+        data_dir = str(tmp_path / 'memman')
+        Path(data_dir, 'data', 'tuned').mkdir(parents=True, exist_ok=True)
+        Path(data_dir, 'data', 'tuned', 'memman.db').write_bytes(b'')
+        env_file(config.BACKEND_FOR('tuned'), 'sqlite')
+        env_file(config.AUTO_THRESHOLD_FOR('tuned'), '0.72')
+
+        out = check_per_store_keys(data_dir)
+        assert out['status'] == 'pass'
+        match = next(s for s in out['detail']['stores']
+                     if s['store'] == 'tuned')
+        assert match['auto_threshold'] == 0.72
+        assert match['auto_threshold_source'] == 'override'
+        assert match.get('error') is None
+
+    def test_auto_threshold_override_skip_sentinel_passes(
+            self, tmp_path, env_file):
+        """`MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>=skip` disables edges.
+        """
+        from memman import config
+        from memman.doctor import check_per_store_keys
+
+        data_dir = str(tmp_path / 'memman')
+        Path(data_dir, 'data', 'noedge').mkdir(parents=True, exist_ok=True)
+        Path(data_dir, 'data', 'noedge', 'memman.db').write_bytes(b'')
+        env_file(config.BACKEND_FOR('noedge'), 'sqlite')
+        env_file(config.AUTO_THRESHOLD_FOR('noedge'), 'skip')
+
+        out = check_per_store_keys(data_dir)
+        assert out['status'] == 'pass'
+        match = next(s for s in out['detail']['stores']
+                     if s['store'] == 'noedge')
+        assert match['auto_threshold'] is None
+        assert match['auto_threshold_source'] == 'override_skip'
+        assert match.get('error') is None
+
+    def test_auto_threshold_invalid_value_fails(
+            self, tmp_path, env_file):
+        """`MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>=garbage` fails.
+        """
+        from memman import config
+        from memman.doctor import check_per_store_keys
+
+        data_dir = str(tmp_path / 'memman')
+        Path(data_dir, 'data', 'bad').mkdir(parents=True, exist_ok=True)
+        Path(data_dir, 'data', 'bad', 'memman.db').write_bytes(b'')
+        env_file(config.BACKEND_FOR('bad'), 'sqlite')
+        env_file(config.AUTO_THRESHOLD_FOR('bad'), 'garbage')
+
+        out = check_per_store_keys(data_dir)
+        assert out['status'] == 'fail'
+        match = next(s for s in out['detail']['stores']
+                     if s['store'] == 'bad')
+        assert match['error'] is not None
+        assert 'garbage' in match['error']
+
+    def test_auto_threshold_out_of_range_fails(
+            self, tmp_path, env_file):
+        """A numeric value outside (0.0, 1.0) fails.
+        """
+        from memman import config
+        from memman.doctor import check_per_store_keys
+
+        data_dir = str(tmp_path / 'memman')
+        Path(data_dir, 'data', 'oor').mkdir(parents=True, exist_ok=True)
+        Path(data_dir, 'data', 'oor', 'memman.db').write_bytes(b'')
+        env_file(config.BACKEND_FOR('oor'), 'sqlite')
+        env_file(config.AUTO_THRESHOLD_FOR('oor'), '1.5')
+
+        out = check_per_store_keys(data_dir)
+        assert out['status'] == 'fail'
+        match = next(s for s in out['detail']['stores']
+                     if s['store'] == 'oor')
+        assert 'range' in match['error'].lower()
+
 
 def _started_scheduler_status(interval=900):
     """Test helper: pretend the scheduler is installed + started."""

@@ -449,10 +449,20 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
             kind = (file_values.get(config.DEFAULT_BACKEND)
                     or 'sqlite').lower()
             source = 'default'
+        surface_key = config.SURFACE_FOR(store)
+        surface_raw = (file_values.get(surface_key) or '').strip()
+        if surface_raw:
+            surface_value = surface_raw.lower()
+            surface_source = 'per_store'
+        else:
+            surface_value = 'code'
+            surface_source = 'default'
         entry: dict[str, Any] = {
             'store': store,
             'backend': kind,
             'source': source,
+            'surface': surface_value,
+            'surface_source': surface_source,
             'error': None,
             'warning': None,
             }
@@ -463,7 +473,8 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
                 f' {", ".join(sorted(registered))}')
             _bump('fail')
         elif kind == 'postgres':
-            per_store_dsn = file_values.get(config.env_key_for('postgres', 'DSN', store))
+            dsn_key = config.env_key_for('postgres', 'DSN', store)
+            per_store_dsn = file_values.get(dsn_key)
             default_dsn = file_values.get(config.DEFAULT_PG_DSN)
             dsn = per_store_dsn or default_dsn
             if not dsn:
@@ -471,6 +482,28 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
                     f'no DSN: set {config.env_key_for("postgres", "DSN", store)} or'
                     f' {config.DEFAULT_PG_DSN}')
                 _bump('fail')
+        if (surface_source == 'per_store'
+                and surface_value not in config.SURFACE_VALUES):
+            entry['error'] = (
+                f'invalid {surface_key}={surface_raw!r}; must be one'
+                f' of {sorted(config.SURFACE_VALUES)}')
+            _bump('fail')
+        auto_key = config.AUTO_THRESHOLD_FOR(store)
+        auto_raw = (file_values.get(auto_key) or '').strip()
+        if auto_raw:
+            try:
+                parsed = config.get_store_auto_threshold(
+                    store, data_dir=data_dir)
+            except ValueError as exc:
+                entry['error'] = str(exc)
+                _bump('fail')
+                parsed = None
+            if isinstance(parsed, float):
+                entry['auto_threshold'] = parsed
+                entry['auto_threshold_source'] = 'override'
+            elif parsed == 'skip':
+                entry['auto_threshold'] = None
+                entry['auto_threshold_source'] = 'override_skip'
         entries.append(entry)
 
     return {
@@ -874,6 +907,93 @@ def check_embed_fingerprint(backend: Backend) -> dict[str, Any]:
         'detail': detail}
 
 
+def check_embed_threshold(
+        backend: Backend,
+        store_name: str | None = None) -> dict[str, Any]:
+    """Report the AUTO_SEMANTIC_THRESHOLD source for the stored fingerprint.
+
+    Precedence reported in `detail['source']`:
+      - `'override'`: the operator set `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>`
+        to a numeric value; status pass.
+      - `'override_skip'`: the operator set the override to `skip`/`none`;
+        status pass (semantic edges intentionally disabled).
+      - `'calibrated'`: the `(provider, model, surface)` triple is in the
+        shipped table; status pass.
+      - `'surface_median'`: triple is uncalibrated; the surface-wide
+        median fallback is used. Status warn -- the value is bounded
+        but not optimized; operators measuring their own value should
+        set the env override.
+    """
+    from memman import config
+    from memman.embed import thresholds as _thresholds
+    from memman.embed.fingerprint import stored_fingerprint
+
+    stored = stored_fingerprint(backend)
+    if stored is None:
+        return {
+            'name': 'embed_threshold', 'status': 'pass',
+            'detail': {
+                'provider': None, 'model': None, 'surface': None,
+                'source': None, 'threshold': None,
+                }}
+
+    if store_name is None:
+        surface = 'code'
+        override = None
+    else:
+        surface = config.get_store_surface(store_name)
+        override = config.get_store_auto_threshold(store_name)
+
+    detail: dict[str, Any] = {
+        'provider': stored.provider,
+        'model': stored.model,
+        'surface': surface,
+        }
+
+    if override == 'skip':
+        detail['source'] = 'override_skip'
+        detail['threshold'] = None
+        if surface != 'code':
+            detail['hint'] = (
+                f'MEMMAN_SURFACE_{store_name}={surface!r} has no effect'
+                ' when AUTO_SEMANTIC_THRESHOLD override is skip.')
+        return {'name': 'embed_threshold', 'status': 'pass',
+                'detail': detail}
+
+    if isinstance(override, float):
+        detail['source'] = 'override'
+        detail['threshold'] = override
+        calibrated = _thresholds.resolve(
+            stored.provider, stored.model, surface)
+        if calibrated is not None and calibrated != override:
+            detail['masked_calibrated'] = calibrated
+            detail['hint'] = (
+                f'override {override:.4f} is masking the calibrated value'
+                f' {calibrated:.4f} for'
+                f' ({stored.provider}, {stored.model}, {surface}); remove'
+                f' MEMMAN_AUTO_SEMANTIC_THRESHOLD_{store_name} to fall back'
+                ' to the calibrated row.')
+        return {'name': 'embed_threshold', 'status': 'pass',
+                'detail': detail}
+
+    threshold, source = _thresholds.resolve_with_fallback(
+        stored.provider, stored.model, surface)
+    detail['threshold'] = threshold
+    detail['source'] = source
+    if source == 'surface_median':
+        detail['hint'] = (
+            f'no calibrated AUTO_SEMANTIC_THRESHOLD for'
+            f' ({stored.provider}, {stored.model}, {surface});'
+            f' using the {surface}-surface median ({threshold:.4f}) as a'
+            f' fallback. Set MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store> to a'
+            f' measured value for production-grade quality.')
+        status = 'warn'
+    else:
+        status = 'pass'
+    return {'name': 'embed_threshold', 'status': status,
+            'detail': detail}
+
+
 def check_no_stale_swap_meta(backend: Backend) -> dict[str, Any]:
     """Warn when `embed_swap_*` meta keys persist on a non-swapping store.
 
@@ -981,11 +1101,13 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
 
 def run_all_checks(
         backend: Backend,
-        data_dir: str | None = None) -> dict[str, Any]:
+        data_dir: str | None = None,
+        store_name: str | None = None) -> dict[str, Any]:
     """Run all health checks and return results with overall status.
 
     Routes every check through the Backend Protocol so SQLite and
-    Postgres are both supported.
+    Postgres are both supported. `store_name` plumbs through to
+    `check_embed_threshold` so the correct surface row is consulted.
     """
     total = backend.nodes.count_active()
     checks = []
@@ -999,6 +1121,7 @@ def run_all_checks(
             check_dangling_edges(backend),
             check_embedding_consistency(backend),
             check_embed_fingerprint(backend),
+            check_embed_threshold(backend, store_name=store_name),
             check_no_stale_swap_meta(backend),
             check_provenance_drift(backend),
             check_edge_degree(backend),

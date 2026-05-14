@@ -10,8 +10,10 @@ and ignore caller-passed timestamps.
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+from memman.embed.fingerprint import Fingerprint, write_fingerprint
 from memman.graph.bfs import BFSOptions, bfs
-from memman.graph.engine import fast_edges
+from memman.graph.engine import fast_edges, reindex_auto_edges
 from memman.graph.entity import create_entity_edges
 from memman.graph.semantic import create_semantic_edges
 from memman.graph.temporal import create_temporal_edge
@@ -313,7 +315,8 @@ class TestSemanticEdgesHighCosine:
         backend.nodes.update_embedding('sv-2', vec2, 'voyage-3-lite')
 
         cache = {'sv-1': vec1, 'sv-2': vec2}
-        count = create_semantic_edges(backend, ins1, embed_cache=cache)
+        count = create_semantic_edges(
+            backend, ins1, embed_cache=cache, threshold=0.62)
         assert count >= 2
 
         edges = backend.edges.by_node_and_type('sv-1', 'semantic')
@@ -336,7 +339,8 @@ class TestSemanticEdgesLowCosine:
         backend.nodes.update_embedding('sl-2', vec2, 'voyage-3-lite')
 
         cache = {'sl-1': vec1, 'sl-2': vec2}
-        count = create_semantic_edges(backend, ins1, embed_cache=cache)
+        count = create_semantic_edges(
+            backend, ins1, embed_cache=cache, threshold=0.62)
         assert count == 0
 
 
@@ -348,8 +352,140 @@ class TestSemanticEdgesNoEmbedding:
         ins = make_insight(id='sne-1', content='no embedding')
         backend.nodes.insert(ins)
 
-        count = create_semantic_edges(backend, ins, embed_cache=None)
+        count = create_semantic_edges(
+            backend, ins, embed_cache=None, threshold=0.62)
         assert count == 0
+
+
+class TestSemanticThresholdResolvedFromFingerprint:
+    """Engine resolves AUTO_SEMANTIC_THRESHOLD per-store via fingerprint."""
+
+    def test_reindex_creates_edges_on_calibrated_fingerprint(self, backend):
+        """Default (voyage, voyage-3-lite) fingerprint resolves to a
+        calibrated threshold and produces semantic edges between
+        near-identical vectors.
+        """
+        ins1 = make_insight(id='rc-1', content='vec one')
+        ins2 = make_insight(id='rc-2', content='vec two')
+        backend.nodes.insert(ins1)
+        backend.nodes.insert(ins2)
+        backend.nodes.update_embedding(
+            'rc-1', _vec_512(1.0, 0.0), 'voyage-3-lite')
+        backend.nodes.update_embedding(
+            'rc-2', _vec_512(0.99, 0.01), 'voyage-3-lite')
+
+        stats = reindex_auto_edges(backend)
+        assert stats['semantic_created'] >= 2
+
+    def test_reindex_uses_surface_median_for_uncalibrated_fingerprint(
+            self, backend):
+        """Uncalibrated fingerprint falls back to surface-median; near-
+        identical vectors still produce edges because their cosine
+        exceeds the median fallback.
+        """
+        write_fingerprint(
+            backend,
+            Fingerprint(provider='fake', model='fake', dim=512))
+
+        ins1 = make_insight(id='ru-1', content='vec one')
+        ins2 = make_insight(id='ru-2', content='vec two')
+        backend.nodes.insert(ins1)
+        backend.nodes.insert(ins2)
+        backend.nodes.update_embedding('ru-1', _vec_512(1.0, 0.0), 'fake')
+        backend.nodes.update_embedding(
+            'ru-2', _vec_512(0.99, 0.01), 'fake')
+
+        stats = reindex_auto_edges(backend)
+        assert stats['semantic_created'] >= 2
+
+    def test_reindex_dry_run_reports_uncalibrated_edges(self, backend):
+        """Dry-run reindex resolves to the surface-median fallback and
+        reports the candidate semantic edges without writing them.
+        """
+        write_fingerprint(
+            backend,
+            Fingerprint(provider='fake', model='fake', dim=512))
+
+        ins1 = make_insight(id='rd-1', content='vec one')
+        ins2 = make_insight(id='rd-2', content='vec two')
+        backend.nodes.insert(ins1)
+        backend.nodes.insert(ins2)
+        backend.nodes.update_embedding('rd-1', _vec_512(1.0, 0.0), 'fake')
+        backend.nodes.update_embedding(
+            'rd-2', _vec_512(0.99, 0.01), 'fake')
+
+        stats = reindex_auto_edges(backend, dry_run=True)
+        assert stats['dry_run'] == 1
+
+
+class TestSemanticThresholdEnvOverride:
+    """Engine consults MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store> ahead of fingerprint.
+    """
+
+    def test_engine_honors_numeric_override(self, backend, env_file):
+        """A numeric override returns immediately, beating the calibrated row.
+
+        Default fingerprint is voyage/voyage-3-lite (calibrated to 0.645);
+        the operator's 0.55 must win.
+        """
+        from memman import config
+        from memman.graph.engine import _resolve_semantic_threshold
+        env_file(config.AUTO_THRESHOLD_FOR('precedence'), '0.55')
+
+        result = _resolve_semantic_threshold(
+            backend, store_name='precedence')
+        assert result == 0.55
+
+    def test_engine_honors_skip_override(self, backend, env_file):
+        """`skip` returns None to disable semantic edges.
+        """
+        from memman import config
+        from memman.graph.engine import _resolve_semantic_threshold
+        env_file(config.AUTO_THRESHOLD_FOR('skipme'), 'skip')
+
+        result = _resolve_semantic_threshold(backend, store_name='skipme')
+        assert result is None
+
+    @pytest.mark.no_autoseed_fingerprint
+    def test_engine_numeric_override_without_fingerprint(
+            self, tmp_backend, env_file):
+        """Numeric override returns even when no fingerprint is stamped yet.
+
+        Operator-set overrides must not silently drop on fresh stores
+        where the fingerprint hasn't been written -- bug would block the
+        override from ever taking effect on a first-write store.
+        """
+        from memman import config
+        from memman.embed.fingerprint import stored_fingerprint
+        from memman.graph.engine import _resolve_semantic_threshold
+
+        assert stored_fingerprint(tmp_backend) is None
+        env_file(config.AUTO_THRESHOLD_FOR('fresh'), '0.55')
+
+        result = _resolve_semantic_threshold(
+            tmp_backend, store_name='fresh')
+        assert result == 0.55
+
+    def test_engine_invalid_override_falls_through(
+            self, backend, env_file, caplog):
+        """An invalid override value is logged and treated as no-override.
+
+        Engine + reindex must not crash on a bad env value; doctor is the
+        validation entry point. Falls through to the calibrated value.
+        """
+        import logging
+
+        from memman import config
+        from memman.graph.engine import _resolve_semantic_threshold
+        env_file(config.AUTO_THRESHOLD_FOR('busted'), 'nonsense')
+
+        with caplog.at_level(logging.WARNING, logger='memman'):
+            result = _resolve_semantic_threshold(
+                backend, store_name='busted')
+        assert result == 0.645
+        assert any(
+            'AUTO_SEMANTIC_THRESHOLD' in r.getMessage()
+            for r in caplog.records)
 
 
 # --- Engine ---

@@ -76,7 +76,7 @@ def active_store(
         raise click.ClickException(str(exc)) from exc
     try:
         if not unchecked:
-            reindex_if_constants_changed(backend)
+            reindex_if_constants_changed(backend, store_name=store)
             try:
                 fp_mod.seed_if_fresh(backend, get_client())
                 fp_mod.bound_embedder(backend)

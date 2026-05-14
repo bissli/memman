@@ -313,11 +313,14 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
     flags remain sticky-seed (they never override an existing file
     value); `config set` is the explicit override path.
 
-    Four shapes of key are accepted:
+    Six shapes of key are accepted:
       * any member of `config.INSTALLABLE_KEYS`
       * `MEMMAN_BACKEND_<store>` (per-store backend routing)
       * `MEMMAN_POSTGRES_DSN_<store>` (per-store DSN)
       * `MEMMAN_RERANK_ENABLED_<store>` (per-store rerank toggle)
+      * `MEMMAN_SURFACE_<store>` (per-store surface: code|claw)
+      * `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>` (per-store override:
+        float in (0,1), or 'skip'/'none' to disable semantic edges)
     Bare canonicals (`MEMMAN_BACKEND`, `MEMMAN_POSTGRES_DSN`) are
     rejected with hints pointing at `MEMMAN_DEFAULT_*` or the
     per-store form.
@@ -345,13 +348,37 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
     elif key.startswith('MEMMAN_RERANK_ENABLED_') and valid_store_name(
             key[len('MEMMAN_RERANK_ENABLED_'):]):
         pass
+    elif key.startswith('MEMMAN_SURFACE_') and valid_store_name(
+            key[len('MEMMAN_SURFACE_'):]):
+        if value.strip().lower() not in config.SURFACE_VALUES:
+            raise click.ClickException(
+                f'surface value {value!r} must be one of'
+                f' {sorted(config.SURFACE_VALUES)}')
+    elif (key.startswith('MEMMAN_AUTO_SEMANTIC_THRESHOLD_')
+            and valid_store_name(
+                key[len('MEMMAN_AUTO_SEMANTIC_THRESHOLD_'):])):
+        raw = value.strip().lower()
+        if raw not in config.AUTO_THRESHOLD_SENTINELS:
+            try:
+                parsed = float(raw)
+            except ValueError as err:
+                raise click.ClickException(
+                    f'{key}={value!r}: must be a float in (0.0, 1.0) or'
+                    f' one of {sorted(config.AUTO_THRESHOLD_SENTINELS)}'
+                    ) from err
+            if not 0.0 < parsed < 1.0:
+                raise click.ClickException(
+                    f'{key}={value!r} is out of range; must be in (0.0, 1.0)')
     else:
         raise click.ClickException(
             f'{key!r} is not a recognized config key. Accepted shapes:'
             ' INSTALLABLE_KEYS members,'
             ' MEMMAN_BACKEND_<store> (per-store routing),'
             ' MEMMAN_POSTGRES_DSN_<store> (per-store DSN),'
-            ' or MEMMAN_RERANK_ENABLED_<store> (per-store rerank toggle).')
+            ' MEMMAN_RERANK_ENABLED_<store> (per-store rerank toggle),'
+            ' MEMMAN_SURFACE_<store> (per-store surface: code|claw), or'
+            ' MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>'
+            ' (per-store cosine override: float in (0,1) or skip|none).')
     from memman.setup.scheduler import _write_env_keys
     data_dir = ctx.obj['data_dir']
     _write_env_keys({key: value}, data_dir=data_dir)
@@ -408,6 +435,29 @@ def config_set_pg_dsn(
     click.echo(f'set {key}={redact_dsn(dsn)} in {config.env_file_path(data_dir)}')
 
 
+@config_cmd.command('get')
+@click.argument('key')
+@click.pass_context
+def config_get(ctx: click.Context, key: str) -> None:
+    """Print the value of `KEY` from the env file (empty line if unset).
+
+    Reads from `<MEMMAN_DATA_DIR>/env` only, matching the runtime
+    resolver. DSN values are redacted; all other values print as
+    stored. Exits 1 if the key is unset.
+    """
+    data_dir = ctx.obj['data_dir']
+    parsed = config.parse_env_file(config.env_file_path(data_dir))
+    value = parsed.get(key)
+    if value is None or value == '':
+        raise click.ClickException(f'{key} is not set')
+    if 'POSTGRES_DSN' in key or 'API_KEY' in key:
+        from memman.trace import redact_dsn
+        click.echo(redact_dsn(value) if 'POSTGRES_DSN' in key
+                   else '***REDACTED***')
+    else:
+        click.echo(value)
+
+
 @config_cmd.command('show')
 @click.pass_context
 def config_show(ctx: click.Context) -> None:
@@ -427,6 +477,12 @@ def config_show(ctx: click.Context) -> None:
             per_store[key] = value
         elif key.startswith('MEMMAN_POSTGRES_DSN_'):
             per_store[key] = '***REDACTED***'
+        elif key.startswith('MEMMAN_RERANK_ENABLED_'):
+            per_store[key] = value
+        elif key.startswith('MEMMAN_SURFACE_'):
+            per_store[key] = value
+        elif key.startswith('MEMMAN_AUTO_SEMANTIC_THRESHOLD_'):
+            per_store[key] = value
     out: dict = {
         'data_dir': data_dir,
         'env': effective,
@@ -1110,7 +1166,8 @@ def _process_queue_row(
         insights_by_id=ctx.insights_by_id,
         executor=executor,
         llm_client=ctx.llm_client,
-        ec=ctx.ec)
+        ec=ctx.ec,
+        store_name=ctx.store_name)
     _json_out(result)
 
 
@@ -1941,10 +1998,12 @@ def doctor(ctx: click.Context, text_output: bool) -> None:
     from memman.doctor import run_all_checks
 
     with _active_backend(ctx, unchecked=True) as backend:
-        result = run_all_checks(
-            backend, data_dir=ctx.obj['data_dir'])
-        result['store'] = _resolve_store_name(
+        store_name = _resolve_store_name(
             ctx.obj['data_dir'], ctx.obj['store'])
+        result = run_all_checks(
+            backend, data_dir=ctx.obj['data_dir'],
+            store_name=store_name)
+        result['store'] = store_name
         result['db_path'] = backend.path
         if text_output:
             _doctor_text_report(result)
@@ -2727,6 +2786,9 @@ def _graph_rebuild_stale_only(
     except Exception:
         active_model = None
 
+    data_dir = ctx.obj['data_dir']
+    store_name = _resolve_store_name(data_dir, ctx.obj['store'])
+
     with _active_backend(ctx) as backend:
         if dry_run:
             stale = backend.nodes.count_stale_insights(
@@ -2798,7 +2860,8 @@ def _graph_rebuild_stale_only(
                         llm_client=llm_client,
                         metadata_llm_client=metadata_llm_client,
                         embed_client=ec,
-                        on_progress=_on_progress)
+                        on_progress=_on_progress,
+                        store_name=store_name)
                     processed += count
                     if count == 0:
                         break
@@ -2845,6 +2908,9 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
         _require_started('rebuild')
     from memman.embed.fingerprint import bound_embedder
     from memman.graph.engine import MAX_LINK_BATCH, link_pending
+
+    data_dir = ctx.obj['data_dir']
+    store_name = _resolve_store_name(data_dir, ctx.obj['store'])
 
     with _active_backend(ctx) as backend:
         llm_client = _get_llm_client_or_fail('slow_canonical')
@@ -2904,7 +2970,8 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
                         llm_client=llm_client,
                         metadata_llm_client=metadata_llm_client,
                         embed_client=ec,
-                        on_progress=_on_progress)
+                        on_progress=_on_progress,
+                        store_name=store_name)
                     processed += count
                     if count == 0:
                         break
@@ -3055,7 +3122,7 @@ def _reembed_one_store(
                 backend.meta.set('embed_reembed_cursor', '')
                 backend.meta.set('embed_reembed_state', 'idle')
 
-            edge_stats = reindex_auto_edges(backend)
+            edge_stats = reindex_auto_edges(backend, store_name=store_name)
 
             stats = {
                 'store': store_name,

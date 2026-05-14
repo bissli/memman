@@ -30,7 +30,7 @@ from memman.embed import EmbeddingProvider
 from memman.embed.vector import cosine_similarity
 from memman.exceptions import EmbedCredentialError
 from memman.graph.causal import infer_llm_causal_edges
-from memman.graph.engine import fast_edges
+from memman.graph.engine import _resolve_semantic_threshold, fast_edges
 from memman.graph.enrichment import build_enriched_text, enrich_with_llm
 from memman.graph.entity import create_entity_edges
 from memman.graph.semantic import create_semantic_edges
@@ -104,6 +104,7 @@ def run_remember(
         insights_by_id: dict[str, Insight] | None = None,
         executor: ThreadPoolExecutor | None = None,
         llm_client: MemmanLLMClient | None = None,
+        store_name: str | None = None,
         ) -> dict[str, Any]:
     """Run the full remember pipeline and return the result dict.
 
@@ -116,6 +117,11 @@ def run_remember(
     by `_drain_queue` to amortize setup across rows in one drain pass.
     When omitted (e.g., direct test use), the function builds them
     from the backend itself.
+
+    `store_name` selects the per-store surface
+    (`MEMMAN_SURFACE_<store>`) for the threshold lookup. None resolves
+    the code-surface default; production callers pass
+    `ctx.store_name`.
     """
     quality_warnings = check_content_quality(content)
 
@@ -201,7 +207,8 @@ def run_remember(
         def apply_all() -> None:
             new_ids: list[str] = []
             for plan in plans:
-                result = _apply_plan(backend, plan, embed_cache)
+                result = _apply_plan(
+                    backend, plan, embed_cache, store_name=store_name)
                 fact_results.append(result)
                 if plan.fact_insight and plan.action not in {
                         'skipped', 'deleted'}:
@@ -481,8 +488,13 @@ def _apply_plan(
         backend: Backend,
         plan: FactPlan,
         embed_cache: dict[str, list[float]],
+        store_name: str | None = None,
         ) -> dict[str, Any]:
     """Apply one planned fact. Must be invoked inside a transaction.
+
+    `store_name` selects the per-store surface for the calibrated
+    semantic-edge threshold lookup. None resolves the code-surface
+    default.
     """
     if plan.action == 'skipped':
         skip_fi = plan.fact_insight
@@ -562,10 +574,12 @@ def _apply_plan(
         operation='remember', insight_id=fi.id, detail=fi.content,
         after=insight_to_delta_dict(fi))
 
+    semantic_threshold = _resolve_semantic_threshold(
+        backend, store_name=store_name)
     edge_stats = fast_edges(backend, fi)
     edge_stats['entity'] = create_entity_edges(backend, fi)
     edge_stats['semantic'] = create_semantic_edges(
-        backend, fi, embed_cache)
+        backend, fi, embed_cache, threshold=semantic_threshold)
 
     for edge in plan.causal_edges:
         backend.edges.upsert(edge)

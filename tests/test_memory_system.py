@@ -323,10 +323,9 @@ class TestGraphTraversal:
         """Edge type filter includes matching, excludes non-matching.
 
         Anchors use textually distant content so the auto-semantic
-        edge generator (AUTO_SEMANTIC_THRESHOLD=0.62) does not fire on
-        real Voyage embeddings — otherwise the explicit causal edge we
-        add would be shadowed by an automatic semantic edge between the
-        same pair.
+        edge generator does not fire at the active per-surface
+        threshold — otherwise the explicit causal edge we add would be
+        shadowed by an automatic semantic edge between the same pair.
         """
         a = remember(runner, 'chose SQLite because embedded serverless',
                      no_reconcile=True)

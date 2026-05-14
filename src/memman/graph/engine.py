@@ -7,9 +7,11 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 from memman.embed import EmbeddingProvider
+from memman.embed import thresholds as embed_thresholds
+from memman.embed._thresholds_generated import _THRESHOLDS as _CALIBRATED
+from memman.embed.fingerprint import stored_fingerprint
 from memman.graph.entity import MAX_ENTITY_LINKS, MAX_TOTAL_ENTITY_EDGES
 from memman.graph.entity import create_entity_edges
-from memman.graph.semantic import AUTO_SEMANTIC_THRESHOLD
 from memman.graph.semantic import create_semantic_edges
 from memman.graph.temporal import MAX_PROXIMITY_EDGES, MIN_PROXIMITY_WEIGHT
 from memman.graph.temporal import TEMPORAL_WINDOW_HOURS, create_temporal_edge
@@ -43,11 +45,18 @@ def link_pending(
         embed_client: EmbeddingProvider | None = None,
         max_batch: int = MAX_LINK_BATCH,
         on_progress: Callable[[str, Insight], None] | None = None,
+        store_name: str | None = None,
         ) -> int:
     """Process insights where linked_at IS NULL.
 
     Creates semantic edges (and optionally LLM causal/enrichment edges)
     for pending insights. Returns the number of insights processed.
+
+    `store_name` plumbs through to `_resolve_semantic_threshold` so the
+    per-store surface (`MEMMAN_SURFACE_<store>`) selects the right row
+    of `_thresholds_generated.py`. Defaults to None for back-compat;
+    `None` resolves the code-surface threshold (the soft fallback in
+    `config.get_store_surface`).
     """
     pending_ids = backend.nodes.get_pending_link_ids(limit=max_batch)
     if not pending_ids:
@@ -55,6 +64,9 @@ def link_pending(
 
     if embed_cache is None:
         embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
+
+    semantic_threshold = _resolve_semantic_threshold(
+        backend, store_name=store_name)
 
     if metadata_llm_client is None:
         metadata_llm_client = llm_client
@@ -146,7 +158,8 @@ def link_pending(
 
             backend.edges.delete_auto_for_node(insight.id, 'semantic')
             sem_count = create_semantic_edges(
-                backend, insight, embed_cache)
+                backend, insight, embed_cache,
+                threshold=semantic_threshold)
 
             backend.edges.delete_auto_for_node(insight.id, 'causal')
             for edge in causal_edges:
@@ -180,7 +193,8 @@ def compute_constants_hash() -> str:
     on graph-shape constant changes.
     """
     blob = json.dumps({
-        'auto_semantic_threshold': AUTO_SEMANTIC_THRESHOLD,
+        'calibrated_thresholds': sorted(
+            (p, m, s, t) for (p, m, s), t in _CALIBRATED.items()),
         'min_proximity_weight': MIN_PROXIMITY_WEIGHT,
         'temporal_window_hours': TEMPORAL_WINDOW_HOURS,
         'max_entity_links': MAX_ENTITY_LINKS,
@@ -190,13 +204,64 @@ def compute_constants_hash() -> str:
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
+def _resolve_semantic_threshold(
+        backend: Backend,
+        store_name: str | None = None) -> float | None:
+    """Return the AUTO_SEMANTIC_THRESHOLD for this store.
+
+    Precedence (returns the first that applies):
+      1. `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>` env-file override
+         (numeric, or `'skip'`/`'none'` sentinel). Consulted before
+         the fingerprint check so an operator-set override applies
+         on a fresh store with no stamped fingerprint yet.
+      2. Calibrated table row keyed by `(provider, model, surface)`.
+      3. Surface-wide median fallback when the triple is uncalibrated.
+
+    Returns `None` only when (a) the override is `'skip'`, or (b)
+    no override is set AND no fingerprint is stamped. Callers
+    propagate `None` to `create_semantic_edges` which then skips
+    semantic-edge creation.
+
+    Invalid env-file overrides are logged at WARNING and treated as
+    no-override; doctor's `check_per_store_keys` is the validation
+    entry point where operators see the structured error.
+    """
+    from memman import config
+    if store_name is not None:
+        try:
+            override = config.get_store_auto_threshold(store_name)
+        except ValueError as err:
+            logger.warning(
+                'invalid %s; ignoring override (%s)',
+                config.AUTO_THRESHOLD_FOR(store_name), err)
+            override = None
+        if override == 'skip':
+            return None
+        if isinstance(override, float):
+            return override
+    fp = stored_fingerprint(backend)
+    if fp is None:
+        return None
+    surface = ('code' if store_name is None
+               else config.get_store_surface(store_name))
+    threshold, _source = embed_thresholds.resolve_with_fallback(
+        fp.provider, fp.model, surface)
+    return threshold
+
+
 def reindex_auto_edges(
-        backend: Backend, dry_run: bool = False) -> dict[str, int]:
+        backend: Backend, dry_run: bool = False,
+        store_name: str | None = None) -> dict[str, int]:
     """Delete auto-created edges and re-create semantic/entity edges.
 
     Heuristic causal edges are deleted (replaced by LLM in Tier 3).
     LLM/manual causal edges are preserved.
+
+    `store_name` plumbs through to `_resolve_semantic_threshold` for
+    per-store surface dispatch; None resolves the code-surface default.
     """
+    semantic_threshold = _resolve_semantic_threshold(
+        backend, store_name=store_name)
     semantic_del = backend.edges.count_auto_by_type('semantic')
     entity_del = backend.edges.count_auto_by_type('entity')
     temporal_del = backend.edges.count_low_weight_temporal_proximity(
@@ -221,7 +286,8 @@ def reindex_auto_edges(
                 dry_stats['entity_created'] += create_entity_edges(
                     backend, ins, dry_run=True)
                 dry_stats['semantic_created'] += create_semantic_edges(
-                    backend, ins, dry_embed_cache, dry_run=True)
+                    backend, ins, dry_embed_cache, dry_run=True,
+                    threshold=semantic_threshold)
         return dry_stats
 
     stats: dict[str, int] = {
@@ -257,7 +323,8 @@ def reindex_auto_edges(
             stats['entity_created'] += create_entity_edges(
                 backend, insight)
             stats['semantic_created'] += create_semantic_edges(
-                backend, insight, embed_cache)
+                backend, insight, embed_cache,
+                threshold=semantic_threshold)
 
         stats['entity_created'] = backend.edges.count_auto_by_type(
             'entity')
@@ -276,20 +343,22 @@ def reindex_auto_edges(
 
 
 def reindex_if_constants_changed(
-        backend: Backend) -> dict[str, int] | None:
+        backend: Backend,
+        store_name: str | None = None) -> dict[str, int] | None:
     """Reindex auto-edges when the stored constants hash is stale.
 
     Returns the reindex stats dict on reindex, or None when the stored
     hash already matched (common case). Emits a WARNING when constants
     drifted (operator hint to run `memman graph rebuild`) and a DEBUG
-    line on first-time initialization.
+    line on first-time initialization. `store_name` plumbs through to
+    `reindex_auto_edges` for per-store surface dispatch.
     """
     current_hash = compute_constants_hash()
     stored_hash = backend.meta.get('constants_hash')
     if stored_hash == current_hash:
         return None
 
-    stats = reindex_auto_edges(backend)
+    stats = reindex_auto_edges(backend, store_name=store_name)
     backend.meta.set('constants_hash', current_hash)
     if stored_hash is not None:
         logger.warning(
