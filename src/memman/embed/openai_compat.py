@@ -54,8 +54,10 @@ class Client:
         try:
             vec = self.embed('test')
             self.dim = len(vec)
-        except Exception:
-            return
+        except Exception as exc:
+            logger.debug(
+                f'openai-compat prepare probe failed:'
+                f' {type(exc).__name__}: {exc}')
 
     def _headers(self) -> dict[str, str]:
         """Build request headers with auth."""

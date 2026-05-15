@@ -2227,7 +2227,10 @@ where attrelid = (%s || '.insights')::regclass
         try:
             cur.execute(state_sql)
             state_row = cur.fetchone()
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                f'meta.embed_swap_state read failed on {schema}:'
+                f' {type(exc).__name__}: {exc}')
             state_row = None
     dims = {r[0]: int(r[1]) for r in rows if r[1] is not None
             and int(r[1]) > 0}

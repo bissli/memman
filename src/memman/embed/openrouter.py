@@ -43,8 +43,10 @@ class Client:
         try:
             vec = self.embed('test')
             self.dim = len(vec)
-        except Exception:
-            return
+        except Exception as exc:
+            logger.debug(
+                f'openrouter prepare probe failed for model={self.model!r}:'
+                f' {type(exc).__name__}: {exc}')
 
     def _headers(self) -> dict[str, str]:
         """Build request headers with auth."""
@@ -63,7 +65,10 @@ class Client:
             vec = self.embed('test')
             self.dim = len(vec)
             result = True
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                f'openrouter available probe failed for model={self.model!r}:'
+                f' {type(exc).__name__}: {exc}')
             result = False
         self._availability_cache = result
         return result

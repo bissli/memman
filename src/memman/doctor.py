@@ -6,6 +6,7 @@ with an overall worst-status summary. Each per-store check takes a
 `db._exec` / `db.path` access is forbidden in this module.
 """
 
+import logging
 import os
 import stat
 import statistics
@@ -13,6 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from memman.store.backend import Backend
+
+logger = logging.getLogger('memman')
 
 
 def check_integrity(backend: Backend) -> dict[str, Any]:
@@ -611,7 +614,10 @@ def check_scheduler_heartbeat(data_dir: str) -> dict[str, Any]:
         state = s.get('state')
         installed = s.get('installed', False)
         platform = s.get('platform', '')
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            f'scheduler status check failed:'
+            f' {type(exc).__name__}: {exc}')
         interval = None
         state = None
         installed = False
@@ -1056,15 +1062,16 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
         return {
             'name': 'provenance_drift', 'status': 'fail',
             'detail': detail}
+    from memman.exceptions import ConfigError
     try:
         detail['active_model_slow_canonical'] = config.require(
             config.LLM_MODEL_SLOW_CANONICAL)
-    except Exception:
+    except ConfigError:
         detail['active_model_slow_canonical'] = None
     try:
         detail['active_model_slow_metadata'] = config.require(
             config.LLM_MODEL_SLOW_METADATA)
-    except Exception:
+    except ConfigError:
         detail['active_model_slow_metadata'] = None
 
     provenance = backend.nodes.provenance_distribution()

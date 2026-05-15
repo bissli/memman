@@ -78,12 +78,16 @@ def link_pending(
 
     try:
         active_pv: str | None = compute_prompt_version()
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            f'compute_prompt_version failed; provenance left null:'
+            f' {type(exc).__name__}: {exc}')
         active_pv = None
+    from memman.exceptions import ConfigError
     try:
         active_model: str | None = config.require(
             config.LLM_MODEL_SLOW_CANONICAL)
-    except Exception:
+    except ConfigError:
         active_model = None
 
     processed = 0
