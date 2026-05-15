@@ -144,8 +144,10 @@ class TestM0Stores:
         out = run_cli(['store', 'create', 'work'], home_dir, store_dir)
         assert_jq(json_out(out), 'store', 'work', 'created work')
 
+    @pytest.mark.requires_live_keys
     def test_store_create_reject_duplicate(self, home_dir: Path,
-                                           store_dir: Path):
+                                           store_dir: Path,
+                                           live_keys):
         out = run_cli(['store', 'create', 'work'], home_dir, store_dir,
                       check=False)
         assert_contains(out.stdout + out.stderr, 'already exists',
@@ -179,8 +181,10 @@ class TestM0Stores:
         assert_contains(out.stdout + out.stderr, 'does not exist',
                         'rejects missing')
 
+    @pytest.mark.requires_live_keys
     def test_store_remove_reject_active(self, home_dir: Path,
-                                        store_dir: Path):
+                                        store_dir: Path,
+                                        live_keys):
         out = run_cli(['store', 'remove', 'work'], home_dir, store_dir,
                       check=False)
         assert_contains(out.stdout + out.stderr,
