@@ -17,12 +17,13 @@ These tests catch:
 """
 
 import json
-import os
 import subprocess
 import uuid
 from pathlib import Path
 
 import pytest
+
+from .conftest import build_e2e_env_body, seed_fingerprint
 
 pytestmark = [pytest.mark.e2e_container]
 
@@ -66,41 +67,13 @@ def _setup_mount(parent: Path, group: str) -> Path:
     not trigger seed_if_fresh, which would otherwise probe the
     Voyage API (requires a live key) on every fresh container.
     """
-    import sqlite3
-
     d = parent / 'data' / group
     d.mkdir(parents=True, exist_ok=True)
     d.chmod(0o777)
     db_path = d / 'memman.db'
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.execute(
-            'create table if not exists meta '
-            '(key text primary key, value text not null)')
-        conn.execute(
-            "insert or replace into meta (key, value) values "
-            "('embed_fingerprint', "
-            '\'{"provider":"voyage","model":"voyage-3-lite","dim":512}\')')
-        conn.commit()
-    finally:
-        conn.close()
+    seed_fingerprint(db_path)
     db_path.chmod(0o666)
     return d
-
-
-_BASE_ENV = (
-    'MEMMAN_LLM_ENDPOINT=https://openrouter.ai/api/v1\n'
-    'MEMMAN_LLM_API_KEY=placeholder-for-non-live-tests\n'
-    'MEMMAN_LLM_MODEL_FAST=anthropic/claude-haiku-4.5\n'
-    'MEMMAN_LLM_MODEL_SLOW_CANONICAL=anthropic/claude-sonnet-4.6\n'
-    'MEMMAN_LLM_MODEL_SLOW_METADATA=anthropic/claude-sonnet-4.6\n'
-    'MEMMAN_EMBED_PROVIDER=voyage\n'
-    'MEMMAN_RERANK_PROVIDER=voyage\n'
-    'MEMMAN_OPENROUTER_ENDPOINT=https://openrouter.ai/api/v1\n'
-    'MEMMAN_VOYAGE_RERANK_MODEL=rerank-2.5-lite\n'
-    'MEMMAN_DEFAULT_BACKEND=sqlite\n'
-    'MEMMAN_OPENROUTER_API_KEY=placeholder-for-non-live-tests\n'
-    'MEMMAN_VOYAGE_API_KEY=placeholder-for-non-live-tests\n')
 
 
 def _write_env_file(container_id: str, body: str) -> None:
@@ -122,21 +95,13 @@ def _seed_env_file(container_id: str,
     cleanly; live-key tests pass `keys` to overwrite with real
     OpenRouter + Voyage credentials before running the drain.
     """
+    overrides: dict[str, str] = {}
     if keys:
         or_key = keys['MEMMAN_OPENROUTER_API_KEY']
-        body = _BASE_ENV.replace(
-            'MEMMAN_OPENROUTER_API_KEY=placeholder-for-non-live-tests',
-            f'MEMMAN_OPENROUTER_API_KEY={or_key}',
-            ).replace(
-            'MEMMAN_VOYAGE_API_KEY=placeholder-for-non-live-tests',
-            f'MEMMAN_VOYAGE_API_KEY={keys["MEMMAN_VOYAGE_API_KEY"]}',
-            ).replace(
-            'MEMMAN_LLM_API_KEY=placeholder-for-non-live-tests',
-            f'MEMMAN_LLM_API_KEY={or_key}',
-            )
-    else:
-        body = _BASE_ENV
-    _write_env_file(container_id, body)
+        overrides['MEMMAN_OPENROUTER_API_KEY'] = or_key
+        overrides['MEMMAN_VOYAGE_API_KEY'] = keys['MEMMAN_VOYAGE_API_KEY']
+        overrides['MEMMAN_LLM_API_KEY'] = or_key
+    _write_env_file(container_id, build_e2e_env_body(overrides))
 
 
 @pytest.fixture
@@ -154,12 +119,7 @@ def nanoclaw_run(nanoclaw_image: str, tmp_path: Path):
         mounts = [(host, '/home/node/.memman/data/default', 'rw')]
         if extra_mounts:
             mounts.extend(extra_mounts)
-        env = dict(env or {})
-        for k in ('MEMMAN_OPENROUTER_API_KEY', 'MEMMAN_VOYAGE_API_KEY'):
-            v = os.environ.get(k)
-            if v:
-                env.setdefault(k, v)
-        cid = _start_container(nanoclaw_image, mounts, env)
+        cid = _start_container(nanoclaw_image, mounts, dict(env or {}))
         started.append(cid)
         _seed_env_file(cid)
         return cid, host

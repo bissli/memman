@@ -16,30 +16,16 @@ search, M11 validation) and are surgically gated on
 `requires_live_keys` only where drain is exercised.
 """
 
-import os
-import sqlite3
 import uuid
 from pathlib import Path
 
 import pytest
 
+from .conftest import build_e2e_env_body, seed_fingerprint
 from .helpers import assert_contains, assert_jq, assert_jq_gte
 from .helpers import find_insight_by_recall, json_out, run_cli
 
 pytestmark = pytest.mark.e2e_cli
-
-
-_BASE_ENV_LINES = (
-    'MEMMAN_LLM_ENDPOINT=https://openrouter.ai/api/v1',
-    'MEMMAN_LLM_MODEL_FAST=anthropic/claude-haiku-4.5',
-    'MEMMAN_LLM_MODEL_SLOW_CANONICAL=anthropic/claude-sonnet-4.6',
-    'MEMMAN_LLM_MODEL_SLOW_METADATA=anthropic/claude-sonnet-4.6',
-    'MEMMAN_EMBED_PROVIDER=voyage',
-    'MEMMAN_RERANK_PROVIDER=voyage',
-    'MEMMAN_OPENROUTER_ENDPOINT=https://openrouter.ai/api/v1',
-    'MEMMAN_VOYAGE_RERANK_MODEL=rerank-2.5-lite',
-    'MEMMAN_DEFAULT_BACKEND=sqlite',
-    )
 
 
 # ---------------------------------------------------------------------
@@ -56,55 +42,15 @@ def home_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     resolver finds providers, endpoints, and (when present) real API
     keys. Without the env file, every store open raises
     `MEMMAN_EMBED_PROVIDER is not set`.
-
-    Secret resolution: `os.environ` first (CI), then the canonical
-    `~/.memman/env` on the host (local dev), then a placeholder so
-    non-live tests still get a parseable env file.
     """
-    from memman import config
-
     home = tmp_path_factory.mktemp('e2e_home')
     dot = home / '.memman'
     dot.mkdir(parents=True, exist_ok=True)
     (dot / 'scheduler.state').write_text('started\n')
     (dot / 'scheduler.state').chmod(0o600)
     (dot / 'cache').mkdir(exist_ok=True)
-
-    user_env = Path.home() / '.memman' / config.ENV_FILENAME
-    file_values = (config.parse_env_file(user_env)
-                   if user_env.exists() else {})
-
-    def _secret(name: str) -> str:
-        return (os.environ.get(name) or file_values.get(name)
-                or 'placeholder-for-non-live-tests')
-
-    lines = list(_BASE_ENV_LINES)
-    or_key = _secret('MEMMAN_OPENROUTER_API_KEY')
-    voyage_key = _secret('MEMMAN_VOYAGE_API_KEY')
-    llm_key = _secret('MEMMAN_LLM_API_KEY')
-    if llm_key == 'placeholder-for-non-live-tests':
-        llm_key = or_key
-    lines.append(f'MEMMAN_OPENROUTER_API_KEY={or_key}')
-    lines.append(f'MEMMAN_VOYAGE_API_KEY={voyage_key}')
-    lines.append(f'MEMMAN_LLM_API_KEY={llm_key}')
-    (dot / 'env').write_text('\n'.join(lines) + '\n')
+    (dot / 'env').write_text(build_e2e_env_body(use_real_secrets=True))
     return home
-
-
-def _seed_fingerprint(db_path: Path) -> None:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.execute(
-            'create table if not exists meta '
-            '(key text primary key, value text not null)')
-        conn.execute(
-            "insert or replace into meta (key, value) values "
-            "('embed_fingerprint', "
-            '\'{"provider":"voyage","model":"voyage-3-lite","dim":512}\')')
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def _data_dir(home: Path, name: str, seed: bool = True) -> Path:
@@ -118,7 +64,7 @@ def _data_dir(home: Path, name: str, seed: bool = True) -> Path:
     d = home / 'data' / name
     d.mkdir(parents=True, exist_ok=True)
     if seed:
-        _seed_fingerprint(d / 'data' / 'default' / 'memman.db')
+        seed_fingerprint(d / 'data' / 'default' / 'memman.db')
     return d
 
 

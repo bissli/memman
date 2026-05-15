@@ -16,9 +16,84 @@ short-circuit. We re-emphasize the contract here:
 
 import os
 import shutil
+import sqlite3
 from pathlib import Path
 
 import pytest
+
+from memman import config
+
+_PLACEHOLDER = 'placeholder-for-non-live-tests'
+
+_SECRET_KEYS = (
+    'MEMMAN_OPENROUTER_API_KEY',
+    'MEMMAN_VOYAGE_API_KEY',
+    'MEMMAN_LLM_API_KEY',
+    )
+
+
+def resolve_e2e_secret(name: str) -> str:
+    """Resolve an API-key env var for e2e fixtures.
+
+    Order matches the canonical runtime resolver: shell `os.environ`
+    first (CI exports secrets), then `~/.memman/env` (local dev keeps
+    them in the runtime config file), then a stable placeholder so
+    non-live tests still emit a parseable env file.
+    """
+    user_env = Path.home() / '.memman' / config.ENV_FILENAME
+    val = os.environ.get(name)
+    if not val and user_env.exists():
+        val = config.parse_env_file(user_env).get(name)
+    return val or _PLACEHOLDER
+
+
+def build_e2e_env_body(overrides: dict[str, str] | None = None,
+                       use_real_secrets: bool = False) -> str:
+    """Render a `KEY=VALUE`-per-line env-file body for e2e tests.
+
+    Starts from `config.INSTALL_DEFAULTS` so model/provider/endpoint
+    constants stay in sync with what `memman install` writes, then
+    overlays e2e-specific secrets and any caller `overrides`. When
+    `use_real_secrets=True`, `MEMMAN_*_API_KEY` values resolve via
+    `resolve_e2e_secret` (shell env then `~/.memman/env`); when False
+    (the default), secrets stay as a stable placeholder so container
+    tests don't silently inherit the host's credentials. Live-key
+    container tests must overlay real keys via the `overrides` dict
+    so the leak path is explicit.
+    """
+    rows: dict[str, str] = dict(config.INSTALL_DEFAULTS)
+    rows[config.DEFAULT_BACKEND] = 'sqlite'
+    for name in _SECRET_KEYS:
+        rows[name] = (resolve_e2e_secret(name)
+                      if use_real_secrets else _PLACEHOLDER)
+    if rows['MEMMAN_LLM_API_KEY'] == _PLACEHOLDER:
+        rows['MEMMAN_LLM_API_KEY'] = rows['MEMMAN_OPENROUTER_API_KEY']
+    if overrides:
+        rows.update(overrides)
+    return ''.join(f'{k}={v}\n' for k, v in rows.items())
+
+
+def seed_fingerprint(db_path: Path) -> None:
+    """Write a voyage-3-lite/512 fingerprint into the store DB.
+
+    Pre-seeding lets `seed_if_fresh` short-circuit on a fresh store,
+    avoiding the live Voyage probe on every store-open. Used by e2e
+    fixtures that don't need a real embed pipeline (CLI plumbing
+    tests, list/use/remove behavior).
+    """
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            'create table if not exists meta '
+            '(key text primary key, value text not null)')
+        conn.execute(
+            "insert or replace into meta (key, value) values "
+            "('embed_fingerprint', "
+            '\'{"provider":"voyage","model":"voyage-3-lite","dim":512}\')')
+        conn.commit()
+    finally:
+        conn.close()
 
 
 @pytest.fixture
@@ -63,20 +138,13 @@ def live_keys() -> dict[str, str]:
 
     Resolution order matches the unit conftest's `_isolate_env`:
     `os.environ` first (CI path: secrets exported via workflow),
-    then the developer's canonical `~/.memman/env` (local dev path:
-    keys live in the runtime config file and may not be re-exported
-    to the shell).
+    then the developer's canonical `~/.memman/env` (local dev path).
     """
-    from memman import config
-
     require = os.environ.get('MEMMAN_E2E_REQUIRE_LIVE') == '1'
-    home_env = Path.home() / '.memman' / config.ENV_FILENAME
-    file_values = (config.parse_env_file(home_env)
-                   if home_env.exists() else {})
     keys = {}
     for name in ('MEMMAN_OPENROUTER_API_KEY', 'MEMMAN_VOYAGE_API_KEY'):
-        val = os.environ.get(name) or file_values.get(name)
-        if not val or val == 'mock-key-for-testing':
+        val = resolve_e2e_secret(name)
+        if val == _PLACEHOLDER or val == 'mock-key-for-testing':
             msg = f'{name} not set; live e2e test cannot run'
             if require:
                 pytest.fail(msg)
@@ -143,31 +211,7 @@ def nanoclaw_image(docker_available: None, repo_root: Path) -> str:
     return tag
 
 
-def _writable_mount_dir(parent: Path, group: str) -> Path:
-    """Create a host-side mount dir the container's `node` user (uid
-    1000) can write to. CI runners use uid 1001 by default; chmod 0o777
-    avoids the EACCES that bind-mount uid mismatch otherwise causes.
-    """
-    d = parent / 'data' / group
-    d.mkdir(parents=True, exist_ok=True)
-    d.chmod(0o777)
-    state = d / 'scheduler.state'
-    state.write_text('started\n')
-    return d
-
-
-def _safe(s: str) -> str:
-    """Sanitize a string into a Postgres-identifier-safe form.
-
-    Lower-case letters, digits, and underscores only; first character
-    forced to a letter. Used by every postgres e2e test to derive a
-    unique schema name from the test node id without colliding with
-    other tests.
-    """
-    safe = ''.join(c if c.isalnum() else '_' for c in s).lower()
-    if safe and not safe[0].isalpha():
-        safe = 'p_' + safe
-    return safe[:40] or 'p_test'
+from tests.conftest import _safe_store_name as _safe  # noqa: E402,F401
 
 
 def _pg_vec(seed: int, dim: int = 512) -> list[float]:
