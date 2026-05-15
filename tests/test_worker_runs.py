@@ -78,9 +78,9 @@ def _invoke(runner_tuple, args):
 
 
 def test_drain_records_worker_run(runner):
-    """`memman scheduler drain --pending` on an empty queue still writes a row.
+    """`memman scheduler drain` on an empty queue still writes a row.
     """
-    result = _invoke(runner, ['scheduler', 'drain', '--pending',
+    result = _invoke(runner, ['scheduler', 'drain',
                               '--limit', '5', '--timeout', '5'])
     assert result.exit_code == 0, result.output
 
@@ -100,7 +100,7 @@ def test_drain_records_worker_run(runner):
 def test_scheduler_status_includes_last_run(runner):
     """`memman scheduler status` surfaces the most recent worker_runs row.
     """
-    _invoke(runner, ['scheduler', 'drain', '--pending',
+    _invoke(runner, ['scheduler', 'drain',
                      '--limit', '1', '--timeout', '5'])
     result = _invoke(runner, ['scheduler', 'status'])
     assert result.exit_code == 0, result.output

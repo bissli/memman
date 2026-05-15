@@ -101,7 +101,7 @@ def test_drain_lock_released_on_setup_failure(tmp_path, monkeypatch):
 
     runner = CliRunner()
     result = runner.invoke(
-        cli, ['--data-dir', data_dir, 'scheduler', 'drain', '--pending'])
+        cli, ['--data-dir', data_dir, 'scheduler', 'drain'])
     assert result.exit_code != 0
 
     fd = drain_lock.acquire(data_dir)
@@ -111,7 +111,7 @@ def test_drain_lock_released_on_setup_failure(tmp_path, monkeypatch):
 def test_drain_skips_when_locked(tmp_path, monkeypatch):
     """If the lock is held, `_drain_queue` returns the skip JSON.
 
-    Holds the lock in-process and runs `scheduler drain --pending`
+    Holds the lock in-process and runs `scheduler drain`
     via CliRunner. Same-process contention works because fcntl.flock
     on Linux is per-file-descriptor.
     """
@@ -124,7 +124,7 @@ def test_drain_skips_when_locked(tmp_path, monkeypatch):
     try:
         runner = CliRunner()
         result = runner.invoke(
-            cli, ['--data-dir', data_dir, 'scheduler', 'drain', '--pending'])
+            cli, ['--data-dir', data_dir, 'scheduler', 'drain'])
         assert result.exit_code == 0, result.output
         out = json.loads(result.stdout)
         assert out['skipped'] == 'another drain in progress'

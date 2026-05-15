@@ -33,18 +33,10 @@ def _patch_no_subprocess(monkeypatch, *, active: bool = True):
     fake_subprocess(monkeypatch, sch, active=active)
 
 
-def test_enrich_requires_pending(runner):
-    """`memman scheduler drain` without --pending errors out.
+def test_drain_empty_queue(runner):
+    """`memman scheduler drain` on an empty queue returns processed=0.
     """
-    result = invoke(runner, ['scheduler', 'drain'])
-    assert result.exit_code != 0
-    assert 'pending' in result.output.lower()
-
-
-def test_enrich_pending_empty_queue(runner):
-    """`memman scheduler drain --pending` on an empty queue returns processed=0.
-    """
-    result = invoke(runner, ['scheduler', 'drain', '--pending', '--limit', '5',
+    result = invoke(runner, ['scheduler', 'drain', '--limit', '5',
                              '--timeout', '5'])
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)

@@ -269,7 +269,7 @@ class TestMaintenanceReindexesAllStores:
 
         result = r.invoke(cli, [
             '--data-dir', data_dir,
-            'scheduler', 'drain', '--pending'])
+            'scheduler', 'drain'])
         assert result.exit_code == 0, result.output
 
         expected = compute_constants_hash()

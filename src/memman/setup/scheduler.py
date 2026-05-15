@@ -214,7 +214,7 @@ def install(data_dir: str,
 
     Writes every key in `knobs` to <data_dir>/env at mode 600 (merging
     with any existing keys) and installs the trigger that runs
-    `memman scheduler drain --pending` at the given interval.
+    `memman scheduler drain` at the given interval.
 
     `knobs` is the install-time snapshot of `INSTALLABLE_KEYS` values
     collected from `os.environ` by the caller. Empty values must be
@@ -233,7 +233,7 @@ def install(data_dir: str,
     binary = memman_binary_path()
 
     _enforce_data_dir_perms(data_dir)
-    env_actions = _write_env_file(knobs, data_dir=data_dir)
+    env_actions = _write_env_keys(knobs, data_dir=data_dir)
 
     kind = detect_scheduler()
     if kind == 'systemd':
@@ -311,16 +311,6 @@ def _write_env_keys_with_flock(
             return _write_env_keys(updates, removes=removes, data_dir=data_dir)
         finally:
             fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
-
-
-def _write_env_file(knobs: dict[str, str],
-                    data_dir: str | None = None) -> list[str]:
-    """Persist install-time `INSTALLABLE_KEYS` values to the env file.
-
-    Caller (`check_prereqs` / `scheduler install`) is responsible for
-    collecting the dict from `os.environ` and dropping empty values.
-    """
-    return _write_env_keys(knobs, data_dir=data_dir)
 
 
 def uninstall(data_dir: str | None = None) -> dict:
@@ -597,7 +587,7 @@ def _install_systemd(binary: str, data_dir: str,
         'Environment=MEMMAN_WORKER=1\n'
         f'EnvironmentFile={env_file}\n'
         f'ExecStartPre=/bin/mkdir -p {Path.home()}/.memman/logs\n'
-        f'ExecStart={binary} scheduler drain --pending --timeout {exec_timeout}\n'
+        f'ExecStart={binary} scheduler drain --timeout {exec_timeout}\n'
         'StandardOutput=append:%h/.memman/logs/enrich.log\n'
         'StandardError=append:%h/.memman/logs/enrich.err\n')
 
@@ -680,7 +670,7 @@ def _install_launchd(binary: str, data_dir: str,
         f'[ -f {env_file_q} ] && . {env_file_q}\n'
         f'export MEMMAN_DATA_DIR={data_dir_q}\n'
         'export MEMMAN_WORKER=1\n'
-        f'exec {binary_q} scheduler drain --pending --timeout {exec_timeout}\n')
+        f'exec {binary_q} scheduler drain --timeout {exec_timeout}\n')
 
     log_path = logs_dir / 'enrich.log'
     err_path = logs_dir / 'enrich.err'

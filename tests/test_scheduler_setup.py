@@ -110,7 +110,7 @@ class TestInstall:
         service = Path(result['service_path']).read_text()
         assert 'OnUnitActiveSec=600s' in timer
         assert 'Persistent=true' in timer
-        assert '/fake/bin/memman scheduler drain --pending' in service
+        assert '/fake/bin/memman scheduler drain' in service
         assert 'MEMMAN_DATA_DIR=' in service
         assert 'EnvironmentFile=' in service
 
@@ -131,7 +131,7 @@ class TestInstall:
         wrapper = Path(result['wrapper_path']).read_text()
         assert '<key>StartInterval</key><integer>1800</integer>' in plist
         assert '/fake/bin/memman' in wrapper
-        assert 'scheduler drain --pending' in wrapper
+        assert 'scheduler drain' in wrapper
         assert os.access(result['wrapper_path'], os.X_OK)
 
     def test_install_writes_both_keys_to_env_file(self,
@@ -643,7 +643,7 @@ class TestServe:
         monkeypatch.setattr(sch, 'detect_scheduler',
                             lambda: sch.SCHEDULER_KIND_SERVE)
         monkeypatch.setattr(sch, 'memman_binary_path', lambda: '/usr/local/bin/memman')
-        monkeypatch.setattr(sch, '_write_env_file', lambda *a, **k: ['noop'])
+        monkeypatch.setattr(sch, '_write_env_keys', lambda *a, **k: ['noop'])
         result = sch.install(
             str(fake_home / 'data'),
             knobs=_knobs(openrouter='or-key', voyage='vy-key'))

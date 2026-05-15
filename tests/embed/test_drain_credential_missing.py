@@ -95,7 +95,7 @@ class TestCredentialMissingFailureMode:
 
         drain_result = runner.invoke(cli, [
             '--data-dir', str(tmp_path),
-            'scheduler', 'drain', '--pending'])
+            'scheduler', 'drain'])
         assert drain_result.exit_code == 0, drain_result.output
 
         qconn = open_queue_db(str(tmp_path))

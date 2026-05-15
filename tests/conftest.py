@@ -269,7 +269,7 @@ def _args_data_dir(args) -> str | None:
 
 
 def _force_drain_with(runner_cls, data_dir, original_invoke) -> None:
-    """Run `scheduler drain --pending` via the underlying click invoke.
+    """Run `scheduler drain` via the underlying click invoke.
 
     Bypasses the autouse-wrapped `invoke` to avoid re-triggering the
     auto-drain path on the drain command itself.
@@ -278,7 +278,7 @@ def _force_drain_with(runner_cls, data_dir, original_invoke) -> None:
     instance = runner_cls()
     result = original_invoke(
         instance, cli,
-        ['--data-dir', data_dir, 'scheduler', 'drain', '--pending'])
+        ['--data-dir', data_dir, 'scheduler', 'drain'])
     assert result.exit_code == 0, (
         f'force_drain failed: exit={result.exit_code} '
         f'output={result.output} exc={result.exception}')
@@ -289,14 +289,14 @@ def force_drain(data_dir: str) -> None:
 
     Tests that follow `remember`/`replace` with a read assertion call
     this to flush pending work through the worker before reading. Uses
-    the same `scheduler drain --pending` code path the OS timer fires.
+    the same `scheduler drain` code path the OS timer fires.
     """
     import click.testing
     from memman.cli import cli
     instance = click.testing.CliRunner()
     result = instance.invoke(
         cli, ['--data-dir', data_dir,
-              'scheduler', 'drain', '--pending'])
+              'scheduler', 'drain'])
     assert result.exit_code == 0, (
         f'force_drain failed: exit={result.exit_code} '
         f'output={result.output} exc={result.exception}')

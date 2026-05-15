@@ -1,7 +1,7 @@
 """Deferred-write queue for memman.
 
 The synchronous write path appends to this queue; a background worker
-(`memman scheduler drain --pending`, hidden) drains it and runs the
+(`memman scheduler drain`, hidden) drains it and runs the
 full remember pipeline.
 Single SQLite file at <data_dir>/queue.db with WAL mode. Atomic claim
 via update-returning; stale claims are reclaimable after the timeout.

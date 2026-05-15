@@ -50,7 +50,7 @@ def test_forget_then_replace_race(runner):
         cli, ['--data-dir', data_dir, 'remember', original_content])
     assert add_result.exit_code == 0, add_result.output
     drain_result = r.invoke(
-        cli, ['--data-dir', data_dir, 'scheduler', 'drain', '--pending'])
+        cli, ['--data-dir', data_dir, 'scheduler', 'drain'])
     assert drain_result.exit_code == 0, drain_result.output
 
     recall_pre = _invoke(
@@ -62,7 +62,7 @@ def test_forget_then_replace_race(runner):
     _invoke(r, data_dir, 'forget', original_id)
 
     drain_result = r.invoke(
-        cli, ['--data-dir', data_dir, 'scheduler', 'drain', '--pending'])
+        cli, ['--data-dir', data_dir, 'scheduler', 'drain'])
     assert drain_result.exit_code == 0, drain_result.output
 
     failed_out = _invoke(r, data_dir, 'scheduler', 'queue', 'failed')

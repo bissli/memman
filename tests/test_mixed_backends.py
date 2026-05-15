@@ -160,7 +160,7 @@ def test_drain_processes_mixed_backends_in_one_batch(
 
         out = r.invoke(
             cli, ['--data-dir', data_dir,
-                  'scheduler', 'drain', '--pending', '--limit', '10'])
+                  'scheduler', 'drain', '--limit', '10'])
         assert out.exit_code == 0, out.output
     finally:
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
@@ -225,7 +225,7 @@ def test_cross_backend_retry(tmp_path, env_file, pg_dsn, monkeypatch):
 
         out = r.invoke(
             cli, ['--data-dir', data_dir,
-                  'scheduler', 'drain', '--pending', '--limit', '1'])
+                  'scheduler', 'drain', '--limit', '1'])
         assert out.exit_code == 0, out.output
         assert attempts_seen[0] == 1, (
             f'expected one process call on first drain,'
@@ -239,7 +239,7 @@ def test_cross_backend_retry(tmp_path, env_file, pg_dsn, monkeypatch):
 
         out = r.invoke(
             cli, ['--data-dir', data_dir,
-                  'scheduler', 'drain', '--pending', '--limit', '1'])
+                  'scheduler', 'drain', '--limit', '1'])
         assert out.exit_code == 0, out.output
         assert attempts_seen[0] == 2, (
             f'expected a second process call after backend swap,'

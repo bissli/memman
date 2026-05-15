@@ -8,7 +8,6 @@ Available on every command:
 | ------------------- | ----------- | ------------------------------------------------------------- |
 | `--store <name>`    | (auto)      | Named memory store (overrides `MEMMAN_STORE` and active file) |
 | `--data-dir <path>` | `~/.memman` | Base data directory                                           |
-| `--readonly`        | `false`     | Open database in read-only mode                               |
 | `--verbose` / `-v`  | `false`     | INFO-level logging to stderr                                  |
 | `--debug`           | `false`     | DEBUG-level logging to stderr (overrides `--verbose`)         |
 | `--version`         |             | Print version and exit                                        |

@@ -247,7 +247,7 @@ class TestReembed:
 
         drain_result = _invoke([
             '--data-dir', str(tmp_path),
-            'scheduler', 'drain', '--pending'])
+            'scheduler', 'drain'])
         assert drain_result.exit_code == 0, drain_result.output
 
         from memman.store.db import store_dir

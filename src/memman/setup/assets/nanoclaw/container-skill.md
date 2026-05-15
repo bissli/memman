@@ -21,7 +21,7 @@ serve is PID 1 unless you intend to terminate the container.
 ## Memory stores
 
 - **Private** (default): per-group, read-write. All writes go here.
-- **Global**: shared across all groups, read-only. Append `--store global --readonly` to read it.
+- **Global**: shared across all groups, read-only. Append `--store global` to read it.
 
 Never write to the global store — the mount is read-only.
 
@@ -34,13 +34,13 @@ Never write to the global store — the mount is read-only.
 
 ```bash
 memman recall "<query>" --limit 5
-memman --store global --readonly recall "<query>" --limit 5
+memman --store global recall "<query>" --limit 5
 ```
 
 The cross-encoder reranker runs by default on multi-token queries
 (auto-skipped on 1-2 token queries).
 
-Note: `--store` and `--readonly` are root-group flags and must come **before** the subcommand name (e.g. `recall`).
+Note: `--store` is a root-group flag and must come **before** the subcommand name (e.g. `recall`).
 
 Craft a focused, keyword-rich query — do not pass the raw user prompt.
 

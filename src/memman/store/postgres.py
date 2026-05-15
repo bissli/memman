@@ -24,7 +24,6 @@ import json
 import logging
 import os
 import time
-from collections import deque
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -2443,43 +2442,6 @@ where deleted_at is null
                 f'dropping invalid HNSW index {row[0]}')
             cur.execute(f'drop index if exists {row[0]} cascade')
         cur.execute(create_sql)
-
-
-def _bfs_python_fallback(
-        edges: list[Edge], active_ids: set[Id], seed_id: Id,
-        depth: int, edge_filter: str) -> list[tuple[Id, int, str]]:
-    """Python BFS fallback used in tests when CTE shape is awkward.
-
-    Mirrors `SqliteEdgeStore.get_neighborhood` so an integration test
-    can compare results when the Python and SQL paths diverge during
-    development. Not used at runtime.
-    """
-    adj: dict[Id, list[Edge]] = {}
-    for e in edges:
-        adj.setdefault(e.source_id, []).append(e)
-        if e.source_id != e.target_id:
-            adj.setdefault(e.target_id, []).append(e)
-    visited = {seed_id}
-    queue: deque[tuple[Id, int]] = deque([(seed_id, 0)])
-    out: list[tuple[Id, int, str]] = []
-    while queue:
-        cur_id, hop = queue.popleft()
-        if hop >= depth:
-            continue
-        for edge in adj.get(cur_id, []):
-            if edge_filter and edge.edge_type != edge_filter:
-                continue
-            neighbor_id = (
-                edge.target_id if edge.target_id != cur_id
-                else edge.source_id)
-            if neighbor_id in visited:
-                continue
-            visited.add(neighbor_id)
-            if neighbor_id not in active_ids:
-                continue
-            out.append((neighbor_id, hop + 1, edge.edge_type))
-            queue.append((neighbor_id, hop + 1))
-    return out
 
 
 _POSTGRES_MIGRATOR_FEATURES = BackendFeatures(

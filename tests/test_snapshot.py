@@ -142,7 +142,7 @@ def test_recall_consumes_snapshot_when_present(tmp_path):
         cli, ['--data-dir', data_dir, 'remember', seed_content])
     assert seed_result.exit_code == 0, seed_result.output
     drain_result = r.invoke(
-        cli, ['--data-dir', data_dir, 'scheduler', 'drain', '--pending'])
+        cli, ['--data-dir', data_dir, 'scheduler', 'drain'])
     assert drain_result.exit_code == 0, drain_result.output
 
     from memman.store.db import read_active
@@ -167,7 +167,7 @@ def test_recall_falls_back_when_snapshot_absent(tmp_path):
     seed_content = (
         'gamma compliance audit runs quarterly under SOC2 type II controls')
     r.invoke(cli, ['--data-dir', data_dir, 'remember', seed_content])
-    r.invoke(cli, ['--data-dir', data_dir, 'scheduler', 'drain', '--pending'])
+    r.invoke(cli, ['--data-dir', data_dir, 'scheduler', 'drain'])
 
     from memman.store.db import read_active
     from memman.store.db import store_dir as _store_dir

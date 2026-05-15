@@ -253,14 +253,13 @@ def _parse_entities(entities: str) -> list[str]:
 @click.version_option(version=memman.__version__, prog_name='memman')
 @click.option('--data-dir', default=None, help='Base data directory (env: MEMMAN_DATA_DIR)')
 @click.option('--store', 'store_name', default='', help='Named memory store')
-@click.option('--readonly', is_flag=True, default=False, help='Open database in read-only mode')
 @click.option('--verbose', '-v', is_flag=True, default=False,
               help='INFO-level logging to stderr')
 @click.option('--debug', is_flag=True, default=False,
               help='DEBUG-level logging to stderr (overrides --verbose)')
 @click.pass_context
 def cli(ctx: click.Context, data_dir: str | None, store_name: str,
-        readonly: bool, verbose: bool, debug: bool) -> None:
+        verbose: bool, debug: bool) -> None:
     """Persistent memory store for LLM agents."""
     if data_dir is None:
         data_dir = os.environ.get(config.DATA_DIR, default_data_dir())
@@ -268,7 +267,6 @@ def cli(ctx: click.Context, data_dir: str | None, store_name: str,
     ctx.ensure_object(dict)
     ctx.obj['data_dir'] = data_dir
     ctx.obj['store'] = store_name
-    ctx.obj['readonly'] = readonly
 
 
 @cli.group()
@@ -589,8 +587,6 @@ def _reset_heartbeat_state() -> None:
 
 
 @scheduler.command('drain', hidden=True)
-@click.option('--pending', is_flag=True, default=False,
-              help='Drain the deferred-write queue')
 @click.option('--limit', default=100, type=int,
               help='Max blobs processed per invocation')
 @click.option('--timeout', default=300, type=int,
@@ -602,16 +598,13 @@ def _reset_heartbeat_state() -> None:
 @click.option('--trace', is_flag=True, default=False,
               help='Write structured trace to ~/.memman/logs/debug.log')
 @click.pass_context
-def scheduler_drain(ctx: click.Context, pending: bool, limit: int,
+def scheduler_drain(ctx: click.Context, limit: int,
                     timeout: int, stores: str, progress: bool,
                     trace: bool) -> None:
     """Run the worker drain loop. Hidden: invoked by the systemd/launchd
     unit's ExecStart. Operators should use `scheduler trigger` to kick
     the unit, or `scheduler queue list` to inspect pending rows.
     """
-    if not pending:
-        raise click.ClickException(
-            'only --pending mode is supported; pass --pending explicitly')
     if trace:
         os.environ[config.DEBUG] = '1'
     _drain_queue(ctx, limit, timeout, stores, progress)
