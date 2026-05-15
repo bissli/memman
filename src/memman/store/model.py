@@ -149,6 +149,38 @@ def insight_to_delta_dict(ins: 'Insight') -> dict[str, Any]:
         }
 
 
+def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
+    """Return all user-visible fields of an insight for JSON output.
+
+    Used by CLI commands that emit Insight objects to stdout and by
+    the recall snapshot writer. Timestamps are formatted with
+    `format_timestamp`; `updated_at` falls back to `created_at` so
+    consumers always see a populated value. Optional fields
+    (`deleted_at`, `summary`, `linked_at`, `enriched_at`) are emitted
+    only when populated.
+    """
+    out: dict[str, Any] = {
+        'id': ins.id,
+        'content': ins.content,
+        'category': ins.category,
+        'importance': ins.importance,
+        'entities': list(ins.entities or []),
+        'source': ins.source,
+        'access_count': ins.access_count,
+        'created_at': format_timestamp(ins.created_at),
+        'updated_at': format_timestamp(ins.updated_at or ins.created_at),
+        }
+    if ins.deleted_at:
+        out['deleted_at'] = format_timestamp(ins.deleted_at)
+    if ins.summary:
+        out['summary'] = ins.summary
+    if ins.linked_at:
+        out['linked_at'] = format_timestamp(ins.linked_at)
+    if ins.enriched_at:
+        out['enriched_at'] = format_timestamp(ins.enriched_at)
+    return out
+
+
 @dataclass
 class OpLogStats:
     """Aggregated oplog statistics."""

@@ -28,7 +28,7 @@ from memman.store.factory import known_backends, list_stores
 _BACKEND_CHOICES = sorted(known_backends())
 from memman.embed import SUPPORTED_EMBED_PROVIDERS as _EMBED_PROVIDER_CHOICES
 from memman.store.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge
-from memman.store.model import Insight, format_timestamp, is_immune
+from memman.store.model import Insight, format_timestamp, insight_to_full_dict, is_immune
 from memman.store.sqlite import open_ro_db
 from tqdm import tqdm
 
@@ -204,30 +204,6 @@ def _parse_since(since: str) -> str:
              'm': timedelta(minutes=val)}[unit]
     cutoff = datetime.now(timezone.utc) - delta
     return format_timestamp(cutoff)
-
-
-def _insight_to_dict(i: Insight) -> dict:
-    """Serialize an Insight for JSON output."""
-    d = {
-        'id': i.id,
-        'content': i.content,
-        'category': i.category,
-        'importance': i.importance,
-        'entities': i.entities,
-        'source': i.source,
-        'access_count': i.access_count,
-        'created_at': format_timestamp(i.created_at),
-        'updated_at': format_timestamp(i.updated_at),
-        }
-    if i.deleted_at:
-        d['deleted_at'] = format_timestamp(i.deleted_at)
-    if i.summary:
-        d['summary'] = i.summary
-    if i.linked_at:
-        d['linked_at'] = format_timestamp(i.linked_at)
-    if i.enriched_at:
-        d['enriched_at'] = format_timestamp(i.enriched_at)
-    return d
 
 
 def _parse_entities(entities: str) -> list[str]:
@@ -1194,7 +1170,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                     'recall_bookkeep_skipped basic q=%r: %s',
                     keyword_str, exc)
             _json_out({
-                'results': [_insight_to_dict(r) for r in results],
+                'results': [insight_to_full_dict(r) for r in results],
                 'meta': {'basic': True},
                 })
             return
@@ -1271,7 +1247,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
         out = {
             'results': [
                 {
-                    'insight': _insight_to_dict(r['insight']),
+                    'insight': insight_to_full_dict(r['insight']),
                     'score': r['score'],
                     'intent': r['intent'],
                     'signals': r['signals'],
@@ -2244,7 +2220,7 @@ def insights_show(ctx: click.Context, id: str) -> None:
         if ins is None:
             raise click.ClickException(
                 f'insight {id} not found or already deleted')
-        _json_out(_insight_to_dict(ins))
+        _json_out(insight_to_full_dict(ins))
 
 
 @cli.command()
