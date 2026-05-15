@@ -60,11 +60,22 @@ def live_keys() -> dict[str, str]:
     `MEMMAN_E2E_REQUIRE_LIVE=1` set, missing keys raise instead of
     skipping silently, so CI lanes that should run live tests fail
     visibly when secrets are misconfigured.
+
+    Resolution order matches the unit conftest's `_isolate_env`:
+    `os.environ` first (CI path: secrets exported via workflow),
+    then the developer's canonical `~/.memman/env` (local dev path:
+    keys live in the runtime config file and may not be re-exported
+    to the shell).
     """
+    from memman import config
+
     require = os.environ.get('MEMMAN_E2E_REQUIRE_LIVE') == '1'
+    home_env = Path.home() / '.memman' / config.ENV_FILENAME
+    file_values = (config.parse_env_file(home_env)
+                   if home_env.exists() else {})
     keys = {}
     for name in ('MEMMAN_OPENROUTER_API_KEY', 'MEMMAN_VOYAGE_API_KEY'):
-        val = os.environ.get(name)
+        val = os.environ.get(name) or file_values.get(name)
         if not val or val == 'mock-key-for-testing':
             msg = f'{name} not set; live e2e test cannot run'
             if require:

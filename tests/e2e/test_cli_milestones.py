@@ -56,19 +56,34 @@ def home_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     resolver finds providers, endpoints, and (when present) real API
     keys. Without the env file, every store open raises
     `MEMMAN_EMBED_PROVIDER is not set`.
+
+    Secret resolution: `os.environ` first (CI), then the canonical
+    `~/.memman/env` on the host (local dev), then a placeholder so
+    non-live tests still get a parseable env file.
     """
+    from memman import config
+
     home = tmp_path_factory.mktemp('e2e_home')
     dot = home / '.memman'
     dot.mkdir(parents=True, exist_ok=True)
     (dot / 'scheduler.state').write_text('started\n')
     (dot / 'scheduler.state').chmod(0o600)
     (dot / 'cache').mkdir(exist_ok=True)
+
+    user_env = Path.home() / '.memman' / config.ENV_FILENAME
+    file_values = (config.parse_env_file(user_env)
+                   if user_env.exists() else {})
+
+    def _secret(name: str) -> str:
+        return (os.environ.get(name) or file_values.get(name)
+                or 'placeholder-for-non-live-tests')
+
     lines = list(_BASE_ENV_LINES)
-    or_key = (os.environ.get('MEMMAN_OPENROUTER_API_KEY')
-              or 'placeholder-for-non-live-tests')
-    voyage_key = (os.environ.get('MEMMAN_VOYAGE_API_KEY')
-                  or 'placeholder-for-non-live-tests')
-    llm_key = os.environ.get('MEMMAN_LLM_API_KEY') or or_key
+    or_key = _secret('MEMMAN_OPENROUTER_API_KEY')
+    voyage_key = _secret('MEMMAN_VOYAGE_API_KEY')
+    llm_key = _secret('MEMMAN_LLM_API_KEY')
+    if llm_key == 'placeholder-for-non-live-tests':
+        llm_key = or_key
     lines.append(f'MEMMAN_OPENROUTER_API_KEY={or_key}')
     lines.append(f'MEMMAN_VOYAGE_API_KEY={voyage_key}')
     lines.append(f'MEMMAN_LLM_API_KEY={llm_key}')
@@ -144,11 +159,11 @@ class TestM0Stores:
         out = run_cli(['store', 'create', 'work'], home_dir, store_dir)
         assert_jq(json_out(out), 'store', 'work', 'created work')
 
-    @pytest.mark.requires_live_keys
-    def test_store_create_reject_duplicate(self, home_dir: Path,
-                                           store_dir: Path,
-                                           live_keys):
-        out = run_cli(['store', 'create', 'work'], home_dir, store_dir,
+    def test_store_create_reject_duplicate(self, tmp_path_factory: pytest.TempPathFactory,
+                                           home_dir: Path):
+        data_dir = tmp_path_factory.mktemp('reject_dup')
+        (data_dir / 'data' / 'work').mkdir(parents=True)
+        out = run_cli(['store', 'create', 'work'], home_dir, data_dir,
                       check=False)
         assert_contains(out.stdout + out.stderr, 'already exists',
                         'rejects duplicate')
@@ -181,11 +196,12 @@ class TestM0Stores:
         assert_contains(out.stdout + out.stderr, 'does not exist',
                         'rejects missing')
 
-    @pytest.mark.requires_live_keys
-    def test_store_remove_reject_active(self, home_dir: Path,
-                                        store_dir: Path,
-                                        live_keys):
-        out = run_cli(['store', 'remove', 'work'], home_dir, store_dir,
+    def test_store_remove_reject_active(self, tmp_path_factory: pytest.TempPathFactory,
+                                        home_dir: Path):
+        data_dir = tmp_path_factory.mktemp('reject_active')
+        (data_dir / 'data' / 'work').mkdir(parents=True)
+        (data_dir / 'active').write_text('work\n')
+        out = run_cli(['store', 'remove', 'work'], home_dir, data_dir,
                       check=False)
         assert_contains(out.stdout + out.stderr,
                         'cannot remove the active store',
