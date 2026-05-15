@@ -26,8 +26,8 @@ class Client:
 
     def __init__(self) -> None:
         self.endpoint = DEFAULT_ENDPOINT
-        self.model = DEFAULT_MODEL
-        self.dim = EMBEDDING_DIM
+        self.model = config.get(config.VOYAGE_EMBED_MODEL) or DEFAULT_MODEL
+        self.dim = EMBEDDING_DIM if self.model == DEFAULT_MODEL else 0
         self._api_key = config.require(config.VOYAGE_API_KEY)
         self._availability_cache: bool | None = None
 
@@ -35,11 +35,11 @@ class Client:
         """Populate `dim` by probing the API if it's not already known.
 
         Default voyage-3-lite has its dim baked in at construction, so
-        the common path is a no-op. Non-default models routed via
-        `registry.get_for` reset `dim` to 0 (they have different
-        dimensionalities -- voyage-3 returns 1024, voyage-3-large
-        returns 1024, etc.); a single test embed populates the actual
-        dim for those callers.
+        the common path is a no-op. Non-default models -- either set
+        via `MEMMAN_VOYAGE_EMBED_MODEL` at install or routed via
+        `registry.get_for` -- start with `dim=0` (they have different
+        dimensionalities; voyage-3 / voyage-3-large return 1024); a
+        single test embed populates the actual dim for those callers.
         """
         if self.dim:
             return

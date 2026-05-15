@@ -142,8 +142,12 @@ def _collect_secrets(
         interactive: bool) -> dict[str, str]:
     """Prompt for missing embed-side mandatory secrets when interactive.
 
-    Skips a key when the file already has it OR when the shell exports
-    it (which would seed the file via `collect_install_knobs` anyway).
+    Skips silently when the file has the key OR when the shell exports
+    the MEMMAN-prefixed name (which seeds the file via
+    `collect_install_knobs` anyway). When only the vendor-native name
+    is exported (e.g. `VOYAGE_API_KEY`), the wizard announces the
+    detection and shows a masked prompt with the native value as the
+    default -- never silently captures cross-tool shell variables.
     Non-interactive runs return an empty dict and let the existing
     prereq check raise `<KEY> is required ...`. The set of mandatory
     keys is computed from `required_install_keys(embed)`; experimental
@@ -157,12 +161,61 @@ def _collect_secrets(
             continue
         if os.environ.get(key, '').strip():
             continue
+        native_value = _native_only_value(key)
+        if native_value:
+            out[key] = _prompt_with_native_default(key, native_value)
+            continue
         click.echo(click.style(
             f'\n{key} is not set; install requires it.', fg='yellow'))
         value = click.prompt(
             f'  {key}', hide_input=True, confirmation_prompt=False)
         out[key] = value.strip()
     return out
+
+
+def _native_only_value(key: str) -> str:
+    """Return the shell value of `key`'s native fallback when MEMMAN- is unset.
+
+    Returns '' when the key has no registered native fallback or when
+    the native shell variable is empty. The MEMMAN-prefixed shell var
+    is NOT consulted -- callers must do that check first and treat a
+    set MEMMAN- value as a silent-skip case.
+    """
+    native_name = config.NATIVE_INSTALL_KEY_FALLBACKS.get(key)
+    if not native_name:
+        return ''
+    return os.environ.get(native_name, '').strip()
+
+
+def _prompt_with_native_default(
+        key: str,
+        native_value: str,
+        *,
+        source_key: str | None = None) -> str:
+    """Announce a detected native shell key and prompt with it as default.
+
+    `key` is the memman-prefixed env name being collected (shown in the
+    prompt). `source_key` is the memman-prefixed name whose native
+    fallback supplied `native_value`; defaults to `key` for the common
+    direct-mapping case (`MEMMAN_VOYAGE_API_KEY` <- `VOYAGE_API_KEY`).
+    The OpenRouter LLM cascade passes `source_key=OPENROUTER_API_KEY`
+    because the detected native key (`OPENROUTER_API_KEY`) seeds a
+    different memman key (`MEMMAN_LLM_API_KEY`).
+
+    Caller has already verified `native_value` is non-empty and the
+    MEMMAN-prefixed name is unset. The prompt stays masked so the
+    default value isn't echoed; the printed hint names the detected
+    native variable so a blank Enter is auditable.
+    """
+    native_name = config.NATIVE_INSTALL_KEY_FALLBACKS[source_key or key]
+    click.echo('')
+    click.echo(click.style(
+        f'  detected {native_name} in shell;'
+        ' press Enter to use it, or type a new value', dim=True))
+    value = click.prompt(
+        f'  {key}', hide_input=True, default=native_value,
+        show_default=False, confirmation_prompt=False)
+    return value.strip()
 
 
 def _select_llm_endpoint(
@@ -239,10 +292,16 @@ def _collect_llm_api_key(
         return out
     if os.environ.get(config.LLM_API_KEY, '').strip():
         return out
-    if (config.is_openrouter_endpoint(endpoint)
-            and (file_values.get(config.OPENROUTER_API_KEY, '').strip()
-                 or os.environ.get(config.OPENROUTER_API_KEY, '').strip())):
-        return out
+    if config.is_openrouter_endpoint(endpoint):
+        if (file_values.get(config.OPENROUTER_API_KEY, '').strip()
+                or os.environ.get(config.OPENROUTER_API_KEY, '').strip()):
+            return out
+        native_or = _native_only_value(config.OPENROUTER_API_KEY)
+        if native_or:
+            out[config.LLM_API_KEY] = _prompt_with_native_default(
+                config.LLM_API_KEY, native_or,
+                source_key=config.OPENROUTER_API_KEY)
+            return out
     loopback = config.is_loopback_endpoint(endpoint)
     click.echo('')
     if loopback:

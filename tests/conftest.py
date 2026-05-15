@@ -102,6 +102,9 @@ def _isolate_env(tmp_path, monkeypatch, request):
     monkeypatch.delenv('MEMMAN_OPENAI_EMBED_API_KEY', raising=False)
     monkeypatch.delenv('MEMMAN_LLM_API_KEY', raising=False)
     monkeypatch.delenv('MEMMAN_LLM_ENDPOINT', raising=False)
+    monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
+    monkeypatch.delenv('VOYAGE_API_KEY', raising=False)
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
     if live_mode and real_secrets:
         for key, val in real_secrets.items():
             monkeypatch.setenv(key, val)

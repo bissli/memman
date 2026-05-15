@@ -28,6 +28,30 @@ class TestVoyagePrepare:
         ec.prepare()
         assert ec.dim == 512
 
+    def test_model_resolves_from_config(self, env_file):
+        """`Client.model` reads from MEMMAN_VOYAGE_EMBED_MODEL when set."""
+        from memman.embed.voyage import Client
+        env_file('MEMMAN_VOYAGE_EMBED_MODEL', 'voyage-3-lite')
+        ec = Client()
+        assert ec.model == 'voyage-3-lite'
+        assert ec.dim == 512
+
+    def test_non_default_model_starts_with_dim_zero(self, env_file, monkeypatch):
+        """Non-default model: dim=0 at construction so prepare() probes."""
+        from memman.embed.voyage import Client
+        env_file('MEMMAN_VOYAGE_EMBED_MODEL', 'voyage-3-large')
+
+        def _fake_embed(self, text):
+            return [0.0] * 1024
+
+        monkeypatch.setattr(
+            'memman.embed.voyage.Client.embed', _fake_embed)
+        ec = Client()
+        assert ec.model == 'voyage-3-large'
+        assert ec.dim == 0
+        ec.prepare()
+        assert ec.dim == 1024
+
 
 class TestOpenAIPrepare:
     """openai_compat's prepare() performs the dim probe lazily."""

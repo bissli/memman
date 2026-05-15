@@ -156,6 +156,7 @@ OLLAMA_HOST = 'MEMMAN_OLLAMA_HOST'
 OLLAMA_EMBED_MODEL = 'MEMMAN_OLLAMA_EMBED_MODEL'
 OLLAMA_MAX_INPUT_CHARS = 'MEMMAN_OLLAMA_MAX_INPUT_CHARS'
 OPENROUTER_EMBED_MODEL = 'MEMMAN_OPENROUTER_EMBED_MODEL'
+VOYAGE_EMBED_MODEL = 'MEMMAN_VOYAGE_EMBED_MODEL'
 VOYAGE_RERANK_MODEL = 'MEMMAN_VOYAGE_RERANK_MODEL'
 
 ENV_FILENAME = 'env'
@@ -188,6 +189,7 @@ INSTALLABLE_KEYS = (
     OLLAMA_EMBED_MODEL,
     OLLAMA_MAX_INPUT_CHARS,
     OPENROUTER_EMBED_MODEL,
+    VOYAGE_EMBED_MODEL,
     VOYAGE_RERANK_MODEL,
     OPENROUTER_API_KEY,
     VOYAGE_API_KEY,
@@ -195,6 +197,34 @@ INSTALLABLE_KEYS = (
     DEFAULT_PG_DSN,
     INTERVAL,
     )
+
+
+NATIVE_INSTALL_KEY_FALLBACKS: dict[str, str] = {
+    OPENROUTER_API_KEY: 'OPENROUTER_API_KEY',
+    VOYAGE_API_KEY: 'VOYAGE_API_KEY',
+    OPENAI_EMBED_API_KEY: 'OPENAI_API_KEY',
+    }
+
+
+def _shell_seed_value(key: str) -> str:
+    """Install-time shell lookup with vendor-native-name fallback.
+
+    Checks `os.environ[key]` (memman-prefixed) first; if empty, falls
+    back to the vendor's documented native name (e.g. `VOYAGE_API_KEY`)
+    via `NATIVE_INSTALL_KEY_FALLBACKS`. Returns the stripped string, or
+    '' when neither is set.
+
+    Do NOT call from runtime paths -- runtime resolution is file-only
+    via `config.get`. This helper exists for `collect_install_knobs`
+    and the wizard's prompt-skip / pre-fill logic only.
+    """
+    value = os.environ.get(key, '').strip()
+    if value:
+        return value
+    fallback = NATIVE_INSTALL_KEY_FALLBACKS.get(key)
+    if not fallback:
+        return ''
+    return os.environ.get(fallback, '').strip()
 
 
 def required_install_keys(embed: str) -> set[str]:
@@ -253,6 +283,7 @@ INSTALL_DEFAULTS: dict[str, str] = {
     OLLAMA_EMBED_MODEL: 'nomic-embed-text',
     OLLAMA_MAX_INPUT_CHARS: '1500',
     OPENROUTER_EMBED_MODEL: 'baai/bge-m3',
+    VOYAGE_EMBED_MODEL: 'voyage-3-lite',
     VOYAGE_RERANK_MODEL: 'rerank-2.5-lite',
     DEFAULT_BACKEND: 'sqlite',
     INTERVAL: '60',
@@ -603,7 +634,7 @@ def collect_install_knobs(data_dir: str) -> dict[str, str]:
         if file_value:
             knobs[key] = file_value
             continue
-        env_value = os.environ.get(key, '').strip()
+        env_value = _shell_seed_value(key)
         if env_value:
             knobs[key] = env_value
             continue

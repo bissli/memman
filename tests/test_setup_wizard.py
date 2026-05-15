@@ -137,6 +137,58 @@ class TestSecretPrompts:
         assert config.LLM_API_KEY not in out
 
 
+class TestNativeKeyDetection:
+    """Native vendor env vars (e.g. VOYAGE_API_KEY) trigger announce-then-prompt."""
+
+    def test_native_voyage_key_announces_and_prompts_with_default(
+            self, tty, tmp_path, monkeypatch, capsys):
+        """Detected native VOYAGE_API_KEY prefills a masked prompt; Enter accepts."""
+        _strip_default_secrets(monkeypatch, tmp_path / 'memman')
+        monkeypatch.setenv(config.DATA_DIR, str(tmp_path / 'memman'))
+        monkeypatch.delenv(config.VOYAGE_API_KEY, raising=False)
+        monkeypatch.delenv(config.OPENROUTER_API_KEY, raising=False)
+        monkeypatch.delenv(config.LLM_API_KEY, raising=False)
+        monkeypatch.setenv('VOYAGE_API_KEY', 'native-vy-value')
+        monkeypatch.setenv('OPENROUTER_API_KEY', 'native-or-value')
+
+        captured: list[dict] = []
+
+        def fake_prompt(*args, **kwargs):
+            captured.append(dict(kwargs, _arg=args[0] if args else None))
+            return kwargs.get('default', '')
+
+        monkeypatch.setattr('memman.setup.wizard.click.prompt', fake_prompt)
+        out = wizard.run_wizard(str(tmp_path / 'memman'))
+        stdout = capsys.readouterr().out
+        assert 'detected VOYAGE_API_KEY in shell' in stdout
+        assert 'detected OPENROUTER_API_KEY in shell' in stdout
+        assert out[config.VOYAGE_API_KEY] == 'native-vy-value'
+        assert out[config.LLM_API_KEY] == 'native-or-value'
+        voyage_call = next(
+            c for c in captured if c['_arg'].strip() == config.VOYAGE_API_KEY)
+        assert voyage_call['default'] == 'native-vy-value'
+        assert voyage_call['hide_input'] is True
+        assert voyage_call['show_default'] is False
+
+    def test_memman_prefixed_still_silent_skips(
+            self, tty, tmp_path, monkeypatch, capsys):
+        """MEMMAN-prefixed shell exports keep their existing silent-skip path."""
+        _strip_default_secrets(monkeypatch, tmp_path / 'memman')
+        monkeypatch.setenv(config.DATA_DIR, str(tmp_path / 'memman'))
+        monkeypatch.setenv(config.VOYAGE_API_KEY, 'memman-vy')
+        monkeypatch.setenv(config.OPENROUTER_API_KEY, 'memman-or')
+        monkeypatch.setenv(config.LLM_API_KEY, 'memman-llm')
+
+        def _should_not_be_called(*a, **kw):
+            raise AssertionError('wizard prompted despite MEMMAN- key present')
+
+        monkeypatch.setattr(
+            'memman.setup.wizard.click.prompt', _should_not_be_called)
+        wizard.run_wizard(str(tmp_path / 'memman'))
+        stdout = capsys.readouterr().out
+        assert 'detected' not in stdout
+
+
 class TestDsn:
     """`--pg-dsn` flag and probe behavior in headless mode."""
 
