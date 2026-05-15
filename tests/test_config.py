@@ -35,6 +35,10 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_OLLAMA_MAX_INPUT_CHARS',
     'MEMMAN_OPENROUTER_EMBED_MODEL',
     'MEMMAN_INTERVAL',
+    'MEMMAN_SCHEDULER_KIND',
+    'MEMMAN_EMBED_SWAP_BATCH_SIZE',
+    'MEMMAN_EMBED_SWAP_INDEX_TIMEOUT',
+    'MEMMAN_REINDEX_TIMEOUT',
     }
 
 
@@ -127,10 +131,14 @@ def test_install_defaults_keys_subset_of_installable():
     assert set(config.INSTALL_DEFAULTS) <= set(config.INSTALLABLE_KEYS)
 
 
-def test_all_vars_covers_installable_plus_process_control():
-    """_ALL_VARS = INSTALLABLE_KEYS + process-control vars."""
+def test_all_vars_covers_installable_plus_direct_env_vars():
+    """_ALL_VARS = INSTALLABLE_KEYS + process-control vars + tuning vars."""
     expected = set(config.INSTALLABLE_KEYS) | {
         config.DATA_DIR, config.STORE, config.WORKER, config.DEBUG,
+        config.SCHEDULER_KIND,
+        config.EMBED_SWAP_BATCH_SIZE,
+        config.EMBED_SWAP_INDEX_TIMEOUT,
+        config.REINDEX_TIMEOUT,
         }
     assert set(config._ALL_VARS) == expected
 
@@ -172,6 +180,10 @@ def test_constants_match_expected_names():
         config.DEFAULT_BACKEND,
         config.DEFAULT_PG_DSN,
         config.INTERVAL,
+        config.SCHEDULER_KIND,
+        config.EMBED_SWAP_BATCH_SIZE,
+        config.EMBED_SWAP_INDEX_TIMEOUT,
+        config.REINDEX_TIMEOUT,
         }
     assert actual == ALL_EXPECTED_NAMES
 

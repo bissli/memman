@@ -27,7 +27,6 @@ SYSTEMD_SERVICE_NAME = 'memman-enrich.service'
 LAUNCHD_LABEL = 'com.memman.enrich'
 STATE_FILENAME = 'scheduler.state'
 SERVE_INTERVAL_FILENAME = 'scheduler.serve_interval'
-SCHEDULER_KIND_ENV = 'MEMMAN_SCHEDULER_KIND'
 SCHEDULER_KIND_SERVE = 'serve'
 DEBUG_STATE_FILENAME = 'debug.state'
 DEFAULT_INTERVAL_SECONDS = 60
@@ -166,8 +165,7 @@ def detect_scheduler() -> str:
     `MEMMAN_SCHEDULER_KIND=serve` and run `memman scheduler serve`, or
     install systemd/launchd integration.
     """
-    import os as _os
-    if _os.environ.get(SCHEDULER_KIND_ENV) == SCHEDULER_KIND_SERVE:
+    if os.environ.get(config.SCHEDULER_KIND) == SCHEDULER_KIND_SERVE:
         return SCHEDULER_KIND_SERVE
     system = platform.system()
     if system == 'Darwin':
@@ -178,7 +176,7 @@ def detect_scheduler() -> str:
     raise RuntimeError(
         'no scheduler available on this host'
         f' (platform={system!r});'
-        f' set {SCHEDULER_KIND_ENV}=serve and run'
+        f' set {config.SCHEDULER_KIND}=serve and run'
         ' `memman scheduler serve`, or install systemd / launchd')
 
 

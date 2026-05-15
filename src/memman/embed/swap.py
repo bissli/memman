@@ -28,6 +28,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from memman import config
 from memman.embed import EmbeddingProvider
 from memman.embed.fingerprint import Fingerprint, write_fingerprint
 from memman.store.backend import Backend
@@ -73,7 +74,7 @@ class SwapProgress:
 def batch_size_from_env() -> int:
     """Read `MEMMAN_EMBED_SWAP_BATCH_SIZE` (default 200).
     """
-    raw = os.environ.get('MEMMAN_EMBED_SWAP_BATCH_SIZE')
+    raw = os.environ.get(config.EMBED_SWAP_BATCH_SIZE)
     if not raw:
         return DEFAULT_BATCH_SIZE
     try:

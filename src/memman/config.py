@@ -30,6 +30,13 @@ installable, never written to the env file, and are read directly
 from `os.environ` by their owners (`is_worker`, `trace.is_enabled`,
 etc.). They do not flow through `get()`.
 
+Tuning vars (`MEMMAN_EMBED_SWAP_BATCH_SIZE`,
+`MEMMAN_EMBED_SWAP_INDEX_TIMEOUT`, `MEMMAN_REINDEX_TIMEOUT`) are
+runtime knobs read directly from `os.environ` by their owners; they
+are also never persisted to the env file but are surfaced by
+`enumerate_effective_config` so operators can see them in
+`memman config show`.
+
 `INSTALLABLE_KEYS` is the single source of truth for what `memman
 install` persists to `~/.memman/env`. Adding a new global knob is
 one tuple entry plus an `INSTALL_DEFAULTS` row when a default exists.
@@ -52,10 +59,15 @@ RERANK_ENABLED = 'MEMMAN_RERANK_ENABLED'
 OPENROUTER_ENDPOINT = 'MEMMAN_OPENROUTER_ENDPOINT'
 DEBUG = 'MEMMAN_DEBUG'
 WORKER = 'MEMMAN_WORKER'
+SCHEDULER_KIND = 'MEMMAN_SCHEDULER_KIND'
 LOG_LEVEL = 'MEMMAN_LOG_LEVEL'
 DEFAULT_BACKEND = 'MEMMAN_DEFAULT_BACKEND'
 DEFAULT_PG_DSN = 'MEMMAN_DEFAULT_POSTGRES_DSN'
 INTERVAL = 'MEMMAN_INTERVAL'
+
+EMBED_SWAP_BATCH_SIZE = 'MEMMAN_EMBED_SWAP_BATCH_SIZE'
+EMBED_SWAP_INDEX_TIMEOUT = 'MEMMAN_EMBED_SWAP_INDEX_TIMEOUT'
+REINDEX_TIMEOUT = 'MEMMAN_REINDEX_TIMEOUT'
 
 
 def BACKEND_FOR(store: str) -> str:
@@ -97,6 +109,41 @@ def env_key_for(backend: str, key: str, store: str) -> str:
     require a new module-level helper alongside `BACKEND_FOR`.
     """
     return f'MEMMAN_{backend.upper()}_{key.upper()}_{store}'
+
+
+def _validate_surface(value: str) -> str | None:
+    """Return None when `value` is a valid surface, else an error message."""
+    if value.strip().lower() in SURFACE_VALUES:
+        return None
+    return (f'must be one of {sorted(SURFACE_VALUES)}')
+
+
+def _validate_threshold(value: str) -> str | None:
+    """Return None when `value` is a valid auto-threshold, else an error."""
+    raw = value.strip().lower()
+    if raw in AUTO_THRESHOLD_SENTINELS:
+        return None
+    try:
+        parsed = float(raw)
+    except ValueError:
+        return (f'must be a float in (0.0, 1.0) or'
+                f' one of {sorted(AUTO_THRESHOLD_SENTINELS)}')
+    if not 0.0 < parsed < 1.0:
+        return 'is out of range; must be in (0.0, 1.0)'
+    return None
+
+
+def _pg_dsn_prefix() -> str:
+    return f'MEMMAN_{"postgres".upper()}_DSN_'
+
+
+PER_STORE_KEY_SPECS: tuple[tuple[str, Any, bool], ...] = (
+    ('MEMMAN_BACKEND_', None, False),
+    (_pg_dsn_prefix(), None, True),
+    ('MEMMAN_RERANK_ENABLED_', None, False),
+    ('MEMMAN_SURFACE_', _validate_surface, False),
+    ('MEMMAN_AUTO_SEMANTIC_THRESHOLD_', _validate_threshold, False),
+    )
 
 
 OPENROUTER_API_KEY = 'MEMMAN_OPENROUTER_API_KEY'
@@ -158,14 +205,8 @@ def required_install_keys(embed: str) -> set[str]:
     install rather than at this config layer. Experimental embed
     providers return an empty set (doctor warns separately).
     """
-    keys: set[str] = set()
-    if embed == 'openrouter':
-        keys.add(OPENROUTER_API_KEY)
-    if embed == 'voyage':
-        keys.add(VOYAGE_API_KEY)
-    if embed == 'openai':
-        keys.add(OPENAI_EMBED_API_KEY)
-    return keys
+    from memman.embed import PROVIDER_REQUIRED_KEYS
+    return set(PROVIDER_REQUIRED_KEYS.get(embed, ()))
 
 
 def is_openrouter_endpoint(url: str) -> bool:
@@ -217,9 +258,17 @@ INSTALL_DEFAULTS: dict[str, str] = {
     INTERVAL: '60',
     }
 
-_PROCESS_CONTROL_VARS = (DATA_DIR, STORE, WORKER, DEBUG)
+_PROCESS_CONTROL_VARS = (DATA_DIR, STORE, WORKER, DEBUG, SCHEDULER_KIND)
 
-_ALL_VARS = INSTALLABLE_KEYS + _PROCESS_CONTROL_VARS
+_TUNING_VARS = (
+    EMBED_SWAP_BATCH_SIZE,
+    EMBED_SWAP_INDEX_TIMEOUT,
+    REINDEX_TIMEOUT,
+    )
+
+_DIRECT_ENV_VARS = frozenset(_PROCESS_CONTROL_VARS + _TUNING_VARS)
+
+_ALL_VARS = INSTALLABLE_KEYS + _PROCESS_CONTROL_VARS + _TUNING_VARS
 
 
 _FILE_CACHE: dict[str, str] | None = None
@@ -453,16 +502,15 @@ def enumerate_effective_config(redact: bool = True) -> dict[str, Any]:
     """Return a dict of every known env var name and current value.
 
     Installable keys resolve via `get` (env file only). Process-control
-    vars (`DATA_DIR`, `STORE`, `WORKER`, `DEBUG`) are read directly
-    from `os.environ` because they are never persisted to the file.
-    Unset/empty vars map to None. Secret vars are replaced with
-    '***REDACTED***' unless `redact=False`. Returned dict is sorted by
-    key for stable diagnostic output.
+    and tuning vars are read directly from `os.environ` because they
+    are never persisted to the file. Unset/empty vars map to None.
+    Secret vars are replaced with '***REDACTED***' unless
+    `redact=False`. Returned dict is sorted by key for stable
+    diagnostic output.
     """
-    direct_only = {DATA_DIR, STORE, WORKER, DEBUG}
     out: dict[str, Any] = {}
     for name in _ALL_VARS:
-        if name in direct_only:
+        if name in _DIRECT_ENV_VARS:
             raw = os.environ.get(name)
         else:
             raw = get(name)
@@ -479,15 +527,15 @@ def enumerate_effective_config(redact: bool = True) -> dict[str, Any]:
 def effective_source(name: str) -> str:
     """Return where `name` resolves from: 'env', 'file', or 'unset'.
 
-    Process-control vars (`DATA_DIR`, `STORE`, `WORKER`, `DEBUG`) read
-    `os.environ` and report 'env' when set. All other keys (the
-    installable ones) report 'file' when present in the env file,
-    'unset' otherwise. Shell-env values for installable keys are
-    invisible to the runtime resolver and are NOT reported here.
+    Process-control and tuning vars read `os.environ` and report 'env'
+    when set. All other keys (the installable ones) report 'file' when
+    present in the env file, 'unset' otherwise. Shell-env values for
+    installable keys are invisible to the runtime resolver and are
+    NOT reported here.
 
     Diagnostic helper for `memman doctor` / `memman config show`.
     """
-    if name in {DATA_DIR, STORE, WORKER, DEBUG}:
+    if name in _DIRECT_ENV_VARS:
         raw = os.environ.get(name)
         if raw is not None and raw != '':
             return 'env'

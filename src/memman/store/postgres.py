@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
+from memman import config
 from memman.embed.fingerprint import Fingerprint
 from memman.migrate import PAYLOAD_VERSION, Artifact, BackendFeatures
 from memman.migrate import MigrateEdge, MigrateError, MigrateInsight
@@ -2271,7 +2272,7 @@ def _check_pg_version(dsn: str) -> None:
 def _swap_index_timeout_s() -> int:
     """Read `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT` (default 0 = unlimited).
     """
-    raw = os.environ.get('MEMMAN_EMBED_SWAP_INDEX_TIMEOUT')
+    raw = os.environ.get(config.EMBED_SWAP_INDEX_TIMEOUT)
     if not raw:
         return 0
     try:
@@ -2417,7 +2418,7 @@ def _ensure_hnsw_index(dsn: str, schema: str) -> None:
     """
     _check_identifier(schema)
     index_name = f'idx_insights_hnsw_{schema}'
-    timeout_s = int(os.environ.get('MEMMAN_REINDEX_TIMEOUT', '180'))
+    timeout_s = int(os.environ.get(config.REINDEX_TIMEOUT, '180'))
     inspect_sql = """
 select i.indexrelid::regclass::text, i.indisvalid
 from pg_index i

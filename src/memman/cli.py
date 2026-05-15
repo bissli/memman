@@ -345,48 +345,26 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
         raise click.ClickException(
             f'{key!r} is no longer accepted under the per-store routing'
             f' model; {bare_canonicals[key]}')
-    if key in config.INSTALLABLE_KEYS:
-        pass
-    elif key.startswith('MEMMAN_BACKEND_') and valid_store_name(
-            key[len('MEMMAN_BACKEND_'):]):
-        pass
-    elif key.startswith('MEMMAN_POSTGRES_DSN_') and valid_store_name(
-            key[len('MEMMAN_POSTGRES_DSN_'):]):
-        pass
-    elif key.startswith('MEMMAN_RERANK_ENABLED_') and valid_store_name(
-            key[len('MEMMAN_RERANK_ENABLED_'):]):
-        pass
-    elif key.startswith('MEMMAN_SURFACE_') and valid_store_name(
-            key[len('MEMMAN_SURFACE_'):]):
-        if value.strip().lower() not in config.SURFACE_VALUES:
-            raise click.ClickException(
-                f'surface value {value!r} must be one of'
-                f' {sorted(config.SURFACE_VALUES)}')
-    elif (key.startswith('MEMMAN_AUTO_SEMANTIC_THRESHOLD_')
-            and valid_store_name(
-                key[len('MEMMAN_AUTO_SEMANTIC_THRESHOLD_'):])):
-        raw = value.strip().lower()
-        if raw not in config.AUTO_THRESHOLD_SENTINELS:
-            try:
-                parsed = float(raw)
-            except ValueError as err:
-                raise click.ClickException(
-                    f'{key}={value!r}: must be a float in (0.0, 1.0) or'
-                    f' one of {sorted(config.AUTO_THRESHOLD_SENTINELS)}'
-                    ) from err
-            if not 0.0 < parsed < 1.0:
-                raise click.ClickException(
-                    f'{key}={value!r} is out of range; must be in (0.0, 1.0)')
-    else:
+
+    accepted = key in config.INSTALLABLE_KEYS
+    if not accepted:
+        for prefix, validator, _ in config.PER_STORE_KEY_SPECS:
+            if not key.startswith(prefix):
+                continue
+            if not valid_store_name(key[len(prefix):]):
+                break
+            if validator is not None:
+                err = validator(value)
+                if err is not None:
+                    raise click.ClickException(f'{key}={value!r}: {err}')
+            accepted = True
+            break
+    if not accepted:
+        shapes = ', '.join(p + '<store>'
+                           for p, _, _ in config.PER_STORE_KEY_SPECS)
         raise click.ClickException(
             f'{key!r} is not a recognized config key. Accepted shapes:'
-            ' INSTALLABLE_KEYS members,'
-            ' MEMMAN_BACKEND_<store> (per-store routing),'
-            ' MEMMAN_POSTGRES_DSN_<store> (per-store DSN),'
-            ' MEMMAN_RERANK_ENABLED_<store> (per-store rerank toggle),'
-            ' MEMMAN_SURFACE_<store> (per-store surface: code|claw), or'
-            ' MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>'
-            ' (per-store cosine override: float in (0,1) or skip|none).')
+            f' INSTALLABLE_KEYS members or {shapes}.')
     from memman.setup.scheduler import _write_env_keys
     data_dir = ctx.obj['data_dir']
     _write_env_keys({key: value}, data_dir=data_dir)
@@ -481,16 +459,10 @@ def config_show(ctx: click.Context) -> None:
     for key, value in sorted(parsed.items()):
         if not value:
             continue
-        if key.startswith('MEMMAN_BACKEND_'):
-            per_store[key] = value
-        elif key.startswith('MEMMAN_POSTGRES_DSN_'):
-            per_store[key] = '***REDACTED***'
-        elif key.startswith('MEMMAN_RERANK_ENABLED_'):
-            per_store[key] = value
-        elif key.startswith('MEMMAN_SURFACE_'):
-            per_store[key] = value
-        elif key.startswith('MEMMAN_AUTO_SEMANTIC_THRESHOLD_'):
-            per_store[key] = value
+        for prefix, _, secret in config.PER_STORE_KEY_SPECS:
+            if key.startswith(prefix):
+                per_store[key] = '***REDACTED***' if secret else value
+                break
     out: dict = {
         'data_dir': data_dir,
         'env': effective,

@@ -659,7 +659,7 @@ class TestDetectScheduler:
     def test_detect_raises_when_no_scheduler(self, monkeypatch):
         """detect_scheduler raises RuntimeError when no kind is available."""
         import platform as _platform
-        monkeypatch.delenv(sch.SCHEDULER_KIND_ENV, raising=False)
+        monkeypatch.delenv(config.SCHEDULER_KIND, raising=False)
         monkeypatch.setattr(_platform, 'system', lambda: 'Linux')
         monkeypatch.setattr(sch.shutil, 'which', lambda _: None)
         with pytest.raises(RuntimeError, match='no scheduler available'):

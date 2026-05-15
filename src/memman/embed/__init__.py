@@ -98,6 +98,13 @@ PROVIDERS: dict[str, Callable[[], EmbeddingProvider]] = {
     'ollama': _ollama_factory,
     }
 
+PROVIDER_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
+    'voyage': (config.VOYAGE_API_KEY,),
+    'openai': (config.OPENAI_EMBED_API_KEY,),
+    'openrouter': (config.OPENROUTER_API_KEY,),
+    'ollama': (),
+    }
+
 SUPPORTED_EMBED_PROVIDERS = ('voyage', 'openai', 'openrouter')
 
 
