@@ -560,7 +560,14 @@ def _launchd_agent_dir() -> Path:
 
 def _install_systemd(binary: str, data_dir: str,
                      interval_seconds: int) -> dict:
-    """Write systemd timer+service units and enable the timer."""
+    """Write systemd timer+service units and enable the timer.
+
+    The post-write sequence is `daemon-reload` then `enable` then
+    `restart` (not `enable --now`) so re-installing over an
+    already-active unit picks up the new schedule. `enable --now` is a
+    no-op on a running timer and would leave the unit on the
+    pre-reload schedule.
+    """
     unit_dir = _systemd_unit_dir()
     timer_path = unit_dir / SYSTEMD_TIMER_NAME
     service_path = unit_dir / SYSTEMD_SERVICE_NAME
@@ -601,10 +608,6 @@ def _install_systemd(binary: str, data_dir: str,
         ['systemctl', '--user', 'enable', SYSTEMD_TIMER_NAME],
         check=False, capture_output=True)
     actions.append('systemctl --user enable memman-enrich.timer')
-    # restart (not just `enable --now`) ensures a freshly-rearmed timer
-    # when re-installing over an already-active unit; `enable --now` is
-    # a no-op on a running timer, leaving the schedule based on the
-    # pre-reload state.
     subprocess.run(
         ['systemctl', '--user', 'restart', SYSTEMD_TIMER_NAME],
         check=False, capture_output=True)

@@ -239,7 +239,8 @@ create index if not exists idx_insights_created on insights(created_at);
 create index if not exists idx_insights_deleted on insights(deleted_at);
 create index if not exists idx_insights_source on insights(source);
 create index if not exists idx_insights_effective_imp on insights(effective_importance);
-create index if not exists idx_prune_candidates on insights(deleted_at, importance, access_count, effective_importance);
+create index if not exists idx_prune_candidates
+    on insights(deleted_at, importance, access_count, effective_importance);
 create index if not exists idx_insights_pending_link
     on insights(linked_at)
     where linked_at is null and deleted_at is null;

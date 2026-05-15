@@ -28,9 +28,11 @@ from memman.store.factory import known_backends, list_stores
 _BACKEND_CHOICES = sorted(known_backends())
 from memman.embed import SUPPORTED_EMBED_PROVIDERS as _EMBED_PROVIDER_CHOICES
 from memman.store.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge
-from memman.store.model import Insight, format_timestamp, insight_to_full_dict, is_immune
+from memman.store.model import Insight, format_timestamp, insight_to_full_dict
+from memman.store.model import is_immune
 from memman.store.sqlite import open_ro_db
 from tqdm import tqdm
+from typing import Self
 
 logger = logging.getLogger('memman')
 
@@ -151,7 +153,7 @@ def _ensure_store_backend_key(store_name: str, data_dir: str) -> None:
     _write_env_keys_with_flock(updates, data_dir=data_dir)
 
 
-def _get_llm_client_or_fail(role: str):
+def _get_llm_client_or_fail(role: str) -> 'MemmanLLMClient':
     """Return a per-role LLM client, re-wrapping ConfigError as ClickException.
 
     Keeps `memman.llm` free of `click` — the CLI boundary is the only
@@ -169,7 +171,8 @@ def _get_llm_client_or_fail(role: str):
 
 def _active_backend(
         ctx: click.Context, *,
-        unchecked: bool = False, reindex_on_open: bool = True):
+        unchecked: bool = False,
+        reindex_on_open: bool = True) -> 'Backend':
     """Click adapter around `memman.session.active_store`.
 
     Resolves data_dir and the active store name from the click context
@@ -480,6 +483,9 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     Always enqueues. The worker drains the queue (under systemd/launchd
     on a host, or in-process when the trigger is inline). Rejected when
     the scheduler is stopped (memman is recall-only in that state).
+    Content is screened by `check_content_quality` before enqueue;
+    advisory warnings come back on the JSON response under
+    `quality_warnings` without blocking the write.
     """
     _require_started('write')
     content_str = ' '.join(content)
@@ -634,7 +640,7 @@ def scheduler_serve(ctx: click.Context, interval: int | None,
     os.environ[config.WORKER] = '1'
     _reset_stop_for_tests()
 
-    def _handle_stop(signum, frame):
+    def _handle_stop(signum: int, frame: object) -> None:
         logger.info(
             f'scheduler serve: caught signal {signum}, finishing drain')
         _request_stop()
@@ -710,8 +716,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
     from memman import trace
     from memman.drain_lock import DrainLockBusy, acquire, release
     from memman.queue import claim, finish_worker_run, mark_done, mark_failed
-    from memman.queue import queue_db, queue_db_path, start_worker_run
-    from memman.queue import stats
+    from memman.queue import queue_db, queue_db_path, start_worker_run, stats
     from memman.setup.scheduler import STATE_STOPPED, read_state
 
     data_dir_val = ctx.obj['data_dir']
@@ -1040,7 +1045,7 @@ class _StoreContext:
             logger.exception(
                 f'failed closing backend for store {self.store_name!r}')
 
-    def __enter__(self) -> '_StoreContext':
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -1260,7 +1265,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
         _json_out(out)
 
 
-def _forget_insight(backend, id: str) -> None:
+def _forget_insight(backend: 'Backend', id: str) -> None:
     """Soft-delete `id` and write a forget oplog row carrying `before`.
     """
     from memman.store.model import insight_to_delta_dict

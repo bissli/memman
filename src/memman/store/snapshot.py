@@ -19,6 +19,7 @@ is acceptable.
 import json
 import logging
 import os
+import sqlite3
 import struct
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -57,7 +58,8 @@ def snapshot_path(store_dir: str) -> Path:
     return Path(store_dir) / SNAPSHOT_FILENAME
 
 
-def write_snapshot(db, store_dir: str, fingerprint: Fingerprint) -> bool:
+def write_snapshot(db: sqlite3.Connection, store_dir: str,
+                   fingerprint: Fingerprint) -> bool:
     """Materialize the recall snapshot for a store.
 
     Skipped (returns False) when active-insight count exceeds

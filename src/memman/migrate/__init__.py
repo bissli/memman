@@ -400,7 +400,7 @@ group by n.nspname
 
 
 def _verify_destination_counts(
-        pg_conn, schema: str, store: str,
+        pg_conn: Any, schema: str, store: str,
         expected: dict[str, int]) -> None:
     """Compare destination table counts against captured source counts.
 

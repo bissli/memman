@@ -11,6 +11,7 @@ import logging
 import os
 import sqlite3
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,7 +64,7 @@ def open_queue_db(base_dir: str) -> sqlite3.Connection:
 
 
 @contextmanager
-def queue_db(base_dir: str):
+def queue_db(base_dir: str) -> Iterator[sqlite3.Connection]:
     """Context-managed open/close around `open_queue_db`.
 
     The deferred-write queue is always SQLite, so this is the canonical
