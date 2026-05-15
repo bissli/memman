@@ -260,7 +260,7 @@ def test_hnsw_partial_index_built_concurrently(
 
 def test_bulk_update_embedding_chunks_at_1000(
         _pg_store_backend, monkeypatch):
-    """bulk_update_embedding splits >1000 rows into <=1000 commits.
+    """_bulk_update_embedding splits >1000 rows into <=1000 commits.
 
     Pure shape test: stubs `executemany` to record batch sizes without
     inserting 1001 rows.
@@ -278,7 +278,7 @@ def test_bulk_update_embedding_chunks_at_1000(
     big_batch = [
         (f'b-{i}', _pg_vec(i), 'voyage-3-lite') for i in range(1500)
         ]
-    backend.nodes.bulk_update_embedding(big_batch)
+    backend.nodes._bulk_update_embedding(big_batch)
     assert sizes, 'executemany never called'
     assert all(n <= 1000 for n in sizes), (
         f'expected all batches <=1000, got {sizes}')

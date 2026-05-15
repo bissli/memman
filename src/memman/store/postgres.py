@@ -1128,14 +1128,16 @@ where deleted_at is null
         with self._conn.cursor() as cur:
             cur.execute(sql)
 
-    def bulk_update_embedding(
+    def _bulk_update_embedding(
             self, rows: list[tuple[Id, list[float], str]]) -> None:
-        """Update embeddings in chunks of <= 1000 rows.
+        """Update embeddings in chunks of <= 1000 rows. Postgres-only.
 
         Under autocommit=True each `executemany` is its own implicit
         transaction, keeping WAL bloat bounded and preventing a single
         long-running statement from holding row-level locks for
-        unrelated readers.
+        unrelated readers. Private (underscored) so callers must
+        explicitly isinstance-guard the backend; not part of the
+        cross-backend `Backend` Protocol surface.
         """
         if not rows:
             return
@@ -1958,16 +1960,6 @@ class PostgresBackend(Backend):
         Autovacuum handles vacuuming on Postgres; no pragma needed.
         """
         self.oplog.maintenance_step()
-
-    def reindex_hnsw(self) -> None:
-        """Idempotently ensure the HNSW index is current.
-
-        Drops any invalid remnant first (per `pg_index.indisvalid`),
-        then issues `create index concurrently if not exists`. Cannot
-        run inside a transaction; opens a dedicated autocommit
-        connection.
-        """
-        _ensure_hnsw_index(self._dsn, self._schema)
 
     def integrity_check(self) -> dict[str, Any]:
         with self._conn.cursor() as cur:
