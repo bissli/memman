@@ -305,15 +305,12 @@ def _write_env_keys_with_flock(
     path = config.env_file_path(data_dir)
     lock_path = path.with_suffix(path.suffix + '.lock')
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fd = lock_path.open('w')
-    try:
+    with lock_path.open('w') as fd:
         fcntl.flock(fd.fileno(), fcntl.LOCK_EX)
-        return _write_env_keys(updates, removes=removes, data_dir=data_dir)
-    finally:
         try:
-            fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
+            return _write_env_keys(updates, removes=removes, data_dir=data_dir)
         finally:
-            fd.close()
+            fcntl.flock(fd.fileno(), fcntl.LOCK_UN)
 
 
 def _write_env_file(knobs: dict[str, str],

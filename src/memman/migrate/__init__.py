@@ -24,7 +24,7 @@ import enum
 import hashlib
 import re
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, ClassVar, Literal
@@ -323,35 +323,32 @@ def preflight(dsn: str) -> dict[str, bool]:
             ) from exc
 
     checks: dict[str, bool] = {}
-    try:
-        with conn.cursor() as cur:
-            cur.execute('select 1')
-            checks['select_1'] = cur.fetchone()[0] == 1
+    with closing(conn), conn.cursor() as cur:
+        cur.execute('select 1')
+        checks['select_1'] = cur.fetchone()[0] == 1
 
-            sql = """
+        sql = """
 select 1 from pg_extension
 where extname = 'vector'
 """
-            cur.execute(sql)
-            row = cur.fetchone()
-            if row is None:
-                raise MigrateError(
-                    'pgvector extension is not installed in the target '
-                    'database; run `create extension vector;` as a '
-                    'superuser first')
-            checks['pgvector_installed'] = True
+        cur.execute(sql)
+        row = cur.fetchone()
+        if row is None:
+            raise MigrateError(
+                'pgvector extension is not installed in the target '
+                'database; run `create extension vector;` as a '
+                'superuser first')
+        checks['pgvector_installed'] = True
 
-            sql = """
+        sql = """
 select has_database_privilege(current_user, current_database(), 'CREATE')
 """
-            cur.execute(sql)
-            checks['create_schema_privilege'] = bool(cur.fetchone()[0])
-            if not checks['create_schema_privilege']:
-                raise MigrateError(
-                    'current postgres role lacks create schema '
-                    'privilege on the target database')
-    finally:
-        conn.close()
+        cur.execute(sql)
+        checks['create_schema_privilege'] = bool(cur.fetchone()[0])
+        if not checks['create_schema_privilege']:
+            raise MigrateError(
+                'current postgres role lacks create schema '
+                'privilege on the target database')
     return checks
 
 

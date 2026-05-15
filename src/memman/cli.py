@@ -735,12 +735,13 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
     import socket
     import sys as _sys
     import time as _time
+    from contextlib import ExitStack
 
     from memman import __version__ as _memman_version
     from memman import trace
     from memman.drain_lock import DrainLockBusy, acquire, release
     from memman.queue import claim, finish_worker_run, mark_done, mark_failed
-    from memman.queue import open_queue_db, queue_db_path, start_worker_run
+    from memman.queue import queue_db, queue_db_path, start_worker_run
     from memman.queue import stats
     from memman.setup.scheduler import STATE_STOPPED, read_state
 
@@ -772,6 +773,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
             })
         return None
 
+    stack = ExitStack()
     try:
         trace.event(
             'drain_start',
@@ -783,7 +785,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
 
         from concurrent.futures import ThreadPoolExecutor
 
-        conn = open_queue_db(data_dir_val)
+        conn = stack.enter_context(queue_db(data_dir_val))
         processed = 0
         failed = 0
         claimed = 0
@@ -796,6 +798,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         record_run = (_time.monotonic() - last_hb) >= HEARTBEAT_MIN_INTERVAL_SECONDS
         run_id = start_worker_run(conn, worker_pid) if record_run else None
     except Exception:
+        stack.close()
         release(lock_fd)
         raise
 
@@ -830,7 +833,8 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
             ctx = store_contexts.get(row.store)
             if ctx is None:
                 try:
-                    ctx = _StoreContext(row.store, data_dir_val)
+                    ctx = stack.enter_context(
+                        _StoreContext(row.store, data_dir_val))
                 except Exception as exc:
                     mark_failed(
                         conn, row.id, f'{type(exc).__name__}: {exc}')
@@ -903,8 +907,6 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 _write_recall_snapshot_for_store)
         except Exception:
             logger.exception('drain maintenance phase failed')
-        for ctx in store_contexts.values():
-            ctx.close()
         if processed > 0:
             record_run = True
         if record_run:
@@ -918,7 +920,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
             except Exception:
                 logger.exception('failed to stamp worker_runs finish row')
         s = stats(conn)
-        conn.close()
+        stack.close()
         release(lock_fd)
 
     trace.event(
@@ -1068,6 +1070,12 @@ class _StoreContext:
         except Exception:
             logger.exception(
                 f'failed closing backend for store {self.store_name!r}')
+
+    def __enter__(self) -> '_StoreContext':
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
 
 
 def _process_queue_row(
