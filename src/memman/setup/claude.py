@@ -4,12 +4,14 @@ import logging
 import os
 import platform
 import shutil
+import sys
 from pathlib import Path
 
 import click
 
 logger = logging.getLogger('memman')
 from memman import config
+from memman.cli import list_claude_permissions
 from memman.setup.deploy import symlink_asset
 from memman.setup.detect import detect_environments
 from memman.setup.markdown import remove_memory_block
@@ -141,7 +143,8 @@ def _init_default_store(data_dir: str) -> None:
         print(f'  Initialized default store at {store_dir(data_dir, "default")}')
 
 
-def _install_claude_code(env: dict, data_dir: str) -> None:
+def _install_claude_code(env: dict, data_dir: str,
+                         no_wizard: bool = False) -> None:
     """Install memman into Claude Code (~/.claude/)."""
     config_dir = env['config_dir']
 
@@ -167,15 +170,36 @@ def _install_claude_code(env: dict, data_dir: str) -> None:
         path = claude_write_hook(config_dir, filename)
         status_ok(f'Hook: {label}', path)
 
-    path = claude_register_hooks(config_dir)
-    status_updated('Settings', path)
-
     settings_path = os.path.join(config_dir, 'settings.json')
+    hooks_dir = os.path.join(config_dir, 'hooks', 'memman')
     data = read_json_file(settings_path)
-    add_memman_permission(data)
+    add_claude_hooks_selective(
+        data, hooks_dir,
+        remind=True, nudge=True, compact=True,
+        task_recall=True, exit_plan=True)
+
+    permissions = list_claude_permissions()
+
+    if sys.stdin.isatty() and not no_wizard:
+        print()
+        print('memman would like to add these entries to'
+              f' {settings_path} permissions.allow:')
+        for entry in permissions:
+            print(f'  {entry}')
+        if click.confirm('Add them?', default=True):
+            add_memman_permission(data, permissions)
+            permission_msg = f'{len(permissions)} memman verbs added'
+        else:
+            permission_msg = (
+                'skipped (use "Allow always" on first call, or re-run'
+                ' memman install)')
+    else:
+        add_memman_permission(data, permissions)
+        permission_msg = f'{len(permissions)} memman verbs added'
+
     write_json_file(settings_path, data)
-    status_ok('Permission',
-              'Bash(memman:*) added to settings.json')
+    status_updated('Settings', settings_path)
+    status_ok('Permissions', permission_msg)
 
     print()
     print('Setup complete!')
@@ -256,7 +280,8 @@ def run_install(data_dir: str, target: str = '',
         _write_env_keys(wizard_out, data_dir=data_dir)
         config.reset_file_cache()
     knobs = check_prereqs(data_dir)
-    _run_install_flow(envs, target=target, data_dir=data_dir, knobs=knobs)
+    _run_install_flow(envs, target=target, data_dir=data_dir, knobs=knobs,
+                      no_wizard=no_wizard)
 
 
 def _reject_flag_file_conflicts(
@@ -301,13 +326,14 @@ def run_uninstall(data_dir: str, target: str = '') -> None:
 
 def _run_install_flow(envs: list[dict], target: str,
                       data_dir: str,
-                      knobs: dict[str, str]) -> None:
+                      knobs: dict[str, str],
+                      no_wizard: bool = False) -> None:
     """Install CLI integrations and the scheduler unit."""
     if target:
         matched = next((e for e in envs if e['name'] == target), None)
         if matched is None:
             raise click.ClickException(f'unknown target {target!r}')
-        _install_env(matched, data_dir=data_dir)
+        _install_env(matched, data_dir=data_dir, no_wizard=no_wizard)
     else:
         print('Detecting LLM CLI environments...')
         print()
@@ -329,7 +355,8 @@ def _run_install_flow(envs: list[dict], target: str,
             errors: list[tuple[str, str]] = []
             for env in detected:
                 try:
-                    _install_env(env, data_dir=data_dir)
+                    _install_env(env, data_dir=data_dir,
+                                 no_wizard=no_wizard)
                 except Exception as exc:
                     logger.exception(
                         'install failed for %s', env['name'])
@@ -346,10 +373,11 @@ def _run_install_flow(envs: list[dict], target: str,
         status_ok(result['platform'], action)
 
 
-def _install_env(env: dict, data_dir: str) -> None:
+def _install_env(env: dict, data_dir: str,
+                 no_wizard: bool = False) -> None:
     """Install memman into a single environment."""
     if env['name'] == 'claude-code':
-        _install_claude_code(env, data_dir=data_dir)
+        _install_claude_code(env, data_dir=data_dir, no_wizard=no_wizard)
     elif env['name'] == 'openclaw':
         from memman.setup.openclaw import install_openclaw
         install_openclaw(env, data_dir=data_dir)

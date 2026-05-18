@@ -8,7 +8,7 @@ import subprocess
 import click
 import pytest
 from click.testing import CliRunner
-from memman.cli import cli
+from memman.cli import cli, list_claude_permissions
 from memman.setup.claude import claude_register_hooks
 from memman.setup.markdown import remove_memory_block
 from memman.setup.settings import add_claude_hooks_selective
@@ -339,39 +339,83 @@ class TestPermissions:
     """`add_memman_permission`, `remove_memman_permission`."""
 
     def test_add_memman_permission(self):
-        """Adds Bash(memman:*) to allow list. Idempotent."""
+        """Adds every curated entry to allow. Idempotent."""
         data = {}
-        add_memman_permission(data)
-        assert 'Bash(memman:*)' in data['permissions']['allow']
-        add_memman_permission(data)
-        assert data['permissions']['allow'].count(
-            'Bash(memman:*)') == 1
+        add_memman_permission(data, list_claude_permissions())
+        allow = data['permissions']['allow']
+        for entry in list_claude_permissions():
+            assert allow.count(entry) == 1
+        add_memman_permission(data, list_claude_permissions())
+        for entry in list_claude_permissions():
+            assert data['permissions']['allow'].count(entry) == 1
 
     def test_add_memman_permission_existing_allow(self):
-        """Appends without disturbing existing entries."""
+        """Appends curated entries without disturbing existing ones."""
         data = {'permissions': {'allow': ['Bash(git:*)']}}
-        add_memman_permission(data)
+        add_memman_permission(data, list_claude_permissions())
         allow = data['permissions']['allow']
-        assert allow == ['Bash(git:*)', 'Bash(memman:*)']
+        assert allow[0] == 'Bash(git:*)'
+        assert allow[1:] == list(list_claude_permissions())
 
     def test_remove_memman_permission(self):
-        """Removes Bash(memman:*), preserves others."""
+        """Drops every memman-containing entry from allow; preserves others."""
         data = {
             'permissions': {
-                'allow': ['Bash(git:*)', 'Bash(memman:*)'],
+                'allow': ['Bash(git:*)', *list_claude_permissions()],
                 },
             }
         remove_memman_permission(data)
         assert data['permissions']['allow'] == ['Bash(git:*)']
 
     def test_remove_memman_permission_missing(self):
-        """No-op when Bash(memman:*) not present."""
+        """No-op when no memman entries present."""
         data = {'permissions': {'allow': ['Bash(git:*)']}}
         remove_memman_permission(data)
         assert data['permissions']['allow'] == ['Bash(git:*)']
 
+    def test_remove_memman_permission_sweeps_user_added(self):
+        """Removes hypothetical user-added Bash(memman ...) entries too."""
+        data = {
+            'permissions': {
+                'allow': [
+                    'Bash(git:*)',
+                    'Bash(memman recall:*)',
+                    'Bash(memman:*)',
+                    'Bash(memman foo)',
+                    ],
+                },
+            }
+        remove_memman_permission(data)
+        assert data['permissions']['allow'] == ['Bash(git:*)']
+
+    def test_remove_memman_permission_sweeps_deny_and_ask(self):
+        """Sweeps deny and ask sections as well as allow."""
+        data = {
+            'permissions': {
+                'allow': ['Bash(memman recall:*)'],
+                'deny': ['Bash(memman uninstall:*)', 'Bash(rm:*)'],
+                'ask': ['Bash(memman scheduler stop)'],
+                },
+            }
+        remove_memman_permission(data)
+        assert data['permissions'] == {'deny': ['Bash(rm:*)']}
+
+    def test_remove_memman_permission_drops_empty_permissions(self):
+        """Empty permissions dict is removed entirely."""
+        data = {'permissions': {'allow': list(list_claude_permissions())}}
+        remove_memman_permission(data)
+        assert 'permissions' not in data
+
+    def test_install_uninstall_roundtrip(self):
+        """Add then remove returns dict to starting state."""
+        before = {'permissions': {'allow': ['Bash(git:*)']}}
+        data = json.loads(json.dumps(before))
+        add_memman_permission(data, list_claude_permissions())
+        remove_memman_permission(data)
+        assert data == before
+
     def test_register_hooks_no_permission(self, tmp_path):
-        """claude_register_hooks() does not add Bash(memman:*) to settings."""
+        """claude_register_hooks() does not add memman permissions."""
         config_dir = str(tmp_path / '.claude')
         hooks_dir = os.path.join(config_dir, 'hooks', 'memman')
         pathlib.Path(hooks_dir).mkdir(parents=True)
@@ -379,7 +423,8 @@ class TestPermissions:
                               task_recall=True)
         data = read_json_file(os.path.join(config_dir, 'settings.json'))
         allow = data.get('permissions', {}).get('allow', [])
-        assert 'Bash(memman:*)' not in allow
+        for entry in list_claude_permissions():
+            assert entry not in allow
 
 
 class TestPrimeAndCompactHooks:
@@ -839,7 +884,7 @@ class TestInstallLoopErrorSurfacing:
         """
         from memman.setup import claude as claude_setup
 
-        def _boom(env, data_dir):
+        def _boom(env, data_dir, no_wizard=False):
             raise RuntimeError(f'boom-{env["name"]}')
 
         monkeypatch.setattr(claude_setup, '_install_env', _boom)
@@ -864,3 +909,87 @@ class TestInstallLoopErrorSurfacing:
         assert 'envB' in msg
         assert 'boom-envA' in msg
         assert 'boom-envB' in msg
+
+
+class TestInstallConsent:
+    """`_install_claude_code` TTY consent flow for permissions."""
+
+    @pytest.fixture
+    def env(self, tmp_path, monkeypatch):
+        """Set up a clean Claude Code config dir and stub heavy deps."""
+        config_dir = tmp_path / '.claude'
+        config_dir.mkdir()
+        monkeypatch.setenv('HOME', str(tmp_path))
+        from memman.setup import claude as claude_setup
+        monkeypatch.setattr(claude_setup, '_init_default_store',
+                            lambda data_dir: None)
+        return {'name': 'claude-code', 'config_dir': str(config_dir)}
+
+    def _allow(self, config_dir: str) -> list:
+        path = os.path.join(config_dir, 'settings.json')
+        data = read_json_file(path)
+        return data.get('permissions', {}).get('allow', [])
+
+    def test_tty_consent_accept_writes_permissions(
+            self, env, tmp_path, monkeypatch):
+        """Interactive accept writes all curated entries."""
+        from memman.setup import claude as claude_setup
+        monkeypatch.setattr('sys.stdin.isatty', lambda: True)
+        monkeypatch.setattr(
+            'memman.setup.claude.click.confirm',
+            lambda *a, **kw: True)
+        claude_setup._install_claude_code(
+            env, data_dir=str(tmp_path / 'memman'))
+        allow = self._allow(env['config_dir'])
+        for entry in list_claude_permissions():
+            assert entry in allow
+
+    def test_tty_consent_decline_skips_permissions(
+            self, env, tmp_path, monkeypatch):
+        """Interactive decline leaves permissions untouched; hooks present."""
+        from memman.setup import claude as claude_setup
+        monkeypatch.setattr('sys.stdin.isatty', lambda: True)
+        monkeypatch.setattr(
+            'memman.setup.claude.click.confirm',
+            lambda *a, **kw: False)
+        claude_setup._install_claude_code(
+            env, data_dir=str(tmp_path / 'memman'))
+        allow = self._allow(env['config_dir'])
+        for entry in list_claude_permissions():
+            assert entry not in allow
+        data = read_json_file(
+            os.path.join(env['config_dir'], 'settings.json'))
+        assert 'hooks' in data
+        assert data['hooks']
+
+    def test_no_wizard_skips_prompt_and_writes(
+            self, env, tmp_path, monkeypatch):
+        """`no_wizard=True` writes silently with no confirm call."""
+        from memman.setup import claude as claude_setup
+        monkeypatch.setattr('sys.stdin.isatty', lambda: True)
+        confirm_calls: list = []
+        monkeypatch.setattr(
+            'memman.setup.claude.click.confirm',
+            lambda *a, **kw: confirm_calls.append(True) or True)
+        claude_setup._install_claude_code(
+            env, data_dir=str(tmp_path / 'memman'), no_wizard=True)
+        assert confirm_calls == []
+        allow = self._allow(env['config_dir'])
+        for entry in list_claude_permissions():
+            assert entry in allow
+
+    def test_non_tty_skips_prompt_and_writes(
+            self, env, tmp_path, monkeypatch):
+        """Non-TTY writes silently with no confirm call."""
+        from memman.setup import claude as claude_setup
+        monkeypatch.setattr('sys.stdin.isatty', lambda: False)
+        confirm_calls: list = []
+        monkeypatch.setattr(
+            'memman.setup.claude.click.confirm',
+            lambda *a, **kw: confirm_calls.append(True) or True)
+        claude_setup._install_claude_code(
+            env, data_dir=str(tmp_path / 'memman'))
+        assert confirm_calls == []
+        allow = self._allow(env['config_dir'])
+        for entry in list_claude_permissions():
+            assert entry in allow

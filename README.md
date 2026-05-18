@@ -154,15 +154,15 @@ Switch a populated store: online via `memman embed swap --to <model> --provider 
 
 `pipx install` puts the `memman` binary on your PATH. `memman install` wires integration into Claude Code, [OpenClaw](https://github.com/openclaw/openclaw), and/or [NanoClaw](https://github.com/qwibitai/nanoclaw). The paths it writes:
 
-| Path                                                   | What                                                 | Form                            |
-| ------------------------------------------------------ | ---------------------------------------------------- | ------------------------------- |
-| `~/.claude/skills/memman/SKILL.md`                     | command reference loaded by the agent                | symlink into installed package  |
-| `~/.claude/hooks/memman/*.sh`                          | six lifecycle hook scripts                           | symlinks into installed package |
-| `~/.claude/settings.json`                              | hook registrations + `Bash(memman:*)` permission     | JSON merge                      |
-| `~/.config/systemd/user/memman-enrich.{timer,service}` | scheduler unit (Linux)                               | unit files                      |
-| `~/Library/LaunchAgents/com.memman.enrich.plist`       | scheduler agent (macOS)                              | plist                           |
-| `~/.memman/env` (mode 0600)                            | canonical config file (API keys + installable knobs) | created or updated in place     |
-| `~/.memman/logs/`                                      | scheduler enrichment worker stdout/stderr            | directory                       |
+| Path                                                   | What                                                               | Form                            |
+| ------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------- |
+| `~/.claude/skills/memman/SKILL.md`                     | command reference loaded by the agent                              | symlink into installed package  |
+| `~/.claude/hooks/memman/*.sh`                          | six lifecycle hook scripts                                         | symlinks into installed package |
+| `~/.claude/settings.json`                              | hook registrations + curated `Bash(memman <verb>:*)` allow entries | JSON merge                      |
+| `~/.config/systemd/user/memman-enrich.{timer,service}` | scheduler unit (Linux)                                             | unit files                      |
+| `~/Library/LaunchAgents/com.memman.enrich.plist`       | scheduler agent (macOS)                                            | plist                           |
+| `~/.memman/env` (mode 0600)                            | canonical config file (API keys + installable knobs)               | created or updated in place     |
+| `~/.memman/logs/`                                      | scheduler enrichment worker stdout/stderr                          | directory                       |
 
 OpenClaw installs swap `~/.claude/` for `~/.openclaw/`. NanoClaw runs the same paths inside the container (see [OpenClaw and NanoClaw](#openclaw-and-nanoclaw--same-split-different-topology) above).
 

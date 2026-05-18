@@ -98,7 +98,7 @@ Setting up Claude Code (~/.claude/)...
   ✓ Hook: recall    ~/.claude/hooks/memman/task_recall.sh
   ✓ Hook: exit_plan ~/.claude/hooks/memman/exit_plan.sh
   ✓ Settings         ~/.claude/settings.json (updated)
-  ✓ Permission       Bash(memman:*) added to settings.json
+  ✓ Permissions      12 memman verbs added
 
 Setup complete!
   Hooks   prime, remind, nudge, compact, recall, exit_plan

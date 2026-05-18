@@ -240,29 +240,46 @@ def add_claude_hooks_selective(
         hooks['PreToolUse'] = arr
 
 
-MEMMAN_PERMISSION = 'Bash(memman:*)'
+_PERMISSION_SECTIONS = ('allow', 'deny', 'ask')
 
 
-def add_memman_permission(data: dict) -> None:
-    """Add Bash(memman:*) to permissions allow list. Idempotent."""
+def add_memman_permission(data: dict, entries: list[str]) -> None:
+    """Append the given entries to permissions.allow. Idempotent.
+
+    Callers obtain `entries` from `memman.cli.list_claude_permissions`,
+    which walks the CLI tree and returns one allow string per
+    `@claude_callable` command.
+    """
     perms = data.setdefault('permissions', {})
     allow = perms.setdefault('allow', [])
-    if MEMMAN_PERMISSION not in allow:
-        allow.append(MEMMAN_PERMISSION)
+    for entry in entries:
+        if entry not in allow:
+            allow.append(entry)
 
 
 def remove_memman_permission(data: dict) -> None:
-    """Remove Bash(memman:*) from permissions allow list."""
+    """Drop every memman-referencing string from permissions allow/deny/ask.
+
+    Mirrors `remove_claude_hooks`: anything mentioning memman is memman's
+    to remove on uninstall.
+    """
     perms = data.get('permissions')
     if not isinstance(perms, dict):
         return
-    allow = perms.get('allow')
-    if not isinstance(allow, list):
-        return
-    try:
-        allow.remove(MEMMAN_PERMISSION)
-    except ValueError:
-        pass
+    for key in _PERMISSION_SECTIONS:
+        arr = perms.get(key)
+        if not isinstance(arr, list):
+            continue
+        filtered = [
+            item for item in arr
+            if not (isinstance(item, str) and 'memman' in item)
+            ]
+        if not filtered:
+            perms.pop(key, None)
+        else:
+            perms[key] = filtered
+    if not perms:
+        data.pop('permissions', None)
 
 
 _REMOVE_IF_EMPTY_ROOTS = frozenset({

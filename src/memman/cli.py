@@ -248,6 +248,35 @@ def cli(ctx: click.Context, data_dir: str | None, store_name: str,
     ctx.obj['store'] = store_name
 
 
+def claude_callable(cmd):
+    """Mark a Click command as safe for Claude Code auto-allow.
+
+    `memman install` walks the CLI tree and emits a `permissions.allow`
+    entry in `~/.claude/settings.json` for every command marked with
+    this decorator. Adding or removing the marker on a subcommand
+    automatically flows to the install-time allow list.
+    """
+    cmd.claude_callable = True
+    return cmd
+
+
+def list_claude_permissions() -> list[str]:
+    """Return `permissions.allow` entries for every @claude_callable command.
+
+    Order is stable: alphabetical by full dotted path.
+    """
+    def walk(group, prefix):
+        out: list[str] = []
+        for name, cmd in group.commands.items():
+            path = (*prefix, name)
+            if isinstance(cmd, click.Group):
+                out.extend(walk(cmd, path))
+            elif getattr(cmd, 'claude_callable', False):
+                out.append(f'Bash(memman {" ".join(path)}:*)')
+        return out
+    return sorted(walk(cli, ()))
+
+
 @cli.group()
 def graph() -> None:
     """Graph operations on insights and edges."""
@@ -466,6 +495,7 @@ def config_show(ctx: click.Context) -> None:
     _json_out(out)
 
 
+@claude_callable
 @cli.command()
 @click.argument('content', nargs=-1, required=True)
 @click.option('--cat', default='general', help='Category')
@@ -1133,6 +1163,7 @@ def _process_queue_row(
     _json_out(result)
 
 
+@claude_callable
 @cli.command()
 @click.argument('keyword', nargs=-1, required=True)
 @click.option('--cat', default='', help='Filter by category')
@@ -1282,6 +1313,7 @@ def _forget_insight(backend: 'Backend', id: str) -> None:
             before=before_delta)
 
 
+@claude_callable
 @cli.command()
 @click.argument('id')
 @click.pass_context
@@ -1298,6 +1330,7 @@ def forget(ctx: click.Context, id: str) -> None:
             })
 
 
+@claude_callable
 @cli.command()
 @click.argument('id')
 @click.argument('content', nargs=-1, required=True)
@@ -1375,6 +1408,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         })
 
 
+@claude_callable
 @graph.command('link')
 @click.argument('source_id')
 @click.argument('target_id')
@@ -1455,6 +1489,7 @@ def graph_link(ctx: click.Context, source_id: str, target_id: str,
         _json_out(out)
 
 
+@claude_callable
 @graph.command('related')
 @click.argument('id')
 @click.option('--edge', default='', help='Filter by edge type')
@@ -1911,6 +1946,7 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
     _json_out({'action': 'removed', 'store': name})
 
 
+@claude_callable
 @cli.command()
 @click.pass_context
 def status(ctx: click.Context) -> None:
@@ -1958,6 +1994,7 @@ def status(ctx: click.Context) -> None:
         _json_out(out)
 
 
+@claude_callable
 @cli.command()
 @click.option('--text', 'text_output', is_flag=True, default=False,
               help='Human-readable colored output (default: JSON)')
@@ -2102,6 +2139,7 @@ def log_worker(ctx: click.Context, errors: bool, lines: int) -> None:
         click.echo(line_str)
 
 
+@claude_callable
 @insights.command('candidates')
 @click.option('--threshold', default=0.5, type=float,
               help='Effective-importance cutoff; insights below are surfaced (default 0.5).')
@@ -2147,6 +2185,7 @@ def insights_candidates(ctx: click.Context, threshold: float,
             })
 
 
+@claude_callable
 @insights.command('review')
 @click.option('--limit', default=20, type=int, help='Max flagged results')
 @click.pass_context
@@ -2182,6 +2221,7 @@ def insights_review(ctx: click.Context, limit: int) -> None:
             })
 
 
+@claude_callable
 @insights.command('protect')
 @click.argument('id')
 @click.pass_context
@@ -2215,6 +2255,7 @@ def insights_protect(ctx: click.Context, id: str) -> None:
             })
 
 
+@claude_callable
 @insights.command('show')
 @click.argument('id')
 @click.pass_context
