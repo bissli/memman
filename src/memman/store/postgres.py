@@ -1074,6 +1074,30 @@ where linked_at is null and deleted_at is null
             row = cur.fetchone()
             return int(row[0]) if row else 0
 
+    def get_unenriched_linked_ids(self, *, limit: int) -> list[Id]:
+        sql = self._q("""
+select id from {s}.insights
+where enriched_at is null
+  and linked_at is not null
+  and deleted_at is null
+order by created_at asc
+limit %s
+""")
+        with self._conn.cursor() as cur:
+            cur.execute(sql, (limit,))
+            return [r[0] for r in cur.fetchall()]
+
+    def count_unenriched_linked(self) -> int:
+        sql = self._q("""
+select count(*) from {s}.insights
+where enriched_at is null and linked_at is not null
+  and deleted_at is null
+""")
+        with self._conn.cursor() as cur:
+            cur.execute(sql)
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
+
     def iter_stale_insight_ids(
             self, active_pv: str,
             active_model: str | None) -> list[Id]:

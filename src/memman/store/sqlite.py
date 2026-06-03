@@ -250,6 +250,12 @@ group by length(embedding)
     def count_pending_links(self) -> int:
         return _node.count_pending_links(self._db)
 
+    def get_unenriched_linked_ids(self, *, limit: int) -> list[Id]:
+        return _node.get_unenriched_linked_ids(self._db, limit)
+
+    def count_unenriched_linked(self) -> int:
+        return _node.count_unenriched_linked(self._db)
+
     def iter_stale_insight_ids(
             self, active_pv: str,
             active_model: str | None) -> list[Id]:

@@ -281,6 +281,15 @@ class NodeStore(Protocol):
         """Count active insights with NULL linked_at."""
         ...
 
+    def get_unenriched_linked_ids(self, *, limit: int) -> list[Id]:
+        """Return ids of linked-but-unenriched (stranded) active insights.
+        """
+        ...
+
+    def count_unenriched_linked(self) -> int:
+        """Count linked-but-unenriched active insights."""
+        ...
+
     def iter_stale_insight_ids(
             self, active_pv: str,
             active_model: str | None) -> list[Id]:

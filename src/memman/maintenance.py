@@ -26,6 +26,7 @@ logger = logging.getLogger('memman')
 
 MAINTENANCE_MIN_BUDGET_SECONDS = 30
 MAINTENANCE_LINK_PENDING_MAX = 3
+MAINTENANCE_REENRICH_MAX = 3
 
 
 def run_maintenance(
@@ -159,6 +160,19 @@ def _run_per_store_maintenance(
 
     if time.monotonic() >= deadline_monotonic:
         return
+
+    try:
+        stranded = ctx.backend.nodes.get_unenriched_linked_ids(
+            limit=MAINTENANCE_REENRICH_MAX)
+        if stranded:
+            ctx.backend.nodes.reset_for_rebuild(stranded)
+            logger.debug(
+                f'maintenance: re-queued {len(stranded)} stranded'
+                f' (linked-but-unenriched) rows in {store_name!r}')
+    except Exception:
+        logger.exception(
+            f'maintenance: re-queue stranded rows failed for'
+            f' {store_name!r}')
 
     try:
         pending = ctx.backend.nodes.count_pending_links()

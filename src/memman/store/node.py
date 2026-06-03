@@ -800,6 +800,34 @@ def count_pending_links(db: 'DB') -> int:
     return row[0] if row else 0
 
 
+def get_unenriched_linked_ids(db: 'DB', limit: int) -> list[str]:
+    """Return IDs of linked-but-unenriched insights, oldest first.
+
+    These rows were stamped `linked_at` (so the pending-link retry
+    path skips them) but never stamped `enriched_at` -- e.g. a prior
+    enrichment LLM call failed. They are otherwise stranded.
+    """
+    sql = """
+select id from insights
+where enriched_at is null
+  and linked_at is not null
+  and deleted_at is null
+order by created_at asc
+limit ?
+"""
+    rows = db._query(sql, (limit,)).fetchall()
+    return [r[0] for r in rows]
+
+
+def count_unenriched_linked(db: 'DB') -> int:
+    """Count linked-but-unenriched active insights."""
+    row = db._query(
+        'select count(*) from insights'
+        ' where enriched_at is null and linked_at is not null'
+        ' and deleted_at is null').fetchone()
+    return row[0] if row else 0
+
+
 def iter_stale_insight_ids(
         db: 'DB', active_pv: str,
         active_model: str | None) -> list[str]:
