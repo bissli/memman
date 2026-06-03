@@ -96,6 +96,20 @@ def test_transaction_rollback_on_exception(backend):
     assert backend.nodes.get('r') is None
 
 
+def test_transaction_rollback_failure_does_not_mask_original(backend):
+    """A failing rollback must not mask the original exception.
+
+    Reproduces the worker-log crash: an inner op ends the transaction,
+    then the body raises. The cleanup `rollback` then finds no active
+    transaction and raises 'cannot rollback - no transaction is
+    active'. The caller must still see the real error, not that one.
+    """
+    with pytest.raises(RuntimeError, match='boom'):
+        with backend.transaction():
+            backend._db._conn.execute('commit')
+            raise RuntimeError('boom')
+
+
 def test_write_lock_is_no_op_on_sqlite(backend):
     """SQLite write_lock() is a no-op context manager."""
     with backend.write_lock('test'):

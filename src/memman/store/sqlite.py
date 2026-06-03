@@ -554,7 +554,10 @@ class SqliteBackend(Backend):
             yield
             self._db._conn.execute('commit')
         except Exception:
-            self._db._conn.execute('rollback')
+            try:
+                self._db._conn.execute('rollback')
+            except sqlite3.OperationalError as rollback_exc:
+                logger.debug(f'rollback skipped: {rollback_exc}')
             raise
         finally:
             self._db._in_tx = False
