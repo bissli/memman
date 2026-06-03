@@ -30,7 +30,7 @@ import time
 import httpx
 from memman import config, trace
 from memman._http import ENRICHMENT_TIMEOUT, MAX_RETRIES, RETRY_BACKOFF
-from memman._http import RETRYABLE_STATUS_CODES, get_session
+from memman._http import RETRYABLE_STATUS_CODES, WORKER_TIMEOUT, get_session
 from memman.exceptions import ConfigError
 from memman.llm.shared import safe_json
 
@@ -45,6 +45,20 @@ _ROLE_ENV_VARS = {
     ROLE_FAST: config.LLM_MODEL_FAST,
     ROLE_SLOW_CANONICAL: config.LLM_MODEL_SLOW_CANONICAL,
     ROLE_SLOW_METADATA: config.LLM_MODEL_SLOW_METADATA,
+    }
+
+FAST_MAX_TOKENS = 1024
+WORKER_MAX_TOKENS = 4096
+
+# Per-role output budget + read timeout. `fast` is the recall hot
+# path and stays tight. The worker roles emit JSON that scales with
+# input size (canonical rewrite, enrichment entity/keyword lists);
+# a small cap truncates large insights mid-JSON and the parse fails,
+# so they get a larger token budget and a longer timeout.
+_ROLE_LIMITS = {
+    ROLE_FAST: (FAST_MAX_TOKENS, ENRICHMENT_TIMEOUT),
+    ROLE_SLOW_CANONICAL: (WORKER_MAX_TOKENS, WORKER_TIMEOUT),
+    ROLE_SLOW_METADATA: (WORKER_MAX_TOKENS, WORKER_TIMEOUT),
     }
 
 _OR_ATTRIBUTION_HEADERS = {
@@ -194,8 +208,10 @@ def get_llm_client(role: str) -> MemmanLLMClient:
     extra: dict[str, str] = {}
     if config.is_openrouter_endpoint(endpoint):
         extra.update(_OR_ATTRIBUTION_HEADERS)
+    max_tokens, timeout = _ROLE_LIMITS[role]
     client = MemmanLLMClient(
-        endpoint, api_key, model, extra_headers=extra or None)
+        endpoint, api_key, model, max_tokens=max_tokens,
+        timeout=timeout, extra_headers=extra or None)
     _ROLE_CACHE[role] = client
     return client
 

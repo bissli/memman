@@ -17,6 +17,7 @@ logger = logging.getLogger('memman')
 _SESSIONS: dict[str, httpx.Client] = {}
 
 ENRICHMENT_TIMEOUT = 10.0
+WORKER_TIMEOUT = 60.0
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504, 529})
 RETRY_BACKOFF = (1.0, 2.0, 4.0)
 MAX_RETRIES = 3
