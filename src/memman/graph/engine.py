@@ -100,25 +100,35 @@ def link_pending(
         if on_progress:
             on_progress('enrich', insight)
 
-        def _do_causal() -> list[Edge]:
-            with backend.readonly_context() as ro:
-                return infer_llm_causal_edges(
-                    ro, insight, metadata_llm_client)
+        # Already-enriched rows whose linked_at was cleared (e.g. by a
+        # constants-hash reindex) only need re-linking, not a fresh LLM
+        # enrich/causal pass: the existing enrichment and LLM causal
+        # edges remain valid. Forced rebuilds clear enriched_at first
+        # (reset_for_rebuild), so they take the full path below.
+        relink_only = insight.enriched_at is not None
 
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            fut_enrich = pool.submit(
-                enrich_with_llm, insight, metadata_llm_client)
-            fut_causal = pool.submit(_do_causal)
-            try:
-                enrichment = fut_enrich.result()
-            except Exception:
-                enrichment = {}
-            if on_progress:
-                on_progress('causal', insight)
-            try:
-                causal_edges = fut_causal.result()
-            except Exception:
-                causal_edges = []
+        enrichment: dict = {}
+        causal_edges: list[Edge] = []
+        if not relink_only:
+            def _do_causal() -> list[Edge]:
+                with backend.readonly_context() as ro:
+                    return infer_llm_causal_edges(
+                        ro, insight, metadata_llm_client)
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                fut_enrich = pool.submit(
+                    enrich_with_llm, insight, metadata_llm_client)
+                fut_causal = pool.submit(_do_causal)
+                try:
+                    enrichment = fut_enrich.result()
+                except Exception:
+                    enrichment = {}
+                if on_progress:
+                    on_progress('causal', insight)
+                try:
+                    causal_edges = fut_causal.result()
+                except Exception:
+                    causal_edges = []
 
         keywords = enrichment.get('keywords', [])
         new_vec = None
@@ -165,9 +175,10 @@ def link_pending(
                 backend, insight, embed_cache,
                 threshold=semantic_threshold)
 
-            backend.edges.delete_auto_for_node(insight.id, 'causal')
-            for edge in causal_edges:
-                backend.edges.upsert(edge)
+            if not relink_only:
+                backend.edges.delete_auto_for_node(insight.id, 'causal')
+                for edge in causal_edges:
+                    backend.edges.upsert(edge)
 
             backend.nodes.stamp_linked(insight_id)
             if enrichment and not reembed_failed:

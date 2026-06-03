@@ -327,3 +327,31 @@ class TestBuildEnrichedText:
         """No keywords means original content returned."""
         result = build_enriched_text('hello world', [])
         assert result == 'hello world'
+
+
+def test_link_pending_relink_only_skips_enrich(tmp_db, tmp_backend):
+    """An already-enriched pending-link row relinks without an LLM pass.
+
+    Regression: link_pending re-ran enrich_with_llm/causal unconditionally,
+    so relinking after a constants-hash clear_linked_at re-enriched every
+    already-enriched row at LLM cost.
+    """
+    from memman.store.model import format_timestamp
+    from memman.store.node import stamp_enriched
+
+    insight = make_insight(id='relink-1', content='already enriched body')
+    insert_insight(tmp_db, insight)
+    stamp_enriched(
+        tmp_db, 'relink-1',
+        format_timestamp(datetime.now(timezone.utc)))
+
+    mock_llm = MagicMock()
+    link_pending(
+        tmp_backend, llm_client=mock_llm, embed_client=None, max_batch=5)
+
+    mock_llm.complete.assert_not_called()
+    row = tmp_db._conn.execute(
+        'SELECT linked_at, enriched_at FROM insights WHERE id = ?',
+        ('relink-1',)).fetchone()
+    assert row[0] is not None
+    assert row[1] is not None

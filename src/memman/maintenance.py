@@ -93,6 +93,59 @@ def run_maintenance(
                 f'maintenance: snapshot write failed for {store_name!r}')
 
 
+def _relink_pending_if_any(
+        backend: Any, store_name: str,
+        deadline_monotonic: float, *,
+        embed_client: Any = None,
+        llm_client: Any = None) -> None:
+    """Drain a bounded slice of a store's pending-link backlog.
+
+    Quiet stores whose `linked_at` was cleared by a constants-hash
+    reindex are otherwise never relinked. Already-enriched rows relink
+    without an LLM pass (the `enriched_at` guard in `link_pending`), so
+    the batch is the full `MAX_LINK_BATCH`. Bounded by the deadline and
+    gated on a cheap `count_pending_links()` so stores with nothing
+    pending pay O(1).
+    """
+    if time.monotonic() >= deadline_monotonic:
+        return
+    from memman.graph.engine import MAX_LINK_BATCH, link_pending
+    try:
+        if backend.nodes.count_pending_links() == 0:
+            return
+    except Exception:
+        logger.exception(
+            f'maintenance: count_pending_links failed for {store_name!r}')
+        return
+    if embed_client is None or llm_client is None:
+        from memman.embed.fingerprint import bound_embedder
+        from memman.llm.client import get_llm_client
+        if embed_client is None:
+            try:
+                embed_client = bound_embedder(backend)
+            except Exception:
+                embed_client = None
+        if llm_client is None:
+            try:
+                llm_client = get_llm_client('slow_canonical')
+            except Exception:
+                logger.exception(
+                    f'maintenance: llm client unavailable for relink of'
+                    f' {store_name!r}')
+                return
+    try:
+        processed = link_pending(
+            backend, llm_client=llm_client, embed_client=embed_client,
+            max_batch=MAX_LINK_BATCH, store_name=store_name)
+        if processed:
+            logger.debug(
+                f'maintenance: relinked {processed} pending rows in'
+                f' {store_name!r}')
+    except Exception:
+        logger.exception(
+            f'maintenance: relink failed for {store_name!r}')
+
+
 def _reindex_all_stores_if_drift(
         data_dir: str,
         store_contexts: dict[str, Any],
@@ -125,6 +178,9 @@ def _reindex_all_stores_if_drift(
             try:
                 reindex_if_constants_changed(
                     ctx.backend, store_name=store_name)
+                _relink_pending_if_any(
+                    ctx.backend, store_name, deadline_monotonic,
+                    embed_client=ctx.ec, llm_client=ctx.llm_client)
             except Exception:
                 logger.exception(
                     f'maintenance: reindex_if_constants_changed failed'
@@ -136,6 +192,8 @@ def _reindex_all_stores_if_drift(
                     unchecked=True) as backend:
                 reindex_if_constants_changed(
                     backend, store_name=store_name)
+                _relink_pending_if_any(
+                    backend, store_name, deadline_monotonic)
         except Exception:
             logger.exception(
                 f'maintenance: reindex_if_constants_changed failed'

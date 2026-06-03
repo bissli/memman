@@ -93,3 +93,43 @@ def test_maintenance_reenriches_stranded_row(tmp_db, tmp_backend):
         ('strand-1',)).fetchone()
     assert row[0] is not None
     assert row[1] is not None
+
+
+def test_idle_store_relinks_after_constants_drift():
+    """An untouched store whose linked_at was cleared by a constants-hash
+    drift gets relinked by the all-stores maintenance pass.
+
+    Regression: _reindex_all_stores_if_drift reindexed quiet stores
+    (clearing linked_at) but never relinked them, stranding every row.
+    """
+    import os
+    import time
+    from datetime import datetime, timezone
+
+    from memman import config
+    from memman.maintenance import _reindex_all_stores_if_drift
+    from memman.store.factory import open_backend
+    from memman.store.model import format_timestamp
+    from memman.store.node import (insert_insight, stamp_enriched,
+                                   stamp_linked)
+
+    data_dir = os.environ[config.DATA_DIR]
+    store = 'idlestore'
+    backend = open_backend(store, data_dir)
+    ts = format_timestamp(datetime.now(timezone.utc))
+    for i in range(3):
+        ins = make_insight(id=f'idle{i}', content=f'idle content {i}')
+        insert_insight(backend._db, ins)
+        stamp_linked(backend._db, ins.id, ts)
+        stamp_enriched(backend._db, ins.id, ts)
+    backend.meta.set('constants_hash', 'STALE-HASH')
+    assert backend.nodes.count_pending_links() == 0
+    backend.close()
+
+    _reindex_all_stores_if_drift(data_dir, {}, time.monotonic() + 60)
+
+    backend2 = open_backend(store, data_dir)
+    try:
+        assert backend2.nodes.count_pending_links() == 0
+    finally:
+        backend2.close()
