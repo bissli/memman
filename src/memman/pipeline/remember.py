@@ -357,6 +357,7 @@ def _plan_fact(
             seen.add(hit_ins.id)
 
         if fact_vec is not None:
+            cosine_cands: list[tuple[float, str, str]] = []
             for eid, evec in embed_cache.items():
                 if eid in seen or eid in deleted_in_batch:
                     continue
@@ -365,10 +366,13 @@ def _plan_fact(
                     continue
                 sim = cosine_similarity(fact_vec, evec)
                 if sim >= SIMILARITY_RECONCILE_THRESHOLD:
-                    similar.append((ins.id, ins.content))
-                    seen.add(eid)
+                    cosine_cands.append((sim, ins.id, ins.content))
+            cosine_cands.sort(key=lambda c: c[0], reverse=True)
+            for _sim, cid, ccontent in cosine_cands:
                 if len(similar) >= MAX_SIMILAR_FOR_RECONCILE:
                     break
+                similar.append((cid, ccontent))
+                seen.add(cid)
 
         if similar:
             recon = llm_extract.reconcile_memories(
