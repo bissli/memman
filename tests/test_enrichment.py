@@ -93,6 +93,32 @@ class TestEnrichWithLLM:
         result = enrich_with_llm(insight, mock_client)
         assert result == {}
 
+    def test_llm_failure_logged_at_warning(self, caplog):
+        """An LLM exception during enrichment is logged at WARNING."""
+        import logging
+        insight = make_insight(id='warn-1', content='test content')
+        mock_client = MagicMock()
+        mock_client.complete.side_effect = ConnectionError('unreachable')
+
+        with caplog.at_level(logging.WARNING, logger='memman'):
+            result = enrich_with_llm(insight, mock_client)
+
+        assert result == {}
+        assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+    def test_parse_error_logged_at_warning(self, caplog):
+        """Unparseable (e.g. truncated) LLM output is logged at WARNING."""
+        import logging
+        insight = make_insight(id='warn-2', content='test content')
+        mock_client = MagicMock()
+        mock_client.complete.return_value = 'not json at all'
+
+        with caplog.at_level(logging.WARNING, logger='memman'):
+            result = enrich_with_llm(insight, mock_client)
+
+        assert result == {}
+        assert any(r.levelno == logging.WARNING for r in caplog.records)
+
     def test_llm_client_none_skips(self, tmp_db, tmp_backend):
         """link_pending with llm_client=None skips enrichment."""
         insight = make_insight(
@@ -134,6 +160,24 @@ class TestEnrichWithLLM:
 
         result = enrich_with_llm(insight, mock_client)
         assert 'Go' in result['entities']
+
+    def test_entities_and_keywords_capped(self):
+        """Over-long LLM entity/keyword lists are capped to salience limits."""
+        from memman.graph.enrichment import (
+            MAX_ENRICH_ENTITIES, MAX_ENRICH_KEYWORDS)
+        insight = make_insight(id='cap-1', content='content', entities=[])
+        mock_client = MagicMock()
+        mock_client.complete.return_value = json.dumps({
+            'entities': [f'e{i}' for i in range(80)],
+            'keywords': [f'k{i}' for i in range(40)],
+            'summary': 'summary',
+            'semantic_facts': ['fact'],
+            })
+
+        result = enrich_with_llm(insight, mock_client)
+
+        assert len(result['entities']) == MAX_ENRICH_ENTITIES
+        assert len(result['keywords']) == MAX_ENRICH_KEYWORDS
 
     def test_entity_merge_malformed(self):
         """Malformed entities field does not clobber existing."""

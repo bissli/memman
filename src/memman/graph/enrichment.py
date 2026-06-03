@@ -22,6 +22,14 @@ ENRICHMENT_SYSTEM_PROMPT = (
     'Focus on precision -- only include entities and facts you are '
     'confident about from the text.')
 
+# Hard caps applied after parsing so an over-eager LLM (e.g. 80+
+# entities on a large multi-claim blob) cannot inflate the entity
+# graph or the keyword-enriched embedding. Enforced in post-processing
+# rather than the prompt so prompt_version (and stored-row provenance)
+# stays stable.
+MAX_ENRICH_ENTITIES = 20
+MAX_ENRICH_KEYWORDS = 12
+
 
 def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
     """Extract enrichment fields from an insight via LLM.
@@ -39,7 +47,11 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
     try:
         raw = llm_client.complete(ENRICHMENT_SYSTEM_PROMPT, prompt)
     except Exception as exc:
-        logger.debug(f'LLM enrichment unavailable for {insight.id}')
+        logger.warning(
+            'enrichment LLM call failed for %s (len=%d): %s: %s;'
+            ' row stays unenriched',
+            insight.id, len(insight.content),
+            type(exc).__name__, exc)
         trace.event(
             'enrich_result',
             insight_id=insight.id,
@@ -49,7 +61,10 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
 
     parsed = parse_json_response(raw)
     if parsed is None:
-        logger.debug(f'LLM enrichment parse error for {insight.id}')
+        logger.warning(
+            'enrichment parse failed for %s (len=%d, raw_len=%d);'
+            ' output likely truncated, row stays unenriched',
+            insight.id, len(insight.content), len(raw))
         trace.event(
             'enrich_result',
             insight_id=insight.id,
@@ -70,10 +85,12 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
             merged.append(e)
             existing.add(key)
 
+    merged = merged[:MAX_ENRICH_ENTITIES]
+
     keywords = parsed.get('keywords', [])
     if not isinstance(keywords, list):
         keywords = []
-    keywords = [str(k) for k in keywords if k]
+    keywords = [str(k) for k in keywords if k][:MAX_ENRICH_KEYWORDS]
 
     summary = parsed.get('summary', '')
     if not isinstance(summary, str):
