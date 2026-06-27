@@ -623,19 +623,18 @@ def scheduler_drain(ctx: click.Context, limit: int,
     _drain_queue(ctx, limit, timeout, stores, progress)
 
 
-def _maybe_fire_backup(binary: str, data_dir: str, now: datetime) -> None:
-    """Spawn a detached backup worker when the cron matches this minute.
+def _maybe_fire_backup(data_dir: str, now: datetime) -> None:
+    """Run a backup in-process when the cron matches this minute (serve only).
 
     Serve-mode only: on systemd/launchd hosts the native backup timer
     owns scheduled backups, so this defers to it (preventing a
     double-fire if a serve loop also runs there). Once-per-minute and
-    restart-safe via ~/.memman/backup.state. Never acquires drain.lock
-    -- the online snapshot is non-disruptive. No-op when
-    MEMMAN_BACKUP_CRON is unset. Worker output is redirected to the
-    backup logs so it never interleaves with the serve loop's streams.
+    restart-safe via ~/.memman/backup.state. The backup runs inline
+    (build_bundle is local-disk-bound; cloud sync of the target is
+    asynchronous), so the matched minute is claimed before the run and
+    a failure is logged rather than retried mid-minute. No drain.lock
+    is taken -- the online snapshot is non-disruptive.
     """
-    import subprocess
-
     from memman.setup.scheduler import SCHEDULER_KIND_SERVE, detect_scheduler
     from memman.setup.scheduler import read_backup_state, write_backup_state
     try:
@@ -653,13 +652,11 @@ def _maybe_fire_backup(binary: str, data_dir: str, now: datetime) -> None:
     if read_backup_state() == minute_key:
         return
     write_backup_state(minute_key)
-    logs_dir = pathlib.Path.home() / '.memman' / 'logs'
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    with open(logs_dir / 'backup.log', 'a') as out, \
-            open(logs_dir / 'backup.err', 'a') as err:
-        subprocess.Popen(
-            [binary, '--data-dir', data_dir, 'backup', 'worker'],
-            stdout=out, stderr=err)
+    from memman.backup import run_backup
+    try:
+        run_backup(data_dir)
+    except Exception as exc:
+        logger.warning('scheduler serve: backup failed: %s', exc)
 
 
 @scheduler.command('serve')
@@ -739,12 +736,6 @@ def scheduler_serve(ctx: click.Context, interval: int | None,
 
         per_drain_timeout = max(10, interval - 10) if interval > 0 else 300
 
-        try:
-            from memman.setup.scheduler import memman_binary_path
-            backup_binary = memman_binary_path()
-        except RuntimeError:
-            backup_binary = None
-
         while True:
             config.reset_file_cache()
             if read_state() == STATE_STOPPED:
@@ -753,9 +744,7 @@ def scheduler_serve(ctx: click.Context, interval: int | None,
             result = _drain_queue(
                 ctx, limit=100, timeout=per_drain_timeout,
                 stores_filter='', verbose=False)
-            if backup_binary is not None:
-                _maybe_fire_backup(
-                    backup_binary, data_dir_val, datetime.now())
+            _maybe_fire_backup(data_dir_val, datetime.now())
             if _stop_requested() or once:
                 break
             if interval > 0:
@@ -2012,7 +2001,7 @@ def backup(ctx: click.Context) -> None:
 @backup.command('run')
 @click.argument('target', required=False)
 @click.pass_context
-def backup_run(ctx: click.Context, target: str) -> None:
+def backup_run(ctx: click.Context, target: str | None) -> None:
     """Build one backup bundle now (TARGET or MEMMAN_BACKUP_TARGET)."""
     data_dir = ctx.obj['data_dir']
     target = target or config.get(config.BACKUP_TARGET)
@@ -2020,15 +2009,8 @@ def backup_run(ctx: click.Context, target: str) -> None:
         raise click.ClickException(
             'no target; pass TARGET or set MEMMAN_BACKUP_TARGET'
             " via 'memman backup schedule'")
-    from memman.backup import build_bundle, prune
-    result = build_bundle(data_dir, target)
-    keep_raw = config.get(config.BACKUP_KEEP)
-    try:
-        keep = int(keep_raw) if keep_raw else 7
-    except ValueError:
-        keep = 7
-    result['pruned'] = prune(target, keep)
-    _json_out({'action': 'backed_up', **result})
+    from memman.backup import run_backup
+    _json_out({'action': 'backed_up', **run_backup(data_dir, target)})
 
 
 @backup.command('schedule')
@@ -2089,7 +2071,7 @@ def backup_unschedule(ctx: click.Context) -> None:
 @backup.command('list')
 @click.argument('target', required=False)
 @click.pass_context
-def backup_list(ctx: click.Context, target: str) -> None:
+def backup_list(ctx: click.Context, target: str | None) -> None:
     """List bundles at TARGET (or MEMMAN_BACKUP_TARGET) from sidecars."""
     target = target or config.get(config.BACKUP_TARGET)
     if not target:
@@ -2188,6 +2170,7 @@ def backup_restore(ctx: click.Context, bundle: str, yes: bool) -> None:
 
     data_dir = ctx.obj['data_dir']
     from memman.backup import restore
+    from memman.exceptions import EmbedFingerprintError
     from memman.migrate import MigrateError, held_drain_lock
 
     needs_pg = False
@@ -2217,7 +2200,7 @@ def backup_restore(ctx: click.Context, bundle: str, yes: bool) -> None:
     try:
         with held_drain_lock(data_dir):
             result = restore(bundle, data_dir)
-    except MigrateError as exc:
+    except (MigrateError, RuntimeError, EmbedFingerprintError) as exc:
         raise click.ClickException(str(exc))
     _json_out({'action': 'restored', **result})
 

@@ -20,6 +20,7 @@ Notes:
   restore routing.
 """
 
+import contextlib
 import errno
 import json
 import logging
@@ -33,6 +34,7 @@ import tarfile
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from memman import config
 from memman.embed.fingerprint import Fingerprint, stored_fingerprint
@@ -46,12 +48,17 @@ BACKUP_FORMAT_VERSION = 1
 DB_FILENAME = 'memman.db'
 DUMP_FILENAME = 'dump.pgdump'
 MANIFEST_NAME = 'manifest.json'
-ACTIVE_NAME = 'active'
 ENV_NONSECRET_NAME = 'env.nonsecret'
 BUNDLE_PREFIX = 'memman-backup'
 INCOMING_DIRNAME = '.memman-incoming'
 
 _STAMP_RE = re.compile(r'(\d{8}T\d{6}Z)\.tar\.gz$')
+
+# Env keys describing THIS host's backup schedule (not portable config);
+# excluded from the bundle so a restore onto another host never silently
+# adopts the source host's cron/target/retention.
+_HOST_LOCAL_KEYS = frozenset({
+    config.BACKUP_CRON, config.BACKUP_TARGET, config.BACKUP_KEEP})
 
 
 def snapshot_sqlite(store: str, data_dir: str, dst_db_path: Path) -> None:
@@ -90,7 +97,7 @@ def snapshot_postgres(store: str, dsn: str, dst_dump_path: Path) -> None:
             f'pg_dump failed for {schema}: {exc.stderr.strip()}') from exc
 
 
-def build_bundle(data_dir: str, target: str) -> dict:
+def build_bundle(data_dir: str, target: str) -> dict[str, Any]:
     """Snapshot every store + non-secret config into one `.tar.gz` at `target`.
 
     Each store is snapshotted in isolation: a store whose snapshot
@@ -124,12 +131,12 @@ def build_bundle(data_dir: str, target: str) -> dict:
             for prefix, _validator, secret in config.PER_STORE_KEY_SPECS)
 
     try:
-        stores_meta: list[dict] = []
+        stores_meta: list[dict[str, Any]] = []
         for store in factory.list_stores(data_dir):
             backend_kind = factory.resolve_store_backend(store, data_dir)
             store_out = staging / 'stores' / store
             store_out.mkdir(parents=True, exist_ok=True)
-            entry: dict = {
+            entry: dict[str, Any] = {
                 'name': store,
                 'backend': backend_kind,
                 'embed_fingerprint': None,
@@ -153,9 +160,9 @@ def build_bundle(data_dir: str, target: str) -> dict:
                     entry['embed_fingerprint'] = fp.to_json() if fp else None
                 else:
                     snapshot_sqlite(store, data_dir, store_out / DB_FILENAME)
-                    with sqlite3.connect(
+                    with contextlib.closing(sqlite3.connect(
                             f'file:{store_out / DB_FILENAME}?mode=ro',
-                            uri=True) as copy_conn:
+                            uri=True)) as copy_conn:
                         row = copy_conn.execute(
                             "select value from meta"
                             " where key = 'embed_fingerprint'").fetchone()
@@ -171,7 +178,7 @@ def build_bundle(data_dir: str, target: str) -> dict:
             k: v
             for k, v in config.parse_env_file(
                 config.env_file_path(data_dir)).items()
-            if not is_secret(k)
+            if not is_secret(k) and k not in _HOST_LOCAL_KEYS
             }
         manifest = {
             'format_version': BACKUP_FORMAT_VERSION,
@@ -182,7 +189,6 @@ def build_bundle(data_dir: str, target: str) -> dict:
             }
         (staging / MANIFEST_NAME).write_text(
             json.dumps(manifest, indent=2, sort_keys=True))
-        (staging / ACTIVE_NAME).write_text(active + '\n')
         (staging / ENV_NONSECRET_NAME).write_text(
             '\n'.join(f'{k}={v}' for k, v in nonsecret.items()) + '\n')
 
@@ -257,13 +263,15 @@ def prune(target: str, keep: int) -> list[str]:
     return removed
 
 
-def run_backup(data_dir: str) -> dict:
-    """Resolve the configured target, build a bundle, then prune.
+def run_backup(data_dir: str, target: str | None = None) -> dict[str, Any]:
+    """Build a bundle then prune, resolving the target if not passed.
 
-    The worker entry point (`memman backup worker`) calls this. Raises
-    `RuntimeError` when no target is configured.
+    `target` falls back to `MEMMAN_BACKUP_TARGET`. The worker entry
+    point (`memman backup worker`) and `backup run` both call this so
+    the build+prune logic lives in one place. Raises `RuntimeError`
+    when no target is configured.
     """
-    target = config.get(config.BACKUP_TARGET)
+    target = target or config.get(config.BACKUP_TARGET)
     if not target:
         raise RuntimeError(
             'no backup target configured; set MEMMAN_BACKUP_TARGET'
@@ -278,7 +286,7 @@ def run_backup(data_dir: str) -> dict:
     return result
 
 
-def restore(bundle_path: str, data_dir: str) -> dict:
+def restore(bundle_path: str, data_dir: str) -> dict[str, Any]:
     """Rebuild stores + non-secret config from a bundle into `data_dir`.
 
     Validates the manifest format version and every stored
@@ -310,7 +318,7 @@ def restore(bundle_path: str, data_dir: str) -> dict:
             _write_env_keys(nonsecret, data_dir=data_dir)
 
         target_env = config.parse_env_file(config.env_file_path(data_dir))
-        host_provider = target_env.get(config.EMBED_PROVIDER)
+        host_provider = target_env.get(config.EMBED_PROVIDER) or ''
         host_model_key = {
             'voyage': config.VOYAGE_EMBED_MODEL,
             'openai': config.OPENAI_EMBED_MODEL,
@@ -321,7 +329,7 @@ def restore(bundle_path: str, data_dir: str) -> dict:
 
         restored: list[str] = []
         pg_skipped: list[str] = []
-        failed: list[dict] = []
+        failed: list[dict[str, Any]] = []
         embed_mismatch: list[str] = []
         for entry in manifest.get('stores', []):
             if entry.get('status') == 'failed':
@@ -341,7 +349,9 @@ def restore(bundle_path: str, data_dir: str) -> dict:
                 else:
                     dst_dir = Path(store_dir(data_dir, name))
                     dst_dir.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(src / DB_FILENAME, dst_dir / DB_FILENAME)
+                    tmp = dst_dir / (DB_FILENAME + '.tmp')
+                    shutil.copy2(src / DB_FILENAME, tmp)
+                    os.replace(tmp, dst_dir / DB_FILENAME)
             except (OSError, subprocess.CalledProcessError) as exc:
                 stderr = (getattr(exc, 'stderr', '') or '').strip()
                 failed.append({

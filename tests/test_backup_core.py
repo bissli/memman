@@ -78,7 +78,6 @@ class TestBuildBundle:
         with tarfile.open(bundle) as tar:
             names = set(tar.getnames())
         assert './manifest.json' in names
-        assert './active' in names
         assert './env.nonsecret' in names
         assert './stores/default/memman.db' in names
         assert not any(n.endswith(('-wal', '-shm')) for n in names)
@@ -121,6 +120,20 @@ class TestBuildBundle:
         assert by_name['bad']['status'] == 'failed'
         assert 'disk full' in by_name['bad']['error']
         assert Path(result['bundle']).exists()
+
+    def test_host_local_backup_keys_excluded(self, tmp_path, env_file):
+        """BACKUP_CRON/TARGET/KEEP are host-local and stay out of the bundle."""
+        data_dir = _data_dir()
+        _seed_store(data_dir, 'default', n=1)
+        env_file('MEMMAN_BACKUP_CRON', '0 3 * * *')
+        env_file('MEMMAN_BACKUP_TARGET', '/some/host/path')
+        env_file('MEMMAN_BACKUP_KEEP', '5')
+        result = build_bundle(data_dir, str(tmp_path / 'archive_hl'))
+        with tarfile.open(result['bundle']) as tar:
+            env_text = tar.extractfile('./env.nonsecret').read().decode()
+        assert 'MEMMAN_BACKUP_CRON' not in env_text
+        assert 'MEMMAN_BACKUP_TARGET' not in env_text
+        assert 'MEMMAN_BACKUP_KEEP' not in env_text
 
     def test_manifest_records_parseable_fingerprint(self, tmp_path):
         """The manifest's per-store fingerprint parses back to a Fingerprint."""

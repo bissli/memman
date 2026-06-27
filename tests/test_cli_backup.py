@@ -118,6 +118,24 @@ class TestBackupRestore:
             input='n\n')
         assert result.exit_code != 0
 
+    def test_incompatible_bundle_exits_clean(self, mm_runner, tmp_path):
+        """A bad-format bundle yields a clean error, not a raw traceback."""
+        import json as _json
+        import tarfile
+
+        staging = tmp_path / 'st'
+        staging.mkdir()
+        (staging / 'manifest.json').write_text(_json.dumps({
+            'format_version': 999, 'stores': [], 'active_store': 'default'}))
+        (staging / 'env.nonsecret').write_text('\n')
+        bundle = tmp_path / 'bad.tar.gz'
+        with tarfile.open(bundle, 'w:gz') as tar:
+            tar.add(staging, arcname='.')
+        result = invoke(mm_runner, ['backup', 'restore', str(bundle), '--yes'])
+        assert result.exit_code != 0
+        assert not isinstance(result.exception, RuntimeError)
+        assert 'format_version' in result.output
+
     def test_runs_with_yes(self, mm_runner, tmp_path):
         """`--yes` restores the store and reports the action."""
         _, data_dir = mm_runner
@@ -150,9 +168,8 @@ class TestMaybeFireBackup:
 
     def test_fires_once_per_minute(
             self, mm_runner, fake_home, monkeypatch, env_file):
-        """A matching cron spawns one worker; a same-minute retry no-ops."""
-        import subprocess
-
+        """A matching cron runs the backup once; a same-minute retry no-ops."""
+        import memman.backup as backup_mod
         from memman.cli import _maybe_fire_backup
 
         _, data_dir = mm_runner
@@ -160,16 +177,15 @@ class TestMaybeFireBackup:
         env_file('MEMMAN_BACKUP_CRON', '* * * * *')
         calls: list = []
         monkeypatch.setattr(
-            subprocess, 'Popen', lambda *a, **k: calls.append(a))
+            backup_mod, 'run_backup', lambda dd: calls.append(dd))
         now = datetime(2026, 6, 27, 3, 0, 0)
-        _maybe_fire_backup('/fake/memman', data_dir, now)
-        _maybe_fire_backup('/fake/memman', data_dir, now)
+        _maybe_fire_backup(data_dir, now)
+        _maybe_fire_backup(data_dir, now)
         assert len(calls) == 1
 
     def test_defers_to_native_timer(self, mm_runner, monkeypatch, env_file):
         """On a systemd host the hook no-ops (the native timer owns backups)."""
-        import subprocess
-
+        import memman.backup as backup_mod
         from memman.cli import _maybe_fire_backup
         from memman.setup import scheduler as sched
 
@@ -178,7 +194,6 @@ class TestMaybeFireBackup:
         env_file('MEMMAN_BACKUP_CRON', '* * * * *')
         calls: list = []
         monkeypatch.setattr(
-            subprocess, 'Popen', lambda *a, **k: calls.append(a))
-        _maybe_fire_backup(
-            '/fake/memman', data_dir, datetime(2026, 6, 27, 3, 0, 0))
+            backup_mod, 'run_backup', lambda dd: calls.append(dd))
+        _maybe_fire_backup(data_dir, datetime(2026, 6, 27, 3, 0, 0))
         assert calls == []

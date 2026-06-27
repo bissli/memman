@@ -771,6 +771,8 @@ def install_backup(data_dir: str, cron_expr: str) -> dict:
     fires backups in-process from `MEMMAN_BACKUP_CRON`). Re-running
     rewrites the unit so a changed cron applies immediately.
     """
+    # deferred: memman.backup imports scheduler, so a top-level import
+    # of memman.backup.cron here would be a circular import.
     from memman.backup.cron import cron_to_launchd, cron_to_oncalendar
 
     binary = memman_binary_path()
@@ -922,7 +924,8 @@ def _uninstall_systemd_backup() -> dict:
     return {'platform': 'systemd', 'actions': actions}
 
 
-def _render_launchd_calendar(calendar: dict | list) -> str:
+def _render_launchd_calendar(
+        calendar: dict[str, int] | list[dict[str, int]]) -> str:
     """Render a StartCalendarInterval dict or list of dicts into plist XML."""
     def _one(entry: dict) -> str:
         inner = ''.join(
@@ -938,8 +941,9 @@ def _render_launchd_calendar(calendar: dict | list) -> str:
             f'  {_one(calendar)}\n')
 
 
-def _install_launchd_backup(binary: str, data_dir: str,
-                            calendar: dict | list) -> dict:
+def _install_launchd_backup(
+        binary: str, data_dir: str,
+        calendar: dict[str, int] | list[dict[str, int]]) -> dict:
     """Write launchd backup plist + wrapper and load the agent.
 
     Diverges from `_install_launchd` in three ways: a calendar trigger
