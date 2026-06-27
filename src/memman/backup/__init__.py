@@ -83,6 +83,7 @@ def snapshot_sqlite(store: str, data_dir: str, dst_db_path: Path) -> None:
         dst = sqlite3.connect(str(dst_db_path))
         try:
             src.backup(dst)
+            dst.execute('pragma journal_mode=DELETE')
         finally:
             dst.close()
     finally:

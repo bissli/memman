@@ -81,6 +81,7 @@ class TestBuildBundle:
         assert './active' in names
         assert './env.nonsecret' in names
         assert './stores/default/memman.db' in names
+        assert not any(n.endswith(('-wal', '-shm')) for n in names)
 
     def test_secret_keys_excluded(self, tmp_path, env_file):
         """env.nonsecret keeps per-store backend but strips every secret."""
