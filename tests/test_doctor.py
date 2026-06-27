@@ -436,6 +436,22 @@ class TestEnvCompleteness:
         assert config.OPENAI_EMBED_API_KEY not in out.get('detail', {}).get(
             'missing', [])
 
+    def test_ignores_optional_backup_keys(self, write_env):
+        """Absent BACKUP_CRON/TARGET (opt-in feature) does not warn."""
+        from memman import config
+        optional_backup = {
+            config.BACKUP_CRON, config.BACKUP_TARGET, config.BACKUP_KEEP}
+        lines = [
+            f'{key}=v' for key in config.INSTALLABLE_KEYS
+            if key not in optional_backup
+            ]
+        write_env('\n'.join(lines) + '\n')
+        out = check_env_completeness()
+        assert out['status'] == 'pass'
+        missing = out.get('detail', {}).get('missing', [])
+        assert config.BACKUP_CRON not in missing
+        assert config.BACKUP_TARGET not in missing
+
 
 class TestCheckPerStoreKeys:
     """`check_per_store_keys` validates `MEMMAN_BACKEND_<store>` shape."""

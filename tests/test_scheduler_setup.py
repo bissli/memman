@@ -876,3 +876,77 @@ class TestUninstall:
 
         result = sch.uninstall(data_dir=str(data_dir))
         assert result['env_actions'] == []
+
+
+class TestBackupScheduler:
+    """`install_backup` / `uninstall_backup` and the backup-state helpers."""
+
+    def test_install_backup_systemd_writes_calendar_timer(
+            self, fake_home, fake_binary, monkeypatch):
+        """systemd install_backup writes an OnCalendar timer + worker service."""
+        monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+        calls = _record_subprocess(monkeypatch)
+        result = sch.install_backup(str(fake_home / '.memman'), '0 3 * * *')
+        assert result['platform'] == 'systemd'
+        timer = Path(result['timer_path']).read_text()
+        service = Path(result['service_path']).read_text()
+        assert 'OnCalendar=*-*-* 03:00:00' in timer
+        assert 'Persistent=true' in timer
+        assert '/fake/bin/memman backup worker' in service
+        argvs = [' '.join(c) for c in calls]
+        assert any('daemon-reload' in a for a in argvs)
+        assert any('enable memman-backup.timer' in a for a in argvs)
+        assert any('restart memman-backup.timer' in a for a in argvs)
+
+    def test_install_backup_launchd_writes_calendar_plist(
+            self, fake_home, fake_binary, monkeypatch):
+        """launchd install_backup writes a StartCalendarInterval array + wrapper."""
+        monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
+        _record_subprocess(monkeypatch)
+        result = sch.install_backup(
+            str(fake_home / '.memman'), '*/15 * * * *')
+        plist = Path(result['plist_path']).read_text()
+        wrapper = Path(result['wrapper_path']).read_text()
+        assert '<key>StartCalendarInterval</key>' in plist
+        assert '<array>' in plist
+        assert '<key>RunAtLoad</key><false/>' in plist
+        assert 'backup worker' in wrapper
+        assert os.access(result['wrapper_path'], os.X_OK)
+
+    def test_install_backup_launchd_single_value_is_dict(
+            self, fake_home, fake_binary, monkeypatch):
+        """A single-value cron yields one calendar dict, not an array."""
+        monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
+        _record_subprocess(monkeypatch)
+        result = sch.install_backup(str(fake_home / '.memman'), '0 3 * * *')
+        plist = Path(result['plist_path']).read_text()
+        assert '<key>Minute</key><integer>0</integer>' in plist
+        assert '<key>Hour</key><integer>3</integer>' in plist
+        assert '<key>StartCalendarInterval</key>\n  <dict>' in plist
+        assert '<key>StartCalendarInterval</key>\n  <array>' not in plist
+
+    def test_uninstall_backup_leaves_enrich_units(
+            self, fake_home, fake_binary, monkeypatch):
+        """uninstall_backup removes only backup units and clears backup.state."""
+        monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+        _record_subprocess(monkeypatch)
+        sch.install(data_dir=str(fake_home / '.memman'),
+                    knobs=_knobs(openrouter='x', voyage='y'))
+        sch.install_backup(str(fake_home / '.memman'), '0 3 * * *')
+        sch.write_backup_state('2026-06-27T03:00')
+        unit_dir = fake_home / '.config' / 'systemd' / 'user'
+        assert (unit_dir / sch.SYSTEMD_BACKUP_TIMER_NAME).exists()
+
+        sch.uninstall_backup(str(fake_home / '.memman'))
+
+        assert not (unit_dir / sch.SYSTEMD_BACKUP_TIMER_NAME).exists()
+        assert not (unit_dir / sch.SYSTEMD_BACKUP_SERVICE_NAME).exists()
+        assert (unit_dir / sch.SYSTEMD_TIMER_NAME).exists()
+        assert sch.read_backup_state() is None
+
+    def test_backup_state_round_trip(self, fake_home):
+        """write/read/clear the once-per-minute backup guard state."""
+        sch.write_backup_state('2026-06-27T03:00')
+        assert sch.read_backup_state() == '2026-06-27T03:00'
+        sch.clear_backup_state()
+        assert sch.read_backup_state() is None

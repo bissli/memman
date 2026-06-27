@@ -25,6 +25,10 @@ from memman.setup._atomic import atomic_write_secure
 SYSTEMD_TIMER_NAME = 'memman-enrich.timer'
 SYSTEMD_SERVICE_NAME = 'memman-enrich.service'
 LAUNCHD_LABEL = 'com.memman.enrich'
+SYSTEMD_BACKUP_TIMER_NAME = 'memman-backup.timer'
+SYSTEMD_BACKUP_SERVICE_NAME = 'memman-backup.service'
+LAUNCHD_BACKUP_LABEL = 'com.memman.backup'
+BACKUP_STATE_FILENAME = 'backup.state'
 STATE_FILENAME = 'scheduler.state'
 SERVE_INTERVAL_FILENAME = 'scheduler.serve_interval'
 SCHEDULER_KIND_SERVE = 'serve'
@@ -77,6 +81,31 @@ def write_state(state: str) -> None:
 def clear_state() -> None:
     """Remove the state file if present (used on uninstall)."""
     path = _state_file_path()
+    if path.exists():
+        path.unlink()
+
+
+def _backup_state_path() -> Path:
+    """Return ~/.memman/backup.state. Per-host; never synced."""
+    return Path.home() / '.memman' / BACKUP_STATE_FILENAME
+
+
+def read_backup_state() -> str | None:
+    """Return the last-fired minute key ('YYYY-MM-DDTHH:MM') or None."""
+    try:
+        return _backup_state_path().read_text().strip() or None
+    except (OSError, FileNotFoundError):
+        return None
+
+
+def write_backup_state(minute_key: str) -> None:
+    """Persist the last-fired minute key for the serve-loop backup guard."""
+    atomic_write_secure(_backup_state_path(), minute_key + '\n')
+
+
+def clear_backup_state() -> None:
+    """Remove the backup-state file if present (used on uninstall)."""
+    path = _backup_state_path()
     if path.exists():
         path.unlink()
 
@@ -721,6 +750,266 @@ def _uninstall_launchd() -> dict:
     agent_dir = _launchd_agent_dir()
     plist_path = agent_dir / f'{LAUNCHD_LABEL}.plist'
     wrapper_path = Path.home() / '.memman' / 'bin' / 'memman-enrich-wrapper.sh'
+    actions = []
+    if plist_path.exists():
+        subprocess.run(
+            ['launchctl', 'unload', str(plist_path)], check=False)
+        plist_path.unlink()
+        actions.append(f'removed {plist_path}')
+    if wrapper_path.exists():
+        wrapper_path.unlink()
+        actions.append(f'removed {wrapper_path}')
+    return {'platform': 'launchd', 'actions': actions}
+
+
+def install_backup(data_dir: str, cron_expr: str) -> dict:
+    """Install the trigger that fires `memman backup worker` on `cron_expr`.
+
+    Translates one cron string to the host's native calendar
+    scheduler: systemd `OnCalendar=` (+`Persistent=true`), launchd
+    `StartCalendarInterval`, or a serve-mode note (the serve loop
+    fires backups in-process from `MEMMAN_BACKUP_CRON`). Re-running
+    rewrites the unit so a changed cron applies immediately.
+    """
+    from memman.backup.cron import cron_to_launchd, cron_to_oncalendar
+
+    binary = memman_binary_path()
+    _enforce_data_dir_perms(data_dir)
+    kind = detect_scheduler()
+    if kind == 'systemd':
+        return _install_systemd_backup(
+            binary, data_dir, cron_to_oncalendar(cron_expr))
+    if kind == 'launchd':
+        return _install_launchd_backup(
+            binary, data_dir, cron_to_launchd(cron_expr))
+    return {
+        'platform': SCHEDULER_KIND_SERVE,
+        'note': ('serve loop fires backup in-process from'
+                 ' MEMMAN_BACKUP_CRON'),
+        }
+
+
+def uninstall_backup(data_dir: str | None = None) -> dict:
+    """Remove the backup trigger and clear backup.state. Keeps env keys.
+
+    Non-secret env keys (`MEMMAN_BACKUP_*`) are intentionally left in
+    place so a later `memman backup schedule` re-install resurrects the
+    configuration without re-entry.
+    """
+    kind = detect_scheduler()
+    if kind == 'systemd':
+        result = _uninstall_systemd_backup()
+    elif kind == 'launchd':
+        result = _uninstall_launchd_backup()
+    else:
+        result = {'platform': SCHEDULER_KIND_SERVE, 'actions': []}
+    clear_backup_state()
+    return result
+
+
+def _verify_systemd_backup_active() -> None:
+    """Poll systemctl is-active; raise if the backup timer isn't active."""
+    try:
+        out = subprocess.run(
+            ['systemctl', '--user', 'is-active', SYSTEMD_BACKUP_TIMER_NAME],
+            capture_output=True, text=True, check=False, timeout=5)
+        state = out.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        raise RuntimeError(
+            f'could not verify systemd backup timer state: {exc}') from exc
+    if state != 'active':
+        raise RuntimeError(
+            f'systemd backup timer is {state!r} after enable;'
+            ' check `journalctl --user -u memman-backup` and confirm'
+            ' `loginctl enable-linger` if this is a headless session')
+
+
+def _verify_launchd_backup_loaded() -> None:
+    """Check launchctl list; raise if the backup job isn't loaded."""
+    try:
+        out = subprocess.run(
+            ['launchctl', 'list', LAUNCHD_BACKUP_LABEL],
+            capture_output=True, text=True, check=False, timeout=5)
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        raise RuntimeError(
+            f'could not verify launchd backup state: {exc}') from exc
+    if out.returncode != 0:
+        raise RuntimeError(
+            f'launchd job {LAUNCHD_BACKUP_LABEL} is not loaded after'
+            ' launchctl load; check ~/.memman/logs/backup.err')
+
+
+def _install_systemd_backup(binary: str, data_dir: str,
+                            oncalendar: str) -> dict:
+    """Write systemd backup timer+service and (re)start the timer.
+
+    Mirrors `_install_systemd` but uses a calendar trigger
+    (`OnCalendar=` + `Persistent=true` for sleep/power-off catch-up)
+    and runs `backup worker` instead of `scheduler drain`.
+    """
+    unit_dir = _systemd_unit_dir()
+    timer_path = unit_dir / SYSTEMD_BACKUP_TIMER_NAME
+    service_path = unit_dir / SYSTEMD_BACKUP_SERVICE_NAME
+
+    timer_contents = (
+        '[Unit]\n'
+        'Description=MemMan backup timer\n\n'
+        '[Timer]\n'
+        f'OnCalendar={oncalendar}\n'
+        'Persistent=true\n\n'
+        '[Install]\n'
+        'WantedBy=timers.target\n')
+
+    env_file = config.env_file_path(data_dir)
+    logs_dir = Path.home() / '.memman' / 'logs'
+    service_contents = (
+        '[Unit]\n'
+        'Description=MemMan backup worker\n\n'
+        '[Service]\n'
+        'Type=oneshot\n'
+        f'Environment="MEMMAN_DATA_DIR={data_dir}"\n'
+        'Environment=MEMMAN_WORKER=1\n'
+        f'EnvironmentFile={env_file}\n'
+        f'ExecStartPre=/bin/mkdir -p {logs_dir}\n'
+        f'ExecStart={binary} backup worker\n'
+        'StandardOutput=append:%h/.memman/logs/backup.log\n'
+        'StandardError=append:%h/.memman/logs/backup.err\n')
+
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    timer_path.write_text(timer_contents)
+    service_path.write_text(service_contents)
+    actions = [f'wrote {timer_path}', f'wrote {service_path}']
+    subprocess.run(['systemctl', '--user', 'daemon-reload'], check=False)
+    subprocess.run(
+        ['systemctl', '--user', 'enable', SYSTEMD_BACKUP_TIMER_NAME],
+        check=False, capture_output=True)
+    actions.append('systemctl --user enable memman-backup.timer')
+    subprocess.run(
+        ['systemctl', '--user', 'restart', SYSTEMD_BACKUP_TIMER_NAME],
+        check=False, capture_output=True)
+    actions.append('systemctl --user restart memman-backup.timer')
+    _verify_systemd_backup_active()
+    return {
+        'platform': 'systemd',
+        'timer_path': str(timer_path),
+        'service_path': str(service_path),
+        'oncalendar': oncalendar,
+        'actions': actions,
+        }
+
+
+def _uninstall_systemd_backup() -> dict:
+    """Stop+disable the backup timer and remove its unit files."""
+    unit_dir = _systemd_unit_dir()
+    timer_path = unit_dir / SYSTEMD_BACKUP_TIMER_NAME
+    service_path = unit_dir / SYSTEMD_BACKUP_SERVICE_NAME
+    actions = []
+    subprocess.run(
+        ['systemctl', '--user', 'stop', SYSTEMD_BACKUP_TIMER_NAME],
+        check=False, capture_output=True)
+    actions.append('systemctl --user stop memman-backup.timer')
+    subprocess.run(
+        ['systemctl', '--user', 'disable', SYSTEMD_BACKUP_TIMER_NAME],
+        check=False, capture_output=True)
+    actions.append('systemctl --user disable memman-backup.timer')
+    for p in (timer_path, service_path):
+        if p.exists():
+            p.unlink()
+            actions.append(f'removed {p}')
+    subprocess.run(
+        ['systemctl', '--user', 'daemon-reload'],
+        check=False, capture_output=True)
+    return {'platform': 'systemd', 'actions': actions}
+
+
+def _render_launchd_calendar(calendar: dict | list) -> str:
+    """Render a StartCalendarInterval dict or list of dicts into plist XML."""
+    def _one(entry: dict) -> str:
+        inner = ''.join(
+            f'<key>{key}</key><integer>{value}</integer>'
+            for key, value in entry.items())
+        return f'<dict>{inner}</dict>'
+
+    if isinstance(calendar, list):
+        body = ''.join(_one(entry) for entry in calendar)
+        return (f'  <key>StartCalendarInterval</key>\n'
+                f'  <array>{body}</array>\n')
+    return (f'  <key>StartCalendarInterval</key>\n'
+            f'  {_one(calendar)}\n')
+
+
+def _install_launchd_backup(binary: str, data_dir: str,
+                            calendar: dict | list) -> dict:
+    """Write launchd backup plist + wrapper and load the agent.
+
+    Diverges from `_install_launchd` in three ways: a calendar trigger
+    (`StartCalendarInterval`) instead of `StartInterval`, `RunAtLoad`
+    false (no backup on every reload), and `backup worker` as the
+    wrapped command.
+    """
+    agent_dir = _launchd_agent_dir()
+    plist_path = agent_dir / f'{LAUNCHD_BACKUP_LABEL}.plist'
+    wrapper_path = (
+        Path.home() / '.memman' / 'bin' / 'memman-backup-wrapper.sh')
+
+    env_file_q = shlex.quote(str(config.env_file_path(data_dir)))
+    data_dir_q = shlex.quote(data_dir)
+    binary_q = shlex.quote(binary)
+    logs_dir = Path.home() / '.memman' / 'logs'
+    logs_dir_q = shlex.quote(str(logs_dir))
+    wrapper_contents = (
+        '#!/bin/sh\n'
+        f'mkdir -p {logs_dir_q}\n'
+        f'[ -f {env_file_q} ] && . {env_file_q}\n'
+        f'export MEMMAN_DATA_DIR={data_dir_q}\n'
+        'export MEMMAN_WORKER=1\n'
+        f'exec {binary_q} backup worker\n')
+
+    log_path = logs_dir / 'backup.log'
+    err_path = logs_dir / 'backup.err'
+    plist_contents = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"'
+        ' "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+        '<plist version="1.0"><dict>\n'
+        f'  <key>Label</key><string>{LAUNCHD_BACKUP_LABEL}</string>\n'
+        '  <key>ProgramArguments</key>\n'
+        '  <array>\n'
+        f'    <string>{wrapper_path}</string>\n'
+        '  </array>\n'
+        + _render_launchd_calendar(calendar)
+        + '  <key>RunAtLoad</key><false/>\n'
+        f'  <key>StandardOutPath</key><string>{log_path}</string>\n'
+        f'  <key>StandardErrorPath</key><string>{err_path}</string>\n'
+        '</dict></plist>\n')
+
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    wrapper_path.parent.mkdir(parents=True, exist_ok=True)
+    wrapper_path.write_text(wrapper_contents)
+    Path(wrapper_path).chmod(0o755)
+    plist_path.write_text(plist_contents)
+    actions = [
+        f'wrote {wrapper_path} (mode 755)', f'wrote {plist_path}']
+    subprocess.run(
+        ['launchctl', 'unload', str(plist_path)], check=False)
+    subprocess.run(
+        ['launchctl', 'load', '-w', str(plist_path)], check=False)
+    actions.append(f'launchctl load -w {plist_path}')
+    _verify_launchd_backup_loaded()
+    return {
+        'platform': 'launchd',
+        'plist_path': str(plist_path),
+        'wrapper_path': str(wrapper_path),
+        'actions': actions,
+        }
+
+
+def _uninstall_launchd_backup() -> dict:
+    """Unload the backup plist and remove its files."""
+    agent_dir = _launchd_agent_dir()
+    plist_path = agent_dir / f'{LAUNCHD_BACKUP_LABEL}.plist'
+    wrapper_path = (
+        Path.home() / '.memman' / 'bin' / 'memman-backup-wrapper.sh')
     actions = []
     if plist_path.exists():
         subprocess.run(

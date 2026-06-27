@@ -21,6 +21,7 @@ from memman.setup.scheduler import detect_scheduler
 from memman.setup.scheduler import install as install_scheduler
 from memman.setup.scheduler import memman_binary_path
 from memman.setup.scheduler import uninstall as uninstall_scheduler
+from memman.setup.scheduler import uninstall_backup
 from memman.setup.settings import add_claude_hooks_selective
 from memman.setup.settings import add_memman_permission, read_json_file
 from memman.setup.settings import remove_claude_hooks, remove_if_empty
@@ -421,6 +422,11 @@ def _run_uninstall_flow(envs: list[dict], target: str,
     result = uninstall_scheduler(data_dir=data_dir)
     for action in result.get('actions', []):
         status_ok(result['platform'], action)
+
+    print('\n[backup]')
+    backup_result = uninstall_backup(data_dir=data_dir)
+    for action in backup_result.get('actions', []):
+        status_ok(backup_result['platform'], action)
 
     print()
     print('Done! All detected integrations removed.')

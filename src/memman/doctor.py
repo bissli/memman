@@ -358,11 +358,14 @@ def check_env_completeness() -> dict[str, Any]:
     optional_unless_default_postgres = set()
     if default_backend != 'postgres':
         optional_unless_default_postgres.add(config.DEFAULT_PG_DSN)
+    optional_backup = {
+        config.BACKUP_CRON, config.BACKUP_TARGET, config.BACKUP_KEEP}
     missing = [
         key for key in config.INSTALLABLE_KEYS
         if not parsed.get(key)
         and key not in optional_secrets
         and key not in optional_unless_default_postgres
+        and key not in optional_backup
         ]
 
     if not missing:

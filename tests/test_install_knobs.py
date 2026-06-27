@@ -145,6 +145,21 @@ class TestCollectInstallKnobs:
         knobs = config.collect_install_knobs(str(data_dir))
         assert knobs[config.DEFAULT_BACKEND] == 'sqlite'
 
+    def test_backup_keep_default_present_cron_target_absent(
+            self, tmp_path, monkeypatch, stub_resolver):
+        """BACKUP_KEEP defaults to '7'; BACKUP_CRON/TARGET stay unset, no error."""
+        data_dir = tmp_path / 'memman'
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / config.ENV_FILENAME).write_text(
+            f'{config.OPENROUTER_API_KEY}=or-key\n'
+            f'{config.VOYAGE_API_KEY}=vy-key\n')
+        monkeypatch.setenv(config.DATA_DIR, str(data_dir))
+        config.reset_file_cache()
+        knobs = config.collect_install_knobs(str(data_dir))
+        assert knobs[config.BACKUP_KEEP] == '7'
+        assert config.BACKUP_CRON not in knobs
+        assert config.BACKUP_TARGET not in knobs
+
     def test_native_voyage_key_seeds_memman_voyage_key(
             self, tmp_path, monkeypatch, stub_resolver):
         """Native `VOYAGE_API_KEY` (no MEMMAN- prefix) seeds the memman key."""
