@@ -622,6 +622,31 @@ def scheduler_drain(ctx: click.Context, limit: int,
     _drain_queue(ctx, limit, timeout, stores, progress)
 
 
+def _maybe_fire_backup(binary: str, data_dir: str, now: datetime) -> None:
+    """Spawn a detached backup worker when the cron matches this minute.
+
+    Once-per-minute and restart-safe via ~/.memman/backup.state. Never
+    acquires drain.lock -- the online snapshot is non-disruptive, so it
+    neither blocks nor is blocked by the enrichment drain. No-op when
+    MEMMAN_BACKUP_CRON is unset (the OS timer path handles scheduled
+    backups on systemd/launchd hosts).
+    """
+    import subprocess
+
+    cron = config.get(config.BACKUP_CRON)
+    if not cron:
+        return
+    from memman.backup.cron import cron_matches
+    if not cron_matches(cron, now):
+        return
+    minute_key = now.strftime('%Y-%m-%dT%H:%M')
+    from memman.setup.scheduler import read_backup_state, write_backup_state
+    if read_backup_state() == minute_key:
+        return
+    write_backup_state(minute_key)
+    subprocess.Popen([binary, '--data-dir', data_dir, 'backup', 'worker'])
+
+
 @scheduler.command('serve')
 @click.option('--interval', default=None, type=int,
               help=('Seconds between drain iterations.'
@@ -699,6 +724,12 @@ def scheduler_serve(ctx: click.Context, interval: int | None,
 
         per_drain_timeout = max(10, interval - 10) if interval > 0 else 300
 
+        try:
+            from memman.setup.scheduler import memman_binary_path
+            backup_binary = memman_binary_path()
+        except RuntimeError:
+            backup_binary = None
+
         while True:
             config.reset_file_cache()
             if read_state() == STATE_STOPPED:
@@ -707,6 +738,9 @@ def scheduler_serve(ctx: click.Context, interval: int | None,
             result = _drain_queue(
                 ctx, limit=100, timeout=per_drain_timeout,
                 stores_filter='', verbose=False)
+            if backup_binary is not None:
+                _maybe_fire_backup(
+                    backup_binary, data_dir_val, datetime.now())
             if _stop_requested() or once:
                 break
             if interval > 0:
@@ -1944,6 +1978,226 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
             abort=True)
     factory.drop_store(name, data_dir)
     _json_out({'action': 'removed', 'store': name})
+
+
+@cli.group(invoke_without_command=True)
+@click.pass_context
+def backup(ctx: click.Context) -> None:
+    """External, scheduled backups of the whole store layout.
+
+    Backups write only to a user-specified external directory, never
+    into ~/.memman/ (that dir is per-host and disposable). No
+    subcommand is claude-callable: `run` writes an external filesystem
+    and `restore` is destructive.
+    """
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(backup_status)
+
+
+@backup.command('run')
+@click.argument('target', required=False)
+@click.pass_context
+def backup_run(ctx: click.Context, target: str) -> None:
+    """Build one backup bundle now (TARGET or MEMMAN_BACKUP_TARGET)."""
+    data_dir = ctx.obj['data_dir']
+    target = target or config.get(config.BACKUP_TARGET)
+    if not target:
+        raise click.ClickException(
+            'no target; pass TARGET or set MEMMAN_BACKUP_TARGET'
+            " via 'memman backup schedule'")
+    from memman.backup import build_bundle, prune
+    result = build_bundle(data_dir, target)
+    keep_raw = config.get(config.BACKUP_KEEP)
+    keep = int(keep_raw) if keep_raw and keep_raw.isdigit() else 7
+    result['pruned'] = prune(target, keep)
+    _json_out({'action': 'backed_up', **result})
+
+
+@backup.command('schedule')
+@click.argument('cron')
+@click.argument('target')
+@click.option('--keep', type=int, default=7,
+              help='Number of bundles to retain (default 7).')
+@click.pass_context
+def backup_schedule(ctx: click.Context, cron: str, target: str,
+                    keep: int) -> None:
+    """Install a scheduled backup: CRON expression writing to TARGET dir.
+
+    CRON is a 5-field expression (e.g. '0 3 * * *' for 03:00 daily).
+    TARGET is created if it does not exist. The cron string is
+    translated to the host's native scheduler at install time.
+    """
+    data_dir = ctx.obj['data_dir']
+    from memman.backup.cron import cron_to_oncalendar
+    try:
+        cron_to_oncalendar(cron)
+    except ValueError as exc:
+        raise click.ClickException(f'invalid cron expression: {exc}')
+    target_path = os.path.expanduser(target)
+    os.makedirs(target_path, exist_ok=True)
+    from memman.setup.scheduler import _write_env_keys, install_backup
+    _write_env_keys(
+        {config.BACKUP_CRON: cron,
+         config.BACKUP_TARGET: target_path,
+         config.BACKUP_KEEP: str(keep)},
+        data_dir=data_dir)
+    result = install_backup(data_dir, cron)
+    _json_out({
+        'action': 'scheduled', 'cron': cron,
+        'target': target_path, 'keep': keep, **result})
+
+
+@backup.command('unschedule')
+@click.pass_context
+def backup_unschedule(ctx: click.Context) -> None:
+    """Remove the scheduled backup trigger (keeps the env config)."""
+    data_dir = ctx.obj['data_dir']
+    from memman.setup.scheduler import uninstall_backup
+    _json_out({'action': 'unscheduled', **uninstall_backup(data_dir)})
+
+
+@backup.command('list')
+@click.argument('target', required=False)
+@click.pass_context
+def backup_list(ctx: click.Context, target: str) -> None:
+    """List bundles at TARGET (or MEMMAN_BACKUP_TARGET) from sidecars."""
+    target = target or config.get(config.BACKUP_TARGET)
+    if not target:
+        raise click.ClickException(
+            'no target; pass TARGET or set MEMMAN_BACKUP_TARGET')
+    target_path = pathlib.Path(os.path.expanduser(target))
+    backups: list[dict] = []
+    if target_path.is_dir():
+        for sidecar in sorted(
+                target_path.glob('memman-backup-*.tar.gz.manifest.json')):
+            bundle = sidecar.with_name(
+                sidecar.name[:-len('.manifest.json')])
+            try:
+                manifest = json.loads(sidecar.read_text())
+            except (OSError, json.JSONDecodeError):
+                manifest = {}
+            backups.append({
+                'bundle': str(bundle),
+                'created_at_utc': manifest.get('created_at_utc'),
+                'host': manifest.get('host'),
+                'stores': [
+                    s.get('name') for s in manifest.get('stores', [])],
+                'size_bytes': (
+                    bundle.stat().st_size if bundle.exists() else None),
+                })
+    _json_out({'target': str(target_path), 'backups': backups})
+
+
+@backup.command('status')
+@click.pass_context
+def backup_status(ctx: click.Context) -> None:
+    """Report backup config, schedule, last fire, and latest bundle."""
+    from memman.setup import scheduler as sched
+
+    cron = config.get(config.BACKUP_CRON)
+    target = config.get(config.BACKUP_TARGET)
+    keep = config.get(config.BACKUP_KEEP)
+    out: dict = {
+        'cron': cron,
+        'target': target,
+        'keep': int(keep) if keep and keep.isdigit() else None,
+        'last_fired': sched.read_backup_state(),
+        'scheduler': None,
+        'installed': False,
+        'next_run': None,
+        'latest_bundle': None,
+        }
+    try:
+        kind = sched.detect_scheduler()
+    except RuntimeError:
+        kind = None
+    out['scheduler'] = kind
+    if kind == 'systemd':
+        timer = (sched._systemd_unit_dir()
+                 / sched.SYSTEMD_BACKUP_TIMER_NAME)
+        out['installed'] = timer.exists()
+        if out['installed']:
+            import subprocess
+            try:
+                shown = subprocess.run(
+                    ['systemctl', '--user', 'show',
+                     '--property=NextElapseUSecRealtime', '--value',
+                     sched.SYSTEMD_BACKUP_TIMER_NAME],
+                    capture_output=True, text=True,
+                    check=False, timeout=5)
+                out['next_run'] = shown.stdout.strip() or None
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
+    elif kind == 'launchd':
+        plist = (sched._launchd_agent_dir()
+                 / f'{sched.LAUNCHD_BACKUP_LABEL}.plist')
+        out['installed'] = plist.exists()
+    if target:
+        target_path = pathlib.Path(os.path.expanduser(target))
+        if target_path.is_dir():
+            bundles = sorted(
+                target_path.glob('memman-backup-*.tar.gz'))
+            out['latest_bundle'] = str(bundles[-1]) if bundles else None
+    _json_out(out)
+
+
+@backup.command('restore')
+@click.argument('bundle')
+@click.option('--yes', is_flag=True, default=False,
+              help='Skip the overwrite confirmation (for scripted use).')
+@click.pass_context
+def backup_restore(ctx: click.Context, bundle: str, yes: bool) -> None:
+    """Restore stores + non-secret config from BUNDLE into the data dir.
+
+    Overwrites local stores. Postgres stores need their DSN configured
+    on this host (the DSN is a secret and is not in the bundle); a
+    store with no DSN is skipped and reported.
+    """
+    import shutil
+    import tarfile
+
+    data_dir = ctx.obj['data_dir']
+    from memman.backup import restore
+    from memman.migrate import MigrateError, held_drain_lock
+
+    needs_pg = False
+    try:
+        with tarfile.open(bundle, 'r:gz') as tar:
+            member = tar.extractfile('./manifest.json')
+            if member is not None:
+                manifest = json.loads(member.read().decode())
+                needs_pg = any(
+                    s.get('backend') == 'postgres'
+                    and s.get('status') != 'failed'
+                    for s in manifest.get('stores', []))
+    except (OSError, tarfile.TarError, json.JSONDecodeError) as exc:
+        raise click.ClickException(f'cannot read bundle: {exc}')
+    if needs_pg and shutil.which('pg_restore') is None:
+        raise click.ClickException(
+            'bundle contains postgres stores but pg_restore is not on'
+            ' PATH; install postgresql-client and retry')
+
+    click.echo(
+        f'About to restore {bundle} into {data_dir} (overwrites local'
+        ' stores).', err=True)
+    if not yes:
+        click.confirm(
+            'Proceed? This overwrites local stores.',
+            default=False, abort=True)
+    try:
+        with held_drain_lock(data_dir):
+            result = restore(bundle, data_dir)
+    except MigrateError as exc:
+        raise click.ClickException(str(exc))
+    _json_out({'action': 'restored', **result})
+
+
+@backup.command('worker', hidden=True)
+@click.pass_context
+def backup_worker(ctx: click.Context) -> None:
+    """Hidden: run one backup now. The scheduler unit's ExecStart target."""
+    from memman.backup import run_backup
+    run_backup(ctx.obj['data_dir'])
 
 
 @claude_callable
