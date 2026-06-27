@@ -26,13 +26,14 @@ from memman.store.db import store_exists, valid_store_name, write_active
 from memman.store.factory import known_backends, list_stores
 
 _BACKEND_CHOICES = sorted(known_backends())
+from typing import Self
+
 from memman.embed import SUPPORTED_EMBED_PROVIDERS as _EMBED_PROVIDER_CHOICES
 from memman.store.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge
 from memman.store.model import Insight, format_timestamp, insight_to_full_dict
 from memman.store.model import is_immune
 from memman.store.sqlite import open_ro_db
 from tqdm import tqdm
-from typing import Self
 
 logger = logging.getLogger('memman')
 
@@ -625,14 +626,23 @@ def scheduler_drain(ctx: click.Context, limit: int,
 def _maybe_fire_backup(binary: str, data_dir: str, now: datetime) -> None:
     """Spawn a detached backup worker when the cron matches this minute.
 
-    Once-per-minute and restart-safe via ~/.memman/backup.state. Never
-    acquires drain.lock -- the online snapshot is non-disruptive, so it
-    neither blocks nor is blocked by the enrichment drain. No-op when
-    MEMMAN_BACKUP_CRON is unset (the OS timer path handles scheduled
-    backups on systemd/launchd hosts).
+    Serve-mode only: on systemd/launchd hosts the native backup timer
+    owns scheduled backups, so this defers to it (preventing a
+    double-fire if a serve loop also runs there). Once-per-minute and
+    restart-safe via ~/.memman/backup.state. Never acquires drain.lock
+    -- the online snapshot is non-disruptive. No-op when
+    MEMMAN_BACKUP_CRON is unset. Worker output is redirected to the
+    backup logs so it never interleaves with the serve loop's streams.
     """
     import subprocess
 
+    from memman.setup.scheduler import SCHEDULER_KIND_SERVE, detect_scheduler
+    from memman.setup.scheduler import read_backup_state, write_backup_state
+    try:
+        if detect_scheduler() != SCHEDULER_KIND_SERVE:
+            return
+    except RuntimeError:
+        return
     cron = config.get(config.BACKUP_CRON)
     if not cron:
         return
@@ -640,11 +650,16 @@ def _maybe_fire_backup(binary: str, data_dir: str, now: datetime) -> None:
     if not cron_matches(cron, now):
         return
     minute_key = now.strftime('%Y-%m-%dT%H:%M')
-    from memman.setup.scheduler import read_backup_state, write_backup_state
     if read_backup_state() == minute_key:
         return
     write_backup_state(minute_key)
-    subprocess.Popen([binary, '--data-dir', data_dir, 'backup', 'worker'])
+    logs_dir = pathlib.Path.home() / '.memman' / 'logs'
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    with open(logs_dir / 'backup.log', 'a') as out, \
+            open(logs_dir / 'backup.err', 'a') as err:
+        subprocess.Popen(
+            [binary, '--data-dir', data_dir, 'backup', 'worker'],
+            stdout=out, stderr=err)
 
 
 @scheduler.command('serve')
@@ -2008,7 +2023,10 @@ def backup_run(ctx: click.Context, target: str) -> None:
     from memman.backup import build_bundle, prune
     result = build_bundle(data_dir, target)
     keep_raw = config.get(config.BACKUP_KEEP)
-    keep = int(keep_raw) if keep_raw and keep_raw.isdigit() else 7
+    try:
+        keep = int(keep_raw) if keep_raw else 7
+    except ValueError:
+        keep = 7
     result['pruned'] = prune(target, keep)
     _json_out({'action': 'backed_up', **result})
 
@@ -2033,6 +2051,18 @@ def backup_schedule(ctx: click.Context, cron: str, target: str,
         cron_to_oncalendar(cron)
     except ValueError as exc:
         raise click.ClickException(f'invalid cron expression: {exc}')
+    fields = cron.split()
+    if len(fields) == 5 and fields[2] != '*' and fields[4] != '*':
+        from memman.setup.scheduler import detect_scheduler
+        try:
+            systemd_host = detect_scheduler() == 'systemd'
+        except RuntimeError:
+            systemd_host = False
+        if systemd_host:
+            click.echo(
+                'Warning: cron restricts BOTH day-of-month and day-of-week.'
+                ' systemd OnCalendar evaluates these as AND (cron uses OR),'
+                ' so the backup fires only when both match.', err=True)
     target_path = os.path.expanduser(target)
     os.makedirs(target_path, exist_ok=True)
     from memman.setup.scheduler import _write_env_keys, install_backup
@@ -2197,7 +2227,10 @@ def backup_restore(ctx: click.Context, bundle: str, yes: bool) -> None:
 def backup_worker(ctx: click.Context) -> None:
     """Hidden: run one backup now. The scheduler unit's ExecStart target."""
     from memman.backup import run_backup
-    run_backup(ctx.obj['data_dir'])
+    try:
+        run_backup(ctx.obj['data_dir'])
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc))
 
 
 @claude_callable

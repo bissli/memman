@@ -89,14 +89,38 @@ class TestBuildBundle:
         _seed_store(data_dir, 's1', n=1)
         env_file('MEMMAN_BACKEND_s1', 'sqlite')
         env_file('MEMMAN_POSTGRES_DSN_s1', 'postgresql://u:pw@h/db')
+        env_file('MEMMAN_DEFAULT_POSTGRES_DSN', 'postgresql://u:pw@h/default')
         target = tmp_path / 'archive_sec'
         result = build_bundle(data_dir, str(target))
         with tarfile.open(result['bundle']) as tar:
             env_text = tar.extractfile('./env.nonsecret').read().decode()
         assert 'MEMMAN_BACKEND_s1=sqlite' in env_text
         assert 'MEMMAN_POSTGRES_DSN_s1' not in env_text
+        assert 'MEMMAN_DEFAULT_POSTGRES_DSN' not in env_text
         assert 'MEMMAN_OPENROUTER_API_KEY' not in env_text
         assert 'MEMMAN_VOYAGE_API_KEY' not in env_text
+
+    def test_partial_store_failure_does_not_abort(self, tmp_path, monkeypatch):
+        """A snapshot failure on one store marks it failed; bundle still completes."""
+        import memman.backup as backup_mod
+
+        data_dir = _data_dir()
+        _seed_store(data_dir, 'good', n=2)
+        _seed_store(data_dir, 'bad', n=1)
+        real = backup_mod.snapshot_sqlite
+
+        def flaky(store, dd, dst):
+            if store == 'bad':
+                raise RuntimeError('disk full')
+            real(store, dd, dst)
+
+        monkeypatch.setattr(backup_mod, 'snapshot_sqlite', flaky)
+        result = build_bundle(data_dir, str(tmp_path / 'archive_partial'))
+        by_name = {e['name']: e for e in result['stores']}
+        assert by_name['good']['status'] == 'ok'
+        assert by_name['bad']['status'] == 'failed'
+        assert 'disk full' in by_name['bad']['error']
+        assert Path(result['bundle']).exists()
 
     def test_manifest_records_parseable_fingerprint(self, tmp_path):
         """The manifest's per-store fingerprint parses back to a Fingerprint."""
@@ -154,6 +178,36 @@ class TestRestore:
         restore(bundle, fresh)
         env = config.parse_env_file(config.env_file_path(fresh))
         assert env[config.VOYAGE_API_KEY] == 'host-secret'
+
+    def test_partial_failure_isolated(self, tmp_path, monkeypatch):
+        """A per-store restore failure is isolated; other stores still restore."""
+        import memman.backup as backup_mod
+
+        data_dir = _data_dir()
+        _seed_store(data_dir, 'alpha', n=2)
+        _seed_store(data_dir, 'beta', n=1)
+        bundle = build_bundle(data_dir, str(tmp_path / 'archive_ri'))['bundle']
+        real_copy = backup_mod.shutil.copy2
+
+        def flaky_copy(src, dst, *a, **k):
+            if 'beta' in str(src):
+                raise OSError('copy denied')
+            return real_copy(src, dst, *a, **k)
+
+        monkeypatch.setattr(backup_mod.shutil, 'copy2', flaky_copy)
+        result = restore(bundle, str(tmp_path / 'fresh_ri'))
+        assert 'alpha' in result['restored']
+        assert 'beta' not in result['restored']
+        assert any(f['store'] == 'beta' for f in result['failed'])
+
+    def test_reports_embed_mismatch(self, tmp_path, env_file):
+        """A store whose fingerprint differs from the bundled embed model is flagged."""
+        data_dir = _data_dir()
+        _seed_store(data_dir, 'default', n=1)
+        env_file('MEMMAN_VOYAGE_EMBED_MODEL', 'voyage-3-large')
+        bundle = build_bundle(data_dir, str(tmp_path / 'archive_em'))['bundle']
+        result = restore(bundle, str(tmp_path / 'fresh_em'))
+        assert 'default' in result['embed_mismatch']
 
     def test_rejects_unknown_format_version(self, tmp_path):
         """A bundle with a newer format_version is refused."""

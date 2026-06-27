@@ -13,7 +13,7 @@ Secrets (API keys, the default Postgres DSN, and every per-store
 `MEMMAN_POSTGRES_DSN_<store>`) are excluded from the bundle and
 re-entered / resolved on the target host at restore.
 
-NOTES
+Notes:
 - The manifest carries its own `BACKUP_FORMAT_VERSION` (no global DB
   schema version exists); `embed_fingerprint` is recorded per store.
 - The per-store `backend` field in the manifest is authoritative for
@@ -51,23 +51,7 @@ ENV_NONSECRET_NAME = 'env.nonsecret'
 BUNDLE_PREFIX = 'memman-backup'
 INCOMING_DIRNAME = '.memman-incoming'
 
-_STAMP_RE = re.compile(r'(\d{8}T\d{6}Z)')
-
-
-def _is_secret_env_key(key: str) -> bool:
-    """Return True when `key` holds a secret that must not enter a bundle.
-
-    Consults both the static `SECRET_VARS` frozenset and the dynamic
-    per-store registry `PER_STORE_KEY_SPECS` -- per-store Postgres DSNs
-    (`MEMMAN_POSTGRES_DSN_<store>`) are secret but are not in
-    `SECRET_VARS`, so a `SECRET_VARS`-only check would leak them.
-    """
-    if key in config.SECRET_VARS:
-        return True
-    for prefix, _validator, is_secret in config.PER_STORE_KEY_SPECS:
-        if is_secret and key.startswith(prefix):
-            return True
-    return False
+_STAMP_RE = re.compile(r'(\d{8}T\d{6}Z)\.tar\.gz$')
 
 
 def snapshot_sqlite(store: str, data_dir: str, dst_db_path: Path) -> None:
@@ -129,96 +113,110 @@ def build_bundle(data_dir: str, target: str) -> dict:
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir(parents=True)
-
-    stores_meta: list[dict] = []
-    for store in factory.list_stores(data_dir):
-        backend_kind = factory.resolve_store_backend(store, data_dir)
-        store_out = staging / 'stores' / store
-        store_out.mkdir(parents=True, exist_ok=True)
-        entry: dict = {
-            'name': store,
-            'backend': backend_kind,
-            'embed_fingerprint': None,
-            'status': 'ok',
-            }
-        try:
-            if backend_kind == 'postgres':
-                if shutil.which('pg_dump') is None:
-                    raise RuntimeError('pg_dump not found on PATH')
-                dsn = factory.resolve_store_pg_dsn(store, data_dir)
-                if not dsn:
-                    raise RuntimeError(
-                        f'no DSN resolved for postgres store {store!r}')
-                snapshot_postgres(store, dsn, store_out / DUMP_FILENAME)
-                backend = factory.open_backend(
-                    store, data_dir, read_only=True)
-                try:
-                    fp = stored_fingerprint(backend)
-                finally:
-                    backend.close()
-                entry['embed_fingerprint'] = fp.to_json() if fp else None
-            else:
-                snapshot_sqlite(store, data_dir, store_out / DB_FILENAME)
-                with sqlite3.connect(
-                        f'file:{store_out / DB_FILENAME}?mode=ro',
-                        uri=True) as copy_conn:
-                    row = copy_conn.execute(
-                        "select value from meta"
-                        " where key = 'embed_fingerprint'").fetchone()
-                entry['embed_fingerprint'] = row[0] if row else None
-        except Exception as exc:
-            entry['status'] = 'failed'
-            entry['error'] = str(exc)
-            logger.warning('backup: store %r snapshot failed: %s', store, exc)
-        stores_meta.append(entry)
-
-    nonsecret = {
-        k: v
-        for k, v in config.parse_env_file(
-            config.env_file_path(data_dir)).items()
-        if not _is_secret_env_key(k)
-        }
-    manifest = {
-        'format_version': BACKUP_FORMAT_VERSION,
-        'created_at_utc': created.isoformat(),
-        'host': host,
-        'active_store': active,
-        'stores': stores_meta,
-        }
-    (staging / MANIFEST_NAME).write_text(
-        json.dumps(manifest, indent=2, sort_keys=True))
-    (staging / ACTIVE_NAME).write_text(active + '\n')
-    (staging / ENV_NONSECRET_NAME).write_text(
-        '\n'.join(f'{k}={v}' for k, v in nonsecret.items()) + '\n')
-
     bundle_name = f'{BUNDLE_PREFIX}-{host}-{stamp}.tar.gz'
     staged_tar = incoming / bundle_name
-    with tarfile.open(staged_tar, 'w:gz') as tar:
-        tar.add(staging, arcname='.')
-    fd = os.open(staged_tar, os.O_RDONLY)
+
+    def is_secret(key: str) -> bool:
+        if key in config.SECRET_VARS:
+            return True
+        return any(
+            secret and key.startswith(prefix)
+            for prefix, _validator, secret in config.PER_STORE_KEY_SPECS)
+
     try:
-        os.fsync(fd)
+        stores_meta: list[dict] = []
+        for store in factory.list_stores(data_dir):
+            backend_kind = factory.resolve_store_backend(store, data_dir)
+            store_out = staging / 'stores' / store
+            store_out.mkdir(parents=True, exist_ok=True)
+            entry: dict = {
+                'name': store,
+                'backend': backend_kind,
+                'embed_fingerprint': None,
+                'status': 'ok',
+                }
+            try:
+                if backend_kind == 'postgres':
+                    if shutil.which('pg_dump') is None:
+                        raise RuntimeError('pg_dump not found on PATH')
+                    dsn = factory.resolve_store_pg_dsn(store, data_dir)
+                    if not dsn:
+                        raise RuntimeError(
+                            f'no DSN resolved for postgres store {store!r}')
+                    snapshot_postgres(store, dsn, store_out / DUMP_FILENAME)
+                    backend = factory.open_backend(
+                        store, data_dir, read_only=True)
+                    try:
+                        fp = stored_fingerprint(backend)
+                    finally:
+                        backend.close()
+                    entry['embed_fingerprint'] = fp.to_json() if fp else None
+                else:
+                    snapshot_sqlite(store, data_dir, store_out / DB_FILENAME)
+                    with sqlite3.connect(
+                            f'file:{store_out / DB_FILENAME}?mode=ro',
+                            uri=True) as copy_conn:
+                        row = copy_conn.execute(
+                            "select value from meta"
+                            " where key = 'embed_fingerprint'").fetchone()
+                    entry['embed_fingerprint'] = row[0] if row else None
+            except Exception as exc:
+                entry['status'] = 'failed'
+                entry['error'] = str(exc)
+                logger.warning(
+                    'backup: store %r snapshot failed: %s', store, exc)
+            stores_meta.append(entry)
+
+        nonsecret = {
+            k: v
+            for k, v in config.parse_env_file(
+                config.env_file_path(data_dir)).items()
+            if not is_secret(k)
+            }
+        manifest = {
+            'format_version': BACKUP_FORMAT_VERSION,
+            'created_at_utc': created.isoformat(),
+            'host': host,
+            'active_store': active,
+            'stores': stores_meta,
+            }
+        (staging / MANIFEST_NAME).write_text(
+            json.dumps(manifest, indent=2, sort_keys=True))
+        (staging / ACTIVE_NAME).write_text(active + '\n')
+        (staging / ENV_NONSECRET_NAME).write_text(
+            '\n'.join(f'{k}={v}' for k, v in nonsecret.items()) + '\n')
+
+        with tarfile.open(staged_tar, 'w:gz') as tar:
+            tar.add(staging, arcname='.')
+        fd = os.open(staged_tar, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+        final_tar = target_path / bundle_name
+        try:
+            os.replace(staged_tar, final_tar)
+        except OSError as exc:
+            if exc.errno == errno.EXDEV:
+                shutil.move(str(staged_tar), str(final_tar))
+            else:
+                raise
+        sidecar = target_path / f'{bundle_name}.manifest.json'
+        sidecar.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+        return {
+            'bundle': str(final_tar),
+            'manifest': str(sidecar),
+            'stores': stores_meta,
+            'active_store': active,
+            }
     finally:
-        os.close(fd)
-
-    final_tar = target_path / bundle_name
-    try:
-        os.replace(staged_tar, final_tar)
-    except OSError as exc:
-        if exc.errno == errno.EXDEV:
-            shutil.move(str(staged_tar), str(final_tar))
-        else:
-            raise
-    sidecar = target_path / f'{bundle_name}.manifest.json'
-    sidecar.write_text(json.dumps(manifest, indent=2, sort_keys=True))
-
-    shutil.rmtree(staging, ignore_errors=True)
-    return {
-        'bundle': str(final_tar),
-        'manifest': str(sidecar),
-        'stores': stores_meta,
-        'active_store': active,
-        }
+        shutil.rmtree(staging, ignore_errors=True)
+        if staged_tar.exists():
+            try:
+                staged_tar.unlink()
+            except OSError:
+                pass
 
 
 def prune(target: str, keep: int) -> list[str]:
@@ -311,42 +309,63 @@ def restore(bundle_path: str, data_dir: str) -> dict:
         if nonsecret:
             _write_env_keys(nonsecret, data_dir=data_dir)
 
+        target_env = config.parse_env_file(config.env_file_path(data_dir))
+        host_provider = target_env.get(config.EMBED_PROVIDER)
+        host_model_key = {
+            'voyage': config.VOYAGE_EMBED_MODEL,
+            'openai': config.OPENAI_EMBED_MODEL,
+            'openrouter': config.OPENROUTER_EMBED_MODEL,
+            'ollama': config.OLLAMA_EMBED_MODEL,
+            }.get(host_provider)
+        host_model = target_env.get(host_model_key) if host_model_key else None
+
         restored: list[str] = []
         pg_skipped: list[str] = []
+        failed: list[dict] = []
+        embed_mismatch: list[str] = []
         for entry in manifest.get('stores', []):
             if entry.get('status') == 'failed':
                 continue
             name = entry['name']
             src = extract_root / 'stores' / name
-            if entry.get('backend') == 'postgres':
-                dsn = factory.resolve_store_pg_dsn(name, data_dir)
-                if not dsn or shutil.which('pg_restore') is None:
-                    pg_skipped.append(name)
-                    continue
-                cmd = ['pg_restore', '-d', dsn, str(src / DUMP_FILENAME)]
-                try:
+            try:
+                if entry.get('backend') == 'postgres':
+                    dsn = factory.resolve_store_pg_dsn(name, data_dir)
+                    if not dsn or shutil.which('pg_restore') is None:
+                        pg_skipped.append(name)
+                        continue
+                    cmd = ['pg_restore', '--clean', '--if-exists',
+                           '-d', dsn, str(src / DUMP_FILENAME)]
                     subprocess.run(
                         cmd, check=True, capture_output=True, text=True)
-                except subprocess.CalledProcessError as exc:
-                    raise RuntimeError(
-                        f'pg_restore failed for store {name!r}:'
-                        f' {exc.stderr.strip()}') from exc
-                restored.append(name)
-            else:
-                dst_dir = Path(store_dir(data_dir, name))
-                dst_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src / DB_FILENAME, dst_dir / DB_FILENAME)
-                restored.append(name)
+                else:
+                    dst_dir = Path(store_dir(data_dir, name))
+                    dst_dir.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src / DB_FILENAME, dst_dir / DB_FILENAME)
+            except (OSError, subprocess.CalledProcessError) as exc:
+                stderr = (getattr(exc, 'stderr', '') or '').strip()
+                failed.append({
+                    'store': name,
+                    'error': f'{exc}{f": {stderr}" if stderr else ""}'})
+                logger.warning('restore: store %r failed: %s', name, exc)
+                continue
+            restored.append(name)
+            fp_json = entry.get('embed_fingerprint')
+            if fp_json and host_provider and host_model:
+                fp = Fingerprint.from_json(fp_json)
+                if fp.provider != host_provider or fp.model != host_model:
+                    embed_mismatch.append(name)
 
         active = manifest.get('active_store')
         if active:
             write_active(data_dir, active)
         config.reset_file_cache()
 
-        target_env = config.parse_env_file(config.env_file_path(data_dir))
         return {
             'restored': restored,
+            'failed': failed,
             'pg_restore_skipped': pg_skipped,
+            'embed_mismatch': embed_mismatch,
             'active_store': active,
             'secret_keys_needed': [
                 k for k in sorted(config.SECRET_VARS)

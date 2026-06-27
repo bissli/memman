@@ -36,6 +36,11 @@ class TestCronMatches:
         assert cron_matches('0 0 1 * 5', datetime(2026, 6, 5, 0, 0))
         assert not cron_matches('0 0 1 * 5', datetime(2026, 6, 3, 0, 0))
 
+    def test_month_field_restricts_to_that_month(self):
+        """`0 0 1 6 *` matches June 1 and rejects the same day in May."""
+        assert cron_matches('0 0 1 6 *', datetime(2026, 6, 1, 0, 0))
+        assert not cron_matches('0 0 1 6 *', datetime(2026, 5, 1, 0, 0))
+
     def test_invalid_exprs_raise(self):
         """Bad field count, out-of-range value, and zero step raise."""
         with pytest.raises(ValueError):
@@ -58,6 +63,10 @@ class TestCronToOnCalendar:
         assert (cron_to_oncalendar('0 9 * * 1-5')
                 == 'Mon,Tue,Wed,Thu,Fri *-*-* 09:00:00')
 
+    def test_month_field_renders(self):
+        """A restricted month renders as a zero-padded date component."""
+        assert cron_to_oncalendar('0 0 1 6 *') == '*-06-01 00:00:00'
+
     def test_no_utc_suffix(self):
         """OnCalendar is local time -- never carries a UTC token."""
         assert 'UTC' not in cron_to_oncalendar('0 3 * * *')
@@ -73,6 +82,8 @@ class TestCronToLaunchd:
             'Minute': 30, 'Hour': 2, 'Day': 1}
         assert cron_to_launchd('0 0 * * 0') == {
             'Minute': 0, 'Hour': 0, 'Weekday': 0}
+        assert cron_to_launchd('0 0 1 6 *') == {
+            'Minute': 0, 'Hour': 0, 'Month': 6, 'Day': 1}
 
     def test_multi_value_returns_array(self):
         """A multi-value field expands to a cartesian array of dicts."""

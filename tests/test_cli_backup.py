@@ -156,6 +156,7 @@ class TestMaybeFireBackup:
         from memman.cli import _maybe_fire_backup
 
         _, data_dir = mm_runner
+        monkeypatch.setenv('MEMMAN_SCHEDULER_KIND', 'serve')
         env_file('MEMMAN_BACKUP_CRON', '* * * * *')
         calls: list = []
         monkeypatch.setattr(
@@ -164,3 +165,20 @@ class TestMaybeFireBackup:
         _maybe_fire_backup('/fake/memman', data_dir, now)
         _maybe_fire_backup('/fake/memman', data_dir, now)
         assert len(calls) == 1
+
+    def test_defers_to_native_timer(self, mm_runner, monkeypatch, env_file):
+        """On a systemd host the hook no-ops (the native timer owns backups)."""
+        import subprocess
+
+        from memman.cli import _maybe_fire_backup
+        from memman.setup import scheduler as sched
+
+        _, data_dir = mm_runner
+        monkeypatch.setattr(sched, 'detect_scheduler', lambda: 'systemd')
+        env_file('MEMMAN_BACKUP_CRON', '* * * * *')
+        calls: list = []
+        monkeypatch.setattr(
+            subprocess, 'Popen', lambda *a, **k: calls.append(a))
+        _maybe_fire_backup(
+            '/fake/memman', data_dir, datetime(2026, 6, 27, 3, 0, 0))
+        assert calls == []

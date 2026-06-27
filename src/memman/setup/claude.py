@@ -322,6 +322,13 @@ def run_uninstall(data_dir: str, target: str = '') -> None:
     """Remove memman integration. Called by the `memman uninstall` command."""
     _validate_target(target)
     envs = detect_environments()
+    print('\n[backup]')
+    try:
+        backup_result = uninstall_backup(data_dir=data_dir)
+        for action in backup_result.get('actions', []):
+            status_ok(backup_result['platform'], action)
+    except RuntimeError:
+        pass
     _run_uninstall_flow(envs, target=target, data_dir=data_dir)
 
 
@@ -422,11 +429,6 @@ def _run_uninstall_flow(envs: list[dict], target: str,
     result = uninstall_scheduler(data_dir=data_dir)
     for action in result.get('actions', []):
         status_ok(result['platform'], action)
-
-    print('\n[backup]')
-    backup_result = uninstall_backup(data_dir=data_dir)
-    for action in backup_result.get('actions', []):
-        status_ok(backup_result['platform'], action)
 
     print()
     print('Done! All detected integrations removed.')

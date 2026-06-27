@@ -34,59 +34,54 @@ _DOW_ORDER: tuple[tuple[int, str], ...] = (
     )
 
 
-def _expand_field(spec: str, lo: int, hi: int) -> set[int]:
-    """Expand one cron field into the explicit set of matching ints.
-
-    Raises ValueError on an out-of-range value, an inverted range, a
-    non-positive step, or a non-integer token.
-    """
-    result: set[int] = set()
-    for part in spec.split(','):
-        part = part.strip()
-        if not part:
-            raise ValueError(f'empty field part in {spec!r}')
-        step = 1
-        base = part
-        if '/' in part:
-            base, _, step_str = part.partition('/')
-            try:
-                step = int(step_str)
-            except ValueError:
-                raise ValueError(f'invalid step {step_str!r} in {spec!r}')
-            if step <= 0:
-                raise ValueError(f'step must be positive in {spec!r}')
-        if base == '*':
-            start, end = lo, hi
-        elif '-' in base:
-            start_str, _, end_str = base.partition('-')
-            try:
-                start, end = int(start_str), int(end_str)
-            except ValueError:
-                raise ValueError(f'invalid range {base!r} in {spec!r}')
-        else:
-            try:
-                start = end = int(base)
-            except ValueError:
-                raise ValueError(f'invalid value {base!r} in {spec!r}')
-        if start < lo or end > hi or start > end:
-            raise ValueError(
-                f'value out of range in {spec!r} (bounds {lo}-{hi})')
-        result.update(range(start, end + 1, step))
-    return result
-
-
 def _parse(expr: str) -> tuple[set[int], set[int], set[int], set[int], set[int]]:
     """Split `expr` into 5 expanded sets; normalize dow `7` to `0`.
 
     Raises ValueError when the field count is not exactly 5 or any
-    field fails to expand.
+    field fails to expand (out-of-range value, inverted range,
+    non-positive step, or non-integer token).
     """
+    def expand(spec: str, lo: int, hi: int) -> set[int]:
+        result: set[int] = set()
+        for part in spec.split(','):
+            part = part.strip()
+            if not part:
+                raise ValueError(f'empty field part in {spec!r}')
+            step = 1
+            base = part
+            if '/' in part:
+                base, _, step_str = part.partition('/')
+                try:
+                    step = int(step_str)
+                except ValueError:
+                    raise ValueError(f'invalid step {step_str!r} in {spec!r}')
+                if step <= 0:
+                    raise ValueError(f'step must be positive in {spec!r}')
+            if base == '*':
+                start, end = lo, hi
+            elif '-' in base:
+                start_str, _, end_str = base.partition('-')
+                try:
+                    start, end = int(start_str), int(end_str)
+                except ValueError:
+                    raise ValueError(f'invalid range {base!r} in {spec!r}')
+            else:
+                try:
+                    start = end = int(base)
+                except ValueError:
+                    raise ValueError(f'invalid value {base!r} in {spec!r}')
+            if start < lo or end > hi or start > end:
+                raise ValueError(
+                    f'value out of range in {spec!r} (bounds {lo}-{hi})')
+            result.update(range(start, end + 1, step))
+        return result
+
     fields = expr.split()
     if len(fields) != 5:
         raise ValueError(
             f'cron expr must have 5 fields, got {len(fields)}: {expr!r}')
     minute, hour, dom, month, dow = (
-        _expand_field(spec, lo, hi)
+        expand(spec, lo, hi)
         for spec, (lo, hi) in zip(fields, _FIELD_BOUNDS))
     if 7 in dow:
         dow = (dow - {7}) | {0}
