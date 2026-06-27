@@ -1,0 +1,170 @@
+"""Unit tests for memman.backup core (snapshot, bundle, restore)."""
+
+import json
+import os
+import sqlite3
+import tarfile
+from pathlib import Path
+
+import pytest
+from memman import config
+from memman.backup import build_bundle, restore, snapshot_sqlite
+from memman.embed.fingerprint import Fingerprint, write_fingerprint
+from memman.store.db import read_active, store_dir, write_active
+from memman.store.sqlite import open_sqlite_backend
+from tests.conftest import make_insight
+
+_FP = Fingerprint('voyage', 'voyage-3-lite', 512)
+
+
+def _data_dir() -> str:
+    return os.environ['MEMMAN_DATA_DIR']
+
+
+def _seed_store(data_dir: str, store: str = 'default', n: int = 3) -> None:
+    """Materialize a sqlite store with a fingerprint and `n` insights."""
+    backend = open_sqlite_backend(store, data_dir)
+    write_fingerprint(backend, _FP)
+    for i in range(n):
+        backend.nodes.insert(
+            make_insight(id=f'{store}-{i}', content=f'memory {i}'))
+    backend.close()
+    write_active(data_dir, store)
+
+
+class TestSnapshotSqlite:
+    """Online sqlite snapshot fidelity."""
+
+    def test_row_count_parity(self):
+        """The snapshot copy has the same insight count as the source."""
+        data_dir = _data_dir()
+        _seed_store(data_dir, 'default', n=3)
+        dst = Path(data_dir) / 'snap.db'
+        snapshot_sqlite('default', data_dir, dst)
+        conn = sqlite3.connect(str(dst))
+        count = conn.execute('select count(*) from insights').fetchone()[0]
+        conn.close()
+        assert count == 3
+
+    def test_succeeds_with_open_writer_connection(self):
+        """Snapshot works while a live backend connection stays open."""
+        data_dir = _data_dir()
+        backend = open_sqlite_backend('default', data_dir)
+        write_fingerprint(backend, _FP)
+        backend.nodes.insert(make_insight(id='a', content='live'))
+        write_active(data_dir, 'default')
+        dst = Path(data_dir) / 'snap_live.db'
+        snapshot_sqlite('default', data_dir, dst)
+        backend.close()
+        conn = sqlite3.connect(str(dst))
+        count = conn.execute('select count(*) from insights').fetchone()[0]
+        conn.close()
+        assert count == 1
+
+
+class TestBuildBundle:
+    """Bundle assembly: atomicity, contents, secret exclusion."""
+
+    def test_atomic_and_complete(self, tmp_path):
+        """A successful bundle leaves no staging and contains every member."""
+        data_dir = _data_dir()
+        _seed_store(data_dir, 'default', n=2)
+        target = tmp_path / 'archive'
+        result = build_bundle(data_dir, str(target))
+        bundle = Path(result['bundle'])
+        assert bundle.exists()
+        incoming = target / '.memman-incoming'
+        assert list(incoming.iterdir()) == []
+        with tarfile.open(bundle) as tar:
+            names = set(tar.getnames())
+        assert './manifest.json' in names
+        assert './active' in names
+        assert './env.nonsecret' in names
+        assert './stores/default/memman.db' in names
+
+    def test_secret_keys_excluded(self, tmp_path, env_file):
+        """env.nonsecret keeps per-store backend but strips every secret."""
+        data_dir = _data_dir()
+        _seed_store(data_dir, 's1', n=1)
+        env_file('MEMMAN_BACKEND_s1', 'sqlite')
+        env_file('MEMMAN_POSTGRES_DSN_s1', 'postgresql://u:pw@h/db')
+        target = tmp_path / 'archive_sec'
+        result = build_bundle(data_dir, str(target))
+        with tarfile.open(result['bundle']) as tar:
+            env_text = tar.extractfile('./env.nonsecret').read().decode()
+        assert 'MEMMAN_BACKEND_s1=sqlite' in env_text
+        assert 'MEMMAN_POSTGRES_DSN_s1' not in env_text
+        assert 'MEMMAN_OPENROUTER_API_KEY' not in env_text
+        assert 'MEMMAN_VOYAGE_API_KEY' not in env_text
+
+    def test_manifest_records_parseable_fingerprint(self, tmp_path):
+        """The manifest's per-store fingerprint parses back to a Fingerprint."""
+        data_dir = _data_dir()
+        _seed_store(data_dir, 'default', n=1)
+        target = tmp_path / 'archive_fp'
+        build_bundle(data_dir, str(target))
+        sidecar = next(target.glob('*.manifest.json'))
+        manifest = json.loads(sidecar.read_text())
+        entry = manifest['stores'][0]
+        assert entry['backend'] == 'sqlite'
+        assert Fingerprint.from_json(entry['embed_fingerprint']).dim == 512
+
+
+class TestRestore:
+    """Restore rebuilds stores + config and reports secrets to re-enter."""
+
+    def test_round_trip_into_fresh_dir(self, tmp_path):
+        """Restoring into an empty dir recreates the store and active pointer."""
+        data_dir = _data_dir()
+        _seed_store(data_dir, 'default', n=4)
+        target = tmp_path / 'archive_rt'
+        bundle = build_bundle(data_dir, str(target))['bundle']
+        fresh = str(tmp_path / 'fresh')
+        result = restore(bundle, fresh)
+        assert result['active_store'] == 'default'
+        assert 'default' in result['restored']
+        db_path = Path(store_dir(fresh, 'default')) / 'memman.db'
+        conn = sqlite3.connect(str(db_path))
+        count = conn.execute('select count(*) from insights').fetchone()[0]
+        conn.close()
+        assert count == 4
+        assert read_active(fresh) == 'default'
+
+    def test_reports_missing_secrets(self, tmp_path):
+        """A fresh restore lists secret keys the operator must re-enter."""
+        data_dir = _data_dir()
+        _seed_store(data_dir, 'default', n=1)
+        target = tmp_path / 'archive_sec2'
+        bundle = build_bundle(data_dir, str(target))['bundle']
+        result = restore(bundle, str(tmp_path / 'fresh2'))
+        assert config.VOYAGE_API_KEY in result['secret_keys_needed']
+
+    def test_preserves_existing_host_secret(self, tmp_path):
+        """Restore merges non-secret config without clobbering host secrets."""
+        from memman.setup.scheduler import _write_env_keys
+
+        data_dir = _data_dir()
+        _seed_store(data_dir, 'default', n=1)
+        target = tmp_path / 'archive_keep'
+        bundle = build_bundle(data_dir, str(target))['bundle']
+        fresh = str(tmp_path / 'fresh3')
+        _write_env_keys(
+            {config.VOYAGE_API_KEY: 'host-secret'}, data_dir=fresh)
+        restore(bundle, fresh)
+        env = config.parse_env_file(config.env_file_path(fresh))
+        assert env[config.VOYAGE_API_KEY] == 'host-secret'
+
+    def test_rejects_unknown_format_version(self, tmp_path):
+        """A bundle with a newer format_version is refused."""
+        staging = tmp_path / 'staging'
+        staging.mkdir()
+        (staging / 'manifest.json').write_text(json.dumps({
+            'format_version': 999, 'stores': [],
+            'active_store': 'default'}))
+        (staging / 'active').write_text('default\n')
+        (staging / 'env.nonsecret').write_text('\n')
+        bundle = tmp_path / 'bad.tar.gz'
+        with tarfile.open(bundle, 'w:gz') as tar:
+            tar.add(staging, arcname='.')
+        with pytest.raises(RuntimeError):
+            restore(str(bundle), str(tmp_path / 'out'))
