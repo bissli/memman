@@ -90,6 +90,7 @@ NanoClaw moves the hot-path boundary into the container. Agent and worker share 
 - **Retention lifecycle** — importance decay, access-count boosting, immunity rules, garbage collection.
 - **Pluggable embeddings, per-store sovereignty** — registered providers include `voyage`, `openai` (any OpenAI-compatible endpoint: OpenAI, vLLM, LiteLLM, ...), `openrouter`, and `ollama`. Each store's `meta.embed_fingerprint` is the runtime authority over its embedder, so one process can serve multiple stores with different embedders. Switch online via `memman embed swap` or offline via `memman embed reembed`.
 - **Pluggable storage backend** — SQLite by default; Postgres + pgvector via the `memman[postgres]` extra. `memman migrate` copies a store between backends in a single command (idempotent, drain-lock-guarded, dry-run support).
+- **External scheduled backups** — `memman backup schedule '<cron>' <dir>` snapshots every store to an external, durable directory (e.g. a Dropbox path) on a cron schedule, online and non-disruptively, with keep-last-N retention. Secrets are excluded from bundles; `memman backup restore` rebuilds a working store after total loss of `~/.memman/`. See [USAGE.md § Backup](docs/USAGE.md#backup).
 
 ## Install
 

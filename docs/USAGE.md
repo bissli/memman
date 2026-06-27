@@ -303,6 +303,36 @@ A stale row is a pending entry claimed more than `STALE_CLAIM_SECONDS` ago (defa
 
 When the scheduler is stopped, memman is recall-only: every write exits 1 with `Scheduler is stopped; cannot <verb>`. The `serve` loop polls the state file every iteration, so pause is observed within seconds even mid-drain.
 
+### Backup
+
+`memman backup` snapshots every store to an **external, durable directory** (e.g. a Dropbox path) on a cron schedule, rotates old bundles, and can rebuild a working store after total loss of `~/.memman/`. Bundles are written **only** to the target directory, never into `~/.memman/` (which is per-host and disposable, so an in-place archive dies with it). Snapshots are online and non-disruptive — the enrichment worker keeps draining (SQLite via the `sqlite3` online-backup API, Postgres via `pg_dump -Fc`), so no scheduler stop is needed.
+
+```bash
+memman backup run [TARGET]                        # build one bundle now (TARGET or MEMMAN_BACKUP_TARGET)
+memman backup schedule '<cron>' TARGET [--keep N] # install a scheduled backup (cron -> native scheduler)
+memman backup unschedule                          # remove the scheduled backup trigger (keeps env config)
+memman backup list [TARGET]                        # list bundles at TARGET (read from sidecar manifests)
+memman backup status                               # cron, target, keep, last fire, next run, latest bundle
+memman backup restore BUNDLE [--yes]               # rebuild stores + non-secret config from a bundle
+```
+
+The cron string is a 5-field expression (`min hour dom month dow`, interpreted in local time) and is translated to the host's native scheduler at install time: systemd `OnCalendar=` (+`Persistent=true` for sleep/power-off catch-up), launchd `StartCalendarInterval`, or an in-process matcher in `serve` mode. The target directory is created if it does not exist. Retention keeps the newest `MEMMAN_BACKUP_KEEP` bundles (default 7).
+
+Each bundle is one atomic `.tar.gz` plus an uncompressed sidecar `<bundle>.manifest.json` (for cheap `list`). A failing store is recorded with `status="failed"` in the manifest and never aborts the whole bundle.
+
+**Secrets are excluded.** API keys, the default Postgres DSN, and every per-store `MEMMAN_POSTGRES_DSN_<store>` are stripped from the bundle's `env.nonsecret` member; per-store backend selection and model/provider/threshold knobs are kept. On `restore`, the non-secret config is merged first (so per-store backend routing is in place), each store is written by its manifest `backend` (SQLite file copy, or `pg_restore` resolving the DSN on the target host), and the active-store pointer is restored. `restore` holds the shared `drain.lock` and reports `secret_keys_needed` (re-enter these on the host), `pg_restore_skipped` (postgres stores with no DSN configured here), `embed_mismatch` (stores whose fingerprint differs from the restored embedding config), and any `failed` stores.
+
+```bash
+# A daily 03:00 backup to a Dropbox archive
+memman backup schedule '0 3 * * *' ~/Dropbox/code/archive/
+memman backup status                               # confirm next run + installed timer
+
+# Restore after losing ~/.memman (re-enter secrets afterward, per secret_keys_needed)
+memman backup restore ~/Dropbox/code/archive/memman-backup-<host>-<stamp>.tar.gz --yes
+```
+
+`memman uninstall` tears down the backup timer/agent alongside the enrichment scheduler; the `MEMMAN_BACKUP_*` env keys are kept so a later `memman backup schedule` resurrects the configuration.
+
 ---
 
 ## Configuration
