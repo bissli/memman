@@ -46,6 +46,7 @@ logger = logging.getLogger('memman')
 
 BACKUP_FORMAT_VERSION = 1
 DB_FILENAME = 'memman.db'
+QUEUE_FILENAME = 'queue.db'
 DUMP_FILENAME = 'dump.pgdump'
 MANIFEST_NAME = 'manifest.json'
 ENV_NONSECRET_NAME = 'env.nonsecret'
@@ -61,15 +62,15 @@ _HOST_LOCAL_KEYS = frozenset({
     config.BACKUP_CRON, config.BACKUP_TARGET, config.BACKUP_KEEP})
 
 
-def snapshot_sqlite(store: str, data_dir: str, dst_db_path: Path) -> None:
-    """Copy a store's SQLite DB to `dst_db_path` via the online backup API.
+def _online_copy(src_db_path: str, dst_db_path: Path) -> None:
+    """Copy a live sqlite DB to `dst_db_path` via the online backup API.
 
-    Uses `sqlite3.Connection.backup`, which is consistent against a
-    live writer, so no scheduler stop or drain lock is required. Opens
-    the source read-only and does NOT run migrations (unlike `open_db`).
+    Uses `sqlite3.Connection.backup`, consistent against a live writer
+    (no scheduler stop / drain lock). Opens the source read-only and
+    leaves the copy as a clean single file (`journal_mode=DELETE`
+    removes the destination -wal/-shm).
     """
-    src_db = os.path.join(store_dir(data_dir, store), DB_FILENAME)
-    src = sqlite3.connect(f'file:{src_db}?mode=ro', uri=True)
+    src = sqlite3.connect(f'file:{src_db_path}?mode=ro', uri=True)
     try:
         dst = sqlite3.connect(str(dst_db_path))
         try:
@@ -79,6 +80,16 @@ def snapshot_sqlite(store: str, data_dir: str, dst_db_path: Path) -> None:
             dst.close()
     finally:
         src.close()
+
+
+def snapshot_sqlite(store: str, data_dir: str, dst_db_path: Path) -> None:
+    """Copy a store's SQLite DB to `dst_db_path` via the online backup API.
+
+    Does NOT run migrations (unlike `open_db`); the source is opened
+    read-only.
+    """
+    _online_copy(
+        os.path.join(store_dir(data_dir, store), DB_FILENAME), dst_db_path)
 
 
 def snapshot_postgres(store: str, dsn: str, dst_dump_path: Path) -> None:
@@ -105,6 +116,12 @@ def build_bundle(data_dir: str, target: str) -> dict[str, Any]:
     never aborts the whole bundle. The bundle is staged under
     `<target>/.memman-incoming/` and atomically published; a sidecar
     `<bundle>.manifest.json` is written alongside for cheap listing.
+
+    The write queue (`queue.db`) is snapshotted BEFORE the store DBs:
+    any queue row marked done in that copy had its insight committed
+    before the later store snapshots (so it is present), while
+    pending/claimed rows simply re-drain idempotently on the restored
+    host -- so a not-yet-drained `remember` is never lost.
     """
     target_path = Path(os.path.expanduser(target))
     target_path.mkdir(parents=True, exist_ok=True)
@@ -131,6 +148,23 @@ def build_bundle(data_dir: str, target: str) -> dict[str, Any]:
             for prefix, _validator, secret in config.PER_STORE_KEY_SPECS)
 
     try:
+        queue_pending: int | None = 0
+        queue_src = os.path.join(data_dir, QUEUE_FILENAME)
+        if os.path.exists(queue_src):
+            try:
+                _online_copy(queue_src, staging / QUEUE_FILENAME)
+                with contextlib.closing(sqlite3.connect(
+                        f'file:{staging / QUEUE_FILENAME}?mode=ro',
+                        uri=True)) as queue_conn:
+                    row = queue_conn.execute(
+                        "select count(*) from queue"
+                        " where status = 'pending'").fetchone()
+                queue_pending = row[0] if row else 0
+            except sqlite3.Error as exc:
+                (staging / QUEUE_FILENAME).unlink(missing_ok=True)
+                queue_pending = None
+                logger.warning('backup: queue.db snapshot failed: %s', exc)
+
         stores_meta: list[dict[str, Any]] = []
         for store in factory.list_stores(data_dir):
             backend_kind = factory.resolve_store_backend(store, data_dir)
@@ -185,6 +219,7 @@ def build_bundle(data_dir: str, target: str) -> dict[str, Any]:
             'created_at_utc': created.isoformat(),
             'host': host,
             'active_store': active,
+            'queue_pending': queue_pending,
             'stores': stores_meta,
             }
         (staging / MANIFEST_NAME).write_text(
@@ -366,6 +401,20 @@ def restore(bundle_path: str, data_dir: str) -> dict[str, Any]:
                 if fp.provider != host_provider or fp.model != host_model:
                     embed_mismatch.append(name)
 
+        queue_member = extract_root / QUEUE_FILENAME
+        queue_restored = False
+        if queue_member.exists() and manifest.get('queue_pending') is not None:
+            dst_queue = Path(data_dir) / QUEUE_FILENAME
+            dst_queue.parent.mkdir(parents=True, exist_ok=True)
+            tmp_queue = dst_queue.parent / (QUEUE_FILENAME + '.tmp')
+            try:
+                shutil.copy2(queue_member, tmp_queue)
+                os.replace(tmp_queue, dst_queue)
+            except OSError:
+                tmp_queue.unlink(missing_ok=True)
+                raise
+            queue_restored = True
+
         active = manifest.get('active_store')
         if active:
             write_active(data_dir, active)
@@ -376,6 +425,7 @@ def restore(bundle_path: str, data_dir: str) -> dict[str, Any]:
             'failed': failed,
             'pg_restore_skipped': pg_skipped,
             'embed_mismatch': embed_mismatch,
+            'queue_restored': queue_restored,
             'active_store': active,
             'secret_keys_needed': [
                 k for k in sorted(config.SECRET_VARS)

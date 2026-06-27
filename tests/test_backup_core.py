@@ -121,6 +121,53 @@ class TestBuildBundle:
         assert 'disk full' in by_name['bad']['error']
         assert Path(result['bundle']).exists()
 
+    def test_queue_captured_and_restored(self, tmp_path):
+        """Pending queue rows are snapshotted into the bundle and restored."""
+        import sqlite3 as _sq
+
+        from memman.queue import enqueue, queue_db, queue_db_path
+
+        data_dir = _data_dir()
+        _seed_store(data_dir, 'default', n=1)
+        with queue_db(data_dir) as conn:
+            enqueue(conn, 'default', 'a pending memory')
+        target = tmp_path / 'archive_q'
+        result = build_bundle(data_dir, str(target))
+        with tarfile.open(result['bundle']) as tar:
+            assert './queue.db' in tar.getnames()
+        manifest = json.loads(next(target.glob('*.manifest.json')).read_text())
+        assert manifest['queue_pending'] == 1
+
+        fresh = str(tmp_path / 'fresh_q')
+        res = restore(result['bundle'], fresh)
+        assert res['queue_restored'] is True
+        conn = _sq.connect(queue_db_path(fresh))
+        pending = conn.execute(
+            "select count(*) from queue where status = 'pending'").fetchone()[0]
+        conn.close()
+        assert pending == 1
+
+    def test_queue_snapshotted_before_stores(self, tmp_path, monkeypatch):
+        """queue.db is copied before any store DB (the loss-safety ordering)."""
+        import memman.backup as backup_mod
+        from memman.queue import enqueue, queue_db
+
+        data_dir = _data_dir()
+        _seed_store(data_dir, 'default', n=1)
+        with queue_db(data_dir) as conn:
+            enqueue(conn, 'default', 'pending')
+        order: list = []
+        real = backup_mod._online_copy
+
+        def recording(src, dst):
+            order.append(Path(dst).name)
+            real(src, dst)
+
+        monkeypatch.setattr(backup_mod, '_online_copy', recording)
+        build_bundle(data_dir, str(tmp_path / 'archive_ord'))
+        assert order[0] == 'queue.db'
+        assert 'memman.db' in order[1:]
+
     def test_host_local_backup_keys_excluded(self, tmp_path, env_file):
         """BACKUP_CRON/TARGET/KEEP are host-local and stay out of the bundle."""
         data_dir = _data_dir()
@@ -221,6 +268,19 @@ class TestRestore:
         bundle = build_bundle(data_dir, str(tmp_path / 'archive_em'))['bundle']
         result = restore(bundle, str(tmp_path / 'fresh_em'))
         assert 'default' in result['embed_mismatch']
+
+    def test_restore_bundle_without_queue(self, tmp_path):
+        """An older v1 bundle with no queue.db restores cleanly (no crash)."""
+        staging = tmp_path / 'st_nq'
+        staging.mkdir()
+        (staging / 'manifest.json').write_text(json.dumps({
+            'format_version': 1, 'stores': [], 'active_store': 'default'}))
+        (staging / 'env.nonsecret').write_text('\n')
+        bundle = tmp_path / 'noqueue.tar.gz'
+        with tarfile.open(bundle, 'w:gz') as tar:
+            tar.add(staging, arcname='.')
+        res = restore(str(bundle), str(tmp_path / 'out_nq'))
+        assert res['queue_restored'] is False
 
     def test_rejects_unknown_format_version(self, tmp_path):
         """A bundle with a newer format_version is refused."""

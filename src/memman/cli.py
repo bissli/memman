@@ -14,7 +14,9 @@ import re
 import sqlite3
 import sys
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from typing import Self
 from urllib.parse import quote
 
 import click
@@ -26,7 +28,6 @@ from memman.store.db import store_exists, valid_store_name, write_active
 from memman.store.factory import known_backends, list_stores
 
 _BACKEND_CHOICES = sorted(known_backends())
-from typing import Self
 
 from memman.embed import SUPPORTED_EMBED_PROVIDERS as _EMBED_PROVIDER_CHOICES
 from memman.store.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge
@@ -623,17 +624,23 @@ def scheduler_drain(ctx: click.Context, limit: int,
     _drain_queue(ctx, limit, timeout, stores, progress)
 
 
-def _maybe_fire_backup(data_dir: str, now: datetime) -> None:
+def _maybe_fire_backup(
+        data_dir: str, now: datetime,
+        settle: Callable[[], None] | None = None) -> None:
     """Run a backup in-process when the cron matches this minute (serve only).
 
     Serve-mode only: on systemd/launchd hosts the native backup timer
     owns scheduled backups, so this defers to it (preventing a
     double-fire if a serve loop also runs there). Once-per-minute and
-    restart-safe via ~/.memman/backup.state. The backup runs inline
-    (build_bundle is local-disk-bound; cloud sync of the target is
-    asynchronous), so the matched minute is claimed before the run and
-    a failure is logged rather than retried mid-minute. No drain.lock
-    is taken -- the online snapshot is non-disruptive.
+    restart-safe via ~/.memman/backup.state, which is stamped only
+    after a successful run so a transient failure retries on the next
+    iteration rather than being suppressed for the whole minute. When
+    firing, `settle` (if given) drains the queue to empty so the
+    snapshot captures a settled store; the bundle also includes
+    queue.db, so residual pending writes are preserved regardless. The
+    backup runs inline (build_bundle is local-disk-bound; cloud sync of
+    the target is async). No drain.lock is taken -- the snapshot is
+    online.
     """
     from memman.setup.scheduler import SCHEDULER_KIND_SERVE, detect_scheduler
     from memman.setup.scheduler import read_backup_state, write_backup_state
@@ -651,10 +658,12 @@ def _maybe_fire_backup(data_dir: str, now: datetime) -> None:
     minute_key = now.strftime('%Y-%m-%dT%H:%M')
     if read_backup_state() == minute_key:
         return
-    write_backup_state(minute_key)
+    if settle is not None:
+        settle()
     from memman.backup import run_backup
     try:
         run_backup(data_dir)
+        write_backup_state(minute_key)
     except Exception as exc:
         logger.warning('scheduler serve: backup failed: %s', exc)
 
@@ -736,6 +745,15 @@ def scheduler_serve(ctx: click.Context, interval: int | None,
 
         per_drain_timeout = max(10, interval - 10) if interval > 0 else 300
 
+        def _settle_queue() -> None:
+            """Drain the queue to empty before a backup (bounded)."""
+            for _ in range(50):
+                drained = _drain_queue(
+                    ctx, limit=100, timeout=per_drain_timeout,
+                    stores_filter='', verbose=False)
+                if not drained or drained.get('claimed', 0) == 0:
+                    return
+
         while True:
             config.reset_file_cache()
             if read_state() == STATE_STOPPED:
@@ -744,7 +762,8 @@ def scheduler_serve(ctx: click.Context, interval: int | None,
             result = _drain_queue(
                 ctx, limit=100, timeout=per_drain_timeout,
                 stores_filter='', verbose=False)
-            _maybe_fire_backup(data_dir_val, datetime.now())
+            _maybe_fire_backup(
+                data_dir_val, datetime.now(), settle=_settle_queue)
             if _stop_requested() or once:
                 break
             if interval > 0:

@@ -183,6 +183,23 @@ class TestMaybeFireBackup:
         _maybe_fire_backup(data_dir, now)
         assert len(calls) == 1
 
+    def test_settle_runs_before_backup(
+            self, mm_runner, fake_home, monkeypatch, env_file):
+        """When firing, the settle hook (queue drain) runs before the backup."""
+        import memman.backup as backup_mod
+        from memman.cli import _maybe_fire_backup
+
+        _, data_dir = mm_runner
+        monkeypatch.setenv('MEMMAN_SCHEDULER_KIND', 'serve')
+        env_file('MEMMAN_BACKUP_CRON', '* * * * *')
+        order: list = []
+        monkeypatch.setattr(
+            backup_mod, 'run_backup', lambda dd: order.append('backup'))
+        _maybe_fire_backup(
+            data_dir, datetime(2026, 6, 27, 3, 0, 0),
+            settle=lambda: order.append('settle'))
+        assert order == ['settle', 'backup']
+
     def test_defers_to_native_timer(self, mm_runner, monkeypatch, env_file):
         """On a systemd host the hook no-ops (the native timer owns backups)."""
         import memman.backup as backup_mod
