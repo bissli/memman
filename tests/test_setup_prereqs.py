@@ -64,11 +64,22 @@ class TestPrereqs:
             setup_claude.run_install(data_dir=str(tmp_path))
 
     def test_uninstall_skips_prereq_checks(self, monkeypatch, tmp_path):
-        """run_uninstall must not require API keys or platform detection."""
+        """run_uninstall must not require API keys or platform detection.
+
+        `uninstall_backup` MUST be stubbed here: unstubbed it runs a
+        real `systemctl --user stop/disable memman-backup.timer`,
+        unlinks the HOST'S real backup unit files under
+        `~/.config/systemd/user/`, and clears the real
+        `~/.memman/backup.state` — silently disarming the nightly
+        backup on every full test run.
+        """
         monkeypatch.setattr(setup_claude, 'detect_scheduler', lambda: '')
         monkeypatch.setattr(setup_claude, 'detect_environments', list)
         monkeypatch.setattr(
             setup_claude, 'uninstall_scheduler',
+            lambda data_dir=None: {'platform': 'unknown', 'actions': []})
+        monkeypatch.setattr(
+            setup_claude, 'uninstall_backup',
             lambda data_dir=None: {'platform': 'unknown', 'actions': []})
         setup_claude.run_uninstall(data_dir=str(tmp_path))
 
