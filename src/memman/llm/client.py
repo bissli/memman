@@ -50,6 +50,8 @@ _ROLE_ENV_VARS = {
 FAST_MAX_TOKENS = 1024
 WORKER_MAX_TOKENS = 4096
 
+EMPTY_RETRY_DELAY = 0.1
+
 # Per-role output budget + read timeout. `fast` is the recall hot
 # path and stays tight. The worker roles emit JSON that scales with
 # input size (canonical rewrite, enrichment entity/keyword lists);
@@ -101,11 +103,33 @@ class MemmanLLMClient:
 
     def complete(self, system: str, user: str, *,
                  temperature: float | None = None) -> str:
-        """Send a chat-completion request.
+        """Send a chat-completion request and return the message content.
 
-        `temperature`: pass a float (typically 0.0) to pin sampling and
-        get deterministic outputs across runs. When None, the provider's
-        default temperature is used.
+        Parameters
+        ----------
+        system : str
+            System prompt.
+        user : str
+            User prompt.
+        temperature : float | None, default None
+            Pass a float (typically 0.0) to pin sampling and get
+            deterministic outputs across runs; None uses the provider's
+            default.
+
+        Returns
+        -------
+        str
+            The first choice's `message.content`.
+
+        Notes
+        -----
+        - Retries up to `MAX_RETRIES` attempts. Retryable HTTP statuses
+          sleep `RETRY_BACKOFF`; an empty body (missing or empty
+          `choices`, or empty / whitespace-only / null `content`)
+          retries after `EMPTY_RETRY_DELAY` and raises `RuntimeError`
+          when every attempt is empty.
+        - A structurally malformed response (missing `message.content`)
+          raises immediately; it does not self-heal.
         """
         headers: dict[str, str] = {'Content-Type': 'application/json'}
         if self.api_key:
@@ -156,22 +180,57 @@ class MemmanLLMClient:
                     continue
                 raise
             data = resp.json()
+            choices = data.get('choices') or []
+            empty_kind = ''
+            content = None
+            if not choices:
+                empty_kind = 'empty_choices'
+            else:
+                try:
+                    content = choices[0]['message']['content']
+                except (KeyError, TypeError) as exc:
+                    trace.event(
+                        'llm_response',
+                        endpoint=self.endpoint,
+                        status=resp.status_code,
+                        elapsed_ms=elapsed_ms,
+                        body=data)
+                    raise RuntimeError(
+                        f'llm response missing message.content'
+                        f' ({exc}): {data!r}') from exc
+                if content is None or (isinstance(content, str)
+                                       and not content.strip()):
+                    empty_kind = 'empty_content'
+            if not empty_kind:
+                trace.event(
+                    'llm_response',
+                    endpoint=self.endpoint,
+                    status=resp.status_code,
+                    elapsed_ms=elapsed_ms,
+                    body=data)
+                return content
             trace.event(
                 'llm_response',
                 endpoint=self.endpoint,
                 status=resp.status_code,
                 elapsed_ms=elapsed_ms,
-                body=data)
-            choices = data.get('choices') or []
-            if not choices:
-                raise RuntimeError(
-                    f'llm returned no choices: {data!r}')
-            try:
-                return choices[0]['message']['content']
-            except (KeyError, TypeError) as exc:
-                raise RuntimeError(
-                    f'llm response missing message.content'
-                    f' ({exc}): {data!r}') from exc
+                body=data,
+                error=empty_kind)
+            if attempt < MAX_RETRIES - 1:
+                logger.debug(
+                    f'llm {empty_kind}, retry'
+                    f' {attempt + 1}/{MAX_RETRIES - 1}')
+                # Notes:
+                # - An empty body is a flaky-endpoint blip, not rate
+                #   limiting, so RETRY_BACKOFF does not apply: its
+                #   (1.0, 2.0, 4.0) of sleep is charged against the
+                #   60 s drain timeout whose maintenance pass needs
+                #   ~30 s.
+                time.sleep(EMPTY_RETRY_DELAY)
+                continue
+            raise RuntimeError(
+                f'llm returned {empty_kind} after'
+                f' {MAX_RETRIES} attempts: {data!r}')
 
 
 _ROLE_CACHE: dict[str, MemmanLLMClient] = {}
