@@ -276,7 +276,7 @@ create table if not exists meta (
 # Never hardcode the filename at a call site: the script gets renamed
 # (kept as generic rebuild machinery) after each migration and a
 # literal would point at a file that no longer exists.
-MIGRATION_SCRIPT = 'scripts/migrate_0180.py'
+MIGRATION_SCRIPT = 'scripts/rebuild_schema.py'
 
 
 def _migrate(db: DB) -> None:

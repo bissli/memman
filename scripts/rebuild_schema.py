@@ -1,29 +1,25 @@
 #!/usr/bin/env python3
-r"""One-off 0.17.3 -> 0.18.0 store rebuild with data repair.
+r"""Whole-store schema rebuild via gather -> repair -> apply.
 
 Rebuilds every SQLite store through `SqliteMigrator.gather()` ->
-`repair_payload()` -> `apply()`, migrating the insights schema to the
-0.18.0 shape (`session_id` / `queue_uuid`) and applying three one-off
-repairs:
+`repair_payload()` -> `apply()`, bringing the insights schema to the
+current baseline. Retained from the 0.18.0 migration as the only
+implementation of this machinery; the one-off 0.18.0 data repairs
+(provenance backfill, backbone-to-proximity conversion) ran once and
+were removed. `repair_payload` keeps only the STRUCTURAL orphan
+filter -- gather selects every edge with no join, and an edge missing
+a live endpoint would hit the FK-checked insert after the store was
+already archived away.
 
-1. provenance -- `source like 'queue:%'` backfilled to `'user'`
-2. backbone   -- temporal backbone edges within the 4 h window are
-   converted to proximity edges; pairs beyond it are dropped as
-   false adjacency (decision 2026-08-04)
-3. orphans    -- edges missing a live endpoint are dropped (FK
-   enforcement would reject them at insert, after the store was
-   already archived)
-
-Throwaway by design: the repairs run once against pre-0.18.0 data and
-must never re-run against a migrated store (guard 2 below). After the
-migration the script is retained as `scripts/rebuild_schema.py` with
-the `repair_payload` body reduced to the orphan filter.
+A future schema change reuses this script wholesale: bump the payload
+version it asserts, adjust guard 2's column probe to the new columns,
+and put any new one-off repairs in `repair_payload`.
 
 Usage
 -----
-    python scripts/migrate_0180.py [STORE ...] [--data-dir PATH] \
-                                   [--probe] [--dry-run] \
-                                   [--log PATH] [--force]
+    python scripts/rebuild_schema.py [STORE ...] [--data-dir PATH] \
+                                     [--probe] [--dry-run] \
+                                     [--log PATH] [--force]
 
 With no STORE arguments, runs against every SQLite store directory
 under `<data_dir>/data/`. `--probe` copies each store into a
@@ -37,7 +33,7 @@ Notes
 - Runs inside the shared drain lock; stop the scheduler first.
 - On ANY exception after a store was archived, the rollback restores
   the pre-migration directory and the whole run aborts. A breadcrumb
-  (`<data_dir>/migrate_0180.inflight`) marks an in-flight store; a
+  (`<data_dir>/rebuild_schema.inflight`) marks an in-flight store; a
   pre-existing breadcrumb is a hard abort, never a skip -- `apply`
   commits the new schema BEFORE its transaction opens, so a killed
   run leaves a valid-looking empty store the column probe alone
@@ -57,19 +53,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import memman
-from memman.graph.temporal import TEMPORAL_WINDOW_HOURS
-from memman.migrate import PAYLOAD_VERSION, MigrationPayload
-from memman.migrate import held_drain_lock
+from memman.migrate import PAYLOAD_VERSION, MigrationPayload, held_drain_lock
 from memman.store import node as _node
-from memman.store.db import default_data_dir, list_local_store_dirs
-from memman.store.db import open_db, store_dir
+from memman.store.db import default_data_dir, list_local_store_dirs, open_db
+from memman.store.db import store_dir
 from memman.store.factory import resolve_store_backend
 from memman.store.snapshot import delete_snapshot
 from memman.store.sqlite import SqliteMigrator
 from tqdm import tqdm
 
 REPO = Path(__file__).resolve().parent.parent
-BREADCRUMB_NAME = 'migrate_0180.inflight'
+BREADCRUMB_NAME = 'rebuild_schema.inflight'
 
 _LOG_PATH: str | None = None
 
@@ -94,9 +88,10 @@ def assert_correct_interpreter() -> None:
     if not mod_path.is_relative_to(REPO / 'src'):
         raise SystemExit(
             f'wrong memman: imported {mod_path}, not the editable'
-            f' tree under {REPO / "src"}. Run:\n'
-            f'  /home/ubuntu/.venv/memman-UJW5wPmK-py3.11/bin/python'
-            f' {REPO}/scripts/migrate_0180.py')
+            f' tree under {REPO / "src"}. Run this script with the'
+            ' editable-install interpreter:\n'
+            f'  <editable venv>/bin/python'
+            f' {REPO}/scripts/rebuild_schema.py')
     if PAYLOAD_VERSION != 2:
         raise SystemExit(
             f'wrong memman: PAYLOAD_VERSION is {PAYLOAD_VERSION},'
@@ -112,39 +107,28 @@ class RepairResult:
     ----------
     payload : MigrationPayload
         The repaired payload (mutated in place and returned).
-    sources_rewritten : int
-        Insights whose `queue:N` source was backfilled to `'user'`.
-    edges_converted : int
-        Backbone edges within the window re-typed to proximity.
-    edges_dropped : int
-        Backbone edges beyond the window, dropped as false adjacency.
     orphan_edges_dropped : int
         Edges missing a live endpoint, dropped by the orphan filter.
     touched_ids : set[str]
-        Live, non-soft-deleted endpoints of DROPPED edges only --
-        conversion never changes an edge count, and
-        `refresh_effective_importance` reads counts, never weights.
-
-    Notes
-    -----
-    - `edges_converted + edges_dropped + orphan_edges_dropped` must
-      reconcile against the total backbone count plus non-backbone
-      orphans; report all counters or the figures do not reconcile.
+        Live, non-soft-deleted endpoints of dropped edges --
+        `refresh_effective_importance` raises `ValueError` on a
+        missing or soft-deleted row, after `apply` has committed.
     """
 
     payload: MigrationPayload
-    sources_rewritten: int = 0
-    edges_converted: int = 0
-    edges_dropped: int = 0
     orphan_edges_dropped: int = 0
     touched_ids: set = field(default_factory=set)
 
 
 def repair_payload(payload: MigrationPayload) -> RepairResult:
-    """Apply the three 0.18.0 one-off repairs to a gathered payload.
+    """Apply the structural repairs to a gathered payload.
 
     Pure and database-free: mutates and returns the payload inside a
-    `RepairResult`. See the module docstring for the three repairs.
+    `RepairResult`. The 0.18.0 one-off repairs ran once and were
+    removed; only the orphan filter remains, and it is NOT a one-off:
+    `soft_delete` hard-deletes edges while leaving rows, so any
+    future path that removes an insight without its edges recreates
+    orphans, and `gather` selects every edge with no join.
 
     Parameters
     ----------
@@ -154,50 +138,13 @@ def repair_payload(payload: MigrationPayload) -> RepairResult:
     Returns
     -------
     RepairResult
-        Repaired payload plus per-repair counters and `touched_ids`.
+        Repaired payload plus the orphan counter and `touched_ids`.
     """
     result = RepairResult(payload)
 
-    # 1. provenance
-    for ins in payload.insights:
-        if ins.source.startswith('queue:'):
-            ins.source = 'user'
-            result.sources_rewritten += 1
-
-    # 2. backbone -- convert within the 4 h window, drop beyond
-    #    (decision 2026-08-04, superseding delete-everything)
-    t = {i.id: i.created_at for i in payload.insights}
-    kept, dropped = [], []
-    for e in payload.edges:
-        meta = e.metadata or {}
-        if not (e.edge_type == 'temporal'
-                and meta.get('sub_type') == 'backbone'):
-            kept.append(e)
-            continue
-        # MISSING-ENDPOINT GUARD -- must precede the timestamp
-        # arithmetic: `default` holds 110 backbone edges whose
-        # endpoint has no insights row, and the lookup would KeyError
-        if e.source_id not in t or e.target_id not in t:
-            kept.append(e)
-            continue
-        hours = abs(
-            (t[e.target_id] - t[e.source_id]).total_seconds()) / 3600.0
-        if hours > TEMPORAL_WINDOW_HOURS:
-            dropped.append(e)
-            continue
-        e.weight = 1.0 / (1.0 + hours)
-        # proximity metadata carries no 'direction' key -- a plain
-        # sub_type flip would leave a shape the write path never makes
-        e.metadata = {
-            'sub_type': 'proximity', 'hours_diff': f'{hours:.2f}'}
-        kept.append(e)
-        result.edges_converted += 1
-    payload.edges = kept
-    result.edges_dropped = len(dropped)
-
-    # 3. orphans -- MANDATORY, must run after (2): gather selects
-    #    every edge with no join, and FK enforcement would reject
-    #    them at insert, after the store was archived away
+    # orphans -- gather selects every edge with no join, and FK
+    # enforcement would reject them at insert, after the store was
+    # archived away
     live = {i.id for i in payload.insights}
     orphans = [e for e in payload.edges
                if e.source_id not in live or e.target_id not in live]
@@ -205,11 +152,8 @@ def repair_payload(payload: MigrationPayload) -> RepairResult:
                      if e.source_id in live and e.target_id in live]
     result.orphan_edges_dropped = len(orphans)
 
-    # touched_ids: dropped edges only, intersected with live
-    # non-soft-deleted ids -- refresh_effective_importance raises
-    # ValueError on a missing or soft-deleted row
     alive = {i.id for i in payload.insights if i.deleted_at is None}
-    for e in [*dropped, *orphans]:
+    for e in orphans:
         result.touched_ids |= {e.source_id, e.target_id} & alive
     return result
 
@@ -252,8 +196,8 @@ def store_gate(data_dir: str, store: str, force: bool) -> str:
         return 'migrate'
     if force:
         _log(f'WARNING: --force re-running already-migrated store'
-             f' {store!r}; repair 2 will re-type its legitimate'
-             ' session backbone edges into proximity edges')
+             f' {store!r}; repair_payload runs again against data it'
+             ' already repaired, with nothing signalling any damage')
         return 'migrate'
     _log(f'{store}: already at 0.18.0 schema, skipping')
     return 'skip'
@@ -307,9 +251,7 @@ def migrate_store(
     m.preflight_source(store)
     payload = m.gather(store)
     result = repair_payload(payload)
-    _log(f'{store}: sources_rewritten={result.sources_rewritten}'
-         f' edges_converted={result.edges_converted}'
-         f' edges_dropped={result.edges_dropped}'
+    _log(f'{store}:'
          f' orphan_edges_dropped={result.orphan_edges_dropped}'
          f' touched={len(result.touched_ids)}')
     if dry_run:
@@ -388,7 +330,7 @@ def main() -> int:
     parser.add_argument('--data-dir', default=default_data_dir())
     parser.add_argument('--probe', action='store_true')
     parser.add_argument('--dry-run', action='store_true')
-    parser.add_argument('--log', default='/tmp/migrate_0180.log')
+    parser.add_argument('--log', default='/tmp/rebuild_schema.log')
     parser.add_argument('--force', action='store_true')
     args = parser.parse_args()
     _LOG_PATH = args.log
