@@ -72,6 +72,11 @@ EMBED_SWAP_BATCH_SIZE = 'MEMMAN_EMBED_SWAP_BATCH_SIZE'
 EMBED_SWAP_INDEX_TIMEOUT = 'MEMMAN_EMBED_SWAP_INDEX_TIMEOUT'
 REINDEX_TIMEOUT = 'MEMMAN_REINDEX_TIMEOUT'
 
+# Process-control only: read from `os.environ` by the CLI's --session
+# default, never persisted to the env file -- a stale persisted id
+# would fuse every later write into one false backbone chain.
+SESSION_ID = 'MEMMAN_SESSION_ID'
+
 
 def BACKEND_FOR(store: str) -> str:
     """Per-store backend env-key name: `MEMMAN_BACKEND_<store>`."""
@@ -296,7 +301,8 @@ INSTALL_DEFAULTS: dict[str, str] = {
     BACKUP_KEEP: '7',
     }
 
-_PROCESS_CONTROL_VARS = (DATA_DIR, STORE, WORKER, DEBUG, SCHEDULER_KIND)
+_PROCESS_CONTROL_VARS = (
+    DATA_DIR, STORE, WORKER, DEBUG, SCHEDULER_KIND, SESSION_ID)
 
 _TUNING_VARS = (
     EMBED_SWAP_BATCH_SIZE,

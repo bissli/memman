@@ -33,20 +33,26 @@ def insert_insight(db: 'DB', i: Insight) -> None:
 insert into insights
     (id, content, category, importance, entities,
      source, access_count, created_at, updated_at,
-     prompt_version, model_id, embedding_model)
-values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     prompt_version, model_id, embedding_model,
+     session_id, queue_uuid)
+values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
     db._exec(sql, (
         i.id, i.content, i.category, i.importance,
         i.entities_json(), i.source, i.access_count,
         now, now,
-        i.prompt_version, i.model_id, i.embedding_model))
+        i.prompt_version, i.model_id, i.embedding_model,
+        i.session_id, i.queue_uuid))
 
 
+# `session_id` then `queue_uuid`, appended last -- must stay
+# byte-identical to postgres.py's _INSIGHT_COLS (see
+# test_insight_column_lists_are_identical_across_backends).
 _INSIGHT_COLUMNS = (
     'id, content, category, importance, entities,'
     ' source, access_count, created_at, updated_at, deleted_at,'
-    ' summary, linked_at, enriched_at, last_accessed_at')
+    ' summary, linked_at, enriched_at, last_accessed_at,'
+    ' session_id, queue_uuid')
 
 
 def get_insight_by_id(db: 'DB', id: str) -> Insight | None:
@@ -329,12 +335,17 @@ def count_total_insights(db: 'DB') -> int:
     return int(row[0])
 
 
-def has_active_with_source(db: 'DB', source: str) -> bool:
-    """Return True if any active insight exists with the given source."""
+def has_active_with_queue_uuid(db: 'DB', queue_uuid: str) -> bool:
+    """Return True if any active insight carries the given queue uuid.
+
+    The idempotency check for queue replays. SQL `= ?` never matches
+    NULL, so legacy rows with a null `queue_uuid` can never satisfy
+    it -- do not add a Python-side default that would.
+    """
     row = db._query(
-        'select 1 from insights where source = ?'
+        'select 1 from insights where queue_uuid = ?'
         ' and deleted_at is null limit 1',
-        (source,)).fetchone()
+        (queue_uuid,)).fetchone()
     return row is not None
 
 
@@ -522,17 +533,30 @@ limit ?
     return [_scan_insight(r) for r in rows]
 
 
-def get_latest_insight_by_source(
-        db: 'DB', source: str, exclude_id: str) -> Insight | None:
-    """Return the most recent non-deleted insight for a given source."""
+def get_latest_insight_by_session(
+        db: 'DB', session_id: str | None,
+        exclude_id: str) -> Insight | None:
+    """Return the most recent non-deleted insight for a session.
+
+    Notes
+    -----
+    - A falsy `session_id` (None or '') returns None here, inside the
+      backend: `'' = ''` matches in SQL and would fuse every
+      unsessioned row into one false chain.
+    - Tiebreak is `created_at desc, id desc` so both backends order
+      identically (SQLite's old source-keyed verb tiebroke on rowid,
+      which Postgres cannot reproduce).
+    """
+    if not session_id:
+        return None
     sql = f"""
 select {_INSIGHT_COLUMNS}
 from insights
-where source = ? and id != ? and deleted_at is null
-order by created_at desc, rowid desc
+where session_id = ? and id != ? and deleted_at is null
+order by created_at desc, id desc
 limit 1
 """
-    row = db._query(sql, (source, exclude_id)).fetchone()
+    row = db._query(sql, (session_id, exclude_id)).fetchone()
     if row is None:
         return None
     return _scan_insight(row)
@@ -916,4 +940,8 @@ def _scan_insight(row: tuple[Any, ...]) -> Insight:
         i.enriched_at = parse_timestamp(row[12])
     if len(row) > 13 and row[13]:
         i.last_accessed_at = parse_timestamp(row[13])
+    if len(row) > 14 and row[14]:
+        i.session_id = row[14]
+    if len(row) > 15 and row[15]:
+        i.queue_uuid = row[15]
     return i

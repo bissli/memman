@@ -40,6 +40,7 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_BACKUP_TARGET',
     'MEMMAN_BACKUP_KEEP',
     'MEMMAN_SCHEDULER_KIND',
+    'MEMMAN_SESSION_ID',
     'MEMMAN_EMBED_SWAP_BATCH_SIZE',
     'MEMMAN_EMBED_SWAP_INDEX_TIMEOUT',
     'MEMMAN_REINDEX_TIMEOUT',
@@ -139,7 +140,7 @@ def test_all_vars_covers_installable_plus_direct_env_vars():
     """_ALL_VARS = INSTALLABLE_KEYS + process-control vars + tuning vars."""
     expected = set(config.INSTALLABLE_KEYS) | {
         config.DATA_DIR, config.STORE, config.WORKER, config.DEBUG,
-        config.SCHEDULER_KIND,
+        config.SCHEDULER_KIND, config.SESSION_ID,
         config.EMBED_SWAP_BATCH_SIZE,
         config.EMBED_SWAP_INDEX_TIMEOUT,
         config.REINDEX_TIMEOUT,
@@ -189,6 +190,7 @@ def test_constants_match_expected_names():
         config.BACKUP_TARGET,
         config.BACKUP_KEEP,
         config.SCHEDULER_KIND,
+        config.SESSION_ID,
         config.EMBED_SWAP_BATCH_SIZE,
         config.EMBED_SWAP_INDEX_TIMEOUT,
         config.REINDEX_TIMEOUT,

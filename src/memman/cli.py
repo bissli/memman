@@ -506,10 +506,13 @@ def config_show(ctx: click.Context) -> None:
 @click.option('--entities', default='', help='Comma-separated entities')
 @click.option('--no-reconcile', is_flag=True, default=False,
               help='Skip LLM reconciliation')
+@click.option('--session', default='', envvar=config.SESSION_ID,
+              help='Session id for the temporal chain'
+                   ' (defaults to $MEMMAN_SESSION_ID)')
 @click.pass_context
 def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
              imp: int, source: str, entities: str,
-             no_reconcile: bool) -> None:
+             no_reconcile: bool, session: str) -> None:
     """Store a new insight via the queue.
 
     Always enqueues. The worker drains the queue (under systemd/launchd
@@ -518,6 +521,13 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     Content is screened by `check_content_quality` before enqueue;
     advisory warnings come back on the JSON response under
     `quality_warnings` without blocking the write.
+
+    Notes
+    -----
+    - `--source` is provenance, stored verbatim (including the
+      `user` default); `--session` is the temporal chain key (no
+      session, no backbone edge); idempotency rides on a queue uuid
+      minted at enqueue. One field per job.
     """
     _require_started('write')
     content_str = ' '.join(content)
@@ -548,9 +558,10 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
         row_id = enqueue(
             conn, store=name, content=content_str,
             hint_cat=cat_hint, hint_imp=imp_hint,
-            hint_source=source if source != 'user' else None,
+            hint_source=source,
             hint_entities=entities or None,
             hint_no_reconcile=no_reconcile,
+            session_id=session or None,
             priority=0)
     _json_out({
         'action': 'queued',
@@ -1145,10 +1156,11 @@ def _process_queue_row(
         executor: 'ThreadPoolExecutor') -> None:
     """Run the full remember pipeline on a claimed queue row.
 
-    The insight's `source` is set to `row.hint_source` when provided
-    (so the user's `--source` flag survives the queue), falling back
-    to `queue:<row.id>`. Crash-recovery idempotency is enforced only
-    when `hint_source` is absent, via a `source=queue:<id>` lookup.
+    The insight's `source` is `row.hint_source` verbatim (provenance
+    survives the queue), falling back to `'user'` for programmatic
+    enqueues that pass nothing. Crash-recovery idempotency is
+    enforced unconditionally via `row.queue_uuid`; `row.session_id`
+    carries the temporal chain key onto the stored insight.
 
     Hoisted state (db, embed_cache, insights_by_id, llm_client, ec,
     executor) comes from `ctx` and the drain-level executor. The
@@ -1162,7 +1174,7 @@ def _process_queue_row(
     entity_list = _parse_entities(row.hint_entities or '')
     category = row.hint_cat or 'general'
     importance = row.hint_imp if row.hint_imp is not None else 3
-    source = row.hint_source or f'queue:{row.id}'
+    source = row.hint_source or 'user'
 
     if category not in VALID_CATEGORIES:
         category = 'general'
@@ -1180,8 +1192,7 @@ def _process_queue_row(
         category=category,
         importance=importance)
 
-    if (row.hint_source is None
-            and backend.nodes.has_active_with_source(source)):
+    if backend.nodes.has_active_with_queue_uuid(row.queue_uuid):
         logger.info(
             f'queue row {row.id} already committed to store'
             f' {row.store!r}; skipping re-processing')
@@ -1197,12 +1208,16 @@ def _process_queue_row(
         old = backend.nodes.get(row.hint_replaced_id)
         if old is not None:
             access_count = old.access_count
+    # Both fields must reach the parent Insight: _plan_fact copies
+    # session_id and queue_uuid off it, so omitting either makes the
+    # whole feature a silent no-op.
     insight = Insight(
         id=str(uuid.uuid4()), content=row.content,
         category=category, importance=importance,
         entities=entity_list, source=source,
         access_count=access_count,
-        created_at=now, updated_at=now)
+        created_at=now, updated_at=now,
+        session_id=row.session_id, queue_uuid=row.queue_uuid)
 
     from memman.pipeline.remember import run_remember
     result = run_remember(
@@ -1302,19 +1317,11 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
 
         query_entities = list(expansion.get('entities', []))
 
-        fetch_limit = limit * 3 if (cat or source) else limit
         resp = intent_aware_recall(
             backend, keyword_str, query_vec, query_entities,
-            fetch_limit, fingerprint=bound_fp,
-            intent_override=intent_override, rerank=rerank)
-        if cat:
-            resp['results'] = [
-                r for r in resp['results']
-                if r['insight'].category == cat][:limit]
-        if source:
-            resp['results'] = [
-                r for r in resp['results']
-                if r['insight'].source == source][:limit]
+            limit, fingerprint=bound_fp,
+            intent_override=intent_override, rerank=rerank,
+            category=cat, source=source)
 
         hits = [{'id': r['insight'].id[:8], 'via': r.get('via', ''),
                  'score': round(r['score'], 3),
@@ -1398,11 +1405,22 @@ def forget(ctx: click.Context, id: str) -> None:
 @click.option('--reconcile/--no-reconcile', 'reconcile', default=False,
               help=('Run LLM reconciliation against existing insights.'
                     ' Default: skip — replace targets a specific id.'))
+@click.option('--session', default='', envvar=config.SESSION_ID,
+              help='Session id for the temporal chain'
+                   ' (defaults to $MEMMAN_SESSION_ID)')
 @click.pass_context
 def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             cat: str, imp: int, source: str,
-            entities: str, reconcile: bool) -> None:
-    """Replace an insight by ID with new content via the queue."""
+            entities: str, reconcile: bool, session: str) -> None:
+    """Replace an insight by ID with new content via the queue.
+
+    Notes
+    -----
+    - Unflagged `--cat` / `--imp` / `--source` / `--entities` inherit
+      the replaced insight's values; the inherited source is passed
+      through verbatim (idempotency rides on the queue uuid, so a
+      non-null source hint no longer suppresses the replay check).
+    """
     _require_started('write')
 
     content_str = ' '.join(content)
@@ -1440,8 +1458,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         cat = old.category
     if imp_src != click.core.ParameterSource.COMMANDLINE:
         imp = old.importance
-    source_explicit = source_src == click.core.ParameterSource.COMMANDLINE
-    if not source_explicit:
+    if source_src != click.core.ParameterSource.COMMANDLINE:
         source = old.source
     if entities_src != click.core.ParameterSource.COMMANDLINE:
         entities = ','.join(old.entities) if old.entities else ''
@@ -1451,10 +1468,11 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         row_id = enqueue(
             conn, store=name, content=content_str,
             hint_cat=cat, hint_imp=imp,
-            hint_source=source if source_explicit else None,
+            hint_source=source,
             hint_entities=entities or None,
             hint_replaced_id=id,
             hint_no_reconcile=not reconcile,
+            session_id=session or None,
             priority=0)
     _json_out({
         'action': 'queued',
@@ -2980,11 +2998,20 @@ def migrate(
     click.echo('  memman doctor    # verify the sqlite backend health')
 
 
-def _emit_guide() -> None:
-    """Write shipped guide.md to stdout."""
+def _emit_guide(session_id: str = '') -> None:
+    """Write shipped guide.md to stdout.
+
+    When `session_id` is known (the SessionStart hook passes it), the
+    guide's literal `$SESSION_ID` placeholder is replaced with the
+    real id, so the injected `remember --session` command template is
+    copy-paste correct — hooks cannot export env vars into the
+    agent's later Bash calls, so the template itself must carry it.
+    """
     from importlib.resources import files as pkg_files
     shipped = (pkg_files('memman.setup.assets')
                .joinpath('claude/guide.md').read_text())
+    if session_id:
+        shipped = shipped.replace('$SESSION_ID', session_id)
     click.echo(shipped, nl=False)
 
 
@@ -3055,7 +3082,7 @@ def prime() -> None:
                    f'Recall critical context now: '
                    f'memman recall "<topic>" --limit 5')
 
-    _emit_guide()
+    _emit_guide(session_id)
 
 
 def _graph_rebuild_stale_only(

@@ -396,7 +396,9 @@ def _plan_fact(
                 entities=fact_entities + list(parent.entities),
                 source=parent.source, access_count=parent.access_count,
                 created_at=parent.created_at,
-                updated_at=parent.updated_at),
+                updated_at=parent.updated_at,
+                session_id=parent.session_id,
+                queue_uuid=parent.queue_uuid),
             skip_reason='target already deleted',
             ), calls
 
@@ -412,7 +414,9 @@ def _plan_fact(
         source=parent.source,
         access_count=parent.access_count,
         created_at=parent.created_at,
-        updated_at=parent.updated_at)
+        updated_at=parent.updated_at,
+        session_id=parent.session_id,
+        queue_uuid=parent.queue_uuid)
 
     embed_vec = fact_vec
     if merged_text:

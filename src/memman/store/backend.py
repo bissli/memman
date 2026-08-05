@@ -130,8 +130,13 @@ class NodeStore(Protocol):
         """Count all insights, including soft-deleted."""
         ...
 
-    def has_active_with_source(self, source: str) -> bool:
-        """Return True if any active insight uses the given source."""
+    def has_active_with_queue_uuid(self, queue_uuid: str) -> bool:
+        """Return True if any active insight carries this queue uuid.
+
+        The idempotency check for queue replays; runs unconditionally
+        for every drained row. Backends implement it in SQL so a null
+        `queue_uuid` on legacy rows can never match.
+        """
         ...
 
     def iter_for_reembed(
@@ -165,9 +170,16 @@ class NodeStore(Protocol):
         """Return recent active insights inside a time window."""
         ...
 
-    def get_latest_by_source(
-            self, *, source: str, exclude_id: Id) -> Insight | None:
-        """Return the most-recent active insight for a given source."""
+    def get_latest_by_session(
+            self, *, session_id: str | None,
+            exclude_id: Id) -> Insight | None:
+        """Return the most-recent active insight for a session.
+
+        Accepts `str | None` because the falsy guard lives INSIDE
+        each backend (a falsy session returns None; `'' = ''` would
+        match in SQL and fuse every unsessioned row). Tiebreak is
+        `created_at desc, id desc` on both backends.
+        """
         ...
 
     def get_recent_active(
@@ -499,8 +511,14 @@ class RecallSession(Protocol):
 
     def vector_anchors(
             self, query_vec: list[float], *, k: int = 10,
-            min_sim: float = 0.0) -> list[tuple[Id, float]]:
-        """Top-k (id, similarity) anchors. Cosine in [-1, 1]."""
+            min_sim: float = 0.0, category: str = '',
+            source: str = '') -> list[tuple[Id, float]]:
+        """Top-k (id, similarity) anchors. Cosine in [-1, 1].
+
+        `category` / `source` restrict eligibility BEFORE the top-k
+        cut ('' = no filter); post-filtering the returned hits would
+        under-fill k, which is the defect this parameter closes.
+        """
         ...
 
 

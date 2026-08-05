@@ -113,6 +113,8 @@ def write_snapshot(db: sqlite3.Connection, store_dir: str,
             'enriched_at': (
                 i.enriched_at.astimezone(timezone.utc).isoformat()
                 if i.enriched_at else None),
+            'session_id': i.session_id,
+            'queue_uuid': i.queue_uuid,
             }
         for i in insights
         ]
@@ -244,6 +246,8 @@ def read_snapshot(
             enriched_at=(
                 parse_timestamp(entry['enriched_at'])
                 if entry['enriched_at'] else None),
+            session_id=entry.get('session_id'),
+            queue_uuid=entry.get('queue_uuid'),
             ) for entry in meta_list]
 
     raw_adj = json.loads(adj_blob)

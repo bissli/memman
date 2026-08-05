@@ -1,11 +1,16 @@
 """Cross-backend contract for `BaseNodeStore` defaulted verbs.
 
-Locks the behavior of the four NodeStore verbs that compose from
+Locks the behavior of the three NodeStore verbs that compose from
 other Protocol verbs and have a Python-side default in
 `memman.store.base`. Both SQLite and Postgres implementations
 must continue to return identical shapes after the override is
 dropped (Postgres: `review_content_quality`) or the default is
 inherited (SQLite: `iter_embeddings_as_vecs`).
+
+`has_active_with_queue_uuid` (which replaced the defaulted
+`has_active_with_source`) deliberately has NO Python-side default:
+a `==` scan would match legacy null `queue_uuid` rows against a
+None argument, where SQL's `= ?` never matches NULL.
 
 `get_pending_link_ids`, `count_pending_links`, and `clear_linked_at`
 are deliberately NOT defaulted in `BaseNodeStore` even though
@@ -38,29 +43,6 @@ def _seed(backend, ids: list[tuple[str, str, str]],
         for rid in embed_ids:
             backend.nodes.update_embedding(
                 rid, _vec(0.1, 0.2, 0.3), 'voyage-3-lite')
-
-
-class TestHasActiveWithSource:
-    """`has_active_with_source` reports presence by source string."""
-
-    def test_returns_true_when_source_present(self, backend):
-        """Active row with the source returns True.
-        """
-        _seed(backend, [('h-1', 'a', 'cli')])
-        assert backend.nodes.has_active_with_source('cli') is True
-
-    def test_returns_false_when_source_absent(self, backend):
-        """No row with the source returns False.
-        """
-        _seed(backend, [('h-2', 'a', 'cli')])
-        assert backend.nodes.has_active_with_source('hook') is False
-
-    def test_excludes_soft_deleted(self, backend):
-        """Soft-deleted rows do not count as active.
-        """
-        _seed(backend, [('h-3', 'a', 'cli')])
-        backend.nodes.soft_delete('h-3')
-        assert backend.nodes.has_active_with_source('cli') is False
 
 
 class TestGetWithoutEmbedding:

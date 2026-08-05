@@ -113,13 +113,19 @@ def test_remember_stamps_provenance(mm_runner):
     queue_id = data['queue_id']
 
     import sqlite3
+
+    from memman.queue import queue_db
+    with queue_db(data_dir) as qconn:
+        queue_uuid = qconn.execute(
+            'select queue_uuid from queue where id = ?',
+            (queue_id,)).fetchone()[0]
     store_path = Path(data_dir) / 'data' / 'default' / 'memman.db'
     conn = sqlite3.connect(str(store_path))
     try:
         prompt_v, model_id, embed_model = conn.execute(
             'SELECT prompt_version, model_id, embedding_model'
-            ' FROM insights WHERE source = ?',
-            (f'queue:{queue_id}',)).fetchone()
+            ' FROM insights WHERE queue_uuid = ?',
+            (queue_uuid,)).fetchone()
     finally:
         conn.close()
 

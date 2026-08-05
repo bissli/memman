@@ -24,15 +24,22 @@ from tests.conftest import make_edge, make_insight
 
 
 class TestTemporalBackboneChain:
-    """Two insights with same source produce bidirectional backbone edges."""
+    """Two insights in one session produce bidirectional backbone edges."""
 
-    def test_temporal_backbone_chain(self, backend):
-        """Insert two insights with same source; verify 2 backbone temporal edges."""
-        now = datetime.now(timezone.utc)
+    def test_backbone_chains_on_session(self, backend):
+        """Same session, different sources: both backbone directions exist.
+
+        Mutation: reverting the chain key to `source` — the differing
+            sources would then produce no backbone edge.
+        Oracle: both `precedes` and `succeeds` backbone edges on the
+            newer insight.
+        """
         ins1 = make_insight(
-            id='t-1', content='first insight', source='proj-a')
+            id='t-1', content='first insight', source='proj-a',
+            session_id='sess-1')
         ins2 = make_insight(
-            id='t-2', content='second insight', source='proj-a')
+            id='t-2', content='second insight', source='proj-b',
+            session_id='sess-1')
         backend.nodes.insert(ins1)
         backend.nodes.insert(ins2)
 
@@ -86,16 +93,50 @@ class TestTemporalProximityDecay:
         assert weight_by_target.get('tp-1', 0) > weight_by_target.get('tp-2', 0)
 
 
-class TestTemporalNoSource:
-    """Single insight with no prior creates 0 backbone edges."""
+class TestTemporalNoSession:
+    """No session id means no backbone edge, ever."""
 
-    def test_temporal_no_source(self, backend):
-        """A lone insight in an empty DB produces 0 temporal edges."""
-        ins = make_insight(id='ts-1', content='solo insight', source='solo')
-        backend.nodes.insert(ins)
+    def test_absent_session_creates_no_backbone(self, backend):
+        """A null session produces no backbone edge to a same-source row.
 
-        count = create_temporal_edge(backend, ins)
-        assert count == 0
+        Mutation: falling back to `source` when `session_id` is null —
+            the shared source would then mint a false backbone edge,
+            reproducing the measured pathology.
+        Oracle: zero backbone edges despite an earlier same-source row.
+        """
+        ins1 = make_insight(
+            id='ts-1', content='earlier insight', source='solo')
+        ins2 = make_insight(
+            id='ts-2', content='later insight', source='solo')
+        backend.nodes.insert(ins1)
+        backend.nodes.insert(ins2)
+
+        create_temporal_edge(backend, ins2)
+        backbone = [
+            e for e in backend.edges.by_node_and_type('ts-2', 'temporal')
+            if e.metadata.get('sub_type') == 'backbone']
+        assert backbone == []
+
+    def test_empty_session_string_creates_no_backbone(self, backend):
+        """An empty-string session must not chain (`'' = ''` matches in SQL).
+
+        Mutation: dropping the falsy guard inside
+            `get_latest_by_session` — two `session_id=''` rows would
+            then fuse into one false chain.
+        Oracle: zero backbone edges between two empty-session rows.
+        """
+        ins1 = make_insight(
+            id='te-1', content='earlier insight', session_id='')
+        ins2 = make_insight(
+            id='te-2', content='later insight', session_id='')
+        backend.nodes.insert(ins1)
+        backend.nodes.insert(ins2)
+
+        create_temporal_edge(backend, ins2)
+        backbone = [
+            e for e in backend.edges.by_node_and_type('te-2', 'temporal')
+            if e.metadata.get('sub_type') == 'backbone']
+        assert backbone == []
 
 
 # --- Entity ---

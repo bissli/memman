@@ -980,10 +980,12 @@ def parse_remember(result, runner_tuple=None):
 
     Modern `remember`/`replace` returns just `{action: queued,
     queue_id, store}`. The autouse-drain runs the worker after the
-    invocation, so the new insight lives in the store DB tagged with
-    `source = queue:<queue_id>`. This helper looks it up so tests
-    that read `id`/`content`/`category`/`importance` after a remember
-    keep working. Postgres-aware: switches the lookup query when the
+    invocation, so the new insight lives in the store DB carrying the
+    queue row's `queue_uuid` (source is provenance and defaults to
+    `'user'` since D1, so it no longer identifies the row). This
+    helper reads the uuid off the queue row — `purge_done` retains
+    done rows for 60 s, ample inside a test — and looks the insight
+    up by it. Postgres-aware: switches the lookup query when the
     per-store `MEMMAN_BACKEND_<store>=postgres` resolves.
     """
     raw = json.loads(result.output)
@@ -997,9 +999,17 @@ def parse_remember(result, runner_tuple=None):
     if queue_id is None:
         return raw
     _, data_dir = runner_tuple
+    from memman.queue import queue_db
     from memman.store.db import read_active
     from memman.store.factory import resolve_store_backend
     from memman.store.factory import resolve_store_pg_dsn
+    with queue_db(data_dir) as qconn:
+        qrow = qconn.execute(
+            'select queue_uuid from queue where id = ?',
+            (queue_id,)).fetchone()
+    if qrow is None:
+        return raw
+    queue_uuid = qrow[0]
     name = raw.get('store') or read_active(data_dir) or 'default'
     backend_kind = resolve_store_backend(name, data_dir)
     if backend_kind == 'postgres':
@@ -1009,13 +1019,13 @@ def parse_remember(result, runner_tuple=None):
         sql = f"""
 select id, content, category, importance
 from {schema}.insights
-where source = %s
+where queue_uuid = %s
   and deleted_at is null
 order by created_at
 """
         dsn = resolve_store_pg_dsn(name, data_dir)
         with psycopg.connect(dsn) as conn, conn.cursor() as cur:
-            cur.execute(sql, (f'queue:{queue_id}',))
+            cur.execute(sql, (queue_uuid,))
             rows = cur.fetchall()
     else:
         from memman.store.db import open_read_only, store_dir
@@ -1024,12 +1034,12 @@ order by created_at
         sql = """
 select id, content, category, importance
 from insights
-where source = ?
+where queue_uuid = ?
   and deleted_at is null
 order by created_at
 """
         try:
-            rows = db._query(sql, (f'queue:{queue_id}',)).fetchall()
+            rows = db._query(sql, (queue_uuid,)).fetchall()
         finally:
             db.close()
     if not rows:

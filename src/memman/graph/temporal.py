@@ -27,8 +27,10 @@ def create_temporal_edge(backend: Backend, insight: Insight) -> int:
 
     count = 0
 
-    prev = backend.nodes.get_latest_by_source(
-        source=insight.source, exclude_id=insight.id)
+    # Chain on the session key; a null/empty session returns None
+    # inside the backend, so no backbone edge is created.
+    prev = backend.nodes.get_latest_by_session(
+        session_id=insight.session_id, exclude_id=insight.id)
     if prev is not None:
         backend.edges.upsert(Edge(
             source_id=prev.id, target_id=insight.id,

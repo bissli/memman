@@ -400,8 +400,20 @@ class TestRecall:
         for r in data['results']:
             assert r['insight']['source'] == 'agent'
 
-    def test_recall_source_filter_inflates_fetch_limit(self, runner):
-        """Recall --source must over-fetch so post-filter doesn't truncate results."""
+    def test_recall_source_filter_returns_matching_rows(self, runner):
+        """Recall --source surfaces a matching row the top-k would drop.
+
+        Folded from `test_recall_source_filter_inflates_fetch_limit`
+        after D2 replaced the fetch-inflation post-filter with anchor
+        scans that filter before the top-k cut; the deep fill-to-limit
+        regression lives in
+        `tests/test_recall_filters.py::test_filtered_recall_fills_to_limit`.
+
+        Mutation: dropping the `source` predicate from the anchor
+            scans (or filtering only after the cut).
+        Oracle: the single agent-sourced row appears despite six
+            better-matching user rows competing for the slots.
+        """
         topics = [
             'PostgreSQL query optimization with EXPLAIN ANALYZE',
             'PostgreSQL index types including B-tree GIN GiST',
@@ -422,11 +434,9 @@ class TestRecall:
             '--source', 'agent', '--limit', '3'])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        agent_results = [r for r in data['results']
-                         if r['insight']['source'] == 'agent']
-        assert len(agent_results) >= 1, (
-            f'Expected at least 1 agent result, got {len(agent_results)}. '
-            f'--source filter without fetch inflation drops valid results')
+        assert data['results'], 'filtered recall returned nothing'
+        for r in data['results']:
+            assert r['insight']['source'] == 'agent'
 
 
 class TestForget:
@@ -1394,6 +1404,23 @@ class TestGraphRebuildStaleOnly:
         assert 'SQLite-only' not in out.output
 
 
+def _rows_for_queue_id(data_dir, store, queue_id):
+    """Active insight ids stored for one queue row, via its queue_uuid."""
+    from memman.queue import queue_db
+    from memman.store.db import open_read_only, store_dir
+    with queue_db(data_dir) as qconn:
+        queue_uuid = qconn.execute(
+            'select queue_uuid from queue where id = ?',
+            (queue_id,)).fetchone()[0]
+    db = open_read_only(store_dir(data_dir, store))
+    try:
+        return db._query(
+            'SELECT id FROM insights WHERE queue_uuid = ?'
+            ' AND deleted_at IS NULL', (queue_uuid,)).fetchall()
+    finally:
+        db.close()
+
+
 class TestIntraBatchDedup:
     """Sibling facts from the same remember call must deduplicate."""
 
@@ -1423,18 +1450,10 @@ class TestIntraBatchDedup:
                 'remember', ('Do not rename loop variables to avoid shadowing '
                              'opts attributes')])
         assert result.exit_code == 0, result.output
-        from memman.store.db import open_read_only, store_dir
         raw = json.loads(result.output)
         queue_id = raw['queue_id']
         _, data_dir = runner
-        db = open_read_only(store_dir(data_dir, raw['store']))
-        try:
-            rows = db._query(
-                'SELECT id FROM insights WHERE source = ?'
-                ' AND deleted_at IS NULL', (f'queue:{queue_id}',)
-                ).fetchall()
-        finally:
-            db.close()
+        rows = _rows_for_queue_id(data_dir, raw['store'], queue_id)
         assert len(rows) == 1, (
             f'expected 1 stored fact, got {len(rows)}: '
             f'queue_id={queue_id}')
@@ -1462,18 +1481,10 @@ class TestIntraBatchDedup:
             result = invoke(runner, [
                 'remember', 'Switched to FastAPI and configured Redis cache'])
         assert result.exit_code == 0, result.output
-        from memman.store.db import open_read_only, store_dir
         raw = json.loads(result.output)
         queue_id = raw['queue_id']
         _, data_dir = runner
-        db = open_read_only(store_dir(data_dir, raw['store']))
-        try:
-            rows = db._query(
-                'SELECT id FROM insights WHERE source = ?'
-                ' AND deleted_at IS NULL', (f'queue:{queue_id}',)
-                ).fetchall()
-        finally:
-            db.close()
+        rows = _rows_for_queue_id(data_dir, raw['store'], queue_id)
         assert len(rows) == 2, (
             f'expected 2 stored facts, got {len(rows)}: '
             f'queue_id={queue_id}')
@@ -1489,18 +1500,10 @@ class TestIntraBatchDedup:
                          'variable names to prevent unintended shadowing of '
                          'options object properties.')])
         assert result.exit_code == 0, result.output
-        from memman.store.db import open_read_only, store_dir
         raw = json.loads(result.output)
         queue_id = raw['queue_id']
         _, data_dir = runner
-        db = open_read_only(store_dir(data_dir, raw['store']))
-        try:
-            rows = db._query(
-                'SELECT id FROM insights WHERE source = ?'
-                ' AND deleted_at IS NULL', (f'queue:{queue_id}',)
-                ).fetchall()
-        finally:
-            db.close()
+        rows = _rows_for_queue_id(data_dir, raw['store'], queue_id)
         assert len(rows) == 1, (
             f'expected 1 stored fact from single thought, got '
             f'{len(rows)}: queue_id={queue_id}')

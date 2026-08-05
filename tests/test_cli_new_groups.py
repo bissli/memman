@@ -125,15 +125,18 @@ def test_queue_retry_rejects_id_with_all_stale(runner):
 
 def _seed_row(data_dir: str, status: str = 'stale') -> int:
     """Insert one queue row with the given status. Returns row id."""
+    import uuid
+
     from memman.queue import open_queue_db
     conn = open_queue_db(data_dir)
     try:
         cur = conn.execute(
             "insert into queue"
             " (store, content, hint_cat, hint_imp, hint_source,"
-            "  hint_entities, status, queued_at)"
-            " values (?, ?, ?, ?, ?, ?, ?, strftime('%s','now'))",
-            ('default', f'{status}-row', 'general', 3, 'test', '[]', status))
+            "  hint_entities, status, queue_uuid, queued_at)"
+            " values (?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'))",
+            ('default', f'{status}-row', 'general', 3, 'test', '[]',
+             status, str(uuid.uuid4())))
         conn.commit()
         return cur.lastrowid
     finally:

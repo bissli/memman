@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 from memman import config
-from memman.backup import build_bundle, restore, snapshot_sqlite
+from memman.backup import BACKUP_FORMAT_VERSION, build_bundle, restore
+from memman.backup import snapshot_sqlite
 from memman.embed.fingerprint import Fingerprint, write_fingerprint
 from memman.store.db import read_active, store_dir, write_active
 from memman.store.sqlite import open_sqlite_backend
@@ -270,17 +271,44 @@ class TestRestore:
         assert 'default' in result['embed_mismatch']
 
     def test_restore_bundle_without_queue(self, tmp_path):
-        """An older v1 bundle with no queue.db restores cleanly (no crash)."""
+        """A current-format bundle with no queue.db restores cleanly.
+
+        Mutation: making `restore` require queue.db in the archive.
+        Oracle: `queue_restored` is False and no exception surfaces.
+        """
         staging = tmp_path / 'st_nq'
         staging.mkdir()
         (staging / 'manifest.json').write_text(json.dumps({
-            'format_version': 1, 'stores': [], 'active_store': 'default'}))
+            'format_version': BACKUP_FORMAT_VERSION, 'stores': [],
+            'active_store': 'default'}))
         (staging / 'env.nonsecret').write_text('\n')
         bundle = tmp_path / 'noqueue.tar.gz'
         with tarfile.open(bundle, 'w:gz') as tar:
             tar.add(staging, arcname='.')
         res = restore(str(bundle), str(tmp_path / 'out_nq'))
         assert res['queue_restored'] is False
+
+    def test_restore_refuses_v1_bundle(self, tmp_path):
+        """A pre-0.18.0 v1 bundle is refused, not silently restored.
+
+        A v1 bundle restored onto this build would yield a store
+        missing `session_id`/`queue_uuid` that fails at `open_db`.
+
+        Mutation: forgetting the `BACKUP_FORMAT_VERSION` bump (v1
+            would then round-trip as current).
+        Oracle: `restore` raises naming the unsupported version 1.
+        """
+        staging = tmp_path / 'st_v1'
+        staging.mkdir()
+        (staging / 'manifest.json').write_text(json.dumps({
+            'format_version': 1, 'stores': [],
+            'active_store': 'default'}))
+        (staging / 'env.nonsecret').write_text('\n')
+        bundle = tmp_path / 'v1.tar.gz'
+        with tarfile.open(bundle, 'w:gz') as tar:
+            tar.add(staging, arcname='.')
+        with pytest.raises(RuntimeError, match='format_version 1'):
+            restore(str(bundle), str(tmp_path / 'out_v1'))
 
     def test_rejects_unknown_format_version(self, tmp_path):
         """A bundle with a newer format_version is refused."""

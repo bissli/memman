@@ -12,12 +12,13 @@ from memman.store.model import Id, Insight
 
 
 class BaseNodeStore:
-    """Mixin with Python-side defaults for selected NodeStore verbs."""
+    """Mixin with Python-side defaults for selected NodeStore verbs.
 
-    def has_active_with_source(self, source: str) -> bool:
-        """Default: scan `get_all_active` for any row with the source.
-        """
-        return any(ins.source == source for ins in self.get_all_active())
+    No default exists for `has_active_with_queue_uuid` on purpose: a
+    Python `==` scan would match legacy rows whose `queue_uuid` is
+    None against a None argument, where SQL's `= ?` never matches
+    NULL. Each backend implements it in SQL.
+    """
 
     def get_without_embedding(
             self, *, limit: int = 100) -> list[Insight]:

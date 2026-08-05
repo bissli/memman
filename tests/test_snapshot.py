@@ -63,6 +63,33 @@ def test_write_then_read_round_trip(tmp_db, tmp_path):
     assert targets == ['snap-b']
 
 
+def test_snapshot_roundtrips_session_id(tmp_db, tmp_path):
+    """Snapshot writer + reader round-trip session_id and queue_uuid.
+
+    The snapshot feeds the recall hot path, and `vector_anchors`
+    filters against snapshot insights; a field written but not read
+    back (or vice versa) silently degrades both.
+
+    Mutation: writing the fields into `insight_meta` but not reading
+        them back (or the reverse).
+    Oracle: values set on one insight reappear after a write/read
+        cycle; the unset insight stays None.
+    """
+    fp = _seed(tmp_db)
+    tmp_db._exec(
+        'UPDATE insights SET session_id = ?, queue_uuid = ?'
+        ' WHERE id = ?', ('sess-snap', 'uuid-snap', 'snap-a'))
+    store_dir = str(tmp_path)
+    assert write_snapshot(tmp_db, store_dir, fp) is True
+    snap = read_snapshot(store_dir, fp)
+    assert snap is not None
+    by_id = {i.id: i for i in snap.insights}
+    assert by_id['snap-a'].session_id == 'sess-snap'
+    assert by_id['snap-a'].queue_uuid == 'uuid-snap'
+    assert by_id['snap-b'].session_id is None
+    assert by_id['snap-b'].queue_uuid is None
+
+
 def test_round_trip_preserves_linked_and_enriched_at(tmp_db, tmp_path):
     """Snapshot writer + reader round-trips the new lifecycle stamps."""
     from datetime import datetime, timezone

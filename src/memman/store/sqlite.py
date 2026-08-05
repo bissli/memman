@@ -114,8 +114,8 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
     def count_total(self) -> int:
         return _node.count_total_insights(self._db)
 
-    def has_active_with_source(self, source: str) -> bool:
-        return _node.has_active_with_source(self._db, source)
+    def has_active_with_queue_uuid(self, queue_uuid: str) -> bool:
+        return _node.has_active_with_queue_uuid(self._db, queue_uuid)
 
     def iter_for_reembed(
             self, cursor: Id, batch: int) -> list[ReembedRow]:
@@ -153,10 +153,11 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
         return _node.get_recent_insights_in_window(
             self._db, exclude_id, window_hours, limit)
 
-    def get_latest_by_source(
-            self, *, source: str, exclude_id: Id) -> Insight | None:
-        return _node.get_latest_insight_by_source(
-            self._db, source, exclude_id)
+    def get_latest_by_session(
+            self, *, session_id: str | None,
+            exclude_id: Id) -> Insight | None:
+        return _node.get_latest_insight_by_session(
+            self._db, session_id, exclude_id)
 
     def get_recent_active(
             self, *, exclude_id: Id, limit: int) -> list[Insight]:
@@ -477,18 +478,32 @@ class SqliteRecallSession(RecallSession):
 
     snapshot: _snapshot.Snapshot | None = None
     _embed_cache: dict[Id, list[float]] | None = None
+    _meta_cache: dict[Id, tuple[str, str]] | None = None
 
     def close(self) -> None:
         """No-op for SQLite (snapshot is in-memory, file-backed)."""
 
     def vector_anchors(
             self, query_vec: list[float], *, k: int = 10,
-            min_sim: float = 0.0) -> list[tuple[Id, float]]:
+            min_sim: float = 0.0, category: str = '',
+            source: str = '') -> list[tuple[Id, float]]:
         """Return top-k (id, similarity) matches via Python cosine.
 
-        Uses the snapshot's pre-loaded embeddings when present;
-        falls back to `_embed_cache` (lazily populated by the
-        recall pipeline). Cosine similarity in [-1, 1].
+        Uses the snapshot's pre-loaded embeddings when present; falls
+        back to `_embed_cache` (lazily populated by the recall
+        pipeline). Cosine similarity in [-1, 1].
+
+        Notes
+        -----
+        - `category` / `source` restrict eligibility before the top-k
+          cut: the snapshot path derives eligible ids from
+          `snapshot.insights`, the fallback path from `_meta_cache`
+          (`{id: (category, source)}`, populated beside
+          `_embed_cache`).
+        - A filter with no metadata available returns [] so the
+          pipeline's in-memory fallback — which filters its input
+          dict — takes over; returning unfiltered hits would
+          under-fill k downstream.
         """
         from memman.embed.vector import cosine_similarity
 
@@ -499,8 +514,25 @@ class SqliteRecallSession(RecallSession):
         else:
             return []
 
+        eligible: set[Id] | None = None
+        if category or source:
+            if self.snapshot is not None:
+                eligible = {
+                    i.id for i in self.snapshot.insights
+                    if (not category or i.category == category)
+                    and (not source or i.source == source)}
+            elif self._meta_cache is not None:
+                eligible = {
+                    eid for eid, (cat, src) in self._meta_cache.items()
+                    if (not category or cat == category)
+                    and (not source or src == source)}
+            else:
+                return []
+
         scored: list[tuple[float, Id]] = []
         for _id, vec in cache.items():
+            if eligible is not None and _id not in eligible:
+                continue
             sim = cosine_similarity(query_vec, vec)
             if sim < min_sim:
                 continue
@@ -833,13 +865,21 @@ class SqliteMigrator(Migrator):
                     f' embed_fingerprint meta key')
             fingerprint = Fingerprint.from_json(fp_str)
 
-            rows = conn.execute("""
+            # Probe before selecting: a rebuild gathers from a
+            # PRE-migration store where the new pair does not exist,
+            # so an unconditional select raises on the first store.
+            present_cols = {
+                r[1] for r in conn.execute(
+                    'pragma table_info(insights)').fetchall()}
+            has_new = {'session_id', 'queue_uuid'} <= present_cols
+            extra = ', session_id, queue_uuid' if has_new else ''
+            rows = conn.execute(f"""
 select id, content, category, importance, entities,
        source, access_count, keywords, summary, semantic_facts,
        last_accessed_at, embedding, effective_importance,
        linked_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, model_id, embedding_model,
-       embedding_pending
+       embedding_pending{extra}
 from insights
 order by id
 """).fetchall()
@@ -869,7 +909,9 @@ order by id
                     deleted_at=(
                         parse_timestamp(r[17]) if r[17] else None),
                     prompt_version=r[18], model_id=r[19],
-                    embedding_model=r[20]))
+                    embedding_model=r[20],
+                    session_id=r[22] if has_new else None,
+                    queue_uuid=r[23] if has_new else None))
                 if r[21] is not None:
                     pv = deserialize_vector(r[21])
                     if pv is not None:
@@ -940,6 +982,11 @@ order by id
 
     def apply(
             self, store: str, payload: MigrationPayload) -> None:
+        if payload.payload_version != PAYLOAD_VERSION:
+            raise MigrateError(
+                f'payload version {payload.payload_version} does not'
+                f' match this build ({PAYLOAD_VERSION}); re-gather'
+                ' with the matching memman')
         if payload.embedding_dtype not in (
                 self.snapshot_features.accepted_embedding_dtypes):
             raise MigrateError(
@@ -985,8 +1032,12 @@ order by id
                         format_timestamp(ins.deleted_at)
                         if ins.deleted_at else None,
                         ins.prompt_version, ins.model_id,
-                        ins.embedding_model))
+                        ins.embedding_model,
+                        ins.session_id, ins.queue_uuid))
                 if insight_rows:
+                    # apply always writes the NEW schema, so the new
+                    # columns are listed unconditionally -- the
+                    # asymmetry with gather's probe is the whole fix.
                     conn.executemany(
                         'insert into insights ('
                         ' id, content, category, importance,'
@@ -996,9 +1047,9 @@ order by id
                         ' effective_importance, linked_at,'
                         ' enriched_at, created_at, updated_at,'
                         ' deleted_at, prompt_version, model_id,'
-                        ' embedding_model)'
+                        ' embedding_model, session_id, queue_uuid)'
                         ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
-                        ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         insight_rows)
 
                 edge_rows = [(

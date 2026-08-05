@@ -13,7 +13,7 @@ Secrets (API keys, the default Postgres DSN, and every per-store
 `MEMMAN_POSTGRES_DSN_<store>`) are excluded from the bundle and
 re-entered / resolved on the target host at restore.
 
-Notes:
+Notes
 - The manifest carries its own `BACKUP_FORMAT_VERSION` (no global DB
   schema version exists); `embed_fingerprint` is recorded per store.
 - The per-store `backend` field in the manifest is authoritative for
@@ -44,7 +44,11 @@ from memman.store.db import read_active, store_dir, write_active
 
 logger = logging.getLogger('memman')
 
-BACKUP_FORMAT_VERSION = 1
+# v2: insights carry session_id/queue_uuid (0.18.0 schema). A v1
+# bundle restored onto 0.18.0 would yield an old-schema store, so
+# restore refuses on version mismatch; read v1 bundles with the
+# pinned memman@0173 install.
+BACKUP_FORMAT_VERSION = 2
 DB_FILENAME = 'memman.db'
 QUEUE_FILENAME = 'queue.db'
 DUMP_FILENAME = 'dump.pgdump'

@@ -235,24 +235,64 @@ def intent_aware_recall(
         rerank: bool = False,
         rerank_weights_override: dict[
             str, tuple[float, float, float, float]] | None = None,
+        category: str = '',
+        source: str = '',
         ) -> dict[str, Any]:
     """Perform MAGMA-aligned intent-aware retrieval.
 
-    Loads the worker-materialized snapshot when present and consumes
-    it for all hot-path reads. Falls back to direct Backend verb
-    calls when the snapshot is missing or its embedding fingerprint
-    doesn't match the active client.
+    Parameters
+    ----------
+    backend : Backend
+        Per-store handle exposing the verb surface.
+    query : str
+        Search text; tokenized for keyword anchors and scoring.
+    query_vec : list[float] | None
+        Query embedding; None degrades to the keyword/time paths.
+    query_entities : list[str]
+        Entity names contributing to the entity signal.
+    limit : int
+        Result cap; `limit <= 0` means unbounded.
+    fingerprint : Fingerprint
+        Active embedding fingerprint; gates snapshot reuse.
+    intent_override : str | None, default None
+        Force an intent instead of `detect_intent(query)`.
+    rerank : bool, default False
+        Re-score the shortlist with the cross-encoder (see Notes).
+    rerank_weights_override : dict | None, default None
+        Read the intent's `(w_kw, w_ent, w_sim, w_gr)` from this dict
+        instead of module-level `RERANK_WEIGHTS`.
+    category : str, default ''
+        Keep only insights with this exact category ('' = no filter).
+    source : str, default ''
+        Keep only insights with this exact source ('' = no filter).
 
-    When `rerank=True` and the query has more than `MIN_RERANK_TOKENS`
-    tokens, the top `RERANK_SHORTLIST` candidates by multi-signal score
-    are re-scored by Voyage rerank-2.5-lite and the rerank score
-    replaces the final ordering. On reranker failure the baseline
-    ordering is preserved.
+    Returns
+    -------
+    dict[str, Any]
+        `{'results': [...], 'meta': {...}}`; `meta.anchor_count` is
+        the filtered anchor count, `meta.traversed` is deliberately
+        unfiltered, and `meta.sparse` compares the filtered result
+        count against the limit.
 
-    `rerank_weights_override`, when set, reads the intent's
-    `(w_kw, w_ent, w_sim, w_gr)` tuple from the override dict instead of
-    module-level `RERANK_WEIGHTS`; otherwise `RERANK_WEIGHTS` is
-    authoritative.
+    Notes
+    -----
+    - Loads the worker-materialized snapshot when present; falls back
+      to direct Backend verb calls when it is missing or its embedding
+      fingerprint does not match.
+    - `category`/`source` filter the ANCHOR pools and the final result
+      set, never the graph traversal: a hop through a non-matching
+      neighbour is correct, and filtering the candidates loop would
+      perturb the `graph_min`/`graph_max` normalisation.
+    - With a filter and `limit > 0`, the anchor budget becomes
+      `max(ANCHOR_TOP_K, limit)`; unfiltered recall keeps
+      `ANCHOR_TOP_K` untouched so the ablation harness's
+      `anchor_top_k` sweep is never overridden.
+    - When `rerank=True` and the query has more than
+      `MIN_RERANK_TOKENS` tokens, the top `RERANK_SHORTLIST`
+      candidates by multi-signal score are re-scored by Voyage
+      rerank-2.5-lite; the filter runs before the rerank block so the
+      shortlist holds only returnable rows. On reranker failure the
+      baseline ordering is preserved.
     """
     if intent_override:
         intent = intent_override
@@ -263,6 +303,19 @@ def intent_aware_recall(
 
     weights = get_weights(intent)
     params = get_traversal_params(intent)
+
+    def _matches(ins: Insight) -> bool:
+        return ((not category or ins.category == category)
+                and (not source or ins.source == source))
+
+    # Notes:
+    # - The `limit <= 0` half matters because a non-positive limit
+    #   means unbounded at the slice below.
+    # - A bare max() would silently override the ablation harness's
+    #   anchor_top_k sweep on every unfiltered rerank config.
+    anchor_k = (ANCHOR_TOP_K
+                if (limit <= 0 or not (category or source))
+                else max(ANCHOR_TOP_K, limit))
 
     with backend.recall_session(fingerprint) as session:
         snapshot = session.snapshot
@@ -289,6 +342,8 @@ def intent_aware_recall(
             embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
             try:
                 session._embed_cache = embed_cache  # type: ignore[attr-defined]
+                session._meta_cache = {  # type: ignore[attr-defined]
+                    i.id: (i.category, i.source) for i in all_insights}
             except AttributeError:
                 pass
 
@@ -310,8 +365,9 @@ def intent_aware_recall(
         if query_vec is not None:
             try:
                 vector_hits = session.vector_anchors(
-                    query_vec, k=ANCHOR_TOP_K,
-                    min_sim=VECTOR_SEARCH_MIN_SIM)
+                    query_vec, k=anchor_k,
+                    min_sim=VECTOR_SEARCH_MIN_SIM,
+                    category=category, source=source)
             except Exception as exc:
                 logger.warning(
                     f'session.vector_anchors failed, falling back: {exc}')
@@ -326,11 +382,16 @@ def intent_aware_recall(
             if s > 0:
                 sim_cache[eid] = s
 
+    # Anchor selection draws from the filtered pool; traversal keeps
+    # the full `insights_by_id` so hops through non-matching rows work.
+    anchor_pool = (all_insights if not (category or source)
+                   else [i for i in all_insights if _matches(i)])
+
     anchor_map: dict[str, tuple[Insight, float, str]] = {}
 
     token_cache: dict[str, set[str]] = {}
     keyword_anchors = keyword_search(
-        all_insights, query, ANCHOR_TOP_K, token_cache)
+        anchor_pool, query, anchor_k, token_cache)
     for rank, (ins, _score) in enumerate(keyword_anchors):
         anchor_map[ins.id] = (
             ins, 1.0 / (RRF_K + rank + 1), 'keyword')
@@ -339,8 +400,16 @@ def intent_aware_recall(
         embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
 
     if query_vec is not None and not vector_hits and embed_cache:
+        # Filter the INPUT dict, never the returned hits: a post-cut
+        # filter reproduces the under-fill this change removes.
+        anchor_embed_cache = embed_cache
+        if category or source:
+            eligible_ids = {i.id for i in anchor_pool}
+            anchor_embed_cache = {
+                eid: vec for eid, vec in embed_cache.items()
+                if eid in eligible_ids}
         vector_hits = vector_search_from_cache(
-            embed_cache, query_vec, ANCHOR_TOP_K)
+            anchor_embed_cache, query_vec, anchor_k)
 
     for rank, (vid, _sim) in enumerate(vector_hits):
         rrf_score = 1.0 / (RRF_K + rank + 1)
@@ -354,8 +423,8 @@ def intent_aware_recall(
                 anchor_map[vid] = (looked, rrf_score, 'vector')
 
     time_sorted = sorted(
-        all_insights, key=lambda i: i.created_at, reverse=True)
-    time_limit = min(ANCHOR_TOP_K, len(time_sorted))
+        anchor_pool, key=lambda i: i.created_at, reverse=True)
+    time_limit = min(anchor_k, len(time_sorted))
     for rank in range(time_limit):
         ins = time_sorted[rank]
         rrf_score = 1.0 / (RRF_K + rank + 1)
@@ -481,6 +550,12 @@ def intent_aware_recall(
 
     results.sort(
         key=lambda r: (-r['score'], -r['insight'].importance))
+
+    # Filter after the weighted-sum sort (so graph_min/graph_max
+    # normalisation saw the full pool) and BEFORE rerank (so the
+    # cross-encoder shortlist holds only returnable rows).
+    if category or source:
+        results = [r for r in results if _matches(r['insight'])]
 
     reranked = False
     if rerank and len(query.split()) > MIN_RERANK_TOKENS:

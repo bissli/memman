@@ -11,6 +11,7 @@ import logging
 import os
 import sqlite3
 import time
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -31,7 +32,12 @@ STATUS_STALE = 'stale'
 
 @dataclass(slots=True)
 class QueueRow:
-    """A single queued blob claimed by a worker."""
+    """A single queued blob claimed by a worker.
+
+    `session_id` and `queue_uuid` sit last so no pre-existing
+    positional index shifts; keep that order (`session_id` then
+    `queue_uuid`) in every column list.
+    """
 
     id: int
     store: str
@@ -45,6 +51,8 @@ class QueueRow:
     priority: int
     queued_at: int
     attempts: int
+    session_id: str | None
+    queue_uuid: str
 
 
 def queue_db_path(base_dir: str) -> str:
@@ -90,6 +98,8 @@ create table if not exists queue (
     hint_entities text,
     hint_replaced_id text,
     hint_no_reconcile integer not null default 0,
+    session_id    text,
+    queue_uuid    text not null unique,
     priority      integer not null default 0,
     queued_at     integer not null,
     claimed_at    integer,
@@ -147,6 +157,7 @@ def enqueue(
         hint_entities: str | None = None,
         hint_replaced_id: str | None = None,
         hint_no_reconcile: bool = False,
+        session_id: str | None = None,
         priority: int = 0,
         ) -> int:
     """Append a blob to the queue. Returns the new row's id.
@@ -154,21 +165,33 @@ def enqueue(
     `hint_replaced_id` carries the id of the insight to soft-delete
     when the worker commits this row — used by the `replace` command.
     `hint_no_reconcile` skips the LLM reconciliation pass for fast
-    deterministic stores (`remember --no-reconcile`).
+    deterministic stores (`remember --no-reconcile`). `session_id`
+    is the temporal chain key (`remember --session`); null means the
+    resulting insights join no backbone chain.
+
+    Notes
+    -----
+    - `queue_uuid` (the idempotency key) is minted here, never passed
+      in: a uuid4 survives a `backup.restore` that rewinds the
+      AUTOINCREMENT counter, where a fresh enqueue would otherwise
+      draw a row id an existing insight already claims and be
+      silently dropped.
     """
     now = int(time.time())
     sql = """
 insert into queue (
     store, content, hint_cat, hint_imp,
     hint_source, hint_entities, hint_replaced_id,
-    hint_no_reconcile, priority, queued_at
+    hint_no_reconcile, session_id, queue_uuid,
+    priority, queued_at
 )
-values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
     cur = conn.execute(sql, (
         store, content, hint_cat, hint_imp, hint_source,
         hint_entities, hint_replaced_id,
-        1 if hint_no_reconcile else 0, priority, now))
+        1 if hint_no_reconcile else 0, session_id,
+        str(uuid.uuid4()), priority, now))
     row_id = cur.lastrowid
     logger.debug(f'queued blob {row_id} for store {store}')
     return row_id
@@ -208,7 +231,8 @@ where id = (
 )
 returning id, store, content, hint_cat, hint_imp,
           hint_source, hint_entities, hint_replaced_id,
-          hint_no_reconcile, priority, queued_at, attempts
+          hint_no_reconcile, priority, queued_at, attempts,
+          session_id, queue_uuid
 """
     params = [now, worker_pid, now, stale_after_seconds, *store_params]
     row = conn.execute(sql, params).fetchone()
@@ -220,7 +244,8 @@ returning id, store, content, hint_cat, hint_imp,
         hint_source=row[5], hint_entities=row[6],
         hint_replaced_id=row[7],
         hint_no_reconcile=bool(row[8]),
-        priority=row[9], queued_at=row[10], attempts=row[11])
+        priority=row[9], queued_at=row[10], attempts=row[11],
+        session_id=row[12], queue_uuid=row[13])
 
 
 def mark_done(conn: sqlite3.Connection, row_id: int) -> None:
@@ -358,7 +383,8 @@ def get_row(
     sql = """
 select id, store, content, hint_cat, hint_imp,
        hint_source, hint_entities, priority, queued_at, claimed_at,
-       worker_pid, attempts, status, last_error, processed_at
+       worker_pid, attempts, status, last_error, processed_at,
+       session_id, queue_uuid
 from queue
 where id = ?
 """
@@ -373,6 +399,7 @@ where id = ?
         'claimed_at': row[9], 'worker_pid': row[10],
         'attempts': row[11], 'status': row[12],
         'last_error': row[13], 'processed_at': row[14],
+        'session_id': row[15], 'queue_uuid': row[16],
         }
 
 

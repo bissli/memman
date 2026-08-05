@@ -98,7 +98,9 @@ create table if not exists {schema}.insights (
     deleted_at  timestamptz,
     prompt_version text,
     model_id    text,
-    embedding_model text
+    embedding_model text,
+    session_id  text,
+    queue_uuid  text
 );
 
 create table if not exists {schema}.edges (
@@ -151,6 +153,10 @@ create index if not exists idx_insights_deleted_{schema}
     on {schema}.insights(deleted_at);
 create index if not exists idx_insights_source_{schema}
     on {schema}.insights(source);
+create index if not exists idx_insights_session_{schema}
+    on {schema}.insights(session_id);
+create index if not exists idx_insights_queue_uuid_{schema}
+    on {schema}.insights(queue_uuid);
 create index if not exists idx_insights_eff_imp_{schema}
     on {schema}.insights(effective_importance);
 create index if not exists idx_insights_pending_link_{schema}
@@ -306,6 +312,10 @@ def _row_to_insight(row: tuple[Any, ...]) -> Insight:
         i.enriched_at = _datetime_or_none(row[12])
     if len(row) > 13:
         i.last_accessed_at = _datetime_or_none(row[13])
+    if len(row) > 14 and row[14]:
+        i.session_id = row[14]
+    if len(row) > 15 and row[15]:
+        i.queue_uuid = row[15]
     return i
 
 
@@ -327,10 +337,14 @@ def _row_to_edge(row: tuple[Any, ...]) -> Edge:
     return e
 
 
+# `session_id` then `queue_uuid`, appended last -- must stay
+# byte-identical to node.py's _INSIGHT_COLUMNS (see
+# test_insight_column_lists_are_identical_across_backends).
 _INSIGHT_COLS = (
     'id, content, category, importance, entities,'
     ' source, access_count, created_at, updated_at, deleted_at,'
-    ' summary, linked_at, enriched_at, last_accessed_at')
+    ' summary, linked_at, enriched_at, last_accessed_at,'
+    ' session_id, queue_uuid')
 
 
 class PostgresNodeStore(BaseNodeStore, NodeStore):
@@ -389,14 +403,16 @@ where attrelid = (%s || '.insights')::regclass
         sql = self._q("""
 insert into {s}.insights
     (id, content, category, importance, entities,
-     source, access_count, prompt_version, model_id, embedding_model)
-values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
+     source, access_count, prompt_version, model_id, embedding_model,
+     session_id, queue_uuid)
+values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s)
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (
                 ins.id, ins.content, ins.category, ins.importance,
                 ins.entities_json(), ins.source, ins.access_count,
-                ins.prompt_version, ins.model_id, ins.embedding_model))
+                ins.prompt_version, ins.model_id, ins.embedding_model,
+                ins.session_id, ins.queue_uuid))
 
     def get(self, id: Id) -> Insight | None:
         sql = self._q(f"""
@@ -655,14 +671,14 @@ select count(*) from {s}.insights where deleted_at is null
             row = cur.fetchone()
             return int(row[0]) if row else 0
 
-    def has_active_with_source(self, source: str) -> bool:
+    def has_active_with_queue_uuid(self, queue_uuid: str) -> bool:
         sql = self._q("""
 select 1 from {s}.insights
-where source = %s and deleted_at is null
+where queue_uuid = %s and deleted_at is null
 limit 1
 """)
         with self._conn.cursor() as cur:
-            cur.execute(sql, (source,))
+            cur.execute(sql, (queue_uuid,))
             return cur.fetchone() is not None
 
     def iter_for_reembed(
@@ -813,17 +829,22 @@ limit %s
             cur.execute(sql, (exclude_id, window_hours, limit))
             return [_row_to_insight(r) for r in cur.fetchall()]
 
-    def get_latest_by_source(
-            self, *, source: str, exclude_id: Id) -> Insight | None:
+    def get_latest_by_session(
+            self, *, session_id: str | None,
+            exclude_id: Id) -> Insight | None:
+        # Falsy guard inside the backend: '' = '' matches in SQL and
+        # would fuse every unsessioned row into one false chain.
+        if not session_id:
+            return None
         sql = self._q(f"""
 select {_INSIGHT_COLS}
 from {{s}}.insights
-where source = %s and id <> %s and deleted_at is null
-order by created_at desc
+where session_id = %s and id <> %s and deleted_at is null
+order by created_at desc, id desc
 limit 1
 """)
         with self._conn.cursor() as cur:
-            cur.execute(sql, (source, exclude_id))
+            cur.execute(sql, (session_id, exclude_id))
             row = cur.fetchone()
             return _row_to_insight(row) if row else None
 
@@ -1702,22 +1723,28 @@ class PostgresRecallSession(RecallSession):
 
     def vector_anchors(
             self, query_vec: list[float], *, k: int = 10,
-            min_sim: float = 0.0) -> list[tuple[Id, float]]:
+            min_sim: float = 0.0, category: str = '',
+            source: str = '') -> list[tuple[Id, float]]:
         """Return top-k (id, similarity) matches via HNSW.
 
         Similarity is `1 - (embedding <=> :q)` (cosine in [-1, 1],
-        higher is better).
+        higher is better). `category` / `source` filter in SQL before
+        the limit so the top-k cut is taken over eligible rows only.
         """
         assert self._conn is not None
         sql = f"""
 select id, 1 - (embedding <=> %s::vector) as sim
 from {self._schema}.insights
 where deleted_at is null and embedding is not null
+  and (%s = '' or category = %s)
+  and (%s = '' or source = %s)
 order by embedding <=> %s::vector
 limit %s
 """
         with self._conn.cursor() as cur:
-            cur.execute(sql, (query_vec, query_vec, k))
+            cur.execute(sql, (
+                query_vec, category, category, source, source,
+                query_vec, k))
             return [
                 (r[0], float(r[1])) for r in cur.fetchall()
                 if r[1] is not None and float(r[1]) >= min_sim
@@ -2557,21 +2584,34 @@ class PostgresMigrator(Migrator):
             fingerprint = Fingerprint.from_json(fp_str)
 
             cur.execute(
-                "select 1 from information_schema.columns"
+                "select column_name from information_schema.columns"
                 " where table_schema = %s"
                 " and table_name = 'insights'"
-                " and column_name = 'embedding_pending'",
+                " and column_name in"
+                " ('embedding_pending', 'session_id', 'queue_uuid')",
                 (schema,))
-            has_pending = cur.fetchone() is not None
-            pending_select = (
-                ', embedding_pending' if has_pending else '')
+            present_cols = {r[0] for r in cur.fetchall()}
+            has_pending = 'embedding_pending' in present_cols
+            has_new = {'session_id', 'queue_uuid'} <= present_cols
+            # Notes:
+            # - Two INDEPENDENT optional column groups exist, so the
+            #   select has four shapes; never hardcode trailing
+            #   indices. Build the tail as an ordered list and derive
+            #   positions from it.
+            optional: list[str] = []
+            if has_pending:
+                optional.append('embedding_pending')
+            if has_new:
+                optional += ['session_id', 'queue_uuid']
+            idx = {name: 21 + n for n, name in enumerate(optional)}
+            optional_select = ''.join(f', {c}' for c in optional)
             cur.execute(f"""
 select id, content, category, importance, entities,
        source, access_count, keywords, summary, semantic_facts,
        last_accessed_at, embedding, effective_importance,
        linked_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, model_id, embedding_model
-       {pending_select}
+       {optional_select}
 from {schema}.insights
 order by id
 """)
@@ -2599,10 +2639,16 @@ order by id
                     updated_at=r[16],
                     deleted_at=r[17],
                     prompt_version=r[18], model_id=r[19],
-                    embedding_model=r[20]))
-                if has_pending and r[21] is not None:
+                    embedding_model=r[20],
+                    session_id=(
+                        r[idx['session_id']] if has_new else None),
+                    queue_uuid=(
+                        r[idx['queue_uuid']] if has_new else None)))
+                if (has_pending
+                        and r[idx['embedding_pending']] is not None):
                     pending.append(PendingReembed(
-                        insight_id=r[0], vector=list(r[21])))
+                        insight_id=r[0],
+                        vector=list(r[idx['embedding_pending']])))
 
             cur.execute(f"""
 select source_id, target_id, edge_type, weight,
@@ -2668,6 +2714,11 @@ order by sqlite_id
 
     def apply(
             self, store: str, payload: MigrationPayload) -> None:
+        if payload.payload_version != PAYLOAD_VERSION:
+            raise MigrateError(
+                f'payload version {payload.payload_version} does not'
+                f' match this build ({PAYLOAD_VERSION}); re-gather'
+                ' with the matching memman')
         if payload.embedding_dtype not in (
                 self.snapshot_features.accepted_embedding_dtypes):
             raise MigrateError(
@@ -2704,8 +2755,13 @@ order by sqlite_id
                             ins.linked_at, ins.enriched_at,
                             ins.created_at, ins.updated_at,
                             ins.deleted_at, ins.prompt_version,
-                            ins.model_id, ins.embedding_model))
+                            ins.model_id, ins.embedding_model,
+                            ins.session_id, ins.queue_uuid))
                     with conn.cursor() as cur:
+                        # apply always writes the NEW schema, so the
+                        # new columns are listed unconditionally --
+                        # the asymmetry with gather's probe is the
+                        # whole fix.
                         cur.executemany(
                             f'insert into {schema}.insights ('
                             ' id, content, category, importance,'
@@ -2715,11 +2771,12 @@ order by sqlite_id
                             ' effective_importance, linked_at,'
                             ' enriched_at, created_at, updated_at,'
                             ' deleted_at, prompt_version, model_id,'
-                            ' embedding_model)'
+                            ' embedding_model, session_id,'
+                            ' queue_uuid)'
                             ' values (%s, %s, %s, %s, %s::jsonb,'
                             ' %s, %s, %s::jsonb, %s, %s::jsonb,'
                             ' %s, %s, %s, %s, %s, %s, %s, %s,'
-                            ' %s, %s, %s)'
+                            ' %s, %s, %s, %s, %s)'
                             ' on conflict (id) do nothing',
                             insight_rows)
 

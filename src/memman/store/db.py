@@ -218,7 +218,9 @@ create table if not exists insights (
     deleted_at  text,
     prompt_version text,
     model_id    text,
-    embedding_model text
+    embedding_model text,
+    session_id  text,
+    queue_uuid  text
 );
 
 create table if not exists edges (
@@ -238,6 +240,8 @@ create index if not exists idx_insights_importance on insights(importance);
 create index if not exists idx_insights_created on insights(created_at);
 create index if not exists idx_insights_deleted on insights(deleted_at);
 create index if not exists idx_insights_source on insights(source);
+create index if not exists idx_insights_session on insights(session_id);
+create index if not exists idx_insights_queue_uuid on insights(queue_uuid);
 create index if not exists idx_insights_effective_imp on insights(effective_importance);
 create index if not exists idx_prune_candidates
     on insights(deleted_at, importance, access_count, effective_importance);
@@ -268,13 +272,35 @@ create table if not exists meta (
 """
 
 
+# The one-off rebuild script every schema diagnostic points at.
+# Never hardcode the filename at a call site: the script gets renamed
+# (kept as generic rebuild machinery) after each migration and a
+# literal would point at a file that no longer exists.
+MIGRATION_SCRIPT = 'scripts/migrate_0180.py'
+
+
 def _migrate(db: DB) -> None:
     """Apply the canonical schema to the database.
 
     Single-user tool: one authoritative schema (`_BASELINE_SCHEMA`),
     always the latest. `create table if not exists` creates a fresh
     database; pre-existing databases must already match the canonical
-    shape -- wipe and recreate on schema change rather than carrying
-    `alter` migrations.
+    shape -- rebuild via `MIGRATION_SCRIPT` on schema change rather
+    than carrying `alter` migrations.
+
+    Notes
+    -----
+    - A pre-migration store fails here on every open (the baseline's
+      `create index ... on insights(session_id)` raises `no such
+      column`), so this is the primary schema diagnostic: nothing
+      that needs a live Backend can report on such a store.
     """
-    db._conn.executescript(_BASELINE_SCHEMA)
+    try:
+        db._conn.executescript(_BASELINE_SCHEMA)
+    except sqlite3.OperationalError as exc:
+        if 'no such column' in str(exc):
+            name = Path(db.path).parent.name
+            raise RuntimeError(
+                f'store {name} predates the current schema;'
+                f' rebuild with {MIGRATION_SCRIPT}') from exc
+        raise
