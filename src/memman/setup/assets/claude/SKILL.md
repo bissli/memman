@@ -12,9 +12,12 @@ are queued and enriched in the background; reads are intent-aware.
 ## Storing what you learn
 
 Store one self-contained fact per call. Pick the most accurate `--cat`.
+**Always pass `--session` with your session id** — it links the
+session's writes into one temporal chain (WHEN recall walks it);
+a write without it joins no chain.
 
 ```bash
-memman remember "<fact>" --cat <category> --imp <1-5> --entities "e1,e2" --source agent
+memman remember "<fact>" --cat <category> --imp <1-5> --entities "e1,e2" --source agent --session $SESSION_ID
 ```
 
 Categories: `preference` · `decision` · `fact` · `insight` · `context` · `general`.
@@ -24,11 +27,12 @@ To correct a stored insight by ID without losing its `access_count` and
 edges:
 
 ```bash
-memman replace <id> "<new content>"
+memman replace <id> "<new content>" --session $SESSION_ID
 ```
 
 `replace` inherits the original's category, importance, entities,
-and source unless you override per-flag.
+and source unless you override per-flag; `--session` follows the
+same rule as `remember` (pass your current session id).
 
 ## Recalling what you know
 
@@ -116,3 +120,6 @@ memman doctor                         # health check (sqlite, queue, keys, sched
   fine — but write each call with one clear claim in mind.
 - `--source agent` when storing on behalf of the user; `--source user`
   is the default for direct user statements.
+- `--session <id>` on every `remember`/`replace` — no session, no
+  temporal chain. `$MEMMAN_SESSION_ID` is honored when exported, but
+  hooks cannot export into your shell, so pass the flag explicitly.

@@ -78,7 +78,7 @@
           <mxGeometry x="80" y="490" width="500" height="70" as="geometry" />
         </mxCell>
 
-        <mxCell id="r_idem" value="Idempotency check&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;if any insight has source='queue:&amp;lt;id&amp;gt;'&lt;br&gt;→ skip + mark done (crash recovery)&lt;/font&gt;" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_idem" value="Idempotency check&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;if any insight carries the row's queue_uuid&lt;br&gt;→ skip + mark done (crash recovery)&lt;/font&gt;" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="640" y="495" width="220" height="80" as="geometry" />
         </mxCell>
 

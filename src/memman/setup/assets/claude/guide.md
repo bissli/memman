@@ -104,13 +104,20 @@ Importance 2 is the floor — if imp=2 feels weak, reconsider storing at all.
 The text you pass must be **self-contained** — dereference anaphora
 ("that", "this", "it") into the actual subject before invoking the CLI.
 
-**How to store**: run `memman remember "<self-contained text>"` directly
-via Bash in your current turn. No sub-agent delegation. The binary is a
-fast blob-append (~50 ms) that queues the text; a background scheduler
-(systemd timer on Linux, launchd on macOS, every 60 s) drains the queue
-and runs the extraction/reconciliation/enrichment pipeline out-of-band.
-This means **newly-stored memories are not recallable in the current
-session** — they become available in later sessions.
+**How to store**: run
+`memman remember "<self-contained text>" --session $SESSION_ID`
+directly via Bash in your current turn. No sub-agent delegation.
+**Always pass `--session`** — it links this session's writes into one
+temporal chain (WHEN recall walks it); a write without it joins no
+chain. Use the session id shown above verbatim; if you see the
+literal `$SESSION_ID` placeholder, substitute your session's id. Add
+`--source agent` when storing your own conclusion rather than
+relaying the user's words. The binary is a fast blob-append (~50 ms)
+that queues the text; a background scheduler (systemd timer on Linux,
+launchd on macOS, every 60 s) drains the queue and runs the
+extraction/reconciliation/enrichment pipeline out-of-band. This means
+**newly-stored memories are not recallable in the current session** —
+they become available in later sessions.
 
 ### Behavioral rules — route to CLAUDE.md
 

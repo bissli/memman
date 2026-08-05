@@ -67,7 +67,8 @@ memman recall "vector database" --limit 10
 # Recall with explicit intent override
 memman recall "why did we choose Qdrant" --intent WHY
 
-# Recall with category/source filter
+# Recall with category/source filter (fills to --limit: the filter
+# runs inside the anchor scans, not as a post-cut)
 memman recall "auth" --cat decision --source agent
 
 # Simple SQL LIKE matching (faster, no graph traversal, no LLM expansion)
@@ -82,13 +83,14 @@ memman forget <id>
 
 **Remember flags:**
 
-| Flag             | Default   | Description                                                                 |
-| ---------------- | --------- | --------------------------------------------------------------------------- |
-| `--cat`          | `general` | Category: `preference`, `decision`, `fact`, `insight`, `context`, `general` |
-| `--imp`          | `3`       | Importance: 1–5                                                             |
-| `--entities`     |           | Comma-separated entities (merged with LLM-extracted)                        |
-| `--source`       | `user`    | Source: `user`, `agent`, `external`                                         |
-| `--no-reconcile` | `false`   | Skip LLM reconciliation (direct insert)                                     |
+| Flag             | Default   | Description                                                                                       |
+| ---------------- | --------- | ------------------------------------------------------------------------------------------------- |
+| `--cat`          | `general` | Category: `preference`, `decision`, `fact`, `insight`, `context`, `general`                       |
+| `--imp`          | `3`       | Importance: 1–5                                                                                   |
+| `--entities`     |           | Comma-separated entities (merged with LLM-extracted)                                              |
+| `--source`       | `user`    | Source: `user`, `agent`, `external` — provenance, stored verbatim                                 |
+| `--session`      | (env)     | Session id for the temporal chain; defaults to `$MEMMAN_SESSION_ID`. No session, no backbone edge |
+| `--no-reconcile` | `false`   | Skip LLM reconciliation (direct insert)                                                           |
 
 **Recall flags:**
 
