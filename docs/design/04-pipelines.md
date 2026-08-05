@@ -31,7 +31,7 @@ Every write goes through the queue. When the scheduler is **stopped**, memman is
 Per-blob processing inside `_process_queue_row`:
 
 1. **Atomic claim** — `UPDATE queue SET claimed_at=..., attempts=attempts+1 WHERE id = (SELECT ... WHERE status='pending' ORDER BY priority DESC, queued_at ASC LIMIT 1) RETURNING ...`. The queue is SQLite WAL, so the claim is race-free under the WAL writer guarantee. Stale claims (>10 min) are reclaimable. Drains never overlap: an `fcntl.flock` on `~/.memman/drain.lock` gates `_drain_queue` regardless of which backend the store-under-drain routes to.
-2. **Idempotency check** — if the target store already has any insight with `source='queue:<id>'`, skip and mark done (crash-recovery after partial commit).
+2. **Idempotency check** — if the target store already has any insight carrying the row's `queue_uuid` (a uuid4 minted at enqueue), skip and mark done (crash-recovery after partial commit). The uuid — not the integer row id — survives a `backup.restore` that rewinds the queue's AUTOINCREMENT counter; `source` is pure provenance and plays no part.
 3. **Quality gate** — regex-based `check_content_quality()` rejects transient patterns.
 4. **LLM fact extraction** — decomposes into 1–5 atomic facts with category/importance/entities.
 5. **Per-fact**: embed via the store's bound provider, keyword + cosine similarity scan, `reconcile_memories` → ADD/UPDATE/DELETE/NONE, insert/update, fast edges.

@@ -24,9 +24,12 @@ recall-only — every write returns a clear error pointing at
 ## Storing what you learn
 
 Store one self-contained fact per call. Pick the most accurate `--cat`.
+**Always pass `--session` with your session id** — it links the
+session's writes into one temporal chain; a write without it joins
+no chain.
 
 ```bash
-memman remember "<fact>" --cat <category> --imp <1-5> --entities "e1,e2" --source agent
+memman remember "<fact>" --cat <category> --imp <1-5> --entities "e1,e2" --source agent --session $SESSION_ID
 ```
 
 Categories: `preference` · `decision` · `fact` · `insight` · `context` · `general`.
@@ -36,11 +39,12 @@ To correct a stored insight by ID without losing its `access_count` and
 edges:
 
 ```bash
-memman replace <id> "<new content>"
+memman replace <id> "<new content>" --session $SESSION_ID
 ```
 
 `replace` inherits the original's category, importance, entities,
-and source unless you override per-flag.
+and source unless you override per-flag; `--session` follows the
+same rule as `remember`.
 
 ## Recalling what you know
 

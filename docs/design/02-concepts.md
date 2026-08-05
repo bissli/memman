@@ -17,7 +17,9 @@
 │ category   : decision                        │
 │ importance : 5  (1-5)                        │
 │ entities   : ["Qdrant", "Milvus"]            │
-│ source     : "user"                          │
+│ source     : "user"     (provenance)         │
+│ session_id : "s-1f2e…"  (temporal chain key) │
+│ queue_uuid : "9b0c…"    (idempotency key)    │
 │ access_count        : 3                      │
 │ effective_importance : 0.85                  │
 │ created_at : 2026-02-18T10:00:00Z            │
@@ -83,7 +85,9 @@ insights (
   effective_importance,                         -- Decayed effective importance
   linked_at, enriched_at,                       -- Pipeline progress timestamps
   prompt_version, model_id, embedding_model,    -- Provenance for re-enrichment
-  created_at, updated_at, deleted_at
+  created_at, updated_at, deleted_at,
+  session_id,                                   -- Temporal chain key (nullable; no session, no backbone edge)
+  queue_uuid                                    -- Idempotency key from the queue row (shared by sibling facts)
 )
 
 -- Relationship edges (composite primary key)
