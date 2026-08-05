@@ -417,6 +417,13 @@ def main() -> int:
                 ' this script is SQLite-only')
 
     failures = 0
+    # Notes:
+    # - expected records this run's applied insight count per store,
+    #   so the final gate can pass a LEGITIMATELY empty store (five
+    #   exist on this host) while still failing the killed-mid-apply
+    #   signature (zero rows where the payload had rows). Stores
+    #   skipped as already-migrated proved count > 0 in store_gate.
+    expected: dict[str, int] = {}
     with held_drain_lock(data_dir):
         for s in tqdm(stores, unit='store', desc='rebuild'):
             if not args.probe and not args.dry_run:
@@ -426,9 +433,10 @@ def main() -> int:
                 if args.probe:
                     probe_store(s, data_dir)
                 else:
-                    migrate_store(
+                    result = migrate_store(
                         SqliteMigrator(data_dir), s, data_dir,
                         dry_run=args.dry_run)
+                    expected[s] = len(result.payload.insights)
             except Exception as exc:
                 _log(f'{s}: ERROR {type(exc).__name__}: {exc}')
                 failures += 1
@@ -442,8 +450,8 @@ def main() -> int:
         return 1 if failures else 0
 
     # Final gate: exit 0 only when every requested store reports the
-    # new schema with rows -- the scheduler must not restart before
-    # this passes
+    # new schema with its expected rows -- the scheduler must not
+    # restart before this passes
     bad = []
     for s in stores:
         db_path = Path(store_dir(data_dir, s)) / 'memman.db'
@@ -451,10 +459,14 @@ def main() -> int:
             bad.append(f'{s}: missing')
             continue
         cols = _insight_columns(db_path)
+        count = _insight_count(db_path)
         if not {'session_id', 'queue_uuid'} <= cols:
             bad.append(f'{s}: old schema')
-        elif _insight_count(db_path) == 0:
-            bad.append(f'{s}: zero rows')
+        elif s in expected and count != expected[s]:
+            bad.append(
+                f'{s}: {count} rows, expected {expected[s]}')
+        elif s not in expected and count == 0:
+            bad.append(f'{s}: zero rows and not rebuilt this run')
     if bad:
         _log(f'final gate FAILED: {bad}')
         return 1
