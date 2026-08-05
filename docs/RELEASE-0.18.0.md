@@ -48,7 +48,10 @@ behaviour that was provably wrong or repairs the data it produced.
    nothing else can read v1 bundles afterwards.
 3. Land 0.18.0, delete and recreate `queue.db` with a queue-only
    command.
-4. Rebuild every store with `scripts/migrate_0180.py` — run
+4. Rebuild every store with the rebuild script (shipped as
+   `scripts/migrate_0180.py` for the 0.18.0 cycle, retained
+   afterwards as `scripts/rebuild_schema.py` with the one-off
+   repairs removed) — run
    `--probe` first (rebuilds throwaway copies and checks count
    parity), then the live run. The script converts within-window
    backbone edges to proximity edges, drops out-of-window ones, and

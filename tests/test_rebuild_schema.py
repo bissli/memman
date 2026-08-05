@@ -1,9 +1,12 @@
-"""Tests for scripts/migrate_0180.py — repairs, guards, rollback.
+"""Tests for scripts/rebuild_schema.py — guards, rollback, orphans.
 
-The script is loaded via importlib (scripts/ is not a package). Pure
-`repair_payload` tests build payloads directly; script-level tests
-hand-build a 0.17.3-schema store, since `open_db` now only creates
-the 0.18.0 shape.
+The retained rebuild machinery from the 0.18.0 migration; the one-off
+data repairs are gone, so these tests cover the structural pieces:
+the orphan filter, the interpreter/schema guards, the rollback, and
+the conditional gather. The script is loaded via importlib
+(scripts/ is not a package); script-level tests hand-build a
+0.17.3-schema store, since `open_db` now only creates the current
+shape.
 """
 
 import importlib.util
@@ -19,12 +22,12 @@ from memman.migrate import MigrationPayload
 from memman.store.model import format_timestamp
 
 _SPEC = importlib.util.spec_from_file_location(
-    'migrate_0180',
-    Path(__file__).parent.parent / 'scripts' / 'migrate_0180.py')
+    'rebuild_schema',
+    Path(__file__).parent.parent / 'scripts' / 'rebuild_schema.py')
 mig = importlib.util.module_from_spec(_SPEC)
 # dataclass resolution reads sys.modules[cls.__module__], so the
 # module must be registered before exec
-sys.modules['migrate_0180'] = mig
+sys.modules['rebuild_schema'] = mig
 _SPEC.loader.exec_module(mig)
 
 NOW = datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc)
@@ -88,12 +91,10 @@ def _mi(id, created_at, *, source='user', deleted_at=None):
         embedding_model=None, session_id=None, queue_uuid=None)
 
 
-def _backbone(src, tgt, direction='precedes'):
+def _semantic(src, tgt):
     return MigrateEdge(
-        source_id=src, target_id=tgt, edge_type='temporal',
-        weight=1.0,
-        metadata={'sub_type': 'backbone', 'direction': direction},
-        created_at=NOW)
+        source_id=src, target_id=tgt, edge_type='semantic',
+        weight=0.7, metadata={}, created_at=NOW)
 
 
 def _payload(insights, edges):
@@ -106,9 +107,8 @@ def _payload(insights, edges):
 
 
 def _make_old_store(data_dir, store):
-    """Hand-build a pre-0.18.0 store: 3 insights, backbone pair
-    within the window (a<->b, 2 h), one beyond it (a<->c, 10 h), one
-    orphan edge, one oplog row, and the meta fingerprint.
+    """Hand-build a pre-0.18.0 store: 3 insights, one live semantic
+    pair, one orphan edge, one oplog row, and the meta fingerprint.
     """
     sdir = Path(data_dir) / 'data' / store
     sdir.mkdir(parents=True)
@@ -124,23 +124,17 @@ def _make_old_store(data_dir, store):
             conn.execute(
                 'insert into insights'
                 ' (id, content, source, created_at, updated_at)'
-                " values (?, ?, ?, ?, ?)",
-                (rid, f'content {rid}', f'queue:{rid}',
+                ' values (?, ?, ?, ?, ?)',
+                (rid, f'content {rid}', 'user',
                  format_timestamp(ts), format_timestamp(ts)))
-        edges = [
-            ('a', 'b', '{"sub_type": "backbone", "direction": "precedes"}'),
-            ('b', 'a', '{"sub_type": "backbone", "direction": "succeeds"}'),
-            ('a', 'c', '{"sub_type": "backbone", "direction": "precedes"}'),
-            ('c', 'a', '{"sub_type": "backbone", "direction": "succeeds"}'),
-            ('b', 'ghost', '{"sub_type": "backbone", "direction": "precedes"}'),
-            ]
-        for src, tgt, meta in edges:
+        edges = [('a', 'b'), ('b', 'a'), ('b', 'ghost')]
+        for src, tgt in edges:
             conn.execute(
                 'insert into edges'
                 ' (source_id, target_id, edge_type, weight,'
                 '  metadata, created_at)'
-                " values (?, ?, 'temporal', 1.0, ?, ?)",
-                (src, tgt, meta, format_timestamp(NOW)))
+                " values (?, ?, 'semantic', 0.7, '{}', ?)",
+                (src, tgt, format_timestamp(NOW)))
         conn.execute(
             'insert into oplog (operation, insight_id, created_at)'
             " values ('remember', 'a', ?)",
@@ -155,82 +149,6 @@ def _make_old_store(data_dir, store):
     return sdir
 
 
-def test_repair_backfills_queue_source_to_user():
-    """Synthetic `queue:N` sources become `'user'`; real ones survive.
-
-    Mutation: dropping repair 1.
-    Oracle: hand-built payload — one `queue:12` row rewritten, one
-        `agent` row untouched, counter reports exactly 1.
-    """
-    p = _payload(
-        [_mi('a', NOW, source='queue:12'),
-         _mi('b', NOW, source='agent')], [])
-    result = mig.repair_payload(p)
-    assert [i.source for i in p.insights] == ['user', 'agent']
-    assert result.sources_rewritten == 1
-
-
-def test_backbone_within_window_converts_to_proximity():
-    """A backbone pair 2 h apart is re-typed, not deleted.
-
-    Mutation: deleting instead of converting (the superseded design).
-    Oracle: both directions survive with weight `1/(1+2)`,
-        `sub_type == 'proximity'`, and NO `direction` key — proximity
-        edges are written without one, so a bare sub_type flip would
-        leave a shape the write path never produces.
-    """
-    p = _payload(
-        [_mi('a', NOW), _mi('b', NOW - timedelta(hours=2))],
-        [_backbone('a', 'b'), _backbone('b', 'a', 'succeeds')])
-    result = mig.repair_payload(p)
-    assert result.edges_converted == 2
-    assert result.edges_dropped == 0
-    assert len(p.edges) == 2
-    for e in p.edges:
-        assert e.metadata['sub_type'] == 'proximity'
-        assert 'direction' not in e.metadata
-        assert e.weight == pytest.approx(1.0 / 3.0)
-        assert e.metadata['hours_diff'] == '2.00'
-
-
-def test_backbone_beyond_window_is_dropped():
-    """A backbone pair 10 h apart is false adjacency and is dropped.
-
-    Mutation: converting unconditionally (no window test).
-    Oracle: both directions gone, `edges_dropped == 2`, zero
-        conversions.
-    """
-    p = _payload(
-        [_mi('a', NOW), _mi('c', NOW - timedelta(hours=10))],
-        [_backbone('a', 'c'), _backbone('c', 'a', 'succeeds')])
-    result = mig.repair_payload(p)
-    assert result.edges_dropped == 2
-    assert result.edges_converted == 0
-    assert p.edges == []
-
-
-def test_backbone_with_missing_endpoint_does_not_raise():
-    """A backbone edge whose endpoint has no insights row passes through.
-
-    `default` holds 110 such edges; without the guard the timestamp
-    lookup raises on the one store the runbook declares mandatory.
-
-    Mutation: dropping the missing-endpoint guard (KeyError), or
-        counting the edge as converted/dropped instead of leaving it
-        for the orphan filter.
-    Oracle: no exception, and the edge lands in
-        `orphan_edges_dropped`.
-    """
-    p = _payload(
-        [_mi('a', NOW)],
-        [_backbone('a', 'ghost')])
-    result = mig.repair_payload(p)
-    assert result.orphan_edges_dropped == 1
-    assert result.edges_converted == 0
-    assert result.edges_dropped == 0
-    assert p.edges == []
-
-
 def test_touched_ids_excludes_dead_endpoints():
     """`touched_ids` carries only live, non-soft-deleted endpoints.
 
@@ -238,30 +156,26 @@ def test_touched_ids_excludes_dead_endpoints():
     and raises `ValueError` on a miss — after `apply` committed and
     the original directory was archived away.
 
-    Mutation: leaving `touched_ids` unintersected with live ids, or
-        collecting converted edges' endpoints too.
-    Oracle: a dropped >4 h pair with one soft-deleted endpoint plus
-        an orphan edge yields exactly the one live id.
+    Mutation: leaving `touched_ids` unintersected with live ids.
+    Oracle: orphan edges touching one live id, one soft-deleted id
+        and one missing id yield exactly the live id.
     """
     p = _payload(
-        [_mi('a', NOW),
-         _mi('c', NOW - timedelta(hours=10), deleted_at=NOW),
-         _mi('w1', NOW), _mi('w2', NOW - timedelta(hours=1))],
-        [_backbone('a', 'c'), _backbone('c', 'a', 'succeeds'),
-         _backbone('a', 'ghost'),
-         _backbone('w1', 'w2'), _backbone('w2', 'w1', 'succeeds')])
+        [_mi('a', NOW), _mi('d', NOW, deleted_at=NOW)],
+        [_semantic('a', 'ghost'), _semantic('d', 'ghost')])
     result = mig.repair_payload(p)
+    assert result.orphan_edges_dropped == 2
     assert result.touched_ids == {'a'}
 
 
 def test_repair_drops_orphan_edges(tmp_path):
     """An edge to a missing insight never reaches the FK-checked insert.
 
-    Mutation: dropping repair 3 — `apply` opens with
+    Mutation: dropping the orphan filter — `apply` opens with
         `pragma foreign_keys=on`, so the orphan hits the insert as a
         FOREIGN KEY failure after the store was archived away.
-    Oracle: the rebuild completes and the new store holds zero edges
-        touching the ghost id.
+    Oracle: the rebuild completes, the ghost edge is gone, and the
+        live pair survives untouched.
     """
     _make_old_store(tmp_path, 's1')
     mig.migrate_store(
@@ -272,27 +186,18 @@ def test_repair_drops_orphan_edges(tmp_path):
             "select count(*) from edges"
             " where source_id = 'ghost' or target_id = 'ghost'"
             ).fetchone()[0]
-        prox = conn.execute(
-            "select weight, json_extract(metadata, '$.direction')"
-            " from edges where json_extract(metadata,"
-            " '$.sub_type') = 'proximity'").fetchall()
-        beyond = conn.execute(
-            "select count(*) from edges"
-            " where source_id = 'c' or target_id = 'c'").fetchone()[0]
+        live = conn.execute(
+            'select count(*) from edges').fetchone()[0]
     assert ghost == 0
-    assert len(prox) == 2
-    assert all(w == pytest.approx(1.0 / 3.0) for w, _d in prox)
-    assert all(d is None for _w, d in prox)
-    assert beyond == 0
+    assert live == 2
 
 
 def test_script_refuses_already_migrated_store(tmp_path):
     """A second run skips a migrated store instead of re-archiving it.
 
     Mutation: dropping the column-probe guard — the re-run would
-        re-archive and repair 2 would re-type legitimate session
-        backbone edges into proximity edges with nothing signalling
-        the damage.
+        re-archive a healthy store and re-run `repair_payload`
+        against data it already repaired.
     Oracle: `store_gate` answers 'skip' after a successful rebuild.
     """
     _make_old_store(tmp_path, 's2')
@@ -351,16 +256,16 @@ def test_new_schema_empty_store_is_not_treated_as_migrated(
     (tmp_path / mig.BREADCRUMB_NAME).write_text('s4')
     monkeypatch.setattr(
         'sys.argv',
-        ['migrate_0180.py', 's4', '--data-dir', str(tmp_path)])
+        ['rebuild_schema.py', 's4', '--data-dir', str(tmp_path)])
     assert mig.main() == 1
     assert (tmp_path / mig.BREADCRUMB_NAME).exists()
 
 
 def test_script_rejects_wrong_interpreter(monkeypatch):
-    """A memman whose PAYLOAD_VERSION is not 2 must abort.
+    """A memman whose payload version differs must abort.
 
-    The pipx interpreter would import 0.17.3's `SqliteMigrator` and
-    silently rebuild the old schema.
+    A mismatched interpreter would import another release's
+    `SqliteMigrator` and silently rebuild the wrong schema.
 
     Mutation: dropping the import guard.
     Oracle: `assert_correct_interpreter` raises `SystemExit` when the
