@@ -140,6 +140,10 @@ class MemmanLLMClient:
         - Token accounting is per attempt, inside the retry loop: an
           empty HTTP-200 body is a billed completion, so success-only
           accounting undercounts by up to `MAX_RETRIES - 1` attempts.
+        - Non-2xx attempts are booked as `http_errors`, never
+          `calls`: a 429 storm bills nothing and must not read as
+          billed completions. An HTTP-200 whose body is not JSON is
+          booked like an empty body and retried.
         """
         if stage not in llm_usage.VALID_STAGES:
             raise ValueError(
@@ -181,7 +185,7 @@ class MemmanLLMClient:
                 usage_block = (
                     err_body.get('usage')
                     if isinstance(err_body, dict) else None)
-                llm_usage.record(stage, usage_block)
+                llm_usage.record(stage, usage_block, http_error=True)
                 trace.event(
                     'llm_response',
                     endpoint=self.endpoint,
@@ -201,17 +205,27 @@ class MemmanLLMClient:
                     time.sleep(delay)
                     continue
                 raise
-            data = resp.json()
+            try:
+                data = resp.json()
+            except ValueError:
+                # A 200 with an unparseable body (truncating proxy)
+                # is still a billed attempt; book it before the
+                # retry, not after a raise that skips the ledger.
+                data = None
             # Every HTTP-200 attempt is a billed completion --
             # malformed, empty and success alike carry a usage block,
             # so record it here, once per attempt, before branching.
             usage_block = (
                 data.get('usage') if isinstance(data, dict) else None)
             llm_usage.record(stage, usage_block)
-            choices = data.get('choices') or []
+            choices = (
+                (data.get('choices') or [])
+                if isinstance(data, dict) else [])
             empty_kind = ''
             content = None
-            if not choices:
+            if data is None:
+                empty_kind = 'unparseable_body'
+            elif not choices:
                 empty_kind = 'empty_choices'
             else:
                 try:

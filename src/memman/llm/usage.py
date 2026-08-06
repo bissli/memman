@@ -10,11 +10,15 @@ completions, and a success-only recorder books zero for two of them.
 
 Notes
 -----
-- `calls` counts HTTP attempts that reached the endpoint; token
-  fields sum the provider-reported `usage` values.
-- A response with no `usage` block increments `missing_usage` and
-  adds nothing to the token fields -- "provider reported zero" and
-  "provider reported nothing" must stay distinguishable.
+- `calls` counts HTTP-200 attempts (billed completions); non-2xx
+  attempts land in `http_errors` instead, so a 429 storm retried
+  three times cannot inflate the billed-call signal 3x. Token
+  fields sum the provider-reported `usage` values from either kind
+  of attempt (an error body reporting usage was still billed).
+- An HTTP-200 response with no `usage` block increments
+  `missing_usage` and adds nothing to the token fields -- "provider
+  reported zero" and "provider reported nothing" must stay
+  distinguishable.
 - The ledger is never reset. Consumers take a `snapshot()` before a
   unit of work and diff with `delta()` after, so row-level and
   drain-level readings coexist without clobbering each other.
@@ -43,13 +47,14 @@ VALID_STAGES = frozenset({
 
 _COUNTER_KEYS = (
     'calls', 'prompt_tokens', 'completion_tokens', 'total_tokens',
-    'missing_usage')
+    'missing_usage', 'http_errors')
 
 _LOCK = threading.Lock()
 _LEDGER: dict[str, dict[str, int]] = {}
 
 
-def record(stage: str, usage: dict | None) -> None:
+def record(stage: str, usage: dict | None, *,
+           http_error: bool = False) -> None:
     """Add one completion attempt to the stage's bucket.
 
     Parameters
@@ -59,7 +64,13 @@ def record(stage: str, usage: dict | None) -> None:
         create a silent phantom bucket.
     usage : dict | None
         The response body's `usage` block, or None when the provider
-        reported nothing (counted in `missing_usage`).
+        reported nothing (counted in `missing_usage` for billed
+        attempts).
+    http_error : bool, default False
+        True for a non-2xx attempt: booked as `http_errors`, not
+        `calls`, and never as `missing_usage` -- an unbilled
+        rejection is neither a billed completion nor a billed
+        completion whose usage went unreported.
     """
     if stage not in VALID_STAGES:
         raise ValueError(
@@ -68,9 +79,13 @@ def record(stage: str, usage: dict | None) -> None:
     with _LOCK:
         bucket = _LEDGER.setdefault(
             stage, dict.fromkeys(_COUNTER_KEYS, 0))
-        bucket['calls'] += 1
+        if http_error:
+            bucket['http_errors'] += 1
+        else:
+            bucket['calls'] += 1
         if not isinstance(usage, dict):
-            bucket['missing_usage'] += 1
+            if not http_error:
+                bucket['missing_usage'] += 1
             return
         prompt = int(usage.get('prompt_tokens') or 0)
         completion = int(usage.get('completion_tokens') or 0)

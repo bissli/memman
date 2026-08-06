@@ -22,9 +22,19 @@ def _install_fake_post(monkeypatch, responses):
 
     def _fake_post(url, headers=None, json=None, timeout=None):
         calls.append(json)
-        payload = responses[min(len(calls) - 1, len(responses) - 1)]
+        spec = responses[min(len(calls) - 1, len(responses) - 1)]
+        # A dict is an HTTP-200 JSON body; a (status, body) tuple
+        # picks the status, with a str body sent as raw text.
+        if isinstance(spec, tuple):
+            status, body = spec
+            if isinstance(body, str):
+                return httpx.Response(
+                    status, request=httpx.Request('POST', url),
+                    text=body)
+            return httpx.Response(
+                status, request=httpx.Request('POST', url), json=body)
         return httpx.Response(
-            200, request=httpx.Request('POST', url), json=payload)
+            200, request=httpx.Request('POST', url), json=spec)
 
     monkeypatch.setitem(
         _http._SESSIONS, llm_client_mod.__name__,
@@ -104,6 +114,57 @@ def test_exhausted_retries_still_charge_every_attempt(monkeypatch):
     d = usage.delta(before, usage.snapshot())
     assert d[usage.STAGE_EXTRACTION]['calls'] == MAX_RETRIES
     assert d[usage.STAGE_EXTRACTION]['prompt_tokens'] == 5 * MAX_RETRIES
+
+
+@pytest.mark.no_mock_llm
+def test_http_errors_split_from_billed_calls(monkeypatch):
+    """Unbilled non-2xx retries land in http_errors, not calls.
+
+    A 429/5xx rejection bills nothing; booking it as a call lets a
+    rate-limit storm inflate the drain's billed-call signal 3x.
+
+    Mutation: recording error attempts into `calls` (the 0.19.0
+        form), or dropping the error-path record entirely.
+    Oracle: a [500, 500, valid] sequence books exactly calls == 1,
+        http_errors == 2, missing_usage == 0, and only the valid
+        attempt's 7 prompt tokens.
+    """
+    monkeypatch.setattr(llm_client_mod.time, 'sleep', lambda s: None)
+    before = usage.snapshot()
+    _install_fake_post(monkeypatch, [
+        (500, {'error': 'boom'}), (500, {'error': 'boom'}), _valid()])
+    assert _client().complete(
+        'sys', 'user', stage=usage.STAGE_ENRICHMENT) == 'ok'
+    d = usage.delta(before, usage.snapshot())
+    assert d[usage.STAGE_ENRICHMENT]['calls'] == 1
+    assert d[usage.STAGE_ENRICHMENT]['http_errors'] == 2
+    assert d[usage.STAGE_ENRICHMENT].get('missing_usage', 0) == 0
+    assert d[usage.STAGE_ENRICHMENT]['prompt_tokens'] == 7
+
+
+@pytest.mark.no_mock_llm
+def test_unparseable_200_body_is_booked_and_retried(monkeypatch):
+    """A billed 200 with a non-JSON body is booked, then retried.
+
+    A truncating proxy returns 200 with an HTML or partial body;
+    the provider billed the completion either way.
+
+    Mutation: parsing `resp.json()` before the accounting (the
+        0.19.0 form) -- the JSONDecodeError skips the ledger and
+        aborts the call with no retry.
+    Oracle: [html junk, valid] returns 'ok' with calls == 2 and
+        missing_usage == 1 in the stage bucket.
+    """
+    monkeypatch.setattr(llm_client_mod.time, 'sleep', lambda s: None)
+    before = usage.snapshot()
+    _install_fake_post(monkeypatch, [
+        (200, '<html>bad gateway page</html>'), _valid()])
+    assert _client().complete(
+        'sys', 'user', stage=usage.STAGE_CAUSAL) == 'ok'
+    d = usage.delta(before, usage.snapshot())
+    assert d[usage.STAGE_CAUSAL]['calls'] == 2
+    assert d[usage.STAGE_CAUSAL]['missing_usage'] == 1
+    assert d[usage.STAGE_CAUSAL]['prompt_tokens'] == 7
 
 
 @pytest.mark.no_mock_llm

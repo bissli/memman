@@ -1264,8 +1264,10 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
            limit: int, source: str, basic: bool,
            intent: str, expand: bool) -> None:
     """Retrieve insights by keyword."""
+    from memman import trace
     from memman.embed.fingerprint import assert_fingerprint_unchanged_for_sync
     from memman.embed.fingerprint import bound_embedder, stored_fingerprint
+    from memman.llm import usage as llm_usage
     from memman.llm.extract import expand_query
     from memman.search.intent import intent_from_string
     from memman.search.recall import intent_aware_recall
@@ -1303,8 +1305,16 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
         expansion: dict = {}
         if expand:
             llm_client = _get_llm_client_or_fail('fast')
+            # The recall process exits right after retrieval, so the
+            # query_expansion bucket would die unreported without a
+            # summary emitted here (drains never see this stage).
+            expand_usage_snap = llm_usage.snapshot()
             expansion = expand_query(llm_client, keyword_str)
             keyword_str = expansion['expanded_query']
+            trace.event(
+                'llm_usage_summary',
+                llm_usage=llm_usage.delta(
+                    expand_usage_snap, llm_usage.snapshot()))
 
         intent_override = None
         if intent:
