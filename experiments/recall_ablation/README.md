@@ -43,3 +43,21 @@ Conclusion — `MMR_LAMBDA = 1.0` (term disabled) is the measured value:
 - Under the production default (rerank on), MMR contributes ~nothing at any lambda: byte-identical output at 0.9, and at the most aggressive 0.5 the final redundancy moves 1.6 points while the cross-encoder re-picks the same head anyway.
 - Rerank-off gains are real (0.655 -> 0.504 at lambda 0.5) but rewrite most of the top-10 (jaccard 0.176 vs baseline) with no relevance labels to certify that the rewrite does not demote a fact's own decision rationale — exactly the pair memman's semantic edges link.
 - The mechanism stays shipped and sweepable (`MMR_LAMBDA`/`MMR_POOL` in `search/recall.py`, `mmr_l*` configs here); revisit if a labeled-relevance eval lands or a rerank-off deployment materialises.
+
+## MMR after-rerank placement sweep (2026-08-06, memman 0.20.0)
+
+The spec's alternative placement — rerank the full top-100 shortlist first, then one-shot MMR over the reranked list (reranker relevance as the score term), then the limit slice — measured with the `mmr_after_l{NN}_rerank` configs; same store sandbox, 12 queries, `--limit 10`. Raw rows in `results_after.csv` (untracked artifact).
+
+| config               | mean redundancy | vs rerank_voyage | jaccard vs rerank_voyage |
+| -------------------- | --------------- | ---------------- | ------------------------ |
+| rerank_voyage        | 0.657           | —                | 1.000                    |
+| mmr_after_l50_rerank | 0.552           | -0.104           | 0.338 (top-3 same 0/12)  |
+| mmr_after_l70_rerank | 0.597           | -0.059           | 0.549 (top-3 same 2/12)  |
+| mmr_after_l80_rerank | 0.625           | -0.032           | 0.711 (top-3 same 4/12)  |
+| mmr_after_l90_rerank | 0.644           | -0.013           | 0.854 (top-3 same 5/12)  |
+
+Conclusion — the placement move does not change the shipped `MMR_LAMBDA = 1.0`:
+
+- Downstream of the reranker the diversity term finally has leverage (unlike upstream, where the cross-encoder re-picks the same head regardless), but every redundancy point is bought by overriding the only relevance oracle in the pipeline: at lambda 0.5 the certified top-3 survives on 0/12 queries, and at lambda 0.9 the surviving 1.3-point gain is noise-level.
+- Same verdict shape as the rerank-off arm above: real diversity, uncertifiable relevance cost. Ship it only when a labeled-relevance eval can prove the trade.
+- The after-rerank arm also reranks all 100 shortlist docs instead of 10 and adds an O(n^2) cosine pass (~+200-400 ms observed on this store), a real hot-path cost for an unverifiable gain.
