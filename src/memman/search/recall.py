@@ -648,6 +648,14 @@ def intent_aware_recall(
             for i, r in enumerate(pool)
             if r['insight'].id in embed_cache]
         if len(vec_rows) > 1:
+            # Ragged dims (mid-model-swap, a partial reembed, or a
+            # short blob) would make np.array raise; off-modal rows
+            # join the unembedded set and hold their positions.
+            modal_dim = Counter(
+                len(v) for _, v in vec_rows).most_common(1)[0][0]
+            vec_rows = [
+                (i, v) for i, v in vec_rows if len(v) == modal_dim]
+        if len(vec_rows) > 1:
             mx = np.array([v for _, v in vec_rows], dtype=np.float64)
             norms = np.linalg.norm(mx, axis=1, keepdims=True)
             norms[norms == 0.0] = 1.0
