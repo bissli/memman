@@ -79,7 +79,7 @@ def test_recent_insights_in_llm_prompt(backend):
     captured_prompts = []
 
     class MockLLM:
-        def complete(self, system, user):
+        def complete(self, system, user, **kwargs):
             captured_prompts.append(user)
             return '[]'
 

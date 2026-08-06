@@ -11,6 +11,7 @@ import pytest
 from memman import _http
 from memman._http import MAX_RETRIES
 from memman.llm import client as llm_client_mod
+from memman.llm import usage
 from memman.llm.client import MemmanLLMClient
 
 VALID = {'choices': [{'message': {'content': 'ok'}}]}
@@ -48,7 +49,7 @@ def test_empty_choices_retries_then_succeeds(monkeypatch):
     calls = _install_fake_post(
         monkeypatch, [{'choices': []}, {'choices': []}, VALID])
     monkeypatch.setattr(llm_client_mod.time, 'sleep', lambda s: None)
-    assert _client().complete('sys', 'user') == 'ok'
+    assert _client().complete('sys', 'user', stage=usage.STAGE_PROBE) == 'ok'
     assert len(calls) == 3
 
 
@@ -64,7 +65,7 @@ def test_empty_choices_raises_after_last_attempt(monkeypatch):
     calls = _install_fake_post(monkeypatch, [{'choices': []}])
     monkeypatch.setattr(llm_client_mod.time, 'sleep', lambda s: None)
     with pytest.raises(RuntimeError):
-        _client().complete('sys', 'user')
+        _client().complete('sys', 'user', stage=usage.STAGE_PROBE)
     assert len(calls) == MAX_RETRIES
 
 
@@ -83,7 +84,7 @@ def test_empty_content_string_retries(monkeypatch, empty_content):
         monkeypatch,
         [{'choices': [{'message': {'content': empty_content}}]}, VALID])
     monkeypatch.setattr(llm_client_mod.time, 'sleep', lambda s: None)
-    assert _client().complete('sys', 'user') == 'ok'
+    assert _client().complete('sys', 'user', stage=usage.STAGE_PROBE) == 'ok'
     assert len(calls) == 2
 
 
@@ -103,7 +104,7 @@ def test_empty_retry_does_not_sleep_backoff(monkeypatch):
     calls = _install_fake_post(
         monkeypatch, [{'choices': []}, {'choices': []}, VALID])
     monkeypatch.setattr(llm_client_mod.time, 'sleep', slept.append)
-    assert _client().complete('sys', 'user') == 'ok'
+    assert _client().complete('sys', 'user', stage=usage.STAGE_PROBE) == 'ok'
     assert len(calls) == 3
     assert all(s < 1.0 for s in slept)
 
@@ -124,5 +125,5 @@ def test_structurally_malformed_response_is_not_retried(monkeypatch):
         monkeypatch, [{'choices': [{'no_message': {}}]}])
     monkeypatch.setattr(llm_client_mod.time, 'sleep', lambda s: None)
     with pytest.raises(RuntimeError):
-        _client().complete('sys', 'user')
+        _client().complete('sys', 'user', stage=usage.STAGE_PROBE)
     assert len(calls) == 1

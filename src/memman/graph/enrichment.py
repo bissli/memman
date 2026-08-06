@@ -3,6 +3,7 @@
 import logging
 
 from memman import trace
+from memman.llm import usage as llm_usage
 from memman.llm.shared import parse_json_response
 from memman.store.model import Insight
 
@@ -45,7 +46,9 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
         existing_entity_count=len(insight.entities))
 
     try:
-        raw = llm_client.complete(ENRICHMENT_SYSTEM_PROMPT, prompt)
+        raw = llm_client.complete(
+            ENRICHMENT_SYSTEM_PROMPT, prompt,
+            stage=llm_usage.STAGE_ENRICHMENT)
     except Exception as exc:
         logger.warning(
             'enrichment LLM call failed for %s (len=%d): %s: %s;'

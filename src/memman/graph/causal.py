@@ -5,6 +5,7 @@ import re
 from typing import Any
 
 from memman import trace
+from memman.llm import usage as llm_usage
 from memman.llm.shared import parse_json_list_response
 from memman.search.keyword import tokenize
 from memman.store.backend import Backend
@@ -158,7 +159,8 @@ def infer_llm_causal_edges(
         recent_count=len(recent))
 
     try:
-        raw = llm_client.complete(LLM_SYSTEM_PROMPT, prompt)
+        raw = llm_client.complete(
+            LLM_SYSTEM_PROMPT, prompt, stage=llm_usage.STAGE_CAUSAL)
     except Exception as exc:
         logger.debug(f'LLM causal inference unavailable for {insight.id}')
         trace.event(

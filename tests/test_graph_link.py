@@ -157,7 +157,7 @@ class TestLinkPending:
         call_log = []
 
         class TxTrackingLLM:
-            def complete(self, system, user):
+            def complete(self, system, user, **kwargs):
                 call_log.append({
                     'in_tx': tmp_db._in_tx,
                     'call': 'complete',
