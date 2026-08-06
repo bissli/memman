@@ -1,0 +1,206 @@
+"""Per-stage LLM token accounting (F1).
+
+Drives the real `MemmanLLMClient.complete` through a fake transport
+(same pattern as test_llm_client_retry.py) and the `usage` ledger
+directly, so attribution, retry accumulation, and the lock are all
+exercised where they live.
+"""
+
+import sys
+import threading
+
+import httpx
+import pytest
+from memman import _http
+from memman.llm import client as llm_client_mod
+from memman.llm import usage
+from memman.llm.client import MemmanLLMClient
+
+
+def _install_fake_post(monkeypatch, responses):
+    calls = []
+
+    def _fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(json)
+        payload = responses[min(len(calls) - 1, len(responses) - 1)]
+        return httpx.Response(
+            200, request=httpx.Request('POST', url), json=payload)
+
+    monkeypatch.setitem(
+        _http._SESSIONS, llm_client_mod.__name__,
+        type('FakeClient', (), {'post': staticmethod(_fake_post)})())
+    return calls
+
+
+def _client():
+    return MemmanLLMClient(
+        endpoint='http://localhost:11434/v1', api_key='',
+        model='test-model')
+
+
+def _valid(content='ok', prompt=7, completion=3):
+    return {
+        'choices': [{'message': {'content': content}}],
+        'usage': {'prompt_tokens': prompt, 'completion_tokens': completion,
+                  'total_tokens': prompt + completion},
+        }
+
+
+@pytest.mark.no_mock_llm
+def test_usage_attributed_to_originating_stage(monkeypatch):
+    """Every billed attempt lands in its caller's stage bucket.
+
+    An empty-retrying call bills each attempt; a success-only
+    recorder books zero for the empties, and a stage mixup charges
+    enrichment's spend to causal.
+
+    Mutation: swapping two stage labels, or reading `usage` only at
+        the success site (dropping retry accumulation).
+    Oracle: an [empty-with-usage, valid] sequence on 'enrichment'
+        records 2 calls / 15 prompt tokens there; a single valid call
+        on 'causal' records 1 call / 7 — exact per-stage sums.
+    """
+    monkeypatch.setattr(llm_client_mod.time, 'sleep', lambda s: None)
+    before = usage.snapshot()
+    empty = {
+        'choices': [],
+        'usage': {'prompt_tokens': 8, 'completion_tokens': 0,
+                  'total_tokens': 8},
+        }
+    _install_fake_post(monkeypatch, [empty, _valid()])
+    assert _client().complete(
+        'sys', 'user', stage=usage.STAGE_ENRICHMENT) == 'ok'
+    _install_fake_post(monkeypatch, [_valid()])
+    assert _client().complete(
+        'sys', 'user', stage=usage.STAGE_CAUSAL) == 'ok'
+    d = usage.delta(before, usage.snapshot())
+    assert d[usage.STAGE_ENRICHMENT]['calls'] == 2
+    assert d[usage.STAGE_ENRICHMENT]['prompt_tokens'] == 15
+    assert d[usage.STAGE_ENRICHMENT]['completion_tokens'] == 3
+    assert d[usage.STAGE_CAUSAL]['calls'] == 1
+    assert d[usage.STAGE_CAUSAL]['prompt_tokens'] == 7
+
+
+@pytest.mark.no_mock_llm
+def test_exhausted_retries_still_charge_every_attempt(monkeypatch):
+    """All-empty attempts are charged even though `complete` raises.
+
+    Mutation: recording usage only on the success return path — a
+        raising call books zero despite MAX_RETRIES billed attempts.
+    Oracle: exactly `MAX_RETRIES` calls and the summed prompt tokens
+        of every empty body appear in the ledger after the raise.
+    """
+    from memman._http import MAX_RETRIES
+    monkeypatch.setattr(llm_client_mod.time, 'sleep', lambda s: None)
+    before = usage.snapshot()
+    empty = {
+        'choices': [],
+        'usage': {'prompt_tokens': 5, 'completion_tokens': 0,
+                  'total_tokens': 5},
+        }
+    _install_fake_post(monkeypatch, [empty])
+    with pytest.raises(RuntimeError):
+        _client().complete('sys', 'user', stage=usage.STAGE_EXTRACTION)
+    d = usage.delta(before, usage.snapshot())
+    assert d[usage.STAGE_EXTRACTION]['calls'] == MAX_RETRIES
+    assert d[usage.STAGE_EXTRACTION]['prompt_tokens'] == 5 * MAX_RETRIES
+
+
+@pytest.mark.no_mock_llm
+def test_missing_usage_block_counts_call_not_tokens(monkeypatch):
+    """A body without `usage` bumps `missing_usage`, not the tokens.
+
+    Mutation: conflating "provider reported zero" with "reported
+        nothing" (e.g. treating a missing block as all-zero usage
+        without counting it).
+    Oracle: a usage-less body yields calls=1, missing_usage=1,
+        zero tokens; an explicit all-zero block yields calls=1,
+        missing_usage=0.
+    """
+    before = usage.snapshot()
+    _install_fake_post(
+        monkeypatch, [{'choices': [{'message': {'content': 'ok'}}]}])
+    _client().complete('sys', 'user', stage=usage.STAGE_PROBE)
+    d = usage.delta(before, usage.snapshot())
+    assert d[usage.STAGE_PROBE]['calls'] == 1
+    assert d[usage.STAGE_PROBE]['missing_usage'] == 1
+    assert d[usage.STAGE_PROBE]['total_tokens'] == 0
+
+    mid = usage.snapshot()
+    _install_fake_post(monkeypatch, [_valid(prompt=0, completion=0)])
+    _client().complete('sys', 'user', stage=usage.STAGE_PROBE)
+    d2 = usage.delta(mid, usage.snapshot())
+    assert d2[usage.STAGE_PROBE]['calls'] == 1
+    assert d2[usage.STAGE_PROBE].get('missing_usage', 0) == 0
+
+
+def test_concurrent_stages_do_not_interleave_usage():
+    """Two threads recording into one stage sum exactly.
+
+    Enrichment and causal run concurrently on a two-worker executor,
+    so `record` races are the production case, not a theoretical one.
+
+    Mutation: removing the `Lock` around the ledger update — the
+        read-modify-write interleaves and updates are lost.
+    Oracle: 2 threads x 20000 records sum to exactly 40000 calls and
+        40000 * 7 prompt tokens.
+    """
+    n = 20000
+    before = usage.snapshot()
+    old_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        def _hammer():
+            for _ in range(n):
+                usage.record(
+                    usage.STAGE_RECONCILIATION, {'prompt_tokens': 7})
+
+        threads = [threading.Thread(target=_hammer) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    finally:
+        sys.setswitchinterval(old_interval)
+    d = usage.delta(before, usage.snapshot())
+    assert d[usage.STAGE_RECONCILIATION]['calls'] == 2 * n
+    assert d[usage.STAGE_RECONCILIATION]['prompt_tokens'] == 2 * n * 7
+
+
+def test_all_call_sites_use_closed_set_stages():
+    """Every production `complete()` call names a closed-set stage.
+
+    Mutation: a typo'd stage string at a call site creating a
+        phantom bucket that never appears in any report.
+    Oracle: `record` raises on an unknown stage, and an ast scan of
+        src/memman finds a `stage=usage.STAGE_*` keyword on every
+        `.complete(` call.
+    """
+    import ast
+    from pathlib import Path
+
+    import memman
+
+    with pytest.raises(ValueError, match='unknown LLM stage'):
+        usage.record('extractoin', None)
+
+    src_root = Path(memman.__file__).parent
+    sites = []
+    for py in src_root.rglob('*.py'):
+        tree = ast.parse(py.read_text())
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == 'complete'):
+                continue
+            sites.append((py.name, node))
+    assert len(sites) >= 6, 'expected the six documented call sites'
+    for name, node in sites:
+        stage_kw = [k for k in node.keywords if k.arg == 'stage']
+        assert stage_kw, f'{name}: complete() call missing stage='
+        val = stage_kw[0].value
+        assert isinstance(val, ast.Attribute), (
+            f'{name}: stage must reference a usage.STAGE_* constant')
+        assert val.attr.startswith('STAGE_'), (
+            f'{name}: stage constant {val.attr!r} not a STAGE_* name')
+        assert getattr(usage, val.attr) in usage.VALID_STAGES

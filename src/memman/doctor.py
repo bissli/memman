@@ -13,6 +13,7 @@ import statistics
 from pathlib import Path
 from typing import Any
 
+from memman.llm import usage as llm_usage
 from memman.store.backend import Backend
 from memman.store.db import MIGRATION_SCRIPT
 
@@ -823,7 +824,9 @@ def check_llm_probe() -> dict[str, Any]:
             detail['error'] = str(exc)
             detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
             return {'name': 'llm_probe', 'status': 'fail', 'detail': detail}
-        out = client.complete('Reply with exactly: ok', 'probe')
+        out = client.complete(
+            'Reply with exactly: ok', 'probe',
+            stage=llm_usage.STAGE_PROBE)
         detail['model'] = client.model
         detail['sample'] = (out or '')[:60]
         detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)

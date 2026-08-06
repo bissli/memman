@@ -5,6 +5,7 @@ import re
 
 import cachetools
 from memman import config, trace
+from memman.llm import usage as llm_usage
 from memman.llm.client import MemmanLLMClient
 from memman.llm.shared import parse_json_response
 
@@ -184,7 +185,9 @@ def extract_facts(
     """
     trace.event('extract_facts_start', content_len=len(content))
     try:
-        raw = llm_client.complete(FACT_EXTRACTION_SYSTEM, content)
+        raw = llm_client.complete(
+            FACT_EXTRACTION_SYSTEM, content,
+            stage=llm_usage.STAGE_EXTRACTION)
     except Exception as exc:
         logger.debug('LLM fact extraction failed, using passthrough')
         trace.event(
@@ -303,7 +306,9 @@ def reconcile_memories(
         fact_count=len(facts),
         existing_count=len(existing_memories))
     try:
-        raw = llm_client.complete(RECONCILIATION_SYSTEM, prompt)
+        raw = llm_client.complete(
+            RECONCILIATION_SYSTEM, prompt,
+            stage=llm_usage.STAGE_RECONCILIATION)
     except Exception as exc:
         logger.debug('LLM reconciliation failed, defaulting to ADD')
         trace.event(
@@ -416,7 +421,9 @@ def expand_query(
 
     trace.event('query_expand_start', query=query)
     try:
-        raw = llm_client.complete(QUERY_EXPANSION_SYSTEM, query)
+        raw = llm_client.complete(
+            QUERY_EXPANSION_SYSTEM, query,
+            stage=llm_usage.STAGE_QUERY_EXPANSION)
     except Exception as exc:
         logger.debug('LLM query expansion failed, using passthrough')
         trace.event(

@@ -813,6 +813,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
     from memman import __version__ as _memman_version
     from memman import trace
     from memman.drain_lock import DrainLockBusy, acquire, release
+    from memman.llm import usage as llm_usage
     from memman.queue import claim, finish_worker_run, mark_done, mark_failed
     from memman.queue import queue_db, queue_db_path, start_worker_run, stats
     from memman.setup.scheduler import STATE_STOPPED, read_state
@@ -869,6 +870,9 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         last_hb = _LAST_HEARTBEAT_AT.get(data_dir_val, 0.0)
         record_run = (_time.monotonic() - last_hb) >= HEARTBEAT_MIN_INTERVAL_SECONDS
         run_id = start_worker_run(conn, worker_pid) if record_run else None
+        # Snapshot-and-delta, never reset: the ledger is process-wide
+        # and row-level deltas below must not clobber the drain total.
+        drain_usage_snap = llm_usage.snapshot()
     except Exception:
         stack.close()
         release(lock_fd)
@@ -925,6 +929,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                     ctx.begin_drain_run()
 
             embed_snap, insights_snap = ctx.snapshot_caches()
+            row_usage_snap = llm_usage.snapshot()
             try:
                 row_t0 = _time.monotonic()
                 _process_queue_row(row, ctx, executor)
@@ -937,7 +942,9 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                     'queue_done',
                     row_id=row.id,
                     store=row.store,
-                    elapsed_ms=row_elapsed_ms)
+                    elapsed_ms=row_elapsed_ms,
+                    llm_usage=llm_usage.delta(
+                        row_usage_snap, llm_usage.snapshot()))
                 if verbose:
                     click.echo(
                         f'[enrich] done id={row.id} store={row.store}',
@@ -951,7 +958,9 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                     row_id=row.id,
                     store=row.store,
                     error_class=type(exc).__name__,
-                    error_message=str(exc)[:500])
+                    error_message=str(exc)[:500],
+                    llm_usage=llm_usage.delta(
+                        row_usage_snap, llm_usage.snapshot()))
                 from memman.exceptions import EmbedCredentialError
                 if isinstance(exc, EmbedCredentialError):
                     trace.event(
@@ -995,6 +1004,8 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         stack.close()
         release(lock_fd)
 
+    drain_usage = llm_usage.delta(drain_usage_snap, llm_usage.snapshot())
+    trace.event('llm_usage_summary', usage=drain_usage)
     trace.event(
         'drain_end',
         processed=processed,
@@ -1004,6 +1015,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         'processed': processed,
         'failed': failed,
         'remaining': s,
+        'llm_usage': drain_usage,
         })
     return {'claimed': claimed, 'processed': processed, 'failed': failed}
 

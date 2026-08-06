@@ -32,6 +32,7 @@ from memman import config, trace
 from memman._http import ENRICHMENT_TIMEOUT, MAX_RETRIES, RETRY_BACKOFF
 from memman._http import RETRYABLE_STATUS_CODES, WORKER_TIMEOUT, get_session
 from memman.exceptions import ConfigError
+from memman.llm import usage as llm_usage
 from memman.llm.shared import safe_json
 
 logger = logging.getLogger('memman')
@@ -102,7 +103,8 @@ class MemmanLLMClient:
         self.extra_headers = dict(extra_headers) if extra_headers else {}
 
     def complete(self, system: str, user: str, *,
-                 temperature: float | None = None) -> str:
+                 temperature: float | None = None,
+                 stage: str) -> str:
         """Send a chat-completion request and return the message content.
 
         Parameters
@@ -115,6 +117,11 @@ class MemmanLLMClient:
             Pass a float (typically 0.0) to pin sampling and get
             deterministic outputs across runs; None uses the provider's
             default.
+        stage : str
+            Originating pipeline stage from `llm.usage.VALID_STAGES`;
+            every attempt's `usage` block is charged to it. Unknown
+            stages raise `ValueError` so a typo cannot create a
+            silent phantom bucket.
 
         Returns
         -------
@@ -130,7 +137,14 @@ class MemmanLLMClient:
           when every attempt is empty.
         - A structurally malformed response (missing `message.content`)
           raises immediately; it does not self-heal.
+        - Token accounting is per attempt, inside the retry loop: an
+          empty HTTP-200 body is a billed completion, so success-only
+          accounting undercounts by up to `MAX_RETRIES - 1` attempts.
         """
+        if stage not in llm_usage.VALID_STAGES:
+            raise ValueError(
+                f'unknown LLM stage {stage!r};'
+                f' valid stages: {sorted(llm_usage.VALID_STAGES)}')
         headers: dict[str, str] = {'Content-Type': 'application/json'}
         if self.api_key:
             headers['Authorization'] = f'Bearer {self.api_key}'
@@ -153,6 +167,7 @@ class MemmanLLMClient:
                 endpoint=self.endpoint,
                 url=url,
                 attempt=attempt + 1,
+                stage=stage,
                 headers=trace.redact_headers(headers),
                 body=body)
             t0 = time.monotonic()
@@ -162,12 +177,19 @@ class MemmanLLMClient:
             try:
                 resp.raise_for_status()
             except httpx.HTTPStatusError:
+                err_body = safe_json(resp)
+                usage_block = (
+                    err_body.get('usage')
+                    if isinstance(err_body, dict) else None)
+                llm_usage.record(stage, usage_block)
                 trace.event(
                     'llm_response',
                     endpoint=self.endpoint,
                     status=resp.status_code,
                     elapsed_ms=elapsed_ms,
-                    body=safe_json(resp),
+                    stage=stage,
+                    usage=usage_block,
+                    body=err_body,
                     error='http_status')
                 if (resp.status_code in RETRYABLE_STATUS_CODES
                         and attempt < MAX_RETRIES - 1):
@@ -180,6 +202,12 @@ class MemmanLLMClient:
                     continue
                 raise
             data = resp.json()
+            # Every HTTP-200 attempt is a billed completion --
+            # malformed, empty and success alike carry a usage block,
+            # so record it here, once per attempt, before branching.
+            usage_block = (
+                data.get('usage') if isinstance(data, dict) else None)
+            llm_usage.record(stage, usage_block)
             choices = data.get('choices') or []
             empty_kind = ''
             content = None
@@ -194,6 +222,8 @@ class MemmanLLMClient:
                         endpoint=self.endpoint,
                         status=resp.status_code,
                         elapsed_ms=elapsed_ms,
+                        stage=stage,
+                        usage=usage_block,
                         body=data)
                     raise RuntimeError(
                         f'llm response missing message.content'
@@ -207,6 +237,8 @@ class MemmanLLMClient:
                     endpoint=self.endpoint,
                     status=resp.status_code,
                     elapsed_ms=elapsed_ms,
+                    stage=stage,
+                    usage=usage_block,
                     body=data)
                 return content
             trace.event(
@@ -214,6 +246,8 @@ class MemmanLLMClient:
                 endpoint=self.endpoint,
                 status=resp.status_code,
                 elapsed_ms=elapsed_ms,
+                stage=stage,
+                usage=usage_block,
                 body=data,
                 error=empty_kind)
             if attempt < MAX_RETRIES - 1:

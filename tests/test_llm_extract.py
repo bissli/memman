@@ -75,7 +75,7 @@ class FakeLLMClient:
         self.response = response
         self.calls: list[tuple[str, str]] = []
 
-    def complete(self, system: str, user: str) -> str:
+    def complete(self, system: str, user: str, **kwargs) -> str:
         """Record call and return canned response."""
         self.calls.append((system, user))
         return self.response
@@ -135,7 +135,7 @@ class TestExtractFacts:
     def test_llm_failure_returns_passthrough(self):
         """Network/timeout error returns content as passthrough fact."""
         class FailingClient:
-            def complete(self, system: str, user: str) -> str:
+            def complete(self, system: str, user: str, **kwargs) -> str:
                 raise ConnectionError('timeout')
         facts = extract_facts(FailingClient(), 'important fact')
         assert len(facts) == 1
@@ -238,7 +238,7 @@ class TestReconcileMemories:
     def test_llm_failure_defaults_to_add(self):
         """LLM failure returns all-ADD."""
         class FailingClient:
-            def complete(self, system: str, user: str) -> str:
+            def complete(self, system: str, user: str, **kwargs) -> str:
                 raise ConnectionError('timeout')
         facts = [{'text': 'a'}, {'text': 'b'}]
         result = reconcile_memories(
@@ -281,7 +281,7 @@ class TestExpandQuery:
     def test_llm_failure_returns_passthrough(self):
         """LLM failure returns original query unchanged."""
         class FailingClient:
-            def complete(self, system: str, user: str) -> str:
+            def complete(self, system: str, user: str, **kwargs) -> str:
                 raise ConnectionError('timeout')
         result = expand_query(FailingClient(), 'my query')
         assert result['expanded_query'] == 'my query'
