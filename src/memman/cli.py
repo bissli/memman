@@ -1313,7 +1313,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
             keyword_str = expansion['expanded_query']
             trace.event(
                 'llm_usage_summary',
-                llm_usage=llm_usage.delta(
+                usage=llm_usage.delta(
                     expand_usage_snap, llm_usage.snapshot()))
 
         intent_override = None
