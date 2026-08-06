@@ -17,6 +17,11 @@ Configurations swept:
     rerank_voyage         baseline + post-hoc Voyage rerank-2.5-lite on top-100
     mmr_l{NN}[_rerank]    baseline + one-shot MMR at lambda 0.NN,
                           with and without the post-hoc rerank
+    mmr_after_l{NN}_rerank  the spec's alternative placement: rerank the
+                          full top-100 shortlist FIRST, then the one-shot
+                          MMR re-sort over the reranked list (reranker
+                          relevance as the score term), then the limit
+                          slice
 
 Select a subset with `--configs name1,name2`; point `--data-dir` at a
 sandbox copy to sweep without touching live stores.
@@ -74,6 +79,9 @@ CONFIGS += [
         {'name': f'mmr_l{int(_lam * 100):02d}_rerank',
          'anchor_top_k': 30, 'weights': None, 'mmr_lambda': _lam,
          'rerank': True},
+        {'name': f'mmr_after_l{int(_lam * 100):02d}_rerank',
+         'anchor_top_k': 30, 'weights': None, 'rerank': True,
+         'mmr_after_rerank': _lam},
         )]
 
 
@@ -157,13 +165,49 @@ def run_one(backend: SqliteBackend, fingerprint: Fingerprint,
 
     if config.get('rerank'):
         shortlist = results[:100]
+        after_lam = config.get('mmr_after_rerank')
         if len(shortlist) >= 2:
             docs = [r['insight'].content for r in shortlist]
             try:
                 t_r = time.perf_counter()
-                scored = voyage_rerank(use_query, docs, top_k=limit)
+                # The after-rerank placement needs the WHOLE reranked
+                # shortlist (membership of the final slice may
+                # change), and the reranker's relevance scores.
+                top_k = len(docs) if after_lam is not None else limit
+                scored = voyage_rerank(use_query, docs, top_k=top_k)
                 elapsed_ms += (time.perf_counter() - t_r) * 1000
                 results = [shortlist[i] for i, _ in scored]
+                if after_lam is not None and len(results) > 1:
+                    # One-shot MMR over the RERANKED list, before the
+                    # limit slice -- the spec's alternative placement.
+                    # Same algorithm as production: score once against
+                    # the pool, sort once, unembedded rows hold their
+                    # slots; the relevance term is the reranker score.
+                    rr_scores = [s for _, s in scored]
+                    embedded = [
+                        i for i, r in enumerate(results)
+                        if r['insight'].id in embeddings]
+                    if len(embedded) > 1:
+                        vec_by_idx = {
+                            i: embeddings[results[i]['insight'].id]
+                            for i in embedded}
+                        mmr_by_idx = {}
+                        for i in embedded:
+                            max_sim = max(
+                                cosine_similarity(
+                                    vec_by_idx[i], vec_by_idx[j])
+                                for j in embedded if j != i)
+                            mmr_by_idx[i] = (
+                                after_lam * rr_scores[i]
+                                - (1.0 - after_lam) * max_sim)
+                        reordered = iter(sorted(
+                            embedded, key=lambda i: mmr_by_idx[i],
+                            reverse=True))
+                        embedded_set = set(embedded)
+                        results = [
+                            results[next(reordered)]
+                            if i in embedded_set else results[i]
+                            for i in range(len(results))]
             except Exception as exc:
                 print(f'  WARN rerank_voyage: rerank call failed '
                       f'({exc}); using unranked top-K')
