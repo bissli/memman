@@ -10,9 +10,11 @@ and `nodes.get` calls from the synchronous recall hot path.
 
 import heapq
 import logging
+from collections import Counter
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from memman import trace
 from memman.embed.vector import cosine_similarity
 from memman.search.intent import detect_intent, get_weights
 from memman.search.keyword import insight_tokens, keyword_search, tokenize
@@ -114,13 +116,19 @@ def beam_search_from_anchor(
         insight_map: dict[str, Insight],
         sim_cache: dict[str, float] | None,
         edges_lookup: Callable[[str], Any],
-        insight_lookup: Callable[[str], Insight | None]) -> None:
+        insight_lookup: Callable[[str], Insight | None]) -> int:
     """Perform beam search from a single anchor node.
 
     `edges_lookup(nid) -> iterable of (neighbor_id, edge_type, weight)`
     `insight_lookup(nid) -> Insight | None`
     Both lookups encapsulate either a snapshot dict access or a SQL
     query so callers don't branch on data source.
+
+    Returns
+    -------
+    int
+        Nodes visited from this anchor (the anchor included); equal
+        to `max_visited` when the traversal hit its budget.
     """
     beam_width, max_depth, max_visited = params
     visited = {start_id: True}
@@ -172,6 +180,7 @@ def beam_search_from_anchor(
             pruned.append(item)
             count += 1
         current = pruned
+    return total_visited
 
 
 def causal_topological_sort(
@@ -303,6 +312,9 @@ def intent_aware_recall(
 
     weights = get_weights(intent)
     params = get_traversal_params(intent)
+    # Hoisted once: `is_enabled` can fall through to a file read, so
+    # calling it per event site is a hot-path regression.
+    enabled = trace.is_enabled()
 
     def _matches(ins: Insight) -> bool:
         return ((not category or ins.category == category)
@@ -452,6 +464,22 @@ def intent_aware_recall(
             f'Zero anchors: all_insights={len(all_insights)}, '
             f'query={query[:80]}')
 
+    if enabled:
+        # vector_hits against anchor_k is the measurement Phase 1
+        # deferred: whether a selective --cat/--source filter makes
+        # the vector scan return fewer than k anchors.
+        trace.event(
+            'recall_anchors',
+            intent=intent,
+            anchor_k=anchor_k,
+            keyword_hits=len(keyword_anchors),
+            vector_hits=len(vector_hits),
+            time_hits=time_limit,
+            fused_pool=anchor_count,
+            via_counts=dict(Counter(
+                via for _, _, via in anchor_map.values())),
+            filtered=bool(category or source))
+
     score_map: dict[str, float] = {}
     via_map: dict[str, str] = {}
     insight_map: dict[str, Insight] = {}
@@ -461,13 +489,25 @@ def intent_aware_recall(
         via_map[aid] = via
         insight_map[aid] = ins
 
+    visited_total = 0
+    capped_anchors = 0
     for aid, (ins, score, via) in anchor_map.items():
-        beam_search_from_anchor(
+        visited = beam_search_from_anchor(
             aid, score, weights, params,
             score_map, via_map, insight_map, sim_cache,
             _edges_lookup, _insight_lookup)
+        visited_total += visited
+        if visited >= params[2]:
+            capped_anchors += 1
 
     traversed_count = len(score_map)
+    if enabled:
+        trace.event(
+            'recall_traversal',
+            visited=visited_total,
+            capped_anchors=capped_anchors,
+            max_visited=params[2],
+            traversed=traversed_count)
 
     query_tokens = tokenize(query)
     query_entity_set = {e.lower() for e in query_entities}
@@ -566,6 +606,7 @@ def intent_aware_recall(
                 rerank_client = get_rerank_client()
                 shortlist = results[:shortlist_size]
                 docs = [r['insight'].content for r in shortlist]
+                before_ids = [r['insight'].id for r in shortlist]
                 scored = rerank_client.rerank(
                     query, docs, top_k=shortlist_size)
                 reordered = []
@@ -576,6 +617,18 @@ def intent_aware_recall(
                     reordered.append(r)
                 results = reordered + results[shortlist_size:]
                 reranked = True
+                if enabled:
+                    # Movement is diffed by ID: the reranker replaces
+                    # every score, so a score diff always says "all
+                    # moved" and could never justify or kill the
+                    # cross-encoder.
+                    moved = sum(
+                        1 for bid, r in zip(before_ids, reordered)
+                        if bid != r['insight'].id)
+                    trace.event(
+                        'recall_rerank',
+                        shortlist=shortlist_size,
+                        moved=moved)
             except Exception as exc:
                 logger.warning(
                     f'rerank failed, keeping baseline ordering: {exc}')
