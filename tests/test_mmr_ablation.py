@@ -83,7 +83,7 @@ def test_mmr_pool_exceeds_rerank_shortlist():
 def test_mmr_pool_is_bounded(tmp_backend, monkeypatch):
     """Rows beyond `MMR_POOL` are exempt from the diversity re-sort.
 
-    Mutation: removing the pool slice — the gram matrix goes O(n^2)
+    Mutation: removing the pool slice -- the gram matrix goes O(n^2)
         over the whole store and the tail reorders.
     Oracle: with the pool capped at 2, the diverse row C (rank 3 by
         relevance) must stay third even though an uncapped MMR at
@@ -101,7 +101,7 @@ def test_mmr_pool_is_bounded(tmp_backend, monkeypatch):
 def test_ablation_overridden_restores_mmr_lambda():
     """`overridden()` restores `MMR_LAMBDA` after each config.
 
-    Mutation: a monkey-patch leak — one config's lambda contaminates
+    Mutation: a monkey-patch leak -- one config's lambda contaminates
         every later config in the same sweep.
     Oracle: the module constant returns to its prior value after the
         context exits, including on the no-override path.
@@ -119,11 +119,11 @@ def test_ablation_harness_runs(tmp_path, monkeypatch):
     """One config runs end-to-end and produces a non-empty results.csv.
 
     `main()` swallows per-config exceptions and still writes the csv
-    with exit 0, so process success is vacuous — the row count is the
+    with exit 0, so process success is vacuous -- the row count is the
     only falsifiable oracle.
 
     Mutation: the `TypeError` regression (positional `fingerprint`,
-        raw `DB` instead of a `Backend`) — every config errors, the
+        raw `DB` instead of a `Backend`) -- every config errors, the
         csv is empty, and the process still exits 0.
     """
     from memman.embed import get_client
@@ -160,3 +160,29 @@ def test_ablation_harness_runs(tmp_path, monkeypatch):
         rows = list(csv.DictReader(f))
     assert rows, 'harness wrote an empty results.csv'
     assert all(r['config'] == 'baseline' for r in rows)
+
+
+def test_mmr_unembedded_rows_hold_position(tmp_backend, monkeypatch):
+    """A vector-less row is exempt from the MMR re-sort.
+
+    An unembedded row is exactly the degraded case (failed embed,
+    dim-mismatch drop); scoring it with a zero penalty hands it the
+    maximum diversity bonus and floats it to the head at any
+    lambda < 1.
+
+    Mutation: defaulting the penalty of an unembedded row to 0.0 and
+        re-sorting it with the pool.
+    Oracle: an unembedded row ranked last by relevance stays last at
+        lambda 0.5 while the embedded rows reorder around it (C still
+        rises above B).
+    """
+    _abc_pool(tmp_backend)
+    tmp_backend.nodes.insert(
+        make_insight(id='mmr-z', content='unembedded filler row'))
+    monkeypatch.setattr(recall_mod, 'MMR_LAMBDA', 1.0)
+    baseline = _recall_ids(tmp_backend)
+    assert baseline.index('mmr-z') == 3
+    monkeypatch.setattr(recall_mod, 'MMR_LAMBDA', 0.5)
+    ids = _recall_ids(tmp_backend)
+    assert ids.index('mmr-z') == 3
+    assert ids.index('mmr-c') < ids.index('mmr-b')

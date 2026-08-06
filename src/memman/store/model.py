@@ -153,14 +153,16 @@ def insight_to_delta_dict(ins: 'Insight') -> dict[str, Any]:
 
 
 def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
-    """Return all user-visible fields of an insight for JSON output.
+    """Return the user-visible fields of an insight for JSON output.
 
-    Used by CLI commands that emit Insight objects to stdout and by
-    the recall snapshot writer. Timestamps are formatted with
+    Used by CLI commands that emit Insight objects to stdout (the
+    recall snapshot writer keeps its own field list in
+    `store/snapshot.py`). Timestamps are formatted with
     `format_timestamp`; `updated_at` falls back to `created_at` so
     consumers always see a populated value. Optional fields
     (`deleted_at`, `summary`, `linked_at`, `enriched_at`) are emitted
-    only when populated.
+    only when populated; the plumbing keys (`session_id`,
+    `queue_uuid`) are deliberately omitted.
     """
     out: dict[str, Any] = {
         'id': ins.id,
@@ -170,6 +172,7 @@ def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
         'entities': list(ins.entities or []),
         'source': ins.source,
         'access_count': ins.access_count,
+        'corroboration_count': ins.corroboration_count,
         'created_at': format_timestamp(ins.created_at),
         'updated_at': format_timestamp(ins.updated_at or ins.created_at),
         }

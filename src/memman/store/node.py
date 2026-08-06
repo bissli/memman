@@ -190,19 +190,31 @@ where id = ?
     db._exec(sql, (now, id))
 
 
-def increment_corroboration(db: 'DB', id: str) -> None:
-    """Bump corroboration_count for an insight.
+def increment_corroboration(
+        db: 'DB', id: str, queue_uuid: str | None = None) -> None:
+    """Bump corroboration_count; optionally adopt the restating uuid.
 
     Never touches `access_count` or `last_accessed_at`: those feed
     the retention-immunity criterion, and a restated fact must not
     earn pruning immunity.
+
+    Parameters
+    ----------
+    id : str
+        The corroborated (stored) insight.
+    queue_uuid : str | None, default None
+        The restating queue row's idempotency key; adopted onto the
+        target (coalesce keeps the old value on None) so a
+        crash-reclaimed all-skips queue row trips the replay guard
+        instead of double-bumping.
     """
     sql = """
 update insights
-set corroboration_count = corroboration_count + 1
+set corroboration_count = corroboration_count + 1,
+    queue_uuid = coalesce(?, queue_uuid)
 where id = ?
 """
-    db._exec(sql, (id,))
+    db._exec(sql, (queue_uuid, id))
 
 
 def compute_effective_importance(

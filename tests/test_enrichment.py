@@ -163,8 +163,8 @@ class TestEnrichWithLLM:
 
     def test_entities_and_keywords_capped(self):
         """Over-long LLM entity/keyword lists are capped to salience limits."""
-        from memman.graph.enrichment import (
-            MAX_ENRICH_ENTITIES, MAX_ENRICH_KEYWORDS)
+        from memman.graph.enrichment import MAX_ENRICH_ENTITIES
+        from memman.graph.enrichment import MAX_ENRICH_KEYWORDS
         insight = make_insight(id='cap-1', content='content', entities=[])
         mock_client = MagicMock()
         mock_client.complete.return_value = json.dumps({
@@ -407,7 +407,7 @@ class TestLengthCaps:
         """Over-long user `--entities` survive; over-long LLM ones drop.
 
         `merged` is seeded from `insight.entities`, which carries the
-        user's `--entities` all the way down — length-filtering
+        user's `--entities` all the way down -- length-filtering
         `merged` would drop over-long USER entities.
 
         Mutation: applying the length cap to `merged` instead of

@@ -111,12 +111,24 @@ class NodeStore(Protocol):
         """Bump access_count and refresh last_accessed_at."""
         ...
 
-    def increment_corroboration(self, id: Id) -> None:
+    def increment_corroboration(
+            self, id: Id, *, queue_uuid: str | None = None) -> None:
         """Bump corroboration_count for an insight.
 
         Observational counter only: it must never feed `is_immune`
         or `compute_effective_importance` -- "the agent said it
         twice" must not grant retention immunity.
+
+        Parameters
+        ----------
+        id : Id
+            The corroborated (stored) insight.
+        queue_uuid : str | None, default None
+            The restating queue row's idempotency key; when given,
+            the target adopts it so a crash-reclaimed queue row
+            whose facts were ALL exact-match skips (nothing inserted
+            carries the uuid) still trips the replay guard instead
+            of double-bumping.
         """
         ...
 

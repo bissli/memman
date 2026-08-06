@@ -243,6 +243,8 @@ create index if not exists idx_insights_deleted on insights(deleted_at);
 create index if not exists idx_insights_source on insights(source);
 create index if not exists idx_insights_session on insights(session_id);
 create index if not exists idx_insights_queue_uuid on insights(queue_uuid);
+-- Load-bearing as the schema canary, not as a query index: this is
+-- the statement that makes a 0.18.x store fail at open (see _migrate).
 create index if not exists idx_insights_corroboration on insights(corroboration_count);
 create index if not exists idx_insights_effective_imp on insights(effective_importance);
 create index if not exists idx_prune_candidates
@@ -292,10 +294,14 @@ def _migrate(db: DB) -> None:
 
     Notes
     -----
-    - A pre-migration store fails here on every open (the baseline's
-      `create index ... on insights(session_id)` raises `no such
-      column`), so this is the primary schema diagnostic: nothing
-      that needs a live Backend can report on such a store.
+    - A pre-migration store fails here on every open: `create table
+      if not exists` no-ops on an existing table, so the tripwire is
+      the baseline's `create index` on the NEWEST schema column
+      (currently `idx_insights_corroboration`) raising `no such
+      column`. Every schema change must index its newest column or
+      the old store opens silently and fails later with a raw
+      OperationalError. This is the primary schema diagnostic:
+      nothing that needs a live Backend can report on such a store.
     """
     try:
         db._conn.executescript(_BASELINE_SCHEMA)

@@ -59,7 +59,7 @@ def _run(backend, content, **kwargs):
 def test_exact_match_single_hit_skips_llm(tmp_backend, monkeypatch):
     """One byte-identical stored row skips reconcile entirely.
 
-    Mutation: deleting the rung — identical content reaches the
+    Mutation: deleting the rung -- identical content reaches the
         reconcile LLM call.
     Oracle: the spy records zero reconcile calls and the fact lands
         as 'skipped'.
@@ -93,7 +93,7 @@ def test_exact_match_two_hits_escalates_to_llm(
 def test_exact_match_is_not_substring_match(tmp_backend, monkeypatch):
     """A superset fact is not swallowed by its stored subset.
 
-    Mutation: replacing the equality with `in` — every superset fact
+    Mutation: replacing the equality with `in` -- every superset fact
         would silently skip against its stored prefix.
     Oracle: the spy records one reconcile call and the fact is added.
     """
@@ -212,3 +212,28 @@ def test_corroboration_does_not_confer_immunity(
     assert stored.corroboration_count == 3
     assert stored.access_count == 0
     assert is_immune(stored.importance, stored.access_count) is False
+
+
+def test_corroborate_adopts_restating_queue_uuid(
+        tmp_backend, monkeypatch):
+    """The corroborated target adopts the restating row's queue_uuid.
+
+    An all-skips queue row inserts nothing carrying its uuid, so a
+    worker crash between the commit and `mark_done` reclaims the row
+    and the replay guard (`has_active_with_queue_uuid`) finds
+    nothing -- the bump repeats on every reclaim.
+
+    Mutation: dropping the queue_uuid adoption from the bump.
+    Oracle: after the skip, the target carries the restating uuid
+        and the replay guard fires for it.
+    """
+    tid = _store(tmp_backend, 'Redis caches session tokens')
+    _spy_reconcile(monkeypatch)
+    parent = _new_insight('Redis caches session tokens')
+    parent.queue_uuid = 'q-restate-1'
+    run_remember(
+        tmp_backend, parent, 'Redis caches session tokens',
+        ec=bound_embedder(tmp_backend))
+    assert tmp_backend.nodes.get(tid).queue_uuid == 'q-restate-1'
+    assert tmp_backend.nodes.has_active_with_queue_uuid(
+        'q-restate-1') is True

@@ -136,6 +136,11 @@ phase-independent:
   in `SCHEMA_COLUMNS`); its `repair_payload` is the structural orphan
   filter only — this cycle needs no data repair, the new column takes
   its `default 0` on every rebuilt row.
+- **The rebuild script is SQLite-only.** A Postgres-routed store also
+  fails at open (the same newest-column index tripwire, translated to
+  the same diagnostic), but its rebuild path is a detour: migrate the
+  store `--to sqlite` on the previous release, rebuild, then migrate
+  back. No Postgres-routed store exists on this host today.
 - History gets no retroactive corroboration counts; pre-migration
   restatements were reconciled by the LLM at write time and stay as
   they landed.

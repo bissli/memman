@@ -143,7 +143,7 @@ def test_reconcile_candidates_ranked_by_similarity(monkeypatch):
 def test_prompt_version_unchanged_by_length_caps():
     """The F5 length caps live post-parse; the prompt hash is pinned.
 
-    Mutation: "fixing" the length caps inside a system prompt — the
+    Mutation: "fixing" the length caps inside a system prompt -- the
         hash moves, every stored row's prompt_version goes stale, and
         doctor demands a fleet-wide `graph rebuild`.
     Oracle: hash pinned at its pre-F5 value.

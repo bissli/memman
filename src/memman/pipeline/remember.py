@@ -540,8 +540,13 @@ def _apply_plan(
         skip_fi = plan.fact_insight
         # Only the exact-match rung sets target_id on a skipped plan;
         # the dedup-sibling / target-deleted / NONE skips carry none.
+        # The target adopts the restating queue_uuid so a
+        # crash-reclaimed all-skips row trips the replay guard
+        # instead of double-bumping.
         if plan.target_id:
-            backend.nodes.increment_corroboration(plan.target_id)
+            backend.nodes.increment_corroboration(
+                plan.target_id,
+                queue_uuid=skip_fi.queue_uuid if skip_fi else None)
             backend.oplog.log(
                 operation='reconcile-corroborate',
                 insight_id=plan.target_id,

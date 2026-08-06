@@ -842,6 +842,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
             'failed': 0,
             'remaining': {'pending': 0, 'claimed': 0,
                           'failed': 0, 'done': 0},
+            'llm_usage': {},
             'skipped': 'another drain in progress',
             })
         return None
@@ -920,7 +921,8 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                         row_id=row.id,
                         store=row.store,
                         error_class=type(exc).__name__,
-                        error_message=str(exc)[:500])
+                        error_message=str(exc)[:500],
+                        llm_usage={})
                     logger.exception(
                         f'enrich row {row.id} failed during store open')
                     continue
