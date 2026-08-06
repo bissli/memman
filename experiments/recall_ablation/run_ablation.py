@@ -178,11 +178,14 @@ def run_one(backend: SqliteBackend, fingerprint: Fingerprint,
                 elapsed_ms += (time.perf_counter() - t_r) * 1000
                 results = [shortlist[i] for i, _ in scored]
                 if after_lam is not None and len(results) > 1:
-                    # One-shot MMR over the RERANKED list, before the
-                    # limit slice -- the spec's alternative placement.
-                    # Same algorithm as production: score once against
-                    # the pool, sort once, unembedded rows hold their
-                    # slots; the relevance term is the reranker score.
+                    # Notes:
+                    # - The spec's alternative placement: one-shot
+                    #   MMR over the RERANKED list, before the limit
+                    #   slice.
+                    # - Mirrors production semantics (unembedded
+                    #   rows hold their slots) so the two placements
+                    #   are comparable; the relevance term is the
+                    #   reranker score, the only one available here.
                     rr_scores = [s for _, s in scored]
                     embedded = [
                         i for i, r in enumerate(results)
