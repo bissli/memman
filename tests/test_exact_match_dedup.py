@@ -237,3 +237,132 @@ def test_corroborate_adopts_restating_queue_uuid(
     assert tmp_backend.nodes.get(tid).queue_uuid == 'q-restate-1'
     assert tmp_backend.nodes.has_active_with_queue_uuid(
         'q-restate-1') is True
+
+
+def test_corroborate_preserves_creating_rows_queue_uuid(
+        tmp_backend, monkeypatch):
+    """A populated queue_uuid survives corroboration.
+
+    The creating row's replay guard outranks the restating row's:
+    clobbering it lets a crash-reclaimed creator re-process its row,
+    and an LLM re-extraction is not guaranteed to re-hit the rung --
+    it can insert the duplicate the guard exists to prevent.
+
+    Mutation: flipping the coalesce back to adopt-over (the 0.19.0
+        form, `coalesce(?, queue_uuid)`).
+    Oracle: after a restatement the target still carries the
+        creating row's uuid and the replay guard fires for it.
+    """
+    tid = str(uuid.uuid4())
+    tmp_backend.nodes.insert(make_insight(
+        id=tid, content='Redis caches session tokens',
+        queue_uuid='q-create-1'))
+    _spy_reconcile(monkeypatch)
+    parent = _new_insight('Redis caches session tokens')
+    parent.queue_uuid = 'q-restate-2'
+    run_remember(
+        tmp_backend, parent, 'Redis caches session tokens',
+        ec=bound_embedder(tmp_backend))
+    assert tmp_backend.nodes.get(tid).queue_uuid == 'q-create-1'
+    assert tmp_backend.nodes.has_active_with_queue_uuid(
+        'q-create-1') is True
+
+
+def test_corroborate_dead_target_degrades_to_add(
+        tmp_backend, monkeypatch):
+    """A target soft-deleted after planning degrades to an add.
+
+    `_drain_queue` builds `insights_by_id` once per store per drain;
+    `auto_prune` and external forgets soft-delete rows without
+    evicting them, so an exact match against a stale entry must not
+    drop the incoming fact.
+
+    Mutation: returning the skip on a zero-row bump (the 0.19.0
+        form) -- the restated fact is stored nowhere and a phantom
+        oplog row names a dead id.
+    Oracle: the fact lands as a live 'add' row, the dead target's
+        counter stays 0, and no corroborate oplog row is written.
+    """
+    tid = _store(tmp_backend, 'Redis caches session tokens')
+    stale_cache = {
+        i.id: i for i in tmp_backend.nodes.get_all_active()}
+    tmp_backend.nodes.soft_delete(tid)
+    _spy_reconcile(monkeypatch)
+    res = run_remember(
+        tmp_backend, _new_insight('Redis caches session tokens'),
+        'Redis caches session tokens',
+        ec=bound_embedder(tmp_backend),
+        insights_by_id=stale_cache)
+    assert res['facts'][0]['action'] == 'add'
+    assert tmp_backend.nodes.get(res['facts'][0]['id']) is not None
+    dead = tmp_backend.nodes.get_include_deleted(tid)
+    assert dead.corroboration_count == 0
+    count = tmp_backend._db._query(
+        'select count(*) from oplog'
+        " where operation = 'reconcile-corroborate'").fetchone()[0]
+    assert count == 0
+
+
+def test_same_fact_twice_in_one_row_bumps_once(
+        tmp_backend, monkeypatch):
+    """One queue row restating a fact twice bumps its target once.
+
+    The counter's semantics are per-restatement across writes, not
+    per-extracted-fact: an over-eager extractor emitting a duplicate
+    pair must not double-count.
+
+    Mutation: dropping the per-invocation `corroborated_ids` set.
+    Oracle: corroboration_count == 1 and exactly one oplog row after
+        a single run whose extraction yields the same fact twice.
+    """
+    tid = _store(tmp_backend, 'Redis caches session tokens')
+    _spy_reconcile(monkeypatch)
+    fact = {'text': 'Redis caches session tokens', 'category': 'fact',
+            'importance': 3, 'entities': []}
+    monkeypatch.setattr(
+        'memman.llm.extract.extract_facts',
+        lambda client, content: [dict(fact), dict(fact)])
+    _run(tmp_backend, 'Redis caches session tokens')
+    assert tmp_backend.nodes.get(tid).corroboration_count == 1
+    count = tmp_backend._db._query(
+        'select count(*) from oplog'
+        " where operation = 'reconcile-corroborate'").fetchone()[0]
+    assert count == 1
+
+
+def test_skip_result_carries_target_id(tmp_backend, monkeypatch):
+    """The skip result names the row that absorbed the restatement.
+
+    The result's 'id' is a never-inserted uuid; without 'target_id'
+    the corroborated row is unreachable from the response.
+
+    Mutation: dropping 'target_id' from the skipped result dict.
+    Oracle: the result's target_id equals the stored row's id.
+    """
+    tid = _store(tmp_backend, 'Redis caches session tokens')
+    _spy_reconcile(monkeypatch)
+    res = _run(tmp_backend, 'Redis caches session tokens')
+    assert res['facts'][0]['action'] == 'skipped'
+    assert res['facts'][0]['target_id'] == tid
+
+
+def test_corroboration_count_reaches_the_json_read_path(
+        tmp_backend, monkeypatch):
+    """The counter is visible through the full-dict serializer.
+
+    `insight_to_full_dict` is the only consumer-facing read path
+    (`recall --json` and `get` both serialize through it); dropping
+    the key makes F4 write-only while every write-side test stays
+    green.
+
+    Mutation: deleting the corroboration_count line from
+        `insight_to_full_dict`.
+    Oracle: after one restatement the serialized target carries
+        corroboration_count == 1.
+    """
+    from memman.store.model import insight_to_full_dict
+    tid = _store(tmp_backend, 'Redis caches session tokens')
+    _spy_reconcile(monkeypatch)
+    _run(tmp_backend, 'Redis caches session tokens')
+    assert insight_to_full_dict(
+        tmp_backend.nodes.get(tid))['corroboration_count'] == 1
