@@ -99,6 +99,9 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
     def increment_access_count(self, id: Id) -> None:
         _node.increment_access_count(self._db, id)
 
+    def increment_corroboration(self, id: Id) -> None:
+        _node.increment_corroboration(self._db, id)
+
     def refresh_effective_importance(self, id: Id) -> float:
         return _node.refresh_effective_importance(self._db, id)
 
