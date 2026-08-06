@@ -295,12 +295,83 @@ def test_corroborate_dead_target_degrades_to_add(
         insights_by_id=stale_cache)
     assert res['facts'][0]['action'] == 'add'
     assert tmp_backend.nodes.get(res['facts'][0]['id']) is not None
+    # The degraded add supersedes nothing: it must name the vanished
+    # row as target_id, never claim a replace of it.
+    assert res['facts'][0].get('replaced_id') is None
+    assert res['facts'][0]['target_id'] == tid
     dead = tmp_backend.nodes.get_include_deleted(tid)
     assert dead.corroboration_count == 0
     count = tmp_backend._db._query(
         'select count(*) from oplog'
         " where operation = 'reconcile-corroborate'").fetchone()[0]
     assert count == 0
+
+
+def test_degrade_repairs_the_stale_drain_caches(
+        tmp_backend, monkeypatch):
+    """One dead target yields ONE live copy across later rows.
+
+    The drain builds `insights_by_id`/`embed_cache` once per store;
+    without apply-time repair every later row exact-matches the
+    same stale dead entry and inserts another copy -- recreating
+    exactly the two-identical-rows state the rung refuses to
+    auto-resolve.
+
+    Mutation: dropping the cache eviction/registration in
+        `apply_all`'s degrade handling.
+    Oracle: three restatements sharing one stale cache leave exactly
+        one live row; calls 2 and 3 skip against the surviving copy,
+        whose counter reads 2.
+    """
+    tid = _store(tmp_backend, 'Redis caches session tokens')
+    stale_cache = {
+        i.id: i for i in tmp_backend.nodes.get_all_active()}
+    shared_embeds = dict(tmp_backend.nodes.iter_embeddings_as_vecs())
+    tmp_backend.nodes.soft_delete(tid)
+    _spy_reconcile(monkeypatch)
+    actions = []
+    for _ in range(3):
+        res = run_remember(
+            tmp_backend, _new_insight('Redis caches session tokens'),
+            'Redis caches session tokens',
+            ec=bound_embedder(tmp_backend),
+            insights_by_id=stale_cache, embed_cache=shared_embeds)
+        actions.append(res['facts'][0]['action'])
+    live = [i for i in tmp_backend.nodes.get_all_active()
+            if i.content == 'Redis caches session tokens']
+    assert len(live) == 1
+    assert actions == ['add', 'skipped', 'skipped']
+    assert live[0].corroboration_count == 2
+
+
+def test_same_row_duplicate_against_dead_target_adds_once(
+        tmp_backend, monkeypatch):
+    """A row whose extraction repeats the fact adds ONE copy.
+
+    Mutation: guarding only the bump with `corroborated_ids`, not
+        the degrade -- the second identical fact inserts a second
+        copy in the same transaction.
+    Oracle: extraction emitting the same fact twice against a dead
+        target leaves exactly one live row with that content.
+    """
+    tid = _store(tmp_backend, 'Redis caches session tokens')
+    stale_cache = {
+        i.id: i for i in tmp_backend.nodes.get_all_active()}
+    tmp_backend.nodes.soft_delete(tid)
+    _spy_reconcile(monkeypatch)
+    fact = {'text': 'Redis caches session tokens', 'category': 'fact',
+            'importance': 3, 'entities': []}
+    monkeypatch.setattr(
+        'memman.llm.extract.extract_facts',
+        lambda client, content: [dict(fact), dict(fact)])
+    run_remember(
+        tmp_backend, _new_insight('Redis caches session tokens'),
+        'Redis caches session tokens',
+        ec=bound_embedder(tmp_backend),
+        insights_by_id=stale_cache)
+    live = [i for i in tmp_backend.nodes.get_all_active()
+            if i.content == 'Redis caches session tokens']
+    assert len(live) == 1
 
 
 def test_same_fact_twice_in_one_row_bumps_once(

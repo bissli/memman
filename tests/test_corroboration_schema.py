@@ -146,3 +146,36 @@ def test_open_db_refuses_store_missing_corroboration_column(tmp_path):
         conn.commit()
     with pytest.raises(RuntimeError, match=MIGRATION_SCRIPT):
         open_db(store_dir(data_dir, 'v018'))
+
+
+def test_increment_corroboration_contract_both_backends(backend):
+    """Liveness guard and adopt-only-when-null hold on BOTH backends.
+
+    Every pipeline-level corroboration test drives SQLite; this pins
+    the changed UPDATE statement itself on the parametrized backend
+    pair.
+
+    Mutation: dropping `deleted_at is null` from one backend's
+        UPDATE, or reverting its coalesce argument order.
+    Oracle: rowcount-derived returns plus direct column reads --
+        live bump True with the key preserved, null key adopted,
+        dead target False with the counter unchanged.
+    """
+    backend.nodes.insert(make_insight(
+        id='cc-1', content='keyed row', queue_uuid='q-created'))
+    assert backend.nodes.increment_corroboration(
+        'cc-1', queue_uuid='q-restate') is True
+    row = backend.nodes.get('cc-1')
+    assert row.corroboration_count == 1
+    assert row.queue_uuid == 'q-created'
+
+    backend.nodes.insert(make_insight(id='cc-2', content='keyless row'))
+    assert backend.nodes.increment_corroboration(
+        'cc-2', queue_uuid='q-adopt') is True
+    assert backend.nodes.get('cc-2').queue_uuid == 'q-adopt'
+
+    backend.nodes.soft_delete('cc-1')
+    assert backend.nodes.increment_corroboration(
+        'cc-1', queue_uuid='q-late') is False
+    dead = backend.nodes.get_include_deleted('cc-1')
+    assert dead.corroboration_count == 1
