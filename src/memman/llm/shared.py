@@ -48,6 +48,10 @@ def drop_overlong_strings(
       retrieval tunable: it needs no ablation-harness sweep. It is
       measured against the fleet's longest legitimate strings
       (137 chars), not tuned for retrieval quality.
+    - Extraction-side drops are logged by content prefix, not
+      insight id: no insight exists yet at extraction time, so the
+      spec's log-the-id requirement is unmeetable there by
+      construction.
     """
     kept = []
     for v in values:

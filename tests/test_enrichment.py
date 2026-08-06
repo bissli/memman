@@ -383,6 +383,30 @@ class TestLengthCaps:
         assert 'cache' in result['keywords']
         assert all(not k.startswith('kkk') for k in result['keywords'])
 
+    def test_length_cap_boundary_sits_at_the_measured_200(self):
+        """A 200-char string survives; its 201-char sibling drops.
+
+        The literals pin the fleet-measured constant itself, not
+        just the comparison: a drift to 2000 (or a `>=` flip) is a
+        silent policy change every mid-range input misses.
+
+        Mutation: `>` flipped to `>=`, or `MAX_ENRICH_STRING_CHARS`
+            drifting from the measured 200.
+        Oracle: hand-built strings straddling the real threshold --
+            exactly 200 chars kept, 201 dropped.
+        """
+        at_cap = 'a' * 200
+        over_cap = 'b' * 201
+        insight = make_insight(id='cap-4', content='cap body', entities=[])
+        mock_client = MagicMock()
+        mock_client.complete.return_value = _make_enrichment_response(
+            entities=[at_cap, over_cap, 'Redis'],
+            keywords=['cache'])
+        result = enrich_with_llm(insight, mock_client)
+        assert at_cap in result['entities']
+        assert over_cap not in result['entities']
+        assert 'Redis' in result['entities']
+
     def test_length_cap_applies_before_count_cap(self):
         """20 valid + 3 over-long LLM entities yield 20, not 17.
 
