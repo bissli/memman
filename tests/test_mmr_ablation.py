@@ -186,3 +186,26 @@ def test_mmr_unembedded_rows_hold_position(tmp_backend, monkeypatch):
     ids = _recall_ids(tmp_backend)
     assert ids.index('mmr-z') == 3
     assert ids.index('mmr-c') < ids.index('mmr-b')
+
+
+def test_mmr_mixed_dim_rows_hold_position(tmp_backend, monkeypatch):
+    """An off-modal-dim vector joins the unembedded exemption.
+
+    A mid-model-swap store or a partial reembed leaves rows at two
+    dims, and a gram matrix cannot be built over ragged vectors.
+
+    Mutation: dropping the modal-dim filter -- `np.array` raises
+        ValueError straight out of `intent_aware_recall`.
+    Oracle: recall completes, the off-dim row keeps its relevance
+        slot (last), and the embedded rows still reorder around it
+        (C above B) at lambda 0.5.
+    """
+    _abc_pool(tmp_backend)
+    _seed_vec(tmp_backend, 'mmr-z', 'off dim filler row', [0.1, 0.2])
+    monkeypatch.setattr(recall_mod, 'MMR_LAMBDA', 1.0)
+    baseline = _recall_ids(tmp_backend)
+    assert baseline.index('mmr-z') == 3
+    monkeypatch.setattr(recall_mod, 'MMR_LAMBDA', 0.5)
+    ids = _recall_ids(tmp_backend)
+    assert ids.index('mmr-z') == 3
+    assert ids.index('mmr-c') < ids.index('mmr-b')
