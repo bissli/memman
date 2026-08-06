@@ -217,8 +217,16 @@ def verify_counts(
     """Compare the applied store's row counts against the payload.
 
     Compares TOTAL insight rows (soft-deleted included), edges after
-    repair, oplog rows, and embedded-row count. Returns a list of
-    mismatch descriptions (empty = pass).
+    repair, oplog rows, embedded-row count, and the summed
+    corroboration counter. Returns a list of mismatch descriptions
+    (empty = pass).
+
+    Notes
+    -----
+    - The corroboration SUM is what proves gather/apply round-trips
+      the newest column: a fleet migrating from the previous schema
+      has all-zero counters, so plain row-count parity would pass
+      even if gather silently dropped the column.
     """
     expected = {
         'insights': len(payload.insights),
@@ -226,6 +234,8 @@ def verify_counts(
         'oplog': len(payload.oplog),
         'embedded': sum(
             1 for i in payload.insights if i.embedding is not None),
+        'corroboration': sum(
+            i.corroboration_count for i in payload.insights),
         }
     with closing(sqlite3.connect(
             f'file:{db_path}?mode=ro', uri=True)) as conn:
@@ -239,6 +249,9 @@ def verify_counts(
             'embedded': conn.execute(
                 'select count(*) from insights'
                 ' where embedding is not null').fetchone()[0],
+            'corroboration': conn.execute(
+                'select coalesce(sum(corroboration_count), 0)'
+                ' from insights').fetchone()[0],
             }
     return [
         f'{k}: expected {expected[k]}, got {actual[k]}'
