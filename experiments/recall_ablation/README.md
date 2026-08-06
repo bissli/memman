@@ -30,10 +30,12 @@ Sweep of `mmr_lambda` in {0.5, 0.7, 0.8, 0.9} x rerank {off, on} plus `baseline`
 | baseline       | 0.655           | —           |                          |
 | mmr_l50        | 0.504           | -0.151      |                          |
 | mmr_l70        | 0.571           | -0.085      |                          |
+| mmr_l80        | 0.599           | -0.057      |                          |
 | mmr_l90        | 0.628           | -0.027      |                          |
 | rerank_voyage  | 0.657           | +0.001      | 1.000                    |
 | mmr_l50_rerank | 0.640           | -0.016      | 0.783 (top-3 same 9/12)  |
 | mmr_l70_rerank | 0.655           | -0.000      | 0.916 (top-3 same 10/12) |
+| mmr_l80_rerank | 0.653           | -0.002      | 0.972 (top-3 same 11/12) |
 | mmr_l90_rerank | 0.657           | +0.001      | 1.000 (identical 12/12)  |
 
 Conclusion — `MMR_LAMBDA = 1.0` (term disabled) is the measured value:

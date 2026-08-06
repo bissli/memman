@@ -44,6 +44,10 @@ def drop_overlong_strings(
     - Drop, never truncate: a truncated entity is still a valid
       exact-match edge key and still lands in the embedding,
       preserving the pathology under a new name.
+    - The cap is a guardrail bounding pathological LLM output, NOT a
+      retrieval tunable: it needs no ablation-harness sweep. It is
+      measured against the fleet's longest legitimate strings
+      (137 chars), not tuned for retrieval quality.
     """
     kept = []
     for v in values:

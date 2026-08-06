@@ -31,9 +31,13 @@ import csv
 import json
 import os
 import time
+import urllib.request
+from collections.abc import Iterator
 from pathlib import Path
 
-from memman.embed.fingerprint import bound_embedder, stored_fingerprint
+from memman.embed import EmbeddingProvider
+from memman.embed.fingerprint import Fingerprint, bound_embedder
+from memman.embed.fingerprint import stored_fingerprint
 from memman.embed.vector import cosine_similarity
 from memman.search import recall as recall_mod
 from memman.search.recall import intent_aware_recall
@@ -61,18 +65,21 @@ CONFIGS = [
     {'name': 'rerank_voyage',        'anchor_top_k':  30, 'weights': None,
      'rerank': True},
     ]
-for _lam in MMR_SWEEP:
-    CONFIGS.append({
-        'name': f'mmr_l{int(_lam * 100):02d}', 'anchor_top_k': 30,
-        'weights': None, 'mmr_lambda': _lam})
-    CONFIGS.append({
-        'name': f'mmr_l{int(_lam * 100):02d}_rerank', 'anchor_top_k': 30,
-        'weights': None, 'mmr_lambda': _lam, 'rerank': True})
+CONFIGS += [
+    cfg
+    for _lam in MMR_SWEEP
+    for cfg in (
+        {'name': f'mmr_l{int(_lam * 100):02d}', 'anchor_top_k': 30,
+         'weights': None, 'mmr_lambda': _lam},
+        {'name': f'mmr_l{int(_lam * 100):02d}_rerank',
+         'anchor_top_k': 30, 'weights': None, 'mmr_lambda': _lam,
+         'rerank': True},
+        )]
 
 
 @contextlib.contextmanager
 def overridden(anchor_top_k: int | None, weights: dict | None,
-               mmr_lambda: float | None = None):
+               mmr_lambda: float | None = None) -> Iterator[None]:
     """Temporarily monkey-patch recall module constants.
     """
     saved_atk = recall_mod.ANCHOR_TOP_K
@@ -95,7 +102,6 @@ def overridden(anchor_top_k: int | None, weights: dict | None,
 def voyage_rerank(query: str, docs: list[str], top_k: int) -> list[tuple[int, float]]:
     """Call Voyage rerank-2.5-lite. Returns list of (orig_index, score).
     """
-    import urllib.request
     key = os.environ['VOYAGE_API_KEY']
     body = {'model': 'rerank-2.5-lite', 'query': query,
             'documents': docs, 'top_k': top_k}
@@ -126,9 +132,10 @@ def expand_via_llm(query: str) -> str:
         return query
 
 
-def run_one(backend, fingerprint, query: str, expanded_query: str,
-            query_vec_cache: dict, embed_client, config: dict,
-            limit: int, embeddings: dict) -> list[dict]:
+def run_one(backend: SqliteBackend, fingerprint: Fingerprint,
+            query: str, expanded_query: str,
+            query_vec_cache: dict, embed_client: EmbeddingProvider,
+            config: dict, limit: int, embeddings: dict) -> list[dict]:
     """Run a single (query, config) and return top-`limit` result rows.
     """
     use_query = expanded_query if config.get('expand') else query
@@ -167,6 +174,8 @@ def run_one(backend, fingerprint, query: str, expanded_query: str,
     results = results[:limit]
     redundancy = _redundancy(
         [r['insight'].id for r in results], embeddings)
+    redundancy_cell = (
+        round(redundancy, 4) if redundancy is not None else '')
     rows = []
     for rank, r in enumerate(results, start=1):
         ins = r['insight']
@@ -179,21 +188,25 @@ def run_one(backend, fingerprint, query: str, expanded_query: str,
             'intent': r.get('intent', ''),
             'via': r.get('via', ''),
             'elapsed_ms': round(elapsed_ms, 1),
-            'redundancy': round(redundancy, 4),
+            'redundancy': redundancy_cell,
             'content': ins.content[:140].replace('\n', ' '),
             })
     return rows
 
 
-def _redundancy(ids: list[str], embeddings: dict) -> float:
+def _redundancy(ids: list[str], embeddings: dict) -> float | None:
     """Mean over rows of each row's max pairwise cosine to the rest.
 
     The number a diversity term exists to reduce: 1.0 means every
     returned row has a near-duplicate in the same result set.
+    Returns None (an empty CSV cell) when fewer than two returned
+    rows are embedded -- "unmeasurable" must stay distinguishable
+    from a measured 0.0, or partial-coverage stores drag a config's
+    mean toward the best possible value.
     """
     vecs = [embeddings[i] for i in ids if i in embeddings]
     if len(vecs) < 2:
-        return 0.0
+        return None
     per_row_max = []
     for i, vi in enumerate(vecs):
         best = max(
@@ -204,13 +217,15 @@ def _redundancy(ids: list[str], embeddings: dict) -> float:
 
 
 def jaccard(a: list[str], b: list[str]) -> float:
+    """Set-overlap ratio of two id lists (1.0 when both are empty)."""
     sa, sb = set(a), set(b)
     if not sa and not sb:
         return 1.0
     return len(sa & sb) / len(sa | sb) if (sa | sb) else 0.0
 
 
-def main():
+def main() -> None:
+    """Run the sweep: recall per (query, config), csv + summaries."""
     ap = argparse.ArgumentParser()
     ap.add_argument('--store', default='search')
     ap.add_argument('--data-dir', default=default_data_dir())
@@ -270,7 +285,7 @@ def main():
             elapsed = rows[0]['elapsed_ms'] if rows else 0
             print(f'  {cfg["name"]:22s} top={len(rows):2d}  '
                   f'elapsed={elapsed:5.0f}ms  '
-                  f'redund={rows[0]["redundancy"] if rows else 0:.3f}  '
+                  f'redund={rows[0]["redundancy"] if rows else "-"}  '
                   f'top1={ids[0][:8] if ids else "-"}')
 
     with Path(out_path).open('w', newline='') as f:
@@ -281,6 +296,11 @@ def main():
         w.writerows(all_rows)
     print(f'\nwrote {len(all_rows)} rows to {out_path}')
 
+    if 'baseline' not in {c['name'] for c in configs}:
+        print('\n(baseline config not in this run; skipping the'
+              ' Jaccard-vs-baseline summaries)')
+        return
+
     print('\n=== TOP-10 JACCARD OVERLAP vs BASELINE per query ===')
     by_qc: dict[tuple[str, str], list[str]] = {}
     for r in all_rows:
@@ -288,15 +308,16 @@ def main():
             r['insight_id'])
 
     queries_str = sorted({r['query'] for r in all_rows})
-    configs_str = [c['name'] for c in configs]
+    configs_str = [
+        c['name'] for c in configs if c['name'] != 'baseline']
 
-    print(f'{"query":50s} ' + ' '.join(f'{c[:12]:>12s}' for c in configs_str[1:]))
+    print(f'{"query":50s} ' + ' '.join(f'{c[:12]:>12s}' for c in configs_str))
     rows_summary = []
     for q in queries_str:
         base = by_qc.get((q, 'baseline'), [])
         line = f'{q[:50]:50s} '
         rec = {'query': q}
-        for cfg in configs_str[1:]:
+        for cfg in configs_str:
             ids = by_qc.get((q, cfg), [])
             j = jaccard(base, ids)
             rec[cfg] = j
@@ -305,7 +326,7 @@ def main():
         rows_summary.append(rec)
 
     print('\n=== AGGREGATE: 1 - mean(Jaccard) per config (higher = changed more) ===')
-    for cfg in configs_str[1:]:
+    for cfg in configs_str:
         avg = sum(r[cfg] for r in rows_summary) / max(1, len(rows_summary))
         print(f'  {cfg:22s} mean Jaccard={avg:.3f}  '
               f'mean change={1-avg:.3f}')

@@ -32,10 +32,13 @@ STAGE_QUERY_EXPANSION = 'query_expansion'
 STAGE_ENRICHMENT = 'enrichment'
 STAGE_CAUSAL = 'causal'
 STAGE_PROBE = 'probe'
+# Off-pipeline measurement tooling (experiments/ harnesses, eval
+# judges) -- keeps their traffic out of the six pipeline buckets.
+STAGE_HARNESS = 'harness'
 
 VALID_STAGES = frozenset({
     STAGE_EXTRACTION, STAGE_RECONCILIATION, STAGE_QUERY_EXPANSION,
-    STAGE_ENRICHMENT, STAGE_CAUSAL, STAGE_PROBE,
+    STAGE_ENRICHMENT, STAGE_CAUSAL, STAGE_PROBE, STAGE_HARNESS,
     })
 
 _COUNTER_KEYS = (

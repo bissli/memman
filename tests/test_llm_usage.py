@@ -58,7 +58,7 @@ def test_usage_attributed_to_originating_stage(monkeypatch):
         the success site (dropping retry accumulation).
     Oracle: an [empty-with-usage, valid] sequence on 'enrichment'
         records 2 calls / 15 prompt tokens there; a single valid call
-        on 'causal' records 1 call / 7 — exact per-stage sums.
+        on 'causal' records 1 call / 7 -- exact per-stage sums.
     """
     monkeypatch.setattr(llm_client_mod.time, 'sleep', lambda s: None)
     before = usage.snapshot()
@@ -85,7 +85,7 @@ def test_usage_attributed_to_originating_stage(monkeypatch):
 def test_exhausted_retries_still_charge_every_attempt(monkeypatch):
     """All-empty attempts are charged even though `complete` raises.
 
-    Mutation: recording usage only on the success return path — a
+    Mutation: recording usage only on the success return path -- a
         raising call books zero despite MAX_RETRIES billed attempts.
     Oracle: exactly `MAX_RETRIES` calls and the summed prompt tokens
         of every empty body appear in the ledger after the raise.
@@ -140,7 +140,7 @@ def test_concurrent_stages_do_not_interleave_usage():
     Enrichment and causal run concurrently on a two-worker executor,
     so `record` races are the production case, not a theoretical one.
 
-    Mutation: removing the `Lock` around the ledger update — the
+    Mutation: removing the `Lock` around the ledger update -- the
         read-modify-write interleaves and updates are lost.
     Oracle: 2 threads x 20000 records sum to exactly 40000 calls and
         40000 * 7 prompt tokens.
@@ -204,3 +204,43 @@ def test_all_call_sites_use_closed_set_stages():
         assert val.attr.startswith('STAGE_'), (
             f'{name}: stage constant {val.attr!r} not a STAGE_* name')
         assert getattr(usage, val.attr) in usage.VALID_STAGES
+
+
+@pytest.mark.no_auto_drain
+def test_drain_json_carries_llm_usage_delta(mm_runner, monkeypatch):
+    """The drain's JSON output carries the drain-level usage delta.
+
+    The ledger tests above never exercise the drain wiring; a
+    snapshot taken after the row loop (or a dropped key) would ship
+    green while reporting an empty summary forever.
+
+    Mutation: taking `drain_usage_snap` after the loop, or dropping
+        the `llm_usage` key from `_json_out`.
+    Oracle: a stub row-processor records one extraction attempt of
+        11 prompt tokens; the drain JSON must carry exactly that
+        per-stage delta.
+    """
+    import json as _json
+
+    from memman.cli import cli
+
+    def _stub_row(row, ctx, executor):
+        usage.record(
+            usage.STAGE_EXTRACTION,
+            {'prompt_tokens': 11, 'completion_tokens': 2,
+             'total_tokens': 13})
+
+    monkeypatch.setattr('memman.cli._process_queue_row', _stub_row)
+    r, data_dir = mm_runner
+    res = r.invoke(cli, [
+        '--data-dir', data_dir, 'remember', 'drain usage probe row'])
+    assert res.exit_code == 0, res.output
+    res = r.invoke(cli, [
+        '--data-dir', data_dir, 'scheduler', 'drain',
+        '--limit', '5', '--timeout', '10'])
+    assert res.exit_code == 0, res.output
+    data = _json.loads(res.output)
+    assert data['processed'] == 1
+    stage = data['llm_usage'][usage.STAGE_EXTRACTION]
+    assert stage['calls'] == 1
+    assert stage['prompt_tokens'] == 11

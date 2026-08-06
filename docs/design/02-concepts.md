@@ -113,7 +113,7 @@ meta (
 
 Provenance columns (`prompt_version`, `model_id`, `embedding_model`) record which LLM and embedding model produced each insight. They power `memman embed reembed` and `memman graph rebuild` when models or prompts change.
 
-**Corroboration semantics.** `corroboration_count` counts exact-match restatements: when a queued write's fact is byte-identical (modulo case and whitespace) to exactly one stored row, the write is skipped without an LLM reconcile call, the stored row's counter is bumped, and a `reconcile-corroborate` oplog row records the restatement. The counter is observational only — it deliberately feeds neither the retention-immunity criterion (`importance >= 4 or access_count >= 3`) nor `effective_importance`, so "the agent said it twice" cannot earn a row permanent immunity. Collect the data first; any ranking or lifecycle use is a later, measured decision.
+**Corroboration semantics.** `corroboration_count` counts exact-match restatements: when a queued write's fact is byte-identical (modulo case and whitespace) to exactly one stored row, the write is skipped without an LLM reconcile call, the stored row's counter is bumped, and a `reconcile-corroborate` oplog row records the restatement. The counter is observational only — it deliberately feeds neither the retention-immunity criterion (`importance >= 4 or access_count >= 3`) nor `effective_importance`, so "the agent said it twice" cannot earn a row permanent immunity. It is per-row-identity: an UPDATE/REPLACE reconciliation soft-deletes the corroborated row and the successor starts at 0. Collect the data first; any ranking or lifecycle use is a later, measured decision.
 
 ---
 

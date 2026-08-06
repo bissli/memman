@@ -138,10 +138,30 @@ def beam_search_from_anchor(
         insight_lookup: Callable[[str], Insight | None]) -> int:
     """Perform beam search from a single anchor node.
 
-    `edges_lookup(nid) -> iterable of (neighbor_id, edge_type, weight)`
-    `insight_lookup(nid) -> Insight | None`
-    Both lookups encapsulate either a snapshot dict access or a SQL
-    query so callers don't branch on data source.
+    Parameters
+    ----------
+    start_id : str
+        Anchor insight id the traversal starts from.
+    start_score : float
+        Anchor's fused RRF score; seeds the running path score.
+    weights : dict[str, float]
+        Intent-adaptive weight per edge type.
+    params : tuple[int, int, int]
+        `(beam_width, max_depth, max_visited)` for the intent.
+    score_map : dict[str, float]
+        Best path score per node; updated in place.
+    via_map : dict[str, str]
+        Edge type that produced each node's best score; updated in
+        place.
+    insight_map : dict[str, Insight]
+        Node id -> Insight for every scored node; updated in place.
+    sim_cache : dict[str, float] | None
+        Query-cosine per node (None when there is no query vector).
+    edges_lookup : Callable
+        `nid -> iterable of (neighbor_id, edge_type, weight)`;
+        encapsulates snapshot dict access or a SQL query.
+    insight_lookup : Callable
+        `nid -> Insight | None`; same encapsulation.
 
     Returns
     -------
@@ -637,16 +657,24 @@ def intent_aware_recall(
             # excluded from its own max.
             np.fill_diagonal(gram, 0.0)
             max_sim = gram.max(axis=1)
-            penalty = [0.0] * len(pool)
-            for (idx, _v), ms in zip(vec_rows, max_sim):
-                penalty[idx] = float(ms)
-            order = sorted(
-                range(len(pool)),
-                key=lambda i: (
-                    MMR_LAMBDA * pool[i]['score']
-                    - (1.0 - MMR_LAMBDA) * penalty[i]),
-                reverse=True)
-            results = [pool[i] for i in order] + results[MMR_POOL:]
+            # Only embedded rows are re-sorted, each holding one of
+            # the slots the embedded set occupied; a vector-less row
+            # keeps its relevance position. Scoring it instead would
+            # hand it a zero penalty -- the maximum diversity bonus
+            # -- and float exactly the degraded rows to the head.
+            embedded = [idx for idx, _v in vec_rows]
+            mmr_by_idx = {
+                idx: (MMR_LAMBDA * pool[idx]['score']
+                      - (1.0 - MMR_LAMBDA) * float(ms))
+                for (idx, _v), ms in zip(vec_rows, max_sim)}
+            reordered_iter = iter(sorted(
+                embedded, key=lambda i: mmr_by_idx[i], reverse=True))
+            embedded_set = set(embedded)
+            pool = [
+                pool[next(reordered_iter)] if i in embedded_set
+                else pool[i]
+                for i in range(len(pool))]
+            results = pool + results[MMR_POOL:]
 
     reranked = False
     if rerank and len(query.split()) > MIN_RERANK_TOKENS:

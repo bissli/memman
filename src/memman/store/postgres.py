@@ -39,6 +39,7 @@ from memman.migrate import PendingReembed, SwapState, sanitize_identifier
 from memman.store.backend import Backend, EdgeStore, MetaStore, NodeStore
 from memman.store.backend import Oplog, RecallSession, _check_identifier
 from memman.store.base import BaseNodeStore
+from memman.store.db import MIGRATION_SCRIPT
 from memman.store.errors import BackendError
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
 from memman.store.model import NodeStats, OpLogEntry, OpLogStats
@@ -555,14 +556,16 @@ where id = %s
         with self._conn.cursor() as cur:
             cur.execute(sql, (id,))
 
-    def increment_corroboration(self, id: Id) -> None:
+    def increment_corroboration(
+            self, id: Id, *, queue_uuid: str | None = None) -> None:
         sql = self._q("""
 update {s}.insights
-set corroboration_count = corroboration_count + 1
+set corroboration_count = corroboration_count + 1,
+    queue_uuid = coalesce(%s, queue_uuid)
 where id = %s
 """)
         with self._conn.cursor() as cur:
-            cur.execute(sql, (id,))
+            cur.execute(sql, (queue_uuid, id))
 
     def refresh_effective_importance(self, id: Id) -> float:
         select_sql = self._q("""
@@ -2224,10 +2227,26 @@ def apply_baseline_schema(
     failure). Creates the `vector` extension, the schema, and the
     base tables (with all constraints declared inline).
     """
+    import psycopg  # optional-extra: lazy like every psycopg use here
     with conn.cursor() as cur:
         cur.execute('create extension if not exists vector')
         cur.execute(f'create schema if not exists {schema}')
-        cur.execute(PG_BASELINE_SCHEMA.format(schema=schema, dim=dim))
+        try:
+            cur.execute(
+                PG_BASELINE_SCHEMA.format(schema=schema, dim=dim))
+        except psycopg.errors.UndefinedColumn as exc:
+            # Mirrors the SQLite diagnostic in store/db.py::_migrate:
+            # `create table if not exists` no-ops on an existing
+            # table, so a pre-migration store trips the baseline's
+            # index on the newest column. The rebuild script is
+            # SQLite-only -- a pg-routed store migrates to sqlite on
+            # the previous release, rebuilds, and migrates back.
+            raise BackendError(
+                f'postgres schema {schema} predates the current'
+                f' schema; rebuild via {MIGRATION_SCRIPT} (SQLite'
+                ' only: migrate the store --to sqlite on the'
+                ' previous release, rebuild, then migrate back)'
+                ) from exc
 
 
 def _ensure_baseline_schema(

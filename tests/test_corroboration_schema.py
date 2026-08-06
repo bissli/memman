@@ -36,7 +36,7 @@ def test_expected_insight_columns_covers_corroboration_count(backend):
     """`doctor.EXPECTED_INSIGHT_COLUMNS` names the new column.
 
     Mutation: adding the column to the baseline schemas but not to
-        doctor — `check_schema_columns` would then pass on a store
+        doctor -- `check_schema_columns` would then pass on a store
         doctor cannot actually vouch for.
     Oracle: the constant names the column AND a freshly created
         store carries it, on both backends.
@@ -48,10 +48,10 @@ def test_expected_insight_columns_covers_corroboration_count(backend):
 
 
 def test_migration_payload_round_trips_corroboration_count(tmp_path):
-    """gather -> apply preserves a non-zero corroboration_count.
+    """Gather -> apply preserves a non-zero corroboration_count.
 
     Mutation: dropping `corroboration_count` from gather's select or
-        from apply's unconditional insert list — a rebuild silently
+        from apply's unconditional insert list -- a rebuild silently
         zeroes live counts.
     Oracle: a count of 5 written before gather reappears in the
         applied store, and the payload row carries it in between.
@@ -73,7 +73,7 @@ def test_migration_payload_round_trips_corroboration_count(tmp_path):
 
 
 def test_gather_from_pre_phase2_schema_defaults_zero(tmp_path):
-    """gather substitutes 0 when the source lacks the column.
+    """Gather substitutes 0 when the source lacks the column.
 
     The rebuild gathers from stores on the 0.18.x schema, where
     `corroboration_count` does not exist; an unconditional select
@@ -120,3 +120,29 @@ def test_postgres_gather_probe_includes_corroboration_count():
     _, _, in_list = gather_body.partition('column_name in')
     assert "'corroboration_count'" in in_list[:300]
     assert "idx['corroboration_count']" in gather_body
+
+
+def test_open_db_refuses_store_missing_corroboration_column(tmp_path):
+    """A 0.18.x-shape store fails at open naming the rebuild script.
+
+    `create table if not exists` no-ops on an existing table, so the
+    ONLY statement that raises for a store already carrying
+    session_id/queue_uuid is the baseline index on the newest column.
+
+    Mutation: dropping `idx_insights_corroboration` from
+        `_BASELINE_SCHEMA` -- the 0.18.x store opens silently and
+        fails later with a raw OperationalError deep in a read path.
+    Oracle: `open_db` raises RuntimeError naming `MIGRATION_SCRIPT`.
+    """
+    import pytest
+    from memman.store.db import MIGRATION_SCRIPT
+
+    data_dir = str(tmp_path)
+    db_path = _seed_store(data_dir, 'v018')
+    with closing(sqlite3.connect(str(db_path))) as conn:
+        conn.execute('drop index idx_insights_corroboration')
+        conn.execute(
+            'alter table insights drop column corroboration_count')
+        conn.commit()
+    with pytest.raises(RuntimeError, match=MIGRATION_SCRIPT):
+        open_db(store_dir(data_dir, 'v018'))
