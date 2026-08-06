@@ -111,6 +111,15 @@ class NodeStore(Protocol):
         """Bump access_count and refresh last_accessed_at."""
         ...
 
+    def increment_corroboration(self, id: Id) -> None:
+        """Bump corroboration_count for an insight.
+
+        Observational counter only: it must never feed `is_immune`
+        or `compute_effective_importance` -- "the agent said it
+        twice" must not grant retention immunity.
+        """
+        ...
+
     def refresh_effective_importance(self, id: Id) -> float:
         """Recompute and persist effective_importance for one insight."""
         ...

@@ -190,6 +190,21 @@ where id = ?
     db._exec(sql, (now, id))
 
 
+def increment_corroboration(db: 'DB', id: str) -> None:
+    """Bump corroboration_count for an insight.
+
+    Never touches `access_count` or `last_accessed_at`: those feed
+    the retention-immunity criterion, and a restated fact must not
+    earn pruning immunity.
+    """
+    sql = """
+update insights
+set corroboration_count = corroboration_count + 1
+where id = ?
+"""
+    db._exec(sql, (id,))
+
+
 def compute_effective_importance(
         importance: int, access_count: int,
         days_since_access: float, edge_count: int) -> float:

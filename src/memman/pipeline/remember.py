@@ -36,6 +36,7 @@ from memman.graph.entity import create_entity_edges
 from memman.graph.semantic import create_semantic_edges
 from memman.llm import extract as llm_extract
 from memman.llm.client import MemmanLLMClient, get_llm_client
+from memman.llm.extract import _WS_COLLAPSE_RE
 from memman.search.keyword import keyword_search
 from memman.search.quality import check_content_quality
 from memman.store.backend import Backend
@@ -375,6 +376,37 @@ def _plan_fact(
                 seen.add(cid)
 
         if similar:
+            # Exact-match rung: byte-identical content (modulo case
+            # and whitespace) needs no LLM judgement when exactly ONE
+            # stored row matches. Two identical stored rows mean the
+            # store is already inconsistent, and which one to merge
+            # into is exactly the judgement worth an LLM call. Full
+            # normalized equality only -- `in` would swallow every
+            # superset fact.
+            normalized = _WS_COLLAPSE_RE.sub(
+                ' ', fact_text).strip().lower()
+            exact_ids = [
+                sid for sid, scontent in similar
+                if _WS_COLLAPSE_RE.sub(' ', scontent).strip().lower()
+                == normalized]
+            if len(exact_ids) == 1:
+                return FactPlan(
+                    action='skipped',
+                    fact_text=fact_text,
+                    fact_insight=Insight(
+                        id=str(uuid.uuid4()), content=fact_text,
+                        category=fact_category,
+                        importance=fact_importance,
+                        entities=fact_entities + list(parent.entities),
+                        source=parent.source,
+                        access_count=parent.access_count,
+                        created_at=parent.created_at,
+                        updated_at=parent.updated_at,
+                        session_id=parent.session_id,
+                        queue_uuid=parent.queue_uuid),
+                    target_id=exact_ids[0],
+                    skip_reason='exact duplicate',
+                    ), calls
             recon = llm_extract.reconcile_memories(
                 llm_client, [fact], similar)
             calls += 1
@@ -506,6 +538,14 @@ def _apply_plan(
     """
     if plan.action == 'skipped':
         skip_fi = plan.fact_insight
+        # Only the exact-match rung sets target_id on a skipped plan;
+        # the dedup-sibling / target-deleted / NONE skips carry none.
+        if plan.target_id:
+            backend.nodes.increment_corroboration(plan.target_id)
+            backend.oplog.log(
+                operation='reconcile-corroborate',
+                insight_id=plan.target_id,
+                detail=f'restated by: {plan.fact_text[:200]}')
         return {
             'id': skip_fi.id if skip_fi else str(uuid.uuid4()),
             'content': skip_fi.content if skip_fi else plan.fact_text,

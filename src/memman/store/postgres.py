@@ -555,6 +555,15 @@ where id = %s
         with self._conn.cursor() as cur:
             cur.execute(sql, (id,))
 
+    def increment_corroboration(self, id: Id) -> None:
+        sql = self._q("""
+update {s}.insights
+set corroboration_count = corroboration_count + 1
+where id = %s
+""")
+        with self._conn.cursor() as cur:
+            cur.execute(sql, (id,))
+
     def refresh_effective_importance(self, id: Id) -> float:
         select_sql = self._q("""
 select importance, access_count, created_at, last_accessed_at
