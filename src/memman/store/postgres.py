@@ -100,7 +100,8 @@ create table if not exists {schema}.insights (
     model_id    text,
     embedding_model text,
     session_id  text,
-    queue_uuid  text
+    queue_uuid  text,
+    corroboration_count integer not null default 0
 );
 
 create table if not exists {schema}.edges (
@@ -157,6 +158,8 @@ create index if not exists idx_insights_session_{schema}
     on {schema}.insights(session_id);
 create index if not exists idx_insights_queue_uuid_{schema}
     on {schema}.insights(queue_uuid);
+create index if not exists idx_insights_corroboration_{schema}
+    on {schema}.insights(corroboration_count);
 create index if not exists idx_insights_eff_imp_{schema}
     on {schema}.insights(effective_importance);
 create index if not exists idx_insights_pending_link_{schema}
@@ -316,6 +319,8 @@ def _row_to_insight(row: tuple[Any, ...]) -> Insight:
         i.session_id = row[14]
     if len(row) > 15 and row[15]:
         i.queue_uuid = row[15]
+    if len(row) > 16 and row[16] is not None:
+        i.corroboration_count = int(row[16])
     return i
 
 
@@ -337,14 +342,14 @@ def _row_to_edge(row: tuple[Any, ...]) -> Edge:
     return e
 
 
-# `session_id` then `queue_uuid`, appended last -- must stay
-# byte-identical to node.py's _INSIGHT_COLUMNS (see
-# test_insight_column_lists_are_identical_across_backends).
+# `session_id`, `queue_uuid`, then `corroboration_count`, appended
+# last -- must stay byte-identical to node.py's _INSIGHT_COLUMNS
+# (see test_insight_column_lists_are_identical_across_backends).
 _INSIGHT_COLS = (
     'id, content, category, importance, entities,'
     ' source, access_count, created_at, updated_at, deleted_at,'
     ' summary, linked_at, enriched_at, last_accessed_at,'
-    ' session_id, queue_uuid')
+    ' session_id, queue_uuid, corroboration_count')
 
 
 class PostgresNodeStore(BaseNodeStore, NodeStore):
@@ -404,15 +409,16 @@ where attrelid = (%s || '.insights')::regclass
 insert into {s}.insights
     (id, content, category, importance, entities,
      source, access_count, prompt_version, model_id, embedding_model,
-     session_id, queue_uuid)
-values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s)
+     session_id, queue_uuid, corroboration_count)
+values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s)
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (
                 ins.id, ins.content, ins.category, ins.importance,
                 ins.entities_json(), ins.source, ins.access_count,
                 ins.prompt_version, ins.model_id, ins.embedding_model,
-                ins.session_id, ins.queue_uuid))
+                ins.session_id, ins.queue_uuid,
+                ins.corroboration_count))
 
     def get(self, id: Id) -> Insight | None:
         sql = self._q(f"""
@@ -2588,14 +2594,16 @@ class PostgresMigrator(Migrator):
                 " where table_schema = %s"
                 " and table_name = 'insights'"
                 " and column_name in"
-                " ('embedding_pending', 'session_id', 'queue_uuid')",
+                " ('embedding_pending', 'session_id', 'queue_uuid',"
+                " 'corroboration_count')",
                 (schema,))
             present_cols = {r[0] for r in cur.fetchall()}
             has_pending = 'embedding_pending' in present_cols
             has_new = {'session_id', 'queue_uuid'} <= present_cols
+            has_corrob = 'corroboration_count' in present_cols
             # Notes:
-            # - Two INDEPENDENT optional column groups exist, so the
-            #   select has four shapes; never hardcode trailing
+            # - Three INDEPENDENT optional column groups exist, so
+            #   the select has eight shapes; never hardcode trailing
             #   indices. Build the tail as an ordered list and derive
             #   positions from it.
             optional: list[str] = []
@@ -2603,6 +2611,8 @@ class PostgresMigrator(Migrator):
                 optional.append('embedding_pending')
             if has_new:
                 optional += ['session_id', 'queue_uuid']
+            if has_corrob:
+                optional.append('corroboration_count')
             idx = {name: 21 + n for n, name in enumerate(optional)}
             optional_select = ''.join(f', {c}' for c in optional)
             cur.execute(f"""
@@ -2643,7 +2653,10 @@ order by id
                     session_id=(
                         r[idx['session_id']] if has_new else None),
                     queue_uuid=(
-                        r[idx['queue_uuid']] if has_new else None)))
+                        r[idx['queue_uuid']] if has_new else None),
+                    corroboration_count=(
+                        int(r[idx['corroboration_count']])
+                        if has_corrob else 0)))
                 if (has_pending
                         and r[idx['embedding_pending']] is not None):
                     pending.append(PendingReembed(
@@ -2756,7 +2769,8 @@ order by sqlite_id
                             ins.created_at, ins.updated_at,
                             ins.deleted_at, ins.prompt_version,
                             ins.model_id, ins.embedding_model,
-                            ins.session_id, ins.queue_uuid))
+                            ins.session_id, ins.queue_uuid,
+                            ins.corroboration_count))
                     with conn.cursor() as cur:
                         # apply always writes the NEW schema, so the
                         # new columns are listed unconditionally --
@@ -2772,11 +2786,11 @@ order by sqlite_id
                             ' enriched_at, created_at, updated_at,'
                             ' deleted_at, prompt_version, model_id,'
                             ' embedding_model, session_id,'
-                            ' queue_uuid)'
+                            ' queue_uuid, corroboration_count)'
                             ' values (%s, %s, %s, %s, %s::jsonb,'
                             ' %s, %s, %s::jsonb, %s, %s::jsonb,'
                             ' %s, %s, %s, %s, %s, %s, %s, %s,'
-                            ' %s, %s, %s, %s, %s)'
+                            ' %s, %s, %s, %s, %s, %s)'
                             ' on conflict (id) do nothing',
                             insight_rows)
 

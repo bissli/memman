@@ -48,7 +48,7 @@ logger = logging.getLogger('memman')
 # bundle restored onto 0.18.0 would yield an old-schema store, so
 # restore refuses on version mismatch; read v1 bundles with the
 # pinned memman@0173 install.
-BACKUP_FORMAT_VERSION = 2
+BACKUP_FORMAT_VERSION = 3
 DB_FILENAME = 'memman.db'
 QUEUE_FILENAME = 'queue.db'
 DUMP_FILENAME = 'dump.pgdump'

@@ -115,6 +115,7 @@ def write_snapshot(db: sqlite3.Connection, store_dir: str,
                 if i.enriched_at else None),
             'session_id': i.session_id,
             'queue_uuid': i.queue_uuid,
+            'corroboration_count': i.corroboration_count,
             }
         for i in insights
         ]
@@ -248,6 +249,8 @@ def read_snapshot(
                 if entry['enriched_at'] else None),
             session_id=entry.get('session_id'),
             queue_uuid=entry.get('queue_uuid'),
+            corroboration_count=int(
+                entry.get('corroboration_count') or 0),
             ) for entry in meta_list]
 
     raw_adj = json.loads(adj_blob)

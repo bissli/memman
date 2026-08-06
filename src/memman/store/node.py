@@ -34,25 +34,25 @@ insert into insights
     (id, content, category, importance, entities,
      source, access_count, created_at, updated_at,
      prompt_version, model_id, embedding_model,
-     session_id, queue_uuid)
-values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     session_id, queue_uuid, corroboration_count)
+values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
     db._exec(sql, (
         i.id, i.content, i.category, i.importance,
         i.entities_json(), i.source, i.access_count,
         now, now,
         i.prompt_version, i.model_id, i.embedding_model,
-        i.session_id, i.queue_uuid))
+        i.session_id, i.queue_uuid, i.corroboration_count))
 
 
-# `session_id` then `queue_uuid`, appended last -- must stay
-# byte-identical to postgres.py's _INSIGHT_COLS (see
-# test_insight_column_lists_are_identical_across_backends).
+# `session_id`, `queue_uuid`, then `corroboration_count`, appended
+# last -- must stay byte-identical to postgres.py's _INSIGHT_COLS
+# (see test_insight_column_lists_are_identical_across_backends).
 _INSIGHT_COLUMNS = (
     'id, content, category, importance, entities,'
     ' source, access_count, created_at, updated_at, deleted_at,'
     ' summary, linked_at, enriched_at, last_accessed_at,'
-    ' session_id, queue_uuid')
+    ' session_id, queue_uuid, corroboration_count')
 
 
 def get_insight_by_id(db: 'DB', id: str) -> Insight | None:
@@ -944,4 +944,6 @@ def _scan_insight(row: tuple[Any, ...]) -> Insight:
         i.session_id = row[14]
     if len(row) > 15 and row[15]:
         i.queue_uuid = row[15]
+    if len(row) > 16 and row[16] is not None:
+        i.corroboration_count = int(row[16])
     return i
