@@ -248,7 +248,9 @@ def test_llm_complete_emits_request_and_response(
         endpoint='https://openrouter.ai/api/v1',
         api_key='fake-secret-key',
         model='anthropic/claude-haiku-4.5')
-    out = client.complete('sys', 'user')
+    from memman.llm import usage as llm_usage
+    out = client.complete(
+        'sys', 'user', stage=llm_usage.STAGE_PROBE)
     assert out == 'hi'
 
     log_path = fake_home / '.memman' / 'logs' / 'debug.log'
