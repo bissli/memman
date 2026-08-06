@@ -366,3 +366,29 @@ def test_open_db_names_the_migration_script(tmp_path):
         open_db(str(tmp_path / 'data' / 's9'))
     assert MIGRATION_SCRIPT in str(excinfo.value)
     assert 's9' in str(excinfo.value)
+
+
+def test_verify_counts_flags_corroboration_sum_mismatch(tmp_path):
+    """`verify_counts` compares the corroboration SUM, not just rows.
+
+    A fleet migrating from the previous schema has all-zero
+    counters, so row-count parity passes even if gather silently
+    drops the column -- the sum is the probe-time proof of the
+    round-trip.
+
+    Mutation: dropping the 'corroboration' key from `verify_counts`.
+    Oracle: a payload whose insights sum to 8 against a store
+        holding 7 yields exactly one mismatch naming corroboration;
+        the matching payload yields none.
+    """
+    from dataclasses import replace
+
+    from memman.store.sqlite import SqliteMigrator
+    seeded = replace(_mi('v1', NOW), corroboration_count=7)
+    m = SqliteMigrator(str(tmp_path))
+    m.apply('sv', _payload([seeded], []))
+    db_path = tmp_path / 'data' / 'sv' / 'memman.db'
+    assert mig.verify_counts(db_path, _payload([seeded], [])) == []
+    claimed = replace(_mi('v1', NOW), corroboration_count=8)
+    mismatches = mig.verify_counts(db_path, _payload([claimed], []))
+    assert mismatches == ['corroboration: expected 8, got 7']
