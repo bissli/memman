@@ -566,7 +566,7 @@ where id = %s and deleted_at is null
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (queue_uuid, id))
-            return cur.rowcount == 1
+            return bool(cur.rowcount == 1)
 
     def refresh_effective_importance(self, id: Id) -> float:
         select_sql = self._q("""
