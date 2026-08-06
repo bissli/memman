@@ -88,7 +88,7 @@ insights (
   prompt_version, model_id, embedding_model,    -- Provenance for re-enrichment
   created_at, updated_at, deleted_at,
   session_id,                                   -- Temporal chain key (nullable; no session, no backbone edge)
-  queue_uuid,                                   -- Idempotency key from the queue row (shared by sibling facts)
+  queue_uuid,                                   -- Idempotency key from the queue row (shared by sibling facts; a corroborated row missing one adopts the restating row's)
   corroboration_count                           -- Exact-match restatements observed (integer not null default 0)
 )
 
@@ -113,7 +113,7 @@ meta (
 
 Provenance columns (`prompt_version`, `model_id`, `embedding_model`) record which LLM and embedding model produced each insight. They power `memman embed reembed` and `memman graph rebuild` when models or prompts change.
 
-**Corroboration semantics.** `corroboration_count` counts exact-match restatements: when a queued write's fact is byte-identical (modulo case and whitespace) to exactly one stored row, the write is skipped without an LLM reconcile call, the stored row's counter is bumped, and a `reconcile-corroborate` oplog row records the restatement. The counter is observational only — it deliberately feeds neither the retention-immunity criterion (`importance >= 4 or access_count >= 3`) nor `effective_importance`, so "the agent said it twice" cannot earn a row permanent immunity. It is per-row-identity: an UPDATE/REPLACE reconciliation soft-deletes the corroborated row and the successor starts at 0. Collect the data first; any ranking or lifecycle use is a later, measured decision.
+**Corroboration semantics.** `corroboration_count` counts exact-match restatements: when a queued write's fact is byte-identical (modulo case and whitespace) to exactly one stored row, the write is skipped without an LLM reconcile call, the stored row's counter is bumped, and a `reconcile-corroborate` oplog row records the restatement. The counter is observational only — it deliberately feeds neither the retention-immunity criterion (`importance >= 4 or access_count >= 3`) nor `effective_importance`, so "the agent said it twice" cannot earn a row permanent immunity. It is per-row-identity: an UPDATE/REPLACE reconciliation soft-deletes the corroborated row and the successor starts at 0. Bump mechanics: the restating queue row's `queue_uuid` is adopted only when the target carries none — the creating row's replay guard outranks the restating row's, so a populated key is never clobbered (the cost is that a crash-reclaimed all-skips restating row may re-bump once); a target soft-deleted between planning and apply degrades the skip to a plain add rather than dropping the fact; and one queue row bumps a given target at most once regardless of how many identical facts its extraction emits. Collect the data first; any ranking or lifecycle use is a later, measured decision.
 
 ---
 
