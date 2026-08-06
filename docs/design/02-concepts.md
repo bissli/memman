@@ -20,6 +20,7 @@
 │ source     : "user"     (provenance)         │
 │ session_id : "s-1f2e…"  (temporal chain key) │
 │ queue_uuid : "9b0c…"    (idempotency key)    │
+│ corroboration_count : 2 (exact restatements) │
 │ access_count        : 3                      │
 │ effective_importance : 0.85                  │
 │ created_at : 2026-02-18T10:00:00Z            │
@@ -87,7 +88,8 @@ insights (
   prompt_version, model_id, embedding_model,    -- Provenance for re-enrichment
   created_at, updated_at, deleted_at,
   session_id,                                   -- Temporal chain key (nullable; no session, no backbone edge)
-  queue_uuid                                    -- Idempotency key from the queue row (shared by sibling facts)
+  queue_uuid,                                   -- Idempotency key from the queue row (shared by sibling facts)
+  corroboration_count                           -- Exact-match restatements observed (integer not null default 0)
 )
 
 -- Relationship edges (composite primary key)
@@ -110,6 +112,8 @@ meta (
 ```
 
 Provenance columns (`prompt_version`, `model_id`, `embedding_model`) record which LLM and embedding model produced each insight. They power `memman embed reembed` and `memman graph rebuild` when models or prompts change.
+
+**Corroboration semantics.** `corroboration_count` counts exact-match restatements: when a queued write's fact is byte-identical (modulo case and whitespace) to exactly one stored row, the write is skipped without an LLM reconcile call, the stored row's counter is bumped, and a `reconcile-corroborate` oplog row records the restatement. The counter is observational only — it deliberately feeds neither the retention-immunity criterion (`importance >= 4 or access_count >= 3`) nor `effective_importance`, so "the agent said it twice" cannot earn a row permanent immunity. Collect the data first; any ranking or lifecycle use is a later, measured decision.
 
 ---
 

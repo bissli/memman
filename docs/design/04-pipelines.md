@@ -34,12 +34,16 @@ Per-blob processing inside `_process_queue_row`:
 2. **Idempotency check** — if the target store already has any insight carrying the row's `queue_uuid` (a uuid4 minted at enqueue), skip and mark done (crash-recovery after partial commit). The uuid — not the integer row id — survives a `backup.restore` that rewinds the queue's AUTOINCREMENT counter; `source` is pure provenance and plays no part.
 3. **Quality gate** — regex-based `check_content_quality()` rejects transient patterns.
 4. **LLM fact extraction** — decomposes into 1–5 atomic facts with category/importance/entities.
-5. **Per-fact**: embed via the store's bound provider, keyword + cosine similarity scan, `reconcile_memories` → ADD/UPDATE/DELETE/NONE, insert/update, fast edges.
-6. **Parallel enrichment + causal inference** (ThreadPoolExecutor, 2 workers).
+5. **Per-fact**: embed via the store's bound provider, keyword + cosine similarity scan, then an **exact-match dedup rung**: when exactly one shortlist row matches the fact byte-for-byte (modulo case and whitespace), the fact skips with no LLM call, the stored row's `corroboration_count` is bumped, and a `reconcile-corroborate` oplog row is written; two identical stored rows escalate to the LLM (the store is already inconsistent, and which row to merge into is exactly the judgement worth a call). Otherwise `reconcile_memories` → ADD/UPDATE/DELETE/NONE, insert/update, fast edges. The rung does not run under `--no-reconcile` (verbatim-store contract; `replace` routes through that flag).
+6. **Parallel enrichment + causal inference** (ThreadPoolExecutor, 2 workers). LLM-proposed entities and keywords over 200 chars are dropped post-parse (never truncated — a truncated entity is still a valid exact-match edge key), before the count caps and before the merge with user-supplied `--entities`, which stay uncapped. The caps are pathological-input guardrails measured against the fleet (longest legitimate strings: 137 chars), not retrieval tunables, and they live post-parse so `prompt_version` is unaffected.
 7. **Re-embed** with enriched keywords; rebuild auto edges.
 8. `mark_done(queue_id)` on success, or `mark_failed` (retry up to 5 times across stale-claim windows before status='failed').
 
 Edge upserts and embed/LLM call sites no longer swallow exceptions; failures (constraint violation, network error, malformed payload) reach `mark_failed` and consume the retry budget. Best-effort cleanup (HTTP session resets, platform probes, pool teardown) keeps narrow typed catches at `logger.debug`.
+
+### Per-stage token accounting
+
+Every `MemmanLLMClient.complete` call names its originating stage from a closed set (`extraction`, `reconciliation`, `query_expansion`, `enrichment`, `causal`, `probe` — an unknown stage raises). The client reads the provider's `usage` block **per attempt inside the retry loop** — an empty HTTP-200 body retried twice is three billed completions, so success-only accounting undercounts — and accumulates into a process-wide ledger behind a `threading.Lock` (enrichment and causal run concurrently, so event-order attribution is unrecoverable). The drain worker snapshots the ledger per row (each `queue_done`/`queue_failed` trace event carries the row's per-stage delta) and emits an `llm_usage_summary` trace event plus an `llm_usage` key in the drain's JSON output with the drain-level totals. A response with no `usage` block counts the call under `missing_usage` without inventing zero tokens.
 
 ### LLM routing
 
@@ -176,6 +180,10 @@ final = w_kw·keyword + w_ent·entity + w_sim·similarity + w_gr·graph
 
 Embeddings are Nd vectors from the store's bound provider (dim is provider-defined; current default is `voyage-3-lite`, 512-dim). The expanded query from Step 0 is embedded for vector search and reranking.
 
+### Step 4a: MMR diversity re-sort (off by default)
+
+Between the `--cat`/`--source` result filter and the cross-encoder shortlist, a one-shot MMR pass can re-sort the top `MMR_POOL` (200) candidates by `lam * relevance - (1 - lam) * max_pool_similarity`, computed with one gram-matrix BLAS call over L2-normalized stored vectors (diagonal zeroed so a row's self-similarity is excluded). It is the cheap one-shot variant — every candidate scored once against the whole pool, then one sort — not greedy iterative MMR. `MMR_POOL > RERANK_SHORTLIST` by construction so the pass can change shortlist membership when rerank is on. `MMR_LAMBDA` ships at the value measured by the `experiments/recall_ablation` mmr sweep; `1.0` disables the term (see the sweep record in that directory's README for why).
+
 ### Step 4b: Cross-encoder rerank
 
 Rerank is on by default. The decision to run is resolved at recall time per call from config: `MEMMAN_RERANK_ENABLED_<store>` (per-store override) falls back to `MEMMAN_RERANK_ENABLED` (global default, `true` post-install). When enabled and the query has more than `MIN_RERANK_TOKENS` (default 2) whitespace tokens, the top `RERANK_SHORTLIST` (default 100) candidates from Step 4 are re-scored by the configured cross-encoder reranker (`MEMMAN_RERANK_PROVIDER`; current default `voyage` with model `rerank-2.5-lite`), and the rerank score replaces the multi-signal score for the final ordering. Operators disable rerank for a noisy store with `memman config set MEMMAN_RERANK_ENABLED_<store> false`.
@@ -222,6 +230,10 @@ Each retrieval result includes signal details:
 The `summary` field is the LLM-authored one-line gloss produced during enrichment (slow_metadata role). It is present only when (a) enrichment has run for the row and (b) the summary actually compresses the content (write-time gate at `len(summary) < len(insight.content) * 0.85`); rows that fail the gate emit no `summary` key. Calling LLMs see ~3.6× token compression with ~90% ranking-decision agreement vs full content.
 
 The host LLM sees these signals and can apply its own judgment with full conversation context.
+
+### Recall trace events
+
+With debug tracing enabled (`MEMMAN_DEBUG=1` or `memman scheduler debug on`), `intent_aware_recall` emits per-phase events: `recall_anchors` (per-signal hit counts, fused pool size, and `vector_hits` against `anchor_k` — the measurement for whether a selective filter starves the vector scan), `recall_traversal` (beam-search visited count and how many anchors hit the visit budget), and `recall_rerank` (how many shortlist positions actually moved, diffed by id — the reranker replaces every score, so a score diff would always read "all moved"). The `trace.is_enabled()` gate is read once per recall, not per event site, because it can fall through to a file read on the synchronous hot path.
 
 ## 4.3 Model resilience
 
