@@ -205,13 +205,15 @@ class MemmanLLMClient:
                     time.sleep(delay)
                     continue
                 raise
-            try:
-                data = resp.json()
-            except ValueError:
-                # A 200 with an unparseable body (truncating proxy)
-                # is still a billed attempt; book it before the
-                # retry, not after a raise that skips the ledger.
-                data = None
+            # Notes:
+            # - A 200 with an unparseable body (truncating proxy) is
+            #   still a billed attempt; book it before the retry,
+            #   not after a raise that skips the ledger.
+            # - Keep the raw text for the trace/error surfaces --
+            #   the operator needs to tell an HTML error page from
+            #   truncated JSON, exactly as the non-2xx branch does.
+            raw_body = safe_json(resp)
+            data = raw_body if isinstance(raw_body, dict) else None
             # Every HTTP-200 attempt is a billed completion --
             # malformed, empty and success alike carry a usage block,
             # so record it here, once per attempt, before branching.
@@ -238,10 +240,10 @@ class MemmanLLMClient:
                         elapsed_ms=elapsed_ms,
                         stage=stage,
                         usage=usage_block,
-                        body=data)
+                        body=raw_body)
                     raise RuntimeError(
                         f'llm response missing message.content'
-                        f' ({exc}): {data!r}') from exc
+                        f' ({exc}): {raw_body!r}') from exc
                 if content is None or (isinstance(content, str)
                                        and not content.strip()):
                     empty_kind = 'empty_content'
@@ -253,7 +255,7 @@ class MemmanLLMClient:
                     elapsed_ms=elapsed_ms,
                     stage=stage,
                     usage=usage_block,
-                    body=data)
+                    body=raw_body)
                 return content
             trace.event(
                 'llm_response',
@@ -262,7 +264,7 @@ class MemmanLLMClient:
                 elapsed_ms=elapsed_ms,
                 stage=stage,
                 usage=usage_block,
-                body=data,
+                body=raw_body,
                 error=empty_kind)
             if attempt < MAX_RETRIES - 1:
                 logger.debug(
@@ -278,7 +280,7 @@ class MemmanLLMClient:
                 continue
             raise RuntimeError(
                 f'llm returned {empty_kind} after'
-                f' {MAX_RETRIES} attempts: {data!r}')
+                f' {MAX_RETRIES} attempts: {raw_body!r}')
 
 
 _ROLE_CACHE: dict[str, MemmanLLMClient] = {}

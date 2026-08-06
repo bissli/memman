@@ -305,3 +305,53 @@ def test_drain_json_carries_llm_usage_delta(mm_runner, monkeypatch):
     stage = data['llm_usage'][usage.STAGE_EXTRACTION]
     assert stage['calls'] == 1
     assert stage['prompt_tokens'] == 11
+
+
+def test_expand_usage_summary_uses_the_drain_event_key(
+        mm_runner, monkeypatch):
+    """`recall --expand` emits llm_usage_summary under the `usage` key.
+
+    The drain's emitter names the payload `usage`; a second emitter
+    for the same event name under a different key is invisible to
+    every consumer keyed on the shipped shape -- the exact
+    observability hole the emission exists to close.
+
+    Mutation: emitting the delta under `llm_usage=`, or dropping the
+        emission from the recall command.
+    Oracle: a trace.event spy captures exactly one llm_usage_summary
+        whose `usage` payload carries the query_expansion stage.
+    """
+    from memman import trace
+    from memman.cli import cli
+
+    events = []
+    monkeypatch.setattr(
+        trace, 'event',
+        lambda name, **kw: events.append((name, kw)))
+    monkeypatch.setattr(
+        'memman.cli._get_llm_client_or_fail', lambda role: object())
+
+    def _fake_expand(client, q):
+        usage.record(
+            usage.STAGE_QUERY_EXPANSION, {'prompt_tokens': 5})
+        return {'expanded_query': q + ' broadened'}
+
+    monkeypatch.setattr(
+        'memman.llm.extract.expand_query', _fake_expand)
+    r, data_dir = mm_runner
+    res = r.invoke(cli, [
+        '--data-dir', data_dir, 'remember', 'expansion seed row'])
+    assert res.exit_code == 0, res.output
+    res = r.invoke(cli, [
+        '--data-dir', data_dir, 'recall', 'expansion', 'seed',
+        '--expand'])
+    assert res.exit_code == 0, res.output
+    # The auto-drain after `remember` emits its own summary; the
+    # recall's is the one carrying the expansion stage under the
+    # shipped `usage` key.
+    summaries = [
+        kw for name, kw in events if name == 'llm_usage_summary']
+    expansion = [
+        kw for kw in summaries
+        if usage.STAGE_QUERY_EXPANSION in kw.get('usage', {})]
+    assert len(expansion) == 1
