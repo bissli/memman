@@ -58,6 +58,7 @@ class Insight:
     enriched_at: datetime | None = None
     session_id: str | None = None
     queue_uuid: str | None = None
+    corroboration_count: int = 0
 
     def entities_json(self) -> str:
         """Return entities as a JSON string for storage."""

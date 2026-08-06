@@ -88,7 +88,8 @@ def _mi(id, created_at, *, source='user', deleted_at=None):
         effective_importance=0.5, linked_at=None, enriched_at=None,
         created_at=created_at, updated_at=created_at,
         deleted_at=deleted_at, prompt_version=None, model_id=None,
-        embedding_model=None, session_id=None, queue_uuid=None)
+        embedding_model=None, session_id=None, queue_uuid=None,
+        corroboration_count=0)
 
 
 def _semantic(src, tgt):

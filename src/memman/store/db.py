@@ -220,7 +220,8 @@ create table if not exists insights (
     model_id    text,
     embedding_model text,
     session_id  text,
-    queue_uuid  text
+    queue_uuid  text,
+    corroboration_count integer not null default 0
 );
 
 create table if not exists edges (
@@ -242,6 +243,7 @@ create index if not exists idx_insights_deleted on insights(deleted_at);
 create index if not exists idx_insights_source on insights(source);
 create index if not exists idx_insights_session on insights(session_id);
 create index if not exists idx_insights_queue_uuid on insights(queue_uuid);
+create index if not exists idx_insights_corroboration on insights(corroboration_count);
 create index if not exists idx_insights_effective_imp on insights(effective_importance);
 create index if not exists idx_prune_candidates
     on insights(deleted_at, importance, access_count, effective_importance);

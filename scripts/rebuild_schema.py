@@ -68,8 +68,9 @@ BREADCRUMB_NAME = 'rebuild_schema.inflight'
 # The payload version this script's schema markers correspond to.
 # A future rebuild bumps this alongside SCHEMA_COLUMNS -- both guard
 # 2 and the final gate read them, so nothing else needs editing.
-EXPECTED_PAYLOAD_VERSION = 2
-SCHEMA_COLUMNS = frozenset({'session_id', 'queue_uuid'})
+EXPECTED_PAYLOAD_VERSION = 3
+SCHEMA_COLUMNS = frozenset(
+    {'session_id', 'queue_uuid', 'corroboration_count'})
 SCHEMA_TAG = f'payload-v{EXPECTED_PAYLOAD_VERSION}'
 
 _LOG_PATH: str | None = None

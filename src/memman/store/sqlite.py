@@ -866,13 +866,22 @@ class SqliteMigrator(Migrator):
             fingerprint = Fingerprint.from_json(fp_str)
 
             # Probe before selecting: a rebuild gathers from a
-            # PRE-migration store where the new pair does not exist,
-            # so an unconditional select raises on the first store.
+            # PRE-migration store where the newest columns do not
+            # exist, so an unconditional select raises on the first
+            # store. `embedding_pending` sits at fixed index 21; the
+            # optional tail starts at 22.
             present_cols = {
                 r[1] for r in conn.execute(
                     'pragma table_info(insights)').fetchall()}
             has_new = {'session_id', 'queue_uuid'} <= present_cols
-            extra = ', session_id, queue_uuid' if has_new else ''
+            has_corrob = 'corroboration_count' in present_cols
+            optional: list[str] = []
+            if has_new:
+                optional += ['session_id', 'queue_uuid']
+            if has_corrob:
+                optional.append('corroboration_count')
+            idx = {name: 22 + n for n, name in enumerate(optional)}
+            extra = ''.join(f', {c}' for c in optional)
             rows = conn.execute(f"""
 select id, content, category, importance, entities,
        source, access_count, keywords, summary, semantic_facts,
@@ -910,8 +919,13 @@ order by id
                         parse_timestamp(r[17]) if r[17] else None),
                     prompt_version=r[18], model_id=r[19],
                     embedding_model=r[20],
-                    session_id=r[22] if has_new else None,
-                    queue_uuid=r[23] if has_new else None))
+                    session_id=(
+                        r[idx['session_id']] if has_new else None),
+                    queue_uuid=(
+                        r[idx['queue_uuid']] if has_new else None),
+                    corroboration_count=(
+                        int(r[idx['corroboration_count']])
+                        if has_corrob else 0)))
                 if r[21] is not None:
                     pv = deserialize_vector(r[21])
                     if pv is not None:
@@ -1033,7 +1047,8 @@ order by id
                         if ins.deleted_at else None,
                         ins.prompt_version, ins.model_id,
                         ins.embedding_model,
-                        ins.session_id, ins.queue_uuid))
+                        ins.session_id, ins.queue_uuid,
+                        ins.corroboration_count))
                 if insight_rows:
                     # apply always writes the NEW schema, so the new
                     # columns are listed unconditionally -- the
@@ -1047,9 +1062,10 @@ order by id
                         ' effective_importance, linked_at,'
                         ' enriched_at, created_at, updated_at,'
                         ' deleted_at, prompt_version, model_id,'
-                        ' embedding_model, session_id, queue_uuid)'
+                        ' embedding_model, session_id, queue_uuid,'
+                        ' corroboration_count)'
                         ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
-                        ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         insight_rows)
 
                 edge_rows = [(
