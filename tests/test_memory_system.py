@@ -26,8 +26,9 @@ def remember(runner_tuple, content, no_reconcile=False, **flags):
     """Store an insight, return first fact dict from output.
 
     `remember` queues + auto-drains via the CliRunner wrapper, then
-    we look up the newly-stored insight by `source = queue:<id>` so
-    existing assertions like `data['id']` keep working.
+    we look up the newly-stored insight by the queue row's
+    `queue_uuid` (since D1, `source` is provenance and defaults to
+    `'user'`) so existing assertions like `data['id']` keep working.
     """
     args = ['remember', content]
     if no_reconcile:
@@ -283,12 +284,13 @@ class TestDeduplication:
 
         Real LLM decides action — may be add/update/none/delete/skipped.
         Under the queue+drain architecture, the user-facing return is
-        always 'queued'; `parse_remember` looks up the post-drain row by
-        `source = queue:<id>` and returns action='add' when a fresh row
-        was inserted. When the LLM reconciles as UPDATE/DELETE/NONE/
-        SKIPPED, no row with that source exists and `parse_remember`
-        falls through to the raw `{action: 'queued', ...}` payload —
-        which is a valid reconciliation outcome, not a failure.
+        always 'queued'; `parse_remember` looks up the post-drain row
+        by the queue row's `queue_uuid` and returns action='add' when
+        a fresh row was inserted. When the LLM reconciles as
+        UPDATE/DELETE/NONE/SKIPPED, no row with that uuid exists and
+        `parse_remember` falls through to the raw
+        `{action: 'queued', ...}` payload — which is a valid
+        reconciliation outcome, not a failure.
         """
         text = 'Go error handling with sentinel values and wrapping'
         remember(runner, text, no_reconcile=True)

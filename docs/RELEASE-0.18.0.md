@@ -48,14 +48,17 @@ behaviour that was provably wrong or repairs the data it produced.
    nothing else can read v1 bundles afterwards.
 3. Land 0.18.0, delete and recreate `queue.db` with a queue-only
    command.
-4. Rebuild every store with the rebuild script (shipped as
-   `scripts/migrate_0180.py` for the 0.18.0 cycle, retained
-   afterwards as `scripts/rebuild_schema.py` with the one-off
-   repairs removed) — run
-   `--probe` first (rebuilds throwaway copies and checks count
-   parity), then the live run. The script converts within-window
-   backbone edges to proximity edges, drops out-of-window ones, and
-   backfills `queue:N` sources.
+4. Rebuild every store with the rebuild script — run `--probe` first
+   (rebuilds throwaway copies and checks count parity), then the live
+   run. **The 0.18.0-cycle script (`scripts/migrate_0180.py`, visible
+   at the `v0.18.0` tag) performed the one-off data repairs**:
+   converting within-window backbone edges to proximity edges,
+   dropping out-of-window ones, and backfilling `queue:N` sources.
+   The script retained on `master` afterwards,
+   `scripts/rebuild_schema.py`, is the generic machinery with those
+   one-off repairs removed (only the structural orphan filter
+   remains) — a fresh migration from 0.17.3 must use the tagged
+   version: `git show v0.18.0:scripts/migrate_0180.py`.
 5. Reinstall the scheduler units from the new version, re-enable
    timers, take a fresh v2 bundle.
 

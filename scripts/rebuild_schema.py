@@ -65,6 +65,13 @@ from tqdm import tqdm
 REPO = Path(__file__).resolve().parent.parent
 BREADCRUMB_NAME = 'rebuild_schema.inflight'
 
+# The payload version this script's schema markers correspond to.
+# A future rebuild bumps this alongside SCHEMA_COLUMNS -- both guard
+# 2 and the final gate read them, so nothing else needs editing.
+EXPECTED_PAYLOAD_VERSION = 2
+SCHEMA_COLUMNS = frozenset({'session_id', 'queue_uuid'})
+SCHEMA_TAG = f'payload-v{EXPECTED_PAYLOAD_VERSION}'
+
 _LOG_PATH: str | None = None
 
 
@@ -79,10 +86,11 @@ def _log(msg: str) -> None:
 def assert_correct_interpreter() -> None:
     """Abort unless this process imports the editable-tree memman.
 
-    The pipx interpreter would import 0.17.3's `SqliteMigrator` and
-    rebuild the OLD schema, silently. Both conditions must hold: the
-    import resolves inside this repo's `src/`, and its payload
-    version is the 0.18.0 one.
+    A stale interpreter would import another release's
+    `SqliteMigrator` and rebuild the OLD schema, silently. Both
+    conditions must hold: the import resolves inside this repo's
+    `src/`, and its payload version matches
+    `EXPECTED_PAYLOAD_VERSION`.
     """
     mod_path = Path(memman.__file__).resolve()
     if not mod_path.is_relative_to(REPO / 'src'):
@@ -92,11 +100,11 @@ def assert_correct_interpreter() -> None:
             ' editable-install interpreter:\n'
             f'  <editable venv>/bin/python'
             f' {REPO}/scripts/rebuild_schema.py')
-    if PAYLOAD_VERSION != 2:
+    if PAYLOAD_VERSION != EXPECTED_PAYLOAD_VERSION:
         raise SystemExit(
             f'wrong memman: PAYLOAD_VERSION is {PAYLOAD_VERSION},'
-            ' expected 2 (the 0.18.0 schema). Refusing to rebuild'
-            ' with a mismatched payload shape.')
+            f' expected {EXPECTED_PAYLOAD_VERSION}. Refusing to'
+            ' rebuild with a mismatched payload shape.')
 
 
 @dataclass
@@ -190,7 +198,7 @@ def store_gate(data_dir: str, store: str, force: bool) -> str:
     if not db_path.exists():
         return 'migrate'
     cols = _insight_columns(db_path)
-    if not {'session_id', 'queue_uuid'} <= cols:
+    if not SCHEMA_COLUMNS <= cols:
         return 'migrate'
     if _insight_count(db_path) == 0:
         return 'migrate'
@@ -199,7 +207,7 @@ def store_gate(data_dir: str, store: str, force: bool) -> str:
              f' {store!r}; repair_payload runs again against data it'
              ' already repaired, with nothing signalling any damage')
         return 'migrate'
-    _log(f'{store}: already at 0.18.0 schema, skipping')
+    _log(f'{store}: already at the target schema ({SCHEMA_TAG}), skipping')
     return 'skip'
 
 
@@ -325,7 +333,7 @@ def main() -> int:
     assert_correct_interpreter()
 
     parser = argparse.ArgumentParser(
-        description='0.17.3 -> 0.18.0 store rebuild with data repair')
+        description=f'whole-store schema rebuild ({SCHEMA_TAG})')
     parser.add_argument('stores', nargs='*', metavar='STORE')
     parser.add_argument('--data-dir', default=default_data_dir())
     parser.add_argument('--probe', action='store_true')
@@ -402,7 +410,7 @@ def main() -> int:
             continue
         cols = _insight_columns(db_path)
         count = _insight_count(db_path)
-        if not {'session_id', 'queue_uuid'} <= cols:
+        if not SCHEMA_COLUMNS <= cols:
             bad.append(f'{s}: old schema')
         elif s in expected and count != expected[s]:
             bad.append(
@@ -412,7 +420,7 @@ def main() -> int:
     if bad:
         _log(f'final gate FAILED: {bad}')
         return 1
-    _log(f'all {len(stores)} stores at 0.18.0 schema')
+    _log(f'all {len(stores)} stores at the target schema ({SCHEMA_TAG})')
     return 0
 
 

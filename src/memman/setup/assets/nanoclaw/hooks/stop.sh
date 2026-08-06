@@ -10,5 +10,5 @@ if echo "$INPUT" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; th
 fi
 
 cat <<'EOF'
-{"decision": "block", "reason": "[memman] Memory check: does this exchange contain anything worth storing (user preferences, decisions, corrections, insights, architectural facts)? If yes, call `memman remember \"<self-contained text>\"` directly via Bash in your next turn (no sub-agent delegation). If nothing qualifies, stop without comment."}
+{"decision": "block", "reason": "[memman] Memory check: does this exchange contain anything worth storing (user preferences, decisions, corrections, insights, architectural facts)? If yes, call `memman remember \"<self-contained text>\" --session <your session id>` directly via Bash in your next turn (no sub-agent delegation). If nothing qualifies, stop without comment."}
 EOF

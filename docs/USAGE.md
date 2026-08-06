@@ -345,7 +345,7 @@ memman reads config at runtime from one source: `<MEMMAN_DATA_DIR>/env`, a `KEY=
 
 `memman config set KEY VALUE` is the override path. Use it after install to change a backend, rotate an API key, or update a DSN. Conflicts between an `INSTALLABLE_KEYS` flag and an existing env-file value are rejected with the exact `memman config set ...` command to run.
 
-Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`) are not persisted to the file; they are read directly from `os.environ` by the components that own them.
+Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`, `MEMMAN_SESSION_ID`) are not persisted to the file; they are read directly from `os.environ` by the components that own them. `MEMMAN_SESSION_ID` in particular is never written to the env file on purpose — a stale persisted session id would fuse every later write into one false temporal chain.
 
 The full variable list lives in [CONTRIBUTING.md § Variable reference](../CONTRIBUTING.md#variable-reference).
 
