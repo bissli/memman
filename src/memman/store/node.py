@@ -191,8 +191,8 @@ where id = ?
 
 
 def increment_corroboration(
-        db: 'DB', id: str, queue_uuid: str | None = None) -> None:
-    """Bump corroboration_count; optionally adopt the restating uuid.
+        db: 'DB', id: str, queue_uuid: str | None = None) -> bool:
+    """Bump corroboration_count on a LIVE insight.
 
     Never touches `access_count` or `last_accessed_at`: those feed
     the retention-immunity criterion, and a restated fact must not
@@ -204,17 +204,32 @@ def increment_corroboration(
         The corroborated (stored) insight.
     queue_uuid : str | None, default None
         The restating queue row's idempotency key; adopted onto the
-        target (coalesce keeps the old value on None) so a
-        crash-reclaimed all-skips queue row trips the replay guard
-        instead of double-bumping.
+        target ONLY when the target carries none.
+
+    Returns
+    -------
+    bool
+        True when a live row was bumped; False when the target is
+        missing or soft-deleted, so the caller can degrade instead
+        of silently dropping the restated fact.
+
+    Notes
+    -----
+    - `coalesce(queue_uuid, ?)` never clobbers a populated key: the
+      creating queue row's replay guard outranks the restating
+      row's. The cost is that a crash-reclaimed all-skips restating
+      row may re-bump once (observational only); the alternative --
+      adopting over the creator's key -- un-guards the creating row
+      and can replay it into a duplicate insert.
     """
     sql = """
 update insights
 set corroboration_count = corroboration_count + 1,
-    queue_uuid = coalesce(?, queue_uuid)
-where id = ?
+    queue_uuid = coalesce(queue_uuid, ?)
+where id = ? and deleted_at is null
 """
-    db._exec(sql, (queue_uuid, id))
+    cursor = db._exec(sql, (queue_uuid, id))
+    return cursor.rowcount == 1
 
 
 def compute_effective_importance(

@@ -112,8 +112,8 @@ class NodeStore(Protocol):
         ...
 
     def increment_corroboration(
-            self, id: Id, *, queue_uuid: str | None = None) -> None:
-        """Bump corroboration_count for an insight.
+            self, id: Id, *, queue_uuid: str | None = None) -> bool:
+        """Bump corroboration_count for a live insight.
 
         Observational counter only: it must never feed `is_immune`
         or `compute_effective_importance` -- "the agent said it
@@ -124,11 +124,17 @@ class NodeStore(Protocol):
         id : Id
             The corroborated (stored) insight.
         queue_uuid : str | None, default None
-            The restating queue row's idempotency key; when given,
-            the target adopts it so a crash-reclaimed queue row
-            whose facts were ALL exact-match skips (nothing inserted
-            carries the uuid) still trips the replay guard instead
-            of double-bumping.
+            The restating queue row's idempotency key; adopted onto
+            the target ONLY when the target carries none, so an
+            all-skips queue row (nothing inserted carries the uuid)
+            still trips the replay guard -- without clobbering the
+            key of the queue row that created the target.
+
+        Returns
+        -------
+        bool
+            True when a live row was bumped; False when the target
+            is missing or soft-deleted.
         """
         ...
 

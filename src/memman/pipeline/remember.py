@@ -207,13 +207,18 @@ def run_remember(
 
         def apply_all() -> None:
             new_ids: list[str] = []
+            corroborated_ids: set[str] = set()
             for plan in plans:
                 result = _apply_plan(
-                    backend, plan, embed_cache, store_name=store_name)
+                    backend, plan, embed_cache, store_name=store_name,
+                    corroborated_ids=corroborated_ids)
                 fact_results.append(result)
-                if plan.fact_insight and plan.action not in {
-                        'skipped', 'deleted'}:
-                    new_ids.append(plan.fact_insight.id)
+                # Keyed on the RESULT action, not the plan's: a
+                # corroborate whose target vanished mid-drain degrades
+                # to an add and must join the refresh/prune-exclusion
+                # set like any other insert.
+                if result.get('action') not in {'skipped', 'deleted'}:
+                    new_ids.append(result['id'])
 
             for nid in new_ids:
                 try:
@@ -405,6 +410,10 @@ def _plan_fact(
                         session_id=parent.session_id,
                         queue_uuid=parent.queue_uuid),
                     target_id=exact_ids[0],
+                    # Carry the already-computed vector so a target
+                    # soft-deleted between planning and apply can
+                    # degrade to an embedded add at no extra cost.
+                    embed_vec=fact_vec,
                     skip_reason='exact duplicate',
                     ), calls
             recon = llm_extract.reconcile_memories(
@@ -529,34 +538,53 @@ def _apply_plan(
         plan: FactPlan,
         embed_cache: dict[str, list[float]],
         store_name: str | None = None,
+        corroborated_ids: set[str] | None = None,
         ) -> dict[str, Any]:
     """Apply one planned fact. Must be invoked inside a transaction.
 
     `store_name` selects the per-store surface for the calibrated
     semantic-edge threshold lookup. None resolves the code-surface
-    default.
+    default. `corroborated_ids` is the caller's per-invocation dedup
+    set: an extractor emitting the same fact twice in one row must
+    bump its target once, not per occurrence.
     """
+    corroborate_degraded = False
     if plan.action == 'skipped':
         skip_fi = plan.fact_insight
         # Only the exact-match rung sets target_id on a skipped plan;
         # the dedup-sibling / target-deleted / NONE skips carry none.
-        # The target adopts the restating queue_uuid so a
-        # crash-reclaimed all-skips row trips the replay guard
-        # instead of double-bumping.
-        if plan.target_id:
-            backend.nodes.increment_corroboration(
+        corroborated = False
+        already_counted = (
+            corroborated_ids is not None
+            and plan.target_id in corroborated_ids)
+        if plan.target_id and not already_counted:
+            corroborated = backend.nodes.increment_corroboration(
                 plan.target_id,
                 queue_uuid=skip_fi.queue_uuid if skip_fi else None)
-            backend.oplog.log(
-                operation='reconcile-corroborate',
-                insight_id=plan.target_id,
-                detail=f'restated by: {plan.fact_text[:200]}')
-        return {
-            'id': skip_fi.id if skip_fi else str(uuid.uuid4()),
-            'content': skip_fi.content if skip_fi else plan.fact_text,
-            'action': 'skipped',
-            'reason': plan.skip_reason,
-            }
+            if corroborated:
+                if corroborated_ids is not None:
+                    corroborated_ids.add(plan.target_id)
+                backend.oplog.log(
+                    operation='reconcile-corroborate',
+                    insight_id=plan.target_id,
+                    detail=f'restated by: {plan.fact_text[:200]}')
+        if not plan.target_id or already_counted or corroborated:
+            return {
+                'id': skip_fi.id if skip_fi else str(uuid.uuid4()),
+                'content': (skip_fi.content if skip_fi
+                            else plan.fact_text),
+                'action': 'skipped',
+                'reason': plan.skip_reason,
+                'target_id': plan.target_id,
+                }
+        # The exact-match target was soft-deleted between planning
+        # and apply (auto_prune, or an external forget); a skip here
+        # would store the fact nowhere, so fall through to a plain
+        # add carrying the vector computed before the rung.
+        corroborate_degraded = True
+        logger.warning(
+            f'corroborate target {plan.target_id} already deleted;'
+            ' degrading to add')
 
     assert plan.fact_insight is not None, (
         'non-skipped FactPlan must carry a fact_insight')
@@ -650,7 +678,8 @@ def _apply_plan(
             semantic_facts=plan.enrichment.get('semantic_facts', []))
         backend.nodes.stamp_enriched(fi.id)
 
-    reported_action = 'add' if target_already_gone else plan.action
+    reported_action = ('add' if target_already_gone
+                       or corroborate_degraded else plan.action)
     result: dict[str, Any] = {
         'id': fi.id,
         'content': fi.content,

@@ -557,15 +557,16 @@ where id = %s
             cur.execute(sql, (id,))
 
     def increment_corroboration(
-            self, id: Id, *, queue_uuid: str | None = None) -> None:
+            self, id: Id, *, queue_uuid: str | None = None) -> bool:
         sql = self._q("""
 update {s}.insights
 set corroboration_count = corroboration_count + 1,
-    queue_uuid = coalesce(%s, queue_uuid)
-where id = %s
+    queue_uuid = coalesce(queue_uuid, %s)
+where id = %s and deleted_at is null
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (queue_uuid, id))
+            return cur.rowcount == 1
 
     def refresh_effective_importance(self, id: Id) -> float:
         select_sql = self._q("""
