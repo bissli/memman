@@ -24,7 +24,8 @@ Categories: `preference` · `decision` · `fact` · `insight` · `context` · `g
 Importance is 2 (passing mention) to 5 (architectural / strong preference). The extraction worker silently floors importance at 2 — `--imp 1` becomes `--imp 2`.
 
 To correct a stored insight by ID without losing its `access_count` and
-edges:
+edges (`corroboration_count` — the count of exact restatements shown in
+recall/get JSON — resets, since the successor is a new row identity):
 
 ```bash
 memman replace <id> "<new content>" --session $SESSION_ID
