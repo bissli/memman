@@ -4,7 +4,7 @@ import logging
 
 from memman import trace
 from memman.llm import usage as llm_usage
-from memman.llm.shared import parse_json_response
+from memman.llm.shared import drop_overlong_strings, parse_json_response
 from memman.store.model import Insight
 
 logger = logging.getLogger('memman')
@@ -79,6 +79,12 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
     if not isinstance(llm_entities, list):
         llm_entities = []
     llm_entities = [str(e) for e in llm_entities if e]
+    # Length cap BEFORE the merge loop and before the count cap:
+    # `merged` is seeded from insight.entities, which carries the
+    # user's --entities (uncapped by design), and 20 valid entities
+    # plus 3 over-long ones must yield 20, not 17.
+    llm_entities = drop_overlong_strings(
+        llm_entities, kind='entity', owner=insight.id)
 
     existing = {e.strip().lower() for e in insight.entities}
     merged = list(insight.entities)
@@ -93,7 +99,9 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
     keywords = parsed.get('keywords', [])
     if not isinstance(keywords, list):
         keywords = []
-    keywords = [str(k) for k in keywords if k][:MAX_ENRICH_KEYWORDS]
+    keywords = drop_overlong_strings(
+        [str(k) for k in keywords if k],
+        kind='keyword', owner=insight.id)[:MAX_ENRICH_KEYWORDS]
 
     summary = parsed.get('summary', '')
     if not isinstance(summary, str):

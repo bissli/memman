@@ -355,3 +355,73 @@ def test_link_pending_relink_only_skips_enrich(tmp_db, tmp_backend):
         ('relink-1',)).fetchone()
     assert row[0] is not None
     assert row[1] is not None
+
+
+class TestLengthCaps:
+    """Per-string length guardrails on LLM entities and keywords (F5)."""
+
+    def test_overlong_entity_dropped_not_truncated(self):
+        """An over-long entity or keyword is dropped, never truncated.
+
+        A truncated entity is still a valid exact-match key and still
+        lands in the embedding, preserving the pathology under a new
+        name.
+
+        Mutation: truncating to `MAX_ENRICH_STRING_CHARS` instead of
+            dropping.
+        Oracle: neither the over-long value nor any prefix of it
+            appears in the result; the valid siblings survive.
+        """
+        insight = make_insight(id='cap-1', content='cap body', entities=[])
+        mock_client = MagicMock()
+        mock_client.complete.return_value = _make_enrichment_response(
+            entities=['Redis', 'e' * 250],
+            keywords=['cache', 'k' * 250])
+        result = enrich_with_llm(insight, mock_client)
+        assert 'Redis' in result['entities']
+        assert all(not e.startswith('eee') for e in result['entities'])
+        assert 'cache' in result['keywords']
+        assert all(not k.startswith('kkk') for k in result['keywords'])
+
+    def test_length_cap_applies_before_count_cap(self):
+        """20 valid + 3 over-long LLM entities yield 20, not 17.
+
+        The 3 over-long inputs are listed FIRST and are LLM-proposed
+        (over-long USER entities survive by design), so a count-cap-
+        first ordering provably drops 3 valid entities from the tail.
+
+        Mutation: applying the count cap before the length cap.
+        Oracle: exactly `MAX_ENRICH_ENTITIES` valid entities survive.
+        """
+        from memman.graph.enrichment import MAX_ENRICH_ENTITIES
+        overlong = [('x' * 250) + str(i) for i in range(3)]
+        valid = [f'entity-{i}' for i in range(MAX_ENRICH_ENTITIES)]
+        insight = make_insight(id='cap-2', content='cap body', entities=[])
+        mock_client = MagicMock()
+        mock_client.complete.return_value = _make_enrichment_response(
+            entities=overlong + valid)
+        result = enrich_with_llm(insight, mock_client)
+        assert result['entities'] == valid
+
+    def test_user_supplied_entities_are_not_capped(self):
+        """Over-long user `--entities` survive; over-long LLM ones drop.
+
+        `merged` is seeded from `insight.entities`, which carries the
+        user's `--entities` all the way down — length-filtering
+        `merged` would drop over-long USER entities.
+
+        Mutation: applying the length cap to `merged` instead of
+            `llm_entities`.
+        Oracle: a 250-char user entity is present in the result while
+            a 250-char LLM entity is absent.
+        """
+        long_user = 'u' * 250
+        insight = make_insight(
+            id='cap-3', content='cap body', entities=[long_user])
+        mock_client = MagicMock()
+        mock_client.complete.return_value = _make_enrichment_response(
+            entities=['ok-entity', 'L' * 250])
+        result = enrich_with_llm(insight, mock_client)
+        assert long_user in result['entities']
+        assert 'ok-entity' in result['entities']
+        assert ('L' * 250) not in result['entities']

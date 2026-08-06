@@ -138,3 +138,15 @@ def test_reconcile_candidates_ranked_by_similarity(monkeypatch):
 
     ids = [cid for cid, _content in captured.get('similar', [])]
     assert 'TOP' in ids, f'top-cosine insight crowded out; candidates={ids}'
+
+
+def test_prompt_version_unchanged_by_length_caps():
+    """The F5 length caps live post-parse; the prompt hash is pinned.
+
+    Mutation: "fixing" the length caps inside a system prompt — the
+        hash moves, every stored row's prompt_version goes stale, and
+        doctor demands a fleet-wide `graph rebuild`.
+    Oracle: hash pinned at its pre-F5 value.
+    """
+    from memman.pipeline.remember import compute_prompt_version
+    assert compute_prompt_version() == '69c8402d41bb72f6'
