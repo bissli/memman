@@ -7,7 +7,7 @@ import cachetools
 from memman import config, trace
 from memman.llm import usage as llm_usage
 from memman.llm.client import MemmanLLMClient
-from memman.llm.shared import parse_json_response
+from memman.llm.shared import drop_overlong_strings, parse_json_response
 
 logger = logging.getLogger('memman')
 
@@ -237,7 +237,9 @@ def extract_facts(
         entities = f.get('entities', [])
         if not isinstance(entities, list):
             entities = []
-        entities = [str(e) for e in entities if e]
+        entities = drop_overlong_strings(
+            [str(e) for e in entities if e],
+            kind='entity', owner=f'extracted fact {text[:32]!r}')
         facts.append({
             'text': text,
             'category': category,

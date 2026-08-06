@@ -84,6 +84,31 @@ class FakeLLMClient:
 class TestExtractFacts:
     """Fact extraction parsing and error handling."""
 
+    def test_extraction_drops_overlong_entities(self):
+        """Fact-extraction entities get the same length guardrail.
+
+        `extract_facts` is the other producer of LLM entities; an
+        uncapped blob here lands in entity edges and the embedding
+        exactly like an enrichment one.
+
+        Mutation: leaving the entity parse in `extract_facts`
+            uncapped (or truncating instead of dropping).
+        Oracle: the 250-char entity is absent from the parsed fact,
+            with no prefix remnant; the valid entity survives.
+        """
+        response = json.dumps({
+            'facts': [{
+                'text': 'Uses Qdrant for vector search',
+                'category': 'decision',
+                'importance': 4,
+                'entities': ['Qdrant', 'z' * 250],
+                }],
+            'skip_reason': None,
+            })
+        client = FakeLLMClient(response)
+        facts = extract_facts(client, 'chose Qdrant')
+        assert facts[0]['entities'] == ['Qdrant']
+
     def test_single_fact_extracted(self):
         """Single fact returned for simple content."""
         response = json.dumps({
