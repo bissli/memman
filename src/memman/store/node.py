@@ -221,6 +221,11 @@ def increment_corroboration(
       row may re-bump once (observational only); the alternative --
       adopting over the creator's key -- un-guards the creating row
       and can replay it into a duplicate insert.
+    - Adoption is per-target, not per-row: one queue row restating
+      several key-less stored facts stamps its uuid onto each
+      (`idx_insights_queue_uuid` is non-unique). The replay guard
+      only asks "does ANY live row carry it", so this is forensic
+      ambiguity, not a correctness hole.
     """
     sql = """
 update insights

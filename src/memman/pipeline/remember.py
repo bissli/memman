@@ -219,6 +219,22 @@ def run_remember(
                 # set like any other insert.
                 if result.get('action') not in {'skipped', 'deleted'}:
                     new_ids.append(result['id'])
+                if (plan.action == 'skipped'
+                        and result.get('action') == 'add'
+                        and plan.fact_insight is not None):
+                    # Repair the drain-scoped caches the planning
+                    # loop never touched for a skipped plan: evict
+                    # the dead target and register the inserted
+                    # copy, or every later row exact-matches the
+                    # same stale entry and inserts another copy.
+                    if plan.target_id:
+                        insights_by_id.pop(plan.target_id, None)
+                        embed_cache.pop(plan.target_id, None)
+                    insights_by_id[plan.fact_insight.id] = (
+                        plan.fact_insight)
+                    if plan.embed_vec is not None:
+                        embed_cache[plan.fact_insight.id] = (
+                            plan.embed_vec)
 
             for nid in new_ids:
                 try:
@@ -580,8 +596,12 @@ def _apply_plan(
         # The exact-match target was soft-deleted between planning
         # and apply (auto_prune, or an external forget); a skip here
         # would store the fact nowhere, so fall through to a plain
-        # add carrying the vector computed before the rung.
+        # add carrying the vector computed before the rung. Mark the
+        # dead target counted so a duplicate fact in the same row
+        # skips against the copy this add inserts.
         corroborate_degraded = True
+        if corroborated_ids is not None and plan.target_id:
+            corroborated_ids.add(plan.target_id)
         logger.warning(
             f'corroborate target {plan.target_id} already deleted;'
             ' degrading to add')
@@ -702,6 +722,11 @@ def _apply_plan(
             },
         'embedded': embedded,
         }
-    if plan.target_id and not target_already_gone:
+    if corroborate_degraded:
+        # The degraded add supersedes nothing -- naming the dead
+        # target as `replaced_id` would claim a replace that never
+        # happened; `target_id` still names the row that vanished.
+        result['target_id'] = plan.target_id
+    elif plan.target_id and not target_already_gone:
         result['replaced_id'] = plan.target_id
     return result
