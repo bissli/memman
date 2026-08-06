@@ -1,0 +1,74 @@
+[
+  {
+    "query": "search",
+    "kind": "ambig-abstract",
+    "expected_intent": "GENERAL",
+    "notes": "from earlier 6-query experiment; ambiguous single token"
+  },
+  {
+    "query": "extraction",
+    "kind": "ambig-abstract",
+    "expected_intent": "GENERAL",
+    "notes": "from earlier 6-query experiment; ambiguous single token"
+  },
+  {
+    "query": "how do we identify form type from a SEC filing",
+    "kind": "multi-concept",
+    "expected_intent": "GENERAL",
+    "notes": "from earlier experiment; question-style multi-concept"
+  },
+  {
+    "query": "what triggers the corpus build pipeline",
+    "kind": "multi-concept",
+    "expected_intent": "GENERAL",
+    "notes": "from earlier experiment; question-style multi-concept"
+  },
+  {
+    "query": "OpenSearch index template",
+    "kind": "specific-tech",
+    "expected_intent": "GENERAL",
+    "notes": "from earlier experiment; feature-plus-qualifier"
+  },
+  {
+    "query": "Lambda timeout error",
+    "kind": "specific-tech",
+    "expected_intent": "GENERAL",
+    "notes": "from earlier experiment; specific-tech"
+  },
+  {
+    "query": "why was query_parser deleted",
+    "kind": "why-causal",
+    "expected_intent": "WHY",
+    "notes": "WHY intent probe; tests rerank vs causal_topological_sort interaction"
+  },
+  {
+    "query": "why did the OpenSearch race condition emerge",
+    "kind": "why-causal",
+    "expected_intent": "WHY",
+    "notes": "WHY intent probe"
+  },
+  {
+    "query": "when was the form_type filter changed",
+    "kind": "when-temporal",
+    "expected_intent": "WHEN",
+    "notes": "WHEN intent probe; tests rerank vs chronological reorder"
+  },
+  {
+    "query": "when did we move OpenSearch data directory",
+    "kind": "when-temporal",
+    "expected_intent": "WHEN",
+    "notes": "WHEN intent probe"
+  },
+  {
+    "query": "AlphaSense ingestion sources",
+    "kind": "entity-named",
+    "expected_intent": "ENTITY",
+    "notes": "ENTITY intent probe; entity weight v2 should help"
+  },
+  {
+    "query": "EventBridge fanout consumers",
+    "kind": "entity-named",
+    "expected_intent": "ENTITY",
+    "notes": "ENTITY intent probe"
+  }
+]

@@ -14,6 +14,7 @@ from collections import Counter
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 from memman import trace
 from memman.embed.vector import cosine_similarity
 from memman.search.intent import detect_intent, get_weights
@@ -33,6 +34,24 @@ RRF_K = 60
 VECTOR_SEARCH_MIN_SIM = 0.10
 RERANK_SHORTLIST = 100
 MIN_RERANK_TOKENS = 2
+
+# Notes:
+# - MMR_LAMBDA weighs relevance against the one-shot diversity
+#   penalty: score = lam * rel - (1 - lam) * max pool similarity;
+#   1.0 disables the term.
+# - 1.0 is the MEASURED value, not a default: the recall_ablation
+#   mmr sweep (2026-08-05, lambda in {0.5..0.9} x rerank on/off, 12
+#   queries, search-store sandbox) showed that under the default
+#   cross-encoder rerank the final output is byte-identical at 0.9
+#   and within 1.6 redundancy points at 0.5, while rerank-off gains
+#   (0.655 -> 0.504 redundancy at 0.5) rewrite most of the top-10
+#   with no relevance oracle to certify them. See
+#   experiments/recall_ablation/README.md for the sweep record.
+# - MMR_POOL bounds the gram matrix (O(n^2)); it must exceed
+#   RERANK_SHORTLIST or MMR provably cannot change shortlist
+#   membership whenever rerank is on (the default).
+MMR_LAMBDA = 1.0
+MMR_POOL = 200
 
 TRAVERSAL_PARAMS: dict[str, tuple[int, int, int]] = {
     'WHY': (15, 5, 500),
@@ -596,6 +615,38 @@ def intent_aware_recall(
     # cross-encoder shortlist holds only returnable rows).
     if category or source:
         results = [r for r in results if _matches(r['insight'])]
+
+    # One-shot MMR diversity: score every candidate once against the
+    # whole pool, then sort once -- NOT greedy iterative MMR (an
+    # O(k*n) selection loop and a different algorithm). Runs between
+    # the filter (only returnable rows) and the rerank block (so it
+    # can change shortlist membership).
+    if MMR_LAMBDA < 1.0 and len(results) > 1 and embed_cache:
+        pool = results[:MMR_POOL]
+        vec_rows = [
+            (i, embed_cache[r['insight'].id])
+            for i, r in enumerate(pool)
+            if r['insight'].id in embed_cache]
+        if len(vec_rows) > 1:
+            mx = np.array([v for _, v in vec_rows], dtype=np.float64)
+            norms = np.linalg.norm(mx, axis=1, keepdims=True)
+            norms[norms == 0.0] = 1.0
+            unit = mx / norms
+            gram = unit @ unit.T
+            # Zero the diagonal so a candidate's self-similarity is
+            # excluded from its own max.
+            np.fill_diagonal(gram, 0.0)
+            max_sim = gram.max(axis=1)
+            penalty = [0.0] * len(pool)
+            for (idx, _v), ms in zip(vec_rows, max_sim):
+                penalty[idx] = float(ms)
+            order = sorted(
+                range(len(pool)),
+                key=lambda i: (
+                    MMR_LAMBDA * pool[i]['score']
+                    - (1.0 - MMR_LAMBDA) * penalty[i]),
+                reverse=True)
+            results = [pool[i] for i in order] + results[MMR_POOL:]
 
     reranked = False
     if rerank and len(query.split()) > MIN_RERANK_TOKENS:
