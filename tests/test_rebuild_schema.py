@@ -254,9 +254,13 @@ def test_new_schema_empty_store_is_not_treated_as_migrated(
     assert mig.store_gate(str(tmp_path), 's4', False) == 'migrate'
 
     (tmp_path / mig.BREADCRUMB_NAME).write_text('s4')
+    # --log must stay inside tmp_path: the argparse default is the
+    # shared host path an operator reads after a REAL rebuild, and an
+    # unpointed test run appends pytest noise into it
     monkeypatch.setattr(
         'sys.argv',
-        ['rebuild_schema.py', 's4', '--data-dir', str(tmp_path)])
+        ['rebuild_schema.py', 's4', '--data-dir', str(tmp_path),
+         '--log', str(tmp_path / 'rebuild.log')])
     assert mig.main() == 1
     assert (tmp_path / mig.BREADCRUMB_NAME).exists()
 

@@ -17,7 +17,7 @@ The project uses Poetry; run commands via `poetry run <cmd>` or inside `poetry s
 The operator-facing model (env file location, install precedence, override path) lives in [USAGE.md § Configuration](docs/USAGE.md#configuration). The contributor-side facts:
 
 - Defaults live in `config.INSTALL_DEFAULTS` and are written to `<MEMMAN_DATA_DIR>/env` by `memman install` only — there is no code-default fallback at runtime. If a key is missing from the env file, the resolver returns `None` and the caller raises `ConfigError` with `run memman install` guidance.
-- Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`) are read directly from `os.environ` and excluded from the env-file model.
+- Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`, `MEMMAN_SESSION_ID`) are read directly from `os.environ` and excluded from the env-file model.
 - `memman doctor` has an `env_completeness` check that warns when a new `INSTALLABLE_KEYS` entry is missing, and an `optional_extras` check that reports which `memman[extras]` install groups resolve at runtime.
 
 ### Variable reference
@@ -59,6 +59,7 @@ The `Type` column distinguishes how each variable is sourced:
 | `MEMMAN_WORKER`                   | process   | Set to `1` by the systemd/launchd unit; enables the rotating worker log.                                                                                                                                                            |
 | `MEMMAN_SCHEDULER_KIND`           | process   | Deployment directive (set by container entrypoint or auto-detected).                                                                                                                                                                |
 | `MEMMAN_DEBUG`                    | process   | Runtime toggle; persistent state lives in `~/.memman/debug.state` instead.                                                                                                                                                          |
+| `MEMMAN_SESSION_ID`               | process   | Default for `remember`/`replace` `--session` (the temporal chain key). Deliberately never persisted to the env file — a stale persisted id would fuse every later write into one false backbone chain.                              |
 
 ## Conventions
 
@@ -73,10 +74,11 @@ Both backends use one schema source of truth per backend, additive-only: column 
 When a schema change is needed:
 
 1. Update the relevant baseline (`_BASELINE_SCHEMA` for SQLite, `PG_BASELINE_SCHEMA` for Postgres). Fresh databases pick the change up automatically.
-2. For existing stores, run a one-off `ALTER TABLE` against every `~/.memman/data/*/memman.db` (SQLite) or every `store_<name>` schema (Postgres).
-3. Commit the schema change and the evidence (test asserting the column is present) in the same change.
+2. For existing stores, rebuild each store with `scripts/rebuild_schema.py` (gather → repair → apply; `--probe` rehearses against throwaway copies first). Since 0.18.0 a pre-migration store hard-fails at `open_db` naming that script (`MIGRATION_SCRIPT` in `store/db.py`) — hand-run `ALTER TABLE` is no longer the mechanism, and the queue DB is wipe-and-recreate on schema change.
+3. Extend both migrator `gather`s with a conditional column probe (a rebuild gathers from stores that predate the new column) and bump `PAYLOAD_VERSION`; bump `BACKUP_FORMAT_VERSION` whenever an insights column changes.
+4. Commit the schema change and the evidence (test asserting the column is present) in the same change.
 
-Do not add a SQLite or Postgres migration ladder; only additive ALTERs are permitted.
+Do not add a SQLite or Postgres migration ladder; the rebuild script is the migration mechanism.
 
 ### Migrating between SQLite and Postgres
 

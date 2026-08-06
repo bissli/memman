@@ -17,6 +17,7 @@ assertion would be vacuously green.
 import math
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from memman.embed.fingerprint import stored_fingerprint
 from memman.search.recall import ANCHOR_TOP_K, intent_aware_recall
 from tests.conftest import make_insight, set_created_at
@@ -135,6 +136,63 @@ def test_filter_does_not_block_graph_traversal(backend):
     ids = {r['insight'].id for r in resp['results']}
     assert 'p-far' in ids
     assert 'g-bridge' not in ids
+
+
+def _vec512(second):
+    """Unit vector [1, second, 0, ...]/norm at the snapshot dim (512)."""
+    n = math.sqrt(1.0 + second * second)
+    v = [0.0] * 512
+    v[0] = 1.0 / n
+    v[1] = second / n
+    return v
+
+
+@pytest.mark.parametrize('with_snapshot', [False, True])
+def test_session_vector_anchors_filter_before_topk(
+        backend, with_snapshot):
+    """`SqliteRecallSession.vector_anchors` itself filters before top-k.
+
+    This is the PRIMARY vector path on an all-SQLite host — the
+    fallback test below deliberately breaks the session verb, so it
+    proves nothing about the verb's own eligibility filter (a
+    mutation stripping `category`/`source` from `vector_anchors`
+    left the whole suite green before this test existed). Covers
+    both branches: `_meta_cache` (snapshot miss) and
+    `snapshot.insights` (snapshot present).
+
+    Mutation: dropping the eligibility filter from either branch of
+        `SqliteRecallSession.vector_anchors` — the top-35 cut over
+        all 70 vectors then keeps the 30 higher-similarity
+        non-matching rows and only 5 matching vector hits survive.
+    Oracle: all 35 results carry via='hybrid' (time + vector agree
+        on the 35 newest matching rows, whose similarity rank
+        matches their recency rank by construction).
+    """
+    from pathlib import Path
+
+    from memman.store.snapshot import write_snapshot
+    pref_ids = _seed(backend, 40, 'preference', 'quiet other subject {i}')
+    fact_ids = _seed(backend, 30, 'fact', 'plain filler body {i}')
+    for i, iid in enumerate(pref_ids):
+        backend.nodes.update_embedding(
+            iid, _vec512(0.3 + 0.002 * i), 'voyage-3-lite')
+    for iid in fact_ids:
+        backend.nodes.update_embedding(
+            iid, _vec512(0.1), 'voyage-3-lite')
+    if with_snapshot:
+        sdir = str(Path(backend._db.path).parent)
+        assert write_snapshot(
+            backend._db, sdir, stored_fingerprint(backend)) is True
+    qv = [0.0] * 512
+    qv[0] = 1.0
+    resp = intent_aware_recall(
+        backend, 'zzz unmatched query', qv, [], 35,
+        fingerprint=stored_fingerprint(backend),
+        intent_override='GENERAL', category='preference')
+    assert len(resp['results']) == 35
+    assert all(r['insight'].category == 'preference'
+               for r in resp['results'])
+    assert all(r['via'] == 'hybrid' for r in resp['results'])
 
 
 def test_vector_cache_fallback_fills_to_anchor_k(backend, monkeypatch):
