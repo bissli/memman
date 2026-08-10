@@ -149,7 +149,7 @@ def _vec512(second):
 
 @pytest.mark.parametrize('with_snapshot', [False, True])
 def test_session_vector_anchors_filter_before_topk(
-        backend, with_snapshot):
+        backend, backend_kind, with_snapshot):
     """`SqliteRecallSession.vector_anchors` itself filters before top-k.
 
     This is the PRIMARY vector path on an all-SQLite host — the
@@ -170,7 +170,14 @@ def test_session_vector_anchors_filter_before_topk(
     """
     from pathlib import Path
 
+    from memman.store.factory import BACKENDS
     from memman.store.snapshot import write_snapshot
+    if with_snapshot and not (
+            BACKENDS[backend_kind].migrator_cls
+            .snapshot_features.supports_recall_snapshot):
+        pytest.skip(
+            f'{backend_kind} declares supports_recall_snapshot=False:'
+            f' the snapshot-present branch is unreachable, not untested')
     pref_ids = _seed(backend, 40, 'preference', 'quiet other subject {i}')
     fact_ids = _seed(backend, 30, 'fact', 'plain filler body {i}')
     for i, iid in enumerate(pref_ids):
@@ -212,22 +219,26 @@ def test_vector_cache_fallback_fills_to_anchor_k(backend, monkeypatch):
         the 35 newest matching rows, whose similarity rank matches
         their recency rank by construction).
     """
-    from memman.store.sqlite import SqliteRecallSession
-    qv = [1.0, 0.0]
+    qv = [0.0] * 512
+    qv[0] = 1.0
     pref_ids = _seed(backend, 40, 'preference', 'quiet other subject {i}')
     fact_ids = _seed(backend, 30, 'fact', 'plain filler body {i}')
     for i, iid in enumerate(pref_ids):
-        c = 0.3 + 0.002 * i
-        n = math.sqrt(1.0 + c * c)
-        backend.nodes.update_embedding(iid, [1.0 / n, c / n], 'test-model')
+        backend.nodes.update_embedding(
+            iid, _vec512(0.3 + 0.002 * i), 'test-model')
     for iid in fact_ids:
-        n = math.sqrt(1.0 + 0.01)
-        backend.nodes.update_embedding(iid, [1.0 / n, 0.1 / n], 'test-model')
+        backend.nodes.update_embedding(iid, _vec512(0.1), 'test-model')
 
     def _raise(self, query_vec, **kwargs):
         raise RuntimeError('forced session miss')
 
-    monkeypatch.setattr(SqliteRecallSession, 'vector_anchors', _raise)
+    # Patch the session class this backend actually yields: naming
+    # SqliteRecallSession outright leaves the Postgres slot unpatched,
+    # so its session verb never raises and the fallback under test is
+    # never reached.
+    with backend.recall_session(stored_fingerprint(backend)) as sess:
+        session_cls = type(sess)
+    monkeypatch.setattr(session_cls, 'vector_anchors', _raise)
     resp = intent_aware_recall(
         backend, 'zzz unmatched query', qv, [], 35,
         fingerprint=stored_fingerprint(backend),
