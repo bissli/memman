@@ -7,7 +7,7 @@ from memman import _http, config
 from memman.embed import voyage
 from memman.embed.openrouter import Client as OpenRouterClient
 from memman.embed.vector import cosine_similarity, deserialize_vector
-from memman.embed.vector import serialize_vector
+from memman.embed.vector import pgvector_to_list, serialize_vector
 from memman.embed.voyage import EMBEDDING_DIM
 from memman.embed.voyage import Client as VoyageClient
 from memman.exceptions import ConfigError
@@ -78,6 +78,52 @@ class TestEmbedUtils:
     def test_deserialize_invalid_length(self):
         """Blob with length not multiple of 8 returns None."""
         assert deserialize_vector(bytes(7)) is None
+
+
+class TestPgvectorToList:
+    """Normalizing whatever the pgvector psycopg adapter hands back."""
+
+    def test_converts_non_iterable_vector_object(self):
+        """A `to_list`-only object converts without being iterated.
+
+        Mutation: reverting the body to a bare `list(v)`, which raises
+        TypeError on the pgvector >= 0.4 `Vector` (not iterable).
+        Oracle: hand-specified floats, plus a stand-in whose only
+        access path is `to_list()` -- iterating it raises.
+        """
+        class VectorLike:
+            def __init__(self, values):
+                self._values = values
+
+            def to_list(self):
+                return list(self._values)
+
+        vec = VectorLike([1.5, -2.5, 0.0])
+        with pytest.raises(TypeError):
+            list(vec)
+        assert pgvector_to_list(vec) == [1.5, -2.5, 0.0]
+
+    def test_converts_ndarray_and_list(self):
+        """pgvector 0.3.x ndarray rows and plain lists still convert.
+
+        Mutation: calling `to_list()` unconditionally, which raises
+        AttributeError on an ndarray or list.
+        Oracle: hand-specified floats for both input shapes.
+        """
+        import numpy as np
+        assert pgvector_to_list(np.array([1.5, -2.5, 0.0])) == [1.5, -2.5, 0.0]
+        assert pgvector_to_list([1.5, -2.5, 0.0]) == [1.5, -2.5, 0.0]
+
+    def test_real_pgvector_vector_roundtrips(self):
+        """The installed pgvector `Vector` converts to exact floats.
+
+        Mutation: reverting to a bare `list(v)` -- fails against the
+        real adapter type, not just the stand-in above.
+        Oracle: hand-specified floats through the genuine Vector class.
+        """
+        pgvector = pytest.importorskip('pgvector')
+        assert pgvector_to_list(pgvector.Vector([1.5, -2.5, 0.0])) == [
+            1.5, -2.5, 0.0]
 
 
 class TestVoyageClient:

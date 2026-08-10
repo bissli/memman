@@ -6,6 +6,7 @@ don't have to think about ndarray types.
 """
 
 import struct
+from typing import Any
 
 import numpy as np
 
@@ -37,6 +38,38 @@ def serialize_vector(v: list[float]) -> bytes:
     if not v:
         return b''
     return struct.pack(f'<{len(v)}d', *v)
+
+
+def pgvector_to_list(v: Any) -> list[float]:
+    """Normalize a `vector` column value to a list of floats.
+
+    Parameters
+    ----------
+    v : Any
+        Value the pgvector psycopg adapter returned for a `vector`
+        column: a `Vector` (pgvector >= 0.4), an `ndarray`
+        (pgvector < 0.4), or any float sequence.
+
+    Returns
+    -------
+    list[float]
+        Component values in column order.
+
+    Notes
+    -----
+    - Both shapes reach callers because the dependency floor admits
+      either: pgvector >= 0.4 returns a `Vector` exposing `to_list()`
+      that is NOT iterable, so `list(v)` raises TypeError, while
+      earlier releases return an ndarray that only `list()` handles.
+    - Elements are not coerced one by one: `to_list()` already yields
+      Python floats and `np.float64` is a float subclass, so the
+      annotation holds without a per-component pass over a 512-wide
+      vector on the recall path.
+    """
+    to_list = getattr(v, 'to_list', None)
+    if to_list is not None:
+        return to_list()
+    return list(v)
 
 
 def deserialize_vector(b: bytes) -> list[float] | None:
