@@ -560,6 +560,53 @@ class TestStore:
         finally:
             qconn.close()
 
+    def test_store_remove_purges_per_store_env_keys(self, runner):
+        """Removing a store drops its per-store keys from the env file.
+
+        Mutation: dropping the `removes=` cleanup, which leaves
+        `MEMMAN_BACKEND_doomed` and the store's Postgres DSN (password
+        included) in the env file after the store is gone.
+        Oracle: the parsed env file -- every PER_STORE_KEY_SPECS prefix
+        for the removed store absent, and the same prefixes for a
+        surviving store plus the global key still present.
+        """
+        from memman import config
+        from memman.setup.scheduler import _write_env_keys
+        _, data_dir = runner
+        invoke(runner, ['store', 'create', 'doomed'])
+        invoke(runner, ['store', 'create', 'keeper'])
+        value_for = {
+            'MEMMAN_BACKEND_': 'sqlite',
+            config._pg_dsn_prefix(): 'postgresql://u:p@127.0.0.1:1/db',
+            'MEMMAN_RERANK_ENABLED_': 'false',
+            'MEMMAN_SURFACE_': 'code',
+            'MEMMAN_AUTO_SEMANTIC_THRESHOLD_': '0.5',
+            }
+        doomed_keys = {
+            f'{prefix}doomed' for prefix, _, _ in config.PER_STORE_KEY_SPECS}
+        keeper_keys = {
+            f'{prefix}keeper' for prefix, _, _ in config.PER_STORE_KEY_SPECS}
+        seeded = {
+            f'{prefix}{store}': value_for[prefix]
+            for prefix, _, _ in config.PER_STORE_KEY_SPECS
+            for store in ('doomed', 'keeper')
+            }
+        _write_env_keys(
+            seeded | {'MEMMAN_LOG_LEVEL': 'DEBUG'}, data_dir=data_dir)
+        env_path = config.env_file_path(data_dir)
+        assert doomed_keys <= set(config.parse_env_file(env_path))
+
+        result = invoke(runner, ['store', 'remove', '--yes', 'doomed'])
+        assert result.exit_code == 0
+
+        after = set(config.parse_env_file(env_path))
+        assert not (doomed_keys & after), (
+            f'per-store keys survived removal: {sorted(doomed_keys & after)}')
+        assert keeper_keys <= after, (
+            f'unrelated store keys were collateral: '
+            f'{sorted(keeper_keys - after)}')
+        assert 'MEMMAN_LOG_LEVEL' in after
+
     def test_store_remove_prompts_without_yes(self, runner):
         """Without --yes, remove prompts; typing 'n' aborts."""
         r, data_dir = runner
