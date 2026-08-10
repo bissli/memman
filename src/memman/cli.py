@@ -2026,7 +2026,12 @@ def store_use(ctx: click.Context, name: str) -> None:
               help='Skip confirmation prompt (for scripted use).')
 @click.pass_context
 def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
-    """Remove a store (prompts unless --yes)."""
+    """Remove a store (prompts unless --yes).
+
+    Also drops the store's per-store env keys, so a removed store
+    leaves no backend selection or Postgres DSN (password included)
+    behind in the env file.
+    """
     data_dir = ctx.obj['data_dir']
     if name not in factory.list_stores(data_dir):
         raise click.ClickException(
@@ -2042,7 +2047,21 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
             f'Drop store "{name}" (and all of its data)?',
             abort=True)
     factory.drop_store(name, data_dir)
-    _json_out({'action': 'removed', 'store': name})
+    # Lazy import: memman.setup.scheduler costs ~4 ms of interpreter
+    # startup (measured), which every CLI call would pay -- including
+    # the per-prompt recall hook -- for a cold-path command.
+    from memman.setup.scheduler import _write_env_keys_with_flock
+    per_store_keys = {
+        f'{prefix}{name}' for prefix, _, _ in config.PER_STORE_KEY_SPECS}
+    stale = per_store_keys & set(
+        config.parse_env_file(config.env_file_path(data_dir)))
+    if stale:
+        _write_env_keys_with_flock({}, removes=stale, data_dir=data_dir)
+    _json_out({
+        'action': 'removed',
+        'store': name,
+        'env_keys_removed': sorted(stale),
+        })
 
 
 @cli.group(invoke_without_command=True)
