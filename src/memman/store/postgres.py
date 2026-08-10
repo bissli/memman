@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from memman import config
 from memman.embed.fingerprint import Fingerprint
+from memman.embed.vector import pgvector_to_list
 from memman.migrate import PAYLOAD_VERSION, Artifact, BackendFeatures
 from memman.migrate import MigrateEdge, MigrateError, MigrateInsight
 from memman.migrate import MigrateOpLog, MigrationPayload, Migrator
@@ -959,7 +960,7 @@ where id = %s and deleted_at is null
         if row is None or row[0] is None:
             return None
         from memman.embed.vector import serialize_vector
-        return serialize_vector(list(row[0]))
+        return serialize_vector(pgvector_to_list(row[0]))
 
     def get_all_embeddings(self) -> list[tuple[Id, str, bytes]]:
         from memman.embed.vector import serialize_vector
@@ -974,7 +975,8 @@ where deleted_at is null and embedding is not null
             for rid, content, vec in cur.fetchall():
                 if vec is None:
                     continue
-                results.append((rid, content, serialize_vector(list(vec))))
+                results.append(
+                    (rid, content, serialize_vector(pgvector_to_list(vec))))
         return results
 
     def iter_embeddings_as_vecs(
@@ -989,7 +991,7 @@ where deleted_at is null and embedding is not null
             for rid, vec in cur.fetchall():
                 if vec is None:
                     continue
-                yield rid, list(vec)
+                yield rid, pgvector_to_list(vec)
 
     def embedding_stats(self) -> tuple[int, int]:
         sql = self._q("""
