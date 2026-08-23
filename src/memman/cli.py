@@ -23,8 +23,9 @@ import click
 import memman
 from memman import config
 from memman.store import factory
-from memman.store.db import default_data_dir, open_db, read_active, store_dir
-from memman.store.db import store_exists, valid_store_name, write_active
+from memman.store.db import default_data_dir, open_db, portable_store_name
+from memman.store.db import read_active, store_dir, store_exists
+from memman.store.db import valid_store_name, write_active
 from memman.store.factory import known_backends, list_stores
 
 _BACKEND_CHOICES = sorted(known_backends())
@@ -2699,6 +2700,7 @@ def migrate(
     from memman.migrate import inspect_target_schemas, preflight
     from memman.setup.scheduler import _write_env_keys
     from memman.store.db import list_local_store_dirs, store_dir
+    from memman.store.errors import ConfigError
     from memman.store.factory import list_stores, resolve_store_backend
     from memman.store.factory import resolve_store_pg_dsn
     from memman.store.postgres import PostgresMigrator, _connection
@@ -2752,6 +2754,47 @@ def migrate(
     if not todo:
         if migrate_all:
             click.echo(f'migrated=0 skipped={len(skipped)}')
+        return
+
+    # Notes:
+    # - Both directions touch a postgres schema, so both need the
+    #   name to be one. Guarding only `--to postgres` leaves the
+    #   same ConfigError escaping `except MigrateError` on the way
+    #   back, after the plan prints and the drain lock is held.
+    # - Store names reach here unchecked: `list_local_store_dirs`
+    #   scans the filesystem, and a postgres route can be hand
+    #   written into the env file.
+    # - `_store_schema` is the oracle rather than a second regex, so
+    #   this gate agrees with the call that raised.
+    # - Runs before the DSN lookup so a naming fault never depends
+    #   on a reachable server.
+    unhostable: list[str] = []
+    for s in list(todo):
+        try:
+            _store_schema(s)
+        except ConfigError:
+            unhostable.append(s)
+            todo.remove(s)
+
+    if unhostable and not migrate_all:
+        bad = unhostable[0]
+        raise click.ClickException(
+            f'store {bad!r} cannot be migrated: memman needs the'
+            f' store name itself to be a SQL identifier matching'
+            f' [a-zA-Z_][a-zA-Z0-9_]*, and {bad!r} is not one.'
+            f' A sqlite-backed store of that name stays fully'
+            f' usable. To move it, create'
+            f' {portable_store_name(bad)!r} and migrate that.')
+    for s in unhostable:
+        click.echo(
+            f'Skipping {s!r}: memman needs the store name itself to'
+            f' be a SQL identifier matching [a-zA-Z_][a-zA-Z0-9_]*.'
+            f' To move it, create'
+            f' {portable_store_name(s)!r} and migrate that.',
+            err=True)
+        skipped.append(s)
+    if not todo:
+        click.echo(f'migrated=0 skipped={len(skipped)}')
         return
 
     if target_backend == 'postgres':
@@ -2969,7 +3012,12 @@ def migrate(
                         f' edges={len(payload.edges)}'
                         f' oplog={len(payload.oplog)}'
                         f' meta={len(payload.meta)} (verified)')
-                except MigrateError as exc:
+                # Notes:
+                # - ConfigError joins MigrateError here so a backend
+                #   rejecting the store still removes the scratch
+                #   dir; escaping this handler stranded a
+                #   `migrate-*` directory in the data dir.
+                except (MigrateError, ConfigError) as exc:
                     shutil.rmtree(scratch, ignore_errors=True)
                     raise click.ClickException(f'{s}: {exc}')
 

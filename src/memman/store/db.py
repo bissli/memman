@@ -21,6 +21,44 @@ def valid_store_name(name: str) -> bool:
     return bool(_VALID_STORE_NAME_RE.match(name))
 
 
+def portable_store_name(name: str) -> str:
+    """Rewrite `name` into a form every backend can host.
+
+    Parameters
+    ----------
+    name : str
+        Any store name, including one no rule has yet checked.
+        Callers pass raw `list_local_store_dirs` output, so a
+        directory name carrying a dot or a space arrives here.
+
+    Returns
+    -------
+    str
+        `name` with every character outside `[A-Za-z0-9_]` replaced
+        by an underscore, prefixed with `s_` unless it then opens on
+        a letter.
+
+    Notes
+    -----
+    - Suggestion text only. The caller renames nothing. There is no
+      `memman store rename`, so an operator acts by hand.
+    - The output clears `_check_identifier` AND `valid_store_name`,
+      because an operator types it into `memman store create`.
+      Meeting only the first would suggest a name that command
+      rejects, which is why a leading digit or underscore takes the
+      `s_` prefix.
+    - Rewriting every illegal character, not just the hyphen, is what
+      keeps the suggestion creatable: `default.bak` must not come
+      back unchanged.
+    - The output is not unique: `a-b` and `a_b` both yield `a_b`,
+      which may name a different live store.
+    """
+    portable = re.sub(r'[^A-Za-z0-9_]', '_', name)
+    if not portable[:1].isalpha():
+        portable = f's_{portable}'
+    return portable
+
+
 def default_data_dir() -> str:
     """Return ~/.memman."""
     home = Path.home()
