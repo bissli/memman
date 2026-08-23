@@ -41,7 +41,7 @@ from memman.store.backend import Backend, EdgeStore, MetaStore, NodeStore
 from memman.store.backend import Oplog, RecallSession, _check_identifier
 from memman.store.base import BaseNodeStore
 from memman.store.db import MIGRATION_SCRIPT
-from memman.store.errors import BackendError
+from memman.store.errors import BackendError, ConfigError
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
 from memman.store.model import NodeStats, OpLogEntry, OpLogStats
 from memman.store.model import ProvenanceCount, ReembedRow, WorkerRun
@@ -54,11 +54,46 @@ logger = logging.getLogger('memman')
 
 EMBEDDING_DIM = 512
 
+# Postgres NAMEDATALEN is 64; an identifier is truncated to 63
+# bytes, silently.
+PG_NAME_MAX_CHARS = 63
+
 
 def _store_schema(name: str) -> str:
-    """Return the Postgres schema name for a memman store."""
+    """Return the Postgres schema name for a memman store.
+
+    Parameters
+    ----------
+    name : str
+        Store name, unprefixed.
+
+    Returns
+    -------
+    str
+        `store_<name>`.
+
+    Raises
+    ------
+    ConfigError
+        When `name` is not a SQL identifier, or when the prefixed
+        schema would exceed `PG_NAME_MAX_CHARS`.
+
+    Notes
+    -----
+    - The length check covers the prefixed schema, not the bare name.
+      Postgres truncates an over-long identifier to NAMEDATALEN-1
+      silently, so two store names differing only past that point map
+      to one schema and share its rows.
+    """
     _check_identifier(name)
-    return f'store_{name}'
+    schema = f'store_{name}'
+    if len(schema) > PG_NAME_MAX_CHARS:
+        raise ConfigError(
+            f'store name {name!r} is too long: schema {schema!r} is'
+            f' {len(schema)} characters and postgres truncates past'
+            f' {PG_NAME_MAX_CHARS}, which would silently merge it'
+            f' with another store')
+    return schema
 
 
 def _lock_id(name: str) -> int:
@@ -235,9 +270,17 @@ def _open_connection(
         kwargs['keepalives_idle'] = 30
     if connect_timeout is not None:
         kwargs['connect_timeout'] = connect_timeout
-    conn = psycopg.connect(dsn, **kwargs)
-    if register_vector:
-        _register_vector(conn)
+    # Notes:
+    # - An unreachable or rejecting server is an ordinary operator
+    #   condition, so it leaves here as BackendError. The lock paths
+    #   call this directly, bypassing `_connection` below.
+    try:
+        conn = psycopg.connect(dsn, **kwargs)
+        if register_vector:
+            _register_vector(conn)
+    except psycopg.Error as exc:
+        raise BackendError(
+            f'postgres connection failed: {exc}') from exc
     return conn
 
 
@@ -254,15 +297,27 @@ def _connection(
     close-scoped, so wrapping `_open_connection` is the way to get
     deterministic close-on-exit semantics for one-shot helpers
     without losing the `register_vector` adapter setup).
+
+    Notes
+    -----
+    - Translating here, rather than at each statement, covers every
+      query in the scope: memman's contract is that a backend raises
+      `BackendError`, and a driver exception does not satisfy it.
+    - A caller that branches on a driver type nests its own handler
+      around the statement instead. Catching there runs first, so the
+      branch is taken before this wrapper sees the error.
     """
+    import psycopg as _psycopg
+
     conn = _open_connection(
         dsn, autocommit=autocommit, keepalives=keepalives,
         connect_timeout=connect_timeout,
         register_vector=register_vector)
     try:
         yield conn
+    except _psycopg.Error as exc:
+        raise BackendError(f'postgres query failed: {exc}') from exc
     finally:
-        import psycopg as _psycopg
         try:
             conn.close()
         except _psycopg.Error as exc:
@@ -2165,16 +2220,17 @@ def _read_stored_dim(dsn: str, store: str) -> int | None:
 
     schema = _store_schema(store)
     sql = f"select value from {schema}.meta where key = 'embed_fingerprint'"
-    try:
-        with _connection(dsn, autocommit=True) as conn, \
-                conn.cursor() as cur:
-            try:
-                cur.execute(sql)
-            except psycopg.errors.UndefinedTable:
-                return None
-            row = cur.fetchone()
-    except psycopg.errors.UndefinedTable:
-        return None
+    # The handler sits at the statement, not around the block: it
+    # runs before `_connection` translates, so a missing schema stays
+    # a None result while every other driver error still becomes a
+    # BackendError.
+    with _connection(dsn, autocommit=True) as conn, \
+            conn.cursor() as cur:
+        try:
+            cur.execute(sql)
+        except psycopg.errors.UndefinedTable:
+            return None
+        row = cur.fetchone()
     if row is None or not row[0]:
         return None
     try:
@@ -2215,21 +2271,9 @@ def drop_postgres_store(store: str, dsn: str) -> None:
     per-store routing model and `factory.drop_store` calls
     `queue.purge_store` separately.
     """
-    import psycopg  # optional-extra: lazy like every psycopg use here
-
     schema = _store_schema(store)
-    # Notes:
-    # - Translate psycopg failures at this boundary so the caller
-    #   sees the documented BackendError. `memman store remove`
-    #   reports a raw driver traceback otherwise, and an unreachable
-    #   server is an ordinary operator condition, not a crash.
-    try:
-        with _connection(
-                dsn, autocommit=True) as conn, conn.cursor() as cur:
-            cur.execute(f'drop schema if exists {schema} cascade')
-    except psycopg.Error as exc:
-        raise BackendError(
-            f'could not drop schema {schema}: {exc}') from exc
+    with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(f'drop schema if exists {schema} cascade')
 
 
 def apply_baseline_schema(

@@ -76,7 +76,7 @@ def resolve_store_backend(store: str, data_dir: str) -> str:
     """
     raw = (
         config.get_store_backend(store, data_dir)
-        or config.get(config.DEFAULT_BACKEND)
+        or config.get_scoped(config.DEFAULT_BACKEND, data_dir)
         or 'sqlite')
     return raw.lower()
 
@@ -86,7 +86,7 @@ def resolve_store_pg_dsn(store: str, data_dir: str) -> str | None:
     """
     return (
         config.get_store_pg_dsn(store, data_dir)
-        or config.get(config.DEFAULT_PG_DSN)
+        or config.get_scoped(config.DEFAULT_PG_DSN, data_dir)
         or None)
 
 

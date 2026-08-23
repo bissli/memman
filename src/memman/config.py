@@ -416,6 +416,37 @@ def require(name: str) -> str:
     return value
 
 
+def get_scoped(name: str, data_dir: str | None = None) -> str | None:
+    """Read `name` from the env file under `data_dir`.
+
+    Parameters
+    ----------
+    name : str
+        Env key to read.
+    data_dir : str or None, default None
+        Directory holding the env file. None defers to `get`, which
+        resolves against `MEMMAN_DATA_DIR`.
+
+    Returns
+    -------
+    str or None
+        The value, or None when unset or empty.
+
+    Notes
+    -----
+    - Pairs with `get_store_backend` / `get_store_pg_dsn` so a caller
+      holding a `data_dir` resolves the per-store key and its default
+      from ONE file. Mixing `get` with those helpers read per-store
+      keys from an explicit directory and defaults from the ambient
+      one, which routed a store to the wrong backend under
+      `memman --data-dir`.
+    """
+    if data_dir is None:
+        return get(name)
+    raw = parse_env_file(env_file_path(data_dir)).get(name)
+    return raw or None
+
+
 def get_store_backend(
         store: str, data_dir: str | None = None) -> str | None:
     """Read `MEMMAN_BACKEND_<store>` from the env file; None if absent.
