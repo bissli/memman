@@ -26,6 +26,7 @@ from memman.store import factory
 from memman.store.db import default_data_dir, open_db, portable_store_name
 from memman.store.db import read_active, store_dir, store_exists
 from memman.store.db import valid_store_name, write_active
+from memman.store.errors import BackendError
 from memman.store.factory import known_backends, list_stores
 
 _BACKEND_CHOICES = sorted(known_backends())
@@ -2047,7 +2048,19 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
         click.confirm(
             f'Drop store "{name}" (and all of its data)?',
             abort=True)
-    factory.drop_store(name, data_dir)
+    # Notes:
+    # - A backend refusing the drop is an operator-facing failure,
+    #   not a bug: an unreachable Postgres, or a store name the
+    #   backend will not accept as an identifier.
+    # - Raising here leaves the env keys in place on purpose. The
+    #   store still exists, and dropping its routing would send the
+    #   next read to the default backend instead of the one holding
+    #   the data.
+    try:
+        factory.drop_store(name, data_dir)
+    except BackendError as exc:
+        raise click.ClickException(
+            f'could not remove store {name!r}: {exc}')
     # Lazy import: memman.setup.scheduler costs ~4 ms of interpreter
     # startup (measured), which every CLI call would pay -- including
     # the per-prompt recall hook -- for a cold-path command.

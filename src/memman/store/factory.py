@@ -261,19 +261,33 @@ def list_stores(data_dir: str) -> list[str]:
 def drop_store(store: str, data_dir: str) -> None:
     """Drop the storage for `store` from its resolved backend.
 
-    Also purges queue rows for the store from the local SQLite queue.
+    Purges the store's rows from the local SQLite queue once the
+    backend has dropped the storage.
+
+    Notes
+    -----
+    - The purge follows a clean drop and is skipped when the drop
+      raises. Running it unconditionally deleted the queued writes of
+      a store that still existed, so an unreachable Postgres or a
+      name the backend rejected cost pending memories outright.
+    - A drop that fails part way (an `rmtree` stopped by a permission
+      error) can therefore leave rows behind. That is the cheaper
+      failure: the rows stay readable and a repeated
+      `memman store remove` clears them, whereas a deleted row is
+      gone.
+    - A purge that fails after a clean drop stays a warning. The
+      storage is already gone, so raising would report failure for
+      finished work and invite a retry that cannot help.
     """
     from memman import queue as _queue
 
     name = resolve_store_backend(store, data_dir)
     desc = descriptor(name)
+    desc.drop_store_fn(store, data_dir)
     try:
-        desc.drop_store_fn(store, data_dir)
-    finally:
-        try:
-            with _queue.queue_db(data_dir) as conn:
-                _queue.purge_store(conn, store)
-        except Exception as exc:
-            logger.warning(
-                'failed to purge queue rows for store %r: %s',
-                store, exc)
+        with _queue.queue_db(data_dir) as conn:
+            _queue.purge_store(conn, store)
+    except Exception as exc:
+        logger.warning(
+            'failed to purge queue rows for store %r: %s',
+            store, exc)
