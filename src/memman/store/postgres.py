@@ -2215,9 +2215,21 @@ def drop_postgres_store(store: str, dsn: str) -> None:
     per-store routing model and `factory.drop_store` calls
     `queue.purge_store` separately.
     """
+    import psycopg  # optional-extra: lazy like every psycopg use here
+
     schema = _store_schema(store)
-    with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
-        cur.execute(f'drop schema if exists {schema} cascade')
+    # Notes:
+    # - Translate psycopg failures at this boundary so the caller
+    #   sees the documented BackendError. `memman store remove`
+    #   reports a raw driver traceback otherwise, and an unreachable
+    #   server is an ordinary operator condition, not a crash.
+    try:
+        with _connection(
+                dsn, autocommit=True) as conn, conn.cursor() as cur:
+            cur.execute(f'drop schema if exists {schema} cascade')
+    except psycopg.Error as exc:
+        raise BackendError(
+            f'could not drop schema {schema}: {exc}') from exc
 
 
 def apply_baseline_schema(
