@@ -2747,6 +2747,19 @@ def migrate(
         else:
             stores_all = list_local_store_dirs(data_dir)
     else:
+        # Notes:
+        # - Check existence before the naming guard below. Without
+        #   it an unknown name falls through to that guard, which
+        #   then describes a store that is not there.
+        # - Only a sqlite-routed store is judged here, from the
+        #   filesystem. Deciding a postgres-routed one needs the
+        #   server, and during an outage that reports a live store as
+        #   missing; those fall through and fail on their own error.
+        if (resolve_store_backend(store, data_dir) == 'sqlite'
+                and not store_exists(data_dir, store)):
+            raise click.ClickException(
+                f'store {store!r} does not exist'
+                f' (list them with `memman store list`)')
         stores_all = [store]
     if not stores_all:
         click.echo('no stores to migrate', err=True)
@@ -2781,33 +2794,52 @@ def migrate(
     #   this gate agrees with the call that raised.
     # - Runs before the DSN lookup so a naming fault never depends
     #   on a reachable server.
-    unhostable: list[str] = []
+    unhostable: list[tuple[str, str]] = []
     for s in list(todo):
         try:
             _store_schema(s)
-        except ConfigError:
-            unhostable.append(s)
+        except ConfigError as exc:
+            unhostable.append((s, str(exc)))
             todo.remove(s)
 
+    # Notes:
+    # - `_store_schema` refuses on character class AND on length, so
+    #   the remedy quotes its message rather than asserting a reason.
+    #   Hardcoding the character-class text told the owner of a
+    #   60-character name that it failed a pattern it matches.
+    # - The rewrite is not injective and does not shorten, so it can
+    #   return the name just refused, or one already claimed by
+    #   another store in this run. Say so instead of naming it.
+    # - `known` comes from the filesystem and this run, never from
+    #   `list_stores`: that reaches the server, and the whole point
+    #   of this gate is to work without one.
+    known = set(list_local_store_dirs(data_dir)) | set(stores_all)
+    taken: set[str] = set()
+
+    def _remedy(name: str) -> str:
+        suggestion = portable_store_name(name)
+        if suggestion == name:
+            return 'rename it to a shorter plain-identifier name'
+        if suggestion in known | taken:
+            return (f'the portable form {suggestion!r} is already'
+                    f' taken, so pick another name')
+        taken.add(suggestion)
+        return f'create {suggestion!r} and migrate that'
+
     if unhostable and not migrate_all:
-        bad = unhostable[0]
+        bad, reason = unhostable[0]
         raise click.ClickException(
-            f'store {bad!r} cannot be migrated: memman needs the'
-            f' store name itself to be a SQL identifier matching'
-            f' [a-zA-Z_][a-zA-Z0-9_]*, and {bad!r} is not one.'
+            f'store {bad!r} cannot be migrated: {reason}.'
             f' A sqlite-backed store of that name stays fully'
-            f' usable. To move it, create'
-            f' {portable_store_name(bad)!r} and migrate that.')
-    for s in unhostable:
+            f' usable. To move it, {_remedy(bad)}.')
+    for s, reason in unhostable:
         click.echo(
-            f'Skipping {s!r}: memman needs the store name itself to'
-            f' be a SQL identifier matching [a-zA-Z_][a-zA-Z0-9_]*.'
-            f' To move it, create'
-            f' {portable_store_name(s)!r} and migrate that.',
+            f'Skipping {s!r}: {reason}. To move it, {_remedy(s)}.',
             err=True)
         skipped.append(s)
     if not todo:
-        click.echo(f'migrated=0 skipped={len(skipped)}')
+        verb = 'planned' if dry_run else 'migrated'
+        click.echo(f'{verb}=0 skipped={len(skipped)}')
         return
 
     if target_backend == 'postgres':
@@ -2883,6 +2915,12 @@ def migrate(
                         f' meta={len(payload.meta)} (dry-run)')
                 except MigrateError as exc:
                     raise click.ClickException(f'{s}: {exc}')
+            # Without this a run that skipped stores looked like a
+            # clean full plan, while the all-skipped branch printed a
+            # count.
+            if migrate_all and skipped:
+                click.echo(
+                    f'planned={len(todo)} skipped={len(skipped)}')
             return
 
         if not yes:

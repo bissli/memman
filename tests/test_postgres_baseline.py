@@ -559,7 +559,11 @@ def test_read_stored_dim_distinguishes_absent_from_unreachable(
     Pre-F.4 the helper swallowed every Exception, so a transient
     connection outage masqueraded as a fresh schema and the next
     fingerprint assert silently kicked off as if the dim were unknown.
+    The outage now arrives as `BackendError`, the contract every
+    backend raises; `__cause__` still carries the driver error, so
+    the two cases stay distinguishable.
     """
+    from memman.store.errors import BackendError
     from memman.store.postgres import _read_stored_dim
 
     schema = _store_schema('absent_store')
@@ -569,5 +573,6 @@ def test_read_stored_dim_distinguishes_absent_from_unreachable(
     assert _read_stored_dim(pg_dsn, 'absent_store') is None
 
     bad_dsn = 'postgresql://user@nonexistent.invalid:5432/x'
-    with pytest.raises(psycopg.OperationalError):
+    with pytest.raises(BackendError) as caught:
         _read_stored_dim(bad_dsn, 'absent_store')
+    assert isinstance(caught.value.__cause__, psycopg.OperationalError)

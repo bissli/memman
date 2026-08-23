@@ -181,8 +181,8 @@ def test_migrate_all_with_only_unhostable_stores_exits_clean(
     through and prints `Stores (0):` with no summary at all -- the
     skip echo alone still satisfies an exit-code-plus-name check, so
     the count line is the only assertion with teeth here.
-    Oracle: the `migrated=0 skipped=1` summary, and the absence of a
-    migration plan header.
+    Oracle: the `planned=0 skipped=1` summary, and the absence of a
+    migration plan header. A dry run never reports "migrated".
     """
     _, data_dir = runner
     _seed_store(data_dir, 'demo-v3')
@@ -193,7 +193,7 @@ def test_migrate_all_with_only_unhostable_stores_exits_clean(
 
     assert result.exit_code == 0, result.output
     assert 'demo-v3' in result.output
-    assert 'migrated=0 skipped=1' in result.output
+    assert 'planned=0 skipped=1' in result.output
     assert 'Migration plan' not in result.output
 
 
@@ -318,3 +318,99 @@ def test_portable_suggestion_is_always_creatable():
         suggestion = portable_store_name(name)
         _check_identifier(suggestion)
         assert valid_store_name(suggestion), (name, suggestion)
+
+
+def test_migrate_refuses_a_store_that_does_not_exist(runner, monkeypatch):
+    """An unknown store is reported as unknown, not as sqlite-backed.
+
+    Mutation: taking `--store NAME` on trust, so the naming guard
+    describes a store that is not there ("stays fully usable on
+    sqlite") instead of saying it does not exist.
+    Oracle: the message must say the store does not exist and must
+    not claim it remains usable.
+    """
+    _stub_postgres(monkeypatch)
+
+    result = invoke(
+        runner, ['migrate', '--store', 'nope-1', '--to', 'postgres',
+                 '--dry-run'])
+
+    assert result.exit_code != 0
+    assert 'nope-1' in result.output
+    assert 'does not exist' in result.output.lower()
+    assert 'stays fully usable' not in result.output
+
+
+def test_suggestion_that_names_a_live_store_says_so(runner, monkeypatch):
+    """A colliding suggestion warns instead of pointing at real data.
+
+    `portable_store_name('a-b')` is `a_b`. When `a_b` already exists,
+    telling the operator to "create a_b and migrate that" points at a
+    different store holding unrelated rows.
+
+    Mutation: emitting the suggestion unconditionally, with no check
+    that it names an existing store.
+    Oracle: with both `a-b` and `a_b` present the output must flag
+    the collision; the plain suggestion wording must not appear.
+    """
+    _, data_dir = runner
+    _seed_store(data_dir, 'a-b')
+    _seed_store(data_dir, 'a_b')
+    _stub_postgres(monkeypatch)
+
+    result = invoke(
+        runner, ['migrate', '--all', '--to', 'postgres', '--dry-run'])
+
+    assert 'a_b' in result.output
+    assert 'already' in result.output.lower()
+    assert 'taken' in result.output.lower()
+
+
+def test_dry_run_reports_the_skip_count_alongside_a_plan(runner,
+                                                         monkeypatch):
+    """A mixed dry run summarizes skips like every other branch.
+
+    Mutation: returning from the dry-run branch before the summary,
+    so a run that skipped stores looks like a clean full plan.
+    Oracle: the `skipped=1` count appears even though one store was
+    planned.
+    """
+    _, data_dir = runner
+    _seed_store(data_dir, 'demo-v3')
+    _seed_store(data_dir, 'goodstore')
+    _stub_postgres(monkeypatch)
+
+    result = invoke(
+        runner, ['migrate', '--all', '--to', 'postgres', '--dry-run'])
+
+    assert result.exit_code == 0, result.output
+    assert 'goodstore: insights=1' in result.output
+    assert 'skipped=1' in result.output
+
+
+def test_refusal_quotes_the_actual_reason_not_a_guess(runner, monkeypatch):
+    """A too-long name is refused for length, not for its characters.
+
+    `_store_schema` rejects on character class AND on length. Asserting
+    a reason instead of quoting the raised one told the owner of a
+    60-character name that it failed a pattern it matches, and offered
+    the identical name as the remedy.
+
+    Mutation: hardcoding the refusal text rather than passing through
+    the `ConfigError` message.
+    Oracle: the message must say the name is too long and must not
+    claim the identifier pattern was violated.
+    """
+    _, data_dir = runner
+    name = 'a' * 60
+    _seed_store(data_dir, name)
+    _stub_postgres(monkeypatch)
+
+    result = invoke(
+        runner, ['migrate', '--store', name, '--to', 'postgres',
+                 '--dry-run'])
+
+    assert result.exit_code != 0
+    assert 'too long' in result.output
+    assert '[a-zA-Z_][a-zA-Z0-9_]*' not in result.output
+    assert f"create '{name}'" not in result.output
