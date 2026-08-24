@@ -1220,3 +1220,65 @@ class TestDoctorBackendDispatch:
                 drop_postgres_store(store, pg_dsn)
             except Exception:
                 pass
+
+
+class TestSingleInsightStore:
+    """A store too small to hold an edge must not fail the gate.
+
+    One active insight cannot link to anything, so `orphan_insights`
+    reports 100% and `edge_degree` reports a zero median. Doctor exits
+    1 on fail and is documented as a CI gate, so such a store made the
+    gate permanently red for a condition it could never satisfy.
+    """
+
+    def test_orphan_check_passes_with_one_insight(self, tmp_db,
+                                                  tmp_backend):
+        """A lone insight is not an orphan; it has nothing to link to.
+
+        Mutation: guarding only `total == 0`, which leaves 1/1 orphaned
+        at 100% and returns fail.
+        Oracle: a store holding exactly one insight, where an edge is
+        impossible by construction.
+        """
+        from memman.doctor import check_orphan_insights
+        _insert_healthy_insight(tmp_db, 'solo-1')
+
+        result = check_orphan_insights(tmp_backend)
+
+        assert result['status'] == 'pass', result['detail']
+
+    def test_edge_degree_passes_with_one_insight(self, tmp_db,
+                                                 tmp_backend):
+        """Degree zero is the only possible degree for a lone insight.
+
+        Mutation: guarding only the empty-store case, so a median of 0
+        falls through to the `med >= 2` test and fails.
+        Oracle: the same single-insight store.
+        """
+        from memman.doctor import check_edge_degree
+        _insert_healthy_insight(tmp_db, 'solo-1')
+
+        result = check_edge_degree(tmp_backend)
+
+        assert result['status'] == 'pass', result['detail']
+
+    def test_two_unlinked_insights_still_report_a_problem(self, tmp_db,
+                                                          tmp_backend):
+        """The small-store guard must not mask a real failure.
+
+        Two insights CAN link, so leaving both orphaned is a genuine
+        signal and must survive the guard.
+
+        Mutation: widening the guard past the point where an edge
+        becomes possible (e.g. `total < 5`), which would silence real
+        orphans in small stores.
+        Oracle: two unlinked insights, where one edge was possible and
+        none exists.
+        """
+        from memman.doctor import check_orphan_insights
+        _insert_healthy_insight(tmp_db, 'duo-1')
+        _insert_healthy_insight(tmp_db, 'duo-2')
+
+        result = check_orphan_insights(tmp_backend)
+
+        assert result['status'] == 'fail', result['detail']

@@ -89,12 +89,22 @@ def check_oplog_delta_coverage(backend: Backend) -> dict[str, Any]:
 
 
 def check_orphan_insights(backend: Backend) -> dict[str, Any]:
-    """Find active insights with zero edges."""
+    """Find active insights with zero edges.
+
+    Notes
+    -----
+    - Under `MIN_LINKABLE_INSIGHTS` the check passes: an edge needs two
+      endpoints, so a lone insight is orphaned by arithmetic. Doctor
+      exits 1 on fail and is documented as a CI gate, so failing there
+      held the gate red for a condition the store could never satisfy.
+    """
     orphan_count, total = backend.nodes.count_orphans()
-    if total == 0:
+    if total < MIN_LINKABLE_INSIGHTS:
         return {'name': 'orphan_insights', 'status': 'pass',
-                'detail': {'orphan_count': 0, 'total_active': 0,
-                           'orphan_pct': 0.0}}
+                'detail': {'orphan_count': orphan_count,
+                           'total_active': total,
+                           'orphan_pct': 0.0,
+                           'note': 'too few insights to link'}}
     orphan_pct = round(orphan_count / total * 100, 1)
     if orphan_count == 0:
         status = 'pass'
@@ -140,11 +150,19 @@ def check_embedding_consistency(backend: Backend) -> dict[str, Any]:
 
 
 def check_edge_degree(backend: Backend) -> dict[str, Any]:
-    """Compute degree distribution stats across active insights."""
+    """Compute degree distribution stats across active insights.
+
+    Notes
+    -----
+    - Under `MIN_LINKABLE_INSIGHTS` the check passes: zero is the only
+      degree a lone insight can have, so the median thresholds below
+      describe nothing.
+    """
     active_ids = backend.nodes.get_active_ids()
-    if not active_ids:
+    if len(active_ids) < MIN_LINKABLE_INSIGHTS:
         return {'name': 'edge_degree', 'status': 'pass',
-                'detail': {'min': 0, 'max': 0, 'median': 0, 'mean': 0.0}}
+                'detail': {'min': 0, 'max': 0, 'median': 0, 'mean': 0.0,
+                           'note': 'too few insights to link'}}
     degree_by_id = backend.edges.degree_distribution()
     degrees = sorted(degree_by_id.get(aid, 0) for aid in active_ids)
     med = statistics.median(degrees)
@@ -166,6 +184,10 @@ def check_edge_degree(backend: Backend) -> dict[str, Any]:
             },
         }
 
+
+# An edge needs two endpoints, so structural link checks do not apply
+# below this many active insights.
+MIN_LINKABLE_INSIGHTS = 2
 
 QUEUE_DEPTH_WARN = 50
 QUEUE_DEPTH_FAIL = 100
