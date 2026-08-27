@@ -16,7 +16,7 @@ SESSION_ID=$(echo "$INPUT" | sed -n 's/.*"session_id": *"\([^"]*\)".*/\1/p' | he
 if [ -z "$SESSION_ID" ]; then
   # Can't determine session - fall back to always blocking (safe default)
   cat <<'EOF'
-{"decision": "block", "reason": "[memman] Memory check: did the user state a preference, make a decision, give a correction, or reach a conclusion? If yes, call `memman remember \"<self-contained text>\" --session <your session id>` directly via Bash in your next turn (no sub-agent, no delegation). Dereference anaphora before storing. Only skip if the exchange was purely open-ended questions with no resolution."}
+{"decision": "block", "reason": "[memman] Memory check: did the user state a preference, make a decision, give a correction, or reach a conclusion? If yes, call `memman remember \"<self-contained text>\"` directly via Bash in your next turn (no sub-agent, no delegation). Dereference anaphora before storing. Only skip if the exchange was purely open-ended questions with no resolution."}
 EOF
   exit 0
 fi

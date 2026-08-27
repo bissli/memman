@@ -17,7 +17,7 @@ The project uses Poetry; run commands via `poetry run <cmd>` or inside `poetry s
 The operator-facing model (env file location, install precedence, override path) lives in [USAGE.md § Configuration](docs/USAGE.md#configuration). The contributor-side facts:
 
 - Defaults live in `config.INSTALL_DEFAULTS` and are written to `<MEMMAN_DATA_DIR>/env` by `memman install` only — there is no code-default fallback at runtime. If a key is missing from the env file, the resolver returns `None` and the caller raises `ConfigError` with `run memman install` guidance.
-- Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`, `MEMMAN_SESSION_ID`) are read directly from `os.environ` and excluded from the env-file model.
+- Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`, `MEMMAN_SESSION_ID`) are read directly from `os.environ` and excluded from the env-file model. `CLAUDE_CODE_SESSION_ID` is read the same way, but it is not memman's variable, so it sits outside `_ALL_VARS` and `memman config show` never reports it.
 - `memman doctor` has an `env_completeness` check that warns when a new `INSTALLABLE_KEYS` entry is missing, and an `optional_extras` check that reports which `memman[extras]` install groups resolve at runtime.
 
 ### Variable reference
@@ -27,6 +27,7 @@ The `Type` column distinguishes how each variable is sourced:
 - `required` — must be present in the env file before any command runs (`memman install` prompts for these in TTY mode and fails otherwise).
 - `installed` — optional INSTALLABLE_KEYS; seeded by `memman install` from defaults or a one-time shell pull, then read from the env file. Override later with `memman config set KEY VALUE`.
 - `process` — never persisted; read directly from `os.environ` by the component that owns them.
+- `foreign` — owned and exported by another tool; memman reads it and never persists, installs, or reports it.
 
 | Variable                          | Type      | Purpose                                                                                                                                                                                                                             |
 | --------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -60,6 +61,7 @@ The `Type` column distinguishes how each variable is sourced:
 | `MEMMAN_SCHEDULER_KIND`           | process   | Deployment directive (set by container entrypoint or auto-detected).                                                                                                                                                                |
 | `MEMMAN_DEBUG`                    | process   | Runtime toggle; persistent state lives in `~/.memman/debug.state` instead.                                                                                                                                                          |
 | `MEMMAN_SESSION_ID`               | process   | Default for `remember`/`replace` `--session` (the temporal chain key). Deliberately never persisted to the env file — a stale persisted id would fuse every later write into one false backbone chain.                              |
+| `CLAUDE_CODE_SESSION_ID`          | foreign   | Second fallback for `--session`, behind `MEMMAN_SESSION_ID`. Claude Code exports it into every Bash call, a subagent's included, with the parent id. Never persisted, never reported by `memman config show`.                       |
 
 ## Conventions
 

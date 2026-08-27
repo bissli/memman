@@ -77,6 +77,15 @@ REINDEX_TIMEOUT = 'MEMMAN_REINDEX_TIMEOUT'
 # would fuse every later write into one false backbone chain.
 SESSION_ID = 'MEMMAN_SESSION_ID'
 
+# Notes:
+# - Not memman's variable: Claude Code exports it into every Bash tool
+#   subprocess, subagents included, and owns its lifetime. memman only
+#   reads it, as the second envvar behind SESSION_ID on --session.
+# - Deliberately outside _ALL_VARS and INSTALLABLE_KEYS. It is neither
+#   installable nor ours to report, and the never-persisted rule above
+#   binds it for the same reason.
+CLAUDE_SESSION_ID = 'CLAUDE_CODE_SESSION_ID'
+
 
 def BACKEND_FOR(store: str) -> str:
     """Per-store backend env-key name: `MEMMAN_BACKEND_<store>`."""

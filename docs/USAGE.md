@@ -83,14 +83,14 @@ memman forget <id>
 
 **Remember flags:**
 
-| Flag             | Default   | Description                                                                                       |
-| ---------------- | --------- | ------------------------------------------------------------------------------------------------- |
-| `--cat`          | `general` | Category: `preference`, `decision`, `fact`, `insight`, `context`, `general`                       |
-| `--imp`          | `3`       | Importance: 1–5                                                                                   |
-| `--entities`     |           | Comma-separated entities (merged with LLM-extracted)                                              |
-| `--source`       | `user`    | Source: `user`, `agent`, `external` — provenance, stored verbatim                                 |
-| `--session`      | (env)     | Session id for the temporal chain; defaults to `$MEMMAN_SESSION_ID`. No session, no backbone edge |
-| `--no-reconcile` | `false`   | Skip LLM reconciliation (direct insert)                                                           |
+| Flag             | Default   | Description                                                                                                                       |
+| ---------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `--cat`          | `general` | Category: `preference`, `decision`, `fact`, `insight`, `context`, `general`                                                       |
+| `--imp`          | `3`       | Importance: 1–5                                                                                                                   |
+| `--entities`     |           | Comma-separated entities (merged with LLM-extracted)                                                                              |
+| `--source`       | `user`    | Source: `user`, `agent`, `external` — provenance, stored verbatim                                                                 |
+| `--session`      | (env)     | Session id for the temporal chain; defaults to `$MEMMAN_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID`. No session, no backbone edge |
+| `--no-reconcile` | `false`   | Skip LLM reconciliation (direct insert)                                                                                           |
 
 **Recall flags:**
 
@@ -346,7 +346,7 @@ memman reads config at runtime from one source: `<MEMMAN_DATA_DIR>/env`, a `KEY=
 
 `memman config set KEY VALUE` is the override path. Use it after install to change a backend, rotate an API key, or update a DSN. Conflicts between an `INSTALLABLE_KEYS` flag and an existing env-file value are rejected with the exact `memman config set ...` command to run.
 
-Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`, `MEMMAN_SESSION_ID`) are not persisted to the file; they are read directly from `os.environ` by the components that own them. `MEMMAN_SESSION_ID` in particular is never written to the env file on purpose — a stale persisted session id would fuse every later write into one false temporal chain.
+Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`, `MEMMAN_SESSION_ID`) are not persisted to the file; they are read directly from `os.environ` by the components that own them. `MEMMAN_SESSION_ID` in particular is never written to the env file on purpose — a stale persisted session id would fuse every later write into one false temporal chain. `--session` then falls back to `CLAUDE_CODE_SESSION_ID`. Claude Code owns and exports it; memman only reads it, and never persists it either.
 
 The full variable list lives in [CONTRIBUTING.md § Variable reference](../CONTRIBUTING.md#variable-reference).
 
