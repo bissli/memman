@@ -384,6 +384,136 @@ class TestRecall:
         if matched and matched[0].get('summary'):
             assert matched[0]['summary'] != matched[0]['content']
 
+    def test_recall_brief_projects_ranked_rows(self, runner):
+        """--brief cuts the ranked path's insight body to the projection.
+
+        Mutation: wiring --brief into the --basic branch only, leaving
+            the ranked path -- the one the UserPromptSubmit hook fires
+            on every user message -- emitting full content.
+        Oracle: the key set the unflagged run emits for the same
+            query, differenced against the flagged one.
+        """
+        invoke(runner, [
+            'remember', 'Go uses SQLite for persistent storage',
+            '--no-reconcile'])
+        full = json.loads(
+            invoke(runner, ['recall', 'Go SQLite storage']).output)
+        assert full['results'], 'expected the ranked path to return a row'
+        full_keys = set(full['results'][0]['insight'])
+        assert 'content' in full_keys
+
+        result = invoke(runner, ['recall', 'Go SQLite storage', '--brief'])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data['results'], 'expected --brief to return the same row'
+        brief_keys = set(data['results'][0]['insight'])
+        assert brief_keys - {'truncated'} == {
+            'id', 'category', 'importance', 'summary'}
+        assert 'content' in full_keys - brief_keys
+
+    def test_recall_brief_projects_the_insight_not_the_row(self, runner):
+        """--brief cuts the insight and leaves the ranking envelope whole.
+
+        Mutation: projecting the whole result row rather than its
+            `insight` value, dropping the ranking diagnostics the
+            recall hint and the quality harness both read.
+        Oracle: the envelope keys and the projected insight's key set
+            asserted on the same row, so neither half can pass alone.
+        """
+        invoke(runner, [
+            'remember', 'Go uses SQLite for persistent storage',
+            '--no-reconcile'])
+        result = invoke(runner, ['recall', 'Go SQLite storage', '--brief'])
+        assert result.exit_code == 0, result.output
+        row = json.loads(result.output)['results'][0]
+        assert {'insight', 'score', 'intent', 'signals'} <= set(row)
+        assert set(row['insight']) - {'truncated'} == {
+            'id', 'category', 'importance', 'summary'}
+
+    def test_recall_brief_basic_path_projects_rows(self, runner):
+        """--brief projects the --basic branch's rows and drops none.
+
+        Mutation: returning `insight_to_full_dict` on the --basic
+            branch, so `recall --basic --brief` still ships content; or
+            letting the flag change how many rows come back rather than
+            only their shape.
+        Oracle: exact four-key set on each row, and the row count of
+            the same query run without the flag.
+        """
+        from memman.store.db import open_db
+        db = open_db(str(pathlib.Path(runner[1]) / 'data' / 'default'))
+        for i in range(3):
+            insert_insight(db, make_insight(
+                id=f'brief-many-{i}', content=f'yankee row {i}',
+                category='fact'))
+        db.close()
+
+        full = json.loads(
+            invoke(runner, ['recall', '--basic', 'yankee']).output)
+        assert len(full['results']) == 3, full['results']
+
+        result = invoke(runner, [
+            'recall', '--basic', '--brief', 'yankee'])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert len(data['results']) == 3, data['results']
+        for r in data['results']:
+            assert set(r) - {'truncated'} == {
+                'id', 'category', 'importance', 'summary'}
+
+    def test_recall_brief_emits_a_real_summary_unmarked(self, runner):
+        """A row that HAS a summary ships it verbatim, with no marker.
+
+        Mutation: always taking the content-prefix fallback. Every
+            other --brief CLI test seeds through `remember`, which
+            leaves summary blank, so all of them run the fallback
+            branch and none would notice.
+        Oracle: the seeded summary string, which is absent from the
+            content, so a fallback cannot produce it.
+        """
+        from memman.store.db import open_db
+        db = open_db(str(pathlib.Path(runner[1]) / 'data' / 'default'))
+        insert_insight(db, make_insight(
+            id='brief-summ', content='zeta ' * 100, category='fact'))
+        db._conn.execute(
+            'update insights set summary = ? where id = ?',
+            ('a genuine enrichment summary', 'brief-summ'))
+        db.close()
+
+        result = invoke(runner, ['recall', '--basic', '--brief', 'zeta'])
+        assert result.exit_code == 0, result.output
+        rows = [r for r in json.loads(result.output)['results']
+                if r['id'] == 'brief-summ']
+        assert rows, 'expected the seeded row back'
+        assert rows[0]['summary'] == 'a genuine enrichment summary'
+        assert 'truncated' not in rows[0]
+
+    def test_recall_brief_never_returns_an_empty_row(self, runner):
+        """A row the compression gate left summary-less still carries text.
+
+        Mutation: a summary-only projection -- `graph/enrichment.py`
+            blanks summary whenever it fails the 0.85 compression gate,
+            which was 46 of 118 rows on a live store, so a third of
+            results come back with nothing to read.
+        Oracle: a seeded row whose 400-char content has no summary; the
+            emitted text is the hand-computed 200-char prefix and the
+            row is marked truncated because content really was cut.
+        """
+        from memman.store.db import open_db
+        content = 'abcde' * 80
+        db = open_db(str(pathlib.Path(runner[1]) / 'data' / 'default'))
+        insert_insight(db, make_insight(
+            id='brief-gate', content=content, category='fact'))
+        db.close()
+
+        result = invoke(runner, ['recall', '--basic', '--brief', 'abcde'])
+        assert result.exit_code == 0, result.output
+        rows = [r for r in json.loads(result.output)['results']
+                if r['id'] == 'brief-gate']
+        assert rows, 'expected the seeded row back'
+        assert rows[0]['summary'] == 'abcde' * 40
+        assert rows[0]['truncated'] is True
+
     def test_recall_source_filter_smart(self, runner):
         """Smart recall respects --source filter."""
         invoke(runner, [

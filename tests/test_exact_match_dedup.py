@@ -421,10 +421,10 @@ def test_corroboration_count_reaches_the_json_read_path(
         tmp_backend, monkeypatch):
     """The counter is visible through the full-dict serializer.
 
-    `insight_to_full_dict` is the only consumer-facing read path
-    (`recall --json` and `get` both serialize through it); dropping
-    the key makes F4 write-only while every write-side test stays
-    green.
+    `insight_to_full_dict` is the consumer-facing read path that
+    carries this counter (`recall` and `get` both serialize through
+    it; `recall --brief` projects it away deliberately); dropping the
+    key makes F4 write-only while every write-side test stays green.
 
     Mutation: deleting the corroboration_count line from
         `insight_to_full_dict`.

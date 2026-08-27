@@ -33,7 +33,8 @@ _BACKEND_CHOICES = sorted(known_backends())
 
 from memman.embed import SUPPORTED_EMBED_PROVIDERS as _EMBED_PROVIDER_CHOICES
 from memman.store.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge
-from memman.store.model import Insight, format_timestamp, insight_to_full_dict
+from memman.store.model import Insight, format_timestamp
+from memman.store.model import insight_to_brief_dict, insight_to_full_dict
 from memman.store.model import is_immune
 from memman.store.sqlite import open_ro_db
 from tqdm import tqdm
@@ -1267,12 +1268,14 @@ def _process_queue_row(
 @click.option('--limit', default=10, type=int, help='Max results')
 @click.option('--source', default='', help='Filter by source')
 @click.option('--basic', is_flag=True, default=False, help='Simple SQL LIKE matching')
+@click.option('--brief', is_flag=True, default=False,
+              help='Project each row to id, category, importance, summary')
 @click.option('--intent', default='', help='Override intent')
 @click.option('--expand', 'expand', is_flag=True, default=False,
               help='Run LLM query expansion before retrieval (off by default)')
 @click.pass_context
 def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
-           limit: int, source: str, basic: bool,
+           limit: int, source: str, basic: bool, brief: bool,
            intent: str, expand: bool) -> None:
     """Retrieve insights by keyword."""
     from memman import trace
@@ -1282,6 +1285,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
     from memman.llm.extract import expand_query
     from memman.search.intent import intent_from_string
     from memman.search.recall import intent_aware_recall
+    project = insight_to_brief_dict if brief else insight_to_full_dict
     keyword_str = ' '.join(keyword)
     store_name = _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store'])
     per_store_rerank = config.get_store_rerank_enabled(store_name)
@@ -1305,7 +1309,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                     'recall_bookkeep_skipped basic q=%r: %s',
                     keyword_str, exc)
             _json_out({
-                'results': [insight_to_full_dict(r) for r in results],
+                'results': [project(r) for r in results],
                 'meta': {'basic': True},
                 })
             return
@@ -1382,7 +1386,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
         out = {
             'results': [
                 {
-                    'insight': insight_to_full_dict(r['insight']),
+                    'insight': project(r['insight']),
                     'score': r['score'],
                     'intent': r['intent'],
                     'signals': r['signals'],

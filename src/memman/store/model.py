@@ -152,6 +152,57 @@ def insight_to_delta_dict(ins: 'Insight') -> dict[str, Any]:
         }
 
 
+BRIEF_CONTENT_CHARS = 200
+
+
+def insight_to_brief_dict(ins: 'Insight') -> dict[str, Any]:
+    """Return the projection `recall --brief` emits in place of the full row.
+
+    Parameters
+    ----------
+    ins : Insight
+        The insight to project.
+
+    Returns
+    -------
+    dict[str, Any]
+        `id`, `category`, `importance`, and `summary`, plus
+        `truncated: True` when `summary` holds a content prefix rather
+        than a real summary.
+
+    Notes
+    -----
+    - `summary` is the single text key either way, so a caller reads
+      one field and checks `truncated` to learn whether anything was
+      withheld.
+    - A row can reach here with no summary several ways: the
+      enrichment compression gate blanks one that is too close to the
+      content, and an LLM or parse failure leaves the row unenriched
+      entirely. A summary-only projection would return an unreadable
+      row for a large minority of the store, so the fallback is the
+      first `BRIEF_CONTENT_CHARS` characters of `content`.
+    - `truncated` marks content the caller has NOT seen, so it fires
+      only when the fallback actually cut something. Marking every
+      fallback would be false for most of them -- the compression gate
+      blanks summaries precisely when content is short, so 230 of the
+      253 summary-less rows across ten live stores sit under the
+      limit -- and would send the caller to `insights show` for a row
+      it already holds in full.
+    """
+    out: dict[str, Any] = {
+        'id': ins.id,
+        'category': ins.category,
+        'importance': ins.importance,
+        }
+    if ins.summary.strip():
+        out['summary'] = ins.summary
+    else:
+        out['summary'] = ins.content[:BRIEF_CONTENT_CHARS]
+        if len(ins.content) > BRIEF_CONTENT_CHARS:
+            out['truncated'] = True
+    return out
+
+
 def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
     """Return the user-visible fields of an insight for JSON output.
 
