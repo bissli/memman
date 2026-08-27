@@ -41,6 +41,24 @@ Per-blob processing inside `_process_queue_row`:
 
 Edge upserts and embed/LLM call sites no longer swallow exceptions; failures (constraint violation, network error, malformed payload) reach `mark_failed` and consume the retry budget. Best-effort cleanup (HTTP session resets, platform probes, pool teardown) keeps narrow typed catches at `logger.debug`.
 
+### Metadata precedence on a reconcile merge
+
+An UPDATE or REPLACE is not an in-place edit. `_apply_plan` soft-deletes the target and inserts a **successor** row, so every field is decided by one of two rules, and a field governed by neither is destroyed with the target. The split:
+
+| Field                                 | Winner                                  | Why                                                                                           |
+| ------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `content`                             | incoming (LLM `merged_text`)            | the merge is what the caller asked for                                                        |
+| `category`, `importance`              | incoming                                | the caller's `--cat`/`--imp` pin, else the extractor's per-fact guess                         |
+| `source`, `session_id`, `queue_uuid`  | incoming                                | provenance names the write that produced this row                                             |
+| `entities`                            | **union** of both                       | the extractor sees only the incoming text, so overwriting would narrow the set on every merge |
+| `corroboration_count`, `access_count` | **max** of both                         | earned history must survive a rewording                                                       |
+| `created_at`                          | successor's own                         | server-side default; the row is new                                                           |
+| edges                                 | **re-pointed** from target to successor | the target's neighborhood is the graph's value; a bare delete throws it away                  |
+
+Incoming-wins on the provenance triple is deliberate: `--source` is the only exact recall pre-filter, so a merged row belongs to the namespace of the write that last touched it. The consequence worth knowing: a later write that passes no `--source` carries the `user` default, so it moves a merged row out of a narrower namespace an earlier write had set. Scope an investigation with `--source` on **every** write that may merge into it, not only the first.
+
+Edge re-pointing skips any edge whose far endpoint is the target itself or the successor, so a self-edge on the target does not become one on the successor. `upsert` keeps the higher weight, so re-pointing onto an edge the successor already minted is safe.
+
 ### Per-stage token accounting
 
 Every `MemmanLLMClient.complete` call names its originating stage from a closed set (`extraction`, `reconciliation`, `query_expansion`, `enrichment`, `causal`, `probe`, plus `harness` for off-pipeline measurement tooling — an unknown stage raises). The client reads the provider's `usage` block **per attempt inside the retry loop** — an empty HTTP-200 body retried twice is three billed completions, so success-only accounting undercounts — and accumulates into a process-wide ledger behind a `threading.Lock` (enrichment and causal run concurrently, so event-order attribution is unrecoverable). The drain worker snapshots the ledger per row (each `queue_done`/`queue_failed` trace event carries the row's per-stage delta) and emits an `llm_usage_summary` trace event plus an `llm_usage` key in the drain's JSON output with the drain-level totals. An HTTP-200 response with no `usage` block counts the call under `missing_usage` without inventing zero tokens; non-2xx attempts land in `http_errors` rather than `calls`, so a retried rate-limit storm cannot inflate the billed-call signal, and an HTTP-200 whose body is not JSON is booked like an empty body and retried.

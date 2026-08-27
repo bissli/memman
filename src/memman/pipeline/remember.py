@@ -636,6 +636,7 @@ def _apply_plan(
 
     target_already_gone = False
     update_before_delta: dict[str, Any] | None = None
+    carried_edges: list[Edge] = []
     if plan.action in {'update', 'replace'} and plan.target_id:
         op_name = ('replace' if plan.action == 'replace'
                    else 'reconcile-update')
@@ -643,6 +644,24 @@ def _apply_plan(
         update_before_delta = (
             insight_to_delta_dict(before_target)
             if before_target is not None else None)
+        if before_target is not None:
+            # A merge is a soft-delete plus an insert, so anything the
+            # successor does not copy here is destroyed with the
+            # target. Entities union rather than overwrite because the
+            # extractor sees only the incoming text and would
+            # otherwise narrow the merged row's entity set on every
+            # pass. Counts carry so corroboration and recall history
+            # survive a rewording.
+            fi.entities = list(dict.fromkeys(
+                list(fi.entities) + list(before_target.entities)))
+            fi.corroboration_count = max(
+                fi.corroboration_count, before_target.corroboration_count)
+            fi.access_count = max(
+                fi.access_count, before_target.access_count)
+            # Snapshot before the sweep at the end of apply: taking it
+            # later would also scoop up the plan's causal edges and the
+            # successor's own freshly minted ones.
+            carried_edges = backend.edges.by_node(plan.target_id)
         deleted_now = backend.nodes.soft_delete(
             plan.target_id, tolerate_missing=True)
         if deleted_now:
@@ -687,6 +706,20 @@ def _apply_plan(
 
     if (plan.action in {'update', 'replace'}
             and plan.target_id and not target_already_gone):
+        for edge in carried_edges:
+            far_id = (edge.target_id if edge.source_id == plan.target_id
+                      else edge.source_id)
+            if far_id in {plan.target_id, fi.id}:
+                continue
+            moved = Edge(
+                source_id=(fi.id if edge.source_id == plan.target_id
+                           else edge.source_id),
+                target_id=(fi.id if edge.target_id == plan.target_id
+                           else edge.target_id),
+                edge_type=edge.edge_type,
+                weight=edge.weight,
+                metadata=dict(edge.metadata))
+            backend.edges.upsert(moved)
         backend.edges.delete_by_node(plan.target_id)
 
     backend.nodes.stamp_linked(fi.id)
