@@ -90,7 +90,7 @@ memman forget <id>
 | `--entities`     |           | Comma-separated entities (merged with LLM-extracted)                                                                              |
 | `--source`       | `user`    | Source: `user`, `agent`, `external` — provenance, stored verbatim                                                                 |
 | `--session`      | (env)     | Session id for the temporal chain; defaults to `$MEMMAN_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID`. No session, no backbone edge |
-| `--no-reconcile` | `false`   | Skip LLM reconciliation (direct insert)                                                                                           |
+| `--no-reconcile` | `false`   | Store the text verbatim: skip extraction and reconciliation, so the write cannot be dropped or folded away                             |
 
 **Recall flags:**
 
@@ -295,12 +295,18 @@ memman scheduler debug on|off|status     # toggle the verbose worker trace log
 
 memman scheduler queue list [--limit N]  # peek pending rows
 memman scheduler queue failed [--limit N]# rows in 'failed' state
+memman scheduler queue skipped [--limit N]# drained writes that stored no insight
 memman scheduler queue show <row_id>     # full payload + trace events for one row
 memman scheduler queue retry <row_id>    # requeue a single failed row
 memman scheduler queue retry --all-stale # requeue every row currently in status='stale'
 memman scheduler queue purge --done      # delete rows where status='done'
 memman scheduler queue purge --stale     # delete rows where status='stale'
+memman scheduler queue purge --skipped   # empty the skipped-write ledger
 ```
+
+A skipped write is a row the pipeline completed without storing an insight: its extraction came back empty, or every extracted fact either reconciled onto an existing insight or deleted one it contradicted. All of these mark the row `done`, and `purge_done` deletes it a minute later, so the `skipped_writes` ledger is what survives. It keeps the full content, the reason, the store, and the session id, and `stats` reports its size under `skipped` (alongside `stale`, which it also reports). The rule is all-or-nothing: a write that stored even one fact is not filed.
+
+Nothing prunes the ledger on a timer: `purge_done` never reaches it. `queue purge --skipped` empties it, `store remove` drops one store's entries, and a `backup restore` replaces it wholesale with the archive's copy. The listing spans every store, and it holds raw content, so treat it as sensitive. Pass `--no-reconcile` on `remember` to bypass every drop and store the text verbatim.
 
 A stale row is a pending entry claimed more than `STALE_CLAIM_SECONDS` ago (default 600 s), usually from a mid-drain worker crash. The post-drain maintenance pass auto-recovers via `queue.retry_stale` alongside `purge_done` and `purge_worker_runs`; the explicit verbs exist for incident response.
 

@@ -82,6 +82,17 @@ Categories: `preference` · `decision` · `fact` · `insight` · `context` · `g
 
 Importance is 2 (passing mention) to 5 (architectural / strong preference). The extraction worker silently floors importance at 2 — `--imp 1` becomes `--imp 2`.
 
+A write is not guaranteed to land. The worker drops content its
+extractor judges trivial, folds a fact that merely restates a stored
+insight into that insight, and deletes a stored insight the new text
+contradicts. All three complete as `done`, so the queue reports
+success either way. When nothing at all was stored, the write is filed
+in the skipped ledger: read it back with `memman scheduler queue
+skipped`, which keeps the full content and the reason. A write that
+stored even one fact is not filed, so a single folded fact in a
+multi-fact write leaves no ledger row. To store text verbatim and
+bypass all three, pass `--no-reconcile`.
+
 Correct an existing insight by ID:
 
 ```bash
