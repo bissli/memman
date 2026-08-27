@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 
 from memman.store.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge
 from memman.store.model import Insight, base_weight, format_float
-from memman.store.model import format_timestamp, is_immune, parse_timestamp
+from memman.store.model import format_timestamp, insight_to_brief_dict
+from memman.store.model import is_immune, parse_timestamp
 
 
 def test_parse_entities_null():
@@ -111,3 +112,104 @@ def test_format_float():
     """Verify 4 decimal place formatting."""
     assert format_float(0.85) == '0.8500'
     assert format_float(1.0) == '1.0000'
+
+
+def test_brief_dict_prefers_populated_summary():
+    """A populated summary is emitted verbatim, with no truncation marker.
+
+    Mutation: always taking the content-prefix fallback, ignoring a
+        populated summary.
+    Oracle: hand-built insight whose summary is a distinct short string
+        from its 400-char content.
+    """
+    ins = Insight(id='b1', content='x' * 400, category='fact',
+                  importance=4, summary='the short summary')
+    out = insight_to_brief_dict(ins)
+    assert out['summary'] == 'the short summary'
+    assert 'truncated' not in out
+
+
+def test_brief_dict_falls_back_to_cut_content():
+    """An empty summary falls back to a cut content prefix, marked truncated.
+
+    Mutation: a naive summary-only projection that emits '' when the
+        enrichment compression gate blanked the summary -- 46 of 118
+        rows on a live store, so a third of results come back empty.
+    Oracle: hand-computed 200-char prefix of a 400-char content.
+    """
+    ins = Insight(id='b2', content='abcde' * 80, category='fact',
+                  importance=3, summary='')
+    out = insight_to_brief_dict(ins)
+    assert out['summary'] == 'abcde' * 40
+    assert out['truncated'] is True
+
+
+def test_brief_dict_projects_exact_fields_and_values():
+    """The projection is exactly four keys carrying the right four values.
+
+    Mutation: reading an adjacent field -- `ins.source` for `category`
+        or `ins.effective_importance` for `importance`. Both sit beside
+        the real ones in `insight_to_delta_dict` and
+        `insight_to_full_dict`, which this projection was written from,
+        so a copy slip lands on them. A key-set assertion cannot see it.
+    Oracle: the whole expected dict, hand-written.
+    """
+    ins = Insight(id='b3', content='c' * 400, category='decision',
+                  importance=5, entities=['alpha'], source='agent',
+                  effective_importance=1.5, summary='s')
+    assert insight_to_brief_dict(ins) == {
+        'id': 'b3',
+        'category': 'decision',
+        'importance': 5,
+        'summary': 's',
+        }
+
+
+def test_brief_dict_never_cuts_a_real_summary():
+    """A summary longer than the limit is emitted whole, not sliced.
+
+    Mutation: applying `[:BRIEF_CONTENT_CHARS]` to both branches -- a
+        plausible tidy-up that caps every text field uniformly. It
+        would silently drop the tail of a long summary and set no
+        marker, since the marker keys off content length.
+    Oracle: a 300-char summary, hand-sized above the 200-char limit.
+    """
+    long_summary = 'w' * 300
+    ins = Insight(id='b6', content='c' * 400, category='fact',
+                  importance=3, summary=long_summary)
+    out = insight_to_brief_dict(ins)
+    assert out['summary'] == long_summary
+    assert 'truncated' not in out
+
+
+def test_brief_dict_does_not_mark_uncut_content():
+    """Content that fits under the limit is emitted whole and unmarked.
+
+    Mutation: marking every summary-less row `truncated`. The
+        enrichment compression gate blanks summaries precisely when
+        content is short, so 230 of the 253 summary-less rows across
+        ten live stores are under the limit -- the marker would be
+        false on 91% of the rows it fires on, and each one sends the
+        caller to `insights show` for a row it already holds whole.
+    Oracle: a 32-char content, well under `BRIEF_CONTENT_CHARS`.
+    """
+    ins = Insight(id='b4', content='Use `make test` to run the suite',
+                  category='fact', importance=3, summary='')
+    out = insight_to_brief_dict(ins)
+    assert out['summary'] == 'Use `make test` to run the suite'
+    assert 'truncated' not in out
+
+
+def test_brief_dict_treats_blank_summary_as_absent():
+    """A whitespace-only summary takes the content fallback, not verbatim.
+
+    Mutation: a bare `if ins.summary:` truthiness test, which passes
+        '   ' straight through and returns a row with nothing to read.
+    Oracle: a 400-char content whose hand-computed 200-char prefix must
+        appear instead of the spaces.
+    """
+    ins = Insight(id='b5', content='abcde' * 80, category='fact',
+                  importance=3, summary='   ')
+    out = insight_to_brief_dict(ins)
+    assert out['summary'] == 'abcde' * 40
+    assert out['truncated'] is True
