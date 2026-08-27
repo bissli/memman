@@ -555,8 +555,17 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
 
     from memman.queue import enqueue, queue_db
     with queue_db(data_dir_val) as conn:
-        cat_hint = cat if cat != 'general' else None
-        imp_hint = imp if imp != 3 else None
+        # Explicitness decides whether `_plan_fact` keeps the caller's
+        # value or defers to the extractor's per-fact guess, so a
+        # caller who types the default must not read as one who typed
+        # nothing. `replace` resolves it the same way.
+        from_cmdline = click.core.ParameterSource.COMMANDLINE
+        cat_hint = (
+            cat if ctx.get_parameter_source('cat') == from_cmdline
+            else None)
+        imp_hint = (
+            imp if ctx.get_parameter_source('imp') == from_cmdline
+            else None)
         row_id = enqueue(
             conn, store=name, content=content_str,
             hint_cat=cat_hint, hint_imp=imp_hint,
