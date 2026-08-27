@@ -132,6 +132,18 @@ create table if not exists worker_runs (
 
 create index if not exists idx_worker_runs_started
     on worker_runs(started_at desc);
+
+create table if not exists skipped_writes (
+    queue_id      integer primary key,
+    store         text not null,
+    content       text not null,
+    skip_reason   text not null,
+    processed_at  integer not null,
+    session_id    text
+);
+
+create index if not exists idx_skipped_writes_processed
+    on skipped_writes(processed_at desc);
 """
 
 
@@ -318,12 +330,134 @@ where id = ?
             f' unlocks in {backoff_seconds}s')
 
 
+def record_skipped_write(
+        conn: sqlite3.Connection,
+        queue_id: int,
+        store: str,
+        content: str,
+        skip_reason: str,
+        session_id: str | None = None) -> None:
+    """Record a drained row whose pipeline stored no insight.
+
+    Parameters
+    ----------
+    queue_id : int
+        Queue row the write arrived on. Primary key here, so
+        re-draining a row replaces its entry rather than adding one.
+    store : str
+        Store the write was addressed to.
+    content : str
+        The write verbatim, in full. The queue row holding it is
+        deleted by `purge_done` a minute after the drain, so this is
+        the only copy that survives.
+    skip_reason : str
+        Why nothing was stored, as reported by the pipeline.
+    session_id : str or None, optional
+        Session the write came from, for tracing it back.
+    """
+    sql = """
+insert or replace into skipped_writes
+    (queue_id, store, content, skip_reason, processed_at, session_id)
+values (?, ?, ?, ?, ?, ?)
+"""
+    conn.execute(sql, (
+        queue_id,
+        store,
+        content,
+        skip_reason,
+        int(time.time()),
+        session_id))
+
+
+def clear_skipped_write(conn: sqlite3.Connection, queue_id: int) -> None:
+    """Retract a queue row's ledger entry.
+
+    Called when a re-drain of a row that once skipped goes on to store
+    something. Without it the ledger reports a write as lost forever
+    and the documented recovery -- read it back and re-enter it --
+    creates a duplicate.
+    """
+    conn.execute(
+        'delete from skipped_writes where queue_id = ?', (queue_id,))
+
+
+def purge_skipped(conn: sqlite3.Connection) -> int:
+    """Empty the skipped-write ledger. Returns deleted count.
+
+    Notes
+    -----
+    - The ledger keeps full content and nothing prunes it on a timer:
+      `purge_done` never reaches it, and `purge_store` only clears one
+      store. Every restatement of an existing insight files a copy, so
+      an operator needs a verb to reclaim the space once the entries
+      have been read.
+    """
+    cur = conn.execute('delete from skipped_writes')
+    return cur.rowcount
+
+
+def list_skipped(
+        conn: sqlite3.Connection,
+        limit: int = 50,
+        ) -> list[dict]:
+    """Return skipped-write ledger rows as dicts, newest first.
+
+    Parameters
+    ----------
+    limit : int, default 50
+        Maximum rows to return.
+
+    Returns
+    -------
+    list[dict]
+        One dict per row carrying `queue_id`, `store`, `content`,
+        `skip_reason`, `processed_at`, and `session_id`.
+
+    Notes
+    -----
+    - `content` is the full write, never a preview. The ledger exists
+      to answer "where did my write go", which a truncation defeats.
+    - The listing spans every store.
+    """
+    sql = """
+select queue_id, store, content, skip_reason, processed_at, session_id
+from skipped_writes
+order by processed_at desc, queue_id desc
+limit ?
+"""
+    rows = conn.execute(sql, (limit,)).fetchall()
+    return [{
+            'queue_id': r[0],
+            'store': r[1],
+            'content': r[2],
+            'skip_reason': r[3],
+            'processed_at': r[4],
+            'session_id': r[5],
+            } for r in rows]
+
+
 def stats(conn: sqlite3.Connection) -> dict:
-    """Return counts by status plus oldest-pending age."""
+    """Return counts by status plus oldest-pending age.
+
+    Returns
+    -------
+    dict
+        One count per queue status (`pending`, `done`, `failed`,
+        `stale`), the `skipped` ledger size, and
+        `oldest_pending_age_seconds` (None when nothing is pending).
+
+    Notes
+    -----
+    - `skipped` counts `skipped_writes`, not queue rows. No queue row
+      ever carries that status; a skipped write is marked `done` and
+      purged, and the ledger is what outlives it.
+    """
     result = {
         'pending': 0,
         'done': 0,
         'failed': 0,
+        'stale': 0,
+        'skipped': 0,
         'oldest_pending_age_seconds': None,
         }
     rows = conn.execute(
@@ -331,6 +465,9 @@ def stats(conn: sqlite3.Connection) -> dict:
     for status, count in rows:
         if status in result:
             result[status] = count
+
+    result['skipped'] = conn.execute(
+        'select count(*) from skipped_writes').fetchone()[0]
 
     oldest = conn.execute(
         "select queued_at from queue where status = 'pending'"
@@ -438,12 +575,23 @@ def purge_done(
 
 
 def purge_store(conn: sqlite3.Connection, store: str) -> int:
-    """Delete all queue rows for the named store. Returns deleted count.
+    """Delete a store's queue rows and ledger entries.
+
+    Returns the number of queue rows deleted.
 
     Called from `memman store remove` so that removing a store also
     drops its in-flight queue rows; otherwise stale rows survive the
     rmtree and the worker re-attempts them against a missing data dir.
+
+    Notes
+    -----
+    - The store's `skipped_writes` rows go with them, and are not
+      counted in the return value. `purge_done` never reaches that
+      table, so removing a store is the only thing that clears it --
+      leaving it would keep the removed store's raw content readable.
     """
+    conn.execute(
+        'delete from skipped_writes where store = ?', (store,))
     cur = conn.execute(
         'delete from queue where store = ?', (store,))
     return cur.rowcount

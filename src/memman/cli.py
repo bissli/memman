@@ -16,7 +16,7 @@ import sys
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import Self
+from typing import Any, Self
 from urllib.parse import quote
 
 import click
@@ -508,7 +508,9 @@ def config_show(ctx: click.Context) -> None:
 @click.option('--source', default='user', help='Source')
 @click.option('--entities', default='', help='Comma-separated entities')
 @click.option('--no-reconcile', is_flag=True, default=False,
-              help='Skip LLM reconciliation')
+              help='Store the text verbatim: skip fact extraction and'
+                   ' reconciliation, so the write cannot be dropped as'
+                   ' trivial or folded into an existing insight')
 @click.option('--session', default='',
               envvar=[config.SESSION_ID, config.CLAUDE_SESSION_ID],
               help='Session id for the temporal chain (defaults to'
@@ -814,9 +816,31 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                  stores_filter: str, verbose: bool) -> dict | None:
     """Claim and process queue rows until limit, timeout, or empty.
 
-    Returns a status dict `{claimed, processed, failed}` so callers
-    can detect empty drains. Returns None if the drain was skipped
-    because another drain is already running.
+    Parameters
+    ----------
+    ctx : click.Context
+        Carries `data_dir` and the active store selection.
+    limit : int
+        Maximum rows to claim in this drain.
+    timeout : int
+        Seconds to keep claiming before returning, whatever remains.
+    stores_filter : str
+        Comma-separated store names to drain; empty drains all.
+    verbose : bool
+        Echo a per-row line to stderr as each row completes.
+
+    Returns
+    -------
+    dict or None
+        `{claimed, processed, failed}`, so a caller can detect an
+        empty drain. None when another drain already holds the lock.
+
+    Notes
+    -----
+    - The emitted JSON carries one count the return value does not:
+      `skipped_writes`, the rows that completed without storing an
+      insight. Each is filed in the `skipped_writes` ledger and still
+      counts toward `processed`.
     """
     import socket
     import sys as _sys
@@ -827,8 +851,10 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
     from memman import trace
     from memman.drain_lock import DrainLockBusy, acquire, release
     from memman.llm import usage as llm_usage
-    from memman.queue import claim, finish_worker_run, mark_done, mark_failed
-    from memman.queue import queue_db, queue_db_path, start_worker_run, stats
+    from memman.pipeline.remember import skip_reason_for_result
+    from memman.queue import claim, clear_skipped_write, finish_worker_run
+    from memman.queue import mark_done, mark_failed, queue_db, queue_db_path
+    from memman.queue import record_skipped_write, start_worker_run, stats
     from memman.setup.scheduler import STATE_STOPPED, read_state
 
     data_dir_val = ctx.obj['data_dir']
@@ -876,6 +902,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         processed = 0
         failed = 0
         claimed = 0
+        skipped_writes = 0
         touched_stores: set[str] = set()
         store_contexts: dict[str, _StoreContext] = {}
         executor = ThreadPoolExecutor(max_workers=2)
@@ -947,8 +974,32 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
             row_usage_snap = llm_usage.snapshot()
             try:
                 row_t0 = _time.monotonic()
-                _process_queue_row(row, ctx, executor)
+                row_result = _process_queue_row(row, ctx, executor)
                 row_elapsed_ms = int((_time.monotonic() - row_t0) * 1000)
+                # Notes:
+                # - The ledger is observability, so its own failure
+                #   must not fail a row whose pipeline already ran:
+                #   that would re-run extraction on every retry and
+                #   burn the attempt budget.
+                # - It is written before mark_done so a crash between
+                #   the two leaves a retryable row, never a done row
+                #   with no record.
+                # - A retry that goes on to store retracts the
+                #   earlier entry, or the ledger reports a stored
+                #   write as lost forever.
+                skip_reason = skip_reason_for_result(row_result)
+                try:
+                    if skip_reason:
+                        record_skipped_write(
+                            conn, row.id, row.store, row.content,
+                            skip_reason, row.session_id)
+                        skipped_writes += 1
+                    else:
+                        clear_skipped_write(conn, row.id)
+                except Exception:
+                    logger.exception(
+                        f'skipped-write ledger update failed for queue'
+                        f' row {row.id}')
                 mark_done(conn, row.id)
                 processed += 1
                 touched_stores.add(row.store)
@@ -1025,10 +1076,12 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         'drain_end',
         processed=processed,
         failed=failed,
+        skipped_writes=skipped_writes,
         remaining=s)
     _json_out({
         'processed': processed,
         'failed': failed,
+        'skipped_writes': skipped_writes,
         'remaining': s,
         'llm_usage': drain_usage,
         })
@@ -1180,7 +1233,7 @@ class _StoreContext:
 def _process_queue_row(
         row: 'memman.queue.QueueRow',
         ctx: _StoreContext,
-        executor: 'ThreadPoolExecutor') -> None:
+        executor: 'ThreadPoolExecutor') -> dict[str, Any]:
     """Run the full remember pipeline on a claimed queue row.
 
     The insight's `source` is `row.hint_source` verbatim (provenance
@@ -1193,6 +1246,14 @@ def _process_queue_row(
     executor) comes from `ctx` and the drain-level executor. The
     drain loop snapshots and restores `ctx`'s caches around this call
     so a transaction failure can't pollute the next row's planning.
+
+    Returns
+    -------
+    dict[str, Any]
+        The `run_remember` result, or `{'action': 'already_committed'}`
+        when the idempotency guard fired. The drain reads it through
+        `skip_reason_for_result` to tell a write that stored an
+        insight from one that stored nothing.
     """
     from memman import trace as _trace
 
@@ -1227,7 +1288,7 @@ def _process_queue_row(
             'process_row_skipped',
             row_id=row.id,
             reason='already_committed')
-        return
+        return {'action': 'already_committed'}
 
     now = datetime.now(timezone.utc)
     access_count = 0
@@ -1260,6 +1321,7 @@ def _process_queue_row(
         ec=ctx.ec,
         store_name=ctx.store_name)
     _json_out(result)
+    return result
 
 
 @claude_callable
@@ -1665,6 +1727,34 @@ def queue_failed(ctx: click.Context, limit: int) -> None:
             })
 
 
+@queue.command('skipped')
+@click.option('--limit', default=50, type=int, help='Max results')
+@click.pass_context
+def queue_skipped(ctx: click.Context, limit: int) -> None:
+    """List drained writes that stored no insight.
+
+    A write whose extraction came back empty, or whose every fact
+    reconciled onto an existing insight, completes as `done` and is
+    purged from the queue a minute later. This ledger keeps its full
+    content and the reason nothing was stored.
+
+    Parameters
+    ----------
+    limit : int, default 50
+        Maximum ledger rows to return, newest first.
+
+    Examples
+    --------
+    memman scheduler queue skipped --limit 20
+    """
+    from memman.queue import list_skipped, queue_db, stats
+    with queue_db(ctx.obj['data_dir']) as conn:
+        _json_out({
+            'stats': stats(conn),
+            'rows': list_skipped(conn, limit=limit),
+            })
+
+
 @queue.command('show')
 @click.argument('row_id', type=int)
 @click.pass_context
@@ -1711,18 +1801,45 @@ def queue_retry(
               help='Delete all rows with status=done')
 @click.option('--stale', 'stale', is_flag=True, default=False,
               help='Delete all rows with status=stale')
+@click.option('--skipped', 'skipped', is_flag=True, default=False,
+              help='Empty the skipped-write ledger')
 @click.pass_context
-def queue_purge(ctx: click.Context, done: bool, stale: bool) -> None:
-    """Remove completed or stale queue rows."""
-    if done and stale:
+def queue_purge(ctx: click.Context, done: bool, stale: bool,
+                skipped: bool) -> None:
+    """Remove completed or stale queue rows, or empty the skip ledger.
+
+    Parameters
+    ----------
+    done : bool
+        Delete every row in status `done`.
+    stale : bool
+        Delete every row in status `stale`.
+    skipped : bool
+        Empty the `skipped_writes` ledger. Nothing else prunes it:
+        `purge_done` never reaches it and `purge_store` clears only
+        one store, so the full content of every skipped write is kept
+        until this runs.
+
+    Examples
+    --------
+    memman scheduler queue purge --done
+    memman scheduler queue purge --skipped
+    """
+    chosen = [f for f in (done, stale, skipped) if f]
+    if len(chosen) > 1:
         raise click.ClickException(
-            'pass either --done or --stale, not both')
-    if not (done or stale):
+            'pass exactly one of --done, --stale, --skipped')
+    if not chosen:
         raise click.ClickException(
-            'pass --done or --stale to confirm deletion')
-    from memman.queue import purge_done, purge_stale, queue_db
+            'pass --done, --stale, or --skipped to confirm deletion')
+    from memman.queue import purge_done, purge_skipped, purge_stale, queue_db
     with queue_db(ctx.obj['data_dir']) as conn:
-        deleted = purge_done(conn) if done else purge_stale(conn)
+        if skipped:
+            deleted = purge_skipped(conn)
+        elif done:
+            deleted = purge_done(conn)
+        else:
+            deleted = purge_stale(conn)
         _json_out({'deleted': deleted})
 
 

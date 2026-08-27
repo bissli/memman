@@ -274,6 +274,61 @@ def run_remember(
         }
 
 
+# A fact result carrying either action stored no copy of the incoming
+# write: the skip returns before planning an insert, and the delete
+# branch returns before `nodes.insert`.
+_STORED_NOTHING = frozenset({'skipped', 'deleted'})
+
+
+def skip_reason_for_result(result: Any) -> str:
+    """Return why a `run_remember` result stored nothing, or `''`.
+
+    Parameters
+    ----------
+    result : Any
+        A `run_remember` return value, in either of its two shapes:
+        the result-level skip (`action='skipped'`, `skip_reason`) the
+        empty extractor produces, or the normal `facts` list whose
+        entries each carry `action` and, when skipped, `reason`.
+        Typed `Any` rather than `dict` because the sole caller is the
+        drain loop, where anything else must read as "stored
+        something" instead of raising.
+
+    Returns
+    -------
+    str
+        The reason nothing was stored -- the reasons joined by
+        `'; '` when several facts each skipped for their own -- or
+        the empty string when the write stored something.
+
+    Notes
+    -----
+    - A write is lost only when NOTHING landed. A result mixing an
+      add with a skip or a delete stored the add, so it returns `''`.
+    - A `deleted` fact counts as storing nothing: the delete branch
+      returns before `nodes.insert`, so a write that only contradicted
+      an existing insight leaves no copy of itself behind.
+    - The two shapes spell the reason differently (`skip_reason` at
+      the result level, `reason` per fact). Both must be read, or the
+      reconcile skip -- every fact deduped onto an existing insight --
+      stays silent.
+    - A result of any other type reads as "stored something". The
+      caller is the drain loop, where raising would send a row that
+      actually succeeded to `mark_failed` and a retry.
+    """
+    if not isinstance(result, dict):
+        return ''
+    if result.get('action') == 'skipped':
+        return result.get('skip_reason') or 'skipped'
+    facts = result.get('facts') or []
+    if not facts:
+        return ''
+    if any(f.get('action') not in _STORED_NOTHING for f in facts):
+        return ''
+    reasons = sorted({f.get('reason', '') for f in facts if f.get('reason')})
+    return '; '.join(reasons) or 'skipped'
+
+
 def _batch_enriched_embeds(
         plans: list[FactPlan], ec: Any) -> None:
     """Embed every plan's enriched text in one HTTP round-trip.
@@ -631,6 +686,8 @@ def _apply_plan(
             'id': fi.id,
             'content': fi.content,
             'action': 'deleted' if deleted_now else 'skipped',
+            'reason': ('contradicted an existing insight' if deleted_now
+                       else 'delete target already gone'),
             'target_id': plan.target_id,
             }
 

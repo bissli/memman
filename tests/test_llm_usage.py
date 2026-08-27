@@ -290,6 +290,7 @@ def test_drain_json_carries_llm_usage_delta(mm_runner, monkeypatch):
             usage.STAGE_EXTRACTION,
             {'prompt_tokens': 11, 'completion_tokens': 2,
              'total_tokens': 13})
+        return {'facts': [{'id': 'a', 'action': 'add'}], 'llm_calls': 1}
 
     monkeypatch.setattr('memman.cli._process_queue_row', _stub_row)
     r, data_dir = mm_runner
