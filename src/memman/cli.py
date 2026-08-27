@@ -540,9 +540,9 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
             ' consider chunking into multiple remember calls')
 
     if cat not in VALID_CATEGORIES:
+        valid = ', '.join(sorted(VALID_CATEGORIES))
         raise click.ClickException(
-            f'invalid category {cat!r}; valid: preference, decision,'
-            ' fact, insight, context, general')
+            f'invalid category {cat!r}; valid: {valid}')
     if imp < 1 or imp > 5:
         raise click.ClickException(
             f'importance must be 1-5, got {imp}')
@@ -1457,9 +1457,9 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             ' consider chunking into multiple remember calls')
 
     if cat not in VALID_CATEGORIES:
+        valid = ', '.join(sorted(VALID_CATEGORIES))
         raise click.ClickException(
-            f'invalid category {cat!r}; valid: preference, decision,'
-            ' fact, insight, context, general')
+            f'invalid category {cat!r}; valid: {valid}')
     if imp < 1 or imp > 5:
         raise click.ClickException(
             f'importance must be 1-5, got {imp}')
