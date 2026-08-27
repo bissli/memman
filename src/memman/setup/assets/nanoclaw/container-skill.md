@@ -95,8 +95,13 @@ memman replace <id> "<new content>"
 ```bash
 memman recall "<query>" --limit 10                     # smart recall + cross-encoder rerank
 memman recall "<keyword>" --basic                      # fast token-only
+memman recall "<query>" --limit 10 --brief             # id/category/importance/summary only
 memman insights show <id>                              # read by ID
 ```
+
+`--brief` works on both paths. A row left without a summary falls back
+to its content instead, so no row comes back blank. `truncated: true`
+marks the rows whose content was cut at 200 characters.
 
 Add `--intent WHY|WHEN|ENTITY` to bias ranking when intent is unambiguous.
 

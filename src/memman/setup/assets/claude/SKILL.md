@@ -25,7 +25,8 @@ Importance is 2 (passing mention) to 5 (architectural / strong preference). The 
 
 To correct a stored insight by ID without losing its `access_count` and
 edges (`corroboration_count` — the count of exact restatements shown in
-recall/get JSON — resets, since the successor is a new row identity):
+recall/get JSON, though not under `--brief` — resets, since the
+successor is a new row identity):
 
 ```bash
 memman replace <id> "<new content>" --session $SESSION_ID
@@ -50,10 +51,23 @@ unambiguous (cause/effect, timeline, entity-centric). Add `--cat` or
 `--source` to filter.
 
 For a fast token-only lookup that skips graph and reranking (cheap,
-no network cost, no ranking by importance):
+no network cost; rows come back ranked by importance, then recency):
 
 ```bash
 memman recall "<keyword>" --basic
+```
+
+Add `--brief` to cut each insight to `id`, `category`, `importance`,
+and `summary`. Use it when scanning for which insight to open rather
+than reading the insights themselves. It works on both paths; on the
+ranked path the `score`, `intent`, and `signals` keys around each
+insight are kept. A row left without a summary falls back to its
+content instead, so no row comes back blank. `truncated: true` marks
+the rows whose content was cut at 200 characters -- those, and only
+those, have more to read via `memman insights show <id>`.
+
+```bash
+memman recall "<query>" --limit 10 --brief
 ```
 
 Read a single insight by ID:

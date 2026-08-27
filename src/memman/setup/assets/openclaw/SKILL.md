@@ -60,10 +60,22 @@ memman recall "<query>" --limit 10
 Add `--intent WHY|WHEN|ENTITY` to bias the ranking when intent is
 unambiguous. Add `--cat` or `--source` to filter.
 
-Fast token-only lookup that skips graph and reranking:
+Fast token-only lookup that skips graph and reranking; rows come back
+ranked by importance, then recency:
 
 ```bash
 memman recall "<keyword>" --basic
+```
+
+Add `--brief` to cut each insight to `id`, `category`, `importance`,
+and `summary`, on both paths; the ranked path keeps the `score`,
+`intent`, and `signals` keys around each insight. A row left without a
+summary falls back to its content instead. `truncated: true` marks the
+rows whose content was cut at 200 characters -- those, and only those,
+have more to read.
+
+```bash
+memman recall "<query>" --limit 10 --brief
 ```
 
 Read a single insight by ID:

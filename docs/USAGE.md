@@ -101,6 +101,7 @@ memman forget <id>
 | `--cat`    |               | Filter by category                                   |
 | `--source` |               | Filter by source                                     |
 | `--basic`  | `false`       | Use simple SQL LIKE matching instead of smart recall |
+| `--brief`  | `false`       | Cut each result to id, category, importance, summary |
 | `--expand` | `false`       | Opt-in LLM query expansion (synonyms + entity hints) |
 
 The cross-encoder rerank stage is on by default and auto-skips on 1-2 token
