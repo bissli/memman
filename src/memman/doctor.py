@@ -305,7 +305,7 @@ EXPECTED_INSIGHT_COLUMNS = {
     'summary', 'keywords', 'semantic_facts',
     'session_id', 'queue_uuid', 'corroboration_count',
     }
-EXPECTED_QUEUE_TABLES = {'queue', 'worker_runs'}
+EXPECTED_QUEUE_TABLES = {'queue', 'skipped_writes', 'worker_runs'}
 
 
 def check_schema_columns(backend: Backend) -> dict[str, Any]:
