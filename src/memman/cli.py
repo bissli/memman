@@ -509,9 +509,10 @@ def config_show(ctx: click.Context) -> None:
 @click.option('--entities', default='', help='Comma-separated entities')
 @click.option('--no-reconcile', is_flag=True, default=False,
               help='Skip LLM reconciliation')
-@click.option('--session', default='', envvar=config.SESSION_ID,
-              help='Session id for the temporal chain'
-                   ' (defaults to $MEMMAN_SESSION_ID)')
+@click.option('--session', default='',
+              envvar=[config.SESSION_ID, config.CLAUDE_SESSION_ID],
+              help='Session id for the temporal chain (defaults to'
+                   ' $MEMMAN_SESSION_ID, then $CLAUDE_CODE_SESSION_ID)')
 @click.pass_context
 def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
              imp: int, source: str, entities: str,
@@ -1444,9 +1445,10 @@ def forget(ctx: click.Context, id: str) -> None:
 @click.option('--reconcile/--no-reconcile', 'reconcile', default=False,
               help=('Run LLM reconciliation against existing insights.'
                     ' Default: skip — replace targets a specific id.'))
-@click.option('--session', default='', envvar=config.SESSION_ID,
-              help='Session id for the temporal chain'
-                   ' (defaults to $MEMMAN_SESSION_ID)')
+@click.option('--session', default='',
+              envvar=[config.SESSION_ID, config.CLAUDE_SESSION_ID],
+              help='Session id for the temporal chain (defaults to'
+                   ' $MEMMAN_SESSION_ID, then $CLAUDE_CODE_SESSION_ID)')
 @click.pass_context
 def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             cat: str, imp: int, source: str,
@@ -1459,6 +1461,11 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
       the replaced insight's values; the inherited source is passed
       through verbatim (idempotency rides on the queue uuid, so a
       non-null source hint no longer suppresses the replay check).
+    - `--session` does not inherit: the successor carries the session
+      that wrote it, so it enters that session's backbone chain.
+      It also inherits the replaced insight's edges, including that
+      row's own backbone edge, so a cross-session replace leaves the
+      successor bridging both chains at full weight.
     """
     _require_started('write')
 
@@ -3156,11 +3163,17 @@ def migrate(
 def _emit_guide(session_id: str = '') -> None:
     """Write shipped guide.md to stdout.
 
-    When `session_id` is known (the SessionStart hook passes it), the
-    guide's literal `$SESSION_ID` placeholder is replaced with the
-    real id, so the injected `remember --session` command template is
-    copy-paste correct — hooks cannot export env vars into the
-    agent's later Bash calls, so the template itself must carry it.
+    Parameters
+    ----------
+    session_id : str, default ''
+        Substituted for the guide's literal `$SESSION_ID`; empty
+        leaves the placeholder in place.
+
+    Notes
+    -----
+    - Only `memman prime` passes an id. `memman guide`, the openclaw
+      bootstrap entry, does not, so that host reads the placeholder
+      verbatim.
     """
     from importlib.resources import files as pkg_files
     shipped = (pkg_files('memman.setup.assets')

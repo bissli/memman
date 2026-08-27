@@ -8,6 +8,7 @@ tests pin the decomposition end to end through the real queue drain.
 import json
 import sqlite3
 
+from memman import config
 from memman.store.db import store_dir
 from tests.conftest import force_drain, invoke, parse_remember
 
@@ -192,6 +193,81 @@ def test_session_flag_and_env_default(mm_runner, monkeypatch):
         'queue_uuid = ?', (u2,))[0][2] == 'cli-sess'
 
 
+def test_session_env_precedence_ladder(mm_runner, monkeypatch):
+    """`--session` beats `$MEMMAN_SESSION_ID` beats `$CLAUDE_CODE_SESSION_ID`.
+
+    Mutation: dropping `CLAUDE_CODE_SESSION_ID` from the envvar list
+        (a subagent, which is never told the id, reverts to a NULL
+        session), or listing it ahead of `MEMMAN_SESSION_ID` (the
+        memman variable would stop being the operator override).
+    Oracle: three writes under a fixed env, storing the Claude id,
+        then the memman id, then the flag value.
+    """
+    _, data_dir = mm_runner
+    monkeypatch.setenv('CLAUDE_CODE_SESSION_ID', 'claude-sess')
+    claude_only = invoke(mm_runner, [
+        'remember', 'claude env session note', '--no-reconcile'])
+    monkeypatch.setenv('MEMMAN_SESSION_ID', 'memman-sess')
+    memman_over_claude = invoke(mm_runner, [
+        'remember', 'memman env session note', '--no-reconcile'])
+    flag_over_both = invoke(mm_runner, [
+        'remember', 'flag session note', '--no-reconcile',
+        '--session', 'flag-sess'])
+    stored = []
+    for result in (claude_only, memman_over_claude, flag_over_both):
+        assert result.exit_code == 0, result.output
+        raw = json.loads(result.output)
+        _sess, queue_uuid = _queue_row(data_dir, raw['queue_id'])
+        stored.append(_stored(
+            data_dir, raw['store'], 'queue_uuid = ?', (queue_uuid,))[0][2])
+    assert stored == ['claude-sess', 'memman-sess', 'flag-sess']
+
+
+def test_replace_reads_claude_code_session_env(mm_runner, monkeypatch):
+    """`replace` honors `$CLAUDE_CODE_SESSION_ID` like `remember` does.
+
+    Mutation: extending the envvar list on the `remember` option
+        alone - a subagent's `replace` would keep storing NULL, or
+        inherit the original row's session and join the wrong chain.
+    Oracle: the replacement carries the exported Claude Code id with
+        no flag passed, while the row it replaces carries a different
+        session entirely.
+    """
+    _, data_dir = mm_runner
+    r1 = invoke(mm_runner, [
+        'remember', 'note awaiting replacement', '--no-reconcile',
+        '--session', 'sess-original'])
+    old = parse_remember(r1, mm_runner)
+    monkeypatch.setenv('CLAUDE_CODE_SESSION_ID', 'claude-replace')
+    r2 = invoke(mm_runner, ['replace', old['id'], 'replacement note'])
+    assert r2.exit_code == 0, r2.output
+    raw2 = json.loads(r2.output)
+    _sess, queue_uuid = _queue_row(data_dir, raw2['queue_id'])
+    rows = _stored(data_dir, raw2['store'], 'queue_uuid = ?', (queue_uuid,))
+    assert len(rows) == 1
+    assert rows[0][2] == 'claude-replace'
+
+
+def test_claude_session_env_is_never_reported_or_persisted(
+        mm_runner, monkeypatch):
+    """A foreign session id stays out of both config surfaces.
+
+    Mutation: adding `CLAUDE_SESSION_ID` to `INSTALLABLE_KEYS` or
+        `_PROCESS_CONTROL_VARS`, which would leak a live session id
+        into `memman config show` and open a path to persisting one
+        - a stale persisted id fuses every later write into one
+        false backbone chain.
+    Oracle: `enumerate_effective_config`, the reporting path behind
+        `memman config show`, omits the key while it is exported,
+        and the env file never gains it.
+    """
+    _, data_dir = mm_runner
+    monkeypatch.setenv('CLAUDE_CODE_SESSION_ID', 'claude-persist')
+    assert 'CLAUDE_CODE_SESSION_ID' not in config.enumerate_effective_config()
+    assert 'CLAUDE_CODE_SESSION_ID' not in config.env_file_path(
+        data_dir).read_text()
+
+
 def test_idempotency_keyed_on_queue_uuid(mm_runner):
     """A replay skips; a second write in the same session does not.
 
@@ -313,9 +389,8 @@ def test_latest_by_session_tiebreak_matches_across_backends(backend):
 def test_prime_substitutes_session_id_into_guide(mm_runner):
     """`memman prime` bakes the real session id into the guide template.
 
-    Hooks cannot export env vars into the agent's later Bash calls,
-    so the injected `remember --session` template must carry the id
-    itself — this is what makes D1's chain adoption real rather than
+    `prime` is the only caller that passes an id, so this is what
+    makes D1's chain adoption real rather than
     documented-but-unexercised.
 
     Mutation: dropping the substitution in `_emit_guide` — the

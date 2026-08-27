@@ -159,7 +159,10 @@ def test_log_level_bootstrap_literal_matches_install_default():
 
 
 def test_constants_match_expected_names():
-    """Every env var the rest of the codebase uses has a constant here.
+    """Every memman env var the codebase uses has a constant here.
+
+    Foreign variables memman only reads (`CLAUDE_CODE_SESSION_ID`)
+    carry a constant too but are deliberately absent from this set.
     """
     actual = {
         config.DATA_DIR, config.STORE,

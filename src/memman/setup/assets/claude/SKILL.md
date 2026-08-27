@@ -12,12 +12,12 @@ are queued and enriched in the background; reads are intent-aware.
 ## Storing what you learn
 
 Store one self-contained fact per call. Pick the most accurate `--cat`.
-**Always pass `--session` with your session id** — it links the
-session's writes into one temporal chain (WHEN recall walks it);
-a write without it joins no chain.
+Writes link into one temporal chain by session, which is what WHEN
+recall walks. Omit `--session`: it reads `$CLAUDE_CODE_SESSION_ID` by
+itself. Pass it only to pin a different id.
 
 ```bash
-memman remember "<fact>" --cat <category> --imp <1-5> --entities "e1,e2" --source agent --session $SESSION_ID
+memman remember "<fact>" --cat <category> --imp <1-5> --entities "e1,e2" --source agent
 ```
 
 Categories: `preference` · `decision` · `fact` · `insight` · `context` · `general`.
@@ -29,12 +29,14 @@ recall/get JSON, though not under `--brief` — resets, since the
 successor is a new row identity):
 
 ```bash
-memman replace <id> "<new content>" --session $SESSION_ID
+memman replace <id> "<new content>"
 ```
 
 `replace` inherits the original's category, importance, entities,
-and source unless you override per-flag; `--session` follows the
-same rule as `remember` (pass your current session id).
+and source unless you override per-flag. `--session` does not inherit:
+the successor is written into today's chain. It also keeps the
+replaced row's edges, so it stays linked to the original's chain as
+well, bridging the two.
 
 ## Recalling what you know
 
@@ -135,6 +137,8 @@ memman doctor                         # health check (sqlite, queue, keys, sched
   fine — but write each call with one clear claim in mind.
 - `--source agent` when storing on behalf of the user; `--source user`
   is the default for direct user statements.
-- `--session <id>` on every `remember`/`replace` — no session, no
-  temporal chain. `$MEMMAN_SESSION_ID` is honored when exported, but
-  hooks cannot export into your shell, so pass the flag explicitly.
+- No session, no temporal chain. You do not have to pass one:
+  `--session` reads `$MEMMAN_SESSION_ID`, then
+  `$CLAUDE_CODE_SESSION_ID`. Claude Code exports that second one into
+  every Bash call, a subagent's included, with the parent's id. An
+  explicit `--session <id>` beats both.

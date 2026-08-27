@@ -109,8 +109,10 @@ The text you pass must be **self-contained** — dereference anaphora
 directly via Bash in your current turn. No sub-agent delegation.
 **Always pass `--session`** — it links this session's writes into one
 temporal chain (WHEN recall walks it); a write without it joins no
-chain. Use the session id shown above verbatim; if you see the
-literal `$SESSION_ID` placeholder, substitute your session's id. Add
+chain. Use the session id shown above verbatim. A literal
+`$SESSION_ID` placeholder means this host did not substitute one and
+exports no session variable either: pass your own id, or omit the
+flag and accept a write with no chain. Add
 `--source agent` when storing your own conclusion rather than
 relaying the user's words. The binary is a fast blob-append (~50 ms)
 that queues the text; a background scheduler (systemd timer on Linux,

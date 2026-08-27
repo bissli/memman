@@ -32,7 +32,15 @@ def run_cli(args: list[str], home: Path, data_dir: Path | None = None,
     cmd += args
     env = os.environ.copy()
     env['HOME'] = str(home)
-    for k in ('MEMMAN_STORE', 'MEMMAN_DATA_DIR'):
+    # Notes:
+    # - MEMMAN_STORE / MEMMAN_DATA_DIR would point the binary at the
+    #   developer's real store instead of the fixture's.
+    # - The session vars would stamp the developer's own session on
+    #   every unsessioned write, forming backbone edges the assertions
+    #   never expected. `_isolate_env` skips e2e, so this is the only
+    #   place that scrubs them.
+    for k in ('MEMMAN_STORE', 'MEMMAN_DATA_DIR',
+              'MEMMAN_SESSION_ID', 'CLAUDE_CODE_SESSION_ID'):
         env.pop(k, None)
     if extra_env:
         env.update(extra_env)
