@@ -25,8 +25,13 @@ The recall response includes a `meta` object with:
 - `reranked`: boolean — true when the cross-encoder rerank stage
   fired (false when query was too short or rerank is disabled for
   this store via `MEMMAN_RERANK_ENABLED_<store>=false`)
-- `sparse`: boolean, present only when results are below half the requested
-  limit — signals low-confidence retrieval; consider broadening the query
+- `sparse`: boolean, present only on a low-confidence result set. It is
+  set when the set is empty, when it holds fewer than `limit // 2` rows,
+  or when no candidate matched a query token. Recall always returns rows
+  (a recency channel seeds the newest insights as anchors whether or not
+  they match), so a full page of `sparse` results means nothing relevant
+  is stored, not that these are the answer. Broaden the query, or accept
+  that the store does not hold it
 
 ### Phase awareness — when to write
 

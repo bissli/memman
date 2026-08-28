@@ -103,12 +103,49 @@ memman forget <id>
 | `--basic`  | `false`       | Use simple SQL LIKE matching instead of smart recall |
 | `--brief`  | `false`       | Cut each result to id, category, importance, summary |
 | `--expand` | `false`       | Opt-in LLM query expansion (synonyms + intent hint) |
+| `--min-score` | `0.0`   | Relevance floor on keyword+similarity, 0.0 to 2.0 (`0.0` = off); rejected with `--basic` |
 
 The cross-encoder rerank stage is on by default and auto-skips on 1-2 token
 queries. Provider is selected via `MEMMAN_RERANK_PROVIDER` (any registered
 rerank provider; ships defaulted to `voyage` / `rerank-2.5-lite`). Toggle
 per-store with `memman config set MEMMAN_RERANK_ENABLED_<store> false` or
 globally with `memman config set MEMMAN_RERANK_ENABLED false`.
+
+**Telling a weak result set from a strong one.** Smart recall always
+returns rows: a recency channel seeds the newest insights as traversal
+anchors whether or not they match, so a query that matches nothing
+still comes back full. Two surfaces separate the cases.
+
+`meta.sparse` is the signal. It is set when the result set is empty,
+when it holds fewer than `limit // 2` rows, or when no candidate
+matched a query token. That last arm is the unscoped-query case: a
+full page of the nearest unrelated memories. Treat a `sparse` response
+as "nothing relevant is stored" rather than as an answer. The one case
+it calls wrong is a query sharing no literal token with a row the
+vector search did find, so re-ask in the store's own words before
+concluding the store is empty.
+
+The last arm reads the keyword channel alone, and deliberately not
+similarity. An exactly-zero similarity means the row carries no
+embedding rather than that it is irrelevant, so a rule requiring it
+fires on nothing once a store is embedded. The two signals also
+overlap in range between matching and non-matching queries, which is
+why no similarity floor replaces the keyword test. The arm also reads
+the candidate pool before `--cat`/`--source` filtering, so a filtered
+recall whose rows were reached by graph from a match is not called
+irrelevant.
+
+`--min-score` is the filter. It drops rows whose keyword plus
+similarity sum falls under the floor, so the range is 0.0 to 2.0 and
+`0.0` means off. It reads those two signals rather than the ranked
+`score` on purpose: the graph signal is min-max normalized, so the top
+row of any query scores 1.0 there and a floor on the blended score
+would shift with the intent's graph weight. Keep it off unless you
+would rather have nothing than something unrelated, because the deep
+tail of a recall is often where the useful row sits. There is no
+canonical value to copy: the usable band is a property of the embedder
+and the store, so find it by running the same query with and without a
+floor and watching what leaves.
 
 ### Graph operations
 

@@ -116,6 +116,16 @@ marks the rows whose content was cut at 200 characters.
 
 Add `--intent WHY|WHEN|ENTITY` to bias ranking when intent is unambiguous.
 
+Recall always returns rows, so check `meta.sparse` before trusting
+them. It is set when the set is empty, when it holds fewer than
+`limit // 2` rows, or when no candidate matched a query token. A
+`sparse` response means nothing relevant is stored, unless the query
+shared no literal token with a row the vector search did find; re-ask
+in the store's own words before concluding it is empty.
+`--min-score` drops rows whose keyword plus similarity sum is under
+the floor (0.0 to 2.0, `0.0` = off, rejected with `--basic`). No value
+is worth copying; the usable band depends on the embedder and store.
+
 ## Forgetting and protecting
 
 ```bash

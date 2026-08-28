@@ -71,6 +71,22 @@ memman recall "<query>" --limit 10
 Add `--intent WHY|WHEN|ENTITY` to bias the ranking when intent is
 unambiguous. Add `--cat` or `--source` to filter.
 
+Recall always returns rows, so check `meta.sparse` before trusting
+them. It is set when the set is empty, when it holds fewer than
+`limit // 2` rows, or when no candidate matched a query token -- a
+full page of the nearest unrelated memories. On a
+`sparse` response, say nothing relevant is stored; do not reason from
+the rows as if they answered the query. It reads literal tokens, so a
+paraphrase sharing no word with a row the vector search did find trips
+it -- re-ask in the store's own words before concluding it is empty.
+
+`--min-score` drops rows whose keyword plus similarity sum is under
+the floor (0.0 to 2.0, `0.0` = off, rejected with `--basic`). Leave it
+off by default: the deep tail of a recall is often where the useful
+row sits. There is no value worth copying -- the usable band depends
+on the embedder and the store, so find it by running the query with
+and without a floor.
+
 Fast token-only lookup that skips graph and reranking; rows come back
 ranked by importance, then recency:
 
