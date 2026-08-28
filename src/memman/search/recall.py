@@ -61,16 +61,46 @@ TRAVERSAL_PARAMS: dict[str, tuple[int, int, int]] = {
     }
 
 # Notes:
-# - `(w_kw, w_sim, w_gr)` per intent. The rows deliberately do NOT sum
-#   to 1.0, so `score` has a per-intent ceiling below 1.0 (WHY 0.90,
-#   WHEN 0.90, ENTITY 0.65, GENERAL 0.85). Scores are only ever
-#   compared within one query at one intent, so the differing ceilings
-#   are harmless; nothing thresholds on the value.
-RERANK_WEIGHTS: dict[str, tuple[float, float, float]] = {
+# - `(w_kw, w_sim, w_gr)` per intent, each raw row divided by its own
+#   sum, so every shipped row sums to 1.0 and `score` carries one
+#   range at every intent. Both hold only to within a float ulp:
+#   WHEN sums to 0.9999999999999999, and `sim_score` is an unclamped
+#   cosine that can return 1 + 1 ulp, so the true bound is
+#   [0, 1 + 4.5e-16]. One range is not one meaning - the mix behind
+#   a 0.7 still differs per intent - and `graph_score` is min-max
+#   normalized over the query's own pool, so no score compares
+#   across queries at any intent.
+# - The raw rows are the pre-0.23.0 four-weight table with `w_ent`
+#   deleted and the survivors untouched, which left them summing to
+#   WHY 0.90, WHEN 0.90, ENTITY 0.65, GENERAL 0.85. The shipped rows
+#   inherit their DIRECTION from that table; only the scale is new.
+#   They are not a measured optimum: the sweeps recorded under
+#   `experiments/quality_matrix/results/sweep_rerank/` flag the
+#   shipped arm as beaten by the grid peak in all six WHEN and WHY
+#   runs, and ENTITY and GENERAL have no grid at all.
+# - The division is computed rather than written out because no
+#   quotient here has an exact float literal - 0.45/0.90 is 1/2, yet
+#   computes to 0.5000000000000001, because the raw row sums to
+#   0.8999999999999999. A rounded literal turns a row as well as
+#   scaling it;
+#   `experiments/recall_ablation/verify_weight_rounding.py` prices
+#   that turn in returned positions.
+# - `score` is NOT comparable across the rerank shortlist boundary.
+#   When the pool exceeds `RERANK_SHORTLIST` the cross-encoder
+#   overwrites the head's scores while the tail keeps these blended
+#   values; a smaller pool is overwritten whole, leaving no tail.
+_RERANK_WEIGHTS_RAW: dict[str, tuple[float, float, float]] = {
     'WHY':     (0.15, 0.45, 0.30),
     'WHEN':    (0.20, 0.40, 0.30),
     'ENTITY':  (0.20, 0.35, 0.10),
     'GENERAL': (0.25, 0.45, 0.15),
+    }
+
+RERANK_WEIGHTS: dict[str, tuple[float, float, float]] = {
+    intent: (kw / (kw + sim + gr),
+             sim / (kw + sim + gr),
+             gr / (kw + sim + gr))
+    for intent, (kw, sim, gr) in _RERANK_WEIGHTS_RAW.items()
     }
 
 

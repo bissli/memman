@@ -4,8 +4,8 @@ import pytest
 from memman.embed.fingerprint import stored_fingerprint
 from memman.search.intent import detect_intent, get_weights, intent_from_string
 from memman.search.keyword import keyword_search, tokenize
-from memman.search.recall import RERANK_WEIGHTS, get_traversal_params
-from memman.search.recall import intent_aware_recall
+from memman.search.recall import _RERANK_WEIGHTS_RAW, RERANK_WEIGHTS
+from memman.search.recall import get_traversal_params, intent_aware_recall
 from memman.store.model import Insight
 from tests.conftest import make_insight
 
@@ -201,37 +201,64 @@ class TestRecallRanking:
             assert intent in RERANK_WEIGHTS
 
     def test_rerank_weights_are_pinned_to_the_measured_table(self):
-        """The shipped weight table is exactly these values.
+        """The raw weight table is exactly these values.
 
         Mutation: any silent retune of any weight -- WHY sim 0.45 ->
             0.05, WHEN graph 0.30 -> 0.01, an intent row dropped -- all
-            of which the range check below still accepts.
+            of which the sum and direction checks below still accept,
+            because normalization hides a row's scale.
         Oracle: the literal table. `experiments/recall_ablation` is the
             arbiter of these constants ("measured or not shipped"), so
             a deliberate change lands here and in that record together.
         """
-        assert RERANK_WEIGHTS == {
+        assert _RERANK_WEIGHTS_RAW == {
             'WHY':     (0.15, 0.45, 0.30),
             'WHEN':    (0.20, 0.40, 0.30),
             'ENTITY':  (0.20, 0.35, 0.10),
             'GENERAL': (0.25, 0.45, 0.15),
             }
 
-    def test_rerank_weights_keep_score_within_unit_range(self):
-        """Every intent's weights are positive and sum to at most 1.0.
+    def test_rerank_weights_are_a_convex_combination(self):
+        """Every intent's weights are positive and sum to 1.0.
 
-        Mutation: a weight raised until an intent's row sums above 1.0,
-            which lets `score` exceed 1.0 while each signal stays in
-            [0, 1] and silently breaks score comparability; or a signal
-            retired by zeroing its weight rather than deleting it,
-            leaving an inert term in the blend.
-        Oracle: hand-summed rows -- WHY 0.90, WHEN 0.90, ENTITY 0.65,
-            GENERAL 0.85, each at or under the 1.0 ceiling that keeps
-            `score` inside [0, 1].
+        Mutation: normalizing by anything but the row's own sum --
+            `max(row)`, or one shared constant across all four rows --
+            which still leaves every weight positive and every row's
+            direction intact, so the direction check below passes it;
+            or a signal retired by zeroing its weight rather than
+            deleting it, leaving an inert term in the blend.
+        Oracle: 1.0 within a float ulp -- WHEN lands one low, since
+            0.20 + 0.40 + 0.30 is not exact in binary. Catches
+            `max(row)` and any single shared constant, since no one
+            constant normalizes row sums of 0.90/0.90/0.65/0.85 at
+            once. It does NOT catch a per-element divisor, which the
+            direction test below does.
         """
         for intent, w in RERANK_WEIGHTS.items():
             assert all(x > 0.0 for x in w), f'{intent} has a dead signal'
-            assert sum(w) <= 1.0 + 1e-9, f'{intent} sum={sum(w)}'
+            assert sum(w) == pytest.approx(1.0, abs=1e-9), \
+                f'{intent} sum={sum(w)}'
+
+    def test_rerank_weights_preserve_raw_row_direction(self):
+        """Normalization rescales each row without turning it.
+
+        Mutation: a transposition inside the comprehension -- `sim`
+            and `gr` swapped on the way out. Every row still sums to
+            1.0 and every weight stays positive, so the convex-
+            combination check above passes it through untouched.
+        Oracle: the raw row's own cross-ratios, compared as products
+            to avoid a division. Ratios survive positive scaling only
+            to a few ulp -- WHY's 3.0 comes back 3.0000000000000004 --
+            hence `rel=1e-12` rather than equality. A swap breaks it
+            in every row, since no row has `w_sim == w_gr`.
+        """
+        for intent, raw in _RERANK_WEIGHTS_RAW.items():
+            scaled = RERANK_WEIGHTS[intent]
+            for i in range(3):
+                for j in range(3):
+                    assert scaled[i] * raw[j] == pytest.approx(
+                        scaled[j] * raw[i], rel=1e-12), \
+                        f'{intent} turned at ({i}, {j})'
 
     def test_rerank_why_emphasizes_similarity(self):
         """WHY intent weights similarity score highest."""
