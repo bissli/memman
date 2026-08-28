@@ -26,11 +26,13 @@ Configurations swept:
 Select a subset with `--configs name1,name2`; point `--data-dir` at a
 sandbox copy to sweep without touching live stores.
 
-The retuned weights bump WHY graph 0.30->0.45 and GENERAL similarity
+`_WEIGHTS_V2_RAW` bumps WHY graph 0.30->0.45 and GENERAL similarity
 0.45->0.55, with the other slots of those rows adjusted to compensate,
-and the ENTITY row keeps its own retune (kw 0.20->0.15, sim
-0.35->0.25). Rows no longer sum to 1.0; the shipped table does not
-either, so the arms stay comparable.
+and keeps the ENTITY row's own retune (kw 0.20->0.15, sim 0.35->0.25).
+Those deltas describe the RAW rows. Both that table and the shipped
+one are then divided by each row's own sum by the same expression, so
+every arm departs from production exactly where its raw row does and
+the exported `WEIGHTS_V2` sums to 1.0 like the shipped table.
 """
 
 import argparse
@@ -57,11 +59,18 @@ from memman.store.sqlite import SqliteBackend
 #   Each row is the historical four-slot candidate with the entity
 #   slot dropped and the other three left untouched, so every arm
 #   still departs from production exactly where it always did.
-WEIGHTS_V2: dict[str, tuple[float, float, float]] = {
+_WEIGHTS_V2_RAW: dict[str, tuple[float, float, float]] = {
     'WHY':     (0.10, 0.35, 0.45),
     'WHEN':    (0.20, 0.40, 0.30),
     'ENTITY':  (0.15, 0.25, 0.10),
     'GENERAL': (0.20, 0.55, 0.15),
+    }
+
+WEIGHTS_V2: dict[str, tuple[float, float, float]] = {
+    intent: (kw / (kw + sim + gr),
+             sim / (kw + sim + gr),
+             gr / (kw + sim + gr))
+    for intent, (kw, sim, gr) in _WEIGHTS_V2_RAW.items()
     }
 
 
