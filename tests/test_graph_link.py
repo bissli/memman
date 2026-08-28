@@ -40,7 +40,7 @@ class TestReindexAutoEdges:
             id='rbc-2', content='second insight for linking'))
 
         reindex_auto_edges(backend)
-        assert link_pending(backend) > 0
+        assert link_pending(backend, store_name='test') > 0
 
     def test_relink_preserves_manual_edge_metadata(self, backend):
         """Manual claude entity edge metadata survives relink."""
@@ -78,7 +78,7 @@ class TestLinkPending:
         _insert_pending(tmp_db, 'cp-1', 'database migration completed')
         _insert_pending(tmp_db, 'cp-2', 'schema update for production')
 
-        processed = link_pending(tmp_backend)
+        processed = link_pending(tmp_backend, store_name='test')
         assert processed == 2
 
         row = tmp_db._conn.execute(
@@ -95,7 +95,7 @@ class TestLinkPending:
             "UPDATE insights SET linked_at = created_at"
             " WHERE id = 'ac-1'")
 
-        processed = link_pending(tmp_backend)
+        processed = link_pending(tmp_backend, store_name='test')
         assert processed == 0
 
     def test_batch_cap_respected(self, tmp_db, tmp_backend):
@@ -105,7 +105,7 @@ class TestLinkPending:
                 tmp_db, f'batch-{i}',
                 f'batch content number {i}')
 
-        processed = link_pending(tmp_backend)
+        processed = link_pending(tmp_backend, store_name='test')
         assert processed == MAX_LINK_BATCH
 
         pending = tmp_db._conn.execute(
@@ -119,7 +119,7 @@ class TestLinkPending:
         for i in range(5):
             _insert_pending(tmp_db, f'rb-{i}', f'recall batch {i}')
 
-        processed = link_pending(tmp_backend, max_batch=2)
+        processed = link_pending(tmp_backend, max_batch=2, store_name='test')
         assert processed == 2
 
         pending = tmp_db._conn.execute(
@@ -132,7 +132,7 @@ class TestLinkPending:
         """llm_client=None processes insights without LLM calls."""
         _insert_pending(tmp_db, 'ln-1', 'content for llm none test')
 
-        processed = link_pending(tmp_backend, llm_client=None)
+        processed = link_pending(tmp_backend, llm_client=None, store_name='test')
         assert processed == 1
 
         row = tmp_db._conn.execute(
@@ -147,7 +147,7 @@ class TestLinkPending:
         tmp_db._conn.execute(
             "UPDATE insights SET linked_at = created_at"
             " WHERE id = 'zp-1'")
-        processed = link_pending(tmp_backend)
+        processed = link_pending(tmp_backend, store_name='test')
         assert processed == 0
 
     def test_llm_calls_outside_transaction(self, tmp_db, tmp_backend):
@@ -164,7 +164,8 @@ class TestLinkPending:
                     })
                 return '[]'
 
-        link_pending(tmp_backend, llm_client=TxTrackingLLM())
+        link_pending(
+            tmp_backend, llm_client=TxTrackingLLM(), store_name='test')
 
         llm_calls_in_tx = [c for c in call_log if c['in_tx']]
         assert llm_calls_in_tx == [], (
@@ -179,7 +180,7 @@ class TestLinkPending:
         def on_progress(stage, insight):
             calls.append((stage, insight.id))
 
-        link_pending(tmp_backend, on_progress=on_progress)
+        link_pending(tmp_backend, on_progress=on_progress, store_name='test')
 
         stages = [c[0] for c in calls]
         assert 'enrich' in stages

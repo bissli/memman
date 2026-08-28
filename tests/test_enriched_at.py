@@ -38,7 +38,7 @@ class TestEnrichedAtOnLinkPending:
             'UPDATE insights SET enriched_at = NULL'
             " WHERE id = 'nl-1'")
 
-        link_pending(tmp_backend, llm_client=None)
+        link_pending(tmp_backend, llm_client=None, store_name='test')
 
         row = tmp_db._conn.execute(
             'SELECT linked_at, enriched_at FROM insights'
@@ -58,7 +58,7 @@ class TestEnrichedAtOnLinkPending:
             '{"keywords": ["test"], "summary": "test",'
             ' "semantic_facts": [], "entities": []}')
 
-        link_pending(tmp_backend, llm_client=mock_llm)
+        link_pending(tmp_backend, llm_client=mock_llm, store_name='test')
 
         row = tmp_db._conn.execute(
             'SELECT linked_at, enriched_at FROM insights'
@@ -97,7 +97,7 @@ class TestEnrichedAtOnLinkPending:
         with caplog.at_level(logging.WARNING, logger='memman'):
             link_pending(
                 tmp_backend, llm_client=mock_llm,
-                embed_client=_FailingClient())
+                embed_client=_FailingClient(), store_name='test')
 
         warned = [r for r in caplog.records
                   if 'Re-embed failed' in r.getMessage()]

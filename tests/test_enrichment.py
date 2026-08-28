@@ -125,7 +125,7 @@ class TestEnrichWithLLM:
             id='nc-1', content='test content')
         insert_insight(tmp_db, insight)
 
-        count = link_pending(tmp_backend, llm_client=None, max_batch=1)
+        count = link_pending(tmp_backend, llm_client=None, max_batch=1, store_name='test')
         assert count == 1
 
         cols = _read_enrichment_columns(tmp_db, 'nc-1')
@@ -219,7 +219,7 @@ class TestReEmbed:
         link_pending(
             tmp_backend, embed_cache=embed_cache,
             llm_client=mock_llm, embed_client=mock_embed,
-            max_batch=1)
+            max_batch=1, store_name='test')
 
         mock_embed.embed.assert_called_once()
         call_text = mock_embed.embed.call_args[0][0]
@@ -237,7 +237,7 @@ class TestReEmbed:
 
         link_pending(
             tmp_backend, llm_client=mock_llm, embed_client=None,
-            max_batch=1)
+            max_batch=1, store_name='test')
 
         cols = _read_enrichment_columns(tmp_db, 'rs-1')
         assert cols['keywords'] is not None
@@ -257,7 +257,7 @@ class TestReEmbed:
 
         link_pending(
             tmp_backend, llm_client=mock_llm, embed_client=mock_embed,
-            max_batch=1)
+            max_batch=1, store_name='test')
 
         row = tmp_db._conn.execute(
             'SELECT linked_at FROM insights WHERE id = ?',
@@ -347,7 +347,8 @@ def test_link_pending_relink_only_skips_enrich(tmp_db, tmp_backend):
 
     mock_llm = MagicMock()
     link_pending(
-        tmp_backend, llm_client=mock_llm, embed_client=None, max_batch=5)
+        tmp_backend, llm_client=mock_llm, embed_client=None, max_batch=5,
+        store_name='test')
 
     mock_llm.complete.assert_not_called()
     row = tmp_db._conn.execute(
