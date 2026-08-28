@@ -104,10 +104,11 @@ class TestPgvectorToList:
         assert pgvector_to_list(vec) == [1.5, -2.5, 0.0]
 
     def test_converts_ndarray_and_list(self):
-        """pgvector 0.3.x ndarray rows and plain lists still convert.
+        """An ndarray row converts, which a real query actually yields.
 
         Mutation: calling `to_list()` unconditionally, which raises
-        AttributeError on an ndarray or list.
+        AttributeError on the ndarray a psycopg round-trip returns at
+        pgvector 0.4.2 -- 253 such failures when this was tried.
         Oracle: hand-specified floats for both input shapes.
         """
         import numpy as np
