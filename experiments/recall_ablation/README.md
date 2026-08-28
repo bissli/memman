@@ -21,6 +21,25 @@ The configurations are hard-coded inside `run_ablation.py` (see the module docst
 
 Rerank configs call the Voyage rerank endpoint directly and read `VOYAGE_API_KEY` from the environment (export it from `MEMMAN_VOYAGE_API_KEY` in `~/.memman/env`).
 
+## Entity signal retired (2026-08-28, memman 0.23.0)
+
+The blend lost its fourth term. `ent_score = matched_entities / query_entities_count` and its per-intent weight are gone; `RERANK_WEIGHTS` is now `(w_kw, w_sim, w_graph)`.
+
+Why, in the order the evidence landed:
+
+- The term was fed only by Step 0's LLM expansion, which became opt-in on 2026-04-28. From that date it was identically 0.0 on the default path, so no harness ever measured it while live - every call site in this harness and in `experiments/quality_matrix/` passes an empty entity list.
+- Fed deliberately (by seeding the set from the query text), it measured indistinguishable from noise against 30 LLM-judged queries: the arm ordering was seeding-off 0.3484 vs seeding-on 0.3416 nDCG@5, but the paired SE is 0.0148, so the +0.02 acceptance bar sits inside the interval. A channel built with the same magnitude and sparsity but values shuffled at random scored 0.3415 +/- 0.0082 over 10 seeds, beating the best hand-designed replacement formula on 3 of 10 seeds.
+- Three replacement formulas were designed independently and each refuted by an independent re-measurement. The defect is amplitude, not shape: the mean of `w_ent *` the largest `ent_score` a query actually produced was 0.0596 against a mean rank-5-to-6 score margin of 0.0118 — 5x on the means, and 24x to 108x on individual queries at full scale — so the term overrode the blend instead of informing it. No numerator or denominator repair survives that.
+- With the cross-encoder on, which is the shipped CLI default, feeding the channel changed the top-5 on 3 of 30 queries and moved nothing at all on the six entity-named ones.
+
+Consequences for anyone reading older records here:
+
+- The weight rows no longer sum to 1.0 (WHY 0.90, WHEN 0.90, ENTITY 0.65, GENERAL 0.85). Those were always the real caps on the default path, because the deleted term contributed nothing there; the survivors keep their literal shipped values, so on that path no ranking and no score moves. Under `--expand` the term was live, so those runs DO reorder — that is the change, not a side effect. Rescaling to restore a cosmetic 1.0 would reorder nothing either way, since ranking is invariant to scaling one intent's row by a constant, but it would inflate every absolute score.
+- `WEIGHTS_V2` rows are the historical four-slot candidates with the entity slot dropped and the other three untouched, so each arm still departs from production where it always did. What is gone is v2's ENTITY-entity claim, 0.35 -> 0.50, which was never testable: every sweep that reported it ran with `ent_score` identically 0.0, so every entity-weight conclusion in `results.csv` and `results_mmr.csv` was vacuous.
+- Entities still reach recall twice over, so this is not a claim that entity data is useless: a candidate's keyword token set unions its content tokens with its entity-name tokens, and `entity` graph edges carry the highest edge weight of any intent under ENTITY (0.55). Dropping that keyword union measured -0.0137 nDCG@5 on this same 30-query instrument, which is inside the same noise band as the entity effect itself and so is not on its own a reason to keep it; what argues for keeping it is the token census - on 43.6% of rows the entity list contributes at least one token the content lacks.
+
+Instrument caveat that bounds every number above: 65.9% of the (query, doc) pairs these arms return carry no relevance grade, the labels date from 2026-04-30, and 30 queries cannot resolve a 0.02 effect - about 130 would be needed. The labels and the nDCG scorer live under `experiments/eval/`, which is untracked, so a fresh clone can reproduce the churn columns but not the quality columns.
+
 ## MMR sweep record (2026-08-05, memman 0.19.0)
 
 Sweep of `mmr_lambda` in {0.5, 0.7, 0.8, 0.9} x rerank {off, on} plus `baseline` and `rerank_voyage` controls; 12 queries, `--limit 10`, against a `/tmp` sandbox copy of the `search` store (2,299 rows, 100% embedded) on the 0.19.0 schema. Raw rows in `results_mmr.csv` (untracked artifact).

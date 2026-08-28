@@ -32,7 +32,7 @@
         <mxCell id="b6" value="&lt;b&gt;Vector Computation&lt;/b&gt;&lt;br&gt;cosine similarity, embedding serialization" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="55" y="390" width="330" height="38" as="geometry" />
         </mxCell>
-        <mxCell id="b7" value="&lt;b&gt;4-Signal Reranking&lt;/b&gt;&lt;br&gt;keyword + entity + similarity + graph, intent-weighted" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="b7" value="&lt;b&gt;3-Signal Reranking&lt;/b&gt;&lt;br&gt;keyword + similarity + graph, intent-weighted" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="55" y="440" width="330" height="38" as="geometry" />
         </mxCell>
         <mxCell id="b8" value="&lt;b&gt;Lifecycle &amp;amp; Decay&lt;/b&gt;&lt;br&gt;EI formula, auto-prune, immunity rules, GC" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
@@ -60,7 +60,7 @@
         <mxCell id="h4" value="&lt;b&gt;Causal Inference&lt;/b&gt; &lt;font style=&quot;font-size:9px&quot;&gt;[slow_metadata]&lt;/font&gt;&lt;br&gt;Evaluate causal relationships between insights&lt;br&gt;causes / enables / prevents (parallel with enrichment)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="485" y="355" width="330" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="h5" value="&lt;b&gt;Query Expansion&lt;/b&gt; &lt;font style=&quot;font-size:9px&quot;&gt;[fast]&lt;/font&gt;&lt;br&gt;Expand recall query with synonyms, entities, intent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="h5" value="&lt;b&gt;Query Expansion&lt;/b&gt; &lt;font style=&quot;font-size:9px&quot;&gt;[fast]&lt;/font&gt;&lt;br&gt;Expand recall query with synonyms and intent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="485" y="425" width="330" height="45" as="geometry" />
         </mxCell>
 
