@@ -45,7 +45,8 @@ def link_pending(
         embed_client: EmbeddingProvider | None = None,
         max_batch: int = MAX_LINK_BATCH,
         on_progress: Callable[[str, Insight], None] | None = None,
-        store_name: str | None = None,
+        *,
+        store_name: str,
         ) -> int:
     """Process insights where linked_at IS NULL.
 
@@ -54,9 +55,10 @@ def link_pending(
 
     `store_name` plumbs through to `_resolve_semantic_threshold` so the
     per-store surface (`MEMMAN_SURFACE_<store>`) selects the right row
-    of `_thresholds_generated.py`. Defaults to None for back-compat;
-    `None` resolves the code-surface threshold (the soft fallback in
-    `config.get_store_surface`).
+    of `_thresholds_generated.py`. It is keyword-only and required: an
+    omitted store name silently resolves the code-surface row and
+    drops any `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>` override, which
+    is a wrong threshold rather than a missing one.
     """
     pending_ids = backend.nodes.get_pending_link_ids(limit=max_batch)
     if not pending_ids:
@@ -221,7 +223,7 @@ def compute_constants_hash() -> str:
 
 def _resolve_semantic_threshold(
         backend: Backend,
-        store_name: str | None = None) -> float | None:
+        store_name: str | None) -> float | None:
     """Return the AUTO_SEMANTIC_THRESHOLD for this store.
 
     Precedence (returns the first that applies):
