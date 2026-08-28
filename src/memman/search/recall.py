@@ -60,11 +60,17 @@ TRAVERSAL_PARAMS: dict[str, tuple[int, int, int]] = {
     'GENERAL': (10, 4, 500),
     }
 
-RERANK_WEIGHTS: dict[str, tuple[float, float, float, float]] = {
-    'WHY':     (0.15, 0.10, 0.45, 0.30),
-    'WHEN':    (0.20, 0.10, 0.40, 0.30),
-    'ENTITY':  (0.20, 0.35, 0.35, 0.10),
-    'GENERAL': (0.25, 0.15, 0.45, 0.15),
+# Notes:
+# - `(w_kw, w_sim, w_gr)` per intent. The rows deliberately do NOT sum
+#   to 1.0, so `score` has a per-intent ceiling below 1.0 (WHY 0.90,
+#   WHEN 0.90, ENTITY 0.65, GENERAL 0.85). Scores are only ever
+#   compared within one query at one intent, so the differing ceilings
+#   are harmless; nothing thresholds on the value.
+RERANK_WEIGHTS: dict[str, tuple[float, float, float]] = {
+    'WHY':     (0.15, 0.45, 0.30),
+    'WHEN':    (0.20, 0.40, 0.30),
+    'ENTITY':  (0.20, 0.35, 0.10),
+    'GENERAL': (0.25, 0.45, 0.15),
     }
 
 
@@ -276,13 +282,12 @@ def causal_topological_sort(
 def intent_aware_recall(
         backend: Backend, query: str,
         query_vec: list[float] | None,
-        query_entities: list[str],
         limit: int, *,
         fingerprint: 'Fingerprint',
         intent_override: str | None = None,
         rerank: bool = False,
         rerank_weights_override: dict[
-            str, tuple[float, float, float, float]] | None = None,
+            str, tuple[float, float, float]] | None = None,
         category: str = '',
         source: str = '',
         ) -> dict[str, Any]:
@@ -296,8 +301,6 @@ def intent_aware_recall(
         Search text; tokenized for keyword anchors and scoring.
     query_vec : list[float] | None
         Query embedding; None degrades to the keyword/time paths.
-    query_entities : list[str]
-        Entity names contributing to the entity signal.
     limit : int
         Result cap; `limit <= 0` means unbounded.
     fingerprint : Fingerprint
@@ -307,7 +310,7 @@ def intent_aware_recall(
     rerank : bool, default False
         Re-score the shortlist with the cross-encoder (see Notes).
     rerank_weights_override : dict | None, default None
-        Read the intent's `(w_kw, w_ent, w_sim, w_gr)` from this dict
+        Read the intent's `(w_kw, w_sim, w_gr)` from this dict
         instead of module-level `RERANK_WEIGHTS`.
     category : str, default ''
         Keep only insights with this exact category ('' = no filter).
@@ -549,7 +552,6 @@ def intent_aware_recall(
             traversed=traversed_count)
 
     query_tokens = tokenize(query)
-    query_entity_set = {e.lower() for e in query_entities}
 
     candidates: list[dict[str, Any]] = []
     graph_min: float | None = None
@@ -585,13 +587,6 @@ def intent_aware_recall(
             intersection = sum(1 for t in query_tokens if t in ct)
             kw_score = intersection / len(query_tokens)
 
-        ent_score = 0.0
-        if query_entity_set:
-            matched = sum(
-                1 for e in c['ins'].entities
-                if e.lower() in query_entity_set)
-            ent_score = matched / max(1, len(query_entity_set))
-
         sim_score = 0.0
         if sim_cache is not None:
             sim_score = sim_cache.get(c['id'], 0.0)
@@ -599,21 +594,20 @@ def intent_aware_recall(
         graph_score = (c['graph_raw'] - graph_min) / graph_range
 
         c['kw_score'] = kw_score
-        c['ent_score'] = ent_score
         c['sim_score'] = sim_score
         c['graph_score'] = graph_score
 
     rerank_table = (rerank_weights_override
                     if rerank_weights_override is not None
                     else RERANK_WEIGHTS)
-    w_kw, w_ent, w_sim, w_gr = rerank_table.get(
+    w_kw, w_sim, w_gr = rerank_table.get(
         intent, RERANK_WEIGHTS['GENERAL'])
 
     results: list[dict[str, Any]] = []
     for c in candidates:
         final_score = (
-            w_kw * c['kw_score'] + w_ent * c['ent_score']
-            + w_sim * c['sim_score'] + w_gr * c['graph_score'])
+            w_kw * c['kw_score'] + w_sim * c['sim_score']
+            + w_gr * c['graph_score'])
         results.append({
             'insight': c['ins'],
             'score': final_score,
@@ -621,7 +615,6 @@ def intent_aware_recall(
             'via': c['via'],
             'signals': {
                 'keyword': c['kw_score'],
-                'entity': c['ent_score'],
                 'similarity': c['sim_score'],
                 'graph': c['graph_score'],
                 },

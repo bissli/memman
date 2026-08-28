@@ -371,7 +371,7 @@ def test_postgres_recall_issues_pgvector_distance_operator(
         intent_aware_recall(
             backend, query='document alpha',
             query_vec=_voyage_shape_vector(seed=999),
-            query_entities=[], limit=5, intent_override='GENERAL',
+            limit=5, intent_override='GENERAL',
             fingerprint=stored_fingerprint(backend))
     finally:
         try:

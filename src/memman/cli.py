@@ -1417,10 +1417,8 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                 ' degrading to keyword path',
                 type(exc).__name__, exc)
 
-        query_entities = list(expansion.get('entities', []))
-
         resp = intent_aware_recall(
-            backend, keyword_str, query_vec, query_entities,
+            backend, keyword_str, query_vec,
             limit, fingerprint=bound_fp,
             intent_override=intent_override, rerank=rerank,
             category=cat, source=source)
@@ -1429,8 +1427,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                  'score': round(r['score'], 3),
                  'kw': round(r['signals']['keyword'], 3),
                  'sim': round(r['signals']['similarity'], 3),
-                 'gr': round(r['signals']['graph'], 3),
-                 'ent': round(r['signals']['entity'], 3)}
+                 'gr': round(r['signals']['graph'], 3)}
                 for r in resp['results']]
         try:
             with backend.transaction():

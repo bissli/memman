@@ -200,30 +200,49 @@ class TestRecallRanking:
         for intent in ['WHY', 'WHEN', 'ENTITY', 'GENERAL']:
             assert intent in RERANK_WEIGHTS
 
-    def test_rerank_weights_sum_to_one(self):
-        """Each intent's weights sum to 1.0."""
+    def test_rerank_weights_are_pinned_to_the_measured_table(self):
+        """The shipped weight table is exactly these values.
+
+        Mutation: any silent retune of any weight -- WHY sim 0.45 ->
+            0.05, WHEN graph 0.30 -> 0.01, an intent row dropped -- all
+            of which the range check below still accepts.
+        Oracle: the literal table. `experiments/recall_ablation` is the
+            arbiter of these constants ("measured or not shipped"), so
+            a deliberate change lands here and in that record together.
+        """
+        assert RERANK_WEIGHTS == {
+            'WHY':     (0.15, 0.45, 0.30),
+            'WHEN':    (0.20, 0.40, 0.30),
+            'ENTITY':  (0.20, 0.35, 0.10),
+            'GENERAL': (0.25, 0.45, 0.15),
+            }
+
+    def test_rerank_weights_keep_score_within_unit_range(self):
+        """Every intent's weights are positive and sum to at most 1.0.
+
+        Mutation: a weight raised until an intent's row sums above 1.0,
+            which lets `score` exceed 1.0 while each signal stays in
+            [0, 1] and silently breaks score comparability; or a signal
+            retired by zeroing its weight rather than deleting it,
+            leaving an inert term in the blend.
+        Oracle: hand-summed rows -- WHY 0.90, WHEN 0.90, ENTITY 0.65,
+            GENERAL 0.85, each at or under the 1.0 ceiling that keeps
+            `score` inside [0, 1].
+        """
         for intent, w in RERANK_WEIGHTS.items():
-            assert abs(sum(w) - 1.0) < 1e-9, (
-                f'{intent} weights sum={sum(w)}')
+            assert all(x > 0.0 for x in w), f'{intent} has a dead signal'
+            assert sum(w) <= 1.0 + 1e-9, f'{intent} sum={sum(w)}'
 
     def test_rerank_why_emphasizes_similarity(self):
         """WHY intent weights similarity score highest."""
-        w_kw, w_ent, w_sim, w_gr = RERANK_WEIGHTS['WHY']
+        w_kw, w_sim, w_gr = RERANK_WEIGHTS['WHY']
         assert w_sim > w_gr
         assert w_sim > w_kw
-        assert w_sim > w_ent
-
-    def test_rerank_entity_emphasizes_entity(self):
-        """ENTITY intent weights entity score highest."""
-        w_kw, w_ent, w_sim, w_gr = RERANK_WEIGHTS['ENTITY']
-        assert w_ent >= w_kw
-        assert w_ent >= w_sim
-        assert w_ent >= w_gr
 
     def test_rerank_general_similarity_highest(self):
         """GENERAL intent weights similarity highest."""
-        w_kw, w_ent, w_sim, w_gr = RERANK_WEIGHTS['GENERAL']
-        assert w_sim > max(w_kw, w_ent, w_gr)
+        w_kw, w_sim, w_gr = RERANK_WEIGHTS['GENERAL']
+        assert w_sim > max(w_kw, w_gr)
 
     def test_hint_field_by_intent(self, backend):
         """Each intent produces its expected hint string."""
@@ -239,7 +258,7 @@ class TestRecallRanking:
         for intent, expected in expected_hints.items():
             result = intent_aware_recall(
                 backend, query='test content recall',
-                query_vec=None, query_entities=[],
+                query_vec=None,
                 limit=5, intent_override=intent,
                 fingerprint=stored_fingerprint(backend))
             assert result['meta']['hint'] == expected
@@ -258,7 +277,7 @@ class TestRecallRanking:
         for intent, ordering in expected.items():
             result = intent_aware_recall(
                 backend, query='test content recall',
-                query_vec=None, query_entities=[],
+                query_vec=None,
                 limit=5, intent_override=intent,
                 fingerprint=stored_fingerprint(backend))
             assert result['meta']['ordering'] == ordering
@@ -267,7 +286,7 @@ class TestRecallRanking:
         """Sparse flag set when results are below half the requested limit."""
         result = intent_aware_recall(
             backend, query='nonexistent query xyz',
-            query_vec=None, query_entities=[],
+            query_vec=None,
             limit=10, intent_override='GENERAL',
             fingerprint=stored_fingerprint(backend))
         assert result['meta']['sparse'] is True
@@ -280,7 +299,7 @@ class TestRecallRanking:
                 content=f'common keyword topic alpha {i}'))
         result = intent_aware_recall(
             backend, query='common keyword topic alpha',
-            query_vec=None, query_entities=[],
+            query_vec=None,
             limit=5, intent_override='GENERAL',
             fingerprint=stored_fingerprint(backend))
         assert 'sparse' not in result['meta']
@@ -297,12 +316,12 @@ class TestRecallRanking:
                 content=f'common keyword topic alpha {i}'))
         baseline = intent_aware_recall(
             backend, query='common keyword topic alpha',
-            query_vec=None, query_entities=[],
+            query_vec=None,
             limit=5, intent_override='WHEN',
             fingerprint=stored_fingerprint(backend))
         with_override = intent_aware_recall(
             backend, query='common keyword topic alpha',
-            query_vec=None, query_entities=[],
+            query_vec=None,
             limit=5, intent_override='WHEN',
             fingerprint=stored_fingerprint(backend),
             rerank_weights_override=dict(RERANK_WEIGHTS))
@@ -312,49 +331,39 @@ class TestRecallRanking:
         for a, b in zip(baseline['results'], with_override['results']):
             assert abs(a['score'] - b['score']) < 1e-9
 
-    def test_rerank_weights_override_changes_ordering(self, backend):
-        """An exaggerated override re-orders results.
+    def test_rerank_weights_override_is_consulted(self, backend):
+        """An override's keyword weight scales the final score exactly.
 
-        Confirms the override is actually consulted, not silently ignored.
-        Two insights have identical keyword match on the query tokens;
-        one carries an entity that matches the query's entity set. Under
-        a keyword-only weighting they score equally; under an
-        entity-only weighting the entity-bearing one wins.
+        Mutation: reading `RERANK_WEIGHTS` instead of the override, so
+            the argument is accepted and ignored -- which no ordering
+            assertion catches when the override happens to rank the
+            same way. Also `rerank_table.get('GENERAL', ...)` in place
+            of `.get(intent, ...)`, a hardcoded row that a
+            same-tuple-per-intent override cannot see.
+        Oracle: hand-computed. The row matches every query token, so
+            `kw_score` is 1.0 and the other two signals are 0.0 with no
+            query vector and a single-row pool; `final` is therefore the
+            looked-up keyword weight itself -- 1.0, then 0.4, then 0.7
+            read from a DIFFERENT intent's row than GENERAL.
         """
         backend.nodes.insert(make_insight(
             id='ovr-a', content='alpha beta gamma topic',
             importance=1))
-        backend.nodes.insert(make_insight(
-            id='ovr-b', content='alpha beta gamma topic',
-            importance=1, entities=['Voyage']))
-        kw_dominant = {
-            'WHEN': (1.0, 0.0, 0.0, 0.0),
-            'WHY': (1.0, 0.0, 0.0, 0.0),
-            'ENTITY': (1.0, 0.0, 0.0, 0.0),
-            'GENERAL': (1.0, 0.0, 0.0, 0.0),
-            }
-        ent_dominant = {
-            'WHEN': (0.0, 1.0, 0.0, 0.0),
-            'WHY': (0.0, 1.0, 0.0, 0.0),
-            'ENTITY': (0.0, 1.0, 0.0, 0.0),
-            'GENERAL': (0.0, 1.0, 0.0, 0.0),
-            }
-        kw_resp = intent_aware_recall(
-            backend, query='alpha beta gamma topic',
-            query_vec=None, query_entities=['Voyage'],
-            limit=5, intent_override='GENERAL',
-            fingerprint=stored_fingerprint(backend),
-            rerank_weights_override=kw_dominant)
-        ent_resp = intent_aware_recall(
-            backend, query='alpha beta gamma topic',
-            query_vec=None, query_entities=['Voyage'],
-            limit=5, intent_override='GENERAL',
-            fingerprint=stored_fingerprint(backend),
-            rerank_weights_override=ent_dominant)
-        kw_scores = {r['insight'].id: r['score']
-                     for r in kw_resp['results']}
-        ent_scores = {r['insight'].id: r['score']
-                      for r in ent_resp['results']}
-        assert kw_scores['ovr-a'] == pytest.approx(
-            kw_scores['ovr-b'], abs=1e-9)
-        assert ent_scores['ovr-b'] > ent_scores['ovr-a']
+
+        def _score(w_kw, intent='GENERAL', others=0.0):
+            override = dict.fromkeys(RERANK_WEIGHTS, (others, 0.0, 0.0))
+            override[intent] = (w_kw, 0.0, 0.0)
+            resp = intent_aware_recall(
+                backend, query='alpha beta gamma topic',
+                query_vec=None,
+                limit=5, intent_override=intent,
+                fingerprint=stored_fingerprint(backend),
+                rerank_weights_override=override)
+            return {r['insight'].id: r['score']
+                    for r in resp['results']}['ovr-a']
+
+        assert _score(1.0) == pytest.approx(1.0)
+        assert _score(0.4) == pytest.approx(0.4)
+        # A row other than GENERAL, holding a value no other row holds,
+        # so a hardcoded lookup key reads the wrong weight and fails.
+        assert _score(0.7, intent='WHEN', others=0.1) == pytest.approx(0.7)

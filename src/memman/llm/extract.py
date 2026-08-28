@@ -169,7 +169,6 @@ QUERY_EXPANSION_SYSTEM = (
     'Return JSON:\n'
     '{"expanded_query": "original plus synonyms and related terms",\n'
     ' "keywords": ["search", "terms"],\n'
-    ' "entities": ["NamedEntity1"],\n'
     ' "intent": "WHY|WHEN|ENTITY|GENERAL"}\n\n'
     'Keep expanded_query under 50 words.')
 
@@ -406,7 +405,7 @@ def expand_query(
         query: str) -> dict:
     """Expand recall query with synonyms and related terms.
 
-    Returns dict with: expanded_query, keywords, entities, intent.
+    Returns dict with: expanded_query, keywords, intent.
     On failure: passthrough with original query. Repeated calls with
     the same query in the same process hit a `cachetools.TTLCache`
     keyed by sha256(normalized_query | $MEMMAN_LLM_MODEL_FAST). Cache
@@ -433,12 +432,12 @@ def expand_query(
             outcome='error',
             error=f'{type(exc).__name__}: {exc}')
         return {'expanded_query': query, 'keywords': [],
-                'entities': [], 'intent': None}
+                'intent': None}
 
     parsed = parse_json_response(raw)
     if parsed is None:
         return {'expanded_query': query, 'keywords': [],
-                'entities': [], 'intent': None}
+                'intent': None}
 
     expanded = parsed.get('expanded_query', query)
     if not isinstance(expanded, str) or not expanded.strip():
@@ -449,11 +448,6 @@ def expand_query(
         keywords = []
     keywords = [str(k) for k in keywords if k]
 
-    entities = parsed.get('entities', [])
-    if not isinstance(entities, list):
-        entities = []
-    entities = [str(e) for e in entities if e]
-
     intent = parsed.get('intent')
     if intent not in {'WHY', 'WHEN', 'ENTITY', 'GENERAL'}:
         intent = None
@@ -461,7 +455,6 @@ def expand_query(
     result = {
         'expanded_query': expanded,
         'keywords': keywords,
-        'entities': entities,
         'intent': intent,
         }
     _expand_cache[cache_key] = dict(result)

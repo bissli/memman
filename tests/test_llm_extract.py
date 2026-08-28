@@ -291,11 +291,10 @@ class TestExpandQuery:
     """Query expansion parsing and error handling."""
 
     def test_basic_expansion(self):
-        """Query is expanded with keywords and entities."""
+        """Query is expanded with synonyms, keywords and an intent."""
         response = json.dumps({
             'expanded_query': 'Redis cache configuration settings',
             'keywords': ['Redis', 'cache', 'config'],
-            'entities': ['Redis'],
             'intent': 'GENERAL',
             })
         client = FakeLLMClient(response)

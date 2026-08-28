@@ -26,8 +26,11 @@ Configurations swept:
 Select a subset with `--configs name1,name2`; point `--data-dir` at a
 sandbox copy to sweep without touching live stores.
 
-The retuned weights bump WHY graph 0.30->0.45, ENTITY entity 0.35->0.50,
-and GENERAL similarity 0.45->0.55 with the remaining slots renormalized.
+The retuned weights bump WHY graph 0.30->0.45 and GENERAL similarity
+0.45->0.55, with the other slots of those rows adjusted to compensate,
+and the ENTITY row keeps its own retune (kw 0.20->0.15, sim
+0.35->0.25). Rows no longer sum to 1.0; the shipped table does not
+either, so the arms stay comparable.
 """
 
 import argparse
@@ -49,11 +52,16 @@ from memman.search.recall import intent_aware_recall
 from memman.store.db import default_data_dir, open_read_only, store_dir
 from memman.store.sqlite import SqliteBackend
 
-WEIGHTS_V2: dict[str, tuple[float, float, float, float]] = {
-    'WHY':     (0.10, 0.10, 0.35, 0.45),
-    'WHEN':    (0.20, 0.10, 0.40, 0.30),
-    'ENTITY':  (0.15, 0.50, 0.25, 0.10),
-    'GENERAL': (0.20, 0.10, 0.55, 0.15),
+# Notes:
+# - `(w_kw, w_sim, w_gr)`, matching the shipped three-signal blend.
+#   Each row is the historical four-slot candidate with the entity
+#   slot dropped and the other three left untouched, so every arm
+#   still departs from production exactly where it always did.
+WEIGHTS_V2: dict[str, tuple[float, float, float]] = {
+    'WHY':     (0.10, 0.35, 0.45),
+    'WHEN':    (0.20, 0.40, 0.30),
+    'ENTITY':  (0.15, 0.25, 0.10),
+    'GENERAL': (0.20, 0.55, 0.15),
     }
 
 
@@ -157,7 +165,7 @@ def run_one(backend: SqliteBackend, fingerprint: Fingerprint,
                     config.get('mmr_lambda')):
         t0 = time.perf_counter()
         resp = intent_aware_recall(
-            backend, use_query, qvec, [], fetch_limit,
+            backend, use_query, qvec, fetch_limit,
             fingerprint=fingerprint)
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
