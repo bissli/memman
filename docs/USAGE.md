@@ -131,9 +131,14 @@ embedding rather than that it is irrelevant, so a rule requiring it
 fires on nothing once a store is embedded. The two signals also
 overlap in range between matching and non-matching queries, which is
 why no similarity floor replaces the keyword test. The arm also reads
-the candidate pool before `--cat`/`--source` filtering, so a filtered
-recall whose rows were reached by graph from a match is not called
+the candidate pool as scored, ahead of `--cat`/`--source` filtering,
+`--min-score`, reranking and the limit slice, so a recall whose
+returned rows were reached by graph from a match is not called
 irrelevant.
+
+The row-count arm needs a bounded limit. At `--limit 0` or below,
+which means unbounded, only the empty-set and unmatched-token arms
+apply.
 
 `--min-score` is the filter. It drops rows whose keyword plus
 similarity sum falls under the floor, so the range is 0.0 to 2.0 and
