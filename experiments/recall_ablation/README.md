@@ -114,3 +114,49 @@ Conclusion — the placement move does not change the shipped `MMR_LAMBDA = 1.0`
 - Downstream of the reranker the diversity term finally has leverage (unlike upstream, where the cross-encoder re-picks the same head regardless), but every redundancy point is bought by overriding the only relevance oracle in the pipeline: at lambda 0.5 the certified top-3 survives on 0/12 queries, and at lambda 0.9 the surviving 1.3-point gain is noise-level.
 - Same verdict shape as the rerank-off arm above: real diversity, uncertifiable relevance cost. Ship it only when a labeled-relevance eval can prove the trade.
 - The after-rerank arm also reranks all 100 shortlist docs instead of 10 and adds an O(n^2) cosine pass (~+200-400 ms observed on this store), a real hot-path cost for an unverifiable gain.
+
+## Sparse relevance rule (2026-08-28, memman item 4)
+
+`meta.sparse` was count-only (`len(results) < limit // 2`), so it could
+not fire on the case it exists for: an unscoped query returning a full
+page of unrelated memories, which recall always produces because the
+recency channel seeds the newest insights as anchors regardless of
+match. Four candidate rules measured with `verify_sparse_rule.py` on
+the search-store sandbox, 80 graded queries against 20 fixed nonsense
+queries, `--limit 10`, rerank off. Firing on a graded query is a false
+positive; not firing on a nonsense query leaves the defect in place.
+
+| rule           | fires on labeled | fires on nonsense |
+| -------------- | ---------------- | ----------------- |
+| exact_zero     | 0/80             | 0/20              |
+| sim_floor_0.15 | 0/80             | 0/20              |
+| sim_floor_0.20 | 0/80             | 5/20              |
+| sim_floor_0.25 | 0/80             | 13/20             |
+| kw_only        | 0/80             | 20/20             |
+| shipped        | 0/80             | 20/20             |
+
+Conclusion — the keyword channel alone carries the rule, and no
+similarity term belongs in it:
+
+- `exact_zero` is the rule the defect ledger specified and it fires on
+  nothing. `sim_cache` stores a cosine only when it is strictly
+  positive, so `sim_score == 0.0` means the row carries no embedding,
+  not that it is irrelevant. On any embedded store the arm is inert,
+  and a unit test passing `query_vec=None` shows it green anyway.
+- No similarity floor can replace the keyword test, because the two
+  populations overlap: labeled top-row similarity runs 0.2860-0.9180
+  and nonsense runs 0.1537-0.3492. Every floor is strictly dominated,
+  and calibrating one would have shipped a tunable that buys nothing.
+- `kw_only` is parameter-free, so it carries no calibration debt and
+  needed validating rather than calibrating.
+- `shipped` differs from `kw_only` by reading the keyword evidence off
+  the candidate pool BEFORE `category`/`source` filtering. The filter
+  can drop the row that matched and keep the rows it reached by graph,
+  which would otherwise flag a working filtered recall as irrelevant.
+  It scores identically here because this run is unfiltered; the
+  filtered case is pinned by a test, not by this harness.
+- Coverage limit: one corpus, and the graded queries are generated
+  from the corpus, so they share its vocabulary. A human paraphrase
+  sharing no token with any stored row is the untested false-positive
+  case. `sparse` is advisory and drops no rows, so the cost of a false
+  positive is a hedged answer rather than a lost result.
