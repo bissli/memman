@@ -8,6 +8,7 @@ graph, search, embed, and LLM primitives live under their own packages.
 import json
 import logging
 import logging.handlers
+import math
 import os
 import pathlib
 import re
@@ -1336,10 +1337,14 @@ def _process_queue_row(
 @click.option('--intent', default='', help='Override intent')
 @click.option('--expand', 'expand', is_flag=True, default=False,
               help='Run LLM query expansion before retrieval (off by default)')
+@click.option('--min-score', 'min_score', default=0.0,
+              type=click.FloatRange(0.0, 2.0),
+              help='Drop rows whose keyword+similarity sum is below '
+                   'this floor (0.0 = off, max 2.0)')
 @click.pass_context
 def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
            limit: int, source: str, basic: bool, brief: bool,
-           intent: str, expand: bool) -> None:
+           intent: str, expand: bool, min_score: float) -> None:
     """Retrieve insights by keyword."""
     from memman import trace
     from memman.embed.fingerprint import assert_fingerprint_unchanged_for_sync
@@ -1350,6 +1355,14 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
     from memman.search.recall import intent_aware_recall
     project = insight_to_brief_dict if brief else insight_to_full_dict
     keyword_str = ' '.join(keyword)
+    if math.isnan(min_score):
+        raise click.ClickException(
+            '--min-score must be a number; NaN compares false against '
+            'every floor and would silently disable the filter.')
+    if basic and min_score > 0.0:
+        raise click.ClickException(
+            '--min-score needs the scored path; --basic is SQL LIKE '
+            'matching and computes no scores.')
     store_name = _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store'])
     per_store_rerank = config.get_store_rerank_enabled(store_name)
     rerank = (per_store_rerank if per_store_rerank is not None
@@ -1421,7 +1434,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
             backend, keyword_str, query_vec,
             limit, fingerprint=bound_fp,
             intent_override=intent_override, rerank=rerank,
-            category=cat, source=source)
+            category=cat, source=source, min_score=min_score)
 
         hits = [{'id': r['insight'].id[:8], 'via': r.get('via', ''),
                  'score': round(r['score'], 3),

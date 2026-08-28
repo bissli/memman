@@ -320,6 +320,7 @@ def intent_aware_recall(
             str, tuple[float, float, float]] | None = None,
         category: str = '',
         source: str = '',
+        min_score: float = 0.0,
         ) -> dict[str, Any]:
     """Perform MAGMA-aligned intent-aware retrieval.
 
@@ -346,14 +347,16 @@ def intent_aware_recall(
         Keep only insights with this exact category ('' = no filter).
     source : str, default ''
         Keep only insights with this exact source ('' = no filter).
+    min_score : float, default 0.0
+        Relevance floor on `kw_score + sim_score`; 0.0 = no filter.
 
     Returns
     -------
     dict[str, Any]
         `{'results': [...], 'meta': {...}}`; `meta.anchor_count` is
         the filtered anchor count, `meta.traversed` is deliberately
-        unfiltered, and `meta.sparse` compares the filtered result
-        count against the limit.
+        unfiltered, and `meta.sparse` flags a low-confidence result
+        set (see Notes).
 
     Notes
     -----
@@ -374,6 +377,25 @@ def intent_aware_recall(
       rerank-2.5-lite; the filter runs before the rerank block so the
       shortlist holds only returnable rows. On reranker failure the
       baseline ordering is preserved.
+    - `min_score` thresholds `kw_score + sim_score`, never the blended
+      score: `graph_score` is min-max normalized, so the top candidate
+      of any query scores 1.0 there and a blended floor would sit at
+      `w_gr`, which moves per intent. Its range is therefore 0.0-2.0.
+    - `meta.sparse` marks a low-confidence result set. It fires on an
+      empty set, on fewer than `limit // 2` rows, and when no
+      candidate matched a query token -- the case an unscoped query
+      hits, where the recency-anchor channel returns newest-first rows
+      that match nothing. The token test reads the candidate pool as
+      scored, before `category`/`source` filtering, `min_score`, MMR,
+      rerank and the limit slice, so a recall whose returned rows were
+      reached by graph from a match is not called irrelevant.
+    - The keyword channel alone carries that last arm, and no
+      similarity term belongs in it. `sim_cache` holds a cosine only
+      when it is strictly positive, so an exactly-zero similarity
+      means the row has no embedding rather than no relevance, and the
+      matching and non-matching populations overlap on similarity, so
+      no floor separates them. Measured by
+      `experiments/recall_ablation/verify_sparse_rule.py`.
     """
     if intent_override:
         intent = intent_override
@@ -653,11 +675,24 @@ def intent_aware_recall(
     results.sort(
         key=lambda r: (-r['score'], -r['insight'].importance))
 
+    # Read the keyword evidence off the UNFILTERED pool: a category or
+    # source filter can drop the row that matched and keep the rows it
+    # reached by graph, and judging relevance on the survivors alone
+    # would then call a working filtered recall irrelevant.
+    pool_matched_a_token = any(
+        r['signals']['keyword'] > 0.0 for r in results)
+
     # Filter after the weighted-sum sort (so graph_min/graph_max
     # normalisation saw the full pool) and BEFORE rerank (so the
     # cross-encoder shortlist holds only returnable rows).
     if category or source:
         results = [r for r in results if _matches(r['insight'])]
+
+    if min_score > 0.0:
+        results = [
+            r for r in results
+            if r['signals']['keyword'] + r['signals']['similarity']
+            >= min_score]
 
     # One-shot MMR diversity: score every candidate once against the
     # whole pool, then sort once -- NOT greedy iterative MMR (an
@@ -753,7 +788,10 @@ def intent_aware_recall(
             key=lambda r: (r['insight'].created_at, r['score']),
             reverse=True)
 
-    sparse = not results or (limit > 0 and len(results) < limit // 2)
+    sparse = (
+        not results
+        or (limit > 0 and len(results) < limit // 2)
+        or not pool_matched_a_token)
 
     if intent == 'WHY':
         ordering = 'causal_topological'
