@@ -102,7 +102,7 @@ memman forget <id>
 | `--source` |               | Filter by source                                     |
 | `--basic`  | `false`       | Use simple SQL LIKE matching instead of smart recall |
 | `--brief`  | `false`       | Cut each result to id, category, importance, summary |
-| `--expand` | `false`       | Opt-in LLM query expansion (synonyms + entity hints) |
+| `--expand` | `false`       | Opt-in LLM query expansion (synonyms + intent hint) |
 
 The cross-encoder rerank stage is on by default and auto-skips on 1-2 token
 queries. Provider is selected via `MEMMAN_RERANK_PROVIDER` (any registered
@@ -422,10 +422,10 @@ The host session never blocks on the network. Newly stored memories become recal
 
 ### Recall pipeline
 
-1. **LLM query expansion** (opt-in via `--expand`) — synonyms, entity extraction, intent detection.
+1. **LLM query expansion** (opt-in via `--expand`) — synonyms and intent detection.
 2. **RRF anchor selection** — keyword + vector + recency fused with K=60.
 3. **Beam search** — intent-weighted graph traversal from anchors.
-4. **4-signal rerank** — keyword, entity, similarity, graph (intent-weighted).
+4. **3-signal rerank** — keyword, similarity, graph (intent-weighted). A stored entity name reaches the keyword signal because a candidate's token set unions its content tokens with its entity-name tokens.
    - **4a. MMR diversity re-sort** — one-shot re-sort of the top 200; shipped disabled (`MMR_LAMBDA = 1.0`, measured a no-op under the cross-encoder rerank at both placements — see `experiments/recall_ablation/README.md`).
 5. **Cross-encoder rerank** (on by default; toggle per-store via `MEMMAN_RERANK_ENABLED_<store>`) — the configured reranker (default `voyage` / `rerank-2.5-lite`) re-scores the top 100 candidates; replaces the multi-signal score for the final ordering. Auto-skips on 1-2 token queries.
 6. **Post-sort** — causal topological (WHY), chronological (WHEN), score (default).

@@ -95,7 +95,7 @@ For OpenRouter endpoints, `memman install` queries `/v1/models` once per role an
 
 ## 4.2 Read pipeline: smart recall
 
-`memman recall` combines LLM query expansion, intent detection, multi-signal anchor selection, beam search graph traversal, and multi-factor re-ranking. Use `--basic` for SQL LIKE fallback.
+`memman recall` combines optional LLM query expansion, intent detection, multi-signal anchor selection, beam search graph traversal, and multi-factor re-ranking. Use `--basic` for SQL LIKE fallback.
 
 ![Smart Recall Pipeline](../diagrams/03-smart-recall-pipeline.drawio.png)
 
@@ -104,8 +104,7 @@ For OpenRouter endpoints, `memman install` queries `/v1/models` once per role an
 `expand_query(llm_client, query)` sends the raw query to the LLM and returns:
 
 - **expanded_query**: original + synonyms and related terms
-- **keywords**: extracted search keywords
-- **entities**: entities mentioned or implied in the query
+- **keywords**: extracted search keywords (parsed and returned; no consumer today)
 - **intent**: WHY / WHEN / ENTITY / GENERAL (can override regex detection)
 
 Expansion runs only when the user passes `--expand`. By default the raw query is embedded directly. Expansion is gated because the LLM has no domain scope and can pull the candidate pool toward general-knowledge synonyms that recency-aware rerank (Step 4) then amplifies. Modern embedding models already capture most synonym intent; recency does the rest. See § 4.3.
@@ -171,31 +170,38 @@ Beam width, max depth, and max-visited budgets are intent-adaptive — see the p
 
 ### Step 4: Multi-factor re-ranking
 
-For all collected candidates, a four-dimensional score is computed and combined via weighted sum:
+For all collected candidates, a three-dimensional score is computed and combined via weighted sum:
 
 ```
 keyword_score  = token_intersection / query_token_count
-entity_score   = matched_entities / max(1, query_entities_count)
+                 // the candidate's token set is content tokens UNION
+                 // its entity-name tokens, so a stored entity name
+                 // reaches the blend through this term
 similarity     = cosine(vec_candidate, vec_query)
 graph_score    = (traversal_score - min) / (max - min)   // min-max normalization
 
-final = w_kw·keyword + w_ent·entity + w_sim·similarity + w_gr·graph
+final = w_kw·keyword + w_sim·similarity + w_gr·graph
 ```
+
+The rows do not sum to 1.0. A fourth term, `entity`, was removed in 0.23.0 (see the note below) and the three survivors kept the values they already had. Rescaling them to restore a nominal 1.0 would reorder nothing — ranking is invariant to scaling one intent's weights by a positive constant — but it would lift every absolute score above what the same query returns today, and those per-intent ceilings (WHY 0.90, WHEN 0.90, ENTITY 0.65, GENERAL 0.85) have been the real ones ever since expansion became opt-in and the entity term went inert.
+
+Note the interaction with the cross-encoder (Step 4b): when rerank fires it overwrites `final` for the top `RERANK_SHORTLIST = 100` rows, so on a pool of 100 or fewer these weights decide nothing about the order the caller sees. Above 100 they decide which rows reach the reranker at all.
 
 **Per-intent tuning.** The Step 3 traversal budget and the Step 4 reranker weights both vary by intent. Left columns tune beam search; right columns tune the reranker:
 
-| Intent  | Beam | Depth | MaxVis | KW   | Ent      | Sim      | Graph    |
-| ------- | ---- | ----- | ------ | ---- | -------- | -------- | -------- |
-| WHY     | 15   | 5     | 500    | 0.15 | 0.10     | **0.45** | **0.30** |
-| WHEN    | 10   | 5     | 400    | 0.20 | 0.10     | **0.40** | **0.30** |
-| ENTITY  | 10   | 4     | 400    | 0.20 | **0.35** | **0.35** | 0.10     |
-| GENERAL | 10   | 4     | 500    | 0.25 | 0.15     | **0.45** | 0.15     |
+| Intent  | Beam | Depth | MaxVis | KW   | Sim      | Graph    |
+| ------- | ---- | ----- | ------ | ---- | -------- | -------- |
+| WHY     | 15   | 5     | 500    | 0.15 | **0.45** | **0.30** |
+| WHEN    | 10   | 5     | 400    | 0.20 | **0.40** | **0.30** |
+| ENTITY  | 10   | 4     | 400    | 0.20 | **0.35** | 0.10     |
+| GENERAL | 10   | 4     | 500    | 0.25 | **0.45** | 0.15     |
 
 **Rationale.**
 
 - **`LAMBDA1 = 1.0`, `LAMBDA2 = 0.4`** (Step 3 traversal-score blend): `LAMBDA1` is from MAGMA Table 5 ("λ1 (Structure Coef.): 1.0 (Base)"); `LAMBDA2` falls within MAGMA's empirically tuned range (0.3–0.7), at the conservative end so structural signal is weighted 2.5× semantic.
 - **Beam / Depth / MaxVis**: max depth 5 (WHY/WHEN) is from MAGMA Table 5. WHY gets beam width 15 (50% wider than the base 10) because causal chains typically span more hops. GENERAL gets `MaxVis=500` (matching WHY) because unknown intent should not restrict exploration. WHEN/ENTITY get 400 as a moderate budget — their primary edges (temporal/entity) form shorter chains.
-- **KW / Ent / Sim / Graph**: extends MAGMA's intent-adaptive philosophy (which steers beam search via edge type weights) into the final reranking stage. MAGMA does not define a separate reranking stage — this is memman's extension.
+- **KW / Sim / Graph**: extends MAGMA's intent-adaptive philosophy (which steers beam search via edge type weights) into the final reranking stage. MAGMA does not define a separate reranking stage — this is memman's extension.
+- **The retired entity term.** A fourth signal, `matched_entities / query_entities_count`, was removed in 0.23.0. Its only feeder was Step 0's expansion, so from the moment expansion became opt-in it was identically 0.0 on the default path and non-zero only under `--expand` — and no harness ever swept it in that live state, because every harness call site passed an empty entity list. Fed deliberately, it measured indistinguishable from a random channel of the same magnitude, and the reason is scale: the mean of `w_ent x` the largest `entity_score` a query actually produced was 0.0596 against a mean rank-5-to-6 score margin of 0.0118, and on individual queries a full-scale match was worth 24x to 108x the margin it had to clear. A term that large does not inform the blend, it overrides it. Entities still reach recall two ways — as keyword tokens through the union above, and as `entity` graph edges, which carry the highest edge weight of any intent under ENTITY (0.55).
 
 Embeddings are Nd vectors from the store's bound provider (dim is provider-defined; current default is `voyage-3-lite`, 512-dim). The expanded query from Step 0 is embedded for vector search and reranking.
 
@@ -207,7 +213,7 @@ Between the `--cat`/`--source` result filter and the cross-encoder shortlist, a 
 
 Rerank is on by default. The decision to run is resolved at recall time per call from config: `MEMMAN_RERANK_ENABLED_<store>` (per-store override) falls back to `MEMMAN_RERANK_ENABLED` (global default, `true` post-install). When enabled and the query has more than `MIN_RERANK_TOKENS` (default 2) whitespace tokens, the top `RERANK_SHORTLIST` (default 100) candidates from Step 4 are re-scored by the configured cross-encoder reranker (`MEMMAN_RERANK_PROVIDER`; current default `voyage` with model `rerank-2.5-lite`), and the rerank score replaces the multi-signal score for the final ordering. Operators disable rerank for a noisy store with `memman config set MEMMAN_RERANK_ENABLED_<store> false`.
 
-Bi-encoder retrieval (Steps 1–4) embeds the query and each insight independently and ranks by cosine plus the four signals. A cross-encoder reads `(query, content)` together with full attention and outputs a relevance score directly, so it resolves cases where bi-encoder cosine misses the right answer despite low token overlap.
+Bi-encoder retrieval (Steps 1–4) embeds the query and each insight independently and ranks by cosine plus the three signals. A cross-encoder reads `(query, content)` together with full attention and outputs a relevance score directly, so it resolves cases where bi-encoder cosine misses the right answer despite low token overlap.
 
 Failures (timeouts, non-200 responses) are caught and logged; the baseline ordering is returned unchanged with `meta.reranked = false`. The 1-2 token query gate skips rerank when there is too little query signal for the cross-encoder to use.
 
@@ -239,7 +245,6 @@ Each retrieval result includes signal details:
   "via": "keyword",
   "signals": {
     "keyword": 0.85,
-    "entity": 0.60,
     "similarity": 0.72,
     "graph": 0.45
   }
