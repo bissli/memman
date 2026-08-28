@@ -47,8 +47,7 @@ def pgvector_to_list(v: Any) -> list[float]:
     ----------
     v : Any
         Value the pgvector psycopg adapter returned for a `vector`
-        column: a `Vector` (pgvector >= 0.4), an `ndarray`
-        (pgvector < 0.4), or any float sequence.
+        column: an `ndarray`, a `Vector`, or any float sequence.
 
     Returns
     -------
@@ -57,10 +56,13 @@ def pgvector_to_list(v: Any) -> list[float]:
 
     Notes
     -----
-    - Both shapes reach callers because the dependency floor admits
-      either: pgvector >= 0.4 returns a `Vector` exposing `to_list()`
-      that is NOT iterable, so `list(v)` raises TypeError, while
-      earlier releases return an ndarray that only `list()` handles.
+    - Both shapes are live at the SAME pgvector version; this is not
+      a floor-raising question. Measured at pgvector 0.4.2: a psycopg
+      round-trip yields `ndarray`, which only `list()` handles, while
+      a `Vector` built in Python exposes `to_list()` and is NOT
+      iterable, so `list(v)` raises TypeError on it. Any test using a
+      constructed `Vector` instead of a real query exercises only the
+      second shape.
     - Elements are not coerced one by one: `to_list()` already yields
       Python floats and `np.float64` is a float subclass, so the
       annotation holds without a per-component pass over a 512-wide
