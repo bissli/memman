@@ -64,7 +64,7 @@ class TestKeywordSignal:
         result = intent_aware_recall(
             backend,
             query='Prometheus monitoring Grafana dashboards',
-            query_vec=None, query_entities=[], limit=20,
+            query_vec=None, limit=20,
             fingerprint=stored_fingerprint(backend))
 
         match = _find_result(result['results'], 'kw-match')
@@ -77,44 +77,6 @@ class TestKeywordSignal:
             assert miss1['signals']['keyword'] < 0.1
         if miss2 is not None:
             assert miss2['signals']['keyword'] < 0.1
-
-
-class TestEntitySignal:
-    """Entity-matching insights get positive entity signal."""
-
-    def test_entity_match_has_positive_entity_signal(self, backend):
-        """Docker insights score entity signal; Kubernetes-only does not."""
-        _insert_fillers(backend)
-        backend.nodes.insert(make_insight(
-            id='ent-docker-1',
-            content='Docker container networking configuration',
-            entities=['Docker'], importance=3))
-        backend.nodes.insert(make_insight(
-            id='ent-docker-2',
-            content='Docker image optimization techniques',
-            entities=['Docker'], importance=3))
-        backend.nodes.insert(make_insight(
-            id='ent-k8s',
-            content='Kubernetes pod scheduling policies',
-            entities=['Kubernetes'], importance=3))
-
-        result = intent_aware_recall(
-            backend,
-            query='Docker container',
-            query_vec=None, query_entities=['Docker'],
-            limit=20, intent_override='ENTITY',
-            fingerprint=stored_fingerprint(backend))
-
-        d1 = _find_result(result['results'], 'ent-docker-1')
-        d2 = _find_result(result['results'], 'ent-docker-2')
-        k8s = _find_result(result['results'], 'ent-k8s')
-
-        assert d1 is not None
-        assert d1['signals']['entity'] > 0
-        assert d2 is not None
-        assert d2['signals']['entity'] > 0
-        if k8s is not None:
-            assert k8s['signals']['entity'] == 0
 
 
 class TestGraphTraversal:
@@ -146,7 +108,7 @@ class TestGraphTraversal:
         result = intent_aware_recall(
             backend,
             query='API rate limiting design',
-            query_vec=None, query_entities=['FastAPI'],
+            query_vec=None,
             limit=20,
             fingerprint=stored_fingerprint(backend))
 
@@ -178,7 +140,7 @@ class TestWhyIntentCausalOrdering:
         result = intent_aware_recall(
             backend,
             query='why SQLite chosen because embedded',
-            query_vec=None, query_entities=[],
+            query_vec=None,
             limit=20, intent_override='WHY',
             fingerprint=stored_fingerprint(backend))
 
@@ -222,7 +184,7 @@ class TestWhenIntentChronologicalOrdering:
         result = intent_aware_recall(
             backend,
             query='database production migration',
-            query_vec=None, query_entities=[],
+            query_vec=None,
             limit=20, intent_override='WHEN',
             fingerprint=stored_fingerprint(backend))
 
@@ -263,7 +225,7 @@ class TestWhenIntentChronologicalOrdering:
         result = intent_aware_recall(
             backend,
             query='database production migration',
-            query_vec=None, query_entities=[],
+            query_vec=None,
             limit=20, intent_override='WHEN',
             fingerprint=stored_fingerprint(backend))
 
@@ -278,33 +240,6 @@ class TestWhenIntentChronologicalOrdering:
             i for i, r in enumerate(result['results'])
             if r['insight'].id == 'when-tie-lo')
         assert hi_idx < lo_idx
-
-
-class TestSingletonEntity:
-    """Singleton entity still produces a positive entity signal."""
-
-    def test_singleton_entity_positive_signal(self, backend):
-        """Unique entity matched by query gets entity signal > 0."""
-        _insert_fillers(backend)
-        backend.nodes.insert(make_insight(
-            id='singleton',
-            content='Terraform infrastructure as code provisioning',
-            entities=['Terraform'], importance=3))
-
-        result = intent_aware_recall(
-            backend,
-            query='Terraform infrastructure',
-            query_vec=None, query_entities=['Terraform'],
-            limit=20, intent_override='ENTITY',
-            fingerprint=stored_fingerprint(backend))
-
-        singleton = _find_result(result['results'], 'singleton')
-        assert singleton is not None
-        assert singleton['signals']['entity'] > 0
-
-        for r in result['results']:
-            if r['insight'].id != 'singleton':
-                assert r['signals']['entity'] == 0
 
 
 class TestImportanceTiebreaker:
@@ -329,7 +264,7 @@ class TestImportanceTiebreaker:
         result = intent_aware_recall(
             backend,
             query='logging best practices',
-            query_vec=None, query_entities=[],
+            query_vec=None,
             limit=20, intent_override='GENERAL',
             fingerprint=stored_fingerprint(backend))
 
@@ -345,29 +280,6 @@ class TestImportanceTiebreaker:
             i for i, r in enumerate(result['results'])
             if r['insight'].id == 'tie-low')
         assert high_idx < low_idx
-
-
-class TestEntityCaseInsensitive:
-    """Entity matching should be case-insensitive at the reranking layer."""
-
-    def test_entity_case_insensitive(self, backend):
-        """Lowercase query entity matches PascalCase stored entity."""
-        _insert_fillers(backend)
-        backend.nodes.insert(make_insight(
-            id='case-py',
-            content='Python type hints and mypy configuration',
-            entities=['Python'], importance=3))
-
-        result = intent_aware_recall(
-            backend,
-            query='python tips',
-            query_vec=None, query_entities=['python'],
-            limit=20, intent_override='ENTITY',
-            fingerprint=stored_fingerprint(backend))
-
-        py = _find_result(result['results'], 'case-py')
-        assert py is not None
-        assert py['signals']['entity'] > 0
 
 
 _N_TOPICS = 20
@@ -425,7 +337,7 @@ def _topk_ids(backend, qvec, k) -> list:
     """Return the top-k ids by intent-aware recall on the given backend."""
     result = intent_aware_recall(
         backend, query='topic insight',
-        query_vec=qvec, query_entities=[],
+        query_vec=qvec,
         limit=k, intent_override='GENERAL',
         fingerprint=stored_fingerprint(backend))
     return [r['insight'].id for r in result['results'][:k]]

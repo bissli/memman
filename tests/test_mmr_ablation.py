@@ -42,7 +42,7 @@ def _abc_pool(backend):
 def _recall_ids(backend, **kwargs):
     qv = [1.0, 0.0, 0.0]
     resp = intent_aware_recall(
-        backend, 'zzz unmatched query', qv, [], 0,
+        backend, 'zzz unmatched query', qv, 0,
         fingerprint=stored_fingerprint(backend),
         intent_override='GENERAL', **kwargs)
     return [r['insight'].id for r in resp['results']]

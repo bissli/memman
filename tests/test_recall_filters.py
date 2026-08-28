@@ -53,7 +53,7 @@ def test_filtered_recall_fills_to_limit(backend):
     _seed(backend, 15, 'preference', 'quiet other subject {i}',
           days_old=10)
     resp = intent_aware_recall(
-        backend, 'alpha topic note', None, [], 10,
+        backend, 'alpha topic note', None, 10,
         fingerprint=stored_fingerprint(backend),
         intent_override='GENERAL', category='preference')
     assert len(resp['results']) == 10
@@ -75,7 +75,7 @@ def test_unfiltered_recall_anchor_k_unchanged(backend):
     """
     _seed(backend, 60, 'fact', 'filler row body {i}')
     resp = intent_aware_recall(
-        backend, 'zzz unmatched query', None, [], 50,
+        backend, 'zzz unmatched query', None, 50,
         fingerprint=stored_fingerprint(backend),
         intent_override='GENERAL')
     assert resp['meta']['anchor_count'] == ANCHOR_TOP_K
@@ -91,7 +91,7 @@ def test_filtered_recall_above_anchor_top_k(backend):
     """
     _seed(backend, 60, 'preference', 'quiet other subject {i}')
     resp = intent_aware_recall(
-        backend, 'zzz unmatched query', None, [], 50,
+        backend, 'zzz unmatched query', None, 50,
         fingerprint=stored_fingerprint(backend),
         intent_override='GENERAL', category='preference')
     assert len(resp['results']) == 50
@@ -130,7 +130,7 @@ def test_filter_does_not_block_graph_traversal(backend):
         backend.edges.upsert(make_edge(
             source_id=b, target_id=a, edge_type='semantic', weight=1.0))
     resp = intent_aware_recall(
-        backend, 'zzz unmatched query', None, [], 0,
+        backend, 'zzz unmatched query', None, 0,
         fingerprint=stored_fingerprint(backend),
         intent_override='GENERAL', category='preference')
     ids = {r['insight'].id for r in resp['results']}
@@ -193,7 +193,7 @@ def test_session_vector_anchors_filter_before_topk(
     qv = [0.0] * 512
     qv[0] = 1.0
     resp = intent_aware_recall(
-        backend, 'zzz unmatched query', qv, [], 35,
+        backend, 'zzz unmatched query', qv, 35,
         fingerprint=stored_fingerprint(backend),
         intent_override='GENERAL', category='preference')
     assert len(resp['results']) == 35
@@ -240,7 +240,7 @@ def test_vector_cache_fallback_fills_to_anchor_k(backend, monkeypatch):
         session_cls = type(sess)
     monkeypatch.setattr(session_cls, 'vector_anchors', _raise)
     resp = intent_aware_recall(
-        backend, 'zzz unmatched query', qv, [], 35,
+        backend, 'zzz unmatched query', qv, 35,
         fingerprint=stored_fingerprint(backend),
         intent_override='GENERAL', category='preference')
     assert len(resp['results']) == 35
@@ -272,7 +272,7 @@ def test_filter_precedes_rerank(backend, monkeypatch):
     _seed(backend, 10, 'preference', 'alpha shared topic pref {i}')
     _seed(backend, 10, 'fact', 'alpha shared topic gen {i}')
     resp = intent_aware_recall(
-        backend, 'alpha shared topic', None, [], 10,
+        backend, 'alpha shared topic', None, 10,
         fingerprint=stored_fingerprint(backend),
         intent_override='GENERAL', rerank=True, category='preference')
     assert resp['meta']['reranked'] is True

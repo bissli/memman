@@ -79,7 +79,7 @@ def _top5_ids(backend, qvec) -> set[str]:
     """Return the top-5 ids by intent-aware recall on the given backend."""
     result = intent_aware_recall(
         backend, query='topic insight',
-        query_vec=qvec, query_entities=[],
+        query_vec=qvec,
         limit=5, intent_override='GENERAL',
         fingerprint=stored_fingerprint(backend))
     return {r['insight'].id for r in result['results'][:5]}
