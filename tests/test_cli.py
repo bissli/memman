@@ -318,6 +318,70 @@ class TestRecall:
             assert result.exit_code == 0
             mock_re.assert_called_once()
 
+    def test_recall_min_score_reaches_retrieval(self, runner):
+        """`--min-score` is forwarded to `intent_aware_recall`.
+
+        Mutation: dropping `min_score=min_score` from the call site, so
+            the flag parses and silently does nothing.
+        Oracle: a spy capturing the kwarg, compared against the value
+            typed on the command line and against the unflagged
+            default.
+        """
+        invoke(runner, [
+            'remember', 'Go uses SQLite for persistent storage',
+            '--no-reconcile'])
+
+        empty = {'results': [], 'meta': {'intent': 'GENERAL'}}
+        with patch('memman.search.recall.intent_aware_recall',
+                   return_value=empty) as spy:
+            invoke(runner, ['recall', 'Go SQLite storage',
+                            '--min-score', '0.4'])
+            assert spy.call_args.kwargs['min_score'] == 0.4
+        with patch('memman.search.recall.intent_aware_recall',
+                   return_value=empty) as spy:
+            invoke(runner, ['recall', 'Go SQLite storage'])
+            assert spy.call_args.kwargs['min_score'] == 0.0
+
+    def test_recall_min_score_rejected_on_basic_path(self, runner):
+        """`--basic --min-score` fails rather than ignoring the floor.
+
+        Mutation: dropping the guard, which makes the floor a silent
+            no-op on the SQL LIKE path that computes no scores.
+        Oracle: a non-zero exit whose message names both flags, against
+            the same command with the floor left at its default.
+        """
+        invoke(runner, [
+            'remember', 'Go uses SQLite for persistent storage',
+            '--no-reconcile'])
+        rejected = invoke(runner, ['recall', 'Go SQLite', '--basic',
+                                   '--min-score', '0.5'])
+        assert rejected.exit_code != 0
+        assert '--min-score' in rejected.output
+        assert '--basic' in rejected.output
+        allowed = invoke(runner, ['recall', 'Go SQLite', '--basic'])
+        assert allowed.exit_code == 0
+
+    def test_recall_min_score_rejects_out_of_domain_values(self, runner):
+        """Values that cannot act as a floor are refused, not ignored.
+
+        Mutation: dropping the NaN guard, or widening the FloatRange,
+            either of which restores a floor that parses and then
+            silently filters nothing.
+        Oracle: three values that cannot threshold anything (below the
+            range, above it, and NaN, which compares false against
+            every row) against an in-range value that is accepted.
+        """
+        invoke(runner, [
+            'remember', 'Go uses SQLite for persistent storage',
+            '--no-reconcile'])
+        for bad in ('-1', '3.0', 'nan'):
+            rejected = invoke(runner, ['recall', 'Go SQLite',
+                                       '--min-score', bad])
+            assert rejected.exit_code != 0, bad
+        accepted = invoke(runner, ['recall', 'Go SQLite',
+                                   '--min-score', '2.0'])
+        assert accepted.exit_code == 0
+
     def test_recall_basic_mode(self, runner):
         """Basic recall returns {results: [...], meta: {basic: True}}."""
         invoke(runner, [

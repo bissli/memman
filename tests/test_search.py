@@ -7,7 +7,8 @@ from memman.search.keyword import keyword_search, tokenize
 from memman.search.recall import _RERANK_WEIGHTS_RAW, RERANK_WEIGHTS
 from memman.search.recall import get_traversal_params, intent_aware_recall
 from memman.store.model import Insight
-from tests.conftest import make_insight
+from tests.conftest import _vec as _vec_512
+from tests.conftest import make_edge, make_insight
 
 
 class TestKeywordSearch:
@@ -330,6 +331,258 @@ class TestRecallRanking:
             limit=5, intent_override='GENERAL',
             fingerprint=stored_fingerprint(backend))
         assert 'sparse' not in result['meta']
+
+    def test_sparse_fires_on_full_irrelevant_result_set(self, backend):
+        """Sparse fires when a FULL result set carries no relevance.
+
+        Mutation: dropping the relevance clause from `sparse`, leaving
+            only the `len(results) < limit // 2` count test.
+        Oracle: the returned row count, asserted at or above the count
+            arm's own threshold, so only the relevance arm can fire.
+        """
+        for i in range(6):
+            backend.nodes.insert(make_insight(
+                id=f'irrelevant-{i}',
+                content=f'saffron marmalade zeppelin {i}'))
+        result = intent_aware_recall(
+            backend, query='quantum tungsten harpsichord',
+            query_vec=None,
+            limit=5, intent_override='GENERAL',
+            fingerprint=stored_fingerprint(backend))
+        assert len(result['results']) == 5
+        assert all(r['signals']['keyword'] == 0.0
+                   for r in result['results'])
+        assert result['meta']['sparse'] is True
+
+    def test_sparse_reads_keyword_only_not_similarity(self, backend):
+        """A full set at similarity 1.0 still fires when keyword is 0.
+
+        Mutation: conjoining `sim_score == 0.0` onto the relevance
+            clause, which is the rule the defect ledger specified and
+            which measurement showed fires on nothing once a store has
+            embeddings (0 of 20 nonsense queries).
+        Oracle: every row embedded parallel to the query vector, so
+            similarity is exactly 1.0 while no query token appears in
+            any row; the sim-conjoined rule cannot fire here and the
+            shipped rule must.
+        """
+        vec = _vec_512(1.0, 0.0)
+        for i in range(6):
+            backend.nodes.insert(make_insight(
+                id=f'simhigh-{i}',
+                content=f'saffron marmalade zeppelin {i}'))
+            backend.nodes.update_embedding(f'simhigh-{i}', vec, 'fake')
+        result = intent_aware_recall(
+            backend, query='quantum tungsten harpsichord',
+            query_vec=vec,
+            limit=5, intent_override='GENERAL',
+            fingerprint=stored_fingerprint(backend))
+        assert len(result['results']) >= 5 // 2
+        assert all(r['signals']['keyword'] == 0.0
+                   for r in result['results'])
+        assert min(r['signals']['similarity']
+                   for r in result['results']) > 0.99
+        assert result['meta']['sparse'] is True
+
+    def test_sparse_absent_when_one_row_is_relevant(self, backend):
+        """One relevant row in a full set keeps `sparse` off.
+
+        Mutation: inverting the pool test to `all(kw > 0.0)`, which
+            demands every row match and so fires on this mostly-
+            irrelevant pool.
+        Oracle: a pool built with exactly one token-matching row, with
+            both the matching and non-matching signals asserted.
+        """
+        for i in range(5):
+            backend.nodes.insert(make_insight(
+                id=f'mixed-irrelevant-{i}',
+                content=f'saffron marmalade zeppelin {i}'))
+        backend.nodes.insert(make_insight(
+            id='mixed-relevant',
+            content='quantum tungsten harpsichord resonance'))
+        result = intent_aware_recall(
+            backend, query='quantum tungsten harpsichord',
+            query_vec=None,
+            limit=5, intent_override='GENERAL',
+            fingerprint=stored_fingerprint(backend))
+        assert len(result['results']) >= 5 // 2
+        signals = [r['signals']['keyword'] for r in result['results']]
+        assert max(signals) > 0.0
+        assert min(signals) == 0.0
+        assert 'sparse' not in result['meta']
+
+    def test_sparse_absent_when_the_filter_hid_the_matching_row(
+            self, backend):
+        """A category filter that hides the match is not "no match".
+
+        Mutation: reading the keyword evidence off the returned rows
+            instead of the pre-filter candidate pool, which calls a
+            working graph-mediated filtered recall irrelevant and tells
+            the agent to discard it.
+        Oracle: a pool whose ONLY token-matching row is the one the
+            `--cat` filter removes, with every returned row asserted at
+            keyword 0.0 so the survivors alone would fire the arm.
+        """
+        backend.nodes.insert(make_insight(
+            id='hidden-match', category='fact',
+            content='quantum tungsten harpsichord resonance'))
+        for i in range(4):
+            backend.nodes.insert(make_insight(
+                id=f'child-{i}', category='decision',
+                content=f'saffron marmalade zeppelin {i}'))
+            backend.edges.upsert(make_edge(
+                source_id=f'child-{i}', target_id='hidden-match',
+                edge_type='causal', weight=1.0))
+            backend.edges.upsert(make_edge(
+                source_id='hidden-match', target_id=f'child-{i}',
+                edge_type='causal', weight=1.0))
+        result = intent_aware_recall(
+            backend, query='quantum tungsten harpsichord',
+            query_vec=None,
+            limit=4, intent_override='GENERAL',
+            fingerprint=stored_fingerprint(backend),
+            category='decision')
+        ids = {r['insight'].id for r in result['results']}
+        assert 'hidden-match' not in ids
+        assert len(result['results']) >= 4 // 2
+        assert all(r['signals']['keyword'] == 0.0
+                   for r in result['results'])
+        assert 'sparse' not in result['meta']
+
+    def test_min_score_thresholds_relevance_not_blended_score(
+            self, backend):
+        """The floor reads `kw + sim`, never the blended score.
+
+        Mutation: thresholding on the blended `score` instead of the
+            keyword and similarity sum.
+        Oracle: min-max normalization hands the top graph row
+            `graph == 1.0`, so its blended score is `w_gr` (0.1765 for
+            GENERAL) -- above the 0.1 floor -- while its relevance sum
+            is 0.0. A blended-score floor keeps that row; the shipped
+            floor drops it.
+        """
+        for i in range(6):
+            backend.nodes.insert(make_insight(
+                id=f'floor-{i}',
+                content=f'saffron marmalade zeppelin {i}'))
+        baseline = intent_aware_recall(
+            backend, query='quantum tungsten harpsichord',
+            query_vec=None,
+            limit=5, intent_override='GENERAL',
+            fingerprint=stored_fingerprint(backend))
+        assert max(r['signals']['graph']
+                   for r in baseline['results']) == 1.0
+        floored = intent_aware_recall(
+            backend, query='quantum tungsten harpsichord',
+            query_vec=None,
+            limit=5, intent_override='GENERAL',
+            fingerprint=stored_fingerprint(backend),
+            min_score=0.1)
+        assert floored['results'] == []
+
+    def test_min_score_sums_similarity_into_the_floor(self, backend):
+        """Similarity carries a row over a floor keyword cannot reach.
+
+        Mutation: dropping `sim_score` from the floor, leaving it a
+            keyword-only threshold while four doc surfaces and the
+            docstring all state it sums both signals.
+        Oracle: rows embedded parallel to the query vector, so keyword
+            is 0.0 and similarity is 1.0; a floor of 0.5 is
+            unreachable by keyword alone and cleared by the sum.
+        """
+        vec = _vec_512(1.0, 0.0)
+        for i in range(6):
+            backend.nodes.insert(make_insight(
+                id=f'simfloor-{i}',
+                content=f'saffron marmalade zeppelin {i}'))
+            backend.nodes.update_embedding(f'simfloor-{i}', vec, 'fake')
+        result = intent_aware_recall(
+            backend, query='quantum tungsten harpsichord',
+            query_vec=vec,
+            limit=5, intent_override='GENERAL',
+            fingerprint=stored_fingerprint(backend),
+            min_score=0.5)
+        assert len(result['results']) == 5
+        assert all(r['signals']['keyword'] == 0.0
+                   for r in result['results'])
+        assert min(r['signals']['similarity']
+                   for r in result['results']) > 0.99
+
+    def test_sparse_count_arm_fires_on_a_short_matching_page(
+            self, backend):
+        """Too few rows is sparse even when the query matched.
+
+        Mutation: deleting the `len(results) < limit // 2` arm, which
+            no other test covers -- the empty-store cases fire all
+            three arms at once and so cannot isolate it.
+        Oracle: three rows returned against a limit of 10, one of them
+            a keyword match, so the pool-match arm is provably quiet
+            and only the count arm can set the flag.
+        """
+        backend.nodes.insert(make_insight(
+            id='short-match',
+            content='quantum tungsten harpsichord resonance'))
+        for i in range(2):
+            backend.nodes.insert(make_insight(
+                id=f'short-filler-{i}',
+                content=f'saffron marmalade zeppelin {i}'))
+        result = intent_aware_recall(
+            backend, query='quantum tungsten harpsichord',
+            query_vec=None,
+            limit=10, intent_override='GENERAL',
+            fingerprint=stored_fingerprint(backend))
+        assert len(result['results']) == 3
+        assert max(r['signals']['keyword']
+                   for r in result['results']) > 0.0
+        assert result['meta']['sparse'] is True
+
+    def test_min_score_default_keeps_zero_relevance_rows(self, backend):
+        """The default floor is off: zero-relevance rows still return.
+
+        Mutation: defaulting `min_score` above 0.0, or dropping the
+            `min_score > 0.0` gate so the filter runs on every call.
+        Oracle: the same pool the 0.1 floor empties comes back
+            populated when no floor is passed.
+        """
+        for i in range(6):
+            backend.nodes.insert(make_insight(
+                id=f'nofloor-{i}',
+                content=f'saffron marmalade zeppelin {i}'))
+        result = intent_aware_recall(
+            backend, query='quantum tungsten harpsichord',
+            query_vec=None,
+            limit=5, intent_override='GENERAL',
+            fingerprint=stored_fingerprint(backend))
+        assert len(result['results']) > 0
+        assert all(r['signals']['keyword'] == 0.0
+                   and r['signals']['similarity'] == 0.0
+                   for r in result['results'])
+
+    def test_min_score_keeps_rows_at_or_above_the_floor(self, backend):
+        """A relevant row survives a floor its relevance sum clears.
+
+        Mutation: an off-by-one comparison (`>` for `>=`) at the exact
+            floor, or inverting the filter to drop the rows it keeps.
+        Oracle: a single row whose keyword score is exactly 1.0 (every
+            query token present) against five rows scoring 0.0, with
+            the floor set to that row's own value.
+        """
+        for i in range(5):
+            backend.nodes.insert(make_insight(
+                id=f'keep-irrelevant-{i}',
+                content=f'saffron marmalade zeppelin {i}'))
+        backend.nodes.insert(make_insight(
+            id='keep-relevant',
+            content='quantum tungsten harpsichord resonance'))
+        result = intent_aware_recall(
+            backend, query='quantum tungsten harpsichord',
+            query_vec=None,
+            limit=5, intent_override='GENERAL',
+            fingerprint=stored_fingerprint(backend),
+            min_score=1.0)
+        assert [r['insight'].id for r in result['results']] == [
+            'keep-relevant']
+        assert result['results'][0]['signals']['keyword'] == 1.0
 
     def test_rerank_weights_override_shipped_matches_default(self, backend):
         """Passing `RERANK_WEIGHTS` as override produces identical scores.
