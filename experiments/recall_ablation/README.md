@@ -34,11 +34,45 @@ Why, in the order the evidence landed:
 
 Consequences for anyone reading older records here:
 
-- The weight rows no longer sum to 1.0 (WHY 0.90, WHEN 0.90, ENTITY 0.65, GENERAL 0.85). Those were always the real caps on the default path, because the deleted term contributed nothing there; the survivors keep their literal shipped values, so on that path no ranking and no score moves. Under `--expand` the term was live, so those runs DO reorder — that is the change, not a side effect. Rescaling to restore a cosmetic 1.0 would reorder nothing either way, since ranking is invariant to scaling one intent's row by a constant, but it would inflate every absolute score.
+- 0.23.0 left the weight rows summing to WHY 0.90, WHEN 0.90, ENTITY 0.65 and GENERAL 0.85 - always the real caps on the default path, because the deleted term contributed nothing there. The survivors kept their literal values, so on that path no ranking and no score moved. Under `--expand` the term was live, so those runs DO reorder - that is the change, not a side effect.
+- 0.23.1 then divided each row by its own sum, back to 1.0. Absolute scores rise; the weighted-sum order does not, since every candidate in a call shares one intent. The division is computed rather than written out - see the rounding record below. Two exceptions to "the order does not move". Above `RERANK_SHORTLIST` the result list carries cross-encoder scores on the head and blended scores on the tail, so at `--limit 0` or `--limit > 100` the WHY and WHEN re-sorts compare both scales and a weight change CAN move rows: WHY whenever a tail score crosses a head score, WHEN only on a `created_at` tie straddling the boundary (routine, since timestamps are second-granularity). And MMR blends the score against a raw cosine (`lam * score - (1 - lam) * max_sim`), which is not scale-invariant - inert at the shipped `MMR_LAMBDA = 1.0`, but it means the `mmr_l*` arms below were measured at the old scale and do not carry over.
+- `WEIGHTS_V2` and the `sweep_rerank.py` grids are normalized by the same expression, so each arm still departs from production exactly where it did and `is_shipped` still matches.
 - `WEIGHTS_V2` rows are the historical four-slot candidates with the entity slot dropped and the other three untouched, so each arm still departs from production where it always did. What is gone is v2's ENTITY-entity claim, 0.35 -> 0.50, which was never testable: every sweep that reported it ran with `ent_score` identically 0.0, so every entity-weight conclusion in `results.csv` and `results_mmr.csv` was vacuous.
 - Entities still reach recall twice over, so this is not a claim that entity data is useless: a candidate's keyword token set unions its content tokens with its entity-name tokens, and `entity` graph edges carry the highest edge weight of any intent under ENTITY (0.55). Dropping that keyword union measured -0.0137 nDCG@5 on this same 30-query instrument, which is inside the same noise band as the entity effect itself and so is not on its own a reason to keep it; what argues for keeping it is the token census - on 43.6% of rows the entity list contributes at least one token the content lacks.
 
 Instrument caveat that bounds every number above: 65.9% of the (query, doc) pairs these arms return carry no relevance grade, the labels date from 2026-04-30, and 30 queries cannot resolve a 0.02 effect - about 130 would be needed. The labels and the nDCG scorer live under `experiments/eval/`, which is untracked, so a fresh clone can reproduce the churn columns but not the quality columns.
+
+## Weight-rounding record (2026-08-28, memman 0.23.1)
+
+`verify_weight_rounding.py` diffs returned id sequences against the raw
+weight table, one arm per way of spelling the rescale. 80 labeled
+search-store queries, `--limit 100`, rerank off (so the weighted sum IS
+the returned order), against a `/tmp` sandbox copy of the `search`
+store.
+
+| Arm      | Positions moved of 8000 |
+| -------- | ----------------------- |
+| control  | 0                       |
+| 4 dp     | 68                      |
+| 5 dp     | 5                       |
+| 6 dp     | 3                       |
+| 8 dp     | 0                       |
+| computed | 0                       |
+
+Conclusion - compute the division, do not write literals:
+
+- The `control` arm repeats the baseline table verbatim and moves
+  nothing, so the instrument is deterministic within a process and the
+  other arms mean what they say.
+- No quotient has an exact float literal, so a rounded row is turned as
+  well as scaled. Movement lands in the deep tail, where adjacent
+  blended scores sit closer together than the rounding error, so the
+  count rises with `--limit`: 4 dp moved 4 to 9 of 2400 slots at limit
+  30 across three runs and 68 of 8000 at limit 100. The run-to-run
+  spread at 4 dp is itself the finding - that perturbation sits inside
+  the near-tie band, where order is not stable across processes.
+- Only `8 dp` and `computed` move nothing at either depth. Computing it
+  also keeps the sum from drifting when someone edits a raw row.
 
 ## MMR sweep record (2026-08-05, memman 0.19.0)
 

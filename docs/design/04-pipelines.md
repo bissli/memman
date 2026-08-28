@@ -183,11 +183,21 @@ graph_score    = (traversal_score - min) / (max - min)   // min-max normalizatio
 final = w_kw·keyword + w_sim·similarity + w_gr·graph
 ```
 
-The rows do not sum to 1.0. A fourth term, `entity`, was removed in 0.23.0 (see the note below) and the three survivors kept the values they already had. Rescaling them to restore a nominal 1.0 would reorder nothing — ranking is invariant to scaling one intent's weights by a positive constant — but it would lift every absolute score above what the same query returns today, and those per-intent ceilings (WHY 0.90, WHEN 0.90, ENTITY 0.65, GENERAL 0.85) have been the real ones ever since expansion became opt-in and the entity term went inert.
+Each row sums to 1.0, so `final` is a weighted average carrying one range at every intent. A fourth term, `entity`, was removed in 0.23.0 (see the note below), which left the rows summing to WHY 0.90, WHEN 0.90, ENTITY 0.65 and GENERAL 0.85; 0.23.1 divided each row by its own sum. Both claims hold to within a float ulp: WHEN sums to 0.9999999999999999, and `similarity` is an unclamped cosine that can return 1 + 1 ulp, so `final` is bounded by 1 + 4.5e-16 rather than by 1. One range is not one meaning - the mix behind a 0.7 still differs per intent - and `graph_score` is min-max normalized over the query's own candidate pool, so no score compares across queries at any intent.
+
+The rows inherit their DIRECTION from the pre-0.23.0 four-weight table; only the scale is new. They are not a measured optimum. `experiments/quality_matrix/results/sweep_rerank/` holds WHEN and WHY swept against three corpora, and the shipped arm is flagged beaten by the grid peak in all six runs; ENTITY and GENERAL have no grid at all. Read that record before treating this table as settled.
+
+The division is computed at import, not written out, because no quotient here has an exact float literal - 0.45/0.90 is 1/2, yet computes to 0.5000000000000001, because the raw row sums to 0.8999999999999999. A rounded literal turns the row as well as scaling it: `experiments/recall_ablation/verify_weight_rounding.py` prices that turn in returned positions, and its record in that directory's README shows four decimals moving 68 of 8000 slots at limit 100 where the computed form moves none. Computing it also keeps the sum from drifting when someone edits a raw row.
+
+Rescaling one intent's row by a positive constant leaves the weighted-sum order untouched, because every candidate in a call shares one intent. Two things break that end to end. Above the shortlist (next paragraph) the list holds two score scales at once, and lifting only one of them can reorder. And MMR scores `lam * relevance - (1 - lam) * max_pool_similarity`, mixing the blended score with a raw cosine, so it is not scale-invariant either - inert at the shipped `MMR_LAMBDA = 1.0`, but a swept lambda means something different after a rescale.
 
 Note the interaction with the cross-encoder (Step 4b): when rerank fires it overwrites `final` for the top `RERANK_SHORTLIST = 100` rows, so on a pool of 100 or fewer these weights decide nothing about the order the caller sees. Above 100 they decide which rows reach the reranker at all.
 
+When the pool exceeds the shortlist, that splice leaves cross-encoder scores on the head and blended scores on the tail; a smaller pool is overwritten whole and has no tail. The limit slice normally drops the tail, but it runs only when `limit > 0`, so `--limit 0` (unbounded) or `--limit > 100` carries both scales into the WHY and WHEN re-sorts, which compare them on one key: `causal_topological_sort` orders its ready set by `-score`, and WHEN breaks a `created_at` tie by score. On that path the order is an interleave of two incomparable scales, so a weight change can perturb it - WHY whenever a tail score crosses a head score, WHEN only on a `created_at` tie straddling the boundary, which is routine because timestamps are second-granularity. No shipped surface reaches it: the skills and hooks recall at `--limit 5` or `--limit 10`.
+
 **Per-intent tuning.** The Step 3 traversal budget and the Step 4 reranker weights both vary by intent. Left columns tune beam search; right columns tune the reranker:
+
+Reranker columns are the RAW rows as written in `_RERANK_WEIGHTS_RAW`; the shipped values are each divided by its row sum.
 
 | Intent  | Beam | Depth | MaxVis | KW   | Sim      | Graph    |
 | ------- | ---- | ----- | ------ | ---- | -------- | -------- |
@@ -240,7 +250,7 @@ Each retrieval result includes signal details:
     "content": "...",
     "summary": "..."
   },
-  "score": 0.73,
+  "score": 0.72,
   "intent": "ENTITY",
   "via": "keyword",
   "signals": {
