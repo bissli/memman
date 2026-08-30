@@ -25,6 +25,26 @@ def test_active_store_wraps_backend_config_error_from_open(
     assert 'oops' in str(exc.value).lower() or 'dsn' in str(exc.value).lower()
 
 
+def test_active_store_wraps_backend_error_from_open(tmp_path):
+    """A corrupt store database raises `ClickException`, not `BackendError`.
+
+    Mutation: dropping `BackendError` from the caught tuple in
+        `active_store`, so a store-open failure escapes the CLI seam
+        and prints a Python traceback.
+    Oracle: `pytest.raises(ClickException)` discriminates -- an
+        unwrapped `BackendError` is not a `ClickException` and escapes
+        it -- plus the path named in the message.
+    """
+    data_dir = tmp_path / 'memman'
+    store_dir = data_dir / 'data' / 'broken'
+    store_dir.mkdir(parents=True)
+    (store_dir / 'memman.db').write_bytes(b'not a sqlite database' * 8)
+    with pytest.raises(ClickException) as excinfo, active_store(
+            data_dir=str(data_dir), store='broken', unchecked=True):
+        pass
+    assert 'memman.db' in str(excinfo.value)
+
+
 def test_active_store_yields_store_bound_ec_per_store(
         tmp_path, env_file, monkeypatch):
     """Two stores with different stored fingerprints in one process

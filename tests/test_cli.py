@@ -14,6 +14,7 @@ from memman.cli import cli
 from memman.embed.fingerprint import seed_default_fingerprint
 from memman.embed.vector import serialize_vector
 from memman.store.db import store_exists
+from memman.store.errors import BackendError
 from memman.store.node import insert_insight, update_embedding
 from tests.conftest import invoke, make_insight, parse_remember
 
@@ -2065,3 +2066,30 @@ class TestPostgresGuards:
         out = r.invoke(cli, ['--data-dir', data_dir, 'embed', 'reembed'])
         assert out.exit_code != 0
         assert 'SQLite-only' in out.output
+
+
+class TestCorruptStoreErrorHygiene:
+    """A store whose database cannot be opened exits cleanly."""
+
+    def test_recall_reports_corrupt_store_without_traceback(self, runner):
+        """`recall` on an unreadable store prints an error, not a trace.
+
+        Mutation: dropping `BackendError` from the caught tuple in
+            `session.active_store`, so the store-open failure escapes
+            the CLI seam. `exit_code` alone cannot catch that -- Click
+            reports an in-command raise as exit 1 too -- so the
+            assertions below read the output and the exception type.
+        Oracle: a clean exit leaves `result.exception` a `SystemExit`
+            and writes `Error: ...` naming the path; a leak leaves the
+            `BackendError` itself on `result.exception`.
+        """
+        _, data_dir = runner
+        sdir = pathlib.Path(data_dir) / 'data' / 'broken'
+        sdir.mkdir(parents=True)
+        (sdir / 'memman.db').write_bytes(b'not a sqlite database' * 8)
+        result = invoke(
+            runner, ['--store', 'broken', 'recall', 'anything', '--basic'])
+        assert result.exit_code != 0
+        assert not isinstance(result.exception, BackendError)
+        assert 'Error: cannot open database' in result.output
+        assert 'memman.db' in result.output

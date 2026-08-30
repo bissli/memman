@@ -9,6 +9,8 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
 
+from memman.store.errors import BackendError
+
 logger = logging.getLogger('memman')
 
 DEFAULT_STORE_NAME = 'default'
@@ -199,26 +201,70 @@ def set_meta(db: 'DB', key: str, value: str) -> None:
 
 
 def open_db(data_dir: str) -> DB:
-    """Open (or create) the SQLite database at the given directory.
+    """Open (or create) the SQLite database for one store.
 
-    Runs idempotent baseline schema + versioned migrations. Does NOT
-    trigger the edge-constants reindex — callers that want that (the
-    CLI `_open_db`) invoke
-    `reindex_if_constants_changed(backend, store_name=...)` after
-    open. Keeping the graph-reindex out of this module avoids a
-    backward import edge from `memman.store` to `memman.graph`.
+    Applies the baseline schema idempotently. Does NOT trigger the
+    edge-constants reindex - callers that want that (the CLI's
+    `_open_store_db`) invoke `reindex_if_constants_changed(backend,
+    store_name=...)` after open. Keeping the graph-reindex out of
+    this module avoids a backward import edge from `memman.store` to
+    `memman.graph`.
+
+    Parameters
+    ----------
+    data_dir : str
+        The STORE directory, not the base data directory: every
+        caller passes `store_dir(base_dir, name)` output, and the
+        database is read from `<data_dir>/memman.db`. Created, with
+        any missing parent, when absent.
+
+    Returns
+    -------
+    DB
+        An open handle the caller owns and closes, by `DB.close()`
+        or the `with` form.
+
+    Raises
+    ------
+    BackendError
+        When the store directory cannot be created, when
+        `<data_dir>/memman.db` cannot be opened or read as a
+        database, or when the store predates the current schema.
+
+    Notes
+    -----
+    - A zero-length `memman.db` raises nothing: SQLite reads it as a
+      fresh database, so this function recreates the baseline schema
+      in it and returns a working, empty store. Only a partially
+      truncated file reads as malformed.
     """
-    Path(data_dir).mkdir(mode=0o755, exist_ok=True, parents=True)
+    try:
+        Path(data_dir).mkdir(mode=0o755, exist_ok=True, parents=True)
+    except OSError as exc:
+        raise BackendError(
+            f'cannot create store directory {data_dir}: {exc}') from exc
     db_path = os.path.join(data_dir, 'memman.db')
     is_new_db = not Path(db_path).exists()
-    conn = sqlite3.connect(db_path, isolation_level=None)
-    if is_new_db:
-        conn.execute('pragma auto_vacuum=incremental')
-    conn.execute('pragma journal_mode=wal')
-    conn.execute('pragma foreign_keys=on')
-    conn.execute('pragma busy_timeout=5000')
-    db = DB(conn, db_path)
-    _migrate(db)
+    try:
+        conn = sqlite3.connect(db_path, isolation_level=None)
+    except sqlite3.Error as exc:
+        raise BackendError(
+            f'cannot open database {db_path}: {exc}') from exc
+    try:
+        if is_new_db:
+            conn.execute('pragma auto_vacuum=incremental')
+        conn.execute('pragma journal_mode=wal')
+        conn.execute('pragma foreign_keys=on')
+        conn.execute('pragma busy_timeout=5000')
+        db = DB(conn, db_path)
+        _migrate(db)
+    except sqlite3.Error as exc:
+        conn.close()
+        raise BackendError(
+            f'cannot open database {db_path}: {exc}') from exc
+    except Exception:
+        conn.close()
+        raise
     return db
 
 
@@ -347,7 +393,7 @@ def _migrate(db: DB) -> None:
     except sqlite3.OperationalError as exc:
         if 'no such column' in str(exc):
             name = Path(db.path).parent.name
-            raise RuntimeError(
+            raise BackendError(
                 f'store {name} predates the current schema;'
                 f' rebuild with {MIGRATION_SCRIPT}') from exc
         raise

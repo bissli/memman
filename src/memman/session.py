@@ -32,6 +32,7 @@ from contextlib import contextmanager
 
 import click
 from memman.store.backend import Backend
+from memman.store.errors import BackendError
 
 
 @contextmanager
@@ -47,28 +48,45 @@ def active_store(
     fingerprint, then yields the Backend. Closes on exit even if the
     body raises.
 
-    Imports for the fingerprint helpers are deferred to call time so
-    test-suite monkeypatching of `memman.embed.fingerprint` (autouse
-    seed-then-assert) is observed.
+    Parameters
+    ----------
+    data_dir : str
+        Base data directory.
+    store : str
+        Resolved store name; the caller applies `_resolve_store_name`
+        before invoking this helper.
+    unchecked : bool, default False
+        When True, skip seed/assert/reindex. Used by diagnostics that
+        must run against a stale or fresh store.
+    reindex_on_open : bool, default True
+        When False, skip the constants-hash reindex check on open
+        while still running the fingerprint seed/assert. Used by
+        recall to keep a potentially-long reindex off the
+        user-facing hot path; the drainer's maintenance pass picks
+        up the drift instead.
 
-    Args:
-        data_dir: base data directory.
-        store: resolved store name (the caller is expected to apply
-            `_resolve_store_name` before invoking this helper).
-        unchecked: when True, skip seed/assert/reindex. Used by
-            diagnostics that must run against a stale or fresh store.
-        reindex_on_open: when False, skip the constants-hash reindex
-            check on open while still running the fingerprint
-            seed/assert. Used by recall to keep a potentially-long
-            reindex off the user-facing hot path; the drainer's
-            maintenance pass picks up the drift instead.
+    Yields
+    ------
+    Backend
+        The open per-store Backend, closed on exit.
 
     Raises
-        click.ClickException: when the fingerprint check or backend
-            open via `factory.open_backend` fails. `ConfigError` from
-            either the runtime layer or the backend layer is wrapped
-            uniformly because `store.errors.ConfigError` now
-            subclasses `memman.exceptions.ConfigError`.
+    ------
+    click.ClickException
+        When the fingerprint check or the backend open via
+        `factory.open_backend` fails.
+
+    Notes
+    -----
+    - One `except` covers `ConfigError` from the runtime layer and
+      from the backend layer alike, because `store.errors.ConfigError`
+      subclasses `memman.exceptions.ConfigError`.
+    - `BackendError` is wrapped alongside it, so a store whose
+      on-disk state cannot be opened exits with a message instead of
+      a traceback.
+    - Imports for the fingerprint helpers are deferred to call time
+      so the test suite's monkeypatching of `memman.embed.fingerprint`
+      (autouse seed-then-assert) is observed.
     """
     from memman.embed import fingerprint as fp_mod
     from memman.embed import get_client
@@ -78,7 +96,7 @@ def active_store(
 
     try:
         backend = open_backend(store, data_dir)
-    except ConfigError as exc:
+    except (ConfigError, BackendError) as exc:
         raise click.ClickException(str(exc)) from exc
     try:
         if not unchecked:

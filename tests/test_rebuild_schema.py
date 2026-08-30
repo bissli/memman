@@ -19,6 +19,7 @@ import pytest
 from memman.embed.fingerprint import seed_default_fingerprint
 from memman.migrate import PAYLOAD_VERSION, MigrateEdge, MigrateInsight
 from memman.migrate import MigrationPayload
+from memman.store.errors import BackendError
 from memman.store.model import format_timestamp
 
 _SPEC = importlib.util.spec_from_file_location(
@@ -357,12 +358,12 @@ def test_open_db_names_the_migration_script(tmp_path):
 
     Mutation: dropping the `_migrate` error translation (a raw
         `no such column` OperationalError surfaces instead).
-    Oracle: `open_db` raises RuntimeError naming both the store dir
+    Oracle: `open_db` raises BackendError naming both the store dir
         and `MIGRATION_SCRIPT`.
     """
     from memman.store.db import MIGRATION_SCRIPT, open_db
     _make_old_store(tmp_path, 's9')
-    with pytest.raises(RuntimeError, match='rebuild with') as excinfo:
+    with pytest.raises(BackendError, match='rebuild with') as excinfo:
         open_db(str(tmp_path / 'data' / 's9'))
     assert MIGRATION_SCRIPT in str(excinfo.value)
     assert 's9' in str(excinfo.value)
