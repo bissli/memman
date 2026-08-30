@@ -90,20 +90,20 @@ memman forget <id>
 | `--entities`     |           | Comma-separated entities (merged with LLM-extracted)                                                                              |
 | `--source`       | `user`    | Source: `user`, `agent`, `external` — provenance, stored verbatim                                                                 |
 | `--session`      | (env)     | Session id for the temporal chain; defaults to `$MEMMAN_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID`. No session, no backbone edge |
-| `--no-reconcile` | `false`   | Store the text verbatim: skip extraction and reconciliation, so the write cannot be dropped or folded away                             |
+| `--no-reconcile` | `false`   | Store the text verbatim: skip extraction and reconciliation, so the write cannot be dropped or folded away                        |
 
 **Recall flags:**
 
-| Flag       | Default       | Description                                          |
-| ---------- | ------------- | ---------------------------------------------------- |
-| `--limit`  | `10`          | Max results                                          |
-| `--intent` | (auto-detect) | Override intent: `WHY`, `WHEN`, `ENTITY`, `GENERAL`; validated always, but inert under `--basic` and named in `meta.ignored` |
-| `--cat`    |               | Filter by category                                   |
-| `--source` |               | Filter by source                                     |
-| `--basic`  | `false`       | Use simple SQL LIKE matching instead of smart recall; emits no `sparse`, and names `--intent` / `--expand` in `meta.ignored` when passed |
-| `--brief`  | `false`       | Cut each result to id, category, importance, summary |
-| `--expand` | `false`       | Opt-in LLM query expansion (synonyms + intent hint); inert under `--basic` and named in `meta.ignored` |
-| `--min-score` | `0.0`   | Relevance floor on keyword+similarity, 0.0 to 2.0 (`0.0` = off); rejected with `--basic` |
+| Flag          | Default       | Description                                                                                                                              |
+| ------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `--limit`     | `10`          | Max results                                                                                                                              |
+| `--intent`    | (auto-detect) | Override intent: `WHY`, `WHEN`, `ENTITY`, `GENERAL`; validated always, but inert under `--basic` and named in `meta.ignored`             |
+| `--cat`       |               | Filter by category                                                                                                                       |
+| `--source`    |               | Filter by source                                                                                                                         |
+| `--basic`     | `false`       | Use simple SQL LIKE matching instead of smart recall; emits no `sparse`, and names `--intent` / `--expand` in `meta.ignored` when passed |
+| `--brief`     | `false`       | Cut each result to id, category, importance, summary                                                                                     |
+| `--expand`    | `false`       | Opt-in LLM query expansion (synonyms + intent hint); inert under `--basic` and named in `meta.ignored`                                   |
+| `--min-score` | `0.0`         | Relevance floor on keyword+similarity, 0.0 to 2.0 (`0.0` = off); rejected with `--basic`                                                 |
 
 The cross-encoder rerank stage is on by default and auto-skips on 1-2 token
 queries. Provider is selected via `MEMMAN_RERANK_PROVIDER` (any registered
