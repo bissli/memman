@@ -9,19 +9,31 @@ from memman.queue import get_row, list_rows, mark_done, mark_failed
 from memman.queue import purge_done, queue_db, retry_row, stats
 
 
-def test_enqueue_returns_incrementing_id(queue_conn):
-    """Enqueue returns monotonically increasing row ids.
+def test_enqueue_returns_row_id_and_the_uuid_it_stored(queue_conn):
+    """Enqueue returns `(row_id, queue_uuid)` and both are the real ones.
+
+    Mutation: returning the row id alone, swapping the pair's order,
+        or minting a second uuid for the return value instead of
+        handing back the one written into the row.
+    Oracle: the `queue_uuid` column read back off each queue row,
+        plus a second enqueue proving ids rise and uuids differ.
     """
-    id1 = enqueue(queue_conn, 'main', 'a')
-    id2 = enqueue(queue_conn, 'main', 'b')
+    id1, uuid1 = enqueue(queue_conn, 'main', 'a')
+    id2, uuid2 = enqueue(queue_conn, 'main', 'b')
+    assert isinstance(id1, int) and isinstance(uuid1, str)
     assert id2 > id1
+    assert uuid1 != uuid2
+    stored = dict(queue_conn.execute(
+        'select id, queue_uuid from queue').fetchall())
+    assert stored[id1] == uuid1
+    assert stored[id2] == uuid2
 
 
 def test_claim_respects_priority(queue_conn):
     """Higher priority rows are claimed before lower priority.
     """
-    low = enqueue(queue_conn, 'main', 'low', priority=0)
-    high = enqueue(queue_conn, 'main', 'high', priority=5)
+    low, _ = enqueue(queue_conn, 'main', 'low', priority=0)
+    high, _ = enqueue(queue_conn, 'main', 'high', priority=5)
     r = claim(queue_conn, worker_pid=1)
     assert r.id == high
 
@@ -29,9 +41,9 @@ def test_claim_respects_priority(queue_conn):
 def test_claim_fifo_within_same_priority(queue_conn):
     """Same-priority rows drain in queued_at order.
     """
-    first = enqueue(queue_conn, 'main', 'first')
+    first, _ = enqueue(queue_conn, 'main', 'first')
     time.sleep(1.05)
-    second = enqueue(queue_conn, 'main', 'second')
+    second, _ = enqueue(queue_conn, 'main', 'second')
     r = claim(queue_conn, worker_pid=1)
     assert r.id == first
 
@@ -45,7 +57,7 @@ def test_claim_returns_none_when_empty(queue_conn):
 def test_claim_bumps_attempts(queue_conn):
     """Each claim increments the row's attempts counter.
     """
-    rid = enqueue(queue_conn, 'main', 'x')
+    rid, _ = enqueue(queue_conn, 'main', 'x')
     r = claim(queue_conn, worker_pid=1)
     assert r.attempts == 1
     assert r.id == rid
@@ -204,7 +216,7 @@ def test_retry_row_resurrects_failed_row(queue_conn):
 def test_retry_row_noop_on_non_failed(queue_conn):
     """retry_row returns False for rows that are not failed.
     """
-    rid = enqueue(queue_conn, 'main', 'a')
+    rid, _ = enqueue(queue_conn, 'main', 'a')
     assert not retry_row(queue_conn, rid)
 
 

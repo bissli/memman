@@ -396,6 +396,48 @@ def has_active_with_queue_uuid(db: 'DB', queue_uuid: str) -> bool:
     return row is not None
 
 
+def get_by_queue_uuid(db: 'DB', queue_uuid: str) -> list[Insight]:
+    """Return the active insights one queued write produced.
+
+    Parameters
+    ----------
+    db : DB
+        Open store connection.
+    queue_uuid : str
+        The write's idempotency key, as returned by `remember` /
+        `replace` and by `memman scheduler queue show`.
+
+    Returns
+    -------
+    list[Insight]
+        Active rows carrying this key, oldest first. Empty when the
+        write stored nothing.
+
+    Notes
+    -----
+    - Ordering tiebreaks on `id`. Every fact of one write is applied
+      in a single transaction, so all siblings share one
+      second-granularity `created_at`; without the tiebreak the order
+      is the query plan's, and Postgres does not sort stably.
+    - Active rows only. A fact that a later reconcile merged away is
+      a tombstone, not where the write landed, and SQL `= ?` never
+      matches the NULL `queue_uuid` of a pre-0.18.0 row.
+    - Empty is a real answer, not an error: a write whose extraction
+      returned nothing is recorded in `skipped_writes`, and a write
+      that only corroborated an existing insight stamps its key on
+      that target only when the target carried none.
+    """
+    sql = f"""
+select {_INSIGHT_COLUMNS}
+from insights
+where queue_uuid = ?
+  and deleted_at is null
+order by created_at, id
+"""
+    rows = db._query(sql, (queue_uuid,)).fetchall()
+    return [_scan_insight(r) for r in rows]
+
+
 def iter_for_reembed(
         db: 'DB', cursor: str, batch: int
         ) -> list[tuple[str, str, str | None, int | None]]:

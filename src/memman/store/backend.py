@@ -166,6 +166,19 @@ class NodeStore(Protocol):
         """
         ...
 
+    def get_by_queue_uuid(self, queue_uuid: str) -> list[Insight]:
+        """Return the active insights one queued write produced.
+
+        The write-to-read join: `remember` and `replace` hand the
+        caller a `queue_uuid`, and this resolves it to the rows that
+        write stored, oldest first, tiebroken on `id` so siblings
+        sharing one transaction timestamp order identically on both
+        backends. Empty when the write stored nothing. Backends
+        implement it in SQL for the same NULL-matching reason as
+        `has_active_with_queue_uuid`.
+        """
+        ...
+
     def iter_for_reembed(
             self, cursor: Id, batch: int) -> list[ReembedRow]:
         """Return a batch of (id, content, embedding_model, blob_length).
