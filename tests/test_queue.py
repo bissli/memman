@@ -20,7 +20,8 @@ def test_enqueue_returns_row_id_and_the_uuid_it_stored(queue_conn):
     """
     id1, uuid1 = enqueue(queue_conn, 'main', 'a')
     id2, uuid2 = enqueue(queue_conn, 'main', 'b')
-    assert isinstance(id1, int) and isinstance(uuid1, str)
+    assert isinstance(id1, int)
+    assert isinstance(uuid1, str)
     assert id2 > id1
     assert uuid1 != uuid2
     stored = dict(queue_conn.execute(
