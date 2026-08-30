@@ -179,7 +179,7 @@ def test_doctor_passes_on_calibrated_fingerprint(backend):
     """Default-seeded `(voyage, voyage-3-lite, code)` reports pass with
     source='calibrated' and the calibrated threshold in the detail.
     """
-    result = check_embed_threshold(backend)
+    result = check_embed_threshold(backend, store_name='test')
     assert result['name'] == 'embed_threshold'
     assert result['status'] == 'pass'
     assert result['detail']['provider'] == 'voyage'
@@ -210,7 +210,7 @@ def test_doctor_warns_on_uncalibrated_fingerprint_with_fallback(backend):
     write_fingerprint(
         backend, Fingerprint(provider='fake', model='fake', dim=512))
 
-    result = check_embed_threshold(backend)
+    result = check_embed_threshold(backend, store_name='test')
     assert result['name'] == 'embed_threshold'
     assert result['status'] == 'warn'
     assert result['detail']['source'] == 'surface_median'
@@ -248,6 +248,34 @@ def test_doctor_override_masks_calibrated_emits_hint(
     assert result['detail']['threshold'] == 0.55
     assert result['detail']['masked_calibrated'] == 0.645
     assert 'masking the calibrated value' in result['detail']['hint']
+
+
+def test_doctor_reports_a_malformed_override_instead_of_raising(
+        backend, env_file):
+    """A garbage override is reported, never propagated out of doctor.
+
+    `run_all_checks` builds its check list eagerly, so a raise here
+    kills the whole `memman doctor` run on any non-empty store --
+    including `check_per_store_keys`, the check whose job is to name
+    this error.
+
+    Mutation: dropping the `except ValueError` around
+        `get_store_auto_threshold`, which restores the raise.
+    Oracle: the returned dict, compared against
+        `_resolve_semantic_threshold`'s own handling of the identical
+        key -- both must ignore the override and land on the
+        calibrated 0.645.
+    """
+    from memman import config
+    from memman.graph.engine import _resolve_semantic_threshold
+    env_file(config.AUTO_THRESHOLD_FOR('garbage'), 'nonsense')
+
+    result = check_embed_threshold(backend, store_name='garbage')
+    assert result['status'] == 'warn' or result['status'] == 'pass'
+    assert 'nonsense' in result['detail']['override_error']
+    assert result['detail']['source'] == 'calibrated'
+    assert result['detail']['threshold'] == 0.645
+    assert _resolve_semantic_threshold(backend, 'garbage') == 0.645
 
 
 def test_doctor_override_matches_calibrated_no_mask_hint(

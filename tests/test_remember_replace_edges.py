@@ -47,7 +47,7 @@ def test_apply_plan_sweeps_edges_pointing_at_replaced_target(tmp_db, tmp_backend
 
     plan = _make_plan(
         new_id='new-1', target_id='old-1', causal_edges=[leaked])
-    _apply_plan(tmp_backend, plan, embed_cache={})
+    _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
 
     deleted = get_insight_by_id_include_deleted(tmp_db, 'old-1')
     assert deleted is not None
@@ -75,7 +75,7 @@ def test_apply_plan_preserves_edges_to_retained_history_nodes(tmp_db, tmp_backen
 
     plan = _make_plan(
         new_id='new-2', target_id='old-2', causal_edges=[new_edge])
-    _apply_plan(tmp_backend, plan, embed_cache={})
+    _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
 
     edges = get_edges_by_node(tmp_db, 'history-1')
     edge_keys = {(e.source_id, e.target_id, e.edge_type) for e in edges}

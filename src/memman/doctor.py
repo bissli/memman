@@ -951,7 +951,8 @@ def check_embed_fingerprint(backend: Backend) -> dict[str, Any]:
 
 def check_embed_threshold(
         backend: Backend,
-        store_name: str | None = None) -> dict[str, Any]:
+        *,
+        store_name: str) -> dict[str, Any]:
     """Report the AUTO_SEMANTIC_THRESHOLD source for the stored fingerprint.
 
     Precedence reported in `detail['source']`:
@@ -965,6 +966,11 @@ def check_embed_threshold(
         median fallback is used. Status warn -- the value is bounded
         but not optimized; operators measuring their own value should
         set the env override.
+
+    A malformed `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>` is reported as
+    `detail['override_error']` and otherwise ignored, so the reported
+    threshold is the one recall actually uses. `check_per_store_keys`
+    is what fails the run over it.
     """
     from memman import config
     from memman.embed import thresholds as _thresholds
@@ -979,25 +985,34 @@ def check_embed_threshold(
                 'source': None, 'threshold': None,
                 }}
 
-    if store_name is None:
-        surface = 'code'
-        override = None
-    else:
-        surface = config.get_store_surface(store_name)
+    surface = config.get_store_surface(store_name)
+    # A malformed override must be REPORTED, not raised: `run_all_checks`
+    # builds its check list eagerly, so propagating here kills the whole
+    # `memman doctor` run before `check_per_store_keys` -- the check whose
+    # job is to name this exact error -- is ever constructed. Swallowing
+    # it to None also matches runtime, where `_resolve_semantic_threshold`
+    # catches the same ValueError and falls through to the table.
+    override_error = None
+    try:
         override = config.get_store_auto_threshold(store_name)
+    except ValueError as err:
+        override_error = str(err)
+        override = None
 
     detail: dict[str, Any] = {
         'provider': stored.provider,
         'model': stored.model,
         'surface': surface,
         }
+    if override_error is not None:
+        detail['override_error'] = override_error
 
     if override == 'skip':
         detail['source'] = 'override_skip'
         detail['threshold'] = None
         if surface != 'code':
             detail['hint'] = (
-                f'MEMMAN_SURFACE_{store_name}={surface!r} has no effect'
+                f'{config.SURFACE_FOR(store_name)}={surface!r} has no effect'
                 ' when AUTO_SEMANTIC_THRESHOLD override is skip.')
         return {'name': 'embed_threshold', 'status': 'pass',
                 'detail': detail}
@@ -1145,7 +1160,8 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
 def run_all_checks(
         backend: Backend,
         data_dir: str | None = None,
-        store_name: str | None = None) -> dict[str, Any]:
+        *,
+        store_name: str) -> dict[str, Any]:
     """Run all health checks and return results with overall status.
 
     Routes every check through the Backend Protocol so SQLite and

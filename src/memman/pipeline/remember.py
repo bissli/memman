@@ -105,7 +105,8 @@ def run_remember(
         insights_by_id: dict[str, Insight] | None = None,
         executor: ThreadPoolExecutor | None = None,
         llm_client: MemmanLLMClient | None = None,
-        store_name: str | None = None,
+        *,
+        store_name: str,
         ) -> dict[str, Any]:
     """Run the full remember pipeline and return the result dict.
 
@@ -120,9 +121,11 @@ def run_remember(
     from the backend itself.
 
     `store_name` selects the per-store surface
-    (`MEMMAN_SURFACE_<store>`) for the threshold lookup. None resolves
-    the code-surface default; production callers pass
-    `ctx.store_name`.
+    (`MEMMAN_SURFACE_<store>`) for the threshold lookup. It is
+    keyword-only and required: an omitted store name silently
+    resolves the code-surface row and skips the
+    `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>` override branch
+    entirely, which is a wrong threshold rather than a missing one.
     """
     quality_warnings = check_content_quality(content)
 
@@ -608,16 +611,20 @@ def _apply_plan(
         backend: Backend,
         plan: FactPlan,
         embed_cache: dict[str, list[float]],
-        store_name: str | None = None,
+        *,
+        store_name: str,
         corroborated_ids: set[str] | None = None,
         ) -> dict[str, Any]:
     """Apply one planned fact. Must be invoked inside a transaction.
 
     `store_name` selects the per-store surface for the calibrated
-    semantic-edge threshold lookup. None resolves the code-surface
-    default. `corroborated_ids` is the caller's per-invocation dedup
-    set: an extractor emitting the same fact twice in one row must
-    bump its target once, not per occurrence.
+    semantic-edge threshold lookup. It is keyword-only and required
+    for the same reason as on `run_remember`: an omitted store name
+    resolves the code-surface row and skips the per-store override,
+    giving a wrong threshold rather than none. `corroborated_ids` is
+    the caller's per-invocation dedup set: an extractor emitting the
+    same fact twice in one row must bump its target once, not per
+    occurrence.
     """
     corroborate_degraded = False
     if plan.action == 'skipped':

@@ -203,7 +203,8 @@ def open_db(data_dir: str) -> DB:
 
     Runs idempotent baseline schema + versioned migrations. Does NOT
     trigger the edge-constants reindex — callers that want that (the
-    CLI `_open_db`) invoke `reindex_if_constants_changed(db)` after
+    CLI `_open_db`) invoke
+    `reindex_if_constants_changed(backend, store_name=...)` after
     open. Keeping the graph-reindex out of this module avoids a
     backward import edge from `memman.store` to `memman.graph`.
     """

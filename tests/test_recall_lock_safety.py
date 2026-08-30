@@ -104,12 +104,12 @@ class TestChunkedReindex:
                 id=f'idem-{i}',
                 content=f'idempotent insight {i} about widgets'))
 
-        reindex_auto_edges(backend, chunk_size=2)
+        reindex_auto_edges(backend, chunk_size=2, store_name='test')
         first_edges = sorted(
             (e.source_id, e.target_id, e.edge_type)
             for e in backend.edges.all())
 
-        reindex_auto_edges(backend, chunk_size=2)
+        reindex_auto_edges(backend, chunk_size=2, store_name='test')
         second_edges = sorted(
             (e.source_id, e.target_id, e.edge_type)
             for e in backend.edges.all())
@@ -141,14 +141,14 @@ class TestChunkedReindex:
             'memman.graph.engine.create_semantic_edges', _flaky)
 
         with pytest.raises(RuntimeError, match='simulated mid-chunk crash'):
-            reindex_auto_edges(backend, chunk_size=2)
+            reindex_auto_edges(backend, chunk_size=2, store_name='test')
 
         assert backend.meta.get('constants_hash') == 'STALE-HASH-MARKER', (
             'constants_hash must NOT be stamped after a mid-chunk crash')
 
         monkeypatch.undo()
         from memman.graph.engine import reindex_if_constants_changed
-        stats = reindex_if_constants_changed(backend)
+        stats = reindex_if_constants_changed(backend, store_name='test')
         assert stats is not None, (
             'second pass must run the reindex since the hash is still stale')
         assert backend.meta.get('constants_hash') == compute_constants_hash()

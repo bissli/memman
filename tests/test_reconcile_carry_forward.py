@@ -45,7 +45,7 @@ def test_merge_unions_target_entities_into_successor(tmp_db, tmp_backend):
         entities=['KeePassXC', 'transcrypt', 'chezmoi']))
 
     plan = _merge_plan('new-1', 'old-1', entities=['systemd'])
-    _apply_plan(tmp_backend, plan, embed_cache={})
+    _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
 
     successor = get_insight_by_id(tmp_db, 'new-1')
     assert successor is not None
@@ -70,7 +70,7 @@ def test_merge_repoints_target_edges_to_successor(tmp_db, tmp_backend):
         edge_type='causal', weight=0.83))
 
     plan = _merge_plan('new-1', 'old-1')
-    _apply_plan(tmp_backend, plan, embed_cache={})
+    _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
 
     assert get_edges_by_node(tmp_db, 'old-1') == []
     carried = [
@@ -95,7 +95,7 @@ def test_merge_repoint_drops_target_self_edge(tmp_db, tmp_backend):
         edge_type='causal', weight=0.7))
 
     plan = _merge_plan('new-1', 'old-1')
-    _apply_plan(tmp_backend, plan, embed_cache={})
+    _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
 
     assert not [
         e for e in get_edges_by_node(tmp_db, 'new-1')
@@ -113,7 +113,7 @@ def test_merge_carries_target_corroboration_count(tmp_db, tmp_backend):
         id='old-1', content='original', corroboration_count=4))
 
     plan = _merge_plan('new-1', 'old-1')
-    _apply_plan(tmp_backend, plan, embed_cache={})
+    _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
 
     successor = get_insight_by_id(tmp_db, 'new-1')
     assert successor is not None
@@ -131,7 +131,7 @@ def test_merge_carries_target_access_count(tmp_db, tmp_backend):
         id='old-1', content='original', access_count=7))
 
     plan = _merge_plan('new-1', 'old-1')
-    _apply_plan(tmp_backend, plan, embed_cache={})
+    _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
 
     successor = get_insight_by_id(tmp_db, 'new-1')
     assert successor is not None

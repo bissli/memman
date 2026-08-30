@@ -340,14 +340,14 @@ def test_delete_branch_names_its_reason(tmp_db, tmp_backend):
     insert_insight(tmp_db, make_insight(
         id='old-1', content='we run on postgres'))
     hit = _apply_plan(tmp_backend, _delete_plan('n-1', 'old-1'),
-                      embed_cache={})
+                      embed_cache={}, store_name='test')
     assert hit['action'] == 'deleted'
     assert hit['reason'] == 'contradicted an existing insight'
     assert skip_reason_for_result({'facts': [hit]}) == hit['reason']
     assert tmp_backend.nodes.get('n-1') is None
 
     miss = _apply_plan(tmp_backend, _delete_plan('n-2', 'never-stored'),
-                       embed_cache={})
+                       embed_cache={}, store_name='test')
     assert miss['action'] == 'skipped'
     assert miss['reason'] == 'delete target already gone'
     assert skip_reason_for_result({'facts': [miss]}) == miss['reason']

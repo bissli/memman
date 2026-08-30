@@ -354,7 +354,7 @@ class TestRunAllChecks:
         """Verify output shape: status, checks list, total_active."""
         from memman.doctor import run_all_checks
         _insert_healthy_insight(tmp_db, 'all-1')
-        result = run_all_checks(tmp_backend)
+        result = run_all_checks(tmp_backend, store_name='test')
         assert 'status' in result
         assert 'checks' in result
         assert 'total_active' in result
@@ -364,7 +364,7 @@ class TestRunAllChecks:
     def test_empty_db(self, tmp_db, tmp_backend):
         """Empty store returns status 'empty' with no checks."""
         from memman.doctor import run_all_checks
-        result = run_all_checks(tmp_backend)
+        result = run_all_checks(tmp_backend, store_name='test')
         assert result['status'] == 'empty'
         assert result['total_active'] == 0
         assert result['checks'] == []
@@ -378,7 +378,7 @@ class TestRunAllChecks:
         for i, id_a in enumerate(ids):
             for id_b in ids[i + 1:]:
                 _insert_edge_pair(tmp_db, id_a, id_b)
-        result = run_all_checks(tmp_backend)
+        result = run_all_checks(tmp_backend, store_name='test')
         assert result['status'] == 'pass', [
             (c['name'], c['status'], c.get('detail'))
             for c in result['checks'] if c['status'] != 'pass']

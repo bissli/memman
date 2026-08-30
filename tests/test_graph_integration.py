@@ -415,7 +415,7 @@ class TestSemanticThresholdResolvedFromFingerprint:
         backend.nodes.update_embedding(
             'rc-2', _vec_512(0.99, 0.01), 'voyage-3-lite')
 
-        stats = reindex_auto_edges(backend)
+        stats = reindex_auto_edges(backend, store_name='test')
         assert stats['semantic_created'] >= 2
 
     def test_reindex_uses_surface_median_for_uncalibrated_fingerprint(
@@ -436,7 +436,7 @@ class TestSemanticThresholdResolvedFromFingerprint:
         backend.nodes.update_embedding(
             'ru-2', _vec_512(0.99, 0.01), 'fake')
 
-        stats = reindex_auto_edges(backend)
+        stats = reindex_auto_edges(backend, store_name='test')
         assert stats['semantic_created'] >= 2
 
     def test_reindex_dry_run_reports_uncalibrated_edges(self, backend):
@@ -455,7 +455,7 @@ class TestSemanticThresholdResolvedFromFingerprint:
         backend.nodes.update_embedding(
             'rd-2', _vec_512(0.99, 0.01), 'fake')
 
-        stats = reindex_auto_edges(backend, dry_run=True)
+        stats = reindex_auto_edges(backend, dry_run=True, store_name='test')
         assert stats['dry_run'] == 1
 
 

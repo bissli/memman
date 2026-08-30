@@ -39,7 +39,7 @@ class TestReindexAutoEdges:
         backend.nodes.insert(make_insight(
             id='rbc-2', content='second insight for linking'))
 
-        reindex_auto_edges(backend)
+        reindex_auto_edges(backend, store_name='test')
         assert link_pending(backend, store_name='test') > 0
 
     def test_relink_preserves_manual_edge_metadata(self, backend):
@@ -59,7 +59,7 @@ class TestReindexAutoEdges:
             metadata={'entity': 'Python', 'created_by': 'claude'})
         backend.edges.upsert(manual_edge)
 
-        reindex_auto_edges(backend)
+        reindex_auto_edges(backend, store_name='test')
 
         edges = backend.edges.all()
         match = [e for e in edges
@@ -197,7 +197,7 @@ class TestLinkPending:
         tmp_db._conn.execute(
             'UPDATE insights SET linked_at = created_at')
 
-        reindex_auto_edges(tmp_backend)
+        reindex_auto_edges(tmp_backend, store_name='test')
 
         pending = tmp_db._conn.execute(
             'SELECT COUNT(*) FROM insights'
