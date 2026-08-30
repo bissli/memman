@@ -14,7 +14,7 @@
 
 1. `memman remember [--cat X --imp Y --entities a,b --source S --session ID] "<text>"` validates input. `--session` (default `$MEMMAN_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID`) is the temporal chain key; the row also receives a `queue_uuid` minted at enqueue (the idempotency key).
 2. Insert one row into the deferred-write queue with `status='pending'`, priority, queued_at, and the raw text + hints. The queue is always `~/.memman/queue.db` (SQLite WAL) regardless of any store's backend choice — it is a process-global write buffer, not per-store state.
-3. Return `{action: queued, queue_id: N, store: ...}` to the caller.
+3. Return `{action: queued, queue_id: N, queue_uuid: U, store: ...}` to the caller. `queue_id` addresses the queue row and is purged about a minute after the drain; `queue_uuid` is stamped on every insight the write produces, so it is the only handle that survives. `memman insights by-queue <U>` resolves it to those rows.
 
 No LLM calls. No embeddings. No similarity scan. No edges. The host session never blocks.
 

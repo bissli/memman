@@ -97,12 +97,12 @@ memman forget <id>
 | Flag       | Default       | Description                                          |
 | ---------- | ------------- | ---------------------------------------------------- |
 | `--limit`  | `10`          | Max results                                          |
-| `--intent` | (auto-detect) | Override intent: `WHY`, `WHEN`, `ENTITY`, `GENERAL`  |
+| `--intent` | (auto-detect) | Override intent: `WHY`, `WHEN`, `ENTITY`, `GENERAL`; validated always, but inert under `--basic` and named in `meta.ignored` |
 | `--cat`    |               | Filter by category                                   |
 | `--source` |               | Filter by source                                     |
-| `--basic`  | `false`       | Use simple SQL LIKE matching instead of smart recall |
+| `--basic`  | `false`       | Use simple SQL LIKE matching instead of smart recall; emits no `sparse`, and names `--intent` / `--expand` in `meta.ignored` when passed |
 | `--brief`  | `false`       | Cut each result to id, category, importance, summary |
-| `--expand` | `false`       | Opt-in LLM query expansion (synonyms + intent hint) |
+| `--expand` | `false`       | Opt-in LLM query expansion (synonyms + intent hint); inert under `--basic` and named in `meta.ignored` |
 | `--min-score` | `0.0`   | Relevance floor on keyword+similarity, 0.0 to 2.0 (`0.0` = off); rejected with `--basic` |
 
 The cross-encoder rerank stage is on by default and auto-skips on 1-2 token
@@ -181,6 +181,9 @@ Auto-reindex of computed edges (semantic, entity, temporal) fires on `open_db()`
 ```bash
 # Read a single insight by ID (full content + metadata)
 memman insights show <id>
+
+# Resolve a write to the insights it produced (key from remember/replace)
+memman insights by-queue <queue_uuid>
 
 # List low-retention candidates (read-only — does NOT delete)
 memman insights candidates --threshold 0.5 --limit 20
@@ -457,7 +460,7 @@ The variables below are not installable — they are read from the env file on d
 
 `memman remember` appends one row to the queue in ~50 ms on the host session — no LLM calls, no embeddings, no edges. The full pipeline runs out of band:
 
-1. **Tier 1 (host)** — append a row to `~/.memman/queue.db` with `status='pending'`, the raw text, and any `--cat`/`--imp`/`--entities` hints. Returns `{action: queued, queue_id, store}`.
+1. **Tier 1 (host)** — append a row to `~/.memman/queue.db` with `status='pending'`, the raw text, and any `--cat`/`--imp`/`--entities` hints. Returns `{action: queued, queue_id, queue_uuid, store}`. The `queue_uuid` is the join key: it is stamped on every insight this write produces and outlives the queue row, which `purge_done` drops about a minute after the drain.
 2. **Tier 2 (worker)** — systemd timer (Linux), launchd agent (macOS), or `memman scheduler serve` PID 1 (containers) invokes `memman scheduler drain --pending` every 60 s under an `flock` on `~/.memman/drain.lock`. Per row: quality gate → LLM fact extraction → per-fact embed + similarity scan → exact-match dedup (a fact byte-identical to exactly one stored row skips the LLM and bumps that row's `corroboration_count`) or LLM reconciliation (ADD/UPDATE/DELETE/NONE) → insert/update → fast edges (temporal + entity + semantic) → parallel enrichment + LLM causal inference → re-embed → rebuild auto edges → mark done.
 
 The host session never blocks on the network. Newly stored memories become recallable on the next drain tick (default 60 s).

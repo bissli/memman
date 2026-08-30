@@ -133,7 +133,7 @@
         <mxCell id="s_e_skip" value="ENTITY / GENERAL" style="edgeStyle=orthogonalEdgeStyle;rounded=1;fontSize=9;" edge="1" parent="1" source="s_topo_q" target="s_skip">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="s_out" value="&lt;b&gt;JSON Output&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;{results: [{insight: {...}, score, intent, via, signals: {keyword, similarity, graph}}],&lt;br&gt; meta: {intent, intent_source, anchor_count, traversed, hint}}&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="s_out" value="&lt;b&gt;JSON Output&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;{results: [{insight: {...}, score, intent, via, signals: {keyword, similarity, graph}}],&lt;br&gt; meta: {intent, intent_source, anchor_count, traversed, hint, ordering, reranked, sparse?}}&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="200" y="1110" width="500" height="60" as="geometry" />
         </mxCell>
         <mxCell id="s_e9a" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="s_topo" target="s_out">

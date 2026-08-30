@@ -17,7 +17,8 @@ Craft a focused, keyword-rich query — do not pass the raw user prompt.
 The cross-encoder reranker runs by default on multi-token queries
 (auto-skipped on 1-2 token queries).
 
-The recall response includes a `meta` object with:
+On the scored path (no `--basic`) the recall response's `meta`
+object carries:
 - `hint`: intent-specific reasoning guidance (always present) — use it to
   frame your synthesis of the results
 - `ordering`: how results are sorted — `causal_topological` (WHY),
@@ -32,6 +33,18 @@ The recall response includes a `meta` object with:
   they match), so a full page of `sparse` results means nothing relevant
   is stored, not that these are the answer. Broaden the query, or accept
   that the store does not hold it
+
+Under `--basic` none of those keys exist. That envelope is
+`{basic: true}`, plus `ignored` when a flag was inert:
+- `ignored`: flag names, present only when non-empty. `--basic`
+  returns before ranking, so `--intent` and `--expand` do nothing
+  there and are named rather than obeyed. `--min-score` is not on
+  this list -- it is rejected outright, because ignoring a filter
+  would leave every returned row looking as though it had cleared a
+  floor it never met
+- There is no `sparse` under `--basic`. Its ABSENCE there is not
+  confidence: `--basic` can return `results: []` and says nothing
+  about how well anything matched
 
 ### Phase awareness — when to write
 

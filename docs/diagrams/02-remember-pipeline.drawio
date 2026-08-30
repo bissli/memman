@@ -32,7 +32,7 @@
           <mxGeometry x="120" y="180" width="500" height="60" as="geometry" />
         </mxCell>
 
-        <mxCell id="r_return" value="Return JSON&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;{action: queued, queue_id: N, store, quality_warnings}&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_return" value="Return JSON&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;{action: queued, queue_id: N, queue_uuid: U, store, quality_warnings}&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="660" y="190" width="370" height="50" as="geometry" />
         </mxCell>
 
