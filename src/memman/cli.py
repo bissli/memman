@@ -1367,8 +1367,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
     # Validated above the `--basic` early return, or `--basic --intent
     # bogus` exits 0 reporting the flag as merely ignored -- telling the
     # caller their intent was well-formed but unusable here, which is a
-    # worse answer than silence. `--entities` was hoisted for the same
-    # reason.
+    # worse answer than silence.
     typed_intent = None
     if intent:
         try:
@@ -2809,7 +2808,7 @@ def insights_show(ctx: click.Context, id: str) -> None:
 @click.argument('queue_uuid')
 @click.pass_context
 def insights_by_queue(ctx: click.Context, queue_uuid: str) -> None:
-    r"""List the insights one queued write produced.
+    """List the insights one queued write produced.
 
     Resolves the `queue_uuid` that `remember` and `replace` return
     into the rows that write actually stored, once the scheduler has
@@ -2818,7 +2817,6 @@ def insights_by_queue(ctx: click.Context, queue_uuid: str) -> None:
     stamped on every insight the write produced and survives.
 
     \b
-
     Parameters
     ----------
     queue_uuid : str
@@ -2826,7 +2824,6 @@ def insights_by_queue(ctx: click.Context, queue_uuid: str) -> None:
         from `memman scheduler queue show <row_id>`.
 
     \b
-
     Returns
     -------
     JSON
@@ -2835,7 +2832,6 @@ def insights_by_queue(ctx: click.Context, queue_uuid: str) -> None:
         one full insight dict per row, oldest first.
 
     \b
-
     Notes
     -----
     - `count: 0` is a real answer, not an error, and has three
@@ -2851,12 +2847,11 @@ def insights_by_queue(ctx: click.Context, queue_uuid: str) -> None:
       so grabbing `queue_id` instead of `queue_uuid` fails loudly.
 
     \b
-
     Examples
     --------
     memman remember "a durable fact" --no-reconcile
     memman insights by-queue 7f3c1e00-0d1a-4f7e-9c2b-2a1d5b8e4c60
-    """
+    """  # noqa: D301, D410, D411
     try:
         uuid.UUID(queue_uuid)
     except ValueError:
