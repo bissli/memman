@@ -14,7 +14,6 @@ These tests pin three properties:
    propagates `database is locked` to the caller — it skips quietly.
 """
 
-import json
 import sqlite3
 
 import pytest
