@@ -415,10 +415,13 @@ def get_by_queue_uuid(db: 'DB', queue_uuid: str) -> list[Insight]:
 
     Notes
     -----
-    - Ordering tiebreaks on `id`. Every fact of one write is applied
-      in a single transaction, so all siblings share one
-      second-granularity `created_at`; without the tiebreak the order
-      is the query plan's, and Postgres does not sort stably.
+    - Ordering tiebreaks on `id`, and the tiebreak is load-bearing:
+      siblings of one write often share a `created_at`, but nothing
+      guarantees it. Both backends stamp server-side, and only
+      Postgres is constant across a transaction (`now()` is
+      `transaction_timestamp()`); SQLite stamps each row from its own
+      clock read, cut to whole seconds. Without the tiebreak the
+      order is the query plan's, and Postgres does not sort stably.
     - Active rows only. A fact that a later reconcile merged away is
       a tombstone, not where the write landed, and SQL `= ?` never
       matches the NULL `queue_uuid` of a pre-0.18.0 row.

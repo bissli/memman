@@ -11,7 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from memman.store.db import store_dir
-from tests.conftest import invoke, make_insight
+from tests.conftest import invoke, make_insight, set_created_at
 
 
 def _queue_uuid_of(data_dir, queue_id):
@@ -190,16 +190,11 @@ def test_by_queue_rejects_a_malformed_uuid(mm_runner):
 def test_get_by_queue_uuid_orders_siblings_deterministically(backend):
     """Rows sharing one write's key come back ordered, on both backends.
 
-    The siblings are inserted in ONE transaction, as
-    `pipeline/remember.py` applies every fact of one write, and share
-    one explicit `created_at`. Both are needed: Postgres ignores the
-    passed stamp and takes the column default, constant across a
-    transaction because `now()` is `transaction_timestamp()`, while
-    SQLite persists the stamp it is given. So only the `id` tiebreak
-    decides the order. Insert them separately and each backend hands
-    out distinct timestamps, which is why an earlier version of this
-    test passed on SQLite and failed on Postgres without exercising
-    the tiebreak at all.
+    Both backends stamp `created_at` server-side and IGNORE the value
+    carried on the Insight, so the siblings are tied by an explicit
+    update instead. That tie is what leaves the `id` tiebreak as the
+    only thing deciding order; without it the rows sort by time and
+    the ORDER BY under test is never exercised.
 
     Mutation: dropping `, id` from the ORDER BY, which leaves the
         query plan deciding. Also catches dropping the `deleted_at`
@@ -207,15 +202,24 @@ def test_get_by_queue_uuid_orders_siblings_deterministically(backend):
     Oracle: ids inserted in reverse-sorted order, so plan order and
         sorted order disagree; expected list is hand-written.
     """
-    # One shared stamp, not `make_insight`'s per-call `now()`: SQLite
-    # persists whatever it is handed, so four separate calls straddling
-    # a second boundary untie the siblings and fire the guard below.
-    stamped = datetime.now(timezone.utc)
+    siblings = ('qu-c', 'qu-b', 'qu-a', 'qu-dead')
     with backend.transaction():
-        for row_id in ('qu-c', 'qu-b', 'qu-a', 'qu-dead'):
+        for row_id in siblings:
             backend.nodes.insert(make_insight(
-                id=row_id, content=f'sibling {row_id}', queue_uuid='w-1',
-                created_at=stamped))
+                id=row_id, content=f'sibling {row_id}', queue_uuid='w-1'))
+    # Notes:
+    # - `nodes.insert` ignores `Insight.created_at` on both backends,
+    #   so passing a shared stamp to `make_insight` would be inert.
+    #   Postgres takes `default now()`, constant across the
+    #   transaction; SQLite writes a per-row `datetime.now()` cut to
+    #   whole seconds, which ties only when the inserts happen to land
+    #   inside one second.
+    # - `set_created_at` commits on its Postgres branch, and psycopg
+    #   forbids an explicit commit inside `backend.transaction()`, so
+    #   it runs after the block rather than in it.
+    for row_id in siblings:
+        set_created_at(backend, row_id, datetime(
+            2026, 1, 1, tzinfo=timezone.utc))
     backend.nodes.insert(make_insight(
         id='qu-other', content='another write', queue_uuid='w-2'))
     backend.nodes.soft_delete('qu-dead')
