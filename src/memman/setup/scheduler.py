@@ -488,12 +488,25 @@ def stop() -> dict:
 
 
 def trigger() -> dict:
-    """Run the scheduler worker once, immediately.
+    """Dispatch one worker run. The call returns before that run ends.
 
-    systemd: `systemctl start --no-block` the service. launchd:
-    `launchctl start` the agent. inline: callers (the CLI) drain
-    in-process via _drain_queue; this function rejects on inline since
-    the trigger is implicit, not on-demand.
+    Returns
+    -------
+    dict
+        `platform` and the `actions` taken, plus a `note` reporting
+        either that the run was dispatched or that one was already in
+        progress.
+
+    Notes
+    -----
+    - systemd starts the service with `systemctl --user start
+      --no-block` and launchd with `launchctl start`. Both return as
+      soon as the run is queued, so a caller that needs the drain's
+      outcome polls the unit or reads `memman log worker`. It cannot
+      read the outcome from this return.
+    - Serve mode has no on-demand trigger and raises: that loop drains
+      on its own cadence, and `scheduler serve --once` is the way to
+      run a single drain there.
     """
     kind = detect_scheduler()
     if kind == SCHEDULER_KIND_SERVE:
@@ -518,7 +531,7 @@ def trigger() -> dict:
                     'platform': 'systemd',
                     'actions': [' '.join(cmd)],
                     'note': 'a scheduled run is already in progress;'
-                            ' see `memman scheduler logs`',
+                            ' see `memman log worker`',
                     }
             raise RuntimeError(
                 f'systemctl start failed (rc={out.returncode}):'
@@ -526,7 +539,7 @@ def trigger() -> dict:
         return {
             'platform': 'systemd',
             'actions': [' '.join(cmd)],
-            'note': 'dispatched; see `memman scheduler logs`',
+            'note': 'dispatched; see `memman log worker`',
             }
     plist_path = _launchd_agent_dir() / f'{LAUNCHD_LABEL}.plist'
     if not plist_path.exists():
@@ -543,7 +556,7 @@ def trigger() -> dict:
     return {
         'platform': 'launchd',
         'actions': [' '.join(cmd)],
-        'note': 'dispatched; see `memman scheduler logs`',
+        'note': 'dispatched; see `memman log worker`',
         }
 
 

@@ -2079,7 +2079,14 @@ def scheduler_interval(ctx: click.Context, seconds: int | None) -> None:
 @scheduler.command('trigger')
 @click.pass_context
 def scheduler_trigger(ctx: click.Context) -> None:
-    """Run the scheduler's drain job now. Rejected when stopped."""
+    """Dispatch a drain now. The command does not wait for it to finish.
+
+    Rejected when the scheduler is stopped. systemd uses
+    `systemctl --user start --no-block` and launchd uses `launchctl
+    start`, so a `dispatched` response means the run was queued, not
+    that it has started or finished. Read `memman log worker` for the
+    outcome.
+    """
     _require_started('trigger drain')
     from memman.setup.scheduler import trigger
     try:

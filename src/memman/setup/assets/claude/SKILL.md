@@ -95,9 +95,16 @@ and `summary`. Use it when scanning for which insight to open rather
 than reading the insights themselves. It works on both paths; on the
 ranked path the `score`, `intent`, and `signals` keys around each
 insight are kept. A row left without a summary falls back to its
-content instead, so no row comes back blank. `truncated: true` marks
-the rows whose content was cut at 200 characters -- those, and only
-those, have more to read via `memman insights show <id>`.
+content instead, so no row comes back blank. `truncated: true` means
+the text you got is a raw content prefix cut at 200 characters. Its
+ABSENCE does not mean you hold the whole row: a summarized row carries
+no marker however much its summary left out, and a fallback row is
+marked only when its content ran past the cut. `memman insights show
+<id>` is how you read the rest of any row worth more than a scan.
+
+`--brief` also drops `created_at`. On the scored path a WHEN query
+still orders rows newest first, so brief rows keep their sequence but
+carry no dates. Read a row in full when you need the date itself.
 
 ```bash
 memman recall "<query>" --limit 10 --brief

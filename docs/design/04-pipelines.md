@@ -87,7 +87,7 @@ For OpenRouter endpoints, `memman install` queries `/v1/models` once per role an
 | `memman scheduler start`                  | activate the trigger (idempotent)                                                          |
 | `memman scheduler stop`                   | deactivate the trigger; trigger files stay                                                 |
 | `memman scheduler interval --seconds N`   | change cadence; min 60 s for systemd/launchd; serve mode accepts `>= 0` (`0` = continuous) |
-| `memman scheduler trigger`                | run the drain now (rejects when stopped)                                                   |
+| `memman scheduler trigger`                | dispatch a drain and return at once, without waiting for it (rejects when stopped)         |
 
 `memman graph rebuild` re-enriches all already-stored insights through the full LLM pipeline (useful after model/prompt changes; rejects when the scheduler is stopped). Auto-created edges (semantic, entity, temporal) are recomputed on DB open when edge constants change — no operator command for that.
 
