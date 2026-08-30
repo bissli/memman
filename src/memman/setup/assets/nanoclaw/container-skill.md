@@ -9,8 +9,10 @@ description: Persistent graph-based memory. Recall context before responding, re
 typed insights and a graph of edges between them. PID 1 of the container
 is `memman scheduler serve`, which drains the write queue every 60
 seconds. From the agent's perspective `remember` returns immediately
-with `{action: queued, queue_id}`; the new insight becomes recallable
-within the next drain interval.
+with `{action: queued, queue_id, queue_uuid}`; the new insight becomes
+recallable within the next drain interval. Keep the `queue_uuid` if you
+need to find what the write stored -- `memman insights by-queue <uuid>`
+resolves it once the drain has run.
 
 If `memman scheduler stop` is run inside the container, memman becomes
 recall-only and the serve loop exits at its next iteration. Because the
@@ -108,6 +110,7 @@ memman recall "<query>" --limit 10                     # smart recall + cross-en
 memman recall "<keyword>" --basic                      # fast token-only
 memman recall "<query>" --limit 10 --brief             # id/category/importance/summary only
 memman insights show <id>                              # read by ID
+memman insights by-queue <queue_uuid>                  # what one write stored
 ```
 
 `--brief` works on both paths. A row left without a summary falls back
@@ -116,7 +119,9 @@ marks the rows whose content was cut at 200 characters.
 
 Add `--intent WHY|WHEN|ENTITY` to bias ranking when intent is unambiguous.
 
-Recall always returns rows, so check `meta.sparse` before trusting
+`--basic` emits no `meta.sparse` at all, so a missing `sparse` there
+is not confidence. On the scored path recall always returns rows, so
+check `meta.sparse` before trusting
 them. It is set when the set is empty, when it holds fewer than
 `limit // 2` rows, or when no candidate matched a query token. A
 `sparse` response means nothing relevant is stored, unless the query
@@ -125,6 +130,9 @@ in the store's own words before concluding it is empty.
 `--min-score` drops rows whose keyword plus similarity sum is under
 the floor (0.0 to 2.0, `0.0` = off, rejected with `--basic`). No value
 is worth copying; the usable band depends on the embedder and store.
+`--basic` returns before ranking, so `--intent` and `--expand` do
+nothing there; it lists them in `meta.ignored` rather than obeying
+them.
 
 ## Forgetting and protecting
 

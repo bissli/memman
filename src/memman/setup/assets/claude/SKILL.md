@@ -63,7 +63,9 @@ Add `--intent WHY|WHEN|ENTITY` to bias the ranking when intent is
 unambiguous (cause/effect, timeline, entity-centric). Add `--cat` or
 `--source` to filter.
 
-Recall always returns rows, so check `meta.sparse` before trusting
+`--basic` emits no `meta.sparse` at all, so a missing `sparse` there
+is not confidence. On the scored path recall always returns rows, so
+check `meta.sparse` before trusting
 them. It is set when the set is empty, when it holds fewer than
 `limit // 2` rows, or when no candidate matched a query token -- a
 full page of the nearest unrelated memories. On a
@@ -73,11 +75,13 @@ paraphrase sharing no word with a row the vector search did find trips
 it -- re-ask in the store's own words before concluding it is empty.
 
 `--min-score` drops rows whose keyword plus similarity sum is under
-the floor (0.0 to 2.0, `0.0` = off, rejected with `--basic`). Leave it
-off by default: the deep tail of a recall is often where the useful
-row sits. There is no value worth copying -- the usable band depends
-on the embedder and the store, so find it by running the query with
-and without a floor.
+the floor (0.0 to 2.0, `0.0` = off, rejected with `--basic` -- a
+filter that quietly did nothing would certify rows it never checked,
+unlike `--intent` and `--expand`, which `--basic` names in
+`meta.ignored` instead). Leave it off by default: the deep tail of a
+recall is often where the useful row sits. There is no value worth
+copying -- the usable band depends on the embedder and the store, so
+find it by running the query with and without a floor.
 
 For a fast token-only lookup that skips graph and reranking (cheap,
 no network cost; rows come back ranked by importance, then recency):
@@ -104,6 +108,18 @@ Read a single insight by ID:
 ```bash
 memman insights show <id>
 ```
+
+`remember` and `replace` return a `queue_uuid`. It is stamped on every
+insight that write produces, so it answers "where did my write land"
+once the scheduler has drained:
+
+```bash
+memman insights by-queue <queue_uuid>
+```
+
+`count: 0` has three causes: the write is still queued, it stored
+nothing (see `memman scheduler queue skipped`), or it went to a
+different store -- the queue is global while this reads one store.
 
 ## Forgetting and protecting
 
