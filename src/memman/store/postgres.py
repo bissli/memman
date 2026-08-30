@@ -756,6 +756,18 @@ limit 1
             cur.execute(sql, (queue_uuid,))
             return cur.fetchone() is not None
 
+    def get_by_queue_uuid(self, queue_uuid: str) -> list[Insight]:
+        sql = self._q(f"""
+select {_INSIGHT_COLS}
+from {{s}}.insights
+where queue_uuid = %s
+  and deleted_at is null
+order by created_at, id
+""")
+        with self._conn.cursor() as cur:
+            cur.execute(sql, (queue_uuid,))
+            return [_row_to_insight(r) for r in cur.fetchall()]
+
     def iter_for_reembed(
             self, cursor: Id, batch: int) -> list[ReembedRow]:
         sql = self._q("""

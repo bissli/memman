@@ -171,8 +171,8 @@ def enqueue(
         hint_no_reconcile: bool = False,
         session_id: str | None = None,
         priority: int = 0,
-        ) -> int:
-    """Append a blob to the queue. Returns the new row's id.
+        ) -> tuple[int, str]:
+    """Append a blob to the queue. Returns `(row_id, queue_uuid)`.
 
     `hint_replaced_id` carries the id of the insight to soft-delete
     when the worker commits this row — used by the `replace` command.
@@ -188,8 +188,14 @@ def enqueue(
       AUTOINCREMENT counter, where a fresh enqueue would otherwise
       draw a row id an existing insight already claims and be
       silently dropped.
+    - Both halves are returned because they answer different
+      questions: `row_id` addresses the queue row, which
+      `purge_done` drops a minute after the drain, while
+      `queue_uuid` is stamped on every insight the write produces
+      and is the only key that outlives the queue.
     """
     now = int(time.time())
+    queue_uuid = str(uuid.uuid4())
     sql = """
 insert into queue (
     store, content, hint_cat, hint_imp,
@@ -203,10 +209,10 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         store, content, hint_cat, hint_imp, hint_source,
         hint_entities, hint_replaced_id,
         1 if hint_no_reconcile else 0, session_id,
-        str(uuid.uuid4()), priority, now))
+        queue_uuid, priority, now))
     row_id = cur.lastrowid
     logger.debug(f'queued blob {row_id} for store {store}')
-    return row_id
+    return row_id, queue_uuid
 
 
 def claim(

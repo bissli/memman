@@ -121,6 +121,9 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
     def has_active_with_queue_uuid(self, queue_uuid: str) -> bool:
         return _node.has_active_with_queue_uuid(self._db, queue_uuid)
 
+    def get_by_queue_uuid(self, queue_uuid: str) -> list[Insight]:
+        return _node.get_by_queue_uuid(self._db, queue_uuid)
+
     def iter_for_reembed(
             self, cursor: Id, batch: int) -> list[ReembedRow]:
         rows = _node.iter_for_reembed(self._db, cursor, batch)

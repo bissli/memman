@@ -571,7 +571,7 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
         imp_hint = (
             imp if ctx.get_parameter_source('imp') == from_cmdline
             else None)
-        row_id = enqueue(
+        row_id, queue_uuid = enqueue(
             conn, store=name, content=content_str,
             hint_cat=cat_hint, hint_imp=imp_hint,
             hint_source=source,
@@ -582,6 +582,7 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     _json_out({
         'action': 'queued',
         'queue_id': row_id,
+        'queue_uuid': queue_uuid,
         'store': name,
         'quality_warnings': quality_warnings,
         })
@@ -1583,7 +1584,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
 
     from memman.queue import enqueue, queue_db
     with queue_db(data_dir_val) as conn:
-        row_id = enqueue(
+        row_id, queue_uuid = enqueue(
             conn, store=name, content=content_str,
             hint_cat=cat, hint_imp=imp,
             hint_source=source,
@@ -1595,6 +1596,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
     _json_out({
         'action': 'queued',
         'queue_id': row_id,
+        'queue_uuid': queue_uuid,
         'store': name,
         'replaced_id': id,
         'quality_warnings': quality_warnings,
@@ -2778,6 +2780,76 @@ def insights_show(ctx: click.Context, id: str) -> None:
             raise click.ClickException(
                 f'insight {id} not found or already deleted')
         _json_out(insight_to_full_dict(ins))
+
+
+@claude_callable
+@insights.command('by-queue')
+@click.argument('queue_uuid')
+@click.pass_context
+def insights_by_queue(ctx: click.Context, queue_uuid: str) -> None:
+    r"""List the insights one queued write produced.
+
+    Resolves the `queue_uuid` that `remember` and `replace` return
+    into the rows that write actually stored, once the scheduler has
+    drained it. This is the write-to-read join: the queue row itself
+    is purged about a minute after the drain, while the uuid is
+    stamped on every insight the write produced and survives.
+
+    \b
+
+    Parameters
+    ----------
+    queue_uuid : str
+        The `queue_uuid` from a `remember` / `replace` response, or
+        from `memman scheduler queue show <row_id>`.
+
+    \b
+
+    Returns
+    -------
+    JSON
+        `{queue_uuid, store, count, results}`. `store` is the store
+        SEARCHED, not the store the write targeted. `results` holds
+        one full insight dict per row, oldest first.
+
+    \b
+
+    Notes
+    -----
+    - `count: 0` is a real answer, not an error, and has three
+      causes: the write is still queued, it stored nothing (see
+      `memman scheduler queue skipped`), or it went to a different
+      store. The queue is process-global while this command reads
+      one store, so a uuid from `remember --store shop` resolves to
+      nothing under any other store.
+    - After the drain, one write resolves to one row only under
+      `--no-reconcile`, which bypasses extraction; otherwise it can
+      split into several.
+    - A malformed uuid is rejected rather than answered `count: 0`,
+      so grabbing `queue_id` instead of `queue_uuid` fails loudly.
+
+    \b
+
+    Examples
+    --------
+    memman remember "a durable fact" --no-reconcile
+    memman insights by-queue 7f3c1e00-0d1a-4f7e-9c2b-2a1d5b8e4c60
+    """
+    try:
+        uuid.UUID(queue_uuid)
+    except ValueError:
+        raise click.ClickException(
+            f'{queue_uuid!r} is not a queue uuid. Pass the `queue_uuid`'
+            ' from a remember/replace response, not the `queue_id`.')
+    name = _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store'])
+    with _active_backend(ctx) as backend:
+        rows = backend.nodes.get_by_queue_uuid(queue_uuid)
+    _json_out({
+        'queue_uuid': queue_uuid,
+        'store': name,
+        'count': len(rows),
+        'results': [insight_to_full_dict(r) for r in rows],
+        })
 
 
 @cli.command()

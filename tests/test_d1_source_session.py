@@ -132,8 +132,8 @@ def test_source_defaults_to_user_for_programmatic_enqueue(mm_runner):
     from memman.queue import enqueue, queue_db
     _, data_dir = mm_runner
     with queue_db(data_dir) as conn:
-        row_id = enqueue(conn, store='default',
-                         content='programmatic enqueue note')
+        row_id, _ = enqueue(conn, store='default',
+                            content='programmatic enqueue note')
     force_drain(data_dir)
     _sess, queue_uuid = _queue_row(data_dir, row_id)
     rows = _stored(data_dir, 'default', 'queue_uuid = ?', (queue_uuid,))
