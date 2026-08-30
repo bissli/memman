@@ -14,6 +14,7 @@ from pathlib import Path
 from memman.embed.fingerprint import seed_default_fingerprint
 from memman.embed.fingerprint import write_fingerprint
 from memman.store.db import open_db, store_dir
+from memman.store.errors import BackendError
 from memman.store.node import insert_insight
 from memman.store.sqlite import SqliteBackend, SqliteMigrator
 from tests.conftest import make_insight
@@ -132,7 +133,7 @@ def test_open_db_refuses_store_missing_corroboration_column(tmp_path):
     Mutation: dropping `idx_insights_corroboration` from
         `_BASELINE_SCHEMA` -- the 0.18.x store opens silently and
         fails later with a raw OperationalError deep in a read path.
-    Oracle: `open_db` raises RuntimeError naming `MIGRATION_SCRIPT`.
+    Oracle: `open_db` raises BackendError naming `MIGRATION_SCRIPT`.
     """
     import pytest
     from memman.store.db import MIGRATION_SCRIPT
@@ -144,7 +145,7 @@ def test_open_db_refuses_store_missing_corroboration_column(tmp_path):
         conn.execute(
             'alter table insights drop column corroboration_count')
         conn.commit()
-    with pytest.raises(RuntimeError, match=MIGRATION_SCRIPT):
+    with pytest.raises(BackendError, match=MIGRATION_SCRIPT):
         open_db(store_dir(data_dir, 'v018'))
 
 
