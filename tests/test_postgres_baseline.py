@@ -474,7 +474,7 @@ def test_reindex_concurrent_writers_no_edges_lost(pg_dsn):
         backend = open_postgres_backend(store_name, pg_dsn)
         try:
             barrier.wait()
-            reindex_auto_edges(backend)
+            reindex_auto_edges(backend, store_name='pg_concurrent')
         except Exception as e:
             errors.append(e)
         finally:

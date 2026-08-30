@@ -51,6 +51,7 @@ def _spy_reconcile(monkeypatch):
 
 
 def _run(backend, content, **kwargs):
+    kwargs.setdefault('store_name', 'test')
     return run_remember(
         backend, _new_insight(content), content,
         ec=bound_embedder(backend), **kwargs)
@@ -233,7 +234,7 @@ def test_corroborate_adopts_restating_queue_uuid(
     parent.queue_uuid = 'q-restate-1'
     run_remember(
         tmp_backend, parent, 'Redis caches session tokens',
-        ec=bound_embedder(tmp_backend))
+        ec=bound_embedder(tmp_backend), store_name='test')
     assert tmp_backend.nodes.get(tid).queue_uuid == 'q-restate-1'
     assert tmp_backend.nodes.has_active_with_queue_uuid(
         'q-restate-1') is True
@@ -262,7 +263,7 @@ def test_corroborate_preserves_creating_rows_queue_uuid(
     parent.queue_uuid = 'q-restate-2'
     run_remember(
         tmp_backend, parent, 'Redis caches session tokens',
-        ec=bound_embedder(tmp_backend))
+        ec=bound_embedder(tmp_backend), store_name='test')
     assert tmp_backend.nodes.get(tid).queue_uuid == 'q-create-1'
     assert tmp_backend.nodes.has_active_with_queue_uuid(
         'q-create-1') is True
@@ -291,7 +292,7 @@ def test_corroborate_dead_target_degrades_to_add(
     res = run_remember(
         tmp_backend, _new_insight('Redis caches session tokens'),
         'Redis caches session tokens',
-        ec=bound_embedder(tmp_backend),
+        ec=bound_embedder(tmp_backend), store_name='test',
         insights_by_id=stale_cache)
     assert res['facts'][0]['action'] == 'add'
     assert tmp_backend.nodes.get(res['facts'][0]['id']) is not None
@@ -334,7 +335,7 @@ def test_degrade_repairs_the_stale_drain_caches(
         res = run_remember(
             tmp_backend, _new_insight('Redis caches session tokens'),
             'Redis caches session tokens',
-            ec=bound_embedder(tmp_backend),
+            ec=bound_embedder(tmp_backend), store_name='test',
             insights_by_id=stale_cache, embed_cache=shared_embeds)
         actions.append(res['facts'][0]['action'])
     live = [i for i in tmp_backend.nodes.get_all_active()
@@ -367,7 +368,7 @@ def test_same_row_duplicate_against_dead_target_adds_once(
     run_remember(
         tmp_backend, _new_insight('Redis caches session tokens'),
         'Redis caches session tokens',
-        ec=bound_embedder(tmp_backend),
+        ec=bound_embedder(tmp_backend), store_name='test',
         insights_by_id=stale_cache)
     live = [i for i in tmp_backend.nodes.get_all_active()
             if i.content == 'Redis caches session tokens']

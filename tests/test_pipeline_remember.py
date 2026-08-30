@@ -53,7 +53,7 @@ def test_refresh_effective_importance_failure_is_logged(
         run_remember(
             tmp_backend, insight,
             content=insight.content,
-            ec=bound_embedder(tmp_backend),
+            ec=bound_embedder(tmp_backend), store_name='test',
             no_reconcile=True)
     matches = [
         r for r in caplog.records
@@ -80,7 +80,7 @@ def test_auto_prune_failure_is_logged(
         run_remember(
             tmp_backend, insight,
             content=insight.content,
-            ec=bound_embedder(tmp_backend),
+            ec=bound_embedder(tmp_backend), store_name='test',
             no_reconcile=True)
     matches = [
         r for r in caplog.records

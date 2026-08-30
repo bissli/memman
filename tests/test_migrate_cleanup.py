@@ -149,6 +149,6 @@ def test_run_all_checks_includes_stale_post_migrate_source(
     from memman.store.sqlite import SqliteBackend
 
     backend = SqliteBackend(tmp_db)
-    out = run_all_checks(backend, str(tmp_path / 'memman'))
+    out = run_all_checks(backend, str(tmp_path / 'memman'), store_name='test')
     names = [c['name'] for c in out['checks']]
     assert 'stale_post_migrate_source' in names

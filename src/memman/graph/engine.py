@@ -223,7 +223,7 @@ def compute_constants_hash() -> str:
 
 def _resolve_semantic_threshold(
         backend: Backend,
-        store_name: str | None) -> float | None:
+        store_name: str) -> float | None:
     """Return the AUTO_SEMANTIC_THRESHOLD for this store.
 
     Precedence (returns the first that applies):
@@ -244,23 +244,21 @@ def _resolve_semantic_threshold(
     entry point where operators see the structured error.
     """
     from memman import config
-    if store_name is not None:
-        try:
-            override = config.get_store_auto_threshold(store_name)
-        except ValueError as err:
-            logger.warning(
-                'invalid %s; ignoring override (%s)',
-                config.AUTO_THRESHOLD_FOR(store_name), err)
-            override = None
-        if override == 'skip':
-            return None
-        if isinstance(override, float):
-            return override
+    try:
+        override = config.get_store_auto_threshold(store_name)
+    except ValueError as err:
+        logger.warning(
+            'invalid %s; ignoring override (%s)',
+            config.AUTO_THRESHOLD_FOR(store_name), err)
+        override = None
+    if override == 'skip':
+        return None
+    if isinstance(override, float):
+        return override
     fp = stored_fingerprint(backend)
     if fp is None:
         return None
-    surface = ('code' if store_name is None
-               else config.get_store_surface(store_name))
+    surface = config.get_store_surface(store_name)
     threshold, _source = embed_thresholds.resolve_with_fallback(
         fp.provider, fp.model, surface)
     return threshold
@@ -271,7 +269,8 @@ REINDEX_CHUNK_SIZE = 10
 
 def reindex_auto_edges(
         backend: Backend, dry_run: bool = False,
-        store_name: str | None = None,
+        *,
+        store_name: str,
         chunk_size: int = REINDEX_CHUNK_SIZE) -> dict[str, int]:
     """Delete auto-created edges and re-create semantic/entity edges.
 
@@ -279,7 +278,10 @@ def reindex_auto_edges(
     LLM/manual causal edges are preserved.
 
     `store_name` plumbs through to `_resolve_semantic_threshold` for
-    per-store surface dispatch; None resolves the code-surface default.
+    per-store surface dispatch. It is keyword-only and required: an
+    omitted store name silently resolves the code-surface row and
+    skips the `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>` override
+    branch, which is a wrong threshold rather than a missing one.
 
     Chunking: the per-insight delete-then-create loop runs in
     transactions of `chunk_size` insights so each lock-hold stays
@@ -372,14 +374,16 @@ def reindex_auto_edges(
 
 def reindex_if_constants_changed(
         backend: Backend,
-        store_name: str | None = None) -> dict[str, int] | None:
+        *,
+        store_name: str) -> dict[str, int] | None:
     """Reindex auto-edges when the stored constants hash is stale.
 
     Returns the reindex stats dict on reindex, or None when the stored
     hash already matched (common case). Emits a WARNING when constants
     drifted (operator hint to run `memman graph rebuild`) and a DEBUG
     line on first-time initialization. `store_name` plumbs through to
-    `reindex_auto_edges` for per-store surface dispatch.
+    `reindex_auto_edges` for per-store surface dispatch, keyword-only
+    and required for the same reason it is there.
     """
     current_hash = compute_constants_hash()
     stored_hash = backend.meta.get('constants_hash')
