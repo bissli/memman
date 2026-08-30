@@ -1364,6 +1364,17 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
         raise click.ClickException(
             '--min-score needs the scored path; --basic is SQL LIKE '
             'matching and computes no scores.')
+    # Validated above the `--basic` early return, or `--basic --intent
+    # bogus` exits 0 reporting the flag as merely ignored -- telling the
+    # caller their intent was well-formed but unusable here, which is a
+    # worse answer than silence. `--entities` was hoisted for the same
+    # reason.
+    typed_intent = None
+    if intent:
+        try:
+            typed_intent = intent_from_string(intent)
+        except ValueError as e:
+            raise click.ClickException(str(e))
     store_name = _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store'])
     per_store_rerank = config.get_store_rerank_enabled(store_name)
     rerank = (per_store_rerank if per_store_rerank is not None
@@ -1385,9 +1396,25 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                 logger.debug(
                     'recall_bookkeep_skipped basic q=%r: %s',
                     keyword_str, exc)
+            # Notes:
+            # - `--min-score` is rejected above, not named here: it
+            #   is a FILTER, so ignoring it would certify every
+            #   returned row as having cleared a floor it never met.
+            # - `--intent` and `--expand` leave the caller a
+            #   complete, visible result set, so naming them is
+            #   enough; an exit code would break a hook that passes
+            #   them out of habit.
+            # - The tuple order below fixes the reported order.
+            basic_meta: dict[str, Any] = {'basic': True}
+            ignored = [
+                name for name, was_given
+                in (('intent', bool(intent)), ('expand', expand))
+                if was_given]
+            if ignored:
+                basic_meta['ignored'] = ignored
             _json_out({
                 'results': [project(r) for r in results],
-                'meta': {'basic': True},
+                'meta': basic_meta,
                 })
             return
 
@@ -1408,13 +1435,8 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                 usage=llm_usage.delta(
                     expand_usage_snap, llm_usage.snapshot()))
 
-        intent_override = None
-        if intent:
-            try:
-                intent_override = intent_from_string(intent)
-            except ValueError as e:
-                raise click.ClickException(str(e))
-        elif expansion.get('intent'):
+        intent_override = typed_intent
+        if not intent and expansion.get('intent'):
             try:
                 intent_override = intent_from_string(
                     expansion['intent'])

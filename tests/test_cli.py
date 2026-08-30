@@ -361,6 +361,43 @@ class TestRecall:
         allowed = invoke(runner, ['recall', 'Go SQLite', '--basic'])
         assert allowed.exit_code == 0
 
+    def test_recall_basic_names_the_flags_it_ignored(self, runner):
+        """`--basic` reports inert ranking flags in `meta.ignored`.
+
+        Mutation: dropping the `was_given` guard so both names are
+            always listed, emitting `ignored` unconditionally, naming
+            only `intent` and letting `--expand` stay silently inert,
+            or leaking the key onto the scored envelope where
+            `--intent` is genuinely honored.
+        Oracle: the whole `meta` dict compared against a hand-written
+            expectation for each of the four flag combinations, so an
+            absent key and an empty list are distinguishable.
+        """
+        invoke(runner, [
+            'remember', 'Go uses SQLite for persistent storage',
+            '--no-reconcile'])
+
+        def meta(*flags):
+            r = invoke(runner, ['recall', 'Go SQLite', '--basic', *flags])
+            assert r.exit_code == 0, r.output
+            return json.loads(r.output)['meta']
+
+        assert meta() == {'basic': True}
+        assert meta('--intent', 'WHY') == {
+            'basic': True, 'ignored': ['intent']}
+        assert meta('--expand') == {
+            'basic': True, 'ignored': ['expand']}
+        assert meta('--intent', 'WHY', '--expand') == {
+            'basic': True, 'ignored': ['intent', 'expand']}
+
+        # The key must never reach the scored envelope: recall fires
+        # from a hook on every user message, and `--intent` IS honored
+        # there, so reporting it would be a lie as well as bytes.
+        scored = invoke(runner, [
+            'recall', 'Go SQLite', '--intent', 'WHY', '--limit', '1'])
+        assert scored.exit_code == 0, scored.output
+        assert 'ignored' not in json.loads(scored.output)['meta']
+
     def test_recall_min_score_rejects_out_of_domain_values(self, runner):
         """Values that cannot act as a floor are refused, not ignored.
 
