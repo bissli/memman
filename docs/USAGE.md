@@ -331,7 +331,7 @@ memman log worker [--errors] [--lines N]            # tail worker output (~/.mem
 memman scheduler status [--text]         # platform, interval, state, next run, last heartbeat (default JSON)
 memman scheduler start [--text]          # flip persistent state to STARTED (resume drains + writes)
 memman scheduler stop [--text]           # flip persistent state to STOPPED (pause drains + reject writes)
-memman scheduler trigger                 # run a drain now (systemd/launchd; not applicable in serve mode)
+memman scheduler trigger                 # dispatch a drain, do not wait for it (systemd/launchd; not applicable in serve mode)
 memman scheduler interval --seconds N    # change cadence (60s minimum on systemd/launchd)
 memman scheduler install                 # install the scheduler unit (idempotent)
 memman scheduler uninstall               # remove the scheduler unit; preserves persistent state

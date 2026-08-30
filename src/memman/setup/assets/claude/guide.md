@@ -46,6 +46,20 @@ Under `--basic` none of those keys exist. That envelope is
   confidence: `--basic` can return `results: []` and says nothing
   about how well anything matched
 
+`--brief` cuts each row to `id`, `category`, `importance`, and
+`summary`, on either path. Use it when scanning for which insight to
+open rather than reading the insights themselves. A row with no
+summary falls back to the first 200 characters of its content, so no
+row comes back blank, and `truncated: true` marks that fallback when
+the content ran past the cut. The marker's ABSENCE does not mean you
+hold the whole row: a summarized row carries no marker however much
+its summary left out. Read a row in full with
+`memman insights show <id>`.
+
+`--brief` also drops `created_at`. On the scored path a WHEN query
+still reports `ordering: chronological` and orders rows newest first,
+so brief rows keep their sequence but carry no dates.
+
 ### Phase awareness — when to write
 
 **Store immediately** when the user states a preference, makes a decision, gives a
@@ -187,5 +201,5 @@ while a timer-driven drain is running, the second invocation logs
 - `memman scheduler start` — flip state to STARTED (resume drains + writes).
 - `memman scheduler stop` — flip state to STOPPED (pause drains + reject writes).
 - `memman scheduler interval --seconds N` — change cadence (min 60s for systemd/launchd; serve mode accepts any value `>= 0`, with `0` meaning continuous).
-- `memman scheduler trigger` — run the drain now on systemd/launchd; not applicable in serve mode.
+- `memman scheduler trigger` — dispatch a drain on systemd/launchd and return at once. It does not wait for the drain, so a `dispatched` response means the run started, not that it finished; read `memman log worker` for the outcome. Not applicable in serve mode.
 - `memman log worker [--errors]` — tail the enrichment worker logs.

@@ -115,7 +115,15 @@ memman insights by-queue <queue_uuid>                  # what one write stored
 
 `--brief` works on both paths. A row left without a summary falls back
 to its content instead, so no row comes back blank. `truncated: true`
-marks the rows whose content was cut at 200 characters.
+means the text you got is a raw content prefix cut at 200 characters.
+Its ABSENCE does not mean you hold the whole row: a summarized row
+carries no marker however much its summary left out, and a fallback
+row is marked only when its content ran past the cut. `memman insights
+show <id>` is how you read the rest of any row worth more than a scan.
+
+`--brief` also drops `created_at`. On the scored path a WHEN query
+still orders rows newest first, so brief rows keep their sequence but
+carry no dates. Read a row in full when you need the date itself.
 
 Add `--intent WHY|WHEN|ENTITY` to bias ranking when intent is unambiguous.
 
