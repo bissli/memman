@@ -97,6 +97,8 @@ For OpenRouter endpoints, `memman install` queries `/v1/models` once per role an
 
 `memman recall` combines optional LLM query expansion, intent detection, multi-signal anchor selection, beam search graph traversal, and multi-factor re-ranking. Use `--basic` for SQL LIKE fallback.
 
+`--basic` returns before Step 0 and runs none of the steps below, so every flag that only feeds a step is inert there. `--intent` is still validated -- `--basic --intent bogus` fails rather than reporting a malformed intent as merely ignored -- and both it and `--expand` are then named in `meta.ignored`. `--min-score` is rejected instead, whenever it is actually set: it is a filter, and dropping a floor silently would leave every returned row looking like it had cleared one. (`--min-score 0` is the off value and passes.) `--cat`, `--source` and `--brief` stay fully active. So does `--limit`, with one trap: `--limit 0` means unbounded on the scored path, where the slice runs only when `limit > 0`, but the basic path passes the number straight into a SQL `limit ?`, so `--basic --limit 0` returns nothing at all.
+
 ![Smart Recall Pipeline](../diagrams/03-smart-recall-pipeline.drawio.png)
 
 ### Step 0: LLM query expansion (opt-in, off by default)
@@ -107,7 +109,7 @@ For OpenRouter endpoints, `memman install` queries `/v1/models` once per role an
 - **keywords**: extracted search keywords (parsed and returned; no consumer today)
 - **intent**: WHY / WHEN / ENTITY / GENERAL (can override regex detection)
 
-Expansion runs only when the user passes `--expand`. By default the raw query is embedded directly. Expansion is gated because the LLM has no domain scope and can pull the candidate pool toward general-knowledge synonyms that recency-aware rerank (Step 4) then amplifies. Modern embedding models already capture most synonym intent; recency does the rest. See § 4.3.
+Expansion runs only when the user passes `--expand`, and never under `--basic`. By default the raw query is embedded directly. Expansion is gated because the LLM has no domain scope and can pull the candidate pool toward general-knowledge synonyms that recency-aware rerank (Step 4) then amplifies. Modern embedding models already capture most synonym intent; recency does the rest. See § 4.3.
 
 ### Step 1: Intent detection
 
@@ -120,7 +122,7 @@ Query intent is identified via regex (or LLM override from Step 0):
 | ENTITY  | `what is`, `who is`, `tell me about`, `describe`, `about`                              |
 | GENERAL | None of the above match                                                                |
 
-`--intent` manually overrides automatic detection.
+`--intent` manually overrides automatic detection. Under `--basic` no intent is detected at all, so the flag is validated and then reported in `meta.ignored`.
 
 ### Step 2: Multi-signal anchor selection (RRF fusion)
 
@@ -139,7 +141,7 @@ Each insight may rank differently across signals; RRF fusion produces a composit
 
 **Rationale.**
 
-- **`ANCHOR_TOP_K = 30`**: per-signal anchor pool size. MAGMA Table 5 specifies 20; memman uses 30 to give beam search a richer starting frontier given the flat insight hierarchy (no episode/narrative super-nodes).
+- **`ANCHOR_TOP_K = 30`**: per-signal anchor pool size. MAGMA Table 5 specifies 20; memman uses 30 to give beam search a richer starting frontier given the flat insight hierarchy (no episode/narrative super-nodes). The 30 is not flat in every case: with `--cat` or `--source` set and `limit > 0`, the budget widens to `max(ANCHOR_TOP_K, limit)` so a filtered recall can still fill a large limit. Unfiltered recall keeps `ANCHOR_TOP_K` untouched, which is what stops a bare `max()` from silently overriding the ablation harness's `anchor_top_k` sweep.
 - **`RRF_K = 60`**: standard value from the original RRF paper (Cormack, Clarke & Büttcher, SIGIR 2009). MAP scores nearly flat from k=50–90, with k=60 validated across four TREC collections.
 - **`VECTOR_SEARCH_MIN_SIM = 0.10`**: noise floor matching MAGMA's lower similarity threshold bound. Below 0.10, vector search hits add noise rather than signal.
 
@@ -215,6 +217,10 @@ Reranker columns are the RAW rows as written in `_RERANK_WEIGHTS_RAW`; the shipp
 
 Embeddings are Nd vectors from the store's bound provider (dim is provider-defined; current default is `voyage-3-lite`, 512-dim). The expanded query from Step 0 is embedded for vector search and reranking.
 
+### The `--min-score` floor (off by default)
+
+The floor runs between the `--cat` / `--source` result filter and the MMR pass of Step 4a. `--min-score` drops any row whose `keyword + similarity` falls below the floor, so its range is 0.0 to 2.0 and `0.0` means off. It thresholds that sum rather than the blended `score` because `graph_score` is min-max normalized: the top candidate of any query scores 1.0 there, so a blended floor would sit at `w_gr` and move with the intent. It ships opt-in because the deep tail of a recall is often where the useful row sits.
+
 ### Step 4a: MMR diversity re-sort (off by default)
 
 Between the `--cat`/`--source` result filter and the cross-encoder shortlist, a one-shot MMR pass can re-sort the top `MMR_POOL` (200) candidates by `lam * relevance - (1 - lam) * max_pool_similarity`, computed with one gram-matrix BLAS call over L2-normalized stored vectors (diagonal zeroed so a row's self-similarity is excluded). It is the cheap one-shot variant — every candidate scored once against the whole pool, then one sort — not greedy iterative MMR. Candidates without a cached embedding are exempt from the re-sort and hold their relevance position (scoring them would hand the degraded rows a zero penalty — the maximum diversity bonus). `MMR_POOL > RERANK_SHORTLIST` by construction so the pass can change shortlist membership when rerank is on. `MMR_LAMBDA` ships at the value measured by the `experiments/recall_ablation` mmr sweep; `1.0` disables the term (see the sweep record in that directory's README for why).
@@ -256,14 +262,42 @@ Each retrieval result includes signal details:
   "signals": {
     "keyword": 0.85,
     "similarity": 0.72,
-    "graph": 0.45
+    "graph": 0.45,
+    "rerank": 0.81
   }
 }
 ```
 
+`signals.rerank` is present only on rows Step 4b actually re-scored: it is the cross-encoder score, and it is the same number that replaced `score`. Its absence means the row never reached the shortlist, or that rerank was off, gated by the token minimum, or failed.
+
 The `summary` field is the LLM-authored one-line gloss produced during enrichment (slow_metadata role). It is present only when (a) enrichment has run for the row and (b) the summary actually compresses the content (write-time gate at `len(summary) < len(insight.content) * 0.85`); rows that fail the gate emit no `summary` key. Calling LLMs see ~3.6× token compression with ~90% ranking-decision agreement vs full content.
 
 The host LLM sees these signals and can apply its own judgment with full conversation context.
+
+### Response envelope
+
+`intent_aware_recall` returns `{'results': [...], 'meta': {...}}`. The `meta` object is the pipeline's account of its own run, and is what lets a calling LLM weigh the rows it got:
+
+| Field           | Computed at | Meaning                                                                           |
+| --------------- | ----------- | --------------------------------------------------------------------------------- |
+| `intent`        | Step 1      | The resolved intent, whatever supplied it                                         |
+| `intent_source` | Step 1      | `override` when `--intent` or a Step 0 expansion hint supplied the intent, else `auto` |
+| `hint`          | Step 1      | Per-intent reasoning guidance from `RECALL_HINTS`; always present                 |
+| `anchor_count`  | Step 2      | Fused anchor pool size, after `--cat` / `--source` filtering                       |
+| `traversed`     | Step 3      | Candidates scored, deliberately unfiltered                                        |
+| `reranked`      | Step 4b     | `true` only when the cross-encoder re-scored the shortlist; a reranker failure leaves it `false` |
+| `ordering`      | Step 5 / 5b | `causal_topological` (WHY), `chronological` (WHEN), else `score`                   |
+| `sparse`        | Post-slice  | Present only when `true`: the low-confidence rule below                           |
+
+Two of these carry a trap worth stating. `intent_source` reads `override` for a Step 0 expansion hint exactly as it does for an explicit `--intent`, so it distinguishes automatic detection from everything else, not the user from the LLM. And `anchor_count` against `traversed` is the filter diagnostic, read against the budget rule in Step 2 rather than against a flat 30: while `limit` stays at or below `ANCHOR_TOP_K`, an anchor count that collapses under a selective `--cat` while `traversed` stays wide says the filter starved the anchor pools, not the graph. Above that, a filter widens the budget itself and the two move for reasons that are not the diagnosis.
+
+`sparse` fires on any of three arms: an empty result set, fewer than `limit // 2` rows when `limit > 0`, or a candidate pool in which nothing matched a query token. The row-count arm needs a bounded limit, so at `--limit 0` only the empty-set and unmatched-token arms can fire. That last arm is the unscoped-query case, where Step 2's Recency signal anchors newest-first rows that match nothing. Its token test reads the pool as scored -- before `--cat` / `--source` filtering, `min_score`, MMR, rerank and the limit slice -- so rows the graph reached from a real match are never called irrelevant. The keyword channel alone carries that arm, and no similarity term belongs in it: `sim_cache` holds a cosine only when it is strictly positive and the lookup defaults to 0.0, so an exactly-zero similarity means either that the row carries no embedding or that its cosine was non-positive. It never distinguishes those from a real relevance measured and found small, which is why no floor on that signal can carry the arm. Measured by `experiments/recall_ablation/verify_sparse_rule.py`.
+
+`sparse` is emitted only when set, and `ignored` only when non-empty. A calling LLM reads this envelope out of its own context window, so a key that always reported `false` would spend tokens to say nothing. On the scored path a missing `sparse` therefore means the set is not sparse; under `--basic` it means nothing was computed.
+
+Under `--basic` none of those keys exist. That envelope is `{'basic': true}`, plus `ignored` when a flag was wasted -- a list of bare flag names (`intent`, `expand`), without the leading dashes. The absence of `sparse` there is not confidence: `--basic` can return nothing and says so no differently than a full page.
+
+The rows change shape as well, which matters more to a consumer than the missing `meta` keys. A scored row wraps its insight -- `{'insight': ..., 'score': ..., 'intent': ..., 'signals': ..., 'via': ...}` -- while a basic row IS the bare insight dict. Code reading `results[i]['insight']` or `results[i]['signals']` breaks under `--basic`.
 
 ### Recall trace events
 
