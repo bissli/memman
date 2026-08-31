@@ -391,10 +391,12 @@ def intent_aware_recall(
       reached by graph from a match is not called irrelevant.
     - The keyword channel alone carries that last arm, and no
       similarity term belongs in it. `sim_cache` holds a cosine only
-      when it is strictly positive, so an exactly-zero similarity
-      means the row has no embedding rather than no relevance, and the
-      matching and non-matching populations overlap on similarity, so
-      no floor separates them. Measured by
+      when it is strictly positive and the lookup defaults to 0.0, so
+      an exactly-zero similarity means either that the row carries no
+      embedding or that its cosine was non-positive -- never that a
+      real relevance was measured and found small. The matching and
+      non-matching populations also overlap on similarity, so no floor
+      separates them. Measured by
       `experiments/recall_ablation/verify_sparse_rule.py`.
     """
     if intent_override:
