@@ -322,13 +322,14 @@ memman log list --since 7d                          # entries from last 7 days
 memman log list --since 7d --stats                  # grouped counts + never-accessed
 memman log list --text                              # human-readable text table
 
-memman log worker [--errors] [--lines N]            # tail worker output (~/.memman/logs/enrich.{log,err})
+memman log worker [--errors] [--lines N]            # tail worker stdout/stderr (~/.memman/logs/enrich.{log,err})
+memman log worker --stack [--lines N]               # tail the rotated log + backups (<data-dir>/logs/memman.log); excludes --errors
 ```
 
 ### Scheduler
 
 ```bash
-memman scheduler status [--text]         # platform, interval, state, next run, last heartbeat (default JSON)
+memman scheduler status [--text]         # platform, interval, state, next run, last heartbeat, log paths (default JSON)
 memman scheduler start [--text]          # flip persistent state to STARTED (resume drains + writes)
 memman scheduler stop [--text]           # flip persistent state to STOPPED (pause drains + reject writes)
 memman scheduler trigger                 # dispatch a drain, do not wait for it (systemd/launchd; not applicable in serve mode)

@@ -197,9 +197,9 @@ while a timer-driven drain is running, the second invocation logs
 `drain: another drain is in progress, skipping` and exits 0.
 
 - `memman scheduler serve [--interval N] [--once]` — long-running drain loop (used as PID 1 in containers). `--interval 0` means continuous (drains back-to-back, with a 100 ms idle backoff when the queue is empty).
-- `memman scheduler status` — platform, interval, next run, state, last heartbeat.
+- `memman scheduler status` — platform, interval, next run, state, last heartbeat, and the three worker-log paths.
 - `memman scheduler start` — flip state to STARTED (resume drains + writes).
 - `memman scheduler stop` — flip state to STOPPED (pause drains + reject writes).
 - `memman scheduler interval --seconds N` — change cadence (min 60s for systemd/launchd; serve mode accepts any value `>= 0`, with `0` meaning continuous).
 - `memman scheduler trigger` — dispatch a drain on systemd/launchd and return at once. It does not wait for the drain, so a `dispatched` response means the run started, not that it finished; read `memman log worker` for the outcome. Not applicable in serve mode.
-- `memman log worker [--errors]` — tail the enrichment worker logs.
+- `memman log worker [--errors|--stack]` - tail one worker log target; the two flags are mutually exclusive. `--errors` reads `enrich.err`, which carries the worker's own ERROR-level tracebacks. `--stack` reads the rotated `memman.log` and its backups, the only place a traceback survives when the CLI error that reports it is one line. The `enrich` files always sit under `~/.memman/logs`; `memman.log` follows `--data-dir`, so under a non-default data dir they are in different directories and the error message names the exact command to run. `memman scheduler status` prints all three paths.

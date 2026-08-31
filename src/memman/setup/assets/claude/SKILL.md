@@ -173,7 +173,7 @@ memman doctor                         # health check (sqlite, queue, keys, sched
 | Command                                              | Purpose                             |
 | ---------------------------------------------------- | ----------------------------------- |
 | `memman log list [--since 7d --stats --text]`        | Operation audit log                 |
-| `memman scheduler status`                            | Worker state, queue depth, next run |
+| `memman scheduler status`                            | Worker state, next run, log paths   |
 | `memman scheduler queue list`                        | Inspect deferred-write queue        |
 | `memman store list` / `use <name>` / `create <name>` | Multi-store management              |
 | `memman config show`                                 | Effective settings (env + on-disk)  |

@@ -195,9 +195,12 @@ memman/
 ├── queue.db                      # Deferred-write queue (SQLite)
 ├── cache/                        # LLM response cache
 ├── compact/                      # Session-compact flag files
-├── logs/                         # Scheduler stdout/stderr
+├── logs/                         # Scheduler redirects + rotated worker log
 │   ├── enrich.log
-│   └── enrich.err
+│   ├── enrich.err
+│   ├── backup.log
+│   ├── backup.err
+│   └── memman.log
 └── data/                         # Each store has its own isolated directory
     ├── default/
     │   └── memman.db             # SQLite database (WAL mode)
@@ -206,6 +209,8 @@ memman/
     └── <name>/
         └── memman.db
 ```
+
+That tree is the default layout, where the data directory is `~/.memman`. Under a non-default `--data-dir`, `env`, `active`, `queue.db`, `data/` and `logs/memman.log` all move with it. What stays under `~/.memman` is `compact/` and the four scheduler redirects, `logs/enrich.{log,err}` and `logs/backup.{log,err}`: the systemd unit pins those to `%h/.memman/logs`, and the launchd plist bakes the absolute home in at install time, so neither reads the data dir. `memman scheduler status` prints the enrich and rotated paths, and `memman log worker --stack` reads the rotated one together with its backups.
 
 Each store is fully independent — insights, edges, and oplog do not cross stores. On SQLite this is one `memman.db` per store; on Postgres it is one `store_<name>` schema per store inside one shared database. Shipped assets (`guide.md`, `SKILL.md`) live inside the installed package and are read via `importlib.resources`; nothing memman deploys lives under `~/.memman/`. `~/.memman/` is user state: memory data, API keys, caches, logs, queued work.
 
