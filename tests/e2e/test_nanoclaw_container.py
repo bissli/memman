@@ -313,6 +313,17 @@ class TestCorruptDb:
 
     def test_recall_returns_clean_error_on_corrupt_db(self, nanoclaw_run):
         """Truncate the SQLite file; recall must not leak a traceback.
+
+        Mutation: a leak of a type the root group does NOT translate --
+            an `OSError` or `FileNotFoundError` from the store path.
+            The `sqlite3` family no longer reaches here untranslated,
+            so this no longer pins the per-site translations it was
+            written for; that job moved to
+            `tests/test_backend_error_hygiene.py`.
+        Oracle: `Traceback` absent from stderr on a real container,
+            which is also the end-to-end check that the seam is wired
+            in the shipped image at all -- something no unit test can
+            establish.
         """
         cid, _ = nanoclaw_run()
         _exec(cid, ['memman', 'remember', '--no-reconcile',
