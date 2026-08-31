@@ -68,11 +68,11 @@ def _stub_postgres(monkeypatch, *, preflight=None):
 def test_migrate_named_store_rejects_unhostable_name(runner, monkeypatch):
     """`--store demo-v3` fails cleanly instead of raising ConfigError.
 
-    Mutation: dropping the eligibility guard, so `_store_schema`
-    raises ConfigError past the CLI's `except MigrateError`.
-    Oracle: the escaped exception type -- a handled refusal leaves
-    `result.exception` a SystemExit, the live bug leaves the
-    ConfigError itself.
+    Mutation: dropping the eligibility guard, so the command skips
+    the unhostable store and exits 0 instead of refusing.
+    Oracle: the non-zero exit. The CLI root group also catches
+    ConfigError, so the escaped-type assertion below holds either
+    way; the exit code is what separates a refusal from a skip.
     """
     _, data_dir = runner
     _seed_store(data_dir, 'demo-v3')

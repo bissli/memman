@@ -8,6 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
+from urllib.parse import quote
 
 from memman.store.errors import BackendError
 
@@ -244,7 +245,11 @@ def open_db(data_dir: str) -> DB:
         raise BackendError(
             f'cannot create store directory {data_dir}: {exc}') from exc
     db_path = os.path.join(data_dir, 'memman.db')
-    is_new_db = not Path(db_path).exists()
+    try:
+        is_new_db = not Path(db_path).exists()
+    except OSError as exc:
+        raise BackendError(
+            f'cannot open database {db_path}: {exc}') from exc
     try:
         conn = sqlite3.connect(db_path, isolation_level=None)
     except sqlite3.Error as exc:
@@ -269,14 +274,73 @@ def open_db(data_dir: str) -> DB:
 
 
 def open_read_only(data_dir: str) -> DB:
-    """Open the SQLite database in read-only mode."""
+    """Open one store's SQLite database in read-only mode.
+
+    Parameters
+    ----------
+    data_dir : str
+        The STORE directory, exactly as `open_db` takes it. The
+        database is read from `<data_dir>/memman.db` and is never
+        created.
+
+    Returns
+    -------
+    DB
+        An open read-only handle the caller owns and closes, by
+        `DB.close()` or the `with` form.
+
+    Raises
+    ------
+    BackendError
+        When `<data_dir>/memman.db` is absent, or cannot be opened or
+        read as a database. Never a bare `OSError` or `sqlite3.Error`.
+
+    Notes
+    -----
+    - Of the four callers, only `_count_active_rows` (under `memman
+      embed reembed`) reports the failure: it reaches the CLI root
+      group, which catches `BackendError` alone. `memman prime`,
+      `graph.engine.link_pending` and `pipeline.remember` each wrap
+      their call in `except Exception` and carry on without the
+      read-only handle, so on those three a raised error is a silent
+      degrade, not a message.
+    """
     db_path = os.path.join(data_dir, 'memman.db')
-    if not Path(db_path).exists():
-        raise FileNotFoundError(f'database not found: {db_path}')
-    uri = f'file:{db_path}?mode=ro'
-    conn = sqlite3.connect(uri, uri=True, isolation_level=None)
-    conn.execute('pragma journal_mode=wal')
-    conn.execute('pragma foreign_keys=on')
+    try:
+        found = Path(db_path).exists()
+    except OSError as exc:
+        raise BackendError(
+            f'cannot open database {db_path}: {exc}') from exc
+    if not found:
+        raise BackendError(f'database not found: {db_path}')
+    # Percent-encode: SQLite cuts a URI at the first `?`, so a raw `#`
+    # or `?` in the path both truncates the filename and demotes
+    # `mode=ro` to an unrecognized parameter, which opens -- and
+    # creates -- a different file read-write.
+    uri = f'file:{quote(db_path)}?mode=ro'
+    try:
+        conn = sqlite3.connect(uri, uri=True, isolation_level=None)
+    except sqlite3.Error as exc:
+        raise BackendError(
+            f'cannot open database {db_path}: {exc}') from exc
+    try:
+        conn.execute('pragma foreign_keys=on')
+        # Notes:
+        # - Forces the header read, so a malformed file fails here
+        #   rather than at the caller's first query, outside any
+        #   translation. `pragma foreign_keys` alone does not touch
+        #   the file and returns cleanly on corrupt bytes.
+        # - Must stay a READ. A write pragma (`journal_mode`) fails
+        #   on `mode=ro` against any store not already in WAL, which
+        #   is every store a `backup restore` just laid down.
+        conn.execute('pragma schema_version')
+    except sqlite3.Error as exc:
+        conn.close()
+        raise BackendError(
+            f'cannot open database {db_path}: {exc}') from exc
+    except Exception:
+        conn.close()
+        raise
     return DB(conn, db_path)
 
 

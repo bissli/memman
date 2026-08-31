@@ -2074,14 +2074,19 @@ class TestCorruptStoreErrorHygiene:
     def test_recall_reports_corrupt_store_without_traceback(self, runner):
         """`recall` on an unreadable store prints an error, not a trace.
 
-        Mutation: dropping `BackendError` from the caught tuple in
-            `session.active_store`, so the store-open failure escapes
-            the CLI seam. `exit_code` alone cannot catch that -- Click
-            reports an in-command raise as exit 1 too -- so the
-            assertions below read the output and the exception type.
+        Mutation: dropping `open_db`'s `sqlite3.Error` translation, so
+            a raw driver error reaches the CLI where neither seam can
+            catch it -- `session.active_store` and the root group both
+            catch `BackendError` alone. `exit_code` cannot catch that:
+            Click reports an in-command raise as exit 1 too.
         Oracle: a clean exit leaves `result.exception` a `SystemExit`
             and writes `Error: ...` naming the path; a leak leaves the
-            `BackendError` itself on `result.exception`.
+            `sqlite3.DatabaseError` itself on `result.exception`.
+
+        Two seams now cover the `BackendError` leg, so this test no
+        longer discriminates between them; the direct pin on
+        `active_store`'s catch is
+        `tests/test_session.py::test_active_store_wraps_backend_error_from_open`.
         """
         _, data_dir = runner
         sdir = pathlib.Path(data_dir) / 'data' / 'broken'
@@ -2093,3 +2098,71 @@ class TestCorruptStoreErrorHygiene:
         assert not isinstance(result.exception, BackendError)
         assert 'Error: cannot open database' in result.output
         assert 'memman.db' in result.output
+
+    def test_remember_reports_corrupt_queue_without_traceback(self, runner):
+        """`remember` on an unreadable queue.db prints an error, not a trace.
+
+        Mutation: dropping the root group's `BackendError` translation,
+            so the translated queue error escapes with no seam to catch
+            it -- `remember` never reaches `session.active_store`, which
+            is the only other seam. `exit_code` alone cannot catch that:
+            Click reports an in-command raise as exit 1 too.
+        Oracle: a clean exit leaves `result.exception` a `SystemExit`
+            and writes `Error: ...` naming the queue file; a leak leaves
+            the `BackendError` itself on `result.exception`.
+        """
+        _, data_dir = runner
+        queue_path = pathlib.Path(data_dir) / 'queue.db'
+        queue_path.write_bytes(b'not a sqlite database' * 8)
+        result = invoke(runner, ['remember', 'a fact worth keeping'])
+        assert result.exit_code != 0
+        assert not isinstance(result.exception, BackendError)
+        assert 'Error: cannot open queue database' in result.output
+        assert 'queue.db' in result.output
+
+    def test_reembed_reports_unreadable_store_without_traceback(self, runner):
+        """`embed reembed --dry-run` names a bad store dir, not a trace.
+
+        Mutation: dropping the root group's `BackendError` translation,
+            or leaving `open_read_only`'s missing-database case raising
+            `FileNotFoundError`. `embed reembed` counts rows through
+            `open_ro_db`, so it reaches neither `open_db` nor
+            `session.active_store`.
+        Oracle: a store directory with no `memman.db` -- the sweep is
+            global, so one stray directory is enough -- and a clean exit
+            leaves `result.exception` a `SystemExit` with `Error: ...`
+            naming the path.
+        """
+        _, data_dir = runner
+        (pathlib.Path(data_dir) / 'data' / 'stray').mkdir(parents=True)
+        result = invoke(runner, ['embed', 'reembed', '--dry-run'])
+        assert result.exit_code != 0
+        assert not isinstance(result.exception, BackendError)
+        assert 'Error: database not found' in result.output
+        assert 'stray' in result.output
+
+    def test_debug_keeps_the_stack_the_seam_hides(self, runner, caplog):
+        """`--debug` still carries the traceback behind the clean line.
+
+        Mutation: dropping `exc_info=True` from the seam's
+            `logger.debug`, which discards the only copy of the stack
+            -- the clean `Error:` line is all that survives, and no
+            flag brings the traceback back.
+        Oracle: the captured record's own `exc_info`, plus the
+            `BackendError` type in its formatted text. Asserting on
+            `result.output` would not work: `_configure_logging` binds
+            its handler to whatever `sys.stderr` was live at the first
+            configure in the process and never rebinds.
+        """
+        import logging
+
+        _, data_dir = runner
+        (pathlib.Path(data_dir) / 'queue.db').write_bytes(
+            b'not a sqlite database' * 8)
+        with caplog.at_level(logging.DEBUG, logger='memman'):
+            result = invoke(runner, ['--debug', 'remember', 'a fact'])
+        assert result.exit_code != 0
+        seam = [r for r in caplog.records if 'CLI seam' in r.getMessage()]
+        assert seam, [r.getMessage() for r in caplog.records]
+        assert seam[0].exc_info is not None
+        assert 'BackendError' in logging.Formatter().format(seam[0])

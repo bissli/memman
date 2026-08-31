@@ -115,8 +115,10 @@ def test_store_remove_reports_a_failed_drop_without_traceback(runner,
 
     Mutation: leaving ConfigError unhandled in `store_remove`, so the
     operator gets a raw traceback instead of a message.
-    Oracle: the escaped exception is not a ConfigError, and the store
-    name appears in the output.
+    Oracle: the store name in the output. The CLI root group also
+    catches ConfigError, so the escaped-type assertion below holds
+    either way and only the store name discriminates -- the seam's
+    own message carries the refusal text but not the name.
     """
     import memman.store.sqlite as sqlite_backend
 

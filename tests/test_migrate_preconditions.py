@@ -79,3 +79,77 @@ def test_migrate_opens_source_in_readonly_mode(tmp_path):
     assert any('mode=ro' in s and uri for s, uri in seen_uris), (
         f'expected sqlite3.connect to be called with read-only URI;'
         f' got {seen_uris}')
+
+
+def test_preflight_source_reports_a_store_with_no_schema(tmp_path):
+    """A store that opens but holds no tables fails as `MigrateError`.
+
+    Mutation: dropping `preflight_source`'s own `sqlite3.Error`
+        handler. `_connect_ro` cannot cover this -- the file is a
+        valid database, so it opens and probes clean, and the failure
+        lands on the `insights` select inside the block.
+    Oracle: a zero-length file, which SQLite reads as a fresh empty
+        database, so `select count(*) from insights` raises `no such
+        table`; `MigrateError` is outside the `sqlite3.Error`
+        hierarchy.
+    """
+    sdir = tmp_path / 'data' / 'schemaless'
+    sdir.mkdir(parents=True)
+    (sdir / 'memman.db').write_bytes(b'')
+    with pytest.raises(MigrateError) as excinfo:
+        SqliteMigrator(str(tmp_path)).preflight_source('schemaless')
+    assert 'schemaless' in str(excinfo.value)
+
+
+def test_gather_reports_an_unreadable_store(tmp_path):
+    """A corrupt source store fails as `MigrateError` from `gather` too.
+
+    Mutation: routing `gather` back to a bare `sqlite3.connect`.
+        `connect` is lazy, so the failure would land on the first
+        select inside a hundred-line `with` block and escape
+        untranslated; `preflight_source` above cannot catch that,
+        because `migrate --all` reaches `gather` on stores it already
+        preflighted.
+    Oracle: `MigrateError` is outside the `sqlite3.Error` hierarchy.
+    """
+    sdir = tmp_path / 'data' / 'broken'
+    sdir.mkdir(parents=True)
+    (sdir / 'memman.db').write_bytes(b'not a sqlite database' * 8)
+    with pytest.raises(MigrateError) as excinfo:
+        SqliteMigrator(str(tmp_path)).gather('broken')
+    assert 'broken' in str(excinfo.value)
+
+
+def test_connect_ro_closes_the_connection_when_the_probe_fails(
+        tmp_path, monkeypatch):
+    """A failed migration read leaves no connection behind.
+
+    Mutation: dropping `conn.close()` from `_connect_ro`'s handler.
+        `sqlite3.connect` is lazy, so it returns a live handle and the
+        corrupt file only surfaces at the probe -- every refused
+        migration read would then leak a file handle, and
+        `migrate --all` walks every store.
+    Oracle: the captured connection is probed after the raise.
+        `ProgrammingError` means closed; a leaked handle raises
+        `DatabaseError` on these bytes instead, so the probe
+        discriminates on the type, not on the query succeeding.
+    """
+    import memman.store.sqlite as sqlite_mod
+
+    captured = []
+    real_connect = sqlite_mod.sqlite3.connect
+
+    def spy_connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        captured.append(conn)
+        return conn
+
+    monkeypatch.setattr(sqlite_mod.sqlite3, 'connect', spy_connect)
+    sdir = tmp_path / 'data' / 'broken'
+    sdir.mkdir(parents=True)
+    (sdir / 'memman.db').write_bytes(b'not a sqlite database' * 8)
+    with pytest.raises(MigrateError):
+        SqliteMigrator(str(tmp_path)).gather('broken')
+    assert captured
+    with pytest.raises(sqlite3.ProgrammingError):
+        captured[0].execute('select 1')
