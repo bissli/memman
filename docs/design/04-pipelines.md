@@ -106,7 +106,6 @@ For OpenRouter endpoints, `memman install` queries `/v1/models` once per role an
 `expand_query(llm_client, query)` sends the raw query to the LLM and returns:
 
 - **expanded_query**: original + synonyms and related terms
-- **keywords**: extracted search keywords (parsed and returned; no consumer today)
 - **intent**: WHY / WHEN / ENTITY / GENERAL (can override regex detection)
 
 Expansion runs only when the user passes `--expand`, and never under `--basic`. By default the raw query is embedded directly. Expansion is gated because the LLM has no domain scope and can pull the candidate pool toward general-knowledge synonyms that recency-aware rerank (Step 4) then amplifies. Modern embedding models already capture most synonym intent; recency does the rest. See § 4.3.
