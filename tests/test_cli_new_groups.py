@@ -6,6 +6,7 @@ wiring and JSON output shape are caught.
 """
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -236,6 +237,73 @@ def test_scheduler_status_text_output(runner, monkeypatch):
     assert result.exit_code == 0, result.output
     assert 'installed:' in result.output
     assert 'platform:' in result.output
+
+
+def test_scheduler_status_reports_the_rotated_worker_log(
+        runner, monkeypatch, tmp_path):
+    """`scheduler status` names <data-dir>/logs/memman.log.
+
+    Mutation: resolving the rotated log under ~/.memman/logs like the
+        two enrich redirects, or omitting the key, either of which
+        leaves an operator with no route to a preserved stack.
+    Oracle: the absolute path built from the runner's own data dir,
+        compared for equality, with the fake home held distinct so a
+        conftest change collapsing the two could not hide the
+        mutation.
+    """
+    _patch_no_subprocess(monkeypatch)
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    fake_home = tmp_path / 'fake_home'
+    fake_home.mkdir()
+    monkeypatch.setattr(Path, 'home', lambda: fake_home)
+    assert Path(runner[1]) != fake_home
+    result = invoke(runner, ['scheduler', 'status'])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data['stack_path'] == str(
+        Path(runner[1]) / 'logs' / 'memman.log')
+
+
+def test_scheduler_status_times_the_stack_file_it_names(
+        runner, monkeypatch, tmp_path):
+    """`scheduler status` reports each log's OWN mtime.
+
+    Mutation: pairing `stack_mtime` with `err_path` or `log_path` in
+        the mtime loop, which tells an operator asking whether a stack
+        is fresh about a different file entirely. Dropping the entry is
+        caught by the same assertion.
+    Oracle: the three files are stamped to three known, distinct
+        epochs, so each key can only match its own file.
+    """
+    import os
+    _patch_no_subprocess(monkeypatch)
+    monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
+    fake_home = tmp_path / 'fake_home'
+    home_logs = fake_home / '.memman' / 'logs'
+    home_logs.mkdir(parents=True)
+    monkeypatch.setattr(Path, 'home', lambda: fake_home)
+    data_logs = Path(runner[1]) / 'logs'
+    data_logs.mkdir(parents=True, exist_ok=True)
+    stamps = {
+        home_logs / 'enrich.log': 1000000000,
+        home_logs / 'enrich.err': 1200000000,
+        data_logs / 'memman.log': 1400000000,
+        }
+    for path, when in stamps.items():
+        path.write_text('x\n')
+        os.utime(path, (when, when))
+
+    result = invoke(runner, ['scheduler', 'status'])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    expected = {
+        'log_mtime': 1000000000,
+        'err_mtime': 1200000000,
+        'stack_mtime': 1400000000,
+        }
+    for key, when in expected.items():
+        got = datetime.fromisoformat(data[key]).timestamp()
+        assert got == when, f'{key}: {data[key]}'
 
 
 def test_scheduler_bare_shows_help(runner):

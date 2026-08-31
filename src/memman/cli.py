@@ -334,8 +334,16 @@ class MemmanGroup(click.Group):
         - The worker's stderr is a systemd `append:` redirect that
           nothing rotates, so the stack cannot go there without growing
           `enrich.err` forever. It goes to the rotated
-          `logs/memman.log`, and `memman log worker --errors` reads
-          `enrich.err` alone -- hence naming the file here.
+          `logs/memman.log`, which `memman log worker --stack` reads.
+        - The suggested command carries `--data-dir` whenever the
+          writer's data dir is not the default, and carries it BEFORE
+          the subcommand, which is the only position Click accepts for
+          a group option. The worker's `MEMMAN_DATA_DIR` comes from the
+          unit or the launchd wrapper and never reaches the operator's
+          shell, so a bare command would resolve `~/.memman` and tail
+          a different install's log. The handler writes
+          `<data_dir>/logs/memman.log`, so its own path supplies the
+          value.
         - The `exc_info=True` calls stay in the `except` arms above
           rather than moving in here: outside a lexical handler the
           formatter reads them as dead and STRIPS the keyword, which
@@ -344,8 +352,13 @@ class MemmanGroup(click.Group):
         for handler in logger.handlers:
             if (isinstance(handler, logging.handlers.RotatingFileHandler)
                     and getattr(handler, '_memman', False)):
+                stack_file = pathlib.Path(handler.baseFilename)
+                writer_data_dir = str(stack_file.parent.parent)
+                pin = ('' if writer_data_dir == default_data_dir()
+                       else f' --data-dir {writer_data_dir}')
                 return (f'{user_message} (full traceback in'
-                        f' {handler.baseFilename})')
+                        f' {stack_file}; read it with'
+                        f" 'memman{pin} log worker --stack')")
         return user_message
 
 
@@ -2013,9 +2026,14 @@ def scheduler_status(ctx: click.Context, text_output: bool) -> None:
     logs_dir = pathlib.Path.home() / '.memman' / 'logs'
     log_path = logs_dir / 'enrich.log'
     err_path = logs_dir / 'enrich.err'
+    # The rotated worker log follows --data-dir while the two unit
+    # redirects beside it never do, so it cannot be built off logs_dir.
+    stack_path = pathlib.Path(ctx.obj['data_dir']) / 'logs' / 'memman.log'
     result['log_path'] = str(log_path)
     result['err_path'] = str(err_path)
-    for key, path in (('log_mtime', log_path), ('err_mtime', err_path)):
+    result['stack_path'] = str(stack_path)
+    for key, path in (('log_mtime', log_path), ('err_mtime', err_path),
+                      ('stack_mtime', stack_path)):
         try:
             result[key] = datetime.fromtimestamp(
                 path.stat().st_mtime, tz=timezone.utc
@@ -2783,21 +2801,84 @@ def log_list(ctx: click.Context, limit: int, since: str,
 @log.command('worker')
 @click.option('--errors', is_flag=True, default=False,
               help='Read enrich.err instead of enrich.log.')
+@click.option('--stack', is_flag=True, default=False,
+              help='Read the rotated worker log that preserves tracebacks.')
 @click.option('--lines', type=int, default=50,
               help='Number of tail lines to print (default 50).')
 @click.pass_context
-def log_worker(ctx: click.Context, errors: bool, lines: int) -> None:
-    """Print the tail of ~/.memman/logs/enrich.{log,err} (worker output)."""
-    logs_dir = pathlib.Path.home() / '.memman' / 'logs'
-    path = logs_dir / ('enrich.err' if errors else 'enrich.log')
-    if not path.is_file():
-        click.echo(f'[memman] no log file yet at {path}', err=True)
+def log_worker(ctx: click.Context, errors: bool, stack: bool,
+               lines: int) -> None:
+    """Print the tail of one worker log target.
+
+    `enrich.log` and `enrich.err` are the enrichment worker's stdout
+    and stderr. `memman.log` is the rotated DEBUG log holding the
+    tracebacks a one-line CLI error cannot carry, and the two targets
+    do not share a directory.
+
+    \b
+    Parameters
+    ----------
+    errors : bool
+        Read `enrich.err` rather than `enrich.log`.
+    stack : bool
+        Read `memman.log` and its rotation backups. Rejected together
+        with `--errors`.
+    lines : int
+        Tail length; a non-positive value prints everything read.
+
+    \b
+    Notes
+    -----
+    - `enrich.log` and `enrich.err` sit under `~/.memman/logs`
+      whatever `--data-dir` says: the systemd unit pins those two
+      redirects to `%h/.memman/logs`, and the launchd plist bakes the
+      absolute home in at install time. Neither reads the data dir.
+    - `memman.log` is the one target that follows `--data-dir`, since
+      the rotating handler builds its path from it. Under a
+      non-default data dir the targets live in two directories, and
+      this command resolves each from its own source.
+    - `--stack` reads the rotation backups as well as the live file,
+      oldest first. Rotation caps the set at 20 MB over four files, and
+      BOTH the enrichment worker and the backup worker write it, so a
+      traceback reaches a backup file sooner than its size suggests.
+    - Nothing rotates `enrich.err`, so a pointer naming a stack can
+      outlive the stack itself once all four files have turned over.
+
+    \b
+    Examples
+    --------
+    memman log worker --errors
+    memman log worker --stack --lines 200
+    """  # noqa: D301, D410, D411
+    if errors and stack:
+        raise click.UsageError(
+            '--errors and --stack name different files; pass one.')
+    if stack:
+        named = pathlib.Path(ctx.obj['data_dir']) / 'logs' / 'memman.log'
+        # Oldest backup first, so one tail spans a rotation. The
+        # traceback a CLI error pointed at is often already in
+        # memman.log.1: two workers share this file and rotation keeps
+        # only _WORKER_LOG_BACKUPS of it, so reading the live file
+        # alone reports no traceback while the stack is still on disk.
+        candidates = [
+            named.with_name(f'{named.name}.{i}')
+            for i in range(_WORKER_LOG_BACKUPS, 0, -1)]
+        candidates.append(named)
+    else:
+        logs_dir = pathlib.Path.home() / '.memman' / 'logs'
+        named = logs_dir / ('enrich.err' if errors else 'enrich.log')
+        candidates = [named]
+    present = [p for p in candidates if p.is_file()]
+    if not present:
+        click.echo(f'[memman] no log file yet at {named}', err=True)
         return
-    try:
-        content = path.read_text(errors='replace').splitlines()
-    except OSError as exc:
-        raise click.ClickException(
-            f'failed to read {path}: {exc}') from exc
+    content: list[str] = []
+    for path in present:
+        try:
+            content.extend(path.read_text(errors='replace').splitlines())
+        except OSError as exc:
+            raise click.ClickException(
+                f'failed to read {path}: {exc}') from exc
     tail = content[-lines:] if lines > 0 else content
     for line_str in tail:
         click.echo(line_str)
