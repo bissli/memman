@@ -8,8 +8,8 @@ with real/mocked LLM is covered by test_cli.py and test_memory_system.py.
 import json
 
 import pytest
-from memman.llm.extract import _strip_line_refs, expand_query, extract_facts
-from memman.llm.extract import reconcile_memories
+from memman.llm.extract import QUERY_EXPANSION_SYSTEM, _strip_line_refs
+from memman.llm.extract import expand_query, extract_facts, reconcile_memories
 from memman.llm.shared import parse_json_response
 
 
@@ -79,6 +79,14 @@ class FakeLLMClient:
         """Record call and return canned response."""
         self.calls.append((system, user))
         return self.response
+
+
+class FailingLLMClient:
+    """LLMClient whose every call raises, for passthrough tests."""
+
+    def complete(self, system: str, user: str, **kwargs) -> str:
+        """Raise as a wedged transport would."""
+        raise ConnectionError('timeout')
 
 
 class TestExtractFacts:
@@ -291,7 +299,13 @@ class TestExpandQuery:
     """Query expansion parsing and error handling."""
 
     def test_basic_expansion(self):
-        """Query is expanded with synonyms, keywords and an intent."""
+        """The model's expansion reaches the caller, not the raw query.
+
+        Mutation: discarding the parsed expansion and returning the
+            original query, or normalizing a valid intent to None.
+        Oracle: the exact expansion string in the canned response. A
+            substring check would pass on the passthrough value.
+        """
         response = json.dumps({
             'expanded_query': 'Redis cache configuration settings',
             'keywords': ['Redis', 'cache', 'config'],
@@ -299,17 +313,59 @@ class TestExpandQuery:
             })
         client = FakeLLMClient(response)
         result = expand_query(client, 'Redis config')
-        assert 'Redis' in result['expanded_query']
+        assert result['expanded_query'] == 'Redis cache configuration settings'
         assert result['intent'] == 'GENERAL'
 
     def test_llm_failure_returns_passthrough(self):
         """LLM failure returns original query unchanged."""
-        class FailingClient:
-            def complete(self, system: str, user: str, **kwargs) -> str:
-                raise ConnectionError('timeout')
-        result = expand_query(FailingClient(), 'my query')
+        result = expand_query(FailingLLMClient(), 'my query')
         assert result['expanded_query'] == 'my query'
         assert result['intent'] is None
+
+    def test_result_carries_only_the_two_read_keys(self):
+        """All four return paths yield exactly expanded_query and intent.
+
+        Mutation: leaving 'keywords' on one of the four return paths,
+            or letting an unrequested model key reach the caller.
+        Oracle: the key set the sole production caller in `memman.cli`
+            reads - `expanded_query` once and `intent` twice.
+        """
+        parsed_ok = json.dumps({
+            'expanded_query': 'alpha beta',
+            'keywords': ['alpha'],
+            'intent': 'GENERAL',
+            })
+        cases = {
+            'parsed': (FakeLLMClient(parsed_ok), 'alpha'),
+            'unparseable': (FakeLLMClient('not json at all'), 'beta'),
+            'llm_error': (FailingLLMClient(), 'gamma'),
+            }
+        for path, (client, query) in cases.items():
+            result = expand_query(client, query)
+            assert set(result) == {'expanded_query', 'intent'}, path
+
+        cached_client = FakeLLMClient(parsed_ok)
+        expand_query(cached_client, 'delta')
+        cached = expand_query(cached_client, 'delta')
+        assert len(cached_client.calls) == 1, 'second call must be cached'
+        assert set(cached) == {'expanded_query', 'intent'}
+
+    def test_prompt_requests_exactly_the_keys_the_parser_keeps(self):
+        """The prompt's JSON skeleton names the surviving result keys.
+
+        Mutation: asking the model for a key the parser discards, which
+            buys nothing but tokens, or dropping a key the parser reads,
+            which kills intent routing with no error.
+        Oracle: the skeleton parsed out of QUERY_EXPANSION_SYSTEM against
+            a live expand_query result - neither side hand-copied.
+        """
+        skeleton = QUERY_EXPANSION_SYSTEM[
+            QUERY_EXPANSION_SYSTEM.index('{'):
+            QUERY_EXPANSION_SYSTEM.rindex('}') + 1]
+        requested = set(json.loads(skeleton))
+        response = json.dumps({'expanded_query': 'x', 'intent': 'WHY'})
+        returned = set(expand_query(FakeLLMClient(response), 'q'))
+        assert requested == returned
 
     def test_invalid_intent_normalized(self):
         """Unknown intent is set to None."""
