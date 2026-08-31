@@ -2075,18 +2075,22 @@ class TestCorruptStoreErrorHygiene:
         """`recall` on an unreadable store prints an error, not a trace.
 
         Mutation: dropping `open_db`'s `sqlite3.Error` translation, so
-            a raw driver error reaches the CLI where neither seam can
-            catch it -- `session.active_store` and the root group both
-            catch `BackendError` alone. `exit_code` cannot catch that:
-            Click reports an in-command raise as exit 1 too.
-        Oracle: a clean exit leaves `result.exception` a `SystemExit`
-            and writes `Error: ...` naming the path; a leak leaves the
-            `sqlite3.DatabaseError` itself on `result.exception`.
+            the driver error escapes the OPEN untranslated.
+        Oracle: the MESSAGE, not the exception type. `open_db` names
+            the store path (`cannot open database ... memman.db`);
+            the root group's generic arm says only `sqlite query
+            failed`, so the message is what separates them.
 
-        Two seams now cover the `BackendError` leg, so this test no
-        longer discriminates between them; the direct pin on
-        `active_store`'s catch is
-        `tests/test_session.py::test_active_store_wraps_backend_error_from_open`.
+        Scope, since two seams have since grown over this path. The
+        root group catches `sqlite3.Error` as well as `BackendError`,
+        so `result.exception` is a `SystemExit` under the mutation too
+        and the type assertion below is tautological -- kept only as a
+        guard against a future seam that re-raises. This test now pins
+        `open_db`'s own translation via its message alone. The direct
+        pin on `active_store`'s catch is
+        `tests/test_session.py::test_active_store_wraps_backend_error_from_open`,
+        and the root group's sqlite arm is pinned by
+        `tests/test_backend_error_hygiene.py::test_sqlite_statement_error_exits_as_one_clean_line`.
         """
         _, data_dir = runner
         sdir = pathlib.Path(data_dir) / 'data' / 'broken'

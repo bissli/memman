@@ -78,7 +78,7 @@ proper signal-forwarding trap:
 set -e
 : "${MEMMAN_INTERVAL:=60}"
 memman scheduler serve --interval "$MEMMAN_INTERVAL" \
-    >> "$HOME/.memman/logs/memman.log" 2>&1 &
+    >> "$HOME/.memman/logs/serve.log" 2>&1 &
 scheduler_pid=$!
 trap 'kill -TERM $scheduler_pid 2>/dev/null; wait $scheduler_pid' TERM INT
 exec "$@"

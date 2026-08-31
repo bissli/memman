@@ -53,6 +53,24 @@ def _configure_logging(data_dir: str, verbose: bool, debug: bool) -> None:
     Runs on every CLI invocation including `memman install` (before
     the env file exists). The literal `'WARNING'` fall-through must
     equal `INSTALL_DEFAULTS[LOG_LEVEL]`; a unit test enforces that.
+
+    Notes
+    -----
+    - Levels are PER HANDLER, not on the logger alone. The stream
+      handler carries the configured level, so what an interactive
+      caller sees is unchanged. Under the worker the file handler
+      takes DEBUG and the logger is opened to DEBUG to feed it, which
+      is what preserves a stack the stream must never print.
+    - Raising the CLI seam to `logger.exception` would be the wrong
+      way to keep that stack: the stream handler is attached
+      unconditionally, so an ERROR-level record prints its traceback
+      to interactive users and undoes the clean one-line exit.
+    - Worker DEBUG volume is bounded by rotation, not by judgement:
+      `_WORKER_LOG_MAX_BYTES` x (`_WORKER_LOG_BACKUPS` + 1) caps
+      `logs/memman.log` at 20 MB -- the live file plus three backups.
+      The budget is shared with routine drain DEBUG traffic, since the
+      logger opens the whole `memman` tree, so a stack can rotate away
+      while the pointer naming it sits in the unrotated `enrich.err`.
     """
     if debug:
         level = logging.DEBUG
@@ -64,32 +82,37 @@ def _configure_logging(data_dir: str, verbose: bool, debug: bool) -> None:
 
     logger.setLevel(level)
 
-    has_stream = any(
-        isinstance(h, logging.StreamHandler)
-        and not isinstance(h, logging.FileHandler)
-        and getattr(h, '_memman', False)
-        for h in logger.handlers)
-    if not has_stream:
-        sh = logging.StreamHandler(sys.stderr)
-        sh.setFormatter(logging.Formatter(_LOG_FORMAT))
-        sh._memman = True
-        logger.addHandler(sh)
+    stream = next(
+        (h for h in logger.handlers
+         if isinstance(h, logging.StreamHandler)
+         and not isinstance(h, logging.FileHandler)
+         and getattr(h, '_memman', False)),
+        None)
+    if stream is None:
+        stream = logging.StreamHandler(sys.stderr)
+        stream.setFormatter(logging.Formatter(_LOG_FORMAT))
+        stream._memman = True
+        logger.addHandler(stream)
+    stream.setLevel(level)
 
     if config.is_worker():
-        has_file = any(
-            isinstance(h, logging.handlers.RotatingFileHandler)
-            and getattr(h, '_memman', False)
-            for h in logger.handlers)
-        if not has_file:
+        handler = next(
+            (h for h in logger.handlers
+             if isinstance(h, logging.handlers.RotatingFileHandler)
+             and getattr(h, '_memman', False)),
+            None)
+        if handler is None:
             log_dir = pathlib.Path(data_dir) / 'logs'
             log_dir.mkdir(parents=True, exist_ok=True)
-            fh = logging.handlers.RotatingFileHandler(
+            handler = logging.handlers.RotatingFileHandler(
                 log_dir / 'memman.log',
                 maxBytes=_WORKER_LOG_MAX_BYTES,
                 backupCount=_WORKER_LOG_BACKUPS)
-            fh.setFormatter(logging.Formatter(_LOG_FORMAT))
-            fh._memman = True
-            logger.addHandler(fh)
+            handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+            handler._memman = True
+            logger.addHandler(handler)
+        handler.setLevel(logging.DEBUG)
+        logger.setLevel(logging.DEBUG)
 
 
 def _json_out(obj: object) -> None:
@@ -254,15 +277,76 @@ class MemmanGroup(click.Group):
       covers the paths that bypass it: the queue, the read-only
       opens, and every mid-command failure the Postgres backend
       translates.
+    - `sqlite3.Error` is caught alongside, because the SQLite backend
+      translates no statement failure of its own: `open_db` translates
+      the OPEN, and nothing translates `database is locked` from a
+      query. Without this arm the same condition exits as one clean
+      line on Postgres and as a raw traceback on SQLite.
+    - Translating HERE rather than in `DB._query` / `DB._exec` is what
+      keeps the fifteen callers that branch on a driver type intact
+      (`queue.claim`'s stale-claim reclaim, `recall`'s bookkeeping
+      skip, `sqlite.py`'s `IntegrityError` arm). Their handlers sit
+      deeper, so they run first and this seam never sees the error --
+      the same ordering the Postgres backend gets by translating at
+      the connection scope instead of at each statement.
     """
 
     def invoke(self, ctx: click.Context) -> Any:
-        """Run the subcommand, reporting a `BackendError` as a message."""
+        """Run the subcommand, reporting a backend failure as a message."""
         try:
             return super().invoke(ctx)
         except BackendError as exc:
             logger.debug('backend error reached the CLI seam', exc_info=True)
-            raise click.ClickException(str(exc)) from exc
+            raise click.ClickException(self._name_the_stack(str(exc))) from exc
+        except sqlite3.Error as exc:
+            logger.debug('sqlite error reached the CLI seam', exc_info=True)
+            raise click.ClickException(
+                self._name_the_stack(
+                    f'sqlite query failed: {exc}')) from exc
+
+    @staticmethod
+    def _name_the_stack(user_message: str) -> str:
+        """Append the log file carrying the stack, when one does.
+
+        Parameters
+        ----------
+        user_message : str
+            The one-line message Click prints.
+
+        Returns
+        -------
+        str
+            `user_message`, with the log file appended when a rotating
+            file handler is attached to carry the stack.
+
+        Notes
+        -----
+        - The pointer rides the MESSAGE rather than a log record of its
+          own. A record would sit at the mercy of the stream handler's
+          level, and `MEMMAN_LOG_LEVEL=ERROR` is an installable value
+          that would drop it -- restoring the very symptom of one line
+          and no route to the stack. Click prints this message through
+          its own writer, so no level can suppress it.
+        - The test is an ATTACHED HANDLER, never `is_worker()`:
+          `scheduler serve` sets the worker flag inside the command,
+          long after the root callback configured logging, so the flag
+          can read true while no file holds any stack.
+        - The worker's stderr is a systemd `append:` redirect that
+          nothing rotates, so the stack cannot go there without growing
+          `enrich.err` forever. It goes to the rotated
+          `logs/memman.log`, and `memman log worker --errors` reads
+          `enrich.err` alone -- hence naming the file here.
+        - The `exc_info=True` calls stay in the `except` arms above
+          rather than moving in here: outside a lexical handler the
+          formatter reads them as dead and STRIPS the keyword, which
+          silently discards the only copy of the stack.
+        """
+        for handler in logger.handlers:
+            if (isinstance(handler, logging.handlers.RotatingFileHandler)
+                    and getattr(handler, '_memman', False)):
+                return (f'{user_message} (full traceback in'
+                        f' {handler.baseFilename})')
+        return user_message
 
 
 @click.group(cls=MemmanGroup)
@@ -283,6 +367,8 @@ def cli(ctx: click.Context, data_dir: str | None, store_name: str,
     ctx.ensure_object(dict)
     ctx.obj['data_dir'] = data_dir
     ctx.obj['store'] = store_name
+    ctx.obj['verbose'] = verbose
+    ctx.obj['debug'] = debug
 
 
 def claude_callable(cmd):
@@ -773,6 +859,12 @@ def scheduler_serve(ctx: click.Context, interval: int | None,
         raise click.ClickException('--interval must be >= 0')
 
     os.environ[config.WORKER] = '1'
+    # The root callback configured logging before this flag was set, so
+    # without a second pass `serve` runs with no worker file handler and
+    # drops every stack it was supposed to keep.
+    _configure_logging(
+        ctx.obj['data_dir'], ctx.obj.get('verbose', False),
+        ctx.obj.get('debug', False))
     _reset_stop_for_tests()
 
     def _handle_stop(signum: int, frame: object) -> None:
@@ -3187,7 +3279,17 @@ def migrate(
                         f' edges={len(payload.edges)}'
                         f' oplog={len(payload.oplog)}'
                         f' meta={len(payload.meta)} (dry-run)')
-                except MigrateError as exc:
+                # Notes:
+                # - All three types are reachable. `apply` and
+                #   `_verify_destination_counts` reach the Postgres
+                #   connection scope and raise `BackendError`, while
+                #   `SqliteMigrator.gather` runs its selects unwrapped
+                #   -- `_connect_ro` translates only the connect and
+                #   the `pragma schema_version` probe -- so a store
+                #   that opens and then fails mid-read raises a bare
+                #   `sqlite3.Error`. Miss either and the store name is
+                #   lost, and `--all` cannot say which store failed.
+                except (MigrateError, BackendError, sqlite3.Error) as exc:
                     raise click.ClickException(f'{s}: {exc}')
             # Without this a run that skipped stores looked like a
             # clean full plan, while the all-skipped branch printed a
@@ -3242,7 +3344,8 @@ def migrate(
                             click.echo(
                                 f'  Archived source to'
                                 f' {artifact.location}.')
-                    except MigrateError as exc:
+                    except (MigrateError, BackendError,
+                            sqlite3.Error) as exc:
                         raise click.ClickException(f'{s}: {exc}')
                     except OSError as exc:
                         click.echo(
@@ -3338,11 +3441,16 @@ def migrate(
                         f' oplog={len(payload.oplog)}'
                         f' meta={len(payload.meta)} (verified)')
                 # Notes:
-                # - ConfigError joins MigrateError here so a backend
+                # - BackendError joins MigrateError here so a backend
                 #   rejecting the store still removes the scratch
                 #   dir; escaping this handler stranded a
-                #   `migrate-*` directory in the data dir.
-                except (MigrateError, ConfigError) as exc:
+                #   `migrate-*` directory in the data dir. It
+                #   subsumes the ConfigError this once named, and
+                #   also covers the bare BackendError that
+                #   `gather` / `apply` / `_verify_destination_counts`
+                #   raise from the Postgres connection scope.
+                except (MigrateError, BackendError,
+                        sqlite3.Error) as exc:
                     shutil.rmtree(scratch, ignore_errors=True)
                     raise click.ClickException(f'{s}: {exc}')
 
@@ -4082,21 +4190,51 @@ def embed_swap(
             _require_stopped('swap')
             progress = run_swap(backend, ec_new, plan)
 
-        fp = stored_fingerprint(backend) or Fingerprint(
-            provider=plan.target_provider,
-            model=plan.target_model,
-            dim=plan.target_dim)
-        if fp.provider != plan.target_provider:
-            write_fingerprint(
-                backend,
-                Fingerprint(
-                    provider=plan.target_provider,
-                    model=plan.target_model,
-                    dim=plan.target_dim))
-            fp = Fingerprint(
+        # Notes:
+        # - Everything below runs AFTER the one-way cutover, so a
+        #   backend failure here must not read as a retryable swap.
+        #   `run_swap` already wrote the fingerprint in one
+        #   transaction with its own state cleanup, which makes this
+        #   block a confirming re-read; the generic seam message
+        #   would describe it exactly as it describes a failure to
+        #   connect before any data moved.
+        # - Re-running the same swap IS safe, and that is worth
+        #   saying rather than leaving the operator to guess:
+        #   `run_swap` returns DONE at once when the stored
+        #   fingerprint already matches the target, so it re-embeds
+        #   nothing.
+        try:
+            fp = stored_fingerprint(backend) or Fingerprint(
                 provider=plan.target_provider,
                 model=plan.target_model,
                 dim=plan.target_dim)
+            if fp.provider != plan.target_provider:
+                write_fingerprint(
+                    backend,
+                    Fingerprint(
+                        provider=plan.target_provider,
+                        model=plan.target_model,
+                        dim=plan.target_dim))
+                fp = Fingerprint(
+                    provider=plan.target_provider,
+                    model=plan.target_model,
+                    dim=plan.target_dim)
+        # Notes:
+        # - BOTH types are reachable and neither is redundant: the
+        #   Postgres backend translates at its connection scope, while
+        #   the SQLite backend deliberately does not translate a
+        #   statement failure, so the same read raises `BackendError`
+        #   on one backend and `sqlite3.Error` on the other. Catching
+        #   only the first left this unfixed on the default backend.
+        except (BackendError, sqlite3.Error) as exc:
+            raise click.ClickException(
+                f'store {name!r}: the vector cutover to'
+                f' {plan.target_provider}:{plan.target_model} COMPLETED,'
+                f' and only the fingerprint check after it failed:'
+                f' {exc}. No data is pending and nothing was rolled'
+                ' back. Re-run the same `memman embed swap --to` to'
+                ' confirm the state; it re-embeds nothing when the'
+                ' stored fingerprint already matches.') from exc
 
         _json_out({
             'store': name,

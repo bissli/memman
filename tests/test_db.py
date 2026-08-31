@@ -30,8 +30,11 @@ def test_open_db_wraps_unreadable_file_as_backend_error(tmp_path):
     """A non-database file fails as `BackendError`, never raw sqlite3.
 
     Mutation: dropping the `sqlite3.Error` translation in `open_db`, so
-        a raw `sqlite3.DatabaseError` reaches the CLI seam and prints a
-        Python traceback instead of a clean message.
+        a raw `sqlite3.DatabaseError` leaves this function. The CLI no
+        longer prints a traceback for that -- the root group catches
+        `sqlite3.Error` too -- but it would report the generic `sqlite
+        query failed` in place of the store path, and every non-CLI
+        caller would see the driver type.
     Oracle: `BackendError` sits outside the `sqlite3.Error` hierarchy,
         so the raised type discriminates translated from untranslated.
     """

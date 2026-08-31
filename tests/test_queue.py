@@ -321,8 +321,12 @@ def test_open_queue_db_wraps_unreadable_file_as_backend_error(tmp_path):
     """A non-database `queue.db` fails as `BackendError`, never raw sqlite3.
 
     Mutation: dropping the `sqlite3.Error` translation around the pragma
-        and migrate block, so `memman remember` prints a Python
-        traceback on a queue file a mid-write crash corrupted.
+        and migrate block, so the driver error leaves this function on a
+        queue file a mid-write crash corrupted. `memman remember` no
+        longer prints a traceback for that -- the root group catches
+        `sqlite3.Error` too -- but it would lose the message naming the
+        queue file, and every non-CLI caller would see the driver
+        type.
     Oracle: `sqlite3.connect` is lazy, so garbage bytes surface at the
         first pragma as `sqlite3.DatabaseError`, a type outside
         `BackendError`.
