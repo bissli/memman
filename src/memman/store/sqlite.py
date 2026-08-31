@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
 from typing import Any, ClassVar, Self
+from urllib.parse import quote
 
 from memman.embed.fingerprint import Fingerprint
 from memman.embed.vector import deserialize_vector, serialize_vector
@@ -831,18 +832,64 @@ class SqliteMigrator(Migrator):
     def _store_path(self, store: str) -> Path:
         return Path(_db.store_dir(self.data_dir, store)) / 'memman.db'
 
+    def _connect_ro(self, store: str, path: Path) -> sqlite3.Connection:
+        """Open one store's SQLite file read-only for a migration read.
+
+        Parameters
+        ----------
+        store : str
+            Store name, for the error message only.
+        path : Path
+            Full path to the store's `memman.db`.
+
+        Returns
+        -------
+        sqlite3.Connection
+            An open read-only connection the caller closes.
+
+        Raises
+        ------
+        MigrateError
+            When the file cannot be opened or read as a database.
+            Never a bare `sqlite3.Error`: `memman migrate` catches
+            `MigrateError`, and the CLI root group catches
+            `BackendError`, so an untranslated driver error reaches
+            the operator as a traceback.
+        """
+        # Percent-encode, and probe with a read that forces the header:
+        # `connect` is lazy, so corrupt bytes surface at the first
+        # statement, and an unescaped `#` or `?` in the path would
+        # silently open a different file read-write.
+        uri = f'file:{quote(str(path))}?mode=ro'
+        conn = None
+        try:
+            conn = sqlite3.connect(uri, uri=True)
+            conn.execute('pragma schema_version')
+        except sqlite3.Error as exc:
+            if conn is not None:
+                conn.close()
+            raise MigrateError(
+                f'cannot read sqlite store {store!r} at {path}:'
+                f' {exc}') from exc
+        return conn
+
     def preflight_source(self, store: str) -> None:
         path = self._store_path(store)
         if not path.exists():
             raise MigrateError(
                 f'sqlite store not found: {path}')
-        with contextlib.closing(sqlite3.connect(
-                f'file:{path}?mode=ro', uri=True)) as conn:
-            n = conn.execute(
-                'select count(*) from insights').fetchone()[0]
-            fp = conn.execute(
-                "select 1 from meta where key ="
-                " 'embed_fingerprint'").fetchone()
+        try:
+            with contextlib.closing(
+                    self._connect_ro(store, path)) as conn:
+                n = conn.execute(
+                    'select count(*) from insights').fetchone()[0]
+                fp = conn.execute(
+                    "select 1 from meta where key ="
+                    " 'embed_fingerprint'").fetchone()
+        except sqlite3.Error as exc:
+            raise MigrateError(
+                f'cannot read sqlite store {store!r} at {path}:'
+                f' {exc}') from exc
         if n == 0 and fp is None:
             raise MigrateError(
                 f'sqlite store {store!r} is empty (no insights,'
@@ -860,8 +907,8 @@ class SqliteMigrator(Migrator):
             raise MigrateError(
                 f'sqlite store not found: {path}')
 
-        with contextlib.closing(sqlite3.connect(
-                f'file:{path}?mode=ro', uri=True)) as conn:
+        with contextlib.closing(
+                self._connect_ro(store, path)) as conn:
             meta_dict = dict(conn.execute(
                 'select key, value from meta').fetchall())
 

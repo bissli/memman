@@ -104,10 +104,9 @@ def test_transaction_rollback_failure_does_not_mask_original(backend):
     transaction and raises 'cannot rollback - no transaction is
     active'. The caller must still see the real error, not that one.
     """
-    with pytest.raises(RuntimeError, match='boom'):
-        with backend.transaction():
-            backend._db._conn.execute('commit')
-            raise RuntimeError('boom')
+    with pytest.raises(RuntimeError, match='boom'), backend.transaction():
+        backend._db._conn.execute('commit')
+        raise RuntimeError('boom')
 
 
 def test_write_lock_is_no_op_on_sqlite(backend):
@@ -167,3 +166,24 @@ def test_drop_store_dispatches_to_sqlite(tmp_path):
     drop_store('gone2', str(tmp_path))
     assert (
         not pathlib.Path(tmp_path / 'data' / 'gone2').exists())
+
+
+def test_readonly_context_reports_a_missing_database(tmp_path):
+    """`readonly_context` on a deleted store file raises `BackendError`.
+
+    Mutation: reverting `open_read_only`'s missing-file leg to
+        `FileNotFoundError`. Its three other callers wrap the call in
+        `except Exception` and degrade silently, so this method is the
+        only place the type is observable.
+    Oracle: `BackendError` sits outside the `OSError` hierarchy, so
+        `pytest.raises(BackendError)` discriminates the two.
+    """
+    from memman.store.errors import BackendError
+
+    bk = open_sqlite_backend('gone', str(tmp_path))
+    try:
+        (pathlib.Path(tmp_path) / 'data' / 'gone' / 'memman.db').unlink()
+        with pytest.raises(BackendError), bk.readonly_context():
+            pass
+    finally:
+        bk.close()

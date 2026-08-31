@@ -17,6 +17,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from memman.store.errors import BackendError
+
 logger = logging.getLogger('memman')
 
 QUEUE_FILENAME = 'queue.db'
@@ -61,13 +63,55 @@ def queue_db_path(base_dir: str) -> str:
 
 
 def open_queue_db(base_dir: str) -> sqlite3.Connection:
-    """Open (or create) the queue SQLite database under base_dir."""
-    Path(base_dir).mkdir(mode=0o755, exist_ok=True, parents=True)
+    """Open (or create) the queue SQLite database under base_dir.
+
+    Parameters
+    ----------
+    base_dir : str
+        Base data directory, created with any missing parent when
+        absent. The database is `<base_dir>/queue.db`.
+
+    Returns
+    -------
+    sqlite3.Connection
+        An open connection the caller owns and closes. `queue_db`
+        wraps this function and closes for its callers.
+
+    Raises
+    ------
+    BackendError
+        When `base_dir` cannot be created, or when
+        `<base_dir>/queue.db` cannot be opened or read as a database.
+        Never a bare `OSError` or `sqlite3.Error`.
+
+    Notes
+    -----
+    - `memman remember` opens the queue before it opens any store, so
+      nothing else on the write path catches a raw driver error; the
+      CLI root group catches `BackendError` alone.
+    """
+    try:
+        Path(base_dir).mkdir(mode=0o755, exist_ok=True, parents=True)
+    except OSError as exc:
+        raise BackendError(
+            f'cannot create data directory {base_dir}: {exc}') from exc
     path = queue_db_path(base_dir)
-    conn = sqlite3.connect(path, isolation_level=None)
-    conn.execute('pragma journal_mode=wal')
-    conn.execute('pragma busy_timeout=5000')
-    _migrate(conn)
+    try:
+        conn = sqlite3.connect(path, isolation_level=None)
+    except sqlite3.Error as exc:
+        raise BackendError(
+            f'cannot open queue database {path}: {exc}') from exc
+    try:
+        conn.execute('pragma journal_mode=wal')
+        conn.execute('pragma busy_timeout=5000')
+        _migrate(conn)
+    except sqlite3.Error as exc:
+        conn.close()
+        raise BackendError(
+            f'cannot open queue database {path}: {exc}') from exc
+    except Exception:
+        conn.close()
+        raise
     return conn
 
 

@@ -1,12 +1,14 @@
 """Unit tests for the deferred-write queue."""
 
+import sqlite3
 import time
 
 import pytest
 from memman.queue import MAX_ATTEMPTS, STALE_CLAIM_SECONDS, STATUS_DONE
 from memman.queue import STATUS_FAILED, STATUS_PENDING, claim, enqueue
 from memman.queue import get_row, list_rows, mark_done, mark_failed
-from memman.queue import purge_done, queue_db, retry_row, stats
+from memman.queue import open_queue_db, purge_done, queue_db, retry_row, stats
+from memman.store.errors import BackendError
 
 
 def test_enqueue_returns_row_id_and_the_uuid_it_stored(queue_conn):
@@ -313,3 +315,115 @@ def test_queue_db_context_manager_closes_on_exit(tmp_path):
             'select count(*) from queue').fetchone() == (1,)
     with pytest.raises(sqlite3.ProgrammingError):
         conn.execute('select 1')
+
+
+def test_open_queue_db_wraps_unreadable_file_as_backend_error(tmp_path):
+    """A non-database `queue.db` fails as `BackendError`, never raw sqlite3.
+
+    Mutation: dropping the `sqlite3.Error` translation around the pragma
+        and migrate block, so `memman remember` prints a Python
+        traceback on a queue file a mid-write crash corrupted.
+    Oracle: `sqlite3.connect` is lazy, so garbage bytes surface at the
+        first pragma as `sqlite3.DatabaseError`, a type outside
+        `BackendError`.
+    """
+    (tmp_path / 'queue.db').write_bytes(b'not a sqlite database' * 8)
+    with pytest.raises(BackendError) as excinfo:
+        open_queue_db(str(tmp_path))
+    assert 'queue.db' in str(excinfo.value)
+
+
+def test_open_queue_db_wraps_unopenable_path_as_backend_error(tmp_path):
+    """A directory at the queue path fails as `BackendError`.
+
+    Mutation: dropping the translation around the `sqlite3.connect` call
+        specifically. `connect` is lazy, so the corrupt-bytes test above
+        never reaches that handler and cannot catch this.
+    Oracle: a directory at `<base_dir>/queue.db` makes `connect` itself
+        raise `unable to open database file`.
+    """
+    (tmp_path / 'queue.db').mkdir()
+    with pytest.raises(BackendError) as excinfo:
+        open_queue_db(str(tmp_path))
+    assert 'queue.db' in str(excinfo.value)
+
+
+def test_open_queue_db_wraps_uncreatable_base_dir_as_backend_error(tmp_path):
+    """A plain file where the data dir belongs fails as `BackendError`.
+
+    Mutation: leaving `Path.mkdir` outside the translation, so `OSError`
+        escapes untranslated. `OSError` is not a `sqlite3.Error`, so the
+        handlers below the mkdir cannot catch it.
+    Oracle: `mkdir(exist_ok=True)` still raises `FileExistsError` when
+        the path exists and is not a directory.
+    """
+    occupied = tmp_path / 'mm'
+    occupied.write_text('not a directory')
+    with pytest.raises(BackendError) as excinfo:
+        open_queue_db(str(occupied))
+    assert 'mm' in str(excinfo.value)
+
+
+def test_open_queue_db_closes_the_connection_when_open_fails(
+        tmp_path, monkeypatch):
+    """A failed queue open leaves no connection behind.
+
+    Mutation: dropping `conn.close()` from the failure handler, so every
+        failed open leaks a file handle. The corrupt-bytes test above
+        passes with the connection left open.
+    Oracle: the captured connection is independently probed after the
+        raise. `ProgrammingError` means closed; a leaked handle raises
+        `DatabaseError` on these bytes instead, so the probe
+        discriminates on the type, not on the query succeeding.
+    """
+    from memman import queue as queue_mod
+
+    captured = []
+    real_connect = queue_mod.sqlite3.connect
+
+    def spy_connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        captured.append(conn)
+        return conn
+
+    monkeypatch.setattr(queue_mod.sqlite3, 'connect', spy_connect)
+    (tmp_path / 'queue.db').write_bytes(b'not a sqlite database' * 8)
+    with pytest.raises(BackendError):
+        open_queue_db(str(tmp_path))
+    assert captured
+    with pytest.raises(sqlite3.ProgrammingError):
+        captured[0].execute('select 1')
+
+
+def test_open_queue_db_closes_the_connection_on_a_non_sqlite_error(
+        tmp_path, monkeypatch):
+    """A failure that is not a `sqlite3.Error` still closes the handle.
+
+    Mutation: keeping only the `sqlite3.Error` arm of the two-arm
+        template `open_db` uses. `_migrate` runs inside the guarded
+        block, so any error it raises that is not a driver error
+        leaks the connection.
+    Oracle: `_migrate` is stubbed to raise `RuntimeError`; the
+        captured connection is probed after the raise -- a closed
+        handle raises `ProgrammingError`, a leaked one answers.
+    """
+    from memman import queue as queue_mod
+
+    captured = []
+    real_connect = queue_mod.sqlite3.connect
+
+    def spy_connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        captured.append(conn)
+        return conn
+
+    def boom(conn):
+        raise RuntimeError('migrate exploded')
+
+    monkeypatch.setattr(queue_mod.sqlite3, 'connect', spy_connect)
+    monkeypatch.setattr(queue_mod, '_migrate', boom)
+    with pytest.raises(RuntimeError):
+        open_queue_db(str(tmp_path))
+    assert captured
+    with pytest.raises(sqlite3.ProgrammingError):
+        captured[0].execute('select 1')

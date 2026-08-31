@@ -234,7 +234,38 @@ def _parse_entities(entities: str) -> list[str]:
     return entity_list
 
 
-@click.group()
+class MemmanGroup(click.Group):
+    """Root group that reports a backend failure as a clean CLI error.
+
+    Notes
+    -----
+    - One `invoke` override covers the whole command tree: a group
+      runs its subcommands inside its own `invoke`, so a
+      `BackendError` raised at any depth passes through here. The
+      alternative, a handler per command, would repeat itself at
+      every command that opens a store or the queue.
+    - The caught type is `BackendError` AND its subclasses, so
+      `store.errors.ConfigError` and `store.errors.IntegrityError`
+      come here too. Their messages are user-facing, but a constraint
+      violation is bug-shaped and now exits as one line like any
+      other; `--debug` is what recovers its stack.
+    - `session.active_store` keeps its own earlier catch, so a
+      read-write store open never reaches here. This seam is what
+      covers the paths that bypass it: the queue, the read-only
+      opens, and every mid-command failure the Postgres backend
+      translates.
+    """
+
+    def invoke(self, ctx: click.Context) -> Any:
+        """Run the subcommand, reporting a `BackendError` as a message."""
+        try:
+            return super().invoke(ctx)
+        except BackendError as exc:
+            logger.debug('backend error reached the CLI seam', exc_info=True)
+            raise click.ClickException(str(exc)) from exc
+
+
+@click.group(cls=MemmanGroup)
 @click.version_option(version=memman.__version__, prog_name='memman')
 @click.option('--data-dir', default=None, help='Base data directory (env: MEMMAN_DATA_DIR)')
 @click.option('--store', 'store_name', default='', help='Named memory store')
