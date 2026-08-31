@@ -153,9 +153,14 @@ def test_worker_keeps_the_stack_the_stream_must_not_print(
         one-line exit. Equally caught: leaving the logger at the
         configured level, which filters the record before any handler
         sees it.
+        Also caught: moving the handler's own path, which decouples
+        the file the worker writes from the file
+        `memman log worker --stack` reads and leaves that command
+        tailing a path nothing ever creates.
     Oracle: the three levels must disagree in one direction -- logger
         DEBUG, file handler DEBUG, stream handler at the configured
-        WARNING.
+        WARNING -- and the handler's path is compared against
+        `<data_dir>/logs/memman.log` spelled out independently.
     """
     from memman import cli as cli_mod
 
@@ -179,6 +184,8 @@ def test_worker_keeps_the_stack_the_stream_must_not_print(
     assert log.level == logging.DEBUG
     assert files[0].level == logging.DEBUG
     assert streams[0].level == logging.WARNING
+    assert files[0].baseFilename == str(
+        Path(data_dir) / 'logs' / 'memman.log')
 
 
 def test_interactive_logging_attaches_no_worker_file(
@@ -212,17 +219,23 @@ def test_worker_says_where_the_stack_went(
     """The terse worker line names the file holding the traceback.
 
     The stack goes to the rotated `logs/memman.log` because the
-    worker's stderr is an unrotated systemd `append:` redirect. But
-    `memman log worker --errors` reads `enrich.err` alone, so a stack
-    preserved and unnamed is a stack the operator cannot reach.
+    worker's stderr is an unrotated systemd `append:` redirect, and
+    that file sits under `--data-dir` rather than beside
+    `enrich.err`, so a stack preserved and unnamed is a stack the
+    operator cannot reach.
 
     Mutation: emitting the pointer as its own log record instead of on
         the message. `MEMMAN_LOG_LEVEL=ERROR` is an installable value,
         so the stream handler would drop a WARNING and restore the
         reported symptom -- one line, no route to the stack. Setting
-        that level here is what catches it.
-    Oracle: `memman.log` named in the output Click itself writes,
-        which no log level can suppress.
+        that level here is what catches it. Equally caught: trimming
+        the command out of the message, which leaves an operator a
+        path and no way to know what reads it; and emitting
+        `--data-dir` after the subcommand, where Click rejects a group
+        option, so the suggested command cannot run.
+    Oracle: `memman.log` and the command that reads it, both named in
+        the output Click itself writes, which no log level can
+        suppress.
     """
     _, data_dir = runner
     monkeypatch.setenv('MEMMAN_WORKER', '1')
@@ -233,6 +246,35 @@ def test_worker_says_where_the_stack_went(
 
     assert result.exit_code != 0
     assert 'memman.log' in result.output, result.output
+    assert f'--data-dir {data_dir} log worker --stack' in result.output, \
+        result.output
+
+
+def test_the_stack_hint_drops_the_flag_on_a_default_data_dir(
+        tmp_path, monkeypatch, logger_state):
+    """The suggested command omits `--data-dir` when it is the default.
+
+    Mutation: emitting `--data-dir` unconditionally, which pastes a
+        redundant flag into every default install's error message; or
+        emitting it never, which is the defect this hint was built to
+        fix and which the sibling test catches from the other side.
+    Oracle: `default_data_dir()` recomputed from the patched home and
+        compared against the message, which must name the path and
+        omit the flag.
+    """
+    from memman import cli as cli_mod
+
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    data_dir = str(tmp_path / '.memman')
+    assert data_dir == cli_mod.default_data_dir()
+    monkeypatch.setenv('MEMMAN_WORKER', '1')
+    cli_mod._configure_logging(data_dir, verbose=False, debug=False)
+
+    message = cli_mod.MemmanGroup._name_the_stack('it broke')
+
+    assert 'log worker --stack' in message
+    assert '--data-dir' not in message
+    assert str(Path(data_dir) / 'logs' / 'memman.log') in message
 
 
 def test_migrate_keeps_the_store_name_on_a_bare_backend_error(

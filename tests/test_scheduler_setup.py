@@ -818,6 +818,115 @@ class TestSchedulerLogs:
         assert 'no log file yet' in result.output.lower() \
             or 'no log file yet' in (result.stderr or '').lower()
 
+    def test_log_worker_stack_reads_the_data_dir_rotated_log(
+            self, tmp_path, monkeypatch):
+        """`log worker --stack` reads <data-dir>/logs/memman.log.
+
+        Mutation: resolving --stack under ~/.memman/logs like the two
+            enrich targets, which is not where the rotating handler
+            writes it once --data-dir moves.
+        Oracle: a decoy memman.log seeded under the fake home; only
+            the data-dir file's marker may surface.
+        """
+        from click.testing import CliRunner
+        from memman.cli import cli
+        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        data_dir = tmp_path / 'elsewhere'
+        (data_dir / 'logs').mkdir(parents=True)
+        (data_dir / 'logs' / 'memman.log').write_text('STACK-MARKER\n')
+        home_logs = tmp_path / '.memman' / 'logs'
+        home_logs.mkdir(parents=True)
+        (home_logs / 'memman.log').write_text('HOME-DECOY\n')
+        result = CliRunner().invoke(
+            cli, ['--data-dir', str(data_dir), 'log', 'worker', '--stack'])
+        assert result.exit_code == 0, result.output
+        assert 'STACK-MARKER' in result.output
+        assert 'HOME-DECOY' not in result.output
+
+    def test_log_worker_enrich_targets_ignore_the_data_dir(
+            self, tmp_path, monkeypatch):
+        """`log worker` reads ~/.memman/logs under a custom data dir.
+
+        Mutation: resolving enrich.log or enrich.err from --data-dir as
+            well, which would break either - the systemd unit pins
+            those redirects to %h/.memman/logs and the launchd plist
+            bakes in the absolute home, so neither follows the data
+            dir. Both targets are exercised, so narrowing the mutation
+            to one file does not escape.
+        Oracle: a decoy of each name seeded under the data dir; only
+            the home files' markers may surface.
+        """
+        from click.testing import CliRunner
+        from memman.cli import cli
+        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        data_dir = tmp_path / 'elsewhere'
+        (data_dir / 'logs').mkdir(parents=True)
+        home_logs = tmp_path / '.memman' / 'logs'
+        home_logs.mkdir(parents=True)
+        for name in ('enrich.log', 'enrich.err'):
+            (data_dir / 'logs' / name).write_text(f'DATADIR-DECOY-{name}\n')
+            (home_logs / name).write_text(f'HOME-MARKER-{name}\n')
+        for name, flags in (('enrich.log', []), ('enrich.err', ['--errors'])):
+            result = CliRunner().invoke(
+                cli,
+                ['--data-dir', str(data_dir), 'log', 'worker'] + flags)
+            assert result.exit_code == 0, result.output
+            assert f'HOME-MARKER-{name}' in result.output
+            assert f'DATADIR-DECOY-{name}' not in result.output
+
+    def test_log_worker_stack_spans_the_rotation_backups(
+            self, tmp_path, monkeypatch):
+        """`log worker --stack` reads memman.log.N, not just the live file.
+
+        Mutation: reading only the live `memman.log`. Rotation keeps
+            three backups and BOTH the enrichment and backup workers
+            write the file, so the traceback a CLI error pointed at is
+            often already in `memman.log.1`; reading the live file
+            alone prints a tail with no traceback in it while the stack
+            is still on disk.
+        Oracle: the traceback marker exists ONLY in `memman.log.1`,
+            and ordering - the backup is older, so it must print
+            before the live line.
+        """
+        from click.testing import CliRunner
+        from memman.cli import cli
+        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        data_dir = tmp_path / 'elsewhere'
+        (data_dir / 'logs').mkdir(parents=True)
+        (data_dir / 'logs' / 'memman.log.1').write_text(
+            'ROTATED-TRACEBACK\n')
+        (data_dir / 'logs' / 'memman.log').write_text('LIVE-LINE\n')
+        result = CliRunner().invoke(
+            cli, ['--data-dir', str(data_dir), 'log', 'worker', '--stack'])
+        assert result.exit_code == 0, result.output
+        assert 'ROTATED-TRACEBACK' in result.output
+        assert 'LIVE-LINE' in result.output
+        assert (result.output.index('ROTATED-TRACEBACK')
+                < result.output.index('LIVE-LINE'))
+
+    def test_log_worker_rejects_both_target_flags(
+            self, tmp_path, monkeypatch):
+        """`log worker --errors --stack` is a usage error.
+
+        Mutation: dropping the guard so one flag silently wins and the
+            operator reads a different file than the one they asked
+            for.
+        Oracle: Click's usage exit code 2, and both flag names in the
+            message.
+        """
+        from click.testing import CliRunner
+        from memman.cli import cli
+        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        home_logs = tmp_path / '.memman' / 'logs'
+        home_logs.mkdir(parents=True)
+        (home_logs / 'enrich.err').write_text('ERR-MARKER\n')
+        result = CliRunner().invoke(
+            cli, ['log', 'worker', '--errors', '--stack'])
+        assert result.exit_code == 2, result.output
+        assert '--errors' in result.output
+        assert '--stack' in result.output
+        assert 'ERR-MARKER' not in result.output
+
 
 def _install_env_full(data_dir):
     """Seed an env file with a representative mix of keys.
