@@ -32,6 +32,10 @@ RUN chmod 0755 /app/hooks/memman/*.sh
 # would COPY into the user's nanoclaw build context).
 COPY src/memman/setup/assets/nanoclaw/container-skill.md \
      /app/skills/memman/SKILL.md
+# Restate the mode: COPY preserves the host file's permissions, and a
+# checkout under a restrictive umask yields 0600, which the non-root
+# runtime user cannot read. Mirrors the hooks chmod above.
+RUN chmod 0644 /app/skills/memman/SKILL.md
 
 # Memman state lives under /home/node/.memman in the running container.
 # Pre-write the started state so writes are accepted on first run; the
