@@ -142,6 +142,34 @@ def test_swap_clears_meta_after_done(swap_backend):
     assert leftover == []
 
 
+def test_swap_clears_constants_hash_so_edges_rebuild(swap_backend):
+    """Cutover clears `constants_hash`, arming the next drain's reindex.
+
+    Every `semantic` edge carries as its weight a cosine computed
+    under the retired model, and recall reads that weight directly.
+    `reindex_if_constants_changed` reindexes exactly when the stored
+    hash disagrees with the computed one, so deleting the key is what
+    schedules the repair.
+
+    Mutation: leaving `constants_hash` in place at cutover, which
+        leaves every semantic edge weighted by the old model forever
+        - the same stale-derived-data class as the removed snapshot.
+    Oracle: the meta key, seeded to a known value before the swap and
+        required absent after.
+    """
+    _seed_insights(swap_backend, 2)
+    swap_backend.meta.set('constants_hash', 'stale-hash-from-old-model')
+    ec = _StubEmbedder(dim=768)
+    plan = SwapPlan(
+        target_provider='stub-target',
+        target_model='stub-target-d768',
+        target_dim=768)
+
+    run_swap(swap_backend, ec, plan)
+
+    assert swap_backend.meta.get('constants_hash') is None
+
+
 def test_swap_resume_skips_already_filled_rows(swap_backend, monkeypatch):
     """A second run after a partial backfill resumes from the cursor.
 
