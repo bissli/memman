@@ -763,8 +763,27 @@ class TestSchedulerLogs:
     """`memman log worker` and the install-time logs/ directory."""
 
     def test_install_creates_logs_directory(self, tmp_path, monkeypatch):
-        """_install_claude_code creates ~/.memman/logs/ with mode 755."""
+        """_install_claude_code leaves ~/.memman/logs/ owner-only.
+
+        Worker logs carry memory content, and doctor's
+        `env_permissions` check warns on any group or other bit under
+        ~/.memman.
+
+        Mutation: dropping the explicit chmod, or asking mkdir for a
+            mode with group/other bits. `mkdir(mode=...)` is masked by
+            the umask and does nothing at all for an existing
+            directory, so only the chmod can tighten one an earlier
+            install left at 0755 - which is why the fixture pre-creates
+            it that way.
+        Oracle: the directory's stat mode after install, compared
+            against 0o700 exactly.
+        """
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        # The case mkdir cannot fix: a directory that already exists,
+        # group- and world-readable, from an earlier install.
+        preexisting = tmp_path / '.memman' / 'logs'
+        preexisting.mkdir(parents=True)
+        preexisting.chmod(0o755)
         monkeypatch.setattr(
             'memman.setup.claude.claude_register_hooks',
             lambda cd, **kw: '/dev/null')
@@ -775,7 +794,7 @@ class TestSchedulerLogs:
         _install_claude_code(env, data_dir=str(tmp_path / 'data'))
         logs_dir = tmp_path / '.memman' / 'logs'
         assert logs_dir.is_dir()
-        assert (logs_dir.stat().st_mode & 0o777) == 0o755
+        assert (logs_dir.stat().st_mode & 0o777) == 0o700
 
     def test_log_worker_reads_log_file(self, tmp_path, monkeypatch):
         """`memman log worker` prints the tail of enrich.log."""
@@ -992,7 +1011,7 @@ class TestBackupScheduler:
 
     def test_install_backup_systemd_writes_calendar_timer(
             self, fake_home, fake_binary, monkeypatch):
-        """systemd install_backup writes an OnCalendar timer + worker service."""
+        """Systemd install_backup writes an OnCalendar timer + worker service."""
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'systemd')
         calls = _record_subprocess(monkeypatch)
         result = sch.install_backup(str(fake_home / '.memman'), '0 3 * * *')
@@ -1009,7 +1028,7 @@ class TestBackupScheduler:
 
     def test_install_backup_launchd_writes_calendar_plist(
             self, fake_home, fake_binary, monkeypatch):
-        """launchd install_backup writes a StartCalendarInterval array + wrapper."""
+        """Launchd install_backup writes a StartCalendarInterval array + wrapper."""
         monkeypatch.setattr(sch, 'detect_scheduler', lambda: 'launchd')
         _record_subprocess(monkeypatch)
         result = sch.install_backup(

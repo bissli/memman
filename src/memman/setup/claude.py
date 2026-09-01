@@ -152,7 +152,15 @@ def _install_claude_code(env: dict, data_dir: str,
     print(f'\nSetting up Claude Code ({config_dir})...')
 
     logs_dir = Path.home() / '.memman' / 'logs'
-    logs_dir.mkdir(mode=0o755, parents=True, exist_ok=True)
+    # Notes:
+    # - 0700, matching the rest of ~/.memman: worker logs carry
+    #   memory content, and doctor's `env_permissions` check warns on
+    #   any group or other bit under that directory.
+    # - chmod as well as mkdir: mkdir's mode is masked by the umask,
+    #   so it alone cannot state a mode, and it does nothing at all
+    #   for a directory an earlier install already created.
+    logs_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    logs_dir.chmod(0o700)
 
     print('\n[1/2] Skill')
     path = claude_write_skill(config_dir)
