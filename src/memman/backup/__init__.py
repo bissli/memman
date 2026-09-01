@@ -391,6 +391,14 @@ def restore(bundle_path: str, data_dir: str) -> dict[str, Any]:
                     tmp = dst_dir / (DB_FILENAME + '.tmp')
                     shutil.copy2(src / DB_FILENAME, tmp)
                     os.replace(tmp, dst_dir / DB_FILENAME)
+                    # The WAL and SHM belong to the database being
+                    # replaced, not to the one arriving. Leaving them
+                    # lets SQLite replay a foreign log over the
+                    # restored file, which is corruption rather than
+                    # staleness.
+                    for side in (
+                            DB_FILENAME + '-wal', DB_FILENAME + '-shm'):
+                        (dst_dir / side).unlink(missing_ok=True)
             except (OSError, subprocess.CalledProcessError) as exc:
                 stderr = (getattr(exc, 'stderr', '') or '').strip()
                 failed.append({
