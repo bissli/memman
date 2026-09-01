@@ -218,8 +218,7 @@ def test_maintenance_retries_stale_rows(runner):
             data_dir=data_dir,
             touched_stores=set(),
             store_contexts={},
-            deadline_monotonic=_time.monotonic() + 60,
-            snapshot_writer=lambda *a, **kw: None)
+            deadline_monotonic=_time.monotonic() + 60)
         status = conn.execute(
             'select status from queue where id = ?', (row_id,)).fetchone()[0]
         assert status == 'pending'

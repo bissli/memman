@@ -1,11 +1,11 @@
 """Tests for hot-path observability in `pipeline.remember`.
 
 The `apply_all` block in `remember.run_remember` calls
-`refresh_effective_importance` and `auto_prune` and falls back to
-quiet defaults (0.0 / 0) when either raises. F.4 turns the silent
-exceptions into `logger.warning` lines so operators can see real
-failures (e.g., DB pool exhaustion, schema drift) without losing
-the transactional fallback.
+`refresh_effective_importance` and falls back to a quiet default
+(0.0) when it raises. F.4 turns the silent exception into a
+`logger.warning` line so operators can see real failures (e.g., DB
+pool exhaustion, schema drift) without losing the transactional
+fallback.
 """
 
 import logging
@@ -58,33 +58,6 @@ def test_refresh_effective_importance_failure_is_logged(
     matches = [
         r for r in caplog.records
         if 'refresh_effective_importance failed' in r.getMessage()]
-    assert matches
-
-
-def test_auto_prune_failure_is_logged(
-        tmp_backend, monkeypatch, caplog):
-    """A raising `auto_prune` produces a warn line.
-
-    The fallback (`pruned = 0`) still applies so the new insight
-    persists and the transaction completes.
-    """
-    from memman.embed.fingerprint import bound_embedder
-    from memman.pipeline.remember import run_remember
-
-    def _boom(*args, **kwargs):
-        raise RuntimeError('forced prune failure')
-
-    monkeypatch.setattr(tmp_backend.nodes, 'auto_prune', _boom)
-    insight = _new_insight('Postgres MVCC provides snapshot isolation')
-    with caplog.at_level(logging.WARNING, logger='memman'):
-        run_remember(
-            tmp_backend, insight,
-            content=insight.content,
-            ec=bound_embedder(tmp_backend), store_name='test',
-            no_reconcile=True)
-    matches = [
-        r for r in caplog.records
-        if 'auto_prune failed' in r.getMessage()]
     assert matches
 
 

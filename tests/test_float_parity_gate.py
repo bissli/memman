@@ -15,7 +15,6 @@ import random
 
 import pytest
 from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
-from memman.embed.fingerprint import stored_fingerprint
 from memman.search.recall import intent_aware_recall
 from memman.store.model import Insight
 from tests.conftest import EMBEDDING_DIM
@@ -80,8 +79,7 @@ def _top5_ids(backend, qvec) -> set[str]:
     result = intent_aware_recall(
         backend, query='topic insight',
         query_vec=qvec,
-        limit=5, intent_override='GENERAL',
-        fingerprint=stored_fingerprint(backend))
+        limit=5, intent_override='GENERAL')
     return {r['insight'].id for r in result['results'][:5]}
 
 

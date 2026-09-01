@@ -41,7 +41,7 @@ Six categories distinguish the nature of a memory:
 Importance ranges from 2 to 5 and affects retrieval ranking and lifecycle. The CLI accepts `--imp 1`, but the LLM extraction pipeline floors it at 2 — `1` is reserved for raw `--no-reconcile` writes only.
 
 - **5**: critical decision, never automatically cleaned up
-- **4**: important fact, immune to auto-pruning
+- **4**: important fact, protected tier (never offered for deletion)
 - **3**: standard memory (default `--imp`)
 - **2**: low priority / passing mention (effective floor for extracted facts)
 
@@ -144,7 +144,7 @@ memman's architecture is divided into five layers:
 ├──────────────────────────────────────────────────────────────┤
 │  Storage Layer        store/   (backend, base, factory, db,    │
 │                                node, edge, oplog, model,       │
-│                                snapshot, sqlite, postgres)     │
+│                                sqlite, postgres)               │
 │                       queue.py (deferred-write queue)          │
 │                       migrate.py (SQLite -> Postgres copy)     │
 ├──────────────────────────────────────────────────────────────┤
@@ -167,7 +167,7 @@ memman/
 │   ├── config.py             # Env-file resolver (INSTALLABLE_KEYS)
 │   ├── doctor.py             # Health checks (memman doctor)
 │   ├── drain_lock.py         # Cross-process drain.lock
-│   ├── maintenance.py        # GC, auto-prune, EI recompute
+│   ├── maintenance.py        # GC, EI recompute, edge reindex
 │   ├── migrate.py            # SQLite -> Postgres migration
 │   ├── queue.py              # Deferred-write queue
 │   ├── trace.py              # JSONL debug tracing

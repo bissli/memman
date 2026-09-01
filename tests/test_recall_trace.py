@@ -7,7 +7,6 @@ synchronous hot path) and the id-based rerank movement metric.
 """
 
 from memman import trace
-from memman.embed.fingerprint import stored_fingerprint
 from memman.search.recall import intent_aware_recall
 from tests.conftest import make_insight
 
@@ -46,7 +45,6 @@ def test_is_enabled_read_once_per_recall(tmp_backend, monkeypatch):
         trace, 'is_enabled', lambda: calls.append(1) or False)
     resp = intent_aware_recall(
         tmp_backend, 'alpha shared topic', None, 5,
-        fingerprint=stored_fingerprint(tmp_backend),
         intent_override='GENERAL')
     assert resp['results']
     assert len(calls) == 1
@@ -79,7 +77,6 @@ def test_rerank_event_reports_moved_by_id_not_score(
     monkeypatch.setattr('memman.rerank.get_client', _IdentityRerank)
     resp = intent_aware_recall(
         tmp_backend, 'alpha shared topic', None, 5,
-        fingerprint=stored_fingerprint(tmp_backend),
         intent_override='GENERAL', rerank=True)
     assert resp['meta']['reranked'] is True
     rr = [f for n, f in events if n == 'recall_rerank']
@@ -115,7 +112,6 @@ def test_anchor_event_reports_vector_hits_against_anchor_k(
     qv[0] = 1.0
     intent_aware_recall(
         tmp_backend, 'zzz unmatched query', qv, 35,
-        fingerprint=stored_fingerprint(tmp_backend),
         intent_override='GENERAL', category='preference')
     ev = [f for n, f in events if n == 'recall_anchors']
     assert ev
@@ -144,7 +140,6 @@ def test_traversal_event_counts_budget_capped_anchors(
     def _run():
         return intent_aware_recall(
             tmp_backend, 'alpha shared topic', None, 5,
-            fingerprint=stored_fingerprint(tmp_backend),
             intent_override='GENERAL')
 
     _run()

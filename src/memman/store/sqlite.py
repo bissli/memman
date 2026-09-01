@@ -1,14 +1,13 @@
 """SQLite implementation of the Backend Protocol surface.
 
 Thin facade. Each Protocol verb binds 1:1 to an existing free
-function in `store/{node,edge,oplog,db,snapshot}.py`.
+function in `store/{node,edge,oplog,db}.py`.
 
-This module is the only file allowed to import
-`memman.store.snapshot` outside of `store/`. The recall path goes
-through `Backend.recall_session()` which yields a
-`SqliteRecallSession`; pipeline code reads `session.snapshot` for
-its SQL-or-snapshot branching logic and falls through to the
-active backend's verbs when the snapshot is absent.
+The recall path goes through `Backend.recall_session()`, which yields
+a `SqliteRecallSession` holding one in-process embedding matrix for
+the life of a single request. There is no persisted read cache: the
+pipeline reads live SQL, so recall's candidate universe is the
+store's active set by construction.
 """
 
 import contextlib
@@ -26,6 +25,7 @@ from types import TracebackType
 from typing import Any, ClassVar, Self
 from urllib.parse import quote
 
+import numpy as np
 from memman.embed.fingerprint import Fingerprint
 from memman.embed.vector import deserialize_vector, serialize_vector
 from memman.migrate import PAYLOAD_VERSION, Artifact, BackendFeatures
@@ -36,7 +36,6 @@ from memman.store import db as _db
 from memman.store import edge as _edge
 from memman.store import node as _node
 from memman.store import oplog as _oplog
-from memman.store import snapshot as _snapshot
 from memman.store.backend import Backend, EdgeStore, MetaStore, NodeStore
 from memman.store.backend import Oplog, RecallSession
 from memman.store.base import BaseNodeStore
@@ -145,12 +144,6 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
                 prompt_version=r[0], model_id=r[1], count=r[2])
             for r in rows
             ]
-
-    def auto_prune(
-            self, *, max_insights: int,
-            exclude_ids: list[Id] | None = None) -> int:
-        return _node.auto_prune(
-            self._db, max_insights, exclude_ids)
 
     def boost_retention(self, id: Id) -> None:
         _node.boost_retention(self._db, id)
@@ -321,6 +314,9 @@ class SqliteEdgeStore(EdgeStore):
     def all(self) -> list[Edge]:
         return _edge.get_all_edges(self._db)
 
+    def adjacency(self) -> dict[Id, list[tuple[Id, str, float]]]:
+        return _edge.get_adjacency(self._db)
+
     def delete_by_node(self, node_id: Id) -> None:
         _edge.delete_edges_by_node(self._db, node_id)
 
@@ -471,82 +467,187 @@ from oplog
 
 @dataclass
 class SqliteRecallSession(RecallSession):
-    """Read-side session for the recall pipeline.
+    """Read-side session for one recall request.
 
-    Exposes `snapshot` directly so recall pipeline code can take the
-    snapshot-or-SQL branching decision that lives in
-    `search.recall.intent_aware_recall`.
+    Owns an in-process embedding matrix, built lazily on first vector
+    use so a keyword-only recall pays nothing for it, and dropped on
+    context exit.
 
-    Construction reads the snapshot eagerly so the lifecycle is clear:
-    enter the context, read the snapshot once, fall through to SQL on
-    miss, exit the context. Concurrent readers each take their own
-    session; SQLite snapshots are file-backed (POSIX rename semantics
-    guarantee atomicity).
+    Attributes
+    ----------
+    db : DB
+        Live handle the matrix is built from. Reading it per request
+        is what makes recall's candidate universe equal the store's
+        active set.
+
+    Notes
+    -----
+    - The matrix is float64 because `embed.vector.cosine_similarity`
+      promotes to float64, so a float64 matmul keeps this path within
+      a float ulp of the per-pair helper it replaces. The speed comes
+      from `np.frombuffer` replacing `struct.unpack` (measured
+      12.4 ms -> 1.0 ms at N=1053), not from a narrower dtype.
+    - Rows whose blob width differs from the store's modal width are
+      left out of the matrix, so a half-finished `embed swap` scores
+      them 0.0 instead of raising on a ragged `np.array`.
     """
 
-    snapshot: _snapshot.Snapshot | None = None
-    _embed_cache: dict[Id, list[float]] | None = None
-    _meta_cache: dict[Id, tuple[str, str]] | None = None
+    db: DB | None = None
+    _groups: dict[int, tuple[list[Id], Any, Any]] | None = None
+    _row_of: dict[Id, tuple[int, int]] | None = None
+    _meta: dict[Id, tuple[str, str]] | None = None
 
     def close(self) -> None:
-        """No-op for SQLite (snapshot is in-memory, file-backed)."""
+        """Drop the matrices so they do not outlive the request."""
+        self._groups = None
+        self._row_of = None
+        self._meta = None
+
+    def _load(self) -> None:
+        """Build one embedding matrix per stored width, once.
+
+        Notes
+        -----
+        - Grouped by width rather than reduced to a single modal
+          width: a store mid-`embed reembed` holds two widths, and
+          scoring only the modal group would blank the whole vector
+          channel for a query at the other width -- including the
+          rows that query CAN score. Each row is compared only
+          against a query of its own width, which is
+          `cosine_similarity`'s own 0.0-on-mismatch rule applied per
+          row rather than per store.
+        - One pass reads category and source beside the blob, so the
+          eligibility filter in `vector_anchors` needs no second
+          query and no cache handed in by the pipeline.
+        """
+        if self._groups is not None or self.db is None:
+            return
+        sql = """
+select id, category, source, embedding
+from insights
+where deleted_at is null and embedding is not null
+"""
+        rows = [
+            (rid, cat, src, blob)
+            for rid, cat, src, blob in self.db._query(sql)
+            if blob]
+        self._meta = {rid: (cat, src) for rid, cat, src, _b in rows}
+
+        by_width: dict[int, list[tuple[Id, bytes]]] = {}
+        malformed = 0
+        for rid, _cat, _src, blob in rows:
+            # A float64 vector is a whole number of 8-byte doubles.
+            # np.frombuffer would raise on anything else and take the
+            # whole channel down with it.
+            if len(blob) % 8:
+                malformed += 1
+                continue
+            by_width.setdefault(len(blob), []).append((rid, blob))
+        if malformed:
+            logger.warning(
+                f'{malformed} embedding blob(s) are not a whole number'
+                f' of float64 values and were skipped; run'
+                f' `memman embed reembed` to repair')
+
+        groups: dict[int, tuple[list[Id], Any, Any]] = {}
+        row_of: dict[Id, tuple[int, int]] = {}
+        for width, entries in by_width.items():
+            dim = width // 8
+            matrix = np.empty((len(entries), dim), dtype=np.float64)
+            for row, (rid, blob) in enumerate(entries):
+                matrix[row] = np.frombuffer(blob, dtype='<f8')
+                row_of[rid] = (dim, row)
+            norms = np.linalg.norm(matrix, axis=1)
+            norms[norms == 0.0] = 1.0
+            groups[dim] = ([rid for rid, _b in entries], matrix, norms)
+
+        self._groups = groups
+        self._row_of = row_of
+
+    def _cosines(
+            self, query_vec: list[float]) -> tuple[list[Id], Any]:
+        """Ids and cosines for the rows matching the query's width.
+
+        Rows stored at any other width are absent from the result,
+        which the callers read as similarity 0.0.
+        """
+        empty: tuple[list[Id], Any] = ([], np.zeros((0,), dtype=np.float64))
+        self._load()
+        if not self._groups:
+            return empty
+        query = np.asarray(query_vec, dtype=np.float64)
+        if query.ndim != 1:
+            return empty
+        group = self._groups.get(int(query.shape[0]))
+        if group is None:
+            return empty
+        query_norm = float(np.linalg.norm(query))
+        if query_norm == 0.0:
+            return empty
+        ids, matrix, norms = group
+        return ids, (matrix @ query) / (norms * query_norm)
+
+    def similarities(
+            self, query_vec: list[float], *,
+            ids: set[Id] | None = None) -> dict[Id, float]:
+        """Cosine per id, positives only. See the Protocol docstring."""
+        row_ids, sims = self._cosines(query_vec)
+        out: dict[Id, float] = {}
+        for row in np.nonzero(sims > 0.0)[0]:
+            rid = row_ids[row]
+            if ids is None or rid in ids:
+                out[rid] = float(sims[row])
+        return out
+
+    def vectors_for_ids(
+            self, ids: list[Id]) -> dict[Id, list[float]]:
+        """Embeddings for specific ids.
+
+        Reads whatever width each id was stored at, so a store mid
+        -reembed returns both.
+        """
+        self._load()
+        if not self._groups or self._row_of is None:
+            return {}
+        out: dict[Id, list[float]] = {}
+        for rid in ids:
+            found = self._row_of.get(rid)
+            if found is None:
+                continue
+            dim, row = found
+            group = self._groups.get(dim)
+            if group is not None:
+                out[rid] = group[1][row].tolist()
+        return out
 
     def vector_anchors(
             self, query_vec: list[float], *, k: int = 10,
             min_sim: float = 0.0, category: str = '',
             source: str = '') -> list[tuple[Id, float]]:
-        """Return top-k (id, similarity) matches via Python cosine.
-
-        Uses the snapshot's pre-loaded embeddings when present; falls
-        back to `_embed_cache` (lazily populated by the recall
-        pipeline). Cosine similarity in [-1, 1].
+        """Return top-k (id, similarity) matches. Cosine in [-1, 1].
 
         Notes
         -----
-        - `category` / `source` restrict eligibility before the top-k
-          cut: the snapshot path derives eligible ids from
-          `snapshot.insights`, the fallback path from `_meta_cache`
-          (`{id: (category, source)}`, populated beside
-          `_embed_cache`).
-        - A filter with no metadata available returns [] so the
-          pipeline's in-memory fallback — which filters its input
-          dict — takes over; returning unfiltered hits would
-          under-fill k downstream.
+        - `category` / `source` restrict eligibility BEFORE the top-k
+          cut, so a filtered recall still returns k anchors where k
+          exist. Post-filtering the hits would under-fill k.
+        - Ties break on id descending, matching the previous
+          `sort(reverse=True)` over `(sim, id)` pairs.
         """
-        from memman.embed.vector import cosine_similarity
-
-        if self.snapshot is not None:
-            cache = self.snapshot.embeddings
-        elif self._embed_cache is not None:
-            cache = self._embed_cache
-        else:
-            return []
-
-        eligible: set[Id] | None = None
-        if category or source:
-            if self.snapshot is not None:
-                eligible = {
-                    i.id for i in self.snapshot.insights
-                    if (not category or i.category == category)
-                    and (not source or i.source == source)}
-            elif self._meta_cache is not None:
-                eligible = {
-                    eid for eid, (cat, src) in self._meta_cache.items()
-                    if (not category or cat == category)
-                    and (not source or src == source)}
-            else:
-                return []
-
+        row_ids, sims = self._cosines(query_vec)
+        meta = self._meta or {}
         scored: list[tuple[float, Id]] = []
-        for _id, vec in cache.items():
-            if eligible is not None and _id not in eligible:
-                continue
-            sim = cosine_similarity(query_vec, vec)
-            if sim < min_sim:
-                continue
-            scored.append((sim, _id))
+        for row in np.nonzero(sims >= min_sim)[0]:
+            rid = row_ids[row]
+            if category or source:
+                cat, src = meta.get(rid, ('', ''))
+                if category and cat != category:
+                    continue
+                if source and src != source:
+                    continue
+            scored.append((float(sims[row]), rid))
         scored.sort(reverse=True)
-        return [(eid, sim) for sim, eid in scored[:k]]
+        return [(rid, sim) for sim, rid in scored[:k]]
 
 
 class SqliteBackend(Backend):
@@ -688,38 +789,18 @@ class SqliteBackend(Backend):
             ro_db.close()
 
     @contextmanager
-    def recall_session(
-            self, fingerprint: 'Fingerprint',
-            ) -> Iterator[SqliteRecallSession]:
+    def recall_session(self) -> Iterator[SqliteRecallSession]:
         """Yield a SqliteRecallSession for one recall request.
 
-        Reads the snapshot keyed by the store-bound `fingerprint`;
-        falls through to SQL when the snapshot is missing or its
-        embedding model disagrees with `fingerprint`.
+        The session builds its embedding matrix from the live
+        database, so there is no stored artifact whose embedding model
+        could disagree with the caller's.
         """
-        snap: _snapshot.Snapshot | None = None
-        try:
-            store_dir_path = str(Path(self._db.path).parent)
-            snap = _snapshot.read_snapshot(store_dir_path, fingerprint)
-        except Exception as exc:
-            logger.warning(f'snapshot load failed, using SQL: {exc}')
-            snap = None
-        session = SqliteRecallSession(snapshot=snap)
+        session = SqliteRecallSession(db=self._db)
         try:
             yield session
         finally:
             session.close()
-
-    def write_snapshot(self, fingerprint: Any) -> bool:
-        """Materialize the recall snapshot.
-
-        SQLite-specific writer. Not on the Backend Protocol surface
-        (snapshots are SQLite-only); cli and worker callers reach this
-        via `backend.write_snapshot(...)` rather than importing
-        `store.snapshot.write_snapshot`.
-        """
-        return _snapshot.write_snapshot(
-            self._db, str(Path(self._db.path).parent), fingerprint)
 
     def storage_summary(self) -> dict[str, Any]:
         return _db.storage_summary(self._db)
@@ -803,7 +884,6 @@ def drop_sqlite_store(store: str, data_dir: str) -> None:
 _SQLITE_MIGRATOR_FEATURES = BackendFeatures(
     supports_edges=True,
     supports_oplog=True,
-    supports_recall_snapshot=True,
     supports_reembed=True,
     supports_drain_heartbeat=False,
     supports_filesystem_artifacts=True,

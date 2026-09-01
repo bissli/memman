@@ -53,7 +53,7 @@ import argparse
 import json
 from pathlib import Path
 
-from memman.embed.fingerprint import bound_embedder, stored_fingerprint
+from memman.embed.fingerprint import bound_embedder
 from memman.search.recall import intent_aware_recall
 from memman.store.db import open_read_only, store_dir
 from memman.store.sqlite import SqliteBackend
@@ -136,7 +136,6 @@ def main() -> None:
 
     backend = SqliteBackend(
         open_read_only(store_dir(args.data_dir, args.store)))
-    fingerprint = stored_fingerprint(backend)
     embedder = bound_embedder(backend)
 
     labeled = []
@@ -154,8 +153,7 @@ def main() -> None:
         for query in queries:
             qvec = embedder.embed(query)
             resp = intent_aware_recall(
-                backend, query, qvec, args.limit,
-                fingerprint=fingerprint, rerank=False)
+                backend, query, qvec, args.limit)
             rows = resp['results']
             fired[pop]['shipped_meta'] += int(
                 resp['meta'].get('sparse', False))

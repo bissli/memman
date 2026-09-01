@@ -1,29 +1,34 @@
 """Intent-aware recall with beam search, RRF, Kahn's topological sort.
 
-Opens a `RecallSession` via `Backend.recall_session()` which reads
-the worker-materialized snapshot when present. Falls back to direct
-Backend verb calls when the snapshot is missing,
-fingerprint-mismatched, or unreadable. The snapshot path eliminates
-`nodes.get_all_active`, `iter_embeddings_as_vecs`, `edges.by_node`,
-and `nodes.get` calls from the synchronous recall hot path.
+Reads live storage on every request. The candidate universe is
+`nodes.get_all_active()` and the graph is one `edges.adjacency()`
+read, so recall cannot serve a row the store has deleted or miss one
+it holds.
+
+Notes
+-----
+- There is deliberately no derived read artifact on this path. A
+  materialized snapshot shipped here once and froze permanently: its
+  writer stopped above a row cap while its reader had no staleness
+  check, so recall served deleted rows and hid live ones until the
+  file was removed by hand.
+- Vector work stays behind `RecallSession`: `vector_anchors` for the
+  top-k and `similarities` for the per-candidate cosine. This module
+  never holds a whole-store embedding dict.
 """
 
 import heapq
 import logging
 from collections import Counter
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 from memman import trace
-from memman.embed.vector import cosine_similarity
 from memman.search.intent import detect_intent, get_weights
 from memman.search.keyword import insight_tokens, keyword_search, tokenize
 from memman.store.backend import Backend
 from memman.store.model import Insight
-
-if TYPE_CHECKING:
-    from memman.embed.fingerprint import Fingerprint
 
 logger = logging.getLogger('memman')
 
@@ -117,40 +122,17 @@ def get_traversal_params(intent: str) -> tuple[int, int, int]:
     return TRAVERSAL_PARAMS.get(intent, TRAVERSAL_PARAMS['GENERAL'])
 
 
-def vector_search_from_cache(
-        embed_cache: dict[str, list[float]],
-        query_vec: list[float],
-        limit: int) -> list[tuple[str, float]]:
-    """Cosine similarity search over pre-loaded embeddings."""
-    heap_list: list[tuple[float, str]] = []
-    for id, vec in embed_cache.items():
-        sim = cosine_similarity(query_vec, vec)
-        if sim <= VECTOR_SEARCH_MIN_SIM:
-            continue
-        if limit <= 0 or len(heap_list) < limit:
-            heapq.heappush(heap_list, (sim, id))
-        elif sim > heap_list[0][0]:
-            heapq.heapreplace(heap_list, (sim, id))
-
-    if not heap_list:
-        return []
-
-    result = []
-    while heap_list:
-        sim, id = heapq.heappop(heap_list)
-        result.append((id, sim))
-    result.reverse()
-    return result
-
-
 def _bidirectional_adjacency(
         directed: dict[str, list[tuple[str, str, float]]],
         ) -> dict[str, list[tuple[str, str, float]]]:
     """Mirror a directional source -> targets map into both directions.
 
-    Beam search walks edges as undirected; the snapshot stores them
-    keyed by source. This helper materializes the reverse direction so
-    `nid -> incoming + outgoing` is one dict lookup.
+    Beam search walks edges as undirected; `EdgeStore.adjacency()`
+    returns them keyed by source. This helper materializes the reverse
+    direction so `nid -> incoming + outgoing` is one dict lookup.
+
+    The input's lists are not mutated, so the caller can keep the
+    directed map for the source-keyed causal lookup.
     """
     bidir: dict[str, list[tuple[str, str, float]]] = {}
     for source_id, edges in directed.items():
@@ -171,7 +153,8 @@ def beam_search_from_anchor(
         insight_map: dict[str, Insight],
         sim_cache: dict[str, float] | None,
         edges_lookup: Callable[[str], Any],
-        insight_lookup: Callable[[str], Insight | None]) -> int:
+        insight_lookup: Callable[[str], Insight | None],
+        phantom_ids: set[str]) -> int:
     """Perform beam search from a single anchor node.
 
     Parameters
@@ -194,10 +177,15 @@ def beam_search_from_anchor(
     sim_cache : dict[str, float] | None
         Query-cosine per node (None when there is no query vector).
     edges_lookup : Callable
-        `nid -> iterable of (neighbor_id, edge_type, weight)`;
-        encapsulates snapshot dict access or a SQL query.
+        `nid -> iterable of (neighbor_id, edge_type, weight)`,
+        read from the pre-built bidirectional adjacency map.
     insight_lookup : Callable
         `nid -> Insight | None`; same encapsulation.
+    phantom_ids : set[str]
+        Ids an edge referenced but `insight_lookup` could not
+        resolve; shared across anchors and updated in place, so one
+        dangling edge costs one lookup per recall rather than one per
+        anchor.
 
     Returns
     -------
@@ -224,6 +212,20 @@ def beam_search_from_anchor(
                 if total_visited >= max_visited:
                     break
 
+                # An edge can outlive its endpoint row. Resolve the
+                # neighbour first: scoring one that does not resolve
+                # would spend a visit budget slot and a beam push on a
+                # node no result can ever carry, and re-resolve the
+                # same miss once per anchor.
+                if neighbor_id in phantom_ids:
+                    continue
+                if neighbor_id not in insight_map:
+                    ins = insight_lookup(neighbor_id)
+                    if ins is None:
+                        phantom_ids.add(neighbor_id)
+                        continue
+                    insight_map[neighbor_id] = ins
+
                 structural = weights.get(etype, 0.0) * weight
                 semantic = (
                     sim_cache.get(neighbor_id, 0.0)
@@ -236,10 +238,6 @@ def beam_search_from_anchor(
                 if existing is None or neighbor_score > existing:
                     score_map[neighbor_id] = neighbor_score
                     via_map[neighbor_id] = etype
-                    if neighbor_id not in insight_map:
-                        ins = insight_lookup(neighbor_id)
-                        if ins is not None:
-                            insight_map[neighbor_id] = ins
 
                 if neighbor_id not in visited:
                     visited[neighbor_id] = True
@@ -313,7 +311,6 @@ def intent_aware_recall(
         backend: Backend, query: str,
         query_vec: list[float] | None,
         limit: int, *,
-        fingerprint: 'Fingerprint',
         intent_override: str | None = None,
         rerank: bool = False,
         rerank_weights_override: dict[
@@ -334,8 +331,6 @@ def intent_aware_recall(
         Query embedding; None degrades to the keyword/time paths.
     limit : int
         Result cap; `limit <= 0` means unbounded.
-    fingerprint : Fingerprint
-        Active embedding fingerprint; gates snapshot reuse.
     intent_override : str | None, default None
         Force an intent instead of `detect_intent(query)`.
     rerank : bool, default False
@@ -360,9 +355,10 @@ def intent_aware_recall(
 
     Notes
     -----
-    - Loads the worker-materialized snapshot when present; falls back
-      to direct Backend verb calls when it is missing or its embedding
-      fingerprint does not match.
+    - Reads live storage on every call: the candidate universe is
+      `nodes.get_all_active()` and the graph is one
+      `edges.adjacency()` read, so a row the store has deleted cannot
+      be returned and a row it holds cannot be hidden.
     - `category`/`source` filter the ANCHOR pools and the final result
       set, never the graph traversal: a hop through a non-matching
       neighbour is correct, and filtering the candidates loop would
@@ -425,52 +421,46 @@ def intent_aware_recall(
                 if (limit <= 0 or not (category or source))
                 else max(ANCHOR_TOP_K, limit))
 
-    with backend.recall_session(fingerprint) as session:
-        snapshot = session.snapshot
+    all_insights = backend.nodes.get_all_active()
+    insights_by_id = {i.id: i for i in all_insights}
 
-        if snapshot is not None:
-            all_insights = snapshot.insights
-            embed_cache = snapshot.embeddings
-            bidir = _bidirectional_adjacency(snapshot.adjacency)
-            insights_by_id = {i.id: i for i in snapshot.insights}
+    # Notes:
+    # - One projection-only read of the whole edge table, not one
+    #   query per frontier node. The per-node form re-read each edge
+    #   about 4.4x over (125,699 rows scanned against E=28,862) and
+    #   cost a psycopg round-trip apiece on Postgres.
+    # - `adjacency()` skips `metadata`, whose per-row json.loads was
+    #   69% of the equivalent `edges.all()` and which traversal
+    #   discards.
+    directed = backend.edges.adjacency()
+    bidir = _bidirectional_adjacency(directed)
+    phantom_ids: set[str] = set()
 
-            def _edges_lookup(nid: str) -> Any:
-                return bidir.get(nid, ())
+    def _edges_lookup(nid: str) -> Any:
+        return bidir.get(nid, ())
 
-            def _insight_lookup(nid: str) -> Insight | None:
-                return insights_by_id.get(nid)
+    def _insight_lookup(nid: str) -> Insight | None:
+        return insights_by_id.get(nid)
 
-            def _causal_edges_lookup(source_id: str) -> list[str]:
-                return [
-                    target for target, etype, _w
-                    in snapshot.adjacency.get(source_id, ())
-                    if etype == 'causal']
-        else:
-            all_insights = backend.nodes.get_all_active()
-            embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
-            try:
-                session._embed_cache = embed_cache  # type: ignore[attr-defined]
-                session._meta_cache = {  # type: ignore[attr-defined]
-                    i.id: (i.category, i.source) for i in all_insights}
-            except AttributeError:
-                pass
+    def _causal_edges_lookup(source_id: str) -> list[str]:
+        return [
+            target for target, etype, _w
+            in directed.get(source_id, ())
+            if etype == 'causal']
 
-            def _edges_lookup(nid: str) -> Any:
-                for e in backend.edges.by_node(nid):
-                    neighbor_id = (
-                        e.target_id if e.target_id != nid else e.source_id)
-                    yield (neighbor_id, e.edge_type, e.weight)
-
-            def _insight_lookup(nid: str) -> Insight | None:
-                return backend.nodes.get(nid)
-
-            def _causal_edges_lookup(source_id: str) -> list[str]:
-                return [
-                    e.target_id
-                    for e in backend.edges.by_source_and_type(
-                        source_id, 'causal')]
-
+    sim_cache: dict[str, float] = {}
+    with backend.recall_session() as session:
         if query_vec is not None:
+            # Scored where the vectors live: one matmul on SQLite, one
+            # `embedding <=>` query on Postgres. The pipeline needs N
+            # scalars, and pulling N x dim floats to compute them was
+            # a whole-store read per recall on both backends.
+            try:
+                sim_cache = session.similarities(query_vec)
+            except Exception as exc:
+                logger.warning(
+                    f'session.similarities failed, similarity signal'
+                    f' unavailable: {exc}')
             try:
                 vector_hits = session.vector_anchors(
                     query_vec, k=anchor_k,
@@ -478,17 +468,11 @@ def intent_aware_recall(
                     category=category, source=source)
             except Exception as exc:
                 logger.warning(
-                    f'session.vector_anchors failed, falling back: {exc}')
+                    f'session.vector_anchors failed, no vector'
+                    f' anchors this request: {exc}')
                 vector_hits = []
         else:
             vector_hits = []
-
-    sim_cache: dict[str, float] = {}
-    if query_vec is not None and embed_cache:
-        for eid, vec in embed_cache.items():
-            s = cosine_similarity(query_vec, vec)
-            if s > 0:
-                sim_cache[eid] = s
 
     # Anchor selection draws from the filtered pool; traversal keeps
     # the full `insights_by_id` so hops through non-matching rows work.
@@ -503,21 +487,6 @@ def intent_aware_recall(
     for rank, (ins, _score) in enumerate(keyword_anchors):
         anchor_map[ins.id] = (
             ins, 1.0 / (RRF_K + rank + 1), 'keyword')
-
-    if vector_hits and not embed_cache:
-        embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
-
-    if query_vec is not None and not vector_hits and embed_cache:
-        # Filter the INPUT dict, never the returned hits: a post-cut
-        # filter reproduces the under-fill this change removes.
-        anchor_embed_cache = embed_cache
-        if category or source:
-            eligible_ids = {i.id for i in anchor_pool}
-            anchor_embed_cache = {
-                eid: vec for eid, vec in embed_cache.items()
-                if eid in eligible_ids}
-        vector_hits = vector_search_from_cache(
-            anchor_embed_cache, query_vec, anchor_k)
 
     for rank, (vid, _sim) in enumerate(vector_hits):
         rrf_score = 1.0 / (RRF_K + rank + 1)
@@ -591,7 +560,7 @@ def intent_aware_recall(
         visited = beam_search_from_anchor(
             aid, score, weights, params,
             score_map, via_map, insight_map, sim_cache,
-            _edges_lookup, _insight_lookup)
+            _edges_lookup, _insight_lookup, phantom_ids)
         visited_total += visited
         if visited >= params[2]:
             capped_anchors += 1
@@ -701,8 +670,22 @@ def intent_aware_recall(
     # O(k*n) selection loop and a different algorithm). Runs between
     # the filter (only returnable rows) and the rerank block (so it
     # can change shortlist membership).
-    if MMR_LAMBDA < 1.0 and len(results) > 1 and embed_cache:
+    if MMR_LAMBDA < 1.0 and len(results) > 1:
         pool = results[:MMR_POOL]
+        # Notes:
+        # - A second, short session, so no database connection is held
+        #   across the rerank network call below.
+        # - Bounded by id on Postgres. On SQLite it rebuilds the whole
+        #   store's embedding matrix, because that is what the session
+        #   reads from - so enabling MMR costs a second matrix build
+        #   per recall there.
+        try:
+            with backend.recall_session() as mmr_session:
+                embed_cache = mmr_session.vectors_for_ids(
+                    [r['insight'].id for r in pool])
+        except Exception as exc:
+            logger.warning(f'MMR vector fetch failed, skipping: {exc}')
+            embed_cache = {}
         vec_rows = [
             (i, embed_cache[r['insight'].id])
             for i, r in enumerate(pool)

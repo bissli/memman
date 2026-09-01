@@ -865,3 +865,114 @@ class TestEdgeCases:
         remember(runner, content, no_reconcile=True)
         hits = recall_basic(runner, 'zephyr')
         assert any('0xFF' in c for c in contents(hits))
+
+
+class TestRecallFreshness:
+    """Scored recall's candidate universe is the store's active set.
+
+    A materialized read cache once served this path and froze
+    permanently above a row cap, and no test asserted this equality,
+    so recall served deleted rows and hid live ones. These are the
+    gate that keeps the candidate universe honest.
+    """
+
+    def test_scored_recall_matches_db_active_set(self, mm_runner):
+        """Verify scored recall sees exactly the non-deleted rows on disk.
+
+        Mutation: any read-side cache on the recall path that a
+            write does not invalidate - memoizing get_all_active(),
+            or reintroducing a materialized read artifact.
+        Oracle: the store DB's own active-id set, read through a raw
+            sqlite3 connection outside the pipeline.
+
+        Sqlite-only by construction: Postgres never had a snapshot, so
+        the pre-change failure is a sqlite property. `remember`
+        auto-drains via the CliRunner wrapper, so only the
+        out-of-band insert and the `forget` skip the drain.
+        """
+        import sqlite3
+        from pathlib import Path
+
+        kept = remember(mm_runner, 'Kombu message serialization uses JSON',
+                        no_reconcile=True)
+        doomed = remember(mm_runner, 'Supervisord manages worker processes',
+                          no_reconcile=True)
+        invoke(mm_runner, ['forget', doomed['id']])
+
+        _cli, data_dir = mm_runner
+        dbs = list(Path(data_dir).glob('data/*/memman.db'))
+        assert len(dbs) == 1, f'expected one store db, found {dbs}'
+        conn = sqlite3.connect(str(dbs[0]))
+        try:
+            conn.execute(
+                "insert into insights (id, content, created_at, updated_at)"
+                " values (?, ?, '2026-01-01T00:00:00+00:00',"
+                " '2026-01-01T00:00:00+00:00')",
+                ('oob-freshness-1', 'Havelock proxy rotates upstream keys'))
+            conn.commit()
+            expected = {
+                r[0] for r in conn.execute(
+                    'select id from insights where deleted_at is null')}
+        finally:
+            conn.close()
+
+        hits = recall_smart(mm_runner, 'Kombu Havelock Supervisord', limit=0)
+        assert {h['id'] for h in hits} == expected
+        assert kept['id'] in expected
+        assert doomed['id'] not in expected
+
+    def test_recall_universe_equals_get_all_active(self, runner):
+        """Verify recall's pool equals the backend's own active set.
+
+        Mutation: a read-side cache on either backend that a write
+            does not invalidate.
+        Oracle: `memman status`'s `total_insights`, a plain
+            `count(*) where deleted_at is null` taken outside the
+            recall pipeline, plus the ids of the rows kept.
+        """
+        kept = [
+            remember(runner, 'Traefik ingress terminates TLS at the edge',
+                     no_reconcile=True)['id'],
+            remember(runner, 'Kombu serializes celery task payloads',
+                     no_reconcile=True)['id'],
+            remember(runner, 'Havelock proxy rotates its upstream keys',
+                     no_reconcile=True)['id'],
+            ]
+        doomed = remember(runner, 'Vagrant provisions local dev boxes',
+                          no_reconcile=True)
+        invoke(runner, ['forget', doomed['id']])
+
+        result = invoke(runner, ['status'])
+        active_count = json.loads(result.output)['total_insights']
+
+        hits = recall_smart(
+            runner, 'Traefik Kombu Havelock Vagrant ingress boxes', limit=0)
+        returned = {h['id'] for h in hits}
+        # Set equality, not a count: with several rows alive, a count
+        # alone cannot tell "the whole universe" from "some rows".
+        assert returned == set(kept)
+        assert len(hits) == active_count == len(kept)
+        assert doomed['id'] not in returned
+
+    def test_forget_removes_from_scored_recall(self, runner):
+        """Verify a forgotten insight is absent from SCORED recall.
+
+        Mutation: serving a soft-deleted row from a stale read cache
+            on the scored path (the `--basic` sibling cannot catch it,
+            since it queries SQL directly).
+        Oracle: a surviving sibling insight that must still be
+            returned, so an empty result set cannot satisfy the
+            absence assertion.
+        """
+        data = remember(runner, 'Redis Cluster resharding moves hash slots',
+                        no_reconcile=True)
+        survivor = remember(
+            runner, 'Redis Sentinel promotes a replica on failover',
+            no_reconcile=True)
+        invoke(runner, ['forget', data['id']])
+        hits = recall_smart(runner, 'Redis Cluster resharding hash slots')
+        returned = {h['id'] for h in hits}
+        # Anti-vacuity: without this the test passes whenever scored
+        # recall returns nothing at all, for any reason.
+        assert survivor['id'] in returned
+        assert data['id'] not in returned

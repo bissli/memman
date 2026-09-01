@@ -1,4 +1,4 @@
-"""Differential check that a `RERANK_WEIGHTS` rescale preserves order.
+r"""Differential check that a `RERANK_WEIGHTS` rescale preserves order.
 
 Runs every labeled query through `intent_aware_recall` once per weight
 table and diffs the returned id sequences against a baseline table.
@@ -35,7 +35,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from memman.embed.fingerprint import bound_embedder, stored_fingerprint
+from memman.embed.fingerprint import bound_embedder
 from memman.search.recall import _RERANK_WEIGHTS_RAW, RERANK_WEIGHTS
 from memman.search.recall import intent_aware_recall
 from memman.store.db import open_read_only, store_dir
@@ -81,21 +81,17 @@ def main() -> None:
     args = ap.parse_args()
 
     backend = SqliteBackend(open_read_only(store_dir(args.data_dir, args.store)))
-    fingerprint = stored_fingerprint(backend)
     embedder = bound_embedder(backend)
 
     queries = []
     with Path(args.labels).open() as f:
-        for line in f:
-            if line.strip():
-                queries.append(json.loads(line)['query'])
+        queries.extend(json.loads(line)['query'] for line in f if line.strip())
 
     arms: list[tuple[str, dict]] = [('control', dict(_RERANK_WEIGHTS_RAW))]
-    for places in (int(p) for p in args.places.split(',')):
-        arms.append((f'{places}dp', {
+    arms.extend((f'{places}dp', {
             intent: rounded_to(row, places)
             for intent, row in _RERANK_WEIGHTS_RAW.items()
-            }))
+            }) for places in (int(p) for p in args.places.split(',')))
     arms.append(('computed', dict(RERANK_WEIGHTS)))
 
     moved: Counter = Counter()
@@ -103,12 +99,12 @@ def main() -> None:
     for query in queries:
         qvec = embedder.embed(query)
         baseline = [r['insight'].id for r in intent_aware_recall(
-            backend, query, qvec, args.limit, fingerprint=fingerprint,
+            backend, query, qvec, args.limit,
             rerank_weights_override=dict(_RERANK_WEIGHTS_RAW))['results']]
         slots += len(baseline)
         for name, table in arms:
             ids = [r['insight'].id for r in intent_aware_recall(
-                backend, query, qvec, args.limit, fingerprint=fingerprint,
+                backend, query, qvec, args.limit,
                 rerank_weights_override=table)['results']]
             moved[name] += (sum(1 for a, b in zip(baseline, ids) if a != b)
                             + abs(len(baseline) - len(ids)))

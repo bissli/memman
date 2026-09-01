@@ -17,8 +17,6 @@ assertion would be vacuously green.
 import math
 from datetime import datetime, timedelta, timezone
 
-import pytest
-from memman.embed.fingerprint import stored_fingerprint
 from memman.search.recall import ANCHOR_TOP_K, intent_aware_recall
 from tests.conftest import make_insight, set_created_at
 
@@ -54,7 +52,6 @@ def test_filtered_recall_fills_to_limit(backend):
           days_old=10)
     resp = intent_aware_recall(
         backend, 'alpha topic note', None, 10,
-        fingerprint=stored_fingerprint(backend),
         intent_override='GENERAL', category='preference')
     assert len(resp['results']) == 10
     assert all(r['insight'].category == 'preference'
@@ -76,7 +73,6 @@ def test_unfiltered_recall_anchor_k_unchanged(backend):
     _seed(backend, 60, 'fact', 'filler row body {i}')
     resp = intent_aware_recall(
         backend, 'zzz unmatched query', None, 50,
-        fingerprint=stored_fingerprint(backend),
         intent_override='GENERAL')
     assert resp['meta']['anchor_count'] == ANCHOR_TOP_K
 
@@ -92,7 +88,6 @@ def test_filtered_recall_above_anchor_top_k(backend):
     _seed(backend, 60, 'preference', 'quiet other subject {i}')
     resp = intent_aware_recall(
         backend, 'zzz unmatched query', None, 50,
-        fingerprint=stored_fingerprint(backend),
         intent_override='GENERAL', category='preference')
     assert len(resp['results']) == 50
     assert all(r['insight'].category == 'preference'
@@ -131,7 +126,6 @@ def test_filter_does_not_block_graph_traversal(backend):
             source_id=b, target_id=a, edge_type='semantic', weight=1.0))
     resp = intent_aware_recall(
         backend, 'zzz unmatched query', None, 0,
-        fingerprint=stored_fingerprint(backend),
         intent_override='GENERAL', category='preference')
     ids = {r['insight'].id for r in resp['results']}
     assert 'p-far' in ids
@@ -147,37 +141,20 @@ def _vec512(second):
     return v
 
 
-@pytest.mark.parametrize('with_snapshot', [False, True])
-def test_session_vector_anchors_filter_before_topk(
-        backend, backend_kind, with_snapshot):
-    """`SqliteRecallSession.vector_anchors` itself filters before top-k.
+def test_session_vector_anchors_filter_before_topk(backend):
+    """`RecallSession.vector_anchors` itself filters before top-k.
 
-    This is the PRIMARY vector path on an all-SQLite host — the
-    fallback test below deliberately breaks the session verb, so it
-    proves nothing about the verb's own eligibility filter (a
-    mutation stripping `category`/`source` from `vector_anchors`
-    left the whole suite green before this test existed). Covers
-    both branches: `_meta_cache` (snapshot miss) and
-    `snapshot.insights` (snapshot present).
+    This is the only vector anchor path: eligibility is applied to
+    the candidate rows, never to the returned hits.
 
-    Mutation: dropping the eligibility filter from either branch of
-        `SqliteRecallSession.vector_anchors` — the top-35 cut over
-        all 70 vectors then keeps the 30 higher-similarity
-        non-matching rows and only 5 matching vector hits survive.
+    Mutation: dropping the `category`/`source` eligibility filter
+        from `vector_anchors` — the top-35 cut over all 70 vectors
+        then keeps the 30 higher-similarity non-matching rows and
+        only 5 matching vector hits survive.
     Oracle: all 35 results carry via='hybrid' (time + vector agree
         on the 35 newest matching rows, whose similarity rank
         matches their recency rank by construction).
     """
-    from pathlib import Path
-
-    from memman.store.factory import BACKENDS
-    from memman.store.snapshot import write_snapshot
-    if with_snapshot and not (
-            BACKENDS[backend_kind].migrator_cls
-            .snapshot_features.supports_recall_snapshot):
-        pytest.skip(
-            f'{backend_kind} declares supports_recall_snapshot=False:'
-            f' the snapshot-present branch is unreachable, not untested')
     pref_ids = _seed(backend, 40, 'preference', 'quiet other subject {i}')
     fact_ids = _seed(backend, 30, 'fact', 'plain filler body {i}')
     for i, iid in enumerate(pref_ids):
@@ -186,15 +163,10 @@ def test_session_vector_anchors_filter_before_topk(
     for iid in fact_ids:
         backend.nodes.update_embedding(
             iid, _vec512(0.1), 'voyage-3-lite')
-    if with_snapshot:
-        sdir = str(Path(backend._db.path).parent)
-        assert write_snapshot(
-            backend._db, sdir, stored_fingerprint(backend)) is True
     qv = [0.0] * 512
     qv[0] = 1.0
     resp = intent_aware_recall(
         backend, 'zzz unmatched query', qv, 35,
-        fingerprint=stored_fingerprint(backend),
         intent_override='GENERAL', category='preference')
     assert len(resp['results']) == 35
     assert all(r['insight'].category == 'preference'
@@ -202,51 +174,49 @@ def test_session_vector_anchors_filter_before_topk(
     assert all(r['via'] == 'hybrid' for r in resp['results'])
 
 
-def test_vector_cache_fallback_fills_to_anchor_k(backend, monkeypatch):
-    """The in-memory vector fallback searches a filtered input dict.
+def test_recall_survives_a_raising_session_verb(backend, monkeypatch):
+    """Verify a failing vector channel degrades instead of returning nothing.
 
-    Forces the fallback by making the session verb raise, then checks
-    the fallback returned `anchor_k` MATCHING vector hits — not
-    merely that the surviving hits match. Non-matching rows carry
-    strictly higher similarity, so an unfiltered top-k is dominated
-    by rows the filter then discards.
+    A dimension mismatch, a missing pgvector extension, or a statement
+    timeout makes `similarities` / `vector_anchors` raise. Recall must
+    keep the keyword and time channels and still answer; the previous
+    design papered over this with a whole-store Python cosine scan,
+    which is the cost this change removed, so the degrade path is now
+    the only thing standing between an operator error and an empty
+    recall.
 
-    Mutation: post-filtering `vector_search_from_cache`'s hits
-        instead of filtering its input dict — the top-35 cut over all
-        70 vectors keeps 30 non-matching rows and only 5 matching
-        vector hits survive.
-    Oracle: all 35 results carry via='hybrid' (time + vector agree on
-        the 35 newest matching rows, whose similarity rank matches
-        their recency rank by construction).
+    Mutation: letting either exception escape `intent_aware_recall`,
+        or returning an empty result set instead of falling through to
+        the surviving channels.
+    Oracle: the same query run against a healthy session, whose row
+        count the degraded run must match (both channels reach every
+        seeded row here), with the similarity signal at 0.0 throughout
+        the degraded run.
     """
-    qv = [0.0] * 512
-    qv[0] = 1.0
-    pref_ids = _seed(backend, 40, 'preference', 'quiet other subject {i}')
-    fact_ids = _seed(backend, 30, 'fact', 'plain filler body {i}')
-    for i, iid in enumerate(pref_ids):
-        backend.nodes.update_embedding(
-            iid, _vec512(0.3 + 0.002 * i), 'test-model')
-    for iid in fact_ids:
-        backend.nodes.update_embedding(iid, _vec512(0.1), 'test-model')
+    _seed(backend, 12, 'fact', 'kombu serialization body {i}')
+    query_vec = _vec512(0.2)
 
-    def _raise(self, query_vec, **kwargs):
-        raise RuntimeError('forced session miss')
+    healthy = intent_aware_recall(
+        backend, 'kombu serialization body', query_vec, 10,
+        intent_override='GENERAL')
 
-    # Patch the session class this backend actually yields: naming
-    # SqliteRecallSession outright leaves the Postgres slot unpatched,
-    # so its session verb never raises and the fallback under test is
-    # never reached.
-    with backend.recall_session(stored_fingerprint(backend)) as sess:
-        session_cls = type(sess)
+    def _raise(self, *args, **kwargs):
+        raise RuntimeError('forced session failure')
+
+    with backend.recall_session() as probe:
+        session_cls = type(probe)
+    monkeypatch.setattr(session_cls, 'similarities', _raise)
     monkeypatch.setattr(session_cls, 'vector_anchors', _raise)
-    resp = intent_aware_recall(
-        backend, 'zzz unmatched query', qv, 35,
-        fingerprint=stored_fingerprint(backend),
-        intent_override='GENERAL', category='preference')
-    assert len(resp['results']) == 35
-    assert all(r['insight'].category == 'preference'
-               for r in resp['results'])
-    assert all(r['via'] == 'hybrid' for r in resp['results'])
+
+    degraded = intent_aware_recall(
+        backend, 'kombu serialization body', query_vec, 10,
+        intent_override='GENERAL')
+
+    assert len(degraded['results']) == len(healthy['results']) > 0
+    assert all(r['signals']['similarity'] == 0.0
+               for r in degraded['results'])
+    assert all(r['signals']['keyword'] > 0.0
+               for r in degraded['results'])
 
 
 def test_filter_precedes_rerank(backend, monkeypatch):
@@ -273,7 +243,6 @@ def test_filter_precedes_rerank(backend, monkeypatch):
     _seed(backend, 10, 'fact', 'alpha shared topic gen {i}')
     resp = intent_aware_recall(
         backend, 'alpha shared topic', None, 10,
-        fingerprint=stored_fingerprint(backend),
         intent_override='GENERAL', rerank=True, category='preference')
     assert resp['meta']['reranked'] is True
     assert seen_docs, 'rerank spy never called'

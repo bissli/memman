@@ -328,12 +328,18 @@ def test_reindex_drops_invalid_hnsw_remnant(pg_dsn):
 
 def test_postgres_recall_issues_pgvector_distance_operator(
         tmp_path, pg_dsn, monkeypatch):
-    """Postgres `intent_aware_recall` issues SQL with the pgvector `<=>`
-    distance operator -- HNSW is on the production recall path, not
-    dead code.
+    """Postgres recall issues an HNSW-shaped pgvector anchor query.
+
+    Mutation: replacing the indexed anchor query with a
+        sequential-scan equivalent that returns the same rows - the
+        exact regression a bare `<=>` substring check cannot see,
+        because `RecallSession.similarities` also emits `<=>` in an
+        unordered full-table scan that HNSW cannot serve.
+    Oracle: the captured SQL, required to carry `<=>` inside an
+        `order by` AND a `limit`, which is the only shape the HNSW
+        index answers.
     """
     from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
-    from memman.embed.fingerprint import stored_fingerprint
     from memman.search.recall import intent_aware_recall
     from memman.store.model import Insight
 
@@ -371,8 +377,7 @@ def test_postgres_recall_issues_pgvector_distance_operator(
         intent_aware_recall(
             backend, query='document alpha',
             query_vec=_voyage_shape_vector(seed=999),
-            limit=5, intent_override='GENERAL',
-            fingerprint=stored_fingerprint(backend))
+            limit=5, intent_override='GENERAL')
     finally:
         try:
             backend.close()
@@ -388,6 +393,15 @@ def test_postgres_recall_issues_pgvector_distance_operator(
         f'pgvector distance operator <=> never appeared in '
         f'{len(captured_sql)} SQL statements during Postgres recall. '
         f'HNSW is dead code. Sample SQL: {captured_sql[:5]}')
+
+    def _is_hnsw_shaped(sql: str) -> bool:
+        lowered = ' '.join(sql.lower().split())
+        after_order = lowered.partition('order by')[2]
+        return '<=>' in after_order and 'limit' in after_order
+
+    assert any(_is_hnsw_shaped(s) for s in pgvector_ops), (
+        f'`<=>` appears but never inside an `order by ... limit`, so '
+        f'no statement can use the HNSW index. Sample: {pgvector_ops[:3]}')
 
 
 def test_reembed_lock_session_scoped_and_releases_on_close(

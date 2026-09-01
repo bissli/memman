@@ -24,8 +24,6 @@ logger = logging.getLogger('memman')
 Id = str
 Score = float
 
-MAX_INSIGHTS = 1000
-
 VALID_CATEGORIES = {
     'preference', 'decision', 'fact',
     'insight', 'context', 'general',
@@ -122,7 +120,7 @@ class OpLogEntry:
 
     `before` and `after` capture the insight content before and
     after the logged operation. Populated by reconcile, replace,
-    forget, and auto_prune so forensic questions can be answered
+    and forget so forensic questions can be answered
     from the oplog alone. Older rows may have both as None.
     """
 
@@ -206,9 +204,8 @@ def insight_to_brief_dict(ins: 'Insight') -> dict[str, Any]:
 def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
     """Return the user-visible fields of an insight for JSON output.
 
-    Used by CLI commands that emit Insight objects to stdout (the
-    recall snapshot writer keeps its own field list in
-    `store/snapshot.py`). Timestamps are formatted with
+    Used by CLI commands that emit Insight objects to stdout.
+    Timestamps are formatted with
     `format_timestamp`; `updated_at` falls back to `created_at` so
     consumers always see a populated value. Optional fields
     (`deleted_at`, `summary`, `linked_at`, `enriched_at`) are emitted
@@ -371,5 +368,11 @@ def base_weight(importance: int) -> float:
 
 
 def is_immune(importance: int, access_count: int) -> bool:
-    """Check if an insight is immune to auto-pruning."""
+    """Whether an insight is exempt from retention review.
+
+    Read by `get_retention_candidates`, which only ever REPORTS: an
+    immune row is never offered to the operator as a deletion
+    candidate. Nothing deletes on this predicate -- the store is
+    uncapped and automatic deletion was removed.
+    """
     return importance >= 4 or access_count >= 3

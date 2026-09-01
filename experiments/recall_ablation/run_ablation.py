@@ -46,8 +46,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from memman.embed import EmbeddingProvider
-from memman.embed.fingerprint import Fingerprint, bound_embedder
-from memman.embed.fingerprint import stored_fingerprint
+from memman.embed.fingerprint import bound_embedder
 from memman.embed.vector import cosine_similarity
 from memman.search import recall as recall_mod
 from memman.search.recall import intent_aware_recall
@@ -157,7 +156,7 @@ def expand_via_llm(query: str) -> str:
         return query
 
 
-def run_one(backend: SqliteBackend, fingerprint: Fingerprint,
+def run_one(backend: SqliteBackend,
             query: str, expanded_query: str,
             query_vec_cache: dict, embed_client: EmbeddingProvider,
             config: dict, limit: int, embeddings: dict) -> list[dict]:
@@ -174,8 +173,7 @@ def run_one(backend: SqliteBackend, fingerprint: Fingerprint,
                     config.get('mmr_lambda')):
         t0 = time.perf_counter()
         resp = intent_aware_recall(
-            backend, use_query, qvec, fetch_limit,
-            fingerprint=fingerprint)
+            backend, use_query, qvec, fetch_limit)
         elapsed_ms = (time.perf_counter() - t0) * 1000
 
     results = resp['results']
@@ -314,7 +312,6 @@ def main() -> None:
     sdir = store_dir(args.data_dir, args.store)
     print(f'opening store at {sdir}')
     backend = SqliteBackend(open_read_only(sdir))
-    fingerprint = stored_fingerprint(backend)
     embed_client = bound_embedder(backend)
     print(f'embed: {embed_client.name} model={embed_client.model} '
           f'dim={embed_client.dim}')
@@ -337,7 +334,7 @@ def main() -> None:
         for cfg in configs:
             try:
                 rows = run_one(
-                    backend, fingerprint, query,
+                    backend, query,
                     expanded_cache.get(query, query),
                     query_vec_cache, embed_client, cfg, args.limit,
                     embeddings)

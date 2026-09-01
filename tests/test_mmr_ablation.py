@@ -13,7 +13,6 @@ import sys
 import uuid
 from pathlib import Path
 
-from memman.embed.fingerprint import stored_fingerprint
 from memman.search import recall as recall_mod
 from memman.search.recall import intent_aware_recall
 from tests.conftest import make_insight
@@ -43,7 +42,6 @@ def _recall_ids(backend, **kwargs):
     qv = [1.0, 0.0, 0.0]
     resp = intent_aware_recall(
         backend, 'zzz unmatched query', qv, 0,
-        fingerprint=stored_fingerprint(backend),
         intent_override='GENERAL', **kwargs)
     return [r['insight'].id for r in resp['results']]
 

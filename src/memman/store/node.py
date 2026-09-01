@@ -7,8 +7,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from memman.store.model import Insight, base_weight, format_timestamp
-from memman.store.model import insight_to_delta_dict, is_immune
-from memman.store.model import parse_timestamp
+from memman.store.model import is_immune, parse_timestamp
 
 if TYPE_CHECKING:
     from memman.store.db import DB
@@ -16,7 +15,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger('memman')
 
 HALF_LIFE_DAYS = 30.0
-PRUNE_BATCH_SIZE = 10
 
 
 def insert_insight(db: 'DB', i: Insight) -> None:
@@ -502,74 +500,6 @@ order by n desc
 """
     rows = db._query(sql).fetchall()
     return [(r[0], r[1], r[2]) for r in rows]
-
-
-def auto_prune(db: 'DB', max_insights: int,
-               exclude_ids: list[str] | None = None) -> int:
-    """Soft-delete the lowest EI non-immune insights when over capacity."""
-    if exclude_ids is None:
-        exclude_ids = []
-
-    total = count_active_insights(db)
-    if total <= max_insights:
-        return 0
-
-    excess = min(total - max_insights, PRUNE_BATCH_SIZE)
-
-    args: list[Any] = list(exclude_ids)
-    exclude_clause = ''
-    if exclude_ids:
-        placeholders = ','.join('?' for _ in exclude_ids)
-        exclude_clause = f'and id not in ({placeholders})'
-
-    candidate_sql = f"""
-select id from insights
-where deleted_at is null
-  and importance < 4
-  and access_count < 3
-  {exclude_clause}
-order by effective_importance asc
-limit {PRUNE_BATCH_SIZE}
-"""
-    candidate_rows = db._query(candidate_sql, tuple(args)).fetchall()
-    for (cid,) in candidate_rows:
-        try:
-            refresh_effective_importance(db, cid)
-        except ValueError:
-            pass
-
-    args.append(excess)
-    rows_sql = f"""
-select id from insights
-where deleted_at is null
-  and importance < 4
-  and access_count < 3
-  {exclude_clause}
-order by effective_importance asc
-limit ?
-"""
-    rows = db._query(rows_sql, tuple(args)).fetchall()
-
-    now = format_timestamp(datetime.now(timezone.utc))
-    pruned = 0
-    update_sql = """
-update insights
-set deleted_at = ?, updated_at = ?
-where id = ? and deleted_at is null
-"""
-    from memman.store.edge import delete_edges_by_node
-    from memman.store.oplog import log_op
-    for (cid,) in rows:
-        before_ins = get_insight_by_id_include_deleted(db, cid)
-        cursor = db._exec(update_sql, (now, now, cid))
-        if cursor.rowcount > 0:
-            delete_edges_by_node(db, cid)
-            pruned += 1
-            if before_ins is not None:
-                log_op(
-                    db, 'auto_prune', cid, '',
-                    before=insight_to_delta_dict(before_ins))
-    return pruned
 
 
 def review_content_quality(

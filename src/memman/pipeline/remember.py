@@ -40,7 +40,7 @@ from memman.llm.extract import _WS_COLLAPSE_RE
 from memman.search.keyword import keyword_search
 from memman.search.quality import check_content_quality
 from memman.store.backend import Backend
-from memman.store.model import MAX_INSIGHTS, Edge, Insight, format_timestamp
+from memman.store.model import Edge, Insight, format_timestamp
 from memman.store.model import insight_to_delta_dict
 
 logger = logging.getLogger('memman')
@@ -250,18 +250,6 @@ def run_remember(
                 for r in fact_results:
                     if r.get('id') == nid:
                         r['effective_importance'] = ei
-                        break
-
-            if new_ids:
-                try:
-                    pruned = backend.nodes.auto_prune(
-                        max_insights=MAX_INSIGHTS, exclude_ids=new_ids)
-                except Exception as exc:
-                    logger.warning('auto_prune failed: %s', exc)
-                    pruned = 0
-                for r in fact_results:
-                    if r.get('id') in new_ids:
-                        r['auto_pruned'] = pruned
                         break
 
         with backend.transaction():
@@ -656,7 +644,7 @@ def _apply_plan(
                 'target_id': plan.target_id,
                 }
         # The exact-match target was soft-deleted between planning
-        # and apply (auto_prune, or an external forget); a skip here
+        # and apply (an external forget); a skip here
         # would store the fact nowhere, so fall through to a plain
         # add carrying the vector computed before the rung. Mark the
         # dead target counted so a duplicate fact in the same row

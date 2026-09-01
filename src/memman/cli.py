@@ -1188,8 +1188,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
             from memman.maintenance import run_maintenance
             run_maintenance(
                 conn, data_dir_val, touched_stores,
-                store_contexts, deadline,
-                _write_recall_snapshot_for_store)
+                store_contexts, deadline)
         except Exception:
             logger.exception('drain maintenance phase failed')
         if processed > 0:
@@ -1224,34 +1223,6 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         'llm_usage': drain_usage,
         })
     return {'claimed': claimed, 'processed': processed, 'failed': failed}
-
-
-def _write_recall_snapshot_for_store(
-        data_dir_val: str, store_name: str,
-        fp: 'Fingerprint') -> None:
-    """Materialize the recall snapshot for one store after a successful drain.
-
-    SQLite-only: Postgres reads via live `recall_session` queries and
-    has no on-disk snapshot file. Snapshot writes are idempotent and
-    bounded (cap at 1000 active insights). Failures here are isolated
-    per store and never abort the drain or cause queue rows to retry.
-
-    `fp` is the store-bound fingerprint captured at `_StoreContext`
-    construction; passing it in (rather than reading the env-active
-    one here) keeps the snapshot stamp aligned with the per-store
-    embedder under per-store-sovereignty routing.
-    """
-    from memman.store.factory import resolve_store_backend
-    backend_name = resolve_store_backend(store_name, data_dir_val)
-    if backend_name != 'sqlite':
-        return
-
-    from memman.store.db import open_db as _open_store_db
-    from memman.store.sqlite import SqliteBackend
-
-    sdir = store_dir(data_dir_val, store_name)
-    with _open_store_db(sdir) as db:
-        SqliteBackend(db).write_snapshot(fp)
 
 
 class _StoreContext:
@@ -1590,7 +1561,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
 
         resp = intent_aware_recall(
             backend, keyword_str, query_vec,
-            limit, fingerprint=bound_fp,
+            limit,
             intent_override=intent_override, rerank=rerank,
             category=cat, source=source, min_score=min_score)
 
@@ -2898,8 +2869,6 @@ def insights_candidates(ctx: click.Context, threshold: float,
     to actually remove an insight, or `memman insights protect <id>` to
     boost its retention.
     """
-    from memman.store.model import MAX_INSIGHTS
-
     with _active_backend(ctx) as backend:
         candidates, total = backend.nodes.get_retention_candidates(
             threshold=threshold, limit=limit)
@@ -2922,7 +2891,6 @@ def insights_candidates(ctx: click.Context, threshold: float,
             'threshold': threshold,
             'candidates_found': len(candidates),
             'candidates': out_candidates,
-            'max_insights': MAX_INSIGHTS,
             'actions': {
                 'purge': 'memman forget <id>',
                 'protect': 'memman insights protect <id>',
@@ -3496,9 +3464,7 @@ def migrate(
 
     import tempfile
 
-    from memman.embed.fingerprint import Fingerprint
     from memman.setup.archive import archive_postgres_schema
-    from memman.store.snapshot import write_snapshot
 
     try:
         with held_drain_lock(data_dir):
@@ -3557,24 +3523,6 @@ def migrate(
                     f'  Wrote {config.BACKEND_FOR(s)}=sqlite to'
                     f' {data_dir}/env (removed'
                     f' {config.env_key_for("postgres", "DSN", s)}).')
-
-                try:
-                    db = open_db(str(target))
-                    try:
-                        fp_row = db.conn.execute(
-                            'select value from meta'
-                            " where key = 'embed_fingerprint'"
-                            ).fetchone()
-                        if fp_row and fp_row[0]:
-                            fp = Fingerprint.from_json(fp_row[0])
-                            write_snapshot(db, str(target), fp)
-                            click.echo('  Regenerated snapshot.')
-                    finally:
-                        db.close()
-                except Exception as exc:
-                    click.echo(
-                        f'  WARNING: snapshot regeneration failed:'
-                        f' {exc}', err=True)
 
                 try:
                     drop_postgres_store(s, dsn)

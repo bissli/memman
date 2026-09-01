@@ -35,7 +35,7 @@ Responsibilities split into two tiers:
 
 | Tier         | Role                      | Handles                                                                            |
 | ------------ | ------------------------- | ---------------------------------------------------------------------------------- |
-| **Binary**   | Deterministic computation | Storage, graph indexing, keyword search, vector math, decay formulas, auto-pruning |
+| **Binary**   | Deterministic computation | Storage, graph indexing, keyword search, vector math, decay formulas |
 | **Host LLM** | High-level judgment       | Decides what to remember, when to recall, which links to create, what to forget    |
 
 The same binary + skill works across Claude Code, Cursor, or any LLM CLI. Swapping the host LLM requires no changes to the binary.
@@ -51,7 +51,7 @@ memman draws on two directly implemented papers.
 The [RRF paper](https://dl.acm.org/doi/10.1145/1571941.1572114) (Cormack, Clarke & Buttcher, SIGIR 2009) provides the multi-signal fusion algorithm used in anchor selection. memman uses the exact `1/(k + rank)` formula with k=60, fusing keyword, vector, and recency signals into one composite ranking.
 
 **Engineering choices.**
-The pipeline uses three LLM role slots (recall fast path, worker canonical, worker metadata); see [§ LLM routing](04-pipelines.md#llm-routing) for the model assignments and cost-tuning rationale. The write path uses LLM reconciliation (ADD/UPDATE/DELETE/NONE) instead of threshold-based comparison. The lifecycle is hook-driven: remember → reconcile → enrich → auto-prune.
+The pipeline uses three LLM role slots (recall fast path, worker canonical, worker metadata); see [§ LLM routing](04-pipelines.md#llm-routing) for the model assignments and cost-tuning rationale. The write path uses LLM reconciliation (ADD/UPDATE/DELETE/NONE) instead of threshold-based comparison. The lifecycle is hook-driven: remember → reconcile → enrich.
 
 Where MAGMA's reference implementation is a Python library with in-memory NetworkX graphs, memman persists everything in SQLite (or Postgres + pgvector) with a complete write-back lifecycle and exposes the system through CLI commands — auditable, portable, sandboxed.
 

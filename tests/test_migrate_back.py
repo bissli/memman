@@ -2,7 +2,7 @@
 
 Verifies the postgres-to-sqlite migration orchestration: pg_dump
 pre-flight, target-dir-absent guard, copy-to-tmp + atomic rename,
-postgres schema archive, env-key flip, snapshot regeneration, and
+postgres schema archive, env-key flip, and
 warn-only schema drop. Round-trip preservation of insight ids,
 edge keys, and oplog ids (via `coalesce(legacy_id, id)`) is the
 cornerstone test.
@@ -292,45 +292,6 @@ def test_migrate_cli_to_sqlite_archives_dump_and_drops_schema(
                     'select 1 from pg_namespace where nspname = %s',
                     (schema,))
                 assert cur.fetchone() is None
-    finally:
-        _drop_schema(pg_dsn, store)
-
-
-def test_migrate_cli_to_sqlite_regenerates_snapshot(
-        tmp_path, env_file, pg_dsn):
-    """CLI reverse migrate writes recall_snapshot.v1.bin to target dir."""
-    from memman.cli import cli
-    from memman.store.db import store_dir
-    from memman.store.postgres import PostgresMigrator
-    from memman.store.snapshot import SNAPSHOT_FILENAME
-    from memman.store.sqlite import SqliteMigrator
-
-    store = 'rb_snap'
-    data_dir = tmp_path / 'memman'
-    _seed_sqlite_store(data_dir, store)
-    _drop_schema(pg_dsn, store)
-    try:
-        source = store_dir(str(data_dir), store)
-        src_mig = SqliteMigrator(str(data_dir))
-        src_mig.preflight_source(store)
-        payload = src_mig.gather(store)
-        tgt_mig = PostgresMigrator(str(data_dir), dsn=pg_dsn)
-        tgt_mig.preflight_target(store)
-        tgt_mig.apply(store, payload)
-        shutil.rmtree(source)
-        env_file('MEMMAN_BACKEND_' + store, 'postgres')
-        env_file('MEMMAN_POSTGRES_DSN_' + store, pg_dsn)
-
-        runner = CliRunner()
-        result = runner.invoke(
-            cli, [
-                '--data-dir', str(data_dir),
-                'migrate', '--to', 'sqlite',
-                '--store', store, '--yes'],
-            catch_exceptions=False)
-        assert result.exit_code == 0, result.output
-        snap = data_dir / 'data' / store / SNAPSHOT_FILENAME
-        assert snap.exists(), result.output
     finally:
         _drop_schema(pg_dsn, store)
 
