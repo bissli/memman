@@ -257,7 +257,7 @@ Each retrieval result includes signal details:
   },
   "score": 0.72,
   "intent": "ENTITY",
-  "via": "keyword",
+  "via": "entity",
   "signals": {
     "keyword": 0.85,
     "similarity": 0.72,
@@ -266,6 +266,17 @@ Each retrieval result includes signal details:
   }
 }
 ```
+
+`via` reports either the anchor channel that selected the row
+(`keyword`, `vector`, `hybrid`, `time`) or the edge type that reached
+it (`entity`, `temporal`, `causal`, `semantic`). In practice the edge
+type dominates: the traversal overwrites an anchor's channel label
+whenever it re-scores that node, so on a well-connected store almost
+every returned row carries an edge type. A channel label survives only
+where traversal never re-scored the row -- a store with no edges
+returns every row as `hybrid`. That overwrite is a known defect rather
+than the intent, and it is why the field cannot be read as reliable
+provenance.
 
 `signals.rerank` is present only on rows Step 4b actually re-scored: it is the cross-encoder score, and it is the same number that replaced `score`. Its absence means the row never reached the shortlist, or that rerank was off, gated by the token minimum, or failed.
 
@@ -315,10 +326,10 @@ Two principles:
 
 | Hook                                                             | Stored at | Detects                            | Operator action                                                                                                                                                                                                                                      |
 | ---------------------------------------------------------------- | --------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `embed_fingerprint`                                              | `meta`    | per-store embedder binding         | Each store's stored fingerprint binds the embedder used by recall, drain, snapshot, and graph rebuild. Change the binding via `memman embed swap` (online, resumable shadow-column backfill) or `memman embed reembed` (offline, scheduler-stopped). |
+| `embed_fingerprint`                                              | `meta`    | per-store embedder binding         | Each store's stored fingerprint binds the embedder used by recall, drain, and graph rebuild. Change the binding via `memman embed swap` (online, resumable shadow-column backfill) or `memman embed reembed` (offline, scheduler-stopped). |
 | `embed_swap_state` / `embed_swap_cursor` / `embed_swap_target_*` | `meta`    | in-flight swap progress            | Written by `embed swap`; **deleted** on cutover or `--abort`. `memman doctor`'s `no_stale_swap_meta` check warns if any key remains on an idle store.                                                                                                |
 | `insights.prompt_version` + `insights.model_id`                  | per row   | system-prompt or slow-model change | `memman doctor` warns; remediate via `memman graph rebuild` or `UPDATE insights SET linked_at=NULL, enriched_at=NULL WHERE prompt_version='<old>' OR model_id='<old>';` then drain.                                                                  |
-| `constants_hash`                                                 | `meta`    | edge-construction constants change | Auto-reindex on next open + warning.                                                                                                                                                                                                                 |
+| `constants_hash`                                                 | `meta`    | edge-construction constants change, and a completed `embed swap` (which clears the key so stale semantic edge weights rebuild) | Auto-reindex on next open + warning.                                                                                                                                                                                                                 |
 | `linked_at` / `enriched_at`                                      | per row   | per-row pipeline-stage completion  | `link_pending` drains naturally.                                                                                                                                                                                                                     |
 
 Per-row provenance columns are preferred over global meta-key fingerprints because they expose the actual rebuild scope: how many rows came from which prompt or model. That distribution is what the operator needs to write a targeted hand-update SQL rather than rebuilding the whole store.

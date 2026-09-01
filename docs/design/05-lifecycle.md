@@ -23,37 +23,35 @@ edge_factor:   1.0 + 0.1 × min(edge_count, 5)     // up to +0.5
 
 **Rationale.**
 
-- **`base_weight` (1.0, 0.8, 0.5, 0.3, 0.15)**: non-linear spacing produces a 6.7:1 ratio between importance 5 and 1. The 0.8→0.5 gap between importance 4→3 reinforces the immunity boundary — importance 4+ is the protected tier. The 0.3→0.15 gap between 2→1 makes raw `--no-reconcile` writes decay sharply.
+- **`base_weight` (1.0, 0.8, 0.5, 0.3, 0.15)**: non-linear spacing produces a 6.7:1 ratio between importance 5 and 1. The 0.8→0.5 gap between importance 4→3 reinforces the protected tier at importance 4+. The 0.3→0.15 gap between 2→1 makes raw `--no-reconcile` writes decay sharply.
 - **`HALF_LIFE_DAYS = 30`**: one calendar month. At 30 days EI halves, at 60 days quarters, at 90 days ~12.5%. Inspired by Ebbinghaus forgetting-curve research but not derived from a specific paper. Not from MAGMA (no decay mechanism).
-- **`edge_factor` cap at 5 edges, +0.1 per edge (max +50%)**: prevents highly-connected hub nodes from becoming permanently immune through connectivity alone.
+- **`edge_factor` cap at 5 edges, +0.1 per edge (max +50%)**: prevents highly-connected hub nodes from riding to the top of the EI ranking through connectivity alone.
 
 ## 5.2 Immunity rules
 
-Exempt from automatic cleanup:
+Never offered as a retention candidate, so `memman insights candidates` never surfaces them:
 
 - `importance >= 4` (high-value memories)
 - `access_count >= 3` (frequently retrieved)
 
+Nothing deletes on this predicate. It gates a report, not a cleanup — `is_immune` has no writer.
+
 **Rationale.**
 
-- **`importance >= 4`**: follows from the importance scale — importance 4 means "immune to auto-pruning" (§ 2.1).
+- **`importance >= 4`**: follows from the importance scale — importance 4 is the protected tier (§ 2.1).
 - **`access_count >= 3`**: three independent retrievals give statistical evidence of genuine utility, not coincidental access. Two recalls already suggest real value; three is a safety margin.
 
-## 5.3 Auto-pruning
+## 5.3 Retention review
 
-Triggered when active insights exceed **1000**:
+A store is **uncapped** and nothing deletes automatically. Deletion is always an operator action: `memman forget <id>`.
 
-1. Compute EI for all insights.
-2. Exclude immune insights.
-3. Take the lowest EI entries (up to 10 per batch).
-4. Soft-delete (set `deleted_at`).
-5. Cascade-delete related edges.
+`memman insights candidates` reports the lowest-EI non-immune rows so an operator can decide. It never deletes, and immune rows (`importance >= 4` or `access_count >= 3`) are never offered.
 
 **Rationale.**
 
-- **`MAX_INSIGHTS = 1000`**: practical capacity for a single-user CLI memory system. Keeps SQLite scan cost bounded. Not from MAGMA (the paper specifies no storage capacity limit; its `Max Nodes: 200` is a per-query traversal budget, a different concept).
-- **`PRUNE_BATCH_SIZE = 10`**: ~1% of MAX_INSIGHTS. Limits write amplification per `remember` call — a single insert never cascades into mass deletion.
-- **`MAX_OPLOG_ENTRIES = 5000`**: 5× MAX_INSIGHTS; retains roughly five operations per insight. Sufficient audit trail without unbounded growth.
+- **No count cap.** A memory store's value grows with what it holds, so a capacity limit is the wrong shape for it. The former `MAX_INSIGHTS = 1000` also drove an `auto_prune` that soft-deleted real memories with only an oplog trace, and its predicate (`importance < 4 and access_count < 3`) made the deletions unpredictable rather than gentle: on a store of mostly high-importance rows it pruned nothing and the cap silently failed to bound anything, while on a store of low-importance rows it deleted freely.
+- **Scan cost is not a reason to cap.** Bounded recall latency is the storage layer's problem, not the operator's; see [04-pipelines.md § Smart recall](04-pipelines.md).
+- **`MAX_OPLOG_ENTRIES = 5000`**: the oplog is an audit trail, not memory, and a bounded trail is the point. Roughly five operations per insight at the scale where the value was chosen; retained without unbounded growth.
 
 ## 5.4 Insights group
 
@@ -85,7 +83,7 @@ memman insights show <id>
 
 Embeddings power semantic search and graph connectivity. Vector dimensionality is provider-defined and recorded in a per-store `meta.embed_fingerprint` (provider, model, dim). Switching a store's embedder is explicit — online via `memman embed swap` (resumable shadow-column backfill) or offline via `memman embed reembed`.
 
-**Per-store embedder sovereignty.** Each store's stored fingerprint is the runtime authority over which embedder client serves that store. Every consumer — drain worker (`_StoreContext`), recall (`bound_embedder(backend)` → `intent_aware_recall(fingerprint=...)`), snapshot writes/reads, graph rebuild, `run_remember(ec=...)` — binds via `embed.fingerprint.bound_embedder(backend)`, which resolves `meta.embed_fingerprint` and dispatches to `embed.registry.get_for(provider, model)`. One process can sequentially open two stores fingerprinted to different providers without env mutation. The operator-facing worked example lives in [USAGE.md § Embedding Operations](../USAGE.md#embedding-operations).
+**Per-store embedder sovereignty.** Each store's stored fingerprint is the runtime authority over which embedder client serves that store. Every consumer — drain worker (`_StoreContext`), recall (`bound_embedder(backend)` → the query embedding), graph rebuild, `run_remember(ec=...)` — binds via `embed.fingerprint.bound_embedder(backend)`, which resolves `meta.embed_fingerprint` and dispatches to `embed.registry.get_for(provider, model)`. One process can sequentially open two stores fingerprinted to different providers without env mutation. The operator-facing worked example lives in [USAGE.md § Embedding Operations](../USAGE.md#embedding-operations).
 
 `MEMMAN_EMBED_PROVIDER`'s runtime role narrows to two cases:
 

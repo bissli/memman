@@ -447,20 +447,6 @@ where attrelid = (%s || '.insights')::regclass
         self._embedding_dim = int(row[0])
         return self._embedding_dim
 
-    @contextmanager
-    def write_lock(self, name: str) -> Iterator[None]:
-        """Per-store transaction-scoped advisory lock on the same conn.
-
-        Mirrors `PostgresBackend.write_lock` (shared key namespace via
-        `_advisory_lock_key`). Used by `auto_prune` to serialize
-        prune sweeps against concurrent reindex/insert work without
-        going through the Backend object.
-        """
-        key = _advisory_lock_key(self._schema, name)
-        with self._conn.cursor() as cur:
-            cur.execute('select pg_advisory_xact_lock(%s)', (key,))
-        yield
-
     def insert(self, ins: Insight) -> None:
         sql = self._q("""
 insert into {s}.insights
@@ -822,69 +808,6 @@ order by count(*) desc
                     prompt_version=r[0], model_id=r[1], count=int(r[2]))
                 for r in cur.fetchall()
                 ]
-
-    def auto_prune(
-            self, *, max_insights: int,
-            exclude_ids: list[Id] | None = None) -> int:
-        from memman.store.node import PRUNE_BATCH_SIZE
-        with self.write_lock('prune'):
-            excludes = list(exclude_ids or [])
-            total = self.count_active()
-            if total <= max_insights:
-                return 0
-            excess = min(total - max_insights, PRUNE_BATCH_SIZE)
-
-            select_sql = self._q("""
-select id from {s}.insights
-where deleted_at is null
-  and importance < 4
-  and access_count < 3
-  and not (id = any(%s))
-order by effective_importance asc
-limit %s
-""")
-            with self._conn.cursor() as cur:
-                cur.execute(select_sql, (excludes, PRUNE_BATCH_SIZE))
-                cand_rows = cur.fetchall()
-            for (cid,) in cand_rows:
-                try:
-                    self.refresh_effective_importance(cid)
-                except ValueError:
-                    pass
-
-            from memman.store.model import insight_to_delta_dict
-            update_sql = self._q("""
-update {s}.insights
-set deleted_at = now(), updated_at = now()
-where id = %s and deleted_at is null
-""")
-            delete_edges_sql = self._q("""
-delete from {s}.edges
-where source_id = %s or target_id = %s
-""")
-            oplog_sql = self._q("""
-insert into {s}.oplog
-       (operation, insight_id, detail, before)
-values ('auto_prune', %s, '', %s::jsonb)
-""")
-            with self._conn.cursor() as cur:
-                cur.execute(select_sql, (excludes, excess))
-                target_rows = cur.fetchall()
-                pruned = 0
-                for (cid,) in target_rows:
-                    before_ins = self.get_include_deleted(cid)
-                    cur.execute(update_sql, (cid,))
-                    if cur.rowcount > 0:
-                        cur.execute(delete_edges_sql, (cid, cid))
-                        pruned += 1
-                        if before_ins is not None:
-                            cur.execute(
-                                oplog_sql,
-                                (cid,
-                                 json.dumps(
-                                     insight_to_delta_dict(
-                                         before_ins))))
-            return pruned
 
     def boost_retention(self, id: Id) -> None:
         sql = self._q("""
@@ -1405,6 +1328,23 @@ from {s}.edges
             cur.execute(sql)
             return [_row_to_edge(r) for r in cur.fetchall()]
 
+    def adjacency(self) -> dict[Id, list[tuple[Id, str, float]]]:
+        sql = self._q("""
+select source_id, target_id, edge_type, weight
+from {s}.edges
+""")
+        adjacency: dict[Id, list[tuple[Id, str, float]]] = {}
+        with self._conn.cursor() as cur:
+            cur.execute(sql)
+            for source_id, target_id, edge_type, weight in cur:
+                # `edges.weight` is nullable; the column default only
+                # fires when an INSERT omits it. `_row_to_edge` coerced
+                # a NULL to 1.0 and traversal relied on that.
+                adjacency.setdefault(source_id, []).append(
+                    (target_id, edge_type,
+                     1.0 if weight is None else float(weight)))
+        return adjacency
+
     def delete_by_node(self, node_id: Id) -> None:
         sql = self._q("""
 delete from {s}.edges
@@ -1767,13 +1707,10 @@ class PostgresRecallSession(RecallSession):
     (`"$user", public`) before the connection is closed -- so no
     session state leaks when the connection is returned to a pool.
 
-    `snapshot` mirrors `SqliteRecallSession.snapshot` as a sentinel:
-    Postgres has no in-memory snapshot (HNSW + pgvector serve that
-    role), so the pipeline's `if session.snapshot is not None`
-    branching falls through to the Backend-verb path.
+    Vector work stays server-side: `vector_anchors` rides the HNSW
+    index, and `similarities` scores with `embedding <=>` so the
+    pipeline receives N scalars instead of N x dim floats.
     """
-
-    snapshot: None = None
 
     def __init__(
             self, dsn: str, schema: str,
@@ -1838,6 +1775,54 @@ limit %s
                 if r[1] is not None and float(r[1]) >= min_sim
                 ]
 
+    def similarities(
+            self, query_vec: list[float], *,
+            ids: set[Id] | None = None) -> dict[Id, float]:
+        """Cosine per id, positives only, computed in the database.
+
+        Notes
+        -----
+        - Returns one float per row rather than the embedding itself,
+          which is the whole point: the pipeline needs N scalars to
+          score with, and shipping N x dim floats to compute them was
+          costing a full whole-store pull per recall.
+        - `ids` is applied in SQL, so a post-traversal call is bounded
+          by the visited set rather than by store size.
+        """
+        assert self._conn is not None
+        sql = f"""
+select id, 1 - (embedding <=> %s::vector) as sim
+from {self._schema}.insights
+where deleted_at is null and embedding is not null
+  and (%s::text[] is null or id = any(%s::text[]))
+"""
+        id_list = None if ids is None else list(ids)
+        with self._conn.cursor() as cur:
+            cur.execute(sql, (query_vec, id_list, id_list))
+            return {
+                r[0]: float(r[1]) for r in cur
+                if r[1] is not None and float(r[1]) > 0.0
+                }
+
+    def vectors_for_ids(
+            self, ids: list[Id]) -> dict[Id, list[float]]:
+        """Embeddings for a bounded set of ids."""
+        if not ids:
+            return {}
+        assert self._conn is not None
+        sql = f"""
+select id, embedding
+from {self._schema}.insights
+where deleted_at is null and embedding is not null
+  and id = any(%s::text[])
+"""
+        with self._conn.cursor() as cur:
+            cur.execute(sql, (list(ids),))
+            return {
+                r[0]: pgvector_to_list(r[1]) for r in cur
+                if r[1] is not None
+                }
+
 
 class PostgresBackend(Backend):
     """Per-store Postgres backend: schema-bound connection + sub-stores.
@@ -1894,8 +1879,8 @@ class PostgresBackend(Backend):
         Postgres: `pg_advisory_xact_lock`. Must be called inside an
         active transaction; the lock auto-releases on transaction
         commit/rollback. Reentrant: the same session may acquire the
-        same key multiple times safely (used by the
-        `apply_all -> auto_prune` nested pattern).
+        same key multiple times safely (used by the nested
+        `apply_all` write pattern).
         """
         key = _advisory_lock_key(self._schema, name)
         with self._conn.transaction():
@@ -1923,10 +1908,8 @@ class PostgresBackend(Backend):
                 pass
 
     @contextmanager
-    def recall_session(
-            self, fingerprint: Fingerprint,
-            ) -> Iterator[PostgresRecallSession]:
-        del fingerprint
+    def recall_session(self) -> Iterator[PostgresRecallSession]:
+        """Yield a PostgresRecallSession for one recall request."""
         session = PostgresRecallSession(self._dsn, self._schema)
         with session:
             yield session
@@ -1940,9 +1923,8 @@ class PostgresBackend(Backend):
         `pg_try_advisory_lock` (non-blocking) so a second sweep
         agent fails fast with `False` instead of waiting hours.
         Released on connection close (intended crash-recovery
-        mechanism). Wrong primitive for `auto_prune` /
-        `reindex_auto_edges` -- those want `write_lock`'s
-        transaction-scoped variant.
+        mechanism). Wrong primitive for `reindex_auto_edges`,
+        which wants `write_lock`'s transaction-scoped variant.
         """
         key = _advisory_lock_key(self._schema, f'reembed:{name}')
         conn = _open_connection(
@@ -2595,7 +2577,6 @@ where deleted_at is null
 _POSTGRES_MIGRATOR_FEATURES = BackendFeatures(
     supports_edges=True,
     supports_oplog=True,
-    supports_recall_snapshot=False,
     supports_reembed=True,
     supports_drain_heartbeat=True,
     supports_filesystem_artifacts=True,

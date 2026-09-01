@@ -129,6 +129,36 @@ def get_all_edges(db: 'DB') -> list[Edge]:
     return [_scan_edge(r) for r in rows]
 
 
+def get_adjacency(db: 'DB') -> dict[str, list[tuple[str, str, float]]]:
+    """Return the whole graph as a source-keyed adjacency map.
+
+    Returns
+    -------
+    dict[str, list[tuple[str, str, float]]]
+        `source_id -> [(target_id, edge_type, weight), ...]`, one
+        entry per edge, directional as stored.
+
+    Notes
+    -----
+    - Projects only the four columns traversal reads. It deliberately
+      does NOT build `Edge` dataclasses: `metadata` is a JSON column
+      no traversal consumer touches, and parsing it per row costs 69%
+      of `get_all_edges` (77.9 ms of 112.5 ms at E=28,862) for a
+      value that is then discarded.
+    - Callers that walk edges as undirected pass the result through
+      `search.recall._bidirectional_adjacency`.
+    """
+    sql = """
+select source_id, target_id, edge_type, weight
+from edges
+"""
+    adjacency: dict[str, list[tuple[str, str, float]]] = {}
+    for source_id, target_id, edge_type, weight in db._query(sql):
+        adjacency.setdefault(source_id, []).append(
+            (target_id, edge_type, weight))
+    return adjacency
+
+
 def delete_edges_by_node(db: 'DB', node_id: str) -> None:
     """Remove all edges referencing a node."""
     db._exec(

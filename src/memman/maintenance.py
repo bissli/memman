@@ -11,7 +11,6 @@ Steps:
    - `trim_oplog_by_age` (once per drain, not per row).
    - `link_pending` with a small batch cap so a backlog of pending
      enrichments cannot blow the maintenance budget.
-   - Recall snapshot write (delegated to the cli helper).
 
 Each step is bounded by the remaining drain timeout; if less than
 30 s remains the entire maintenance phase is skipped and rolled to
@@ -34,14 +33,8 @@ def run_maintenance(
         data_dir: str,
         touched_stores: set[str],
         store_contexts: dict[str, Any],
-        deadline_monotonic: float,
-        snapshot_writer: Any) -> None:
-    """Execute the post-drain maintenance pass.
-
-    `snapshot_writer(data_dir, store_name)` is the cli helper that
-    materializes a recall snapshot. Passed in to avoid a circular
-    import between maintenance and cli.
-    """
+        deadline_monotonic: float) -> None:
+    """Execute the post-drain maintenance pass."""
     if time.monotonic() + MAINTENANCE_MIN_BUDGET_SECONDS > deadline_monotonic:
         logger.debug(
             'maintenance: skipped, less than'
@@ -86,11 +79,6 @@ def run_maintenance(
             continue
         _run_per_store_maintenance(
             ctx, store_name, deadline_monotonic)
-        try:
-            snapshot_writer(data_dir, store_name, ctx._stored_fp)
-        except Exception:
-            logger.exception(
-                f'maintenance: snapshot write failed for {store_name!r}')
 
 
 def _relink_pending_if_any(

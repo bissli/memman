@@ -31,7 +31,7 @@
         <mxCell id="s_ep" style="edgeStyle=orthogonalEdgeStyle;rounded=1;dashed=1;strokeColor=#999999;" edge="1" parent="1" source="s_intent" target="s_params">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="s_getall" value="get_all_active_insights()&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;SQLite: snapshot-cached up to SNAPSHOT_MAX_INSIGHTS=1000; Postgres: SQL pushdown / pgvector&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="s_getall" value="get_all_active_insights()&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Live read on both backends; one edges.adjacency() read for the graph&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="300" y="260" width="300" height="40" as="geometry" />
         </mxCell>
         <mxCell id="s_e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="s_intent" target="s_getall">

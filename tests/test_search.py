@@ -1,7 +1,6 @@
 """Tests for memman.search -- keyword, intent, and recall."""
 
 import pytest
-from memman.embed.fingerprint import stored_fingerprint
 from memman.search.intent import detect_intent, get_weights, intent_from_string
 from memman.search.keyword import keyword_search, tokenize
 from memman.search.recall import _RERANK_WEIGHTS_RAW, RERANK_WEIGHTS
@@ -287,8 +286,7 @@ class TestRecallRanking:
             result = intent_aware_recall(
                 backend, query='test content recall',
                 query_vec=None,
-                limit=5, intent_override=intent,
-                fingerprint=stored_fingerprint(backend))
+                limit=5, intent_override=intent)
             assert result['meta']['hint'] == expected
 
     def test_ordering_field_by_intent(self, backend):
@@ -306,8 +304,7 @@ class TestRecallRanking:
             result = intent_aware_recall(
                 backend, query='test content recall',
                 query_vec=None,
-                limit=5, intent_override=intent,
-                fingerprint=stored_fingerprint(backend))
+                limit=5, intent_override=intent)
             assert result['meta']['ordering'] == ordering
 
     def test_sparse_flag_present(self, backend):
@@ -315,8 +312,7 @@ class TestRecallRanking:
         result = intent_aware_recall(
             backend, query='nonexistent query xyz',
             query_vec=None,
-            limit=10, intent_override='GENERAL',
-            fingerprint=stored_fingerprint(backend))
+            limit=10, intent_override='GENERAL')
         assert result['meta']['sparse'] is True
 
     def test_sparse_flag_absent(self, backend):
@@ -328,8 +324,7 @@ class TestRecallRanking:
         result = intent_aware_recall(
             backend, query='common keyword topic alpha',
             query_vec=None,
-            limit=5, intent_override='GENERAL',
-            fingerprint=stored_fingerprint(backend))
+            limit=5, intent_override='GENERAL')
         assert 'sparse' not in result['meta']
 
     def test_sparse_fires_on_full_irrelevant_result_set(self, backend):
@@ -347,8 +342,7 @@ class TestRecallRanking:
         result = intent_aware_recall(
             backend, query='quantum tungsten harpsichord',
             query_vec=None,
-            limit=5, intent_override='GENERAL',
-            fingerprint=stored_fingerprint(backend))
+            limit=5, intent_override='GENERAL')
         assert len(result['results']) == 5
         assert all(r['signals']['keyword'] == 0.0
                    for r in result['results'])
@@ -375,8 +369,7 @@ class TestRecallRanking:
         result = intent_aware_recall(
             backend, query='quantum tungsten harpsichord',
             query_vec=vec,
-            limit=5, intent_override='GENERAL',
-            fingerprint=stored_fingerprint(backend))
+            limit=5, intent_override='GENERAL')
         assert len(result['results']) >= 5 // 2
         assert all(r['signals']['keyword'] == 0.0
                    for r in result['results'])
@@ -403,8 +396,7 @@ class TestRecallRanking:
         result = intent_aware_recall(
             backend, query='quantum tungsten harpsichord',
             query_vec=None,
-            limit=5, intent_override='GENERAL',
-            fingerprint=stored_fingerprint(backend))
+            limit=5, intent_override='GENERAL')
         assert len(result['results']) >= 5 // 2
         signals = [r['signals']['keyword'] for r in result['results']]
         assert max(signals) > 0.0
@@ -440,7 +432,6 @@ class TestRecallRanking:
             backend, query='quantum tungsten harpsichord',
             query_vec=None,
             limit=4, intent_override='GENERAL',
-            fingerprint=stored_fingerprint(backend),
             category='decision')
         ids = {r['insight'].id for r in result['results']}
         assert 'hidden-match' not in ids
@@ -468,15 +459,13 @@ class TestRecallRanking:
         baseline = intent_aware_recall(
             backend, query='quantum tungsten harpsichord',
             query_vec=None,
-            limit=5, intent_override='GENERAL',
-            fingerprint=stored_fingerprint(backend))
+            limit=5, intent_override='GENERAL')
         assert max(r['signals']['graph']
                    for r in baseline['results']) == 1.0
         floored = intent_aware_recall(
             backend, query='quantum tungsten harpsichord',
             query_vec=None,
             limit=5, intent_override='GENERAL',
-            fingerprint=stored_fingerprint(backend),
             min_score=0.1)
         assert floored['results'] == []
 
@@ -500,7 +489,6 @@ class TestRecallRanking:
             backend, query='quantum tungsten harpsichord',
             query_vec=vec,
             limit=5, intent_override='GENERAL',
-            fingerprint=stored_fingerprint(backend),
             min_score=0.5)
         assert len(result['results']) == 5
         assert all(r['signals']['keyword'] == 0.0
@@ -529,8 +517,7 @@ class TestRecallRanking:
         result = intent_aware_recall(
             backend, query='quantum tungsten harpsichord',
             query_vec=None,
-            limit=10, intent_override='GENERAL',
-            fingerprint=stored_fingerprint(backend))
+            limit=10, intent_override='GENERAL')
         assert len(result['results']) == 3
         assert max(r['signals']['keyword']
                    for r in result['results']) > 0.0
@@ -551,8 +538,7 @@ class TestRecallRanking:
         result = intent_aware_recall(
             backend, query='quantum tungsten harpsichord',
             query_vec=None,
-            limit=5, intent_override='GENERAL',
-            fingerprint=stored_fingerprint(backend))
+            limit=5, intent_override='GENERAL')
         assert len(result['results']) > 0
         assert all(r['signals']['keyword'] == 0.0
                    and r['signals']['similarity'] == 0.0
@@ -578,7 +564,6 @@ class TestRecallRanking:
             backend, query='quantum tungsten harpsichord',
             query_vec=None,
             limit=5, intent_override='GENERAL',
-            fingerprint=stored_fingerprint(backend),
             min_score=1.0)
         assert [r['insight'].id for r in result['results']] == [
             'keep-relevant']
@@ -597,13 +582,11 @@ class TestRecallRanking:
         baseline = intent_aware_recall(
             backend, query='common keyword topic alpha',
             query_vec=None,
-            limit=5, intent_override='WHEN',
-            fingerprint=stored_fingerprint(backend))
+            limit=5, intent_override='WHEN')
         with_override = intent_aware_recall(
             backend, query='common keyword topic alpha',
             query_vec=None,
             limit=5, intent_override='WHEN',
-            fingerprint=stored_fingerprint(backend),
             rerank_weights_override=dict(RERANK_WEIGHTS))
         baseline_order = [r['insight'].id for r in baseline['results']]
         override_order = [r['insight'].id for r in with_override['results']]
@@ -637,7 +620,6 @@ class TestRecallRanking:
                 backend, query='alpha beta gamma topic',
                 query_vec=None,
                 limit=5, intent_override=intent,
-                fingerprint=stored_fingerprint(backend),
                 rerank_weights_override=override)
             return {r['insight'].id: r['score']
                     for r in resp['results']}['ovr-a']

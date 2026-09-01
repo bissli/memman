@@ -16,7 +16,6 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
-from memman.embed.fingerprint import stored_fingerprint
 from memman.search.recall import intent_aware_recall
 from memman.store.model import Insight
 from tests.conftest import EMBEDDING_DIM, make_edge, make_insight
@@ -64,8 +63,7 @@ class TestKeywordSignal:
         result = intent_aware_recall(
             backend,
             query='Prometheus monitoring Grafana dashboards',
-            query_vec=None, limit=20,
-            fingerprint=stored_fingerprint(backend))
+            query_vec=None, limit=20)
 
         match = _find_result(result['results'], 'kw-match')
         miss1 = _find_result(result['results'], 'kw-miss-1')
@@ -109,8 +107,7 @@ class TestGraphTraversal:
             backend,
             query='API rate limiting design',
             query_vec=None,
-            limit=20,
-            fingerprint=stored_fingerprint(backend))
+            limit=20)
 
         g3 = _find_result(result['results'], 'graph-3')
         assert g3 is not None, 'graph-3 should be discovered via traversal'
@@ -141,8 +138,7 @@ class TestWhyIntentCausalOrdering:
             backend,
             query='why SQLite chosen because embedded',
             query_vec=None,
-            limit=20, intent_override='WHY',
-            fingerprint=stored_fingerprint(backend))
+            limit=20, intent_override='WHY')
 
         cause = _find_result(result['results'], 'why-cause')
         effect = _find_result(result['results'], 'why-effect')
@@ -185,8 +181,7 @@ class TestWhenIntentChronologicalOrdering:
             backend,
             query='database production migration',
             query_vec=None,
-            limit=20, intent_override='WHEN',
-            fingerprint=stored_fingerprint(backend))
+            limit=20, intent_override='WHEN')
 
         old = _find_result(result['results'], 'when-old')
         mid = _find_result(result['results'], 'when-mid')
@@ -226,8 +221,7 @@ class TestWhenIntentChronologicalOrdering:
             backend,
             query='database production migration',
             query_vec=None,
-            limit=20, intent_override='WHEN',
-            fingerprint=stored_fingerprint(backend))
+            limit=20, intent_override='WHEN')
 
         hi = _find_result(result['results'], 'when-tie-hi')
         lo = _find_result(result['results'], 'when-tie-lo')
@@ -265,8 +259,7 @@ class TestImportanceTiebreaker:
             backend,
             query='logging best practices',
             query_vec=None,
-            limit=20, intent_override='GENERAL',
-            fingerprint=stored_fingerprint(backend))
+            limit=20, intent_override='GENERAL')
 
         high = _find_result(result['results'], 'tie-high')
         low = _find_result(result['results'], 'tie-low')
@@ -338,8 +331,7 @@ def _topk_ids(backend, qvec, k) -> list:
     result = intent_aware_recall(
         backend, query='topic insight',
         query_vec=qvec,
-        limit=k, intent_override='GENERAL',
-        fingerprint=stored_fingerprint(backend))
+        limit=k, intent_override='GENERAL')
     return [r['insight'].id for r in result['results'][:k]]
 
 

@@ -41,14 +41,13 @@ EmbeddingDtype = Literal[
 class BackendFeatures:
     """Capability flags a backend's migrator advertises.
 
-    Drives capability gates in the CLI (e.g. dry-run, recall
-    snapshot regeneration) and `apply()` payload-content checks
-    (e.g. refusing edge-bearing payloads on edgeless backends).
+    Drives capability gates in the CLI (e.g. dry-run) and
+    `apply()` payload-content checks (e.g. refusing edge-bearing
+    payloads on edgeless backends).
     """
 
     supports_edges: bool
     supports_oplog: bool
-    supports_recall_snapshot: bool
     supports_reembed: bool
     supports_drain_heartbeat: bool
     supports_filesystem_artifacts: bool

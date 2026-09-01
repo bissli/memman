@@ -21,7 +21,7 @@ Distributed-shaping commitments baked into this Protocol surface:
 
 3. **`Backend.transaction()` nesting contract.** Nested calls reuse
    the outer transaction (SAVEPOINT-like or no-op). Required by the
-   existing `apply_all -> auto_prune` nested pattern.
+   nested `apply_all` write pattern.
 
 4. **`Backend.readonly_context()` semantics.** SQLite spawns a separate
    read-only connection. Postgres MUST yield a connection in autocommit
@@ -193,13 +193,6 @@ class NodeStore(Protocol):
         """Return (prompt_version, model_id, count) for active rows."""
         ...
 
-    def auto_prune(
-            self, *, max_insights: int,
-            exclude_ids: list[Id] | None = None) -> int:
-        """Soft-delete the lowest-EI non-immune insights when over cap.
-        """
-        ...
-
     def boost_retention(self, id: Id) -> None:
         """Boost an insight's retention: access_count +3."""
         ...
@@ -253,9 +246,11 @@ class NodeStore(Protocol):
     def get_all_embeddings(self) -> list[tuple[Id, str, bytes]]:
         """Return all (id, content, blob) triples for active insights.
 
-        Used by snapshot writes and the `BaseNodeStore` defaults for
+        Used by the `BaseNodeStore` defaults for
         `get_without_embedding` / `iter_embeddings_as_vecs`. Pipeline
-        and recall paths prefer `iter_embeddings_as_vecs` directly.
+        paths prefer `iter_embeddings_as_vecs` directly; the recall
+        path uses `RecallSession.similarities` instead, which scores
+        without shipping the blobs.
         """
         ...
 
@@ -409,6 +404,17 @@ class EdgeStore(Protocol):
         """Return every edge in the graph."""
         ...
 
+    def adjacency(self) -> dict[Id, list[tuple[Id, str, float]]]:
+        """Whole graph as `source_id -> [(target, type, weight)]`.
+
+        One round-trip, projecting only the columns traversal reads.
+        Prefer this over `all()` on any read path that does not need
+        `Edge.metadata` or `Edge.created_at`: building the dataclass
+        and parsing the JSON metadata is the dominant cost of `all()`
+        and traversal discards both.
+        """
+        ...
+
     def delete_by_node(self, node_id: Id) -> None:
         """Remove all edges referencing a node."""
         ...
@@ -501,7 +507,7 @@ class Oplog(Protocol):
         Insert-only on both backends; trimming is performed by
         `maintenance_step`. `before` / `after` carry pre/post
         insight content for reconcile / replace / forget /
-        auto_prune so the oplog alone is forensic-complete.
+        replace so the oplog alone is forensic-complete.
         """
         ...
 
@@ -533,21 +539,29 @@ class RecallSession(Protocol):
     """Read-side handle for the recall pipeline.
 
     `Backend.recall_session()` yields one of these in a context. The
-    session owns the read-side cache (snapshot, in-memory matrices,
-    or a postgres connection in autocommit mode) for the duration of
-    a single recall request. Closes deterministically on context exit.
+    session owns the read-side cache (an in-process embedding
+    matrix, or a postgres connection in autocommit mode) for the
+    duration of a single recall request. Closes deterministically on
+    context exit.
 
     `vector_anchors` is the high-level verb the pipeline consumes
     inside the `with recall_session()` block. SQLite serves it from
-    the snapshot's pre-loaded `embeddings` (or a lazily-populated
-    `_embed_cache` on the snapshot-miss fallback path). Postgres
-    serves it via HNSW with `embedding <=>`. The pipeline still
-    reads `session.snapshot` directly when present for the broader
-    recall flow (keyword_anchors, neighbors, hydrate, similarity,
-    causal_neighbors).
-    """
+    an in-process embedding matrix built once per session; Postgres
+    serves it via HNSW with `embedding <=>`. Similarity for
+    non-anchor nodes comes from `similarities`, and MMR's bounded
+    vector need from `vectors_for_ids` -- the pipeline never holds a
+    whole-store embedding dict.
 
-    snapshot: Any
+    Notes
+    -----
+    - There is deliberately no persisted read cache behind this
+      Protocol. A materialized snapshot shipped once and froze
+      permanently, because its writer stopped above a row cap while
+      its reader had no staleness check. Any future cache here needs
+      a refresh trigger on every mutation path AND a reader-side
+      validity check that detects drift, or it does not get to be
+      persisted.
+    """
 
     def vector_anchors(
             self, query_vec: list[float], *, k: int = 10,
@@ -558,6 +572,43 @@ class RecallSession(Protocol):
         `category` / `source` restrict eligibility BEFORE the top-k
         cut ('' = no filter); post-filtering the returned hits would
         under-fill k, which is the defect this parameter closes.
+        """
+        ...
+
+    def similarities(
+            self, query_vec: list[float], *,
+            ids: set[Id] | None = None) -> dict[Id, float]:
+        """Cosine of `query_vec` against stored embeddings.
+
+        Parameters
+        ----------
+        query_vec : list[float]
+            Query embedding.
+        ids : set[Id] | None, default None
+            Restrict to these ids; None means every active embedded
+            row.
+
+        Returns
+        -------
+        dict[Id, float]
+            Cosine in (0, 1] per id. Non-positive similarities are
+            omitted, so a missing key means "not similar", and
+            callers read it with `.get(id, 0.0)`.
+
+        Notes
+        -----
+        - Computed where the vectors already live -- one matmul on
+          SQLite, one `embedding <=>` query on Postgres -- so the
+          pipeline never ships N x dim floats to compute N scalars.
+        """
+        ...
+
+    def vectors_for_ids(
+            self, ids: list[Id]) -> dict[Id, list[float]]:
+        """Embeddings for specific ids, for a bounded pool.
+
+        Ids with no embedding, or whose width differs from the
+        store's modal width, are absent from the result.
         """
         ...
 
@@ -589,8 +640,8 @@ class Backend(Protocol):
         """Run a block inside a write transaction.
 
         Nesting reuses the outer transaction (SAVEPOINT or no-op);
-        nested rollback is unsupported. Required by the existing
-        `apply_all -> auto_prune` pattern.
+        nested rollback is unsupported. Required because `apply_all`
+        runs inside a caller-opened transaction.
         """
         ...
 
@@ -602,7 +653,7 @@ class Backend(Protocol):
         SQLite: no-op (`BEGIN IMMEDIATE` already serializes
         per-process). Postgres: `pg_advisory_xact_lock` (transaction-
         scoped, reentrant within the same session). Used by
-        `reindex_auto_edges` and `PostgresNodeStore.auto_prune` to
+        `reindex_auto_edges` to
         serialize read-then-write paths against concurrent writers.
         Wrong primitive for sweeps that span minutes-to-hours; see
         `reembed_lock` for that case.
@@ -706,14 +757,11 @@ class Backend(Protocol):
         ...
 
     def recall_session(
-            self,
-            fingerprint: 'Fingerprint',
-            ) -> AbstractContextManager[RecallSession]:
-        """Yield a `RecallSession` bound to a read-side cache.
+            self) -> AbstractContextManager[RecallSession]:
+        """Yield a `RecallSession` for one recall request.
 
-        `fingerprint` is the store-bound fingerprint (read from
-        `meta.embed_fingerprint` via `bound_embedder`). SQLite uses it
-        to validate the on-disk snapshot; Postgres ignores it.
+        The session reads live storage, so it needs no key: there is
+        no stored per-model artifact for a fingerprint to select.
         """
         ...
 

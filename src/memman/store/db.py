@@ -396,8 +396,6 @@ create index if not exists idx_insights_queue_uuid on insights(queue_uuid);
 -- the statement that makes a 0.18.x store fail at open (see _migrate).
 create index if not exists idx_insights_corroboration on insights(corroboration_count);
 create index if not exists idx_insights_effective_imp on insights(effective_importance);
-create index if not exists idx_prune_candidates
-    on insights(deleted_at, importance, access_count, effective_importance);
 create index if not exists idx_insights_pending_link
     on insights(linked_at)
     where linked_at is null and deleted_at is null;

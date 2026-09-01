@@ -58,7 +58,6 @@ from memman.store import node as _node
 from memman.store.db import default_data_dir, list_local_store_dirs, open_db
 from memman.store.db import store_dir
 from memman.store.factory import resolve_store_backend
-from memman.store.snapshot import delete_snapshot
 from memman.store.sqlite import SqliteMigrator
 from tqdm import tqdm
 
@@ -304,7 +303,6 @@ def migrate_store(
                 _node.refresh_effective_importance(db, iid)
         finally:
             db.close()
-        delete_snapshot(sdir)
     except BaseException:
         sdir = Path(store_dir(data_dir, store))
         _log(f'{store}: FAILED after archive; rolling back from'

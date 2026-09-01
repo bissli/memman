@@ -1,6 +1,6 @@
 """Oplog `before` / `after` content deltas.
 
-Persists pre- and post-state on reconcile / forget / auto_prune so
+Persists pre- and post-state on reconcile / forget so
 forensic questions ("what did insight X say before reconciliation?")
 can be answered from the oplog instead of requiring a backup.
 """

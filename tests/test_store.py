@@ -9,7 +9,7 @@ from memman.store.edge import count_insights_with_entity
 from memman.store.edge import find_insights_with_entity, get_edges_by_node
 from memman.store.edge import get_edges_by_source_and_type, insert_edge
 from memman.store.model import base_weight, is_immune
-from memman.store.node import auto_prune, compute_effective_importance
+from memman.store.node import compute_effective_importance
 from memman.store.node import count_active_insights, get_all_active_insights
 from memman.store.node import get_embedding, get_insight_by_id
 from memman.store.node import get_insight_by_id_include_deleted
@@ -463,104 +463,6 @@ class TestBaseWeight:
             got = base_weight(importance)
             assert got == want, (
                 f'base_weight({importance}): want {want}, got {got}')
-
-
-# --- AutoPrune ---
-
-
-class TestAutoPrune:
-    """Capacity-based soft-delete of lowest-EI non-immune insights."""
-
-    def test_prunes_lowest_ei(self, tmp_db):
-        """Inserts 5 insights with max=3, expects 2 pruned."""
-        for i in range(5):
-            ins = make_insight(
-                id=f'prune-{chr(ord("a") + i)}',
-                content='content', importance=2)
-            insert_insight(tmp_db, ins)
-
-        pruned = auto_prune(tmp_db, 3)
-        assert pruned == 2
-
-        all_active = get_all_active_insights(tmp_db)
-        assert len(all_active) == 3
-
-    def test_respects_immune(self, tmp_db):
-        """Immune insights (importance >= 4) are not pruned."""
-        insert_insight(tmp_db, make_insight(
-            id='immune-1', content='important', importance=4))
-        insert_insight(tmp_db, make_insight(
-            id='immune-2', content='also important', importance=5))
-        insert_insight(tmp_db, make_insight(
-            id='weak-1', content='low importance', importance=1))
-
-        pruned = auto_prune(tmp_db, 1)
-        assert pruned == 1
-
-        got = get_insight_by_id(tmp_db, 'weak-1')
-        assert got is None
-
-    def test_respects_exclude_ids(self, tmp_db):
-        """Excluded IDs survive even when eligible for pruning."""
-        insert_insight(tmp_db, make_insight(
-            id='ex-1', content='content a', importance=1))
-        insert_insight(tmp_db, make_insight(
-            id='ex-2', content='content b', importance=1))
-
-        pruned = auto_prune(tmp_db, 0, exclude_ids=['ex-1'])
-        assert pruned == 1
-
-        got = get_insight_by_id(tmp_db, 'ex-1')
-        assert got is not None
-
-    def test_nothing_to_prune(self, tmp_db):
-        """Under capacity returns 0 pruned."""
-        insert_insight(tmp_db, make_insight(
-            id='ok-1', content='content', importance=3))
-
-        pruned = auto_prune(tmp_db, 10)
-        assert pruned == 0
-
-    def test_prefers_stale_over_fresh(self, tmp_db):
-        """Never-accessed insight pruned before recently-accessed one."""
-        from memman.store.node import increment_access_count
-
-        insert_insight(tmp_db, make_insight(
-            id='stale-1', content='never accessed', importance=2))
-        insert_insight(tmp_db, make_insight(
-            id='fresh-1', content='recently accessed', importance=2))
-
-        for _ in range(2):
-            increment_access_count(tmp_db, 'fresh-1')
-
-        pruned = auto_prune(tmp_db, 1)
-        assert pruned == 1
-
-        assert get_insight_by_id(tmp_db, 'fresh-1') is not None
-        assert get_insight_by_id(tmp_db, 'stale-1') is None
-
-    def test_old_unaccessed_pruned_before_fresh_unaccessed(self, tmp_db):
-        """Recency tiebreak: older row prunes first when access_count ties."""
-        from datetime import datetime, timedelta, timezone
-
-        from memman.store.model import format_timestamp
-
-        insert_insight(tmp_db, make_insight(
-            id='old-row', content='old content', importance=2))
-        insert_insight(tmp_db, make_insight(
-            id='fresh-row', content='fresh content', importance=2))
-
-        when = format_timestamp(
-            datetime.now(timezone.utc) - timedelta(days=30))
-        tmp_db._exec(
-            'UPDATE insights SET created_at = ?, updated_at = ?'
-            ' WHERE id = ?',
-            (when, when, 'old-row'))
-
-        pruned = auto_prune(tmp_db, 1)
-        assert pruned == 1
-        assert get_insight_by_id(tmp_db, 'fresh-row') is not None
-        assert get_insight_by_id(tmp_db, 'old-row') is None
 
 
 # --- Oplog ---

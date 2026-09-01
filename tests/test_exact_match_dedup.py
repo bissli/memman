@@ -274,9 +274,9 @@ def test_corroborate_dead_target_degrades_to_add(
     """A target soft-deleted after planning degrades to an add.
 
     `_drain_queue` builds `insights_by_id` once per store per drain;
-    `auto_prune` and external forgets soft-delete rows without
-    evicting them, so an exact match against a stale entry must not
-    drop the incoming fact.
+    an external forget soft-deletes rows without evicting them, so an
+    exact match against a stale entry must not drop the incoming
+    fact.
 
     Mutation: returning the skip on a zero-row bump (the 0.19.0
         form) -- the restated fact is stored nowhere and a phantom

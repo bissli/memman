@@ -128,7 +128,7 @@
           <mxGeometry x="80" y="1000" width="940" height="55" as="geometry" />
         </mxCell>
 
-        <mxCell id="r_done" value="Re-embed with enriched keywords  ·  rebuild auto edges  ·  refresh effective importance  ·  auto_prune  ·  mark_done(queue_id)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+        <mxCell id="r_done" value="Re-embed with enriched keywords  ·  rebuild auto edges  ·  refresh effective importance  ·  mark_done(queue_id)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="40" y="1090" width="1020" height="40" as="geometry" />
         </mxCell>
 

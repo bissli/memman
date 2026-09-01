@@ -26,7 +26,7 @@ def log_op(db: 'DB', operation: str, insight_id: str,
     not on every write. This keeps the hot path insert-only so
     Postgres `oplog.log` can be a single statement with no delete.
     `before` / `after` carry pre/post insight content for reconcile,
-    replace, forget, and auto_prune.
+    replace, and forget.
     """
     now = format_timestamp(datetime.now(timezone.utc))
     before_s = json.dumps(before) if before is not None else None

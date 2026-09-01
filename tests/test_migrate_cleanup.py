@@ -1,9 +1,8 @@
 """Stale-post-migrate-source doctor tests.
 
 The migrate flow preserves the source SQLite artifacts
-(`memman.db`, `memman.db-wal`, `memman.db-shm`,
-`recall_snapshot.v1.bin`) so the operator has a forensic copy of
-pre-migrate state. Doctor's `check_stale_post_migrate_source`
+(`memman.db`, `memman.db-wal`, `memman.db-shm`) so the operator has
+a forensic copy of pre-migrate state. Doctor's `check_stale_post_migrate_source`
 warns (not fails) for any store whose resolved backend is
 `postgres` and that still has the SQLite source on disk.
 """
@@ -24,7 +23,7 @@ except ImportError:
 
 
 def _seed_with_artifacts(store_dir: Path) -> None:
-    """Build a SQLite store with WAL/SHM/snapshot side files.
+    """Build a SQLite store with its WAL/SHM side files.
     """
     store_dir.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(store_dir / 'memman.db'))
@@ -47,12 +46,11 @@ def _seed_with_artifacts(store_dir: Path) -> None:
         conn.commit()
     finally:
         conn.close()
-    (store_dir / 'recall_snapshot.v1.bin').write_bytes(b'\x00' * 16)
 
 
 @pytest.mark.postgres
 def test_migrate_preserves_source_artifacts(pg_dsn, tmp_path):
-    """After successful verify, the four source files are preserved.
+    """After successful verify, the source files are preserved.
 
     Pre-0.14.2 the migrate flow auto-deleted the SQLite source. That
     cleanup was accidental drift introduced after the docs were

@@ -197,7 +197,6 @@ QUEUE_AGE_FAIL_SECONDS = 86400
 
 _ORPHAN_ARTIFACTS = (
     'memman.db', 'memman.db-wal', 'memman.db-shm',
-    'recall_snapshot.v1.bin',
     )
 
 
@@ -205,7 +204,7 @@ def check_stale_post_migrate_source(data_dir: str) -> dict[str, Any]:
     """Flag SQLite source files left behind on a Postgres-routed store.
 
     A successful `memman migrate <store>` intentionally preserves the
-    source `memman.db` (plus WAL/SHM and the recall snapshot) so the
+    source `memman.db` (plus WAL/SHM) so the
     operator has a forensic copy of pre-migrate state. The file is no
     longer the source of truth -- writes go to Postgres -- so it is
     "stale" and the operator may want to delete it once the postgres
