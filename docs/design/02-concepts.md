@@ -92,6 +92,13 @@ insights (
   corroboration_count                           -- Exact-match restatements observed (integer not null default 0)
 )
 
+-- Keyword index over insights (SQLite only; FTS5 external content,
+-- kept in sync by triggers on insert/delete/update-of the two
+-- indexed columns). Postgres counts against the rows themselves.
+insights_fts (
+  content, entities                 -- terms only; the text stays in insights
+)
+
 -- Relationship edges (composite primary key)
 edges (
   source_id, target_id, edge_type,  -- PK

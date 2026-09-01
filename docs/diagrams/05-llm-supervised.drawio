@@ -20,7 +20,7 @@
         <mxCell id="b2" value="&lt;b&gt;Graph Indexing&lt;/b&gt;&lt;br&gt;temporal backbone, entity co-occurrence, auto-edges" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="55" y="190" width="330" height="38" as="geometry" />
         </mxCell>
-        <mxCell id="b3" value="&lt;b&gt;Keyword Search&lt;/b&gt;&lt;br&gt;tokenization, stopwords, CJK bigrams, scoring" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="b3" value="&lt;b&gt;Keyword Search&lt;/b&gt;&lt;br&gt;tokenization, stopwords, FTS5 counts, scoring" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="55" y="240" width="330" height="38" as="geometry" />
         </mxCell>
         <mxCell id="b4" value="&lt;b&gt;RRF Anchor Selection&lt;/b&gt;&lt;br&gt;keyword + vector + recency fusion (K=60)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">

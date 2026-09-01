@@ -1,4 +1,9 @@
-"""Token-based keyword search and content similarity."""
+"""Token-based keyword search.
+
+The recall pipeline counts matches in the store instead of here;
+this module keeps the per-row route for the drain, which ranks
+facts that are not in any index yet.
+"""
 
 import heapq
 import re
@@ -40,11 +45,40 @@ def insight_tokens(ins: Insight) -> set[str]:
 def keyword_search(
         insights: list[Insight], query: str,
         limit: int,
-        token_cache: dict[str, set[str]] | None = None,
+        counts: dict[str, int] | None = None,
         ) -> list[tuple[Insight, float]]:
     """Score insights by token overlap with query.
 
-    Returns list of (insight, score) sorted by score descending.
+    Parameters
+    ----------
+    insights : list[Insight]
+        Rows to rank. Order matters: an exact tie on
+        `(score, importance)` is resolved in favor of whichever row
+        reached the heap first.
+    query : str
+        Search text, tokenized here to fix the score denominator.
+    limit : int
+        Keep at most this many hits; `limit <= 0` keeps all.
+    counts : dict[str, int] | None, default None
+        Distinct query tokens present per insight id, from an index
+        probe. When given, no insight is tokenized and an id absent
+        from the dict scores 0. When None, each insight's tokens are
+        computed here -- the route for in-memory rows that are not
+        in any index yet.
+
+    Returns
+    -------
+    list[tuple[Insight, float]]
+        `(insight, score)` descending, `score` in [0, 1].
+
+    Notes
+    -----
+    - score = (distinct query tokens present) / (query tokens), which
+      also fills `signals.keyword`.
+    - The two routes agree on that numerator for ASCII text and can
+      differ where a non-ASCII character splits a run differently --
+      see `RecallSession.keyword_counts`. Do not restate them as
+      identical; they are not.
     """
     query_tokens = tokenize(query)
     if not query_tokens:
@@ -52,11 +86,12 @@ def keyword_search(
 
     heap_list: list[tuple[float, int, str, Insight]] = []
     for ins in insights:
-        content_tokens = insight_tokens(ins)
-        if token_cache is not None:
-            token_cache[ins.id] = content_tokens
-
-        intersection = sum(1 for t in query_tokens if t in content_tokens)
+        if counts is None:
+            content_tokens = insight_tokens(ins)
+            intersection = sum(
+                1 for t in query_tokens if t in content_tokens)
+        else:
+            intersection = counts.get(ins.id, 0)
         if intersection == 0:
             continue
         score = intersection / len(query_tokens)

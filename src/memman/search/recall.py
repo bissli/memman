@@ -15,6 +15,9 @@ Notes
 - Vector work stays behind `RecallSession`: `vector_anchors` for the
   top-k and `similarities` for the per-candidate cosine. This module
   never holds a whole-store embedding dict.
+- Keyword work stays there too, behind `keyword_counts`. This module
+  never tokenizes the store: the count comes back per id and fills
+  `kw_score` directly.
 """
 
 import heapq
@@ -26,7 +29,7 @@ from typing import Any
 import numpy as np
 from memman import trace
 from memman.search.intent import detect_intent, get_weights
-from memman.search.keyword import insight_tokens, keyword_search, tokenize
+from memman.search.keyword import keyword_search, tokenize
 from memman.store.backend import Backend
 from memman.store.model import Insight
 
@@ -448,8 +451,24 @@ def intent_aware_recall(
             in directed.get(source_id, ())
             if etype == 'causal']
 
+    query_tokens = tokenize(query)
+
     sim_cache: dict[str, float] = {}
+    keyword_counts: dict[str, int] = {}
     with backend.recall_session() as session:
+        # Notes:
+        # - Counted where the text lives -- one FTS5 probe per token
+        #   on SQLite -- rather than tokenizing every active row per
+        #   request, which was the largest N-linear term left in
+        #   recall.
+        # - This IS `kw_score`'s numerator, so it also replaces the
+        #   whole-store token cache the scoring loop used to read.
+        try:
+            keyword_counts = session.keyword_counts(query_tokens)
+        except Exception as exc:
+            logger.warning(
+                f'session.keyword_counts failed, keyword signal'
+                f' unavailable: {exc}')
         if query_vec is not None:
             # Scored where the vectors live: one matmul on SQLite, one
             # `embedding <=>` query on Postgres. The pipeline needs N
@@ -481,9 +500,8 @@ def intent_aware_recall(
 
     anchor_map: dict[str, tuple[Insight, float, str]] = {}
 
-    token_cache: dict[str, set[str]] = {}
     keyword_anchors = keyword_search(
-        anchor_pool, query, anchor_k, token_cache)
+        anchor_pool, query, anchor_k, keyword_counts)
     for rank, (ins, _score) in enumerate(keyword_anchors):
         anchor_map[ins.id] = (
             ins, 1.0 / (RRF_K + rank + 1), 'keyword')
@@ -574,8 +592,6 @@ def intent_aware_recall(
             max_visited=params[2],
             traversed=traversed_count)
 
-    query_tokens = tokenize(query)
-
     candidates: list[dict[str, Any]] = []
     graph_min: float | None = None
     graph_max: float | None = None
@@ -604,15 +620,10 @@ def intent_aware_recall(
     for c in candidates:
         kw_score = 0.0
         if query_tokens:
-            ct = token_cache.get(c['id'])
-            if ct is None:
-                ct = insight_tokens(c['ins'])
-            intersection = sum(1 for t in query_tokens if t in ct)
-            kw_score = intersection / len(query_tokens)
+            kw_score = (keyword_counts.get(c['id'], 0)
+                        / len(query_tokens))
 
-        sim_score = 0.0
-        if sim_cache is not None:
-            sim_score = sim_cache.get(c['id'], 0.0)
+        sim_score = sim_cache.get(c['id'], 0.0)
 
         graph_score = (c['graph_raw'] - graph_min) / graph_range
 
