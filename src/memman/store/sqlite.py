@@ -492,7 +492,7 @@ class SqliteRecallSession(RecallSession):
       them 0.0 instead of raising on a ragged `np.array`.
     """
 
-    db: DB | None = None
+    db: DB
     _groups: dict[int, tuple[list[Id], Any, Any]] | None = None
     _row_of: dict[Id, tuple[int, int]] | None = None
     _meta: dict[Id, tuple[str, str]] | None = None
@@ -520,7 +520,7 @@ class SqliteRecallSession(RecallSession):
           eligibility filter in `vector_anchors` needs no second
           query and no cache handed in by the pipeline.
         """
-        if self._groups is not None or self.db is None:
+        if self._groups is not None:
             return
         sql = """
 select id, category, source, embedding
@@ -588,16 +588,13 @@ where deleted_at is null and embedding is not null
         return ids, (matrix @ query) / (norms * query_norm)
 
     def similarities(
-            self, query_vec: list[float], *,
-            ids: set[Id] | None = None) -> dict[Id, float]:
+            self, query_vec: list[float]) -> dict[Id, float]:
         """Cosine per id, positives only. See the Protocol docstring."""
         row_ids, sims = self._cosines(query_vec)
-        out: dict[Id, float] = {}
-        for row in np.nonzero(sims > 0.0)[0]:
-            rid = row_ids[row]
-            if ids is None or rid in ids:
-                out[rid] = float(sims[row])
-        return out
+        return {
+            row_ids[row]: float(sims[row])
+            for row in np.nonzero(sims > 0.0)[0]
+            }
 
     def vectors_for_ids(
             self, ids: list[Id]) -> dict[Id, list[float]]:
@@ -619,6 +616,43 @@ where deleted_at is null and embedding is not null
             if group is not None:
                 out[rid] = group[1][row].tolist()
         return out
+
+    def keyword_counts(
+            self, query_tokens: set[str]) -> dict[Id, int]:
+        """Match count per active insight id, from FTS5 probes.
+
+        See the Protocol docstring for the contract.
+
+        Notes
+        -----
+        - Agrees with `keyword.insight_tokens` on ASCII text and
+          diverges on non-ASCII; see the Protocol docstring for the
+          class and the measured rate. Do not "fix" it here -- the
+          tokenizers differ by construction.
+        - One probe per token rather than one `OR` expression: the
+          combined form returns the union of the rows but not which
+          token matched which row, and the per-token count IS
+          `kw_score`'s numerator. Measured at the same cost either
+          way (3.1 ms against 3.0 ms for 50 tokens at N=1054).
+        - The probe expression is built here and never from user
+          text: FTS5 `match` takes a query language, and 8 of 11
+          realistic queries handed to it raw raise a syntax error.
+          Quoting the token costs nothing and makes the probe hold
+          even if `tokenize` ever stops guaranteeing `[a-zA-Z0-9]+`.
+        """
+        if not query_tokens:
+            return {}
+        sql = """
+select i.id
+from insights_fts f
+join insights i on i.rowid = f.rowid
+where insights_fts match ? and i.deleted_at is null
+"""
+        counts: dict[Id, int] = {}
+        for token in query_tokens:
+            for (iid,) in self.db._query(sql, (f'"{token}"',)):
+                counts[iid] = counts.get(iid, 0) + 1
+        return counts
 
     def vector_anchors(
             self, query_vec: list[float], *, k: int = 10,
@@ -806,9 +840,53 @@ class SqliteBackend(Backend):
         return _db.storage_summary(self._db)
 
     def integrity_check(self) -> dict[str, Any]:
+        """Report page-level integrity and keyword-index drift.
+
+        Returns
+        -------
+        dict[str, Any]
+            `{'ok': bool, 'detail': str}`. `detail` is the pragma's
+            own word when the pages are bad, otherwise names the
+            keyword index when its terms no longer match the text.
+
+        Notes
+        -----
+        - The rank-1 form is the only one that reads the content
+          table: `pragma integrity_check` and FTS5's own default
+          `'integrity-check'` both pass on an index whose terms have
+          drifted from the rows they index. Measured on a store
+          edited behind the index -- both blind, rank 1 raises.
+        - It scans every indexed row, so it belongs here in the
+          `doctor` path and never on the recall path.
+        - The probe needs a write transaction, so a read-only handle
+          or a busy writer makes it raise without saying anything
+          about the index. Those arrive as `OperationalError` while
+          real drift arrives as `DatabaseError`, which is why the
+          two are caught separately -- reporting "not run" beats
+          reporting corruption that is not there.
+        """
         row = self._db._query('pragma integrity_check').fetchone()
         result = row[0] if row else 'unknown'
-        return {'ok': result == 'ok', 'detail': result}
+        if result != 'ok':
+            return {'ok': False, 'detail': result}
+        try:
+            self._db._query(
+                "insert into insights_fts(insights_fts, rank)"
+                " values('integrity-check', 1)")
+        except sqlite3.OperationalError as exc:
+            return {
+                'ok': True,
+                'detail': f'{result}; insights_fts not checked: {exc}',
+                }
+        except sqlite3.DatabaseError as exc:
+            return {
+                'ok': False,
+                'detail': (
+                    f'insights_fts does not match insights: {exc};'
+                    f" repair with: insert into"
+                    f" insights_fts(insights_fts) values('rebuild')"),
+                }
+        return {'ok': True, 'detail': result}
 
     def introspect_columns(self, table: str) -> set[str]:
         from memman.store.backend import _check_identifier

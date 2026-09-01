@@ -1776,8 +1776,7 @@ limit %s
                 ]
 
     def similarities(
-            self, query_vec: list[float], *,
-            ids: set[Id] | None = None) -> dict[Id, float]:
+            self, query_vec: list[float]) -> dict[Id, float]:
         """Cosine per id, positives only, computed in the database.
 
         Notes
@@ -1786,23 +1785,68 @@ limit %s
           which is the whole point: the pipeline needs N scalars to
           score with, and shipping N x dim floats to compute them was
           costing a full whole-store pull per recall.
-        - `ids` is applied in SQL, so a post-traversal call is bounded
-          by the visited set rather than by store size.
+        - Whole-store by design: `beam_search_from_anchor` reads the
+          result DURING traversal, so narrowing it to the visited set
+          would change traversal scoring rather than just save work.
         """
         assert self._conn is not None
         sql = f"""
 select id, 1 - (embedding <=> %s::vector) as sim
 from {self._schema}.insights
 where deleted_at is null and embedding is not null
-  and (%s::text[] is null or id = any(%s::text[]))
 """
-        id_list = None if ids is None else list(ids)
         with self._conn.cursor() as cur:
-            cur.execute(sql, (query_vec, id_list, id_list))
+            cur.execute(sql, (query_vec,))
             return {
                 r[0]: float(r[1]) for r in cur
                 if r[1] is not None and float(r[1]) > 0.0
                 }
+
+    def keyword_counts(
+            self, query_tokens: set[str]) -> dict[Id, int]:
+        """Match count per active insight id, computed in the database.
+
+        See the Protocol docstring for the contract.
+
+        Notes
+        -----
+        - `regexp_split_to_array` on the lowercased text with
+          `[^a-z0-9]+` is `keyword._WORD_RE` expressed in SQL, so the
+          count matches the Python route exactly rather than
+          approximately. A tsvector route would stem and would move
+          `kw_score` on every consumer of it.
+        - Entities go through `jsonb_array_elements_text`, so each one
+          is split as the decoded string `insight_tokens` tokenizes,
+          not as the escapes its JSON encoding would carry.
+        - Unindexed, so this is a sequential scan: it saves the
+          round-trip of shipping every row's text to score one query,
+          not the scan itself. A GIN index is a separate change that
+          has to keep the count identical.
+        """
+        if not query_tokens:
+            return {}
+        assert self._conn is not None
+        sql = f"""
+select id, matched
+from (
+    select i.id as id, cardinality(array(
+            select unnest(%s::text[])
+            intersect
+            select unnest(regexp_split_to_array(lower(
+                i.content || ' ' || coalesce((
+                    select string_agg(e, ' ')
+                    from jsonb_array_elements_text(
+                        coalesce(i.entities, '[]'::jsonb)) e), '')),
+                '[^a-z0-9]+'))
+            )) as matched
+    from {self._schema}.insights i
+    where i.deleted_at is null
+) scored
+where matched > 0
+"""
+        with self._conn.cursor() as cur:
+            cur.execute(sql, (sorted(query_tokens),))
+            return {r[0]: int(r[1]) for r in cur}
 
     def vectors_for_ids(
             self, ids: list[Id]) -> dict[Id, list[float]]:

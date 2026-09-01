@@ -128,7 +128,7 @@ Query intent is identified via regex (or LLM override from Step 0):
 Three signals run in parallel and fuse via Reciprocal Rank Fusion:
 
 ```
-Signal 1: Keyword     → KeywordSearch(all_insights, query, top-30)
+Signal 1: Keyword     → KeywordCounts(query_tokens) → top-30
 Signal 2: Vector      → CosineSimilarity(query_vec, all_embeddings, top-30)
 Signal 3: Recency     → sort by created_at DESC, top-30
 
@@ -143,6 +143,7 @@ Each insight may rank differently across signals; RRF fusion produces a composit
 - **`ANCHOR_TOP_K = 30`**: per-signal anchor pool size. MAGMA Table 5 specifies 20; memman uses 30 to give beam search a richer starting frontier given the flat insight hierarchy (no episode/narrative super-nodes). The 30 is not flat in every case: with `--cat` or `--source` set and `limit > 0`, the budget widens to `max(ANCHOR_TOP_K, limit)` so a filtered recall can still fill a large limit. Unfiltered recall keeps `ANCHOR_TOP_K` untouched, which is what stops a bare `max()` from silently overriding the ablation harness's `anchor_top_k` sweep.
 - **`RRF_K = 60`**: standard value from the original RRF paper (Cormack, Clarke & Büttcher, SIGIR 2009). MAP scores nearly flat from k=50–90, with k=60 validated across four TREC collections.
 - **`VECTOR_SEARCH_MIN_SIM = 0.10`**: noise floor matching MAGMA's lower similarity threshold bound. Below 0.10, vector search hits add noise rather than signal.
+- **The keyword channel counts in the store, not in Python.** `RecallSession.keyword_counts` returns how many distinct query tokens each active insight holds, counted where the text lives. On SQLite that is an index probe per query token against an FTS5 table. On Postgres it is one query, and still a sequential scan -- what it saves there is shipping every row's text back to score it, not the scan; indexing it without moving the count is separate work. It replaced a regex tokenization of every active row on every request, measured at 118.9 ms of a 399.7 ms recall at N=1054, and it moved nothing — the score formula, its `[0, 1]` range and every returned row are unchanged. FTS5 `match` takes a query language, so the probe is built from `tokenize` output and never from query text; 8 of 11 realistic queries handed to `match` raw raise a syntax error. `search/keyword.py` keeps the per-row route for the drain's reconciliation pass, which ranks in-memory facts that are not in any index yet.
 
 ### Step 3: Beam search graph traversal
 
@@ -178,6 +179,9 @@ keyword_score  = token_intersection / query_token_count
                  // the candidate's token set is content tokens UNION
                  // its entity-name tokens, so a stored entity name
                  // reaches the blend through this term
+                 // the intersection is counted by the store, not by
+                 // tokenizing every row per request -- one FTS5 probe
+                 // per query token on SQLite, one query on Postgres
 similarity     = cosine(vec_candidate, vec_query)
 graph_score    = (traversal_score - min) / (max - min)   // min-max normalization
 

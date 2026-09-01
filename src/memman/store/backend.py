@@ -550,7 +550,8 @@ class RecallSession(Protocol):
     serves it via HNSW with `embedding <=>`. Similarity for
     non-anchor nodes comes from `similarities`, and MMR's bounded
     vector need from `vectors_for_ids` -- the pipeline never holds a
-    whole-store embedding dict.
+    whole-store embedding dict. `keyword_counts` is the same story
+    for tokens: the pipeline never tokenizes the store.
 
     Notes
     -----
@@ -576,17 +577,13 @@ class RecallSession(Protocol):
         ...
 
     def similarities(
-            self, query_vec: list[float], *,
-            ids: set[Id] | None = None) -> dict[Id, float]:
+            self, query_vec: list[float]) -> dict[Id, float]:
         """Cosine of `query_vec` against stored embeddings.
 
         Parameters
         ----------
         query_vec : list[float]
             Query embedding.
-        ids : set[Id] | None, default None
-            Restrict to these ids; None means every active embedded
-            row.
 
         Returns
         -------
@@ -600,6 +597,9 @@ class RecallSession(Protocol):
         - Computed where the vectors already live -- one matmul on
           SQLite, one `embedding <=>` query on Postgres -- so the
           pipeline never ships N x dim floats to compute N scalars.
+        - Whole-store by design: `beam_search_from_anchor` reads it
+          DURING traversal, so it cannot be narrowed to the visited
+          set without changing traversal scoring.
         """
         ...
 
@@ -609,6 +609,50 @@ class RecallSession(Protocol):
 
         Ids with no embedding, or whose width differs from the
         store's modal width, are absent from the result.
+        """
+        ...
+
+    def keyword_counts(
+            self, query_tokens: set[str]) -> dict[Id, int]:
+        r"""Distinct query tokens present in each active insight.
+
+        Parameters
+        ----------
+        query_tokens : set[str]
+            Tokens from `search.keyword.tokenize`, so each is
+            `[a-zA-Z0-9]+` and none is a stopword.
+
+        Returns
+        -------
+        dict[Id, int]
+            Match count per active insight id, in `[1, len(tokens)]`.
+            An id with no matching token is omitted, so callers read
+            it with `.get(id, 0)`.
+
+        Notes
+        -----
+        - The count is over the insight's content AND its entities,
+          the same union `keyword.insight_tokens` builds, and it is
+          the numerator of `kw_score`. A backend that returns a
+          different count changes `signals.keyword`, `--min-score`,
+          the rerank blend, and `meta.sparse` together.
+        - NON-ASCII TEXT DIVERGES ON SQLITE, deliberately and
+          measurably. `keyword._WORD_RE` is `[a-zA-Z0-9]+`, so it
+          splits a run at any other character; FTS5 `unicode61`
+          keeps a whole Unicode word. `naive` spelled with an
+          i-diaeresis is one FTS term and two Python tokens, and an
+          entity reaches the index as its stored JSON text, so
+          `"the\\nservice"` indexes as `nservice` where Python reads
+          `service`. Measured across all fifteen live stores: 25 of
+          3,715 active rows lose an entity token, and a 70-config
+          recall A/B moved 7 results, all from ONE row. Postgres
+          matches Python exactly. Closing the gap means changing
+          `_WORD_RE`, which moves the drain's reconciliation
+          candidates and causal-edge inference, so it is its own
+          change with its own sweep -- not this one.
+        - Counted where the text already lives -- k index probes on
+          SQLite, one query on Postgres -- so the pipeline never
+          tokenizes the whole store to score one query.
         """
         ...
 
@@ -772,9 +816,12 @@ class Backend(Protocol):
     def integrity_check(self) -> dict[str, Any]:
         """Run a backend-specific integrity probe for `memman doctor`.
 
-        SQLite: `pragma integrity_check`. Postgres: connectivity
-        probe + schema-presence verification (HNSW index validity is
-        checked separately at reindex time).
+        SQLite: `pragma integrity_check`, then a rank-1 FTS5
+        `'integrity-check'` that detects a keyword index whose terms
+        have drifted from the rows they index; a handle that cannot
+        write reports the probe as not run rather than as drift.
+        Postgres: connectivity probe + schema-presence verification
+        (HNSW index validity is checked separately at reindex time).
 
         Returns a dict shaped `{'ok': bool, 'detail': str}` -- doctor
         composes this with sub-store verbs to assemble its overall

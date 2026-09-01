@@ -399,6 +399,7 @@ create index if not exists idx_insights_effective_imp on insights(effective_impo
 create index if not exists idx_insights_pending_link
     on insights(linked_at)
     where linked_at is null and deleted_at is null;
+
 create index if not exists idx_edges_source on edges(source_id);
 create index if not exists idx_edges_target on edges(target_id);
 create index if not exists idx_edges_type on edges(edge_type);
@@ -430,6 +431,51 @@ create table if not exists meta (
 MIGRATION_SCRIPT = 'scripts/rebuild_schema.py'
 
 
+# Keyword channel index, applied by `_migrate` in one transaction
+# rather than from `_BASELINE_SCHEMA`. External content: FTS5 holds
+# the terms, the text stays in `insights`. Every row is indexed,
+# soft-deleted ones included, and `deleted_at` is applied by joining
+# `insights` at read -- an active-only index would need conditional
+# delete triggers, and a 'delete' whose old values are not exactly
+# what was indexed corrupts the index silently.
+_FTS_STATEMENTS = (
+    """
+create virtual table insights_fts using fts5(
+    content,
+    entities,
+    content='insights',
+    content_rowid='rowid',
+    tokenize="unicode61 remove_diacritics 0"
+)
+""",
+    # Scoped to the two indexed columns: a bare `after update` would
+    # make `increment_access_count` and `update_enrichment` write to
+    # the index on every recall.
+    """
+create trigger insights_fts_insert after insert on insights begin
+    insert into insights_fts(rowid, content, entities)
+    values (new.rowid, new.content, new.entities);
+end
+""",
+    """
+create trigger insights_fts_delete after delete on insights begin
+    insert into insights_fts(insights_fts, rowid, content, entities)
+    values ('delete', old.rowid, old.content, old.entities);
+end
+""",
+    """
+create trigger insights_fts_update
+after update of content, entities on insights begin
+    insert into insights_fts(insights_fts, rowid, content, entities)
+    values ('delete', old.rowid, old.content, old.entities);
+    insert into insights_fts(rowid, content, entities)
+    values (new.rowid, new.content, new.entities);
+end
+""",
+    "insert into insights_fts(insights_fts) values('rebuild')",
+    )
+
+
 def _migrate(db: DB) -> None:
     """Apply the canonical schema to the database.
 
@@ -449,6 +495,15 @@ def _migrate(db: DB) -> None:
       the old store opens silently and fails later with a raw
       OperationalError. This is the primary schema diagnostic:
       nothing that needs a live Backend can report on such a store.
+    - Creating `insights_fts` also populates it, in ONE transaction.
+      The triggers only carry rows written after the table exists, so
+      a store that predates it -- or one restored from a backup that
+      does -- would otherwise open with an empty index and silently
+      lose the keyword channel. Atomicity is what makes that safe:
+      the connection is autocommit and `executescript` commits before
+      it runs, so creating the table there would leave an empty index
+      durable if the backfill were interrupted, and the absence check
+      would then read as "already migrated" forever.
     """
     try:
         db._conn.executescript(_BASELINE_SCHEMA)
@@ -459,3 +514,16 @@ def _migrate(db: DB) -> None:
                 f'store {name} predates the current schema;'
                 f' rebuild with {MIGRATION_SCRIPT}') from exc
         raise
+    has_fts = db._conn.execute(
+        "select 1 from sqlite_master"
+        " where type = 'table' and name = 'insights_fts'").fetchone()
+    if has_fts:
+        return
+    db._conn.execute('begin immediate')
+    try:
+        for statement in _FTS_STATEMENTS:
+            db._conn.execute(statement)
+    except Exception:
+        db._conn.execute('rollback')
+        raise
+    db._conn.execute('commit')
