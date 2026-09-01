@@ -216,6 +216,41 @@ class TestRestore:
         assert count == 4
         assert read_active(fresh) == 'default'
 
+    def test_restore_drops_the_destination_wal_and_shm(self, tmp_path):
+        """Restore removes the WAL and SHM belonging to the replaced db.
+
+        SQLite replays a WAL it finds beside a database file. Leaving
+        the destination's own WAL in place lets it replay over the
+        restored file, which is corruption rather than staleness.
+
+        Mutation: dropping the `-wal`/`-shm` unlink from `restore`, or
+            unlinking them before `os.replace` instead of after.
+        Oracle: side files written into the destination by hand with
+            recognizable bytes; both must be gone once restore
+            returns, while the restored row count proves the database
+            itself arrived.
+        """
+        data_dir = _data_dir()
+        _seed_store(data_dir, 'default', n=4)
+        target = tmp_path / 'archive_wal'
+        bundle = build_bundle(data_dir, str(target))['bundle']
+
+        dest = str(tmp_path / 'dest_wal')
+        dest_store = Path(store_dir(dest, 'default'))
+        dest_store.mkdir(parents=True, exist_ok=True)
+        (dest_store / 'memman.db').write_bytes(b'')
+        (dest_store / 'memman.db-wal').write_bytes(b'STALE-WAL')
+        (dest_store / 'memman.db-shm').write_bytes(b'STALE-SHM')
+
+        restore(bundle, dest)
+
+        assert not (dest_store / 'memman.db-wal').exists()
+        assert not (dest_store / 'memman.db-shm').exists()
+        conn = sqlite3.connect(str(dest_store / 'memman.db'))
+        count = conn.execute('select count(*) from insights').fetchone()[0]
+        conn.close()
+        assert count == 4
+
     def test_reports_missing_secrets(self, tmp_path):
         """A fresh restore lists secret keys the operator must re-enter."""
         data_dir = _data_dir()
