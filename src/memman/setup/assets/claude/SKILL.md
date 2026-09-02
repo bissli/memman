@@ -35,9 +35,9 @@ multi-fact write leaves no ledger row. To store text verbatim and
 bypass all three, pass `--no-reconcile`.
 
 To correct a stored insight by ID without losing its `access_count` and
-edges (`corroboration_count` — the count of exact restatements shown in
-recall/get JSON, though not under `--brief` — resets, since the
-successor is a new row identity):
+edges (`corroboration_count` — the count of restatements, whether
+byte-identical or reworded, shown in recall/get JSON but not under
+`--brief` — resets, since the successor is a new row identity):
 
 ```bash
 memman replace <id> "<new content>"
@@ -102,7 +102,7 @@ memman recall "<keyword>" --basic
 ```
 
 Add `--brief` to cut each insight to `id`, `category`, `importance`,
-and `summary`. Use it when scanning for which insight to open rather
+`created_at`, and `summary`. Use it when scanning for which insight to open rather
 than reading the insights themselves. It works on both paths; on the
 ranked path the `score`, `intent`, and `signals` keys around each
 insight are kept. A row left without a summary falls back to its

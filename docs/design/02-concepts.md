@@ -20,7 +20,7 @@
 │ source     : "user"     (provenance)         │
 │ session_id : "s-1f2e…"  (temporal chain key) │
 │ queue_uuid : "9b0c…"    (idempotency key)    │
-│ corroboration_count : 2 (exact restatements) │
+│ corroboration_count : 2 (restatements seen)  │
 │ access_count        : 3                      │
 │ effective_importance : 0.85                  │
 │ created_at : 2026-02-18T10:00:00Z            │
@@ -89,7 +89,7 @@ insights (
   created_at, updated_at, deleted_at,
   session_id,                                   -- Temporal chain key (nullable; no session, no backbone edge)
   queue_uuid,                                   -- Idempotency key from the queue row (shared by sibling facts; a corroborated row missing one adopts the restating row's)
-  corroboration_count                           -- Exact-match restatements observed (integer not null default 0)
+  corroboration_count                           -- Restatements observed, byte-identical or reworded (integer not null default 0)
 )
 
 -- Keyword index over insights (SQLite only; FTS5 external content,
@@ -120,7 +120,7 @@ meta (
 
 Provenance columns (`prompt_version`, `model_id`, `embedding_model`) record which LLM and embedding model produced each insight. They power `memman embed reembed` and `memman graph rebuild` when models or prompts change.
 
-**Corroboration semantics.** `corroboration_count` counts exact-match restatements: when a queued write's fact is byte-identical (modulo case and whitespace) to exactly one stored row, the write is skipped without an LLM reconcile call, the stored row's counter is bumped, and a `reconcile-corroborate` oplog row records the restatement. The counter is observational only — it deliberately feeds neither the retention-immunity criterion (`importance >= 4 or access_count >= 3`) nor `effective_importance`, so "the agent said it twice" cannot earn a row permanent immunity. It is per-row-identity: an UPDATE/REPLACE reconciliation soft-deletes the corroborated row and the successor starts at 0. Bump mechanics: the restating queue row's `queue_uuid` is adopted only when the target carries none — the creating row's replay guard outranks the restating row's, so a populated key is never clobbered (the cost is that a crash-reclaimed all-skips restating row may re-bump once); a target soft-deleted between planning and apply degrades the skip to a plain add rather than dropping the fact; and one queue row bumps a given target at most once regardless of how many identical facts its extraction emits. Collect the data first; any ranking or lifecycle use is a later, measured decision.
+**Corroboration semantics.** `corroboration_count` counts restatements, and two routes reach it. The exact-match rung catches a fact byte-identical (modulo case and whitespace) to exactly one stored row and skips the LLM entirely. The reconciler catches a REWORDED restatement: it answers `NONE` and names the memory that already covers the fact. Either route skips the write, bumps the named row's counter, and records a `reconcile-corroborate` oplog row. The second route is why the prompt spells the NONE action `NONE <id>` and requires an id for every action but ADD. Measured live on `claude-haiku-4.5` and `claude-sonnet-4.6`, 16 cases x 2 repeats each, the earlier id-less wording returned a null target on 39 of 48 reworded restatements against 4 of 48 for the current wording (Fisher exact p=9e-14) -- which is why the counter read 0 on all but 1 of 5,896 rows before this change. The counter is observational only — it deliberately feeds neither the retention-immunity criterion (`importance >= 4 or access_count >= 3`) nor `effective_importance`, so "the agent said it twice" cannot earn a row permanent immunity. It is per-row-identity: an UPDATE/REPLACE reconciliation soft-deletes the corroborated row and the successor starts at 0. Bump mechanics: the restating queue row's `queue_uuid` is adopted only when the target carries none — the creating row's replay guard outranks the restating row's, so a populated key is never clobbered (the cost is that a crash-reclaimed all-skips restating row may re-bump once); a target soft-deleted between planning and apply degrades the skip to a plain add rather than dropping the fact; and one queue row bumps a given target at most once regardless of how many restatements its extraction emits. Collect the data first; any ranking or lifecycle use is a later, measured decision.
 
 ---
 

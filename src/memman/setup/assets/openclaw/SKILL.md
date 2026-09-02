@@ -47,8 +47,9 @@ multi-fact write leaves no ledger row. To store text verbatim and
 bypass all three, pass `--no-reconcile`.
 
 To correct a stored insight by ID without losing its `access_count` and
-edges (`corroboration_count` — the count of exact restatements shown in
-recall/get JSON — resets, since the successor is a new row identity):
+edges (`corroboration_count` — the count of restatements, whether
+byte-identical or reworded, shown in recall/get JSON — resets, since
+the successor is a new row identity):
 
 ```bash
 memman replace <id> "<new content>" --session $SESSION_ID
@@ -110,7 +111,7 @@ memman recall "<keyword>" --basic
 ```
 
 Add `--brief` to cut each insight to `id`, `category`, `importance`,
-and `summary`, on both paths; the ranked path keeps the `score`,
+`created_at`, and `summary`, on both paths; the ranked path keeps the `score`,
 `intent`, and `signals` keys around each insight. A row left without a
 summary falls back to its content instead. `truncated: true` means the
 text you got is a raw content prefix cut at 200 characters. Its
