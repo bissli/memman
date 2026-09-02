@@ -372,10 +372,10 @@ def intent_aware_recall(
       `anchor_top_k` sweep is never overridden.
     - When `rerank=True` and the query has more than
       `MIN_RERANK_TOKENS` tokens, the top `RERANK_SHORTLIST`
-      candidates by multi-signal score are re-scored by Voyage
-      rerank-2.5-lite; the filter runs before the rerank block so the
-      shortlist holds only returnable rows. On reranker failure the
-      baseline ordering is preserved.
+      candidates by multi-signal score are re-scored by the
+      configured Voyage reranker; the filter runs before the rerank
+      block so the shortlist holds only returnable rows. On reranker
+      failure the baseline ordering is preserved.
     - `min_score` thresholds `kw_score + sim_score`, never the blended
       score: `graph_score` is min-max normalized, so the top candidate
       of any query scores 1.0 there and a blended floor would sit at

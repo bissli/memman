@@ -304,7 +304,7 @@ INSTALL_DEFAULTS: dict[str, str] = {
     OLLAMA_MAX_INPUT_CHARS: '1500',
     OPENROUTER_EMBED_MODEL: 'baai/bge-m3',
     VOYAGE_EMBED_MODEL: 'voyage-3-lite',
-    VOYAGE_RERANK_MODEL: 'rerank-2.5-lite',
+    VOYAGE_RERANK_MODEL: 'rerank-3-lite',
     DEFAULT_BACKEND: 'sqlite',
     INTERVAL: '60',
     BACKUP_KEEP: '7',
