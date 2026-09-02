@@ -114,12 +114,22 @@ def test_reconcile_candidates_ranked_by_similarity(monkeypatch):
 
 
 def test_prompt_version_unchanged_by_length_caps():
-    """The F5 length caps live post-parse; the prompt hash is pinned.
+    """The length caps live post-parse; the prompt hash is pinned.
 
-    Mutation: "fixing" the length caps inside a system prompt -- the
-        hash moves, every stored row's prompt_version goes stale, and
-        doctor demands a fleet-wide `graph rebuild`.
-    Oracle: hash pinned at its pre-F5 value.
+    The pin is a tripwire, not a constant: any deliberate write-path
+    prompt change moves it, and re-pinning is the right answer once
+    the author has weighed the cost. That cost is what the tripwire
+    exists to surface -- every stored row in every store goes stale
+    at once, and `graph rebuild --stale` re-runs enrichment and
+    linking only, so it cannot repair an extraction or reconciliation
+    change. The value below moved when the reconcile prompt began
+    demanding the id of the memory a NONE verdict names.
+
+    Mutation: "fixing" the length caps inside a system prompt, or any
+        other incidental prompt edit -- the hash moves, every stored
+        row's prompt_version goes stale, and doctor reports a
+        fleet-wide rebuild that would not address the edit.
+    Oracle: the hash of the four shipped write-path prompts, pinned.
     """
     from memman.pipeline.remember import compute_prompt_version
-    assert compute_prompt_version() == '69c8402d41bb72f6'
+    assert compute_prompt_version() == '65b17a58c930e540'

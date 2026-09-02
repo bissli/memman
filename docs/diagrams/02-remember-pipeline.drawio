@@ -102,7 +102,7 @@
           <mxGeometry x="320" y="775" width="180" height="80" as="geometry" />
         </mxCell>
 
-        <mxCell id="r_recon" value="LLM reconcile&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;exact match (1 hit): skip + corroborate, no LLM&lt;br&gt;else ADD / UPDATE / DELETE / NONE&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_recon" value="LLM reconcile&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;exact match (1 hit): skip + corroborate, no LLM&lt;br&gt;else ADD / UPDATE / DELETE / NONE &amp;lt;id&amp;gt;&lt;br&gt;NONE: skip + corroborate the row it names&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="520" y="775" width="180" height="80" as="geometry" />
         </mxCell>
 

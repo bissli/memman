@@ -533,10 +533,16 @@ def _plan_fact(
                 f' {exc}')
 
     if action == 'NONE':
+        # Carry the target the model named, and the vector alongside
+        # it for the same reason the exact-match rung does: a target
+        # soft-deleted between planning and apply degrades to an add,
+        # which reads `plan.embed_vec`.
         return FactPlan(
             action='skipped',
             fact_text=fact_text,
             fact_insight=fact_insight,
+            target_id=target_id,
+            embed_vec=embed_vec,
             skip_reason='already captured',
             ), calls
 
@@ -617,8 +623,9 @@ def _apply_plan(
     corroborate_degraded = False
     if plan.action == 'skipped':
         skip_fi = plan.fact_insight
-        # Only the exact-match rung sets target_id on a skipped plan;
-        # the dedup-sibling / target-deleted / NONE skips carry none.
+        # The exact-match rung and the reconciler's NONE verdict both
+        # set target_id; the dedup-sibling and target-deleted skips
+        # carry none.
         corroborated = False
         already_counted = (
             corroborated_ids is not None

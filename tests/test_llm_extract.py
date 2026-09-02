@@ -8,8 +8,9 @@ with real/mocked LLM is covered by test_cli.py and test_memory_system.py.
 import json
 
 import pytest
-from memman.llm.extract import QUERY_EXPANSION_SYSTEM, _strip_line_refs
-from memman.llm.extract import expand_query, extract_facts, reconcile_memories
+from memman.llm.extract import QUERY_EXPANSION_SYSTEM, RECONCILIATION_SYSTEM
+from memman.llm.extract import _strip_line_refs, expand_query, extract_facts
+from memman.llm.extract import reconcile_memories
 from memman.llm.shared import parse_json_response
 
 
@@ -286,8 +287,21 @@ class TestReconcileMemories:
             FailingClient(), facts, [('id-1', 'mem 1')])
         assert all(r['action'] == 'ADD' for r in result)
 
-    def test_none_action_preserved(self):
-        """NONE action (already captured) is returned."""
+    def test_none_action_carries_the_memory_it_names(self):
+        """NONE keeps the id of the memory that already captured the
+        fact.
+
+        The id is the whole payload of a NONE verdict: it is what the
+        write path bumps instead of storing the restatement. Mapping
+        it only for the actions that mutate a row leaves the caller
+        unable to tell WHICH memory captured the fact.
+
+        Mutation: nulling `target_id` for any action other than
+            UPDATE or DELETE, on the reasoning that only those two
+            address a row.
+        Oracle: the real uuid behind the numeric id in the canned
+            response, which the id map alone can supply.
+        """
         response = json.dumps({
             'actions': [{
                 'fact': 'same info',
@@ -301,6 +315,59 @@ class TestReconcileMemories:
         result = reconcile_memories(
             client, [{'text': 'same info'}], existing)
         assert result[0]['action'] == 'NONE'
+        assert result[0]['target_id'] == 'uuid-1'
+
+    def test_reconcile_prompt_requires_an_id_on_none(self):
+        """The prompt asks NONE to name the capturing memory.
+
+        Every other test stubs the LLM, so nothing else can see the
+        prompt drop the demand - and a NONE with no id makes the
+        corroboration path inert however correct the code is.
+
+        Mutation: restoring the bare 'NONE: fact already captured
+            adequately' wording, which names no memory and lets the
+            model answer with a null target.
+        Oracle: the NONE line of the shipped system prompt, required
+            to carry the id placeholder that ADD must not.
+        """
+        none_line = next(
+            ln for ln in RECONCILIATION_SYSTEM.split(chr(10))
+            if ln.startswith('- NONE'))
+        assert '<id>' in none_line
+
+    @pytest.mark.parametrize('role', ['slow_canonical', 'fast'])
+    def test_live_model_names_the_memory_on_none(self, role, request):
+        """The configured models answer NONE with the id, not null.
+
+        The prompt line is the load-bearing half of corroboration:
+        the write path can only bump a row the model named. So this
+        is a claim about the MODEL, and only a live call can hold it.
+        `slow_canonical` is the role that reconciles; `fast` is
+        carried as the quality floor.
+
+        Mutation: dropping the id demand from the NONE line of
+            RECONCILIATION_SYSTEM -- over 16 cases x 2 models x 2
+            repeats the id-less wording returned a null target on 39
+            of 48 reworded restatements against 4 of 48 for the
+            shipped wording, so corroboration goes back to counting
+            byte-identical writes alone.
+        Oracle: the id of the one shortlist row that restates the
+            fact, against a second row that does not.
+        """
+        if not request.config.getoption('--live'):
+            pytest.skip('needs --live: asserts real model compliance')
+        from memman.llm.client import get_llm_client
+        client = get_llm_client(role)
+        existing = [
+            ('uuid-unrelated', 'Alice uses vim keybindings.'),
+            ('uuid-restated',
+             'Redis caches session tokens for the web tier.'),
+            ]
+        result = reconcile_memories(
+            client, [{'text': 'Session tokens are cached in Redis.',
+                      'entities': []}], existing)
+        assert result[0]['action'] == 'NONE'
+        assert result[0]['target_id'] == 'uuid-restated'
 
 
 class TestExpandQuery:
