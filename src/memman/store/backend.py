@@ -304,15 +304,25 @@ class NodeStore(Protocol):
 
     def stamp_enriched(
             self, id: Id, *,
-            prompt_version: str | None = None,
-            model_id: str | None = None) -> None:
+            prompt_version: str | None = None) -> None:
         """Mark an insight as enriched. Backend stamps `enriched_at` now.
 
-        When `prompt_version` and/or `model_id` are provided, also
-        records them on the row so future drift checks see the row
-        as current. Pass these from the caller that knows the active
-        config (the link/rebuild driver) so a re-enrichment fully
-        clears provenance drift, not just timestamps.
+        Parameters
+        ----------
+        id : Id
+            Row to stamp.
+        prompt_version : str or None, default None
+            The `compute_prompt_version()` key this enrichment ran
+            under. Pass it from the driver that knows the active
+            config (the link/rebuild path) so the re-enrichment
+            clears the row's staleness, not just its timestamp. The
+            write path omits it, having set it at insert.
+
+        Notes
+        -----
+        - It must not touch `model_id`: that column records the model
+          behind the row's CONTENT, which re-enrichment never
+          rewrites.
         """
         ...
 
@@ -337,17 +347,18 @@ class NodeStore(Protocol):
         """Count linked-but-unenriched active insights."""
         ...
 
-    def iter_stale_insight_ids(
-            self, active_pv: str,
-            active_model: str | None) -> list[Id]:
-        """Return ids of active insights stale w.r.t. current prompt/model.
+    def iter_stale_insight_ids(self, active_pv: str) -> list[Id]:
+        """Return ids of active insights whose staleness key drifted.
+
+        Stale means `prompt_version` is non-NULL and differs from
+        `active_pv`. NULL is not stale. There is no model argument:
+        `active_pv` folds in the `slow_metadata` model already, and
+        that is the only model a rebuild re-runs.
         """
         ...
 
-    def count_stale_insights(
-            self, active_pv: str,
-            active_model: str | None) -> int:
-        """Count active insights stale w.r.t. current prompt/model."""
+    def count_stale_insights(self, active_pv: str) -> int:
+        """Count active insights whose staleness key drifted."""
         ...
 
     def reset_for_rebuild(self, ids: list[Id]) -> None:

@@ -116,20 +116,23 @@ def test_reconcile_candidates_ranked_by_similarity(monkeypatch):
 def test_prompt_version_unchanged_by_length_caps():
     """The length caps live post-parse; the prompt hash is pinned.
 
-    The pin is a tripwire, not a constant: any deliberate write-path
-    prompt change moves it, and re-pinning is the right answer once
-    the author has weighed the cost. That cost is what the tripwire
-    exists to surface -- every stored row in every store goes stale
-    at once, and `graph rebuild --stale` re-runs enrichment and
-    linking only, so it cannot repair an extraction or reconciliation
-    change. The value below moved when the reconcile prompt began
-    demanding the id of the memory a NONE verdict names.
+    The pin is a tripwire, not a constant: any deliberate change to a
+    hashed input moves it, and re-pinning is the right answer once the
+    author has weighed the cost. That cost is what the tripwire
+    surfaces -- every stored row in every store goes stale at once,
+    and only a `graph rebuild --stale` clears it.
+
+    Two inputs now move this value and neither is a length cap: the
+    enrichment prompt and the causal prompt. So does the configured
+    `MEMMAN_LLM_MODEL_SLOW_METADATA`, which the key folds in and which
+    the suite seeds from `INSTALL_DEFAULTS` -- changing that default
+    re-pins this test, deliberately.
 
     Mutation: "fixing" the length caps inside a system prompt, or any
-        other incidental prompt edit -- the hash moves, every stored
-        row's prompt_version goes stale, and doctor reports a
-        fleet-wide rebuild that would not address the edit.
-    Oracle: the hash of the four shipped write-path prompts, pinned.
+        other incidental edit to a hashed input -- the hash moves and
+        every stored row goes stale for a change nobody intended.
+    Oracle: the hash of the two replayable prompts plus the seeded
+        metadata model, pinned.
     """
     from memman.pipeline.remember import compute_prompt_version
-    assert compute_prompt_version() == '65b17a58c930e540'
+    assert compute_prompt_version() == '6a60ef0080b1ab9f'

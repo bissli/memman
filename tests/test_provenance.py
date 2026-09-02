@@ -82,14 +82,24 @@ def test_compute_prompt_version_is_stable():
 
 
 def test_compute_prompt_version_changes_with_prompt(monkeypatch):
-    """Changing a write-path prompt string changes the hash.
+    """Changing a REPLAYED prompt changes the hash.
+
+    The key covers only what `graph rebuild --stale-only` re-runs, so
+    the enrichment prompt is the right lever here. A write-path-only
+    prompt must NOT move it, which
+    `tests/test_provenance_staleness.py` pins from the other side.
+
+    Mutation: hashing a constant, or hashing the prompts by name
+        rather than by value, so an edit to the enrichment prompt
+        leaves the key unchanged and no row is ever reported stale.
+    Oracle: the key recomputed with the enrichment prompt perturbed.
     """
     original = compute_prompt_version()
     compute_prompt_version.cache_clear()
-    from memman.llm import extract as llm_extract
+    from memman.graph import enrichment
     monkeypatch.setattr(
-        llm_extract, 'FACT_EXTRACTION_SYSTEM',
-        llm_extract.FACT_EXTRACTION_SYSTEM + '\n# mutated for test')
+        enrichment, 'ENRICHMENT_SYSTEM_PROMPT',
+        enrichment.ENRICHMENT_SYSTEM_PROMPT + '\n# mutated for test')
     mutated = compute_prompt_version()
     assert mutated != original
     compute_prompt_version.cache_clear()

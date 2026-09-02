@@ -178,14 +178,15 @@ class TestProvenanceDrift:
         assert result['status'] == 'pass'
         assert result['detail']['stale_rows'] == 0
 
-    @pytest.mark.parametrize(('stale_col', 'stale_value', 'stale_count'), [
-        ('prompt_version', 'deadbeefdeadbeef', 2),
-        ('model_id', 'anthropic/claude-haiku-1.0', 1),
-    ])
-    def test_drift_warns(
-            self, tmp_db, tmp_backend,
-            stale_col, stale_value, stale_count):
-        """Rows with non-current prompt_version or model_id surface as warn."""
+    def test_drift_warns(self, tmp_db, tmp_backend):
+        """A drifted prompt_version surfaces as warn with a remedy.
+
+        Mutation: comparing the row's key against a constant, or
+            dropping the warn so drift a rebuild CAN fix goes
+            unreported.
+        Oracle: two drifted rows against one carrying the active key,
+            counted.
+        """
         from memman import config
         from memman.doctor import check_provenance_drift
         from memman.pipeline.remember import compute_prompt_version
@@ -193,33 +194,50 @@ class TestProvenanceDrift:
         active_pv = compute_prompt_version()
         active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
 
-        for i in range(stale_count):
+        for i in range(2):
             _insert_healthy_insight(tmp_db, f'p-stale-{i}')
-        if stale_count == 2:
-            _insert_healthy_insight(tmp_db, 'p-fresh')
-
-        stale_ids = ', '.join(f"'p-stale-{i}'" for i in range(stale_count))
-        if stale_col == 'prompt_version':
-            tmp_db._exec(
-                f'UPDATE insights SET prompt_version = ?, model_id = ?'
-                f' WHERE id IN ({stale_ids})',
-                (stale_value, active_model))
-        else:
-            tmp_db._exec(
-                f'UPDATE insights SET prompt_version = ?, model_id = ?'
-                f' WHERE id IN ({stale_ids})',
-                (active_pv, stale_value))
-        if stale_count == 2:
-            tmp_db._exec(
-                'UPDATE insights SET prompt_version = ?, model_id = ?'
-                " WHERE id = 'p-fresh'",
-                (active_pv, active_model))
+        _insert_healthy_insight(tmp_db, 'p-fresh')
+        tmp_db._exec(
+            'UPDATE insights SET prompt_version = ?, model_id = ?'
+            " WHERE id IN ('p-stale-0', 'p-stale-1')",
+            ('deadbeefdeadbeef', active_model))
+        tmp_db._exec(
+            'UPDATE insights SET prompt_version = ?, model_id = ?'
+            " WHERE id = 'p-fresh'",
+            (active_pv, active_model))
 
         result = check_provenance_drift(tmp_backend)
         assert result['status'] == 'warn'
-        assert result['detail']['stale_rows'] == stale_count
-        if stale_col == 'prompt_version':
-            assert 'remediation' in result['detail']
+        assert result['detail']['stale_rows'] == 2
+        assert 'remediation' in result['detail']
+
+    def test_model_only_drift_does_not_warn(self, tmp_db, tmp_backend):
+        """A row whose only difference is `model_id` is not stale.
+
+        `model_id` names the model behind the row's CONTENT, and no
+        rebuild rewrites it, so warning on it would nag forever with
+        no remedy. The replayable model is folded into
+        `prompt_version` instead.
+
+        Mutation: restoring the `model_id` comparison to
+            `_is_provenance_stale` -- every store whose canonical
+            model was ever swapped warns permanently, and the offered
+            `graph rebuild --stale-only` provably changes nothing.
+        Oracle: one row carrying the active key with a foreign
+            `model_id`, against a pass verdict and zero stale rows.
+        """
+        from memman.doctor import check_provenance_drift
+        from memman.pipeline.remember import compute_prompt_version
+
+        _insert_healthy_insight(tmp_db, 'p-other-model')
+        tmp_db._exec(
+            'UPDATE insights SET prompt_version = ?, model_id = ?'
+            " WHERE id = 'p-other-model'",
+            (compute_prompt_version(), 'anthropic/claude-haiku-1.0'))
+
+        result = check_provenance_drift(tmp_backend)
+        assert result['status'] == 'pass'
+        assert result['detail']['stale_rows'] == 0
 
 
 class TestStaleHelpers:
@@ -229,10 +247,16 @@ class TestStaleHelpers:
     def _seed_six_row_matrix(self, backend, active_pv, active_model):
         """Seed the 6 canonical predicate rows; return expected stale ids.
 
-        Mapping: A=NULL/NULL (not stale), B=current/current (not stale),
-        C=OLD/current (stale), D=current/OLD (stale), E=OLD/OLD (stale),
-        F=NULL/OLD (stale, model branch fires; prompt branch IS NOT NULL
-        guard suppresses it).
+        Mapping, by (prompt_version / model_id): A=NULL/NULL not
+        stale, B=current/current not stale, C=OLD/current STALE,
+        D=current/OLD not stale, E=OLD/OLD STALE, F=NULL/OLD not
+        stale.
+
+        Only the `prompt_version` column decides. D and F carry a
+        drifted `model_id` and are deliberately NOT stale: that
+        column names the model behind the row's content, which no
+        rebuild rewrites. F is also NULL on the deciding column, and
+        NULL is never stale.
         """
         OLD_PV = 'old-prompt-version-deadbeef'
         OLD_MODEL = 'anthropic/claude-old-1.0'
@@ -248,7 +272,7 @@ class TestStaleHelpers:
             backend.nodes.insert(make_insight(
                 id=rid, content=f'content for {rid} long enough',
                 prompt_version=pv, model_id=mid))
-        return ['row-c', 'row-d', 'row-e', 'row-f']
+        return ['row-c', 'row-e']
 
     def test_iter_returns_only_drifted_rows(self, backend):
         """iter_stale_insight_ids excludes NULL provenance and current rows.
@@ -261,7 +285,7 @@ class TestStaleHelpers:
         expected = self._seed_six_row_matrix(
             backend, active_pv, active_model)
 
-        ids = backend.nodes.iter_stale_insight_ids(active_pv, active_model)
+        ids = backend.nodes.iter_stale_insight_ids(active_pv)
         assert sorted(ids) == sorted(expected)
 
     def test_count_matches_iter(self, backend):
@@ -273,9 +297,9 @@ class TestStaleHelpers:
         active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
         self._seed_six_row_matrix(backend, active_pv, active_model)
 
-        n = backend.nodes.count_stale_insights(active_pv, active_model)
-        ids = backend.nodes.iter_stale_insight_ids(active_pv, active_model)
-        assert n == len(ids) == 4
+        n = backend.nodes.count_stale_insights(active_pv)
+        ids = backend.nodes.iter_stale_insight_ids(active_pv)
+        assert n == len(ids) == 2
 
     def test_count_matches_doctor_stale_rows(self, backend):
         """count_stale_insights agrees with check_provenance_drift's stale_rows.
@@ -288,39 +312,17 @@ class TestStaleHelpers:
         active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
         self._seed_six_row_matrix(backend, active_pv, active_model)
 
-        helper_count = backend.nodes.count_stale_insights(
-            active_pv, active_model)
+        helper_count = backend.nodes.count_stale_insights(active_pv)
         doctor_result = check_provenance_drift(backend)
         assert helper_count == doctor_result['detail']['stale_rows']
 
-    def test_no_active_model_skips_model_branch(self, backend):
-        """When active_model is None, only prompt_version drift is stale."""
-        from memman.pipeline.remember import compute_prompt_version
-
-        active_pv = compute_prompt_version()
-        OLD_PV = 'old-prompt-version-deadbeef'
-        OLD_MODEL = 'anthropic/claude-old-1.0'
-        backend.nodes.insert(make_insight(
-            id='r-pv-drift', content='content one long enough',
-            prompt_version=OLD_PV, model_id=OLD_MODEL))
-        backend.nodes.insert(make_insight(
-            id='r-model-drift-only', content='content two long enough',
-            prompt_version=active_pv, model_id=OLD_MODEL))
-
-        ids = backend.nodes.iter_stale_insight_ids(active_pv, None)
-        assert ids == ['r-pv-drift']
-
     def test_empty_store(self, backend):
         """Empty store returns 0 / [] from both helpers."""
-        from memman import config
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
-        assert backend.nodes.iter_stale_insight_ids(
-            active_pv, active_model) == []
-        assert backend.nodes.count_stale_insights(
-            active_pv, active_model) == 0
+        assert backend.nodes.iter_stale_insight_ids(active_pv) == []
+        assert backend.nodes.count_stale_insights(active_pv) == 0
 
 
 class TestEdgeDegree:
