@@ -1755,6 +1755,24 @@ class PostgresRecallSession(RecallSession):
         Similarity is `1 - (embedding <=> :q)` (cosine in [-1, 1],
         higher is better). `category` / `source` filter in SQL before
         the limit so the top-k cut is taken over eligible rows only.
+
+        Notes
+        -----
+        - `hnsw.ef_search` is raised to `max(40, 4 * k)` for this
+          query. HNSW is approximate, so a search width close to `k`
+          returns a top-k that is merely near the true one: measured
+          against an exact SQL oracle over 60 real queries at `k=30`,
+          pgvector's default width of 40 (1.33x `k`) returned
+          `recall@30 = 0.9744`, exact on only 35 of 60, and missed
+          rows scoring as high as 0.4972. At 3.3x it was exactly
+          1.0000 on 60 of 60, and widening further changed nothing.
+        - The width scales with `k` rather than being pinned, so a
+          larger anchor budget widens the search with it. The floor
+          is pgvector's own default, so this can never search
+          narrower than the library would.
+        - It must be set on THIS connection. The session opens its
+          own (`__enter__`), so a width set on the parent Backend's
+          connection never reaches the query that needs it.
         """
         assert self._conn is not None
         sql = f"""
@@ -1767,6 +1785,7 @@ order by embedding <=> %s::vector
 limit %s
 """
         with self._conn.cursor() as cur:
+            cur.execute(f'set hnsw.ef_search = {max(40, 4 * int(k))}')
             cur.execute(sql, (
                 query_vec, category, category, source, source,
                 query_vec, k))
