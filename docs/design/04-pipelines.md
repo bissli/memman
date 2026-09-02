@@ -198,7 +198,7 @@ Rescaling one intent's row by a positive constant leaves the weighted-sum order 
 
 Note the interaction with the cross-encoder (Step 4b): when rerank fires it overwrites `final` for the top `RERANK_SHORTLIST = 100` rows, so on a pool of 100 or fewer these weights decide nothing about the order the caller sees. Above 100 they decide which rows reach the reranker at all.
 
-When the pool exceeds the shortlist, that splice leaves cross-encoder scores on the head and blended scores on the tail; a smaller pool is overwritten whole and has no tail. The limit slice normally drops the tail, but it runs only when `limit > 0`, so `--limit 0` (unbounded) or `--limit > 100` carries both scales into the WHY and WHEN re-sorts, which compare them on one key: `causal_topological_sort` orders its ready set by `-score`, and WHEN breaks a `created_at` tie by score. On that path the order is an interleave of two incomparable scales, so a weight change can perturb it - WHY whenever a tail score crosses a head score, WHEN only on a `created_at` tie straddling the boundary, which is routine because timestamps are second-granularity. No shipped surface reaches it: the skills and hooks recall at `--limit 5` or `--limit 10`.
+When the pool exceeds the shortlist, that splice leaves cross-encoder scores on the head and blended scores on the tail; a smaller pool is overwritten whole and has no tail. The limit slice normally drops the tail, but it runs only when `limit > 0`, so `--limit 0` (unbounded) or `--limit > 100` returns both scales in one list, ordered on one key. The order within the head and within the tail is each internally consistent; only a comparison ACROSS the boundary is meaningless. Nothing re-sorts after the slice, so the splice can no longer be compounded by a second ordering pass - which is what previously let a weight change perturb the returned order on that path.
 
 **Per-intent tuning.** The Step 3 traversal budget and the Step 4 reranker weights both vary by intent. Left columns tune beam search; right columns tune the reranker:
 
@@ -240,13 +240,13 @@ Failures (timeouts, non-200 responses) are caught and logged; the baseline order
 
 Rerank is enabled by default because a labeled-corpus evaluation showed it lifts retrieval quality where the bi-encoder is weakest, with no observed regression on the kinds of queries it was predicted to hurt. WHY and WHEN intents — initially predicted to regress under cross-encoder reranking — gained the most, because their bi-encoder baselines were the weakest. The per-store `MEMMAN_RERANK_ENABLED_<store>` knob exists for operators whose corpora prove to be exceptions.
 
-### Step 5: WHY post-processing — causal topological sort
+### Step 5: WHY structure — causal edges in `meta`
 
-If the intent is WHY, an additional topological sort using Kahn's algorithm arranges results along causal edges so that **causes come first, effects follow**.
+If the intent is WHY, the response carries `meta.causal_edges`: the `[cause, effect]` pairs among the returned rows, cause first, restricted to ids the caller actually received. An empty list is emitted rather than omitted, because "these rows carry no causal relation to each other" is a fact the rows themselves cannot convey.
 
-### Step 5b: WHEN post-processing — chronological sort
+The list is built from the SOURCE-KEYED `directed` adjacency, never the symmetrized `bidir` map the beam traversal walks — the beam crosses a causal edge from either end on purpose, but a payload that did so would give every pair a spurious reverse. Pairs are emitted in returned-row order rather than by iterating an id set, because string hashing is salted per process and a set-ordered payload would differ between two runs of the same query.
 
-If the intent is WHEN, results are re-sorted chronologically — **newest first** by `created_at`, with score as tiebreaker for equal timestamps.
+**Rows are not re-ordered.** There is no post-limit sort on any intent: the returned order is relevance order at every `--limit`, so the first `n` rows of a page of `m` are exactly what a page of `n` returns. A chronological or topological re-sort of a page already cut by relevance asserts an ordering the result set does not contain — five rows dated across a year read as a timeline when they are the five most relevant, arranged to look like one. Relevance order asserts only what each row's visible `score` already shows. On `WHEN`, sort on `created_at`, which `--brief` carries.
 
 ### Signal breakdown
 
@@ -271,16 +271,20 @@ Each retrieval result includes signal details:
 }
 ```
 
-`via` reports either the anchor channel that selected the row
-(`keyword`, `vector`, `hybrid`, `time`) or the edge type that reached
-it (`entity`, `temporal`, `causal`, `semantic`). In practice the edge
-type dominates: the traversal overwrites an anchor's channel label
-whenever it re-scores that node, so on a well-connected store almost
-every returned row carries an edge type. A channel label survives only
-where traversal never re-scored the row -- a store with no edges
-returns every row as `hybrid`. That overwrite is a known defect rather
-than the intent, and it is why the field cannot be read as reliable
-provenance.
+Provenance is tracked internally but NOT returned. The pipeline keeps
+a `via` label per candidate -- either the anchor channel that selected
+the row (`keyword`, `vector`, `hybrid`, `time`) or the edge type that
+reached it (`entity`, `temporal`, `causal`, `semantic`) -- and the
+traversal overwrites an anchor's channel label whenever it re-scores
+that node. On a well-connected store that overwrite is near-total:
+measured over 3,000 returned rows, the label took only edge-type
+values and reported an anchor channel ZERO times, so a row the vector
+channel surfaced came back labeled `entity`. It also predicted
+nothing, spanning 0.05 in precision against judged relevance across
+its four values while a typical page carried four distinct ones. A
+field that is both wrong and uninformative was removed from the
+caller payload rather than corrected in place; reinstating it means
+fixing the overwrite first.
 
 `signals.rerank` is present only on rows Step 4b actually re-scored: it is the cross-encoder score, and it is the same number that replaced `score`. Its absence means the row never reached the shortlist, or that rerank was off, gated by the token minimum, or failed.
 
@@ -300,18 +304,17 @@ The host LLM sees these signals and can apply its own judgment with full convers
 | `anchor_count`  | Step 2      | Fused anchor pool size, after `--cat` / `--source` filtering                       |
 | `traversed`     | Step 3      | Candidates scored, deliberately unfiltered                                        |
 | `reranked`      | Step 4b     | `true` only when the cross-encoder re-scored the shortlist; a reranker failure leaves it `false` |
-| `ordering`      | Step 5 / 5b | `causal_topological` (WHY), `chronological` (WHEN), else `score`                   |
-| `sparse`        | Post-slice  | Present only when `true`: the low-confidence rule below                           |
+| `causal_edges`  | Step 5      | WHY only: `[cause, effect]` pairs among the returned rows; emitted even when empty |
 
 Two of these carry a trap worth stating. `intent_source` reads `override` for a Step 0 expansion hint exactly as it does for an explicit `--intent`, so it distinguishes automatic detection from everything else, not the user from the LLM. And `anchor_count` against `traversed` is the filter diagnostic, read against the budget rule in Step 2 rather than against a flat 30: while `limit` stays at or below `ANCHOR_TOP_K`, an anchor count that collapses under a selective `--cat` while `traversed` stays wide says the filter starved the anchor pools, not the graph. Above that, a filter widens the budget itself and the two move for reasons that are not the diagnosis.
 
-`sparse` fires on any of three arms: an empty result set, fewer than `limit // 2` rows when `limit > 0`, or a candidate pool in which nothing matched a query token. The row-count arm needs a bounded limit, so at `--limit 0` only the empty-set and unmatched-token arms can fire. That last arm is the unscoped-query case, where Step 2's Recency signal anchors newest-first rows that match nothing. Its token test reads the pool as scored -- before `--cat` / `--source` filtering, `min_score`, MMR, rerank and the limit slice -- so rows the graph reached from a real match are never called irrelevant. The keyword channel alone carries that arm, and no similarity term belongs in it: `sim_cache` holds a cosine only when it is strictly positive and the lookup defaults to 0.0, so an exactly-zero similarity means either that the row carries no embedding or that its cosine was non-positive. It never distinguishes those from a real relevance measured and found small, which is why no floor on that signal can carry the arm. Measured by `experiments/recall_ablation/verify_sparse_rule.py`.
+**There is no confidence flag, and that is deliberate.** Recall returns rows even when nothing matches -- Step 2's Recency channel anchors the newest insights regardless -- so a full page is not evidence that anything on it is relevant. An empty `results` means the store itself is empty, not that the query failed. The response answers this per ROW instead: every returned row carries its own `score` and its per-channel `signals`, which a caller compares WITHIN one response. A boolean derived from a threshold would freeze one reranker's score scale into the envelope, and the scale changes when `MEMMAN_RERANK_PROVIDER` or the model does; a per-row score weighed against its siblings does not.
 
-`sparse` is emitted only when set, and `ignored` only when non-empty. A calling LLM reads this envelope out of its own context window, so a key that always reported `false` would spend tokens to say nothing. On the scored path a missing `sparse` therefore means the set is not sparse; under `--basic` it means nothing was computed.
+`ignored` is emitted only when non-empty. A calling LLM reads this envelope out of its own context window, so a key that always reported `false` would spend tokens to say nothing.
 
-Under `--basic` none of those keys exist. That envelope is `{'basic': true}`, plus `ignored` when a flag was wasted -- a list of bare flag names (`intent`, `expand`), without the leading dashes. The absence of `sparse` there is not confidence: `--basic` can return nothing and says so no differently than a full page.
+Under `--basic` none of those keys exist. That envelope is `{'basic': true}`, plus `ignored` when a flag was wasted -- a list of bare flag names (`intent`, `expand`), without the leading dashes. `--basic` returns before ranking, so it carries no `score` and no `signals` either: it can return nothing and says so no differently than a full page.
 
-The rows change shape as well, which matters more to a consumer than the missing `meta` keys. A scored row wraps its insight -- `{'insight': ..., 'score': ..., 'intent': ..., 'signals': ..., 'via': ...}` -- while a basic row IS the bare insight dict. Code reading `results[i]['insight']` or `results[i]['signals']` breaks under `--basic`.
+The rows change shape as well, which matters more to a consumer than the missing `meta` keys. A scored row wraps its insight -- `{'insight': ..., 'score': ..., 'intent': ..., 'signals': ...}` -- while a basic row IS the bare insight dict. Code reading `results[i]['insight']` or `results[i]['signals']` breaks under `--basic`.
 
 ### Recall trace events
 

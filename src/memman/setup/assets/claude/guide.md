@@ -12,27 +12,43 @@
 - Making architectural or design decisions
 - Writing code that touches patterns discussed in past sessions
 
-To recall: `memman recall "<query>" --limit 5`.
+To recall: `memman recall "<query>" --brief --limit 20`.
 Craft a focused, keyword-rich query — do not pass the raw user prompt.
 The cross-encoder reranker runs by default on multi-token queries
-(auto-skipped on 1-2 token queries).
+(auto-skipped on 1-2 token queries). Pass `--session <id>` so the
+return is attributable to your session.
+
+A brief page of 20 costs a fraction of a full page of 5 and carries
+several times the relevant material, so scan wide and open what earns
+it with `memman insights show <id>`.
 
 On the scored path (no `--basic`) the recall response's `meta`
 object carries:
 - `hint`: intent-specific reasoning guidance (always present) — use it to
   frame your synthesis of the results
-- `ordering`: how results are sorted — `causal_topological` (WHY),
-  `chronological` (WHEN), or `score` (ENTITY/GENERAL)
 - `reranked`: boolean — true when the cross-encoder rerank stage
   fired (false when query was too short or rerank is disabled for
   this store via `MEMMAN_RERANK_ENABLED_<store>=false`)
-- `sparse`: boolean, present only on a low-confidence result set. It is
-  set when the set is empty, when it holds fewer than `limit // 2` rows,
-  or when no candidate matched a query token. Recall always returns rows
-  (a recency channel seeds the newest insights as anchors whether or not
-  they match), so a full page of `sparse` results means nothing relevant
-  is stored, not that these are the answer. Broaden the query, or accept
-  that the store does not hold it
+- `causal_edges`: on `WHY` only, the `[cause, effect]` pairs among the
+  returned rows, cause first. An empty list means these rows carry no
+  causal relation to each other — which the rows themselves cannot
+  tell you
+
+Rows always come back in relevance order, at every `--limit`, so the
+first `n` rows of a page of `m` are exactly what a page of `n` would
+have returned. Nothing re-sorts after the cut.
+
+**Judging what came back.** Recall returns rows even when nothing
+matches: a recency channel seeds the newest insights as anchors
+regardless. An empty `results` therefore means the store itself is
+empty, not that the query failed. A full page is therefore not evidence that anything on it is
+relevant — and a page that looks thin usually is not, because the
+store nearly always holds something bearing on a query drawn from the
+same work. Judge each row on its merits against the query. Each row
+carries its own `score` and per-channel `signals`; compare them
+WITHIN the page and never against a fixed number, because the scale
+belongs to whichever reranker is configured. Report that nothing
+relevant is stored only when no row bears on the query.
 
 Under `--basic` none of those keys exist. That envelope is
 `{basic: true}`, plus `ignored` when a flag was inert:
@@ -42,12 +58,12 @@ Under `--basic` none of those keys exist. That envelope is
   this list -- it is rejected outright, because ignoring a filter
   would leave every returned row looking as though it had cleared a
   floor it never met
-- There is no `sparse` under `--basic`. Its ABSENCE there is not
-  confidence: `--basic` can return `results: []` and says nothing
-  about how well anything matched
+`--basic` returns before ranking, so it carries no `score` and no
+`signals` either. An empty `results` there says nothing about how well
+anything matched.
 
-`--brief` cuts each row to `id`, `category`, `importance`, and
-`summary`, on either path. Use it when scanning for which insight to
+`--brief` cuts each row to `id`, `category`, `importance`,
+`created_at`, and `summary`, on either path. Use it when scanning for which insight to
 open rather than reading the insights themselves. A row with no
 summary falls back to the first 200 characters of its content, so no
 row comes back blank, and `truncated: true` marks that fallback when
@@ -56,9 +72,9 @@ hold the whole row: a summarized row carries no marker however much
 its summary left out. Read a row in full with
 `memman insights show <id>`.
 
-`--brief` also drops `created_at`. On the scored path a WHEN query
-still reports `ordering: chronological` and orders rows newest first,
-so brief rows keep their sequence but carry no dates.
+A brief row carries `created_at`, so a WHEN query reconstructs a
+timeline by sorting on that field. Do not read row order as
+chronological: rows are relevance-ordered on every path.
 
 ### Phase awareness — when to write
 

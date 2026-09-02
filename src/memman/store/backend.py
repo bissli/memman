@@ -634,8 +634,8 @@ class RecallSession(Protocol):
         - The count is over the insight's content AND its entities,
           the same union `keyword.insight_tokens` builds, and it is
           the numerator of `kw_score`. A backend that returns a
-          different count changes `signals.keyword`, `--min-score`,
-          the rerank blend, and `meta.sparse` together.
+          different count changes `signals.keyword`, `--min-score`
+          and the rerank blend together.
         - NON-ASCII TEXT DIVERGES ON SQLITE, deliberately and
           measurably. `keyword._WORD_RE` is `[a-zA-Z0-9]+`, so it
           splits a run at any other character; FTS5 `unicode61`

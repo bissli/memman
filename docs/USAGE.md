@@ -100,8 +100,9 @@ memman forget <id>
 | `--intent`    | (auto-detect) | Override intent: `WHY`, `WHEN`, `ENTITY`, `GENERAL`; validated always, but inert under `--basic` and named in `meta.ignored`             |
 | `--cat`       |               | Filter by category                                                                                                                       |
 | `--source`    |               | Filter by source                                                                                                                         |
-| `--basic`     | `false`       | Use simple SQL LIKE matching instead of smart recall; emits no `sparse`, and names `--intent` / `--expand` in `meta.ignored` when passed |
-| `--brief`     | `false`       | Cut each result to id, category, importance, summary                                                                                     |
+| `--basic`     | `false`       | Use simple SQL LIKE matching instead of smart recall; returns before ranking so it carries no `score` or `signals`, and names `--intent` / `--expand` in `meta.ignored` when passed |
+| `--brief`     | `false`       | Cut each result to id, category, importance, created_at, summary                                                                         |
+| `--session`   |               | Calling session id, recorded on the `recall-detail` oplog row so a return is attributable to a session                                    |
 | `--expand`    | `false`       | Opt-in LLM query expansion (synonyms + intent hint); inert under `--basic` and named in `meta.ignored`                                   |
 | `--min-score` | `0.0`         | Relevance floor on keyword+similarity, 0.0 to 2.0 (`0.0` = off); rejected with `--basic`                                                 |
 
@@ -111,34 +112,34 @@ rerank provider; ships defaulted to `voyage` / `rerank-3-lite`). Toggle
 per-store with `memman config set MEMMAN_RERANK_ENABLED_<store> false` or
 globally with `memman config set MEMMAN_RERANK_ENABLED false`.
 
-**Telling a weak result set from a strong one.** Smart recall always
-returns rows: a recency channel seeds the newest insights as traversal
-anchors whether or not they match, so a query that matches nothing
-still comes back full. Two surfaces separate the cases.
+**Telling a weak result set from a strong one.** Smart recall returns
+rows even when nothing matches: a recency channel seeds the newest
+insights as traversal anchors regardless, so a query that matches
+nothing still comes back full. A full page is therefore not evidence
+that anything on it is relevant, and a page that looks thin usually is
+not: a store nearly always holds something bearing on a query drawn
+from the same work. An empty `results` means the store itself is
+empty, not that the query failed.
 
-`meta.sparse` is the signal. It is set when the result set is empty,
-when it holds fewer than `limit // 2` rows, or when no candidate
-matched a query token. That last arm is the unscoped-query case: a
-full page of the nearest unrelated memories. Treat a `sparse` response
-as "nothing relevant is stored" rather than as an answer. The one case
-it calls wrong is a query sharing no literal token with a row the
-vector search did find, so re-ask in the store's own words before
-concluding the store is empty.
+There is no flag for this, deliberately. Every returned row carries
+its own `score` and its per-channel `signals` (keyword, similarity,
+graph), and those are what a caller judges on - compared WITHIN one
+response, never against a fixed number, because the scale belongs to
+whichever reranker is configured and changes when the model does. A
+boolean computed from a threshold would freeze one model's scale into
+the response.
 
-The last arm reads the keyword channel alone, and deliberately not
-similarity. An exactly-zero similarity means the row carries no
-embedding rather than that it is irrelevant, so a rule requiring it
-fires on nothing once a store is embedded. The two signals also
-overlap in range between matching and non-matching queries, which is
-why no similarity floor replaces the keyword test. The arm also reads
-the candidate pool as scored, ahead of `--cat`/`--source` filtering,
-`--min-score`, reranking and the limit slice, so a recall whose
-returned rows were reached by graph from a match is not called
-irrelevant.
+Rows come back in relevance order at every `--limit`, so the first `n`
+rows of a page of `m` are exactly what a page of `n` returns. Nothing
+re-sorts after the limit cut. On `WHY`, `meta.causal_edges` carries
+the `[cause, effect]` pairs among the returned rows, cause first; an
+empty list means those rows carry no causal relation to each other.
+On `WHEN`, sort on each row's `created_at`, which `--brief` also
+carries.
 
-The row-count arm needs a bounded limit. At `--limit 0` or below,
-which means unbounded, only the empty-set and unmatched-token arms
-apply.
+If a query returns nothing that bears on it, the likeliest cause is
+vocabulary: re-ask in the store's own words before concluding the
+store does not hold it.
 
 `--min-score` is the filter. It drops rows whose keyword plus
 similarity sum falls under the floor, so the range is 0.0 to 2.0 and
@@ -474,6 +475,6 @@ The host session never blocks on the network. Newly stored memories become recal
 4. **3-signal rerank** — keyword, similarity, graph (intent-weighted). A stored entity name reaches the keyword signal because a candidate's token set unions its content tokens with its entity-name tokens.
    - **4a. MMR diversity re-sort** — one-shot re-sort of the top 200; shipped disabled (`MMR_LAMBDA = 1.0`, measured a no-op under the cross-encoder rerank at both placements — see `experiments/recall_ablation/README.md`).
 5. **Cross-encoder rerank** (on by default; toggle per-store via `MEMMAN_RERANK_ENABLED_<store>`) — the configured reranker (default `voyage` / `rerank-3-lite`) re-scores the top 100 candidates; replaces the multi-signal score for the final ordering. Auto-skips on 1-2 token queries.
-6. **Post-sort** — causal topological (WHY), chronological (WHEN), score (default).
+6. **Structure payload** — WHY carries `meta.causal_edges`, the `[cause, effect]` pairs among the returned rows. Nothing re-sorts after the limit cut: rows come back in relevance order on every intent.
 
 Inspired by [MAGMA](https://arxiv.org/abs/2601.03236). See [Design & Architecture](DESIGN.md) for the full deep dive.
