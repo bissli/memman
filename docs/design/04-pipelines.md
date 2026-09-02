@@ -6,7 +6,7 @@
 
 ## 4.1 Write pipeline: remember (deferred, two-tier)
 
-`memman remember` appends one row to the queue in ~50 ms. A user-scope scheduler (systemd timer on Linux, launchd agent on macOS) invokes the hidden worker `memman scheduler drain --pending` every 60 s; the drain runs extraction, reconciliation, and enrichment out of band.
+`memman remember` appends one row to the queue in ~50 ms. A user-scope scheduler (systemd timer on Linux, launchd agent on macOS) invokes the hidden worker `memman scheduler drain --timeout 60` every 60 s; the drain runs extraction, reconciliation, and enrichment out of band.
 
 ![Remember Pipeline](../diagrams/02-remember-pipeline.drawio.png)
 
@@ -22,7 +22,7 @@ Every write goes through the queue. When the scheduler is **stopped**, memman is
 
 ### Tier 2: background worker (scheduler-driven)
 
-`memman scheduler drain --pending` (hidden subcommand; only the trigger invokes it) runs under an environment-native trigger:
+`memman scheduler drain --timeout <seconds>` (hidden subcommand; only the trigger invokes it) runs under an environment-native trigger:
 
 - **Linux host**: `systemctl --user` timer at `~/.config/systemd/user/memman-enrich.timer`, `Persistent=true` so sleep/off catch-up is automatic.
 - **macOS host**: launchd agent at `~/Library/LaunchAgents/com.memman.enrich.plist` with `StartInterval=60`.
