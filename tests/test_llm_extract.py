@@ -19,14 +19,22 @@ from memman.llm.shared import parse_json_response
     ('Error on line 42 of the module', 'Error on of the module'),
     ('See app/page.html:106 for the diff', 'See for the diff'),
     ('Bind to localhost:8080', 'Bind to localhost:8080'),
-    ('Reach 10.10.1.247:8000 over VPN', 'Reach 10.10.1.247:8000 over VPN'),
+    ('Reach 192.0.2.1:8000 over VPN', 'Reach 192.0.2.1:8000 over VPN'),
     ('Worker fires daily at 14:18', 'Worker fires daily at 14:18'),
     ('Returns code:404 on miss', 'Returns code:404 on miss'),
     ('Use python:3.11 base image', 'Use python:3.11 base image'),
     ('redis:6379 is the cache', 'redis:6379 is the cache'),
 ])
 def test_strip_line_refs(text, expected):
-    """Strip file:line refs but preserve hostnames, ports, timestamps, versions."""
+    """Strip file:line refs but preserve hostnames, ports, timestamps, versions.
+
+    Mutation: broadening the `file:line` pattern until it also eats a
+    `host:port`, a `HH:MM` clock, an image tag, or a `code:404` - the
+    colon-digit shape is identical, so a pattern written without a
+    filename-extension guard strips all of them.
+    Oracle: hand-paired input/output rows, half of which must come
+    back unchanged.
+    """
     assert _strip_line_refs(text) == expected
 
 
