@@ -1061,10 +1061,9 @@ limit %s
 
     def stamp_enriched(
             self, id: Id, *,
-            prompt_version: str | None = None,
-            model_id: str | None = None) -> None:
+            prompt_version: str | None = None) -> None:
         with self._conn.cursor() as cur:
-            if prompt_version is None and model_id is None:
+            if prompt_version is None:
                 cur.execute(self._q(
                     'update {s}.insights set enriched_at = now()'
                     ' where id = %s'),
@@ -1072,8 +1071,8 @@ limit %s
                 return
             cur.execute(self._q(
                 'update {s}.insights set enriched_at = now(),'
-                ' prompt_version = %s, model_id = %s where id = %s'),
-                (prompt_version, model_id, id))
+                ' prompt_version = %s where id = %s'),
+                (prompt_version, id))
 
     def get_pending_link_ids(self, *, limit: int) -> list[Id]:
         sql = self._q("""
@@ -1130,37 +1129,27 @@ where enriched_at is null and linked_at is not null
             row = cur.fetchone()
             return int(row[0]) if row else 0
 
-    def iter_stale_insight_ids(
-            self, active_pv: str,
-            active_model: str | None) -> list[Id]:
+    def iter_stale_insight_ids(self, active_pv: str) -> list[Id]:
         sql = self._q("""
 select id from {s}.insights
 where deleted_at is null
-  and (
-    (prompt_version is not null and prompt_version != %s)
-    or (model_id is not null and %s::text is not null and model_id != %s)
-  )
+  and prompt_version is not null
+  and prompt_version != %s
 order by created_at asc
 """)
         with self._conn.cursor() as cur:
-            cur.execute(
-                sql, (active_pv, active_model, active_model))
+            cur.execute(sql, (active_pv,))
             return [r[0] for r in cur.fetchall()]
 
-    def count_stale_insights(
-            self, active_pv: str,
-            active_model: str | None) -> int:
+    def count_stale_insights(self, active_pv: str) -> int:
         sql = self._q("""
 select count(*) from {s}.insights
 where deleted_at is null
-  and (
-    (prompt_version is not null and prompt_version != %s)
-    or (model_id is not null and %s::text is not null and model_id != %s)
-  )
+  and prompt_version is not null
+  and prompt_version != %s
 """)
         with self._conn.cursor() as cur:
-            cur.execute(
-                sql, (active_pv, active_model, active_model))
+            cur.execute(sql, (active_pv,))
             row = cur.fetchone()
             return int(row[0]) if row else 0
 

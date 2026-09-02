@@ -2636,13 +2636,8 @@ def status(ctx: click.Context) -> None:
         try:
             from memman.pipeline.remember import compute_prompt_version
             active_pv = compute_prompt_version()
-            try:
-                active_model = config.require(
-                    config.LLM_MODEL_SLOW_CANONICAL)
-            except Exception:
-                active_model = None
             stale_insights: int | None = backend.nodes.count_stale_insights(
-                active_pv, active_model)
+                active_pv)
         except Exception:
             stale_insights = None
         out = {
@@ -3663,8 +3658,10 @@ def _graph_rebuild_stale_only(
         progress_jsonl: bool) -> None:
     """Stale-only branch of `graph rebuild`.
 
-    Filters work to rows whose persisted `prompt_version` / `model_id`
-    no longer match the active values. Works on SQLite and Postgres
+    Filters work to rows whose persisted `prompt_version` no longer
+    matches `compute_prompt_version()` -- the enrichment and causal
+    prompts plus the `slow_metadata` model, which is exactly the set
+    this command replays. Works on SQLite and Postgres
     (the wholesale rebuild's SQLite-only guard does not apply here:
     the per-row writes through `link_pending` are the same traffic
     the `remember` hot path already exercises). Lock + predicate +
@@ -3683,21 +3680,25 @@ def _graph_rebuild_stale_only(
     except Exception as exc:
         raise click.ClickException(
             f'cannot resolve active prompt version: {exc}')
+    # Reported, never compared: `active_pv` already folds this model
+    # in, so the payload names it only so a reader can tell WHICH
+    # input drifted without un-folding the hash.
     try:
-        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
+        enrich_model: str | None = config.require(
+            config.LLM_MODEL_SLOW_METADATA)
     except Exception:
-        active_model = None
+        enrich_model = None
 
     data_dir = ctx.obj['data_dir']
     store_name = _resolve_store_name(data_dir, ctx.obj['store'])
 
     with _active_backend(ctx) as backend:
         if dry_run:
-            stale = backend.nodes.count_stale_insights(
-                active_pv, active_model)
+            stale = backend.nodes.count_stale_insights(active_pv)
             _json_out({
                 'mode': 'stale-only', 'total': stale, 'dry_run': 1,
-                'active_pv': active_pv, 'active_model': active_model,
+                'active_pv': active_pv,
+                'active_enrich_model': enrich_model,
                 })
             return
 
@@ -3706,8 +3707,7 @@ def _graph_rebuild_stale_only(
                 raise click.ClickException(
                     'another graph rebuild is in progress on this store')
 
-            stale_ids = backend.nodes.iter_stale_insight_ids(
-                active_pv, active_model)
+            stale_ids = backend.nodes.iter_stale_insight_ids(active_pv)
             total_count = len(stale_ids)
 
             if total_count == 0:
@@ -3716,7 +3716,7 @@ def _graph_rebuild_stale_only(
                     'mode': 'stale-only',
                     'skipped': 'no_stale_rows',
                     'active_pv': active_pv,
-                    'active_model': active_model,
+                    'active_enrich_model': enrich_model,
                     }
                 _json_out(stats)
                 return
@@ -3777,7 +3777,7 @@ def _graph_rebuild_stale_only(
                 'processed': processed, 'remaining': remaining,
                 'mode': 'stale-only',
                 'active_pv': active_pv,
-                'active_model': active_model,
+                'active_enrich_model': enrich_model,
                 }
             backend.oplog.log(
                 operation='rebuild', insight_id='',
@@ -3793,8 +3793,10 @@ def _graph_rebuild_stale_only(
                    ' (for parents that capture stderr and need streaming'
                    ' progress while the inner tqdm bar is suppressed).')
 @click.option('--stale-only', is_flag=True, default=False,
-              help='Re-enrich only rows whose prompt_version or model_id'
-                   ' no longer matches the active config. Cross-backend'
+              help='Re-enrich only rows whose prompt_version no longer'
+                   ' matches the active config -- the enrichment and'
+                   ' causal prompts plus the slow_metadata model, which'
+                   ' is exactly what this command replays. Cross-backend'
                    ' (works on Postgres). NULL provenance rows are not'
                    ' swept; they need a separate backfill.')
 @click.pass_context

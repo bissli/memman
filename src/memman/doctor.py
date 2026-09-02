@@ -1069,25 +1069,35 @@ def check_no_stale_swap_meta(backend: Backend) -> dict[str, Any]:
         'detail': {'leftover_keys': leftover}}
 
 
-def _is_provenance_stale(
-        row_pv: str | None, row_model: str | None,
-        active_pv: str, active_model: str | None) -> bool:
+def _is_provenance_stale(row_pv: str | None, active_pv: str) -> bool:
     """Single source of truth for the stale-row predicate.
 
-    A row is stale iff `prompt_version` is non-NULL and differs from
-    `active_pv`, OR `model_id` is non-NULL and `active_model` is non-
-    NULL and they differ. NULL provenance is intentionally not stale
-    (those rows pre-date provenance tracking and need a separate
-    backfill).
+    Parameters
+    ----------
+    row_pv : str or None
+        The row's stored `prompt_version`.
+    active_pv : str
+        The active `compute_prompt_version()` key.
 
-    The same predicate is encoded in SQL by `count_stale_insights`
-    and `iter_stale_insight_ids` (`store/node.py`,
-    `store/postgres.py`); keep those WHERE clauses aligned with this
-    function when the rule changes.
+    Returns
+    -------
+    bool
+        True when the row's key is present and has drifted.
+
+    Notes
+    -----
+    - NULL is deliberately not stale: those rows pre-date provenance
+      tracking and need a backfill, not a rebuild.
+    - `model_id` is NOT compared. `active_pv` folds in the
+      `slow_metadata` model, the only model `link_pending` re-runs;
+      `model_id` records the CONTENT model, which no rebuild
+      rewrites, so comparing it would report a row stale forever.
+    - The same predicate is encoded in SQL by `count_stale_insights`
+      and `iter_stale_insight_ids` (`store/node.py`,
+      `store/postgres.py`); keep those WHERE clauses aligned with
+      this function when the rule changes.
     """
-    if row_pv is not None and row_pv != active_pv:
-        return True
-    return bool(row_model is not None and active_model is not None and row_model != active_model)
+    return row_pv is not None and row_pv != active_pv
 
 
 def check_provenance_drift(backend: Backend) -> dict[str, Any]:
@@ -1127,12 +1137,10 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
     provenance = backend.nodes.provenance_distribution()
 
     active_pv = detail['active_prompt_version']
-    active_model = detail['active_model_slow_canonical']
     breakdown: list[dict[str, Any]] = []
     stale_rows = 0
     for pc in provenance:
-        is_stale = _is_provenance_stale(
-            pc.prompt_version, pc.model_id, active_pv, active_model)
+        is_stale = _is_provenance_stale(pc.prompt_version, active_pv)
         breakdown.append({
             'prompt_version': pc.prompt_version,
             'model_id': pc.model_id,

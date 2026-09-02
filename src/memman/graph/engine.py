@@ -73,7 +73,6 @@ def link_pending(
     if metadata_llm_client is None:
         metadata_llm_client = llm_client
 
-    from memman import config
     from memman.graph.causal import infer_llm_causal_edges
     from memman.graph.enrichment import enrich_with_llm
     from memman.pipeline.remember import compute_prompt_version
@@ -85,12 +84,6 @@ def link_pending(
             f'compute_prompt_version failed; provenance left null:'
             f' {type(exc).__name__}: {exc}')
         active_pv = None
-    from memman.exceptions import ConfigError
-    try:
-        active_model: str | None = config.require(
-            config.LLM_MODEL_SLOW_CANONICAL)
-    except ConfigError:
-        active_model = None
 
     processed = 0
 
@@ -185,9 +178,7 @@ def link_pending(
             backend.nodes.stamp_linked(insight_id)
             if enrichment and not reembed_failed:
                 backend.nodes.stamp_enriched(
-                    insight_id,
-                    prompt_version=active_pv,
-                    model_id=active_model)
+                    insight_id, prompt_version=active_pv)
             return sem_count
 
         with backend.transaction():

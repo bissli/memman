@@ -168,14 +168,14 @@ memman graph related <id> --edge causal --depth 2
 memman graph rebuild              # process all insights
 memman graph rebuild --dry-run    # preview count without modifying DB
 memman graph rebuild --stale-only # re-enrich only rows whose prompt_version
-                                  # or model_id no longer matches active config
+                                  # no longer matches the active enrichment key
 ```
 
 Auto-reindex of computed edges (semantic, entity, temporal) fires on `open_db()` when graph constants have changed; no operator command for it.
 
 `graph rebuild` re-enriches all insights through the full LLM pipeline (enrichment, re-embedding, causal inference, edge recreation). Processes in batches of 20. Returns `{"processed": N, "remaining": 0}`. Rejected when the scheduler is stopped.
 
-`--stale-only` is the targeted variant: it only touches rows whose persisted `prompt_version` or `model_id` no longer matches the active config. Cross-backend (works on Postgres, unlike wholesale `graph rebuild` which remains SQLite-only). Shares the `'rebuild'` advisory lock so it cannot race a wholesale rebuild. NULL-provenance rows are not swept; they need a separate backfill.
+`--stale-only` is the targeted variant: it only touches rows whose persisted `prompt_version` no longer matches `compute_prompt_version()` -- the enrichment prompt, the causal prompt, and the `slow_metadata` model, which is exactly the set this command replays. A `model_id` difference is deliberately NOT staleness: that column records the model behind the row's content, which no rebuild rewrites, so reporting it would nag forever with no remedy. Cross-backend (works on Postgres, unlike wholesale `graph rebuild` which remains SQLite-only). Shares the `'rebuild'` advisory lock so it cannot race a wholesale rebuild. NULL-provenance rows are not swept; they need a separate backfill.
 
 ### Insights lifecycle
 

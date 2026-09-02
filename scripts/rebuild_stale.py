@@ -3,8 +3,8 @@ r"""Re-enrich provenance-drifted insights via `graph rebuild --stale-only`.
 
 Iterates a list of stores, runs `memman graph rebuild --stale-only`
 per store, and streams a tqdm progress bar sized from the *stale*
-row count (rows whose persisted `prompt_version` or `model_id` no
-longer matches active config), not the active-row count. Per-store
+row count (rows whose persisted `prompt_version` no longer matches
+the active enrichment key), not the active-row count. Per-store
 output is captured and appended to a log file under `/tmp` so the
 rebuild can run in the background and the operator can tail it later.
 
@@ -89,8 +89,8 @@ def _store_stale_count(memman: str, store: str) -> int:
 
     Uses `memman --store <store> status` (cheap, no LLM). The status
     JSON exposes the count as `stale_insights`; null indicates the
-    active prompt_version/model couldn't be resolved (e.g., missing
-    config), in which case treat the store as having no work and
+    active enrichment key couldn't be resolved (e.g., the store would
+    not open), in which case treat the store as having no work and
     skip it.
     """
     out = subprocess.run(

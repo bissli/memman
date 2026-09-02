@@ -797,22 +797,38 @@ def stamp_linked(db: 'DB', insight_id: str, ts: str) -> None:
 
 def stamp_enriched(
         db: 'DB', insight_id: str, ts: str, *,
-        prompt_version: str | None = None,
-        model_id: str | None = None) -> None:
-    """Set enriched_at timestamp for an insight.
+        prompt_version: str | None = None) -> None:
+    """Set enriched_at, and the staleness key when one is given.
 
-    When `prompt_version` / `model_id` are provided, also writes them
-    so future provenance-drift checks see the row as current.
+    Parameters
+    ----------
+    db : DB
+        Open store handle.
+    insight_id : str
+        Row to stamp.
+    ts : str
+        Formatted `enriched_at` timestamp.
+    prompt_version : str or None, default None
+        The `compute_prompt_version()` key this enrichment ran under.
+        Omitted by the write path, which already set it at insert.
+
+    Notes
+    -----
+    - It deliberately does NOT touch `model_id`. That column records
+      the model that produced the row's CONTENT, which re-enrichment
+      never rewrites; stamping it here attributed every rebuilt row
+      to whatever model happened to be configured at rebuild time and
+      corrupted `provenance_distribution`.
     """
-    if prompt_version is None and model_id is None:
+    if prompt_version is None:
         db._exec(
             'update insights set enriched_at = ? where id = ?',
             (ts, insight_id))
         return
     db._exec(
-        'update insights set enriched_at = ?,'
-        ' prompt_version = ?, model_id = ? where id = ?',
-        (ts, prompt_version, model_id, insight_id))
+        'update insights set enriched_at = ?, prompt_version = ?'
+        ' where id = ?',
+        (ts, prompt_version, insight_id))
 
 
 def get_pending_link_ids(db: 'DB', limit: int) -> list[str]:
@@ -875,47 +891,46 @@ def count_unenriched_linked(db: 'DB') -> int:
 
 
 def iter_stale_insight_ids(
-        db: 'DB', active_pv: str,
-        active_model: str | None) -> list[str]:
-    """Return ids of active insights whose provenance no longer matches.
+        db: 'DB', active_pv: str) -> list[str]:
+    """Return ids of active insights whose staleness key has drifted.
 
-    Mirrors the predicate in `doctor.check_provenance_drift`: a row is
-    stale iff `prompt_version` is non-NULL and differs from `active_pv`,
-    OR `model_id` is non-NULL and `active_model` is non-NULL and they
-    differ. NULL provenance is intentionally not stale (those rows
-    pre-date provenance tracking and need a separate backfill).
+    Notes
+    -----
+    - A row is stale iff `prompt_version` is non-NULL and differs from
+      `active_pv`. NULL provenance is deliberately not stale: those
+      rows pre-date provenance tracking and need a backfill, not a
+      rebuild.
+    - There is no `model_id` branch. `active_pv` already folds in the
+      `slow_metadata` model, which is the only model
+      `link_pending` re-runs; comparing `model_id` as well would fire
+      on the CONTENT model, which no rebuild rewrites, so the row
+      would report stale forever.
+    - Keep this predicate aligned with
+      `doctor._is_provenance_stale` and the Postgres copy.
     """
     sql = """
 select id from insights
 where deleted_at is null
-  and (
-    (prompt_version is not null and prompt_version != ?)
-    or (model_id is not null and ? is not null and model_id != ?)
-  )
+  and prompt_version is not null
+  and prompt_version != ?
 order by created_at asc
 """
-    rows = db._query(
-        sql, (active_pv, active_model, active_model)).fetchall()
+    rows = db._query(sql, (active_pv,)).fetchall()
     return [r[0] for r in rows]
 
 
-def count_stale_insights(
-        db: 'DB', active_pv: str,
-        active_model: str | None) -> int:
-    """Count active insights stale w.r.t. current prompt/model.
+def count_stale_insights(db: 'DB', active_pv: str) -> int:
+    """Count active insights whose staleness key has drifted.
 
     Same predicate as `iter_stale_insight_ids`.
     """
     sql = """
 select count(*) from insights
 where deleted_at is null
-  and (
-    (prompt_version is not null and prompt_version != ?)
-    or (model_id is not null and ? is not null and model_id != ?)
-  )
+  and prompt_version is not null
+  and prompt_version != ?
 """
-    row = db._query(
-        sql, (active_pv, active_model, active_model)).fetchone()
+    row = db._query(sql, (active_pv,)).fetchone()
     return row[0] if row else 0
 
 

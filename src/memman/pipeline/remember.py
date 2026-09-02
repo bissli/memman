@@ -48,26 +48,55 @@ logger = logging.getLogger('memman')
 
 @functools.lru_cache(maxsize=1)
 def compute_prompt_version() -> str:
-    """Return a 16-char SHA-256 hash of the write-path system prompts.
+    """Return a 16-char SHA-256 hash of what a rebuild can replay.
 
-    Covers every system prompt that can mutate what lands in the store
-    (fact extraction, reconciliation, LLM enrichment, LLM causal
-    inference). Query-time prompts (QUERY_EXPANSION) are excluded
-    because they don't affect stored content. The hash is cached for
-    the life of the process — the prompts are module-level constants.
+    Returns
+    -------
+    str
+        First 16 hex chars of a SHA-256 over the enrichment prompt,
+        the causal-inference prompt, and the resolved
+        `MEMMAN_LLM_MODEL_SLOW_METADATA` id.
 
-    Note: the slow-role model ids are *not* part of this hash. Swapping
-    `MEMMAN_LLM_MODEL_SLOW_CANONICAL` or `MEMMAN_LLM_MODEL_SLOW_METADATA`
-    to a model that produces structurally different facts will not
-    invalidate stored insights. Run `memman graph rebuild` after a
-    model swap to re-enrich.
+    Notes
+    -----
+    - THE INVARIANT: this hashes exactly the inputs `link_pending`
+      (`graph/engine.py`) re-runs, and nothing else. It is both the
+      value `stamp_enriched` writes and the key
+      `count_stale_insights` compares, so a key covering more than
+      the remedy replays reports rows stale for a change
+      re-enrichment cannot address - and `graph rebuild --stale`
+      then clears the report by doing unrelated work, which is worse
+      than having no remedy at all.
+    - Extraction and reconciliation prompts are EXCLUDED. A stored
+      row cannot be re-extracted: the source blob leaves the queue
+      about a minute after its drain, so there is nothing to replay
+      and nothing to report.
+    - The metadata model id IS folded in, because `link_pending`
+      runs both the enrichment and the causal call on
+      `slow_metadata`. The canonical model is excluded for the same
+      reason extraction is - it shapes content no rebuild rewrites.
+    - An unresolvable metadata model hashes as the empty string, so a
+      store with no model configured still yields a stable key rather
+      than raising on the `status` path.
+    - Cached for the life of the process. Every consumer - `status`,
+      one drain tick, one rebuild - is a fresh process; tests that
+      vary the inputs call `cache_clear()`.
     """
+    # Imported here, not at module top, so the hash reads each prompt
+    # from its defining module at CALL time. A top-level `from x
+    # import y` would bind a copy and make the invariant above
+    # untestable.
+    from memman import config
+    from memman.exceptions import ConfigError
     from memman.graph.causal import LLM_SYSTEM_PROMPT as CAUSAL_PROMPT
     from memman.graph.enrichment import ENRICHMENT_SYSTEM_PROMPT
-    from memman.llm.extract import FACT_EXTRACTION_SYSTEM
-    from memman.llm.extract import RECONCILIATION_SYSTEM
 
-    blob = f'{FACT_EXTRACTION_SYSTEM}\x00{RECONCILIATION_SYSTEM}\x00{ENRICHMENT_SYSTEM_PROMPT}\x00{CAUSAL_PROMPT}'
+    try:
+        metadata_model = config.require(config.LLM_MODEL_SLOW_METADATA)
+    except ConfigError:
+        metadata_model = ''
+    blob = (f'{ENRICHMENT_SYSTEM_PROMPT}\x00{CAUSAL_PROMPT}'
+            f'\x00{metadata_model}')
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 

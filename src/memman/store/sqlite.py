@@ -236,12 +236,10 @@ group by length(embedding)
 
     def stamp_enriched(
             self, id: Id, *,
-            prompt_version: str | None = None,
-            model_id: str | None = None) -> None:
+            prompt_version: str | None = None) -> None:
         ts = format_timestamp(datetime.now(timezone.utc))
         _node.stamp_enriched(
-            self._db, id, ts,
-            prompt_version=prompt_version, model_id=model_id)
+            self._db, id, ts, prompt_version=prompt_version)
 
     def get_pending_link_ids(self, *, limit: int) -> list[Id]:
         return _node.get_pending_link_ids(self._db, limit)
@@ -258,17 +256,11 @@ group by length(embedding)
     def count_unenriched_linked(self) -> int:
         return _node.count_unenriched_linked(self._db)
 
-    def iter_stale_insight_ids(
-            self, active_pv: str,
-            active_model: str | None) -> list[Id]:
-        return _node.iter_stale_insight_ids(
-            self._db, active_pv, active_model)
+    def iter_stale_insight_ids(self, active_pv: str) -> list[Id]:
+        return _node.iter_stale_insight_ids(self._db, active_pv)
 
-    def count_stale_insights(
-            self, active_pv: str,
-            active_model: str | None) -> int:
-        return _node.count_stale_insights(
-            self._db, active_pv, active_model)
+    def count_stale_insights(self, active_pv: str) -> int:
+        return _node.count_stale_insights(self._db, active_pv)
 
     def reset_for_rebuild(self, ids: list[Id]) -> None:
         _node.reset_for_rebuild(self._db, ids)
