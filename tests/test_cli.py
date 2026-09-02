@@ -510,8 +510,98 @@ class TestRecall:
         assert data['results'], 'expected --brief to return the same row'
         brief_keys = set(data['results'][0]['insight'])
         assert brief_keys - {'truncated'} == {
-            'id', 'category', 'importance', 'summary'}
+            'id', 'category', 'importance', 'created_at', 'summary'}
         assert 'content' in full_keys - brief_keys
+
+    def test_recall_brief_carries_the_stored_created_at(self, runner):
+        """--brief emits created_at with the value the store holds.
+
+        Mutation: emitting `updated_at`, `datetime.now()`, or a
+            constant in place of the row's own `created_at` - a
+            key-set assertion passes on all three, and a WHEN caller
+            sorting on the field would build a wrong timeline from a
+            page that looks correct.
+        Oracle: the same row's `created_at` off the FULL projection,
+            which is independently formatted by
+            `insight_to_full_dict`.
+        """
+        invoke(runner, [
+            'remember', 'Kafka retains partitions by time and size',
+            '--no-reconcile'])
+        full = json.loads(
+            invoke(runner, ['recall', 'Kafka partitions retention']).output)
+        brief = json.loads(
+            invoke(runner, [
+                'recall', 'Kafka partitions retention', '--brief']).output)
+        assert full['results']
+        assert brief['results']
+
+        full_by_id = {r['insight']['id']: r['insight'] for r in full['results']}
+        checked = 0
+        for row in brief['results']:
+            ins = row['insight']
+            assert ins['created_at'] == full_by_id[ins['id']]['created_at']
+            assert ins['created_at'].endswith('Z')
+            checked += 1
+        assert checked, 'expected at least one row to compare'
+
+    def test_recall_detail_oplog_records_the_request(self, runner):
+        """The recall-detail row carries the REQUESTED limit and session.
+
+        Mutation: recording `len(hits)` in place of the requested
+            `limit` - which cannot tell a thin page from a small ask -
+            or dropping the session key, either of which leaves a
+            return unattributable to the session that asked.
+        Oracle: a recall issued with a limit deliberately larger than
+            the store can fill, so the requested value and the
+            returned count differ.
+        """
+        invoke(runner, [
+            'remember', 'Envoy routes gRPC traffic by header match',
+            '--no-reconcile'])
+        invoke(runner, [
+            'recall', 'Envoy gRPC header routing',
+            '--limit', '17', '--session', 'sess-abc'])
+
+        entries = json.loads(
+            invoke(runner, ['log', 'list', '--limit', '50']).output)['entries']
+        details = [
+            json.loads(e['detail'])
+            for e in entries if e['operation'] == 'recall-detail']
+        assert details, 'expected a recall-detail row'
+        row = details[0]
+        assert row['limit'] == 17
+        assert row['session'] == 'sess-abc'
+        assert 'q' in row
+        assert len(row['q']) <= 80
+        assert len(row['hits']) < row['limit'], (
+            'fixture must under-fill the page so the two cannot be '
+            'confused')
+
+    def test_recall_session_falls_back_to_the_environment(
+            self, runner, monkeypatch):
+        """An unflagged recall takes its session from the environment.
+
+        Mutation: dropping the `envvar` list from the `--session`
+            option, which leaves the oplog session blank on every
+            recall an agent issues without the flag - the normal case,
+            since the hooks only ever remind it about the flag.
+        Oracle: the oplog row from a recall run with no `--session`
+            argument at all, against the exported id.
+        """
+        monkeypatch.setenv('MEMMAN_SESSION_ID', 'env-session-9')
+        invoke(runner, [
+            'remember', 'Redis evicts keys by LRU under maxmemory',
+            '--no-reconcile'])
+        invoke(runner, ['recall', 'Redis LRU maxmemory eviction'])
+
+        entries = json.loads(
+            invoke(runner, ['log', 'list', '--limit', '50']).output)['entries']
+        details = [
+            json.loads(e['detail'])
+            for e in entries if e['operation'] == 'recall-detail']
+        assert details, 'expected a recall-detail row'
+        assert details[0]['session'] == 'env-session-9'
 
     def test_recall_brief_projects_the_insight_not_the_row(self, runner):
         """--brief cuts the insight and leaves the ranking envelope whole.
@@ -530,7 +620,7 @@ class TestRecall:
         row = json.loads(result.output)['results'][0]
         assert {'insight', 'score', 'intent', 'signals'} <= set(row)
         assert set(row['insight']) - {'truncated'} == {
-            'id', 'category', 'importance', 'summary'}
+            'id', 'category', 'importance', 'created_at', 'summary'}
 
     def test_recall_brief_basic_path_projects_rows(self, runner):
         """--brief projects the --basic branch's rows and drops none.
@@ -561,7 +651,7 @@ class TestRecall:
         assert len(data['results']) == 3, data['results']
         for r in data['results']:
             assert set(r) - {'truncated'} == {
-                'id', 'category', 'importance', 'summary'}
+                'id', 'category', 'importance', 'created_at', 'summary'}
 
     def test_recall_brief_emits_a_real_summary_unmarked(self, runner):
         """A row that HAS a summary ships it verbatim, with no marker.

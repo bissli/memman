@@ -114,6 +114,10 @@ def test_format_float():
     assert format_float(1.0) == '1.0000'
 
 
+BRIEF_TS = datetime(2026, 3, 4, 5, 6, 7, tzinfo=timezone.utc)
+BRIEF_TS_OTHER = datetime(2027, 8, 9, 10, 11, 12, tzinfo=timezone.utc)
+
+
 def test_brief_dict_prefers_populated_summary():
     """A populated summary is emitted verbatim, with no truncation marker.
 
@@ -122,7 +126,8 @@ def test_brief_dict_prefers_populated_summary():
     Oracle: hand-built insight whose summary is a distinct short string
         from its 400-char content.
     """
-    ins = Insight(id='b1', content='x' * 400, category='fact',
+    ins = Insight(id='b1', created_at=BRIEF_TS, content='x' * 400,
+                  category='fact',
                   importance=4, summary='the short summary')
     out = insight_to_brief_dict(ins)
     assert out['summary'] == 'the short summary'
@@ -137,7 +142,8 @@ def test_brief_dict_falls_back_to_cut_content():
         rows on a live store, so a third of results come back empty.
     Oracle: hand-computed 200-char prefix of a 400-char content.
     """
-    ins = Insight(id='b2', content='abcde' * 80, category='fact',
+    ins = Insight(id='b2', created_at=BRIEF_TS, content='abcde' * 80,
+                  category='fact',
                   importance=3, summary='')
     out = insight_to_brief_dict(ins)
     assert out['summary'] == 'abcde' * 40
@@ -145,22 +151,27 @@ def test_brief_dict_falls_back_to_cut_content():
 
 
 def test_brief_dict_projects_exact_fields_and_values():
-    """The projection is exactly four keys carrying the right four values.
+    """The projection is exactly five keys carrying the right five values.
 
-    Mutation: reading an adjacent field -- `ins.source` for `category`
-        or `ins.effective_importance` for `importance`. Both sit beside
-        the real ones in `insight_to_delta_dict` and
-        `insight_to_full_dict`, which this projection was written from,
-        so a copy slip lands on them. A key-set assertion cannot see it.
-    Oracle: the whole expected dict, hand-written.
+    Mutation: reading an adjacent field -- `ins.source` for `category`,
+        `ins.effective_importance` for `importance`, or `ins.updated_at`
+        for `created_at`. All sit beside the real ones in
+        `insight_to_delta_dict` and `insight_to_full_dict`, which this
+        projection was written from, so a copy slip lands on them. A
+        key-set assertion cannot see it.
+    Oracle: the whole expected dict, hand-written, with `created_at`
+        formatted the way the full projection formats it.
     """
-    ins = Insight(id='b3', content='c' * 400, category='decision',
+    ins = Insight(id='b3', created_at=BRIEF_TS,
+                  updated_at=BRIEF_TS_OTHER, content='c' * 400,
+                  category='decision',
                   importance=5, entities=['alpha'], source='agent',
                   effective_importance=1.5, summary='s')
     assert insight_to_brief_dict(ins) == {
         'id': 'b3',
         'category': 'decision',
         'importance': 5,
+        'created_at': '2026-03-04T05:06:07Z',
         'summary': 's',
         }
 
@@ -175,7 +186,8 @@ def test_brief_dict_never_cuts_a_real_summary():
     Oracle: a 300-char summary, hand-sized above the 200-char limit.
     """
     long_summary = 'w' * 300
-    ins = Insight(id='b6', content='c' * 400, category='fact',
+    ins = Insight(id='b6', created_at=BRIEF_TS, content='c' * 400,
+                  category='fact',
                   importance=3, summary=long_summary)
     out = insight_to_brief_dict(ins)
     assert out['summary'] == long_summary
@@ -193,7 +205,8 @@ def test_brief_dict_does_not_mark_uncut_content():
         caller to `insights show` for a row it already holds whole.
     Oracle: a 32-char content, well under `BRIEF_CONTENT_CHARS`.
     """
-    ins = Insight(id='b4', content='Use `make test` to run the suite',
+    ins = Insight(id='b4', created_at=BRIEF_TS,
+                  content='Use `make test` to run the suite',
                   category='fact', importance=3, summary='')
     out = insight_to_brief_dict(ins)
     assert out['summary'] == 'Use `make test` to run the suite'
@@ -208,7 +221,8 @@ def test_brief_dict_treats_blank_summary_as_absent():
     Oracle: a 400-char content whose hand-computed 200-char prefix must
         appear instead of the spaces.
     """
-    ins = Insight(id='b5', content='abcde' * 80, category='fact',
+    ins = Insight(id='b5', created_at=BRIEF_TS, content='abcde' * 80,
+                  category='fact',
                   importance=3, summary='   ')
     out = insight_to_brief_dict(ins)
     assert out['summary'] == 'abcde' * 40

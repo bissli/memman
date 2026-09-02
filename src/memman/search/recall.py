@@ -113,8 +113,10 @@ RERANK_WEIGHTS: dict[str, tuple[float, float, float]] = {
 
 
 RECALL_HINTS: dict[str, str] = {
-    'WHY': 'Trace the causal chain: earlier results cause later ones',
-    'WHEN': 'Results are newest-first: reconstruct the timeline',
+    'WHY': ('Rows are relevance-ordered; meta.causal_edges lists the '
+            '[cause, effect] pairs among them'),
+    'WHEN': ('Rows are relevance-ordered; each carries created_at - '
+             'order by it to reconstruct the timeline'),
     'ENTITY': 'Describe the entity using evidence across these memories',
     'GENERAL': 'Synthesize key points across these related memories',
     }
@@ -259,57 +261,6 @@ def beam_search_from_anchor(
     return total_visited
 
 
-def causal_topological_sort(
-        results: list[dict[str, Any]],
-        causal_edges_lookup: Callable[[str], list[str]]
-        ) -> list[dict[str, Any]]:
-    """Reorder results so causes appear before effects using Kahn's algorithm.
-
-    `causal_edges_lookup(source_id) -> iterable of target_ids` exposes
-    only the source-keyed causal edges, since this sort treats edges as
-    strictly directional.
-    """
-    if len(results) <= 1:
-        return results
-
-    id_set = {r['insight'].id for r in results}
-    id_to_result = {r['insight'].id: r for r in results}
-
-    adj: dict[str, list[str]] = {}
-    in_degree: dict[str, int] = {r['insight'].id: 0 for r in results}
-
-    for r in results:
-        rid = r['insight'].id
-        for target_id in causal_edges_lookup(rid):
-            if target_id in id_set:
-                adj.setdefault(rid, []).append(target_id)
-                in_degree[target_id] += 1
-
-    heap_list: list[tuple[float, str]] = []
-    for r in results:
-        rid = r['insight'].id
-        if in_degree[rid] == 0:
-            heapq.heappush(
-                heap_list, (-id_to_result[rid]['score'], rid))
-
-    ordered = []
-    while heap_list:
-        _neg_score, nid = heapq.heappop(heap_list)
-        ordered.append(id_to_result[nid])
-        for target in adj.get(nid, []):
-            in_degree[target] -= 1
-            if in_degree[target] == 0:
-                heapq.heappush(
-                    heap_list,
-                    (-id_to_result[target]['score'], target))
-
-    if len(ordered) < len(results):
-        covered = {r['insight'].id for r in ordered}
-        ordered.extend(r for r in results if r['insight'].id not in covered)
-
-    return ordered
-
-
 def intent_aware_recall(
         backend: Backend, query: str,
         query_vec: list[float] | None,
@@ -352,9 +303,9 @@ def intent_aware_recall(
     -------
     dict[str, Any]
         `{'results': [...], 'meta': {...}}`; `meta.anchor_count` is
-        the filtered anchor count, `meta.traversed` is deliberately
-        unfiltered, and `meta.sparse` flags a low-confidence result
-        set (see Notes).
+        the filtered anchor count and `meta.traversed` is deliberately
+        unfiltered. On `WHY`, `meta.causal_edges` carries the
+        `[cause, effect]` pairs among the returned rows (see Notes).
 
     Notes
     -----
@@ -380,23 +331,17 @@ def intent_aware_recall(
       score: `graph_score` is min-max normalized, so the top candidate
       of any query scores 1.0 there and a blended floor would sit at
       `w_gr`, which moves per intent. Its range is therefore 0.0-2.0.
-    - `meta.sparse` marks a low-confidence result set. It fires on an
-      empty set, on fewer than `limit // 2` rows, and when no
-      candidate matched a query token -- the case an unscoped query
-      hits, where the recency-anchor channel returns newest-first rows
-      that match nothing. The token test reads the candidate pool as
-      scored, before `category`/`source` filtering, `min_score`, MMR,
-      rerank and the limit slice, so a recall whose returned rows were
-      reached by graph from a match is not called irrelevant.
-    - The keyword channel alone carries that last arm, and no
-      similarity term belongs in it. `sim_cache` holds a cosine only
-      when it is strictly positive and the lookup defaults to 0.0, so
-      an exactly-zero similarity means either that the row carries no
-      embedding or that its cosine was non-positive -- never that a
-      real relevance was measured and found small. The matching and
-      non-matching populations also overlap on similarity, so no floor
-      separates them. Measured by
-      `experiments/recall_ablation/verify_sparse_rule.py`.
+    - Rows come back in relevance order at every `limit`, so the
+      first `n` of a `limit`-`m` recall are the `limit`-`n` recall.
+      Nothing re-sorts after the limit slice.
+    - `meta.causal_edges` is present on `WHY` and only there, empty
+      list included: "no causal relation among these rows" is a fact
+      the caller cannot derive from the rows. It is built from the
+      SOURCE-KEYED `directed` adjacency, never the symmetrized
+      `bidir` the beam walks, so each pair reads cause-then-effect.
+      Pairs are emitted in returned-row order rather than by
+      iterating an id set, since string hashing is salted per
+      process.
     """
     if intent_override:
         intent = intent_override
@@ -657,13 +602,6 @@ def intent_aware_recall(
     results.sort(
         key=lambda r: (-r['score'], -r['insight'].importance))
 
-    # Read the keyword evidence off the UNFILTERED pool: a category or
-    # source filter can drop the row that matched and keep the rows it
-    # reached by graph, and judging relevance on the survivors alone
-    # would then call a working filtered recall irrelevant.
-    pool_matched_a_token = any(
-        r['signals']['keyword'] > 0.0 for r in results)
-
     # Filter after the weighted-sum sort (so graph_min/graph_max
     # normalisation saw the full pool) and BEFORE rerank (so the
     # cross-encoder shortlist holds only returnable rows).
@@ -777,35 +715,24 @@ def intent_aware_recall(
     if limit > 0 and len(results) > limit:
         results = results[:limit]
 
-    if intent == 'WHY':
-        results = causal_topological_sort(results, _causal_edges_lookup)
-    elif intent == 'WHEN':
-        results.sort(
-            key=lambda r: (r['insight'].created_at, r['score']),
-            reverse=True)
-
-    sparse = (
-        not results
-        or (limit > 0 and len(results) < limit // 2)
-        or not pool_matched_a_token)
-
-    if intent == 'WHY':
-        ordering = 'causal_topological'
-    elif intent == 'WHEN':
-        ordering = 'chronological'
-    else:
-        ordering = 'score'
-
-    meta = {
+    meta: dict[str, Any] = {
         'intent': intent,
         'intent_source': intent_source,
         'anchor_count': anchor_count,
         'traversed': traversed_count,
         'hint': RECALL_HINTS.get(intent, RECALL_HINTS['GENERAL']),
-        'ordering': ordering,
         'reranked': reranked,
         }
-    if sparse:
-        meta['sparse'] = True
+
+    if intent == 'WHY':
+        # Iterate `results`, never the id set: str hashing is salted
+        # per process, so a set-ordered payload would differ run to
+        # run and make two recalls incomparable.
+        returned_ids = {r['insight'].id for r in results}
+        meta['causal_edges'] = [
+            [r['insight'].id, target]
+            for r in results
+            for target in _causal_edges_lookup(r['insight'].id)
+            if target in returned_ids]
 
     return {'results': results, 'meta': meta}

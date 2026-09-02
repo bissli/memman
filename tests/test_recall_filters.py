@@ -219,30 +219,32 @@ def test_recall_survives_a_raising_session_verb(backend, monkeypatch):
                for r in degraded['results'])
 
 
-def test_recall_flags_a_failed_keyword_channel_as_sparse(
-        backend, monkeypatch):
-    """Verify a dead keyword channel answers, and says it is degraded.
+def test_recall_survives_a_failed_keyword_channel(backend, monkeypatch):
+    """Verify a dead keyword channel still answers instead of raising.
 
-    Mutation: letting the exception escape, or swallowing it so the
-        caller gets a full page of zero-keyword rows presented as a
-        normal result set.
-    Oracle: `meta.sparse`, which the healthy run of the same query
-        does not set, plus a keyword signal of 0.0 on every row.
+    Mutation: letting the exception escape, or substituting a
+        non-zero keyword score for the channel that just failed.
+    Oracle: the SAME query run healthy, which scores at least one row
+        above zero on the keyword signal; the degraded run must score
+        every row at exactly 0.0 and still return rows.
 
     Notes
     -----
     - This is the channel with no fallback: a store with no
       embeddings has only keyword and time, so its degrade path
-      decides whether an operator error returns a wrong answer or a
-      flagged one. The flag is not a new field - an all-zero keyword
-      pool is exactly what `meta.sparse` already means.
+      decides whether an operator error returns a wrong answer or
+      raises.
+    - The response deliberately carries no degradation flag. A caller
+      reads the per-row `signals`, where an all-zero keyword column
+      is what a dead channel looks like.
     """
     _seed(backend, 12, 'fact', 'kombu serialization body {i}')
 
     healthy = intent_aware_recall(
         backend, 'kombu serialization body', None, 10,
         intent_override='GENERAL')
-    assert not healthy['meta'].get('sparse')
+    assert any(r['signals']['keyword'] > 0.0
+               for r in healthy['results'])
 
     def _raise(self, *args, **kwargs):
         raise RuntimeError('forced index failure')
@@ -258,7 +260,6 @@ def test_recall_flags_a_failed_keyword_channel_as_sparse(
     assert degraded['results'], 'time anchors should still answer'
     assert all(r['signals']['keyword'] == 0.0
                for r in degraded['results'])
-    assert degraded['meta'].get('sparse') is True
 
 
 def test_filter_precedes_rerank(backend, monkeypatch):

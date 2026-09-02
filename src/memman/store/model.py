@@ -164,15 +164,19 @@ def insight_to_brief_dict(ins: 'Insight') -> dict[str, Any]:
     Returns
     -------
     dict[str, Any]
-        `id`, `category`, `importance`, and `summary`, plus
-        `truncated: True` when `summary` holds a content prefix rather
-        than a real summary.
+        `id`, `category`, `importance`, `created_at`, and `summary`,
+        plus `truncated: True` when `summary` holds a content prefix
+        rather than a real summary.
 
     Notes
     -----
     - `summary` is the single text key either way, so a caller reads
       one field and checks `truncated` to learn whether anything was
       withheld.
+    - `created_at` is formatted identically to the full projection's,
+      because a brief page is the one a WHEN query reads and row
+      order carries no timeline: rows come back in relevance order,
+      so the field is the only thing a caller can sort on.
     - A row can reach here with no summary several ways: the
       enrichment compression gate blanks one that is too close to the
       content, and an LLM or parse failure leaves the row unenriched
@@ -191,6 +195,7 @@ def insight_to_brief_dict(ins: 'Insight') -> dict[str, Any]:
         'id': ins.id,
         'category': ins.category,
         'importance': ins.importance,
+        'created_at': format_timestamp(ins.created_at),
         }
     if ins.summary.strip():
         out['summary'] = ins.summary

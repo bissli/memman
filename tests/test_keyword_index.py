@@ -3,9 +3,9 @@
 `RecallSession.keyword_counts` replaced a per-recall tokenization of
 every active row. It fills `kw_score`'s numerator, so a count that
 disagrees with `keyword.insight_tokens` moves `signals.keyword`,
-`--min-score`, the rerank blend and `meta.sparse` together. These pin
-the count, the query-language safety rule, and the index's sync with
-the rows it indexes.
+`--min-score` and the rerank blend together. These pin the count, the
+query-language safety rule, and the index's sync with the rows it
+indexes.
 """
 
 import sqlite3
@@ -242,8 +242,8 @@ def test_keyword_signal_is_the_overlap_fraction(backend):
 
     Mutation: any rescale of the score - `bm25()`, an IDF weight, or
         a denominator of matched-rather-than-query tokens. All three
-        keep ordering plausible while moving `--min-score`, the
-        rerank blend and `meta.sparse` off their documented range.
+        keep ordering plausible while moving `--min-score` and the
+        rerank blend off their documented range.
     Oracle: hand-computed. 'brown fox jumps quantum' has four
         tokens; kw-a holds three of them and kw-b one.
 

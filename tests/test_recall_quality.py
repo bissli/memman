@@ -12,7 +12,7 @@ is actually exercised.
 """
 
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
@@ -154,86 +154,143 @@ class TestWhyIntentCausalOrdering:
         assert cause_idx < effect_idx
 
 
-class TestWhenIntentChronologicalOrdering:
-    """WHEN intent returns results newest-first by created_at."""
+class TestRelevanceOrderingSurvivesTheLimit:
+    """Nothing re-sorts after the limit slice, on any intent."""
 
-    def test_when_intent_chronological_ordering(self, backend):
-        """Newer insights appear before older ones under WHEN intent."""
+    @pytest.mark.parametrize('intent', ['WHY', 'WHEN', 'GENERAL'])
+    def test_results_are_score_descending(self, backend, intent):
+        """Every intent returns rows in descending score order.
+
+        Mutation: reinstating either post-limit re-sort - the WHEN
+            sort on `(created_at, score)` or the WHY
+            causal-topological sort - both of which reorder a page
+            that was already cut by score.
+        Oracle: the returned rows sorted by `-score` independently,
+            compared as an id sequence.
+        """
         from tests.conftest import set_created_at
         _insert_fillers(backend)
-        backend.nodes.insert(make_insight(
-            id='when-old',
-            content='database migration completed for production deploy',
-            importance=4))
-        backend.nodes.insert(make_insight(
-            id='when-mid',
-            content='database schema updated production migration',
-            importance=4))
-        backend.nodes.insert(make_insight(
-            id='when-new',
-            content='database rollback production migration issue',
-            importance=4))
-        set_created_at(backend, 'when-old', OLD - timedelta(hours=2))
-        set_created_at(backend, 'when-mid', OLD - timedelta(hours=1))
-        set_created_at(backend, 'when-new', OLD)
+        for i, word in enumerate(('rollback', 'schema', 'deploy')):
+            backend.nodes.insert(make_insight(
+                id=f'ord-{i}',
+                content=f'database production migration {word}',
+                importance=4))
+            set_created_at(backend, f'ord-{i}',
+                           OLD.replace(year=2024 + i))
 
         result = intent_aware_recall(
-            backend,
-            query='database production migration',
-            query_vec=None,
-            limit=20, intent_override='WHEN')
+            backend, query='database production migration',
+            query_vec=None, limit=20, intent_override=intent)
 
-        old = _find_result(result['results'], 'when-old')
-        mid = _find_result(result['results'], 'when-mid')
-        new = _find_result(result['results'], 'when-new')
-        assert old is not None
-        assert mid is not None
-        assert new is not None
+        got = [r['insight'].id for r in result['results']]
+        want = [r['insight'].id
+                for r in sorted(result['results'],
+                                key=lambda r: -r['score'])]
+        assert got == want
 
-        new_idx = next(
-            i for i, r in enumerate(result['results'])
-            if r['insight'].id == 'when-new')
-        mid_idx = next(
-            i for i, r in enumerate(result['results'])
-            if r['insight'].id == 'when-mid')
-        old_idx = next(
-            i for i, r in enumerate(result['results'])
-            if r['insight'].id == 'when-old')
-        assert new_idx < mid_idx < old_idx
+    @pytest.mark.parametrize('intent', ['WHY', 'WHEN'])
+    def test_a_short_page_is_the_head_of_a_long_one(self, backend, intent):
+        """The first n rows of a limit-m recall ARE a limit-n recall.
 
-    def test_when_intent_equal_timestamp_tiebreak(self, backend):
-        """Same created_at: higher-scoring insight ranks first."""
+        Mutation: reinstating either post-limit re-sort. Both run
+            AFTER the slice, so they make a page of 3 the three
+            newest (or topologically first) of the top 3 rather than
+            the head of the top 20 - the exact defect that made
+            `limit 5` disagree with the top 5 of `limit 30`.
+        Oracle: two independent calls at different limits on one
+            store, compared as id sequences.
+        """
         from tests.conftest import set_created_at
         _insert_fillers(backend)
-        ts = OLD
+        for i, word in enumerate(
+                ('rollback', 'schema', 'deploy', 'backup', 'restore')):
+            backend.nodes.insert(make_insight(
+                id=f'head-{i}',
+                content=f'database production migration {word}',
+                importance=4))
+            set_created_at(backend, f'head-{i}',
+                           OLD.replace(year=2024 + i))
+
+        wide = intent_aware_recall(
+            backend, query='database production migration',
+            query_vec=None, limit=20, intent_override=intent)
+        narrow = intent_aware_recall(
+            backend, query='database production migration',
+            query_vec=None, limit=3, intent_override=intent)
+
+        assert len(narrow['results']) == 3
+        assert ([r['insight'].id for r in narrow['results']]
+                == [r['insight'].id for r in wide['results']][:3])
+
+
+class TestWhyCausalEdgePayload:
+    """WHY carries its causal structure in meta, not in row order."""
+
+    def test_causal_edges_cover_returned_pairs_and_keep_direction(
+            self, backend):
+        """meta.causal_edges holds every returned pair, cause first.
+
+        Mutation: building the list from the symmetrized `bidir`
+            adjacency the beam walks (which would add the reverse of
+            every pair), from the PRE-slice candidate set (which
+            would name ids the caller never received), or omitting
+            the intersection with the returned ids.
+        Oracle: the edge written directly to the store, plus the
+            assertion that its reverse is absent - the store holds
+            `cause -> effect` and only that direction.
+        """
+        _insert_fillers(backend)
         backend.nodes.insert(make_insight(
-            id='when-tie-hi',
-            content='database production migration rollback strategy',
-            importance=5))
+            id='cause-a',
+            content='database production migration locked the table',
+            importance=4))
         backend.nodes.insert(make_insight(
-            id='when-tie-lo',
-            content='database production migration backup strategy',
-            importance=2))
-        set_created_at(backend, 'when-tie-hi', ts)
-        set_created_at(backend, 'when-tie-lo', ts)
+            id='effect-b',
+            content='database production migration timed out queries',
+            importance=4))
+        backend.edges.upsert(make_edge(
+            source_id='cause-a', target_id='effect-b',
+            edge_type='causal', weight=0.9))
 
         result = intent_aware_recall(
-            backend,
-            query='database production migration',
-            query_vec=None,
-            limit=20, intent_override='WHEN')
+            backend, query='database production migration',
+            query_vec=None, limit=20, intent_override='WHY')
 
-        hi = _find_result(result['results'], 'when-tie-hi')
-        lo = _find_result(result['results'], 'when-tie-lo')
-        assert hi is not None
-        assert lo is not None
-        hi_idx = next(
-            i for i, r in enumerate(result['results'])
-            if r['insight'].id == 'when-tie-hi')
-        lo_idx = next(
-            i for i, r in enumerate(result['results'])
-            if r['insight'].id == 'when-tie-lo')
-        assert hi_idx < lo_idx
+        edges = result['meta']['causal_edges']
+        returned = {r['insight'].id for r in result['results']}
+        assert 'cause-a' in returned
+        assert 'effect-b' in returned
+        assert ['cause-a', 'effect-b'] in edges
+        assert ['effect-b', 'cause-a'] not in edges
+        assert all(src in returned and tgt in returned
+                   for src, tgt in edges)
+
+    def test_causal_edges_absent_on_other_intents(self, backend):
+        """Only WHY carries the payload; an empty list still counts.
+
+        Mutation: emitting `causal_edges` for every intent, which
+            would spend tokens on a key three intents in four cannot
+            populate, or omitting the key on a WHY page that happens
+            to have no causal pair - "these rows are unrelated" is a
+            fact the rows cannot convey.
+        Oracle: the key set per intent, on a store with no causal
+            edge at all.
+        """
+        _insert_fillers(backend)
+        backend.nodes.insert(make_insight(
+            id='lone', content='database production migration notes',
+            importance=4))
+
+        why = intent_aware_recall(
+            backend, query='database production migration',
+            query_vec=None, limit=5, intent_override='WHY')
+        assert why['meta']['causal_edges'] == []
+
+        for intent in ('WHEN', 'ENTITY', 'GENERAL'):
+            other = intent_aware_recall(
+                backend, query='database production migration',
+                query_vec=None, limit=5, intent_override=intent)
+            assert 'causal_edges' not in other['meta']
 
 
 class TestImportanceTiebreaker:

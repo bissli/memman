@@ -184,11 +184,49 @@ class TestM1CRUD:
                         'recall returns the stored insight')
 
     @pytest.mark.requires_live_keys
-    def test_recall_no_match_sparse(self, home_dir: Path, m1_dir: Path,
-                                    live_keys):
-        out = run_cli(['recall', 'nonexistent_xyz_no_match_token'],
-                      home_dir, m1_dir)
-        assert_jq(json_out(out), 'meta.sparse', True, 'sparse flag')
+    def test_recall_no_match_still_answers_with_judgeable_rows(
+            self, home_dir: Path, m1_dir: Path, live_keys):
+        """A no-match query returns rows carrying the evidence to reject them.
+
+        Mutation: returning `results: []` on a no-match query, or
+            dropping `score` / `signals` from the row projection -
+            either leaves a caller unable to tell "the store holds
+            nothing" from "these are the nearest unrelated rows",
+            which is the whole job the deleted `meta.sparse` flag
+            used to attempt.
+        Oracle: a token deliberately absent from the corpus, against
+            a store this test seeds itself; the recency anchor
+            channel must still seed rows, and every row must carry
+            both judgement fields.
+
+        Notes
+        -----
+        - Seeds its own row rather than relying on the class's
+            earlier tests. The predecessor asserted `meta.sparse` and
+            so passed TRIVIALLY in isolation, because the flag fired
+            on the empty set - order-dependence in the opposite
+            direction. Recall returns `[]` on a genuinely empty
+            store, so the recency claim needs at least one row to be
+            a claim at all.
+        """
+        unique = uuid.uuid4().hex[:8]
+        run_cli(
+            ['remember', '--no-reconcile',
+             f'User prefers Redis for cache-probe-{unique}',
+             '--cat', 'preference', '--imp', '3'],
+            home_dir, m1_dir)
+        run_cli(['scheduler', 'serve', '--once'], home_dir, m1_dir)
+
+        data = json_out(run_cli(
+            ['recall', 'nonexistent_xyz_no_match_token'],
+            home_dir, m1_dir))
+        assert data['results'], (
+            'recency anchors must answer even a no-match query')
+        for row in data['results']:
+            assert 'score' in row, 'row must carry its own score'
+            assert 'signals' in row, 'row must carry per-channel signals'
+        assert 'sparse' not in data['meta']
+        assert 'ordering' not in data['meta']
 
     @pytest.mark.requires_live_keys
     def test_status_statistics(self, home_dir: Path, m1_dir: Path,

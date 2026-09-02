@@ -1441,7 +1441,8 @@ def _process_queue_row(
 @click.option('--source', default='', help='Filter by source')
 @click.option('--basic', is_flag=True, default=False, help='Simple SQL LIKE matching')
 @click.option('--brief', is_flag=True, default=False,
-              help='Project each row to id, category, importance, summary')
+              help='Project each row to id, category, importance, '
+                   'created_at, summary')
 @click.option('--intent', default='', help='Override intent')
 @click.option('--expand', 'expand', is_flag=True, default=False,
               help='Run LLM query expansion before retrieval (off by default)')
@@ -1449,10 +1450,17 @@ def _process_queue_row(
               type=click.FloatRange(0.0, 2.0),
               help='Drop rows whose keyword+similarity sum is below '
                    'this floor (0.0 = off, max 2.0)')
+@click.option('--session', default='',
+              envvar=[config.SESSION_ID, config.CLAUDE_SESSION_ID],
+              help='Calling session id, recorded on the recall-detail '
+                   'oplog row so a return is attributable to a session '
+                   '(defaults to $MEMMAN_SESSION_ID, then '
+                   '$CLAUDE_CODE_SESSION_ID, matching `remember`)')
 @click.pass_context
 def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
            limit: int, source: str, basic: bool, brief: bool,
-           intent: str, expand: bool, min_score: float) -> None:
+           intent: str, expand: bool, min_score: float,
+           session: str) -> None:
     """Retrieve insights by keyword."""
     from memman import trace
     from memman.embed.fingerprint import assert_fingerprint_unchanged_for_sync
@@ -1576,10 +1584,17 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                 for r in resp['results']:
                     backend.nodes.increment_access_count(r['insight'].id)
                     r['insight'].access_count += 1
+                # `limit` is the REQUESTED page size, not len(hits):
+                # the returned count cannot distinguish a thin page
+                # from a small ask, which is why the old payload
+                # could not tell which one produced hits_median = 5.
                 backend.oplog.log(
                     operation='recall-detail', insight_id='',
                     detail=json.dumps({'intent': resp['meta']['intent'],
-                                       'q': keyword_str[:80], 'hits': hits}))
+                                       'q': keyword_str[:80],
+                                       'limit': limit,
+                                       'session': session,
+                                       'hits': hits}))
         except sqlite3.OperationalError as exc:
             logger.debug(
                 'recall_bookkeep_skipped detail q=%r: %s',
@@ -1592,7 +1607,6 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                     'score': r['score'],
                     'intent': r['intent'],
                     'signals': r['signals'],
-                    **({'via': r['via']} if r.get('via') else {}),
                     }
                 for r in resp['results']
                 ],

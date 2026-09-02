@@ -7,7 +7,7 @@ from memman.search.recall import _RERANK_WEIGHTS_RAW, RERANK_WEIGHTS
 from memman.search.recall import get_traversal_params, intent_aware_recall
 from memman.store.model import Insight
 from tests.conftest import _vec as _vec_512
-from tests.conftest import make_edge, make_insight
+from tests.conftest import make_insight
 
 
 class TestKeywordSearch:
@@ -272,12 +272,26 @@ class TestRecallRanking:
         assert w_sim > max(w_kw, w_gr)
 
     def test_hint_field_by_intent(self, backend):
-        """Each intent produces its expected hint string."""
+        """Each intent's hint is the pinned string AND is true of the reply.
+
+        Mutation: reinstating a hint that asserts an ordering the
+            reply no longer has ("newest-first", "earlier results
+            cause later ones"), or promising `meta.causal_edges`
+            while the WHY branch that builds it is gone.
+        Oracle: the pinned strings, plus the key set of the same
+            reply - the WHY hint names `causal_edges`, so the reply
+            must carry it, and no other intent may.
+        """
         expected_hints = {
-            'WHY': 'Trace the causal chain: earlier results cause later ones',
-            'WHEN': 'Results are newest-first: reconstruct the timeline',
-            'ENTITY': 'Describe the entity using evidence across these memories',
-            'GENERAL': 'Synthesize key points across these related memories',
+            'WHY': ('Rows are relevance-ordered; meta.causal_edges '
+                    'lists the [cause, effect] pairs among them'),
+            'WHEN': ('Rows are relevance-ordered; each carries '
+                     'created_at - order by it to reconstruct the '
+                     'timeline'),
+            'ENTITY': ('Describe the entity using evidence across '
+                       'these memories'),
+            'GENERAL': ('Synthesize key points across these related '
+                        'memories'),
             }
         backend.nodes.insert(make_insight(
             id='meta-any',
@@ -287,158 +301,12 @@ class TestRecallRanking:
                 backend, query='test content recall',
                 query_vec=None,
                 limit=5, intent_override=intent)
-            assert result['meta']['hint'] == expected
-
-    def test_ordering_field_by_intent(self, backend):
-        """Ordering field matches intent-specific sort strategy."""
-        backend.nodes.insert(make_insight(
-            id='meta-ord',
-            content='test content for recall ordering'))
-        expected = {
-            'WHY': 'causal_topological',
-            'WHEN': 'chronological',
-            'ENTITY': 'score',
-            'GENERAL': 'score',
-            }
-        for intent, ordering in expected.items():
-            result = intent_aware_recall(
-                backend, query='test content recall',
-                query_vec=None,
-                limit=5, intent_override=intent)
-            assert result['meta']['ordering'] == ordering
-
-    def test_sparse_flag_present(self, backend):
-        """Sparse flag set when results are below half the requested limit."""
-        result = intent_aware_recall(
-            backend, query='nonexistent query xyz',
-            query_vec=None,
-            limit=10, intent_override='GENERAL')
-        assert result['meta']['sparse'] is True
-
-    def test_sparse_flag_absent(self, backend):
-        """Sparse flag absent when result count meets threshold."""
-        for i in range(5):
-            backend.nodes.insert(make_insight(
-                id=f'sparse-{i}',
-                content=f'common keyword topic alpha {i}'))
-        result = intent_aware_recall(
-            backend, query='common keyword topic alpha',
-            query_vec=None,
-            limit=5, intent_override='GENERAL')
-        assert 'sparse' not in result['meta']
-
-    def test_sparse_fires_on_full_irrelevant_result_set(self, backend):
-        """Sparse fires when a FULL result set carries no relevance.
-
-        Mutation: dropping the relevance clause from `sparse`, leaving
-            only the `len(results) < limit // 2` count test.
-        Oracle: the returned row count, asserted at or above the count
-            arm's own threshold, so only the relevance arm can fire.
-        """
-        for i in range(6):
-            backend.nodes.insert(make_insight(
-                id=f'irrelevant-{i}',
-                content=f'saffron marmalade zeppelin {i}'))
-        result = intent_aware_recall(
-            backend, query='quantum tungsten harpsichord',
-            query_vec=None,
-            limit=5, intent_override='GENERAL')
-        assert len(result['results']) == 5
-        assert all(r['signals']['keyword'] == 0.0
-                   for r in result['results'])
-        assert result['meta']['sparse'] is True
-
-    def test_sparse_reads_keyword_only_not_similarity(self, backend):
-        """A full set at similarity 1.0 still fires when keyword is 0.
-
-        Mutation: conjoining `sim_score == 0.0` onto the relevance
-            clause, which is the rule the defect ledger specified and
-            which measurement showed fires on nothing once a store has
-            embeddings (0 of 20 nonsense queries).
-        Oracle: every row embedded parallel to the query vector, so
-            similarity is exactly 1.0 while no query token appears in
-            any row; the sim-conjoined rule cannot fire here and the
-            shipped rule must.
-        """
-        vec = _vec_512(1.0, 0.0)
-        for i in range(6):
-            backend.nodes.insert(make_insight(
-                id=f'simhigh-{i}',
-                content=f'saffron marmalade zeppelin {i}'))
-            backend.nodes.update_embedding(f'simhigh-{i}', vec, 'fake')
-        result = intent_aware_recall(
-            backend, query='quantum tungsten harpsichord',
-            query_vec=vec,
-            limit=5, intent_override='GENERAL')
-        assert len(result['results']) >= 5 // 2
-        assert all(r['signals']['keyword'] == 0.0
-                   for r in result['results'])
-        assert min(r['signals']['similarity']
-                   for r in result['results']) > 0.99
-        assert result['meta']['sparse'] is True
-
-    def test_sparse_absent_when_one_row_is_relevant(self, backend):
-        """One relevant row in a full set keeps `sparse` off.
-
-        Mutation: inverting the pool test to `all(kw > 0.0)`, which
-            demands every row match and so fires on this mostly-
-            irrelevant pool.
-        Oracle: a pool built with exactly one token-matching row, with
-            both the matching and non-matching signals asserted.
-        """
-        for i in range(5):
-            backend.nodes.insert(make_insight(
-                id=f'mixed-irrelevant-{i}',
-                content=f'saffron marmalade zeppelin {i}'))
-        backend.nodes.insert(make_insight(
-            id='mixed-relevant',
-            content='quantum tungsten harpsichord resonance'))
-        result = intent_aware_recall(
-            backend, query='quantum tungsten harpsichord',
-            query_vec=None,
-            limit=5, intent_override='GENERAL')
-        assert len(result['results']) >= 5 // 2
-        signals = [r['signals']['keyword'] for r in result['results']]
-        assert max(signals) > 0.0
-        assert min(signals) == 0.0
-        assert 'sparse' not in result['meta']
-
-    def test_sparse_absent_when_the_filter_hid_the_matching_row(
-            self, backend):
-        """A category filter that hides the match is not "no match".
-
-        Mutation: reading the keyword evidence off the returned rows
-            instead of the pre-filter candidate pool, which calls a
-            working graph-mediated filtered recall irrelevant and tells
-            the agent to discard it.
-        Oracle: a pool whose ONLY token-matching row is the one the
-            `--cat` filter removes, with every returned row asserted at
-            keyword 0.0 so the survivors alone would fire the arm.
-        """
-        backend.nodes.insert(make_insight(
-            id='hidden-match', category='fact',
-            content='quantum tungsten harpsichord resonance'))
-        for i in range(4):
-            backend.nodes.insert(make_insight(
-                id=f'child-{i}', category='decision',
-                content=f'saffron marmalade zeppelin {i}'))
-            backend.edges.upsert(make_edge(
-                source_id=f'child-{i}', target_id='hidden-match',
-                edge_type='causal', weight=1.0))
-            backend.edges.upsert(make_edge(
-                source_id='hidden-match', target_id=f'child-{i}',
-                edge_type='causal', weight=1.0))
-        result = intent_aware_recall(
-            backend, query='quantum tungsten harpsichord',
-            query_vec=None,
-            limit=4, intent_override='GENERAL',
-            category='decision')
-        ids = {r['insight'].id for r in result['results']}
-        assert 'hidden-match' not in ids
-        assert len(result['results']) >= 4 // 2
-        assert all(r['signals']['keyword'] == 0.0
-                   for r in result['results'])
-        assert 'sparse' not in result['meta']
+            meta = result['meta']
+            assert meta['hint'] == expected
+            assert 'newest-first' not in meta['hint']
+            assert ('causal_edges' in meta) is (intent == 'WHY')
+            assert 'ordering' not in meta
+            assert 'sparse' not in meta
 
     def test_min_score_thresholds_relevance_not_blended_score(
             self, backend):
@@ -495,33 +363,6 @@ class TestRecallRanking:
                    for r in result['results'])
         assert min(r['signals']['similarity']
                    for r in result['results']) > 0.99
-
-    def test_sparse_count_arm_fires_on_a_short_matching_page(
-            self, backend):
-        """Too few rows is sparse even when the query matched.
-
-        Mutation: deleting the `len(results) < limit // 2` arm, which
-            no other test covers -- the empty-store cases fire all
-            three arms at once and so cannot isolate it.
-        Oracle: three rows returned against a limit of 10, one of them
-            a keyword match, so the pool-match arm is provably quiet
-            and only the count arm can set the flag.
-        """
-        backend.nodes.insert(make_insight(
-            id='short-match',
-            content='quantum tungsten harpsichord resonance'))
-        for i in range(2):
-            backend.nodes.insert(make_insight(
-                id=f'short-filler-{i}',
-                content=f'saffron marmalade zeppelin {i}'))
-        result = intent_aware_recall(
-            backend, query='quantum tungsten harpsichord',
-            query_vec=None,
-            limit=10, intent_override='GENERAL')
-        assert len(result['results']) == 3
-        assert max(r['signals']['keyword']
-                   for r in result['results']) > 0.0
-        assert result['meta']['sparse'] is True
 
     def test_min_score_default_keeps_zero_relevance_rows(self, backend):
         """The default floor is off: zero-relevance rows still return.

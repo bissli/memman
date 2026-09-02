@@ -56,23 +56,34 @@ runs by default on multi-token queries and auto-skips on 1-2 token
 queries.
 
 ```bash
-memman recall "<query>" --limit 10
+memman recall "<query>" --brief --limit 20 --session <id>
 ```
 
 Add `--intent WHY|WHEN|ENTITY` to bias the ranking when intent is
 unambiguous (cause/effect, timeline, entity-centric). Add `--cat` or
 `--source` to filter.
 
-`--basic` emits no `meta.sparse` at all, so a missing `sparse` there
-is not confidence. On the scored path recall always returns rows, so
-check `meta.sparse` before trusting
-them. It is set when the set is empty, when it holds fewer than
-`limit // 2` rows, or when no candidate matched a query token -- a
-full page of the nearest unrelated memories. On a
-`sparse` response, say nothing relevant is stored; do not reason from
-the rows as if they answered the query. It reads literal tokens, so a
-paraphrase sharing no word with a row the vector search did find trips
-it -- re-ask in the store's own words before concluding it is empty.
+Recall returns rows even when nothing matches: a recency channel
+seeds the newest insights as anchors regardless. An empty `results`
+therefore means the store itself is empty, not that the query failed. A full page is
+therefore not evidence that anything on it is relevant -- and a page
+that looks thin usually is not, because the store nearly always holds
+something bearing on a query drawn from the same work. Judge each row
+on its merits against the query. Each row carries its own `score` and
+per-channel `signals`; compare them WITHIN the page and never against
+a fixed number, because the scale belongs to whichever reranker is
+configured. Report that nothing relevant is stored only when no row
+bears on the query.
+
+`--basic` returns before ranking, so it carries no `score` and no
+`signals` to judge with at all. If a paraphrase returns nothing that
+bears on the query, re-ask in the store's own words before concluding
+it is empty.
+
+Rows come back in relevance order at every `--limit`, so the first `n`
+of a page of `m` are exactly a page of `n`. On `WHY`,
+`meta.causal_edges` carries the `[cause, effect]` pairs among the
+returned rows.
 
 `--min-score` drops rows whose keyword plus similarity sum is under
 the floor (0.0 to 2.0, `0.0` = off, rejected with `--basic` -- a
@@ -102,13 +113,9 @@ no marker however much its summary left out, and a fallback row is
 marked only when its content ran past the cut. `memman insights show
 <id>` is how you read the rest of any row worth more than a scan.
 
-`--brief` also drops `created_at`. On the scored path a WHEN query
-still orders rows newest first, so brief rows keep their sequence but
-carry no dates. Read a row in full when you need the date itself.
-
-```bash
-memman recall "<query>" --limit 10 --brief
-```
+A brief row carries `created_at`, so a WHEN query reconstructs a
+timeline by sorting on that field rather than by reading row order,
+which is relevance-ordered on every path.
 
 Read a single insight by ID:
 
