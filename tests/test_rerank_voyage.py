@@ -1,6 +1,7 @@
 """Tests for memman.rerank.voyage and the rerank provider registry."""
 
 import pytest
+from memman import config
 from memman.rerank import RERANKERS, get_client, voyage
 
 
@@ -31,12 +32,19 @@ class TestVoyageClient:
     """Voyage rerank Client behavior."""
 
     def test_default_model(self, monkeypatch):
-        """Client uses rerank-2.5-lite when MEMMAN_VOYAGE_RERANK_MODEL is unset.
+        """Client uses rerank-3-lite when MEMMAN_VOYAGE_RERANK_MODEL is unset.
+
+        Mutation: `DEFAULT_MODEL` drifting from the value the install
+        default map ships, so the two disagree on which reranker runs
+        and which one runs depends on whether a config file exists.
+        Oracle: the model literal, pinned in both places at once.
         """
         monkeypatch.setenv('MEMMAN_VOYAGE_API_KEY', 'rk-1')
         monkeypatch.delenv('MEMMAN_VOYAGE_RERANK_MODEL', raising=False)
         client = voyage.Client()
-        assert client.model == voyage.DEFAULT_MODEL == 'rerank-2.5-lite'
+        assert client.model == voyage.DEFAULT_MODEL == 'rerank-3-lite'
+        assert (config.INSTALL_DEFAULTS[config.VOYAGE_RERANK_MODEL]
+                == 'rerank-3-lite')
 
     def test_configured_model_overrides(self, env_file):
         """MEMMAN_VOYAGE_RERANK_MODEL overrides the default."""

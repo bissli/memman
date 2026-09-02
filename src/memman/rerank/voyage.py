@@ -2,7 +2,7 @@
 
 Mirrors `memman.embed.voyage.Client` for embeddings: API key from
 `MEMMAN_VOYAGE_API_KEY`, model from `MEMMAN_VOYAGE_RERANK_MODEL` (default
-`rerank-2.5-lite`), shared httpx session via `_http.get_session`.
+`rerank-3-lite`), shared httpx session via `_http.get_session`.
 """
 
 import logging
@@ -13,7 +13,7 @@ from memman._http import get_session, post_with_retry
 
 logger = logging.getLogger('memman')
 
-DEFAULT_MODEL = 'rerank-2.5-lite'
+DEFAULT_MODEL = 'rerank-3-lite'
 DEFAULT_ENDPOINT = 'https://api.voyageai.com'
 
 

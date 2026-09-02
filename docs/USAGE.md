@@ -107,7 +107,7 @@ memman forget <id>
 
 The cross-encoder rerank stage is on by default and auto-skips on 1-2 token
 queries. Provider is selected via `MEMMAN_RERANK_PROVIDER` (any registered
-rerank provider; ships defaulted to `voyage` / `rerank-2.5-lite`). Toggle
+rerank provider; ships defaulted to `voyage` / `rerank-3-lite`). Toggle
 per-store with `memman config set MEMMAN_RERANK_ENABLED_<store> false` or
 globally with `memman config set MEMMAN_RERANK_ENABLED false`.
 
@@ -473,7 +473,7 @@ The host session never blocks on the network. Newly stored memories become recal
 3. **Beam search** — intent-weighted graph traversal from anchors.
 4. **3-signal rerank** — keyword, similarity, graph (intent-weighted). A stored entity name reaches the keyword signal because a candidate's token set unions its content tokens with its entity-name tokens.
    - **4a. MMR diversity re-sort** — one-shot re-sort of the top 200; shipped disabled (`MMR_LAMBDA = 1.0`, measured a no-op under the cross-encoder rerank at both placements — see `experiments/recall_ablation/README.md`).
-5. **Cross-encoder rerank** (on by default; toggle per-store via `MEMMAN_RERANK_ENABLED_<store>`) — the configured reranker (default `voyage` / `rerank-2.5-lite`) re-scores the top 100 candidates; replaces the multi-signal score for the final ordering. Auto-skips on 1-2 token queries.
+5. **Cross-encoder rerank** (on by default; toggle per-store via `MEMMAN_RERANK_ENABLED_<store>`) — the configured reranker (default `voyage` / `rerank-3-lite`) re-scores the top 100 candidates; replaces the multi-signal score for the final ordering. Auto-skips on 1-2 token queries.
 6. **Post-sort** — causal topological (WHY), chronological (WHEN), score (default).
 
 Inspired by [MAGMA](https://arxiv.org/abs/2601.03236). See [Design & Architecture](DESIGN.md) for the full deep dive.
