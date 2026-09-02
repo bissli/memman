@@ -66,7 +66,7 @@
           </mxGeometry>
         </mxCell>
 
-        <mxCell id="t2_box" value="&lt;b&gt;Tier 2 — Background worker (memman scheduler drain --pending)&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+        <mxCell id="t2_box" value="&lt;b&gt;Tier 2 — Background worker (memman scheduler drain --timeout 60)&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
           <mxGeometry x="40" y="385" width="1020" height="690" as="geometry" />
         </mxCell>
 
