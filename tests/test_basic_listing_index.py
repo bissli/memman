@@ -1,7 +1,8 @@
-"""The shipped SQLite schema has to order `insights list` from an index.
+"""The shipped SQLite schema has to order the `--basic` listing from an index.
 
 `query_insights` (`store/node.py`) filters on `deleted_at is null` and
-sorts `importance desc, created_at desc` under a limit. Without an
+sorts `importance desc, created_at desc` under a limit. Its one caller
+is `recall --basic` (`cli.py`), not the default scored path. Without an
 index carrying that order SQLite reads every active row into a temp
 b-tree before honoring the limit, so the cost grows with the store
 while the indexed form stops at the limit.
@@ -40,8 +41,8 @@ def _plan_of(db, sql):
     return ' | '.join(r[3] for r in rows)
 
 
-def test_the_insights_list_query_takes_its_order_from_an_index(tmp_path):
-    """Verify the shipped schema sorts `insights list` in the index.
+def test_the_basic_listing_takes_its_order_from_an_index(tmp_path):
+    """Verify the shipped schema sorts the `--basic` listing in the index.
 
     Mutation: dropping the `(deleted_at, importance, created_at)`
         declaration from `_BASELINE_SCHEMA`, narrowing it to
