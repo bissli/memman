@@ -39,7 +39,6 @@ ANCHOR_TOP_K = 30
 LAMBDA1 = 1.0
 LAMBDA2 = 0.4
 RRF_K = 60
-VECTOR_SEARCH_MIN_SIM = 0.10
 RERANK_SHORTLIST = 100
 MIN_RERANK_TOKENS = 2
 
@@ -428,7 +427,6 @@ def intent_aware_recall(
             try:
                 vector_hits = session.vector_anchors(
                     query_vec, k=anchor_k,
-                    min_sim=VECTOR_SEARCH_MIN_SIM,
                     category=category, source=source)
             except Exception as exc:
                 logger.warning(

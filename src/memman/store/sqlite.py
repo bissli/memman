@@ -648,9 +648,8 @@ where insights_fts match ? and i.deleted_at is null
 
     def vector_anchors(
             self, query_vec: list[float], *, k: int = 10,
-            min_sim: float = 0.0, category: str = '',
-            source: str = '') -> list[tuple[Id, float]]:
-        """Return top-k (id, similarity) matches. Cosine in [-1, 1].
+            category: str = '', source: str = '') -> list[tuple[Id, float]]:
+        """Return top-k (id, similarity) matches. Cosine in (0, 1].
 
         Notes
         -----
@@ -663,7 +662,7 @@ where insights_fts match ? and i.deleted_at is null
         row_ids, sims = self._cosines(query_vec)
         meta = self._meta or {}
         scored: list[tuple[float, Id]] = []
-        for row in np.nonzero(sims >= min_sim)[0]:
+        for row in np.nonzero(sims > 0.0)[0]:
             rid = row_ids[row]
             if category or source:
                 cat, src = meta.get(rid, ('', ''))

@@ -9,9 +9,12 @@ rerank.
 Vector-path tests seed deliberately correlated embeddings via
 `nodes.update_embedding` rather than going through the autouse mock
 embedder: the mock builds SHA-256 unit vectors whose pairwise cosine
-(~1/sqrt(dim)) sits below `VECTOR_SEARCH_MIN_SIM = 0.10`, so
-mock-embedded fixtures return zero vector anchors and any vector-path
-assertion would be vacuously green.
+is ~1/sqrt(dim) of arbitrary sign, so which rows anchor is noise and a
+vector-path assertion would be testing the hash. This was previously
+written up as the anchors coming back EMPTY, which was true only while
+`VECTOR_SEARCH_MIN_SIM = 0.10` gated the channel above that cosine;
+the floor is gone, so the reason is now arbitrariness rather than
+absence, and the practice is unchanged.
 """
 
 import math

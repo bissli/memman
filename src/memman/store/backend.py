@@ -577,13 +577,23 @@ class RecallSession(Protocol):
 
     def vector_anchors(
             self, query_vec: list[float], *, k: int = 10,
-            min_sim: float = 0.0, category: str = '',
-            source: str = '') -> list[tuple[Id, float]]:
-        """Top-k (id, similarity) anchors. Cosine in [-1, 1].
+            category: str = '', source: str = '') -> list[tuple[Id, float]]:
+        """Top-k (id, similarity) anchors. Cosine in (0, 1].
 
         `category` / `source` restrict eligibility BEFORE the top-k
         cut ('' = no filter); post-filtering the returned hits would
         under-fill k, which is the defect this parameter closes.
+
+        Notes
+        -----
+        - Positives only, matching `similarities`: a row pointing
+          away from the query is not an entry point into the graph.
+          The sign boundary is the ONLY floor here, and it is the
+          only one that can be, because a fixed cosine means
+          different things under different embedding models while an
+          orthogonal row is orthogonal under all of them.
+        - So a store with fewer than k positive-cosine rows returns
+          fewer than k anchors, by design.
         """
         ...
 

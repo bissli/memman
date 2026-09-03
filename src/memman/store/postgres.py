@@ -1737,11 +1737,10 @@ class PostgresRecallSession(RecallSession):
 
     def vector_anchors(
             self, query_vec: list[float], *, k: int = 10,
-            min_sim: float = 0.0, category: str = '',
-            source: str = '') -> list[tuple[Id, float]]:
+            category: str = '', source: str = '') -> list[tuple[Id, float]]:
         """Return top-k (id, similarity) matches via HNSW.
 
-        Similarity is `1 - (embedding <=> :q)` (cosine in [-1, 1],
+        Similarity is `1 - (embedding <=> :q)` (cosine in (0, 1],
         higher is better). `category` / `source` filter in SQL before
         the limit so the top-k cut is taken over eligible rows only.
 
@@ -1780,7 +1779,7 @@ limit %s
                 query_vec, k))
             return [
                 (r[0], float(r[1])) for r in cur.fetchall()
-                if r[1] is not None and float(r[1]) >= min_sim
+                if r[1] is not None and float(r[1]) > 0.0
                 ]
 
     def similarities(
