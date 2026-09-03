@@ -239,7 +239,32 @@ def _parse_since(since: str) -> str:
 
 
 def _parse_entities(entities: str) -> list[str]:
-    """Parse and validate comma-separated entities."""
+    """Parse and validate comma-separated entities.
+
+    Notes
+    -----
+    - Both caps below are MEASURED against the population they see,
+      fleet-wide on 2026-09-03: 6,220 active rows carrying 116,057
+      entities across 24 stores.
+    - The 200-char per-entity cap is INERT. Longest observed entity
+      is 137 chars, p99 is 42, and zero of 116,057 exceed 200. It has
+      never fired and is kept only as a guard against a pathological
+      argument.
+    - The 50-entity cap governs THIS path alone, and it does not
+      describe what the column holds: 74 rows (1.19%) already carry
+      more than 50 entities, up to 181. `pipeline/remember.py` sets
+      entities from the enrichment without passing through here, and
+      merges them as a monotonic union on every reconciliation, so
+      the machine path is deliberately unbounded while a caller is
+      refused at 51. Raising or removing this cap is a design
+      question, not a tuning one - see QUEUE-1 Q2.
+    - Neither cap is the binding constraint on usefulness.
+      `graph/entity.py` caps entity edges at MAX_TOTAL_ENTITY_EDGES
+      = 50 and counts two per target (forward and reverse) at
+      MAX_ENTITY_LINKS = 5 targets each, so about FIVE entities
+      exhaust the whole edge budget and later ones produce no edge
+      at all. Stored median is 20.
+    """
     entity_list: list[str] = []
     if not entities:
         return entity_list
