@@ -31,7 +31,7 @@ from typing import Any, ClassVar, Literal
 
 from memman.embed.fingerprint import Fingerprint
 
-PAYLOAD_VERSION = 3
+PAYLOAD_VERSION = 4
 
 EmbeddingDtype = Literal[
     'float64', 'float32', 'float16', 'int8', 'binary']
@@ -102,7 +102,6 @@ class MigrateInsight:
     semantic_facts: list[Any] | None
     last_accessed_at: datetime | None
     embedding: list[float] | None
-    effective_importance: float
     linked_at: datetime | None
     enriched_at: datetime | None
     created_at: datetime

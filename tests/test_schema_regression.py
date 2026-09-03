@@ -65,8 +65,10 @@ def test_migrate_insight_fields_cover_pg_baseline_schema_columns():
     through `keyword.insight_tokens` instead of transporting it.
     Carrying it would put a second copy of the tokenizer in the wire
     format. `PAYLOAD_VERSION` is deliberately NOT bumped for it: no
-    `MigrationPayload` field changed, and a bump would refuse stale
-    payloads that are in fact still compatible. The recompute is not
+    `MigrateInsight` field changed, and a bump would refuse stale
+    payloads that are in fact still compatible. Removing a
+    `MigrateInsight` field is the opposite case and DOES take a bump
+    -- v4 dropped `effective_importance`. The recompute is not
     on trust - the column is `not null`, so an `apply` that omitted
     it raises `NotNullViolation` and takes three tests in
     `test_migrate_verify.py` and `test_migrate_dim_resolution.py`

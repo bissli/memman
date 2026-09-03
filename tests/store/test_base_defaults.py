@@ -22,8 +22,7 @@ default that calls `get_all_active()` and filters in Python would
 fetch every row instead of the index-only scan. The SQLite verbs
 are tiny single-column queries; collapsing them into a default
 buys nothing and would only obscure the perf-critical Postgres
-path. `boost_retention` is excluded because `increment_access_count`
-skips `updated_at` and cannot stand in for it.
+path.
 """
 
 from tests.conftest import _vec, make_insight

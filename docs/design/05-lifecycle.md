@@ -4,82 +4,40 @@
 
 ---
 
-memman is not append-only. Important memories persist; outdated ones decay.
+memman is not append-only, but nothing expires on its own: a stored memory persists until an operator removes it.
 
-![Lifecycle & Retention](../diagrams/06-lifecycle-retention.drawio.png)
-
-## 5.1 Effective Importance (EI)
-
-EI combines base importance, access frequency, time decay, and graph connectivity:
-
-```
-EI = base_weight(importance) × access_factor × decay_factor × edge_factor
-
-base_weight:   imp 5 → 1.0,  4 → 0.8,  3 → 0.5,  2 → 0.3,  1 → 0.15
-access_factor: max(1.0, log(1 + access_count))
-decay_factor:  0.5 ^ (days_since_access / 30)     // half-life of 30 days
-edge_factor:   1.0 + 0.1 × min(edge_count, 5)     // up to +0.5
-```
-
-**Rationale.**
-
-- **`base_weight` (1.0, 0.8, 0.5, 0.3, 0.15)**: non-linear spacing produces a 6.7:1 ratio between importance 5 and 1. The 0.8→0.5 gap between importance 4→3 reinforces the protected tier at importance 4+. The 0.3→0.15 gap between 2→1 makes raw `--no-reconcile` writes decay sharply.
-- **`HALF_LIFE_DAYS = 30`**: one calendar month. At 30 days EI halves, at 60 days quarters, at 90 days ~12.5%. Inspired by Ebbinghaus forgetting-curve research but not derived from a specific paper. Not from MAGMA (no decay mechanism).
-- **`edge_factor` cap at 5 edges, +0.1 per edge (max +50%)**: prevents highly-connected hub nodes from riding to the top of the EI ranking through connectivity alone.
-
-## 5.2 Immunity rules
-
-Never offered as a retention candidate, so `memman insights candidates` never surfaces them:
-
-- `importance >= 4` (high-value memories)
-- `access_count >= 3` (frequently retrieved)
-
-Nothing deletes on this predicate. It gates a report, not a cleanup — `is_immune` has no writer.
-
-**Rationale.**
-
-- **`importance >= 4`**: follows from the importance scale — importance 4 is the protected tier (§ 2.1).
-- **`access_count >= 3`**: three independent retrievals give statistical evidence of genuine utility, not coincidental access. Two recalls already suggest real value; three is a safety margin.
-
-## 5.3 Retention review
+## 5.1 Retention
 
 A store is **uncapped** and nothing deletes automatically. Deletion is always an operator action: `memman forget <id>`.
-
-`memman insights candidates` reports the lowest-EI non-immune rows so an operator can decide. It never deletes, and immune rows (`importance >= 4` or `access_count >= 3`) are never offered.
 
 **Rationale.**
 
 - **No count cap.** A memory store's value grows with what it holds, so a capacity limit is the wrong shape for it. The former `MAX_INSIGHTS = 1000` also drove an `auto_prune` that soft-deleted real memories with only an oplog trace, and its predicate (`importance < 4 and access_count < 3`) made the deletions unpredictable rather than gentle: on a store of mostly high-importance rows it pruned nothing and the cap silently failed to bound anything, while on a store of low-importance rows it deleted freely.
+- **No retention score either.** A stored `effective_importance` once combined base importance, access frequency, a 30-day half-life and edge count into one number, and an `importance >= 4 or access_count >= 3` predicate exempted rows from the report it fed. Nothing read the column: both backends recomputed the score on every call and wrote the result back, and no query filtered or ordered by it. The report ranked ascending, and its edge term capped at five edges, so rows carrying dozens of edges scored identically to a row carrying five and the report nominated the best-connected rows in the store for deletion. The column, the predicate, the `insights candidates` report and the `insights protect` command that existed to keep a row off it are all gone.
 - **Scan cost is not a reason to cap.** Bounded recall latency is the storage layer's problem, not the operator's; see [04-pipelines.md § Smart recall](04-pipelines.md).
 - **`MAX_OPLOG_ENTRIES = 5000`**: the oplog is an audit trail, not memory, and a bounded trail is the point. Roughly five operations per insight at the scale where the value was chosen; retained without unbounded growth.
+- **`access_count` records retrievals and nothing else.** Recall increments it once per returned row. No write path and no operator command touches it, so it stays a faithful count of what recall returned -- which is also the limit of what it can answer, since a returned row is not a used one.
 
-## 5.4 Insights group
+## 5.2 Insights group
 
-Manual lifecycle management lives under the `memman insights` group:
+Manual inspection lives under the `memman insights` group:
 
 ```bash
-# View low-retention candidates (read-only — does NOT delete)
-memman insights candidates --threshold 0.5
+# Read a single insight by ID
+memman insights show <id>
 
-# Retain a specific insight (increases access_count by +3)
-memman insights protect <id>
+# Resolve a write to the insights it produced
+memman insights by-queue <queue_uuid>
 
 # Review stored insights for content quality issues
 memman insights review
-
-# Read a single insight by ID
-memman insights show <id>
 ```
 
 `insights review` scans all active insights against transient content patterns (AWS instance IDs, resource counts, verification receipts, deployment receipts, state observations, line number references) and returns flagged entries sorted by warning count. Since the remember pipeline rejects content with 2+ quality warnings at write time, `insights review` primarily catches insights stored before the hard gate was introduced, or single-warning content that accumulated additional transient characteristics over time.
 
-**Rationale.**
-
-- **`boost_retention +3`**: matches the immunity threshold (`access_count >= 3`). A single `insights protect` guarantees immunity regardless of prior access count — the insight crosses the threshold immediately.
-
 ---
 
-## 5.5 Embedding support
+## 5.3 Embedding support
 
 Embeddings power semantic search and graph connectivity. Vector dimensionality is provider-defined and recorded in a per-store `meta.embed_fingerprint` (provider, model, dim). Switching a store's embedder is explicit — online via `memman embed swap` (resumable shadow-column backfill) or offline via `memman embed reembed`.
 
@@ -92,7 +50,7 @@ Embeddings power semantic search and graph connectivity. Vector dimensionality i
 
 `memman embed status` reports the store's stored fingerprint and whether credentials for that fingerprint's provider are available. `memman doctor` (`check_embed_fingerprint`) follows the same shape: pass on stored + creds-available, fail on stored-but-missing-creds, fail on populated-store-without-fingerprint (corruption).
 
-### 5.5.1 Supported providers
+### 5.3.1 Supported providers
 
 | Provider     | Default model             | Notes                                                                                                                                    |
 | ------------ | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
@@ -103,7 +61,7 @@ Embeddings power semantic search and graph connectivity. Vector dimensionality i
 
 The wizard ships defaulted to `voyage`; any of the four is selectable.
 
-### 5.5.1a Calibrated embedding models
+### 5.3.1a Calibrated embedding models
 
 The shipped `_thresholds_generated.py` covers these `(provider, model)` pairs with surface-specific `AUTO_SEMANTIC_THRESHOLD` values. A store using one of these pairs gets the calibrated threshold automatically based on its `MEMMAN_SURFACE_<store>` setting (default `code`).
 
@@ -130,7 +88,7 @@ The shipped `_thresholds_generated.py` covers these `(provider, model)` pairs wi
 | `ollama`     | `all-minilm`                              | 0.558 | 0.568 |
 | `ollama`     | `snowflake-arctic-embed`                  | 0.704 | 0.752 |
 
-### 5.5.1b Models not on the calibrated list
+### 5.3.1b Models not on the calibrated list
 
 A store fingerprinted to a `(provider, model)` triple outside the table above falls back to the **surface-wide median** of the calibrated values for that surface — empirically the lowest-error single-constant rule (mean nDCG@5 loss ~0.014 vs the calibrated optimum on the shipped triples, max ~0.08).
 
@@ -148,7 +106,7 @@ Operators with a quality-critical store can override the fallback by setting `ME
 
 `memman config set MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store> 0.72` (or `skip`) is the supported way to write it. The override takes precedence over both the calibrated table and the median fallback.
 
-### 5.5.2 Vector storage
+### 5.3.2 Vector storage
 
 Vector serialization depends on the active storage backend for the store (`MEMMAN_BACKEND_<store>`, falling back to `MEMMAN_DEFAULT_BACKEND`):
 
@@ -157,7 +115,7 @@ Vector serialization depends on the active storage backend for the store (`MEMMA
 
 > **Threshold resolution.** `AUTO_SEMANTIC_THRESHOLD` is resolved at runtime in this precedence order: (1) per-store env override `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>`; (2) calibrated table lookup `(provider, model, surface)` via `memman.embed.thresholds.resolve`; (3) surface-wide median fallback via `thresholds.resolve_with_fallback`. Surface is a closed set `{'code', 'claw'}` resolved per store via `MEMMAN_SURFACE_<store>` (default `'code'`). The fallback path always returns a usable float, so uncalibrated triples still produce semantic edges -- just at a bounded-but-not-optimal threshold; `memman doctor`'s `embed_threshold` check reports the `source` (`calibrated`, `surface_median`, `override`, or `override_skip`). **After upgrading memman, run `memman graph rebuild` for each store** to recompute semantic edges at the active per-surface threshold for its `meta.embed_fingerprint`. Without rebuild, only new insights flowing through `link_pending` get the corrected threshold; existing edges stay at their built-time value.
 
-### 5.5.3 Embedding in the pipeline
+### 5.3.3 Embedding in the pipeline
 
 - **Initial (remember — sequential)**: each fact is embedded immediately after extraction.
 - **Merged (remember — sequential)**: if reconciliation merges facts, the merged text is re-embedded.
@@ -165,11 +123,11 @@ Vector serialization depends on the active storage backend for the store (`MEMMA
 - **Recovery (`graph rebuild`)**: re-enriches all insights through the full LLM pipeline and updates embeddings.
 - **Recall**: expanded query is embedded for vector search anchors and reranking.
 
-### 5.5.4 Recovery
+### 5.3.4 Recovery
 
 `memman graph rebuild` re-enriches all insights through the full LLM pipeline and updates embeddings. The worker owns the embedding lifecycle (initial, merged, enriched, rebuild).
 
-### 5.5.5 Online embedding swap
+### 5.3.5 Online embedding swap
 
 `memman embed swap` performs a per-store provider/model change without going recall-only. The orchestrator (`src/memman/embed/swap.py`) drives a state machine recorded in per-store meta keys:
 

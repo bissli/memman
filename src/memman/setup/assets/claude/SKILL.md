@@ -135,17 +135,16 @@ memman insights by-queue <queue_uuid>
 nothing (see `memman scheduler queue skipped`), or it went to a
 different store -- the queue is global while this reads one store.
 
-## Forgetting and protecting
+## Forgetting
 
 ```bash
 memman forget <id>                    # soft-delete
-memman insights protect <id>          # boost retention (opposite of forget)
-memman insights candidates            # list low-retention candidates (read-only)
 memman insights review                # scan for content quality issues
 ```
 
-`insights candidates` and `insights review` only surface candidates —
-neither deletes anything. Use `forget <id>` to actually remove.
+`insights review` only surfaces rows — it deletes nothing. Use
+`forget <id>` to actually remove. Nothing else deletes: the store is
+uncapped and a stored insight persists until someone forgets it.
 
 ## Working with relationships
 

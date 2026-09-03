@@ -128,7 +128,6 @@ create table if not exists {schema}.insights (
     semantic_facts jsonb,
     last_accessed_at timestamptz,
     embedding   vector({dim}),
-    effective_importance double precision default 0.5,
     linked_at   timestamptz,
     enriched_at timestamptz,
     created_at  timestamptz not null default now(),
@@ -199,8 +198,6 @@ create index if not exists idx_insights_queue_uuid_{schema}
     on {schema}.insights(queue_uuid);
 create index if not exists idx_insights_corroboration_{schema}
     on {schema}.insights(corroboration_count);
-create index if not exists idx_insights_eff_imp_{schema}
-    on {schema}.insights(effective_importance);
 create index if not exists idx_insights_pending_link_{schema}
     on {schema}.insights(linked_at)
     where linked_at is null and deleted_at is null;
@@ -637,113 +634,6 @@ where id = %s and deleted_at is null
             cur.execute(sql, (queue_uuid, id))
             return bool(cur.rowcount == 1)
 
-    def refresh_effective_importance(self, id: Id) -> float:
-        select_sql = self._q("""
-select importance, access_count, created_at, last_accessed_at
-from {s}.insights
-where id = %s and deleted_at is null
-""")
-        edge_sql = self._q("""
-select (select count(*) from {s}.edges where source_id = %s)
-     + (select count(*) from {s}.edges where target_id = %s)
-""")
-        update_sql = self._q("""
-update {s}.insights
-set effective_importance = %s
-where id = %s
-""")
-        with self._conn.cursor() as cur:
-            cur.execute(select_sql, (id,))
-            row = cur.fetchone()
-            if row is None:
-                raise ValueError(f'insight {id} not found')
-            importance = row[0]
-            access_count = row[1]
-            created_at = _datetime_or_none(row[2]) or datetime.now(
-                timezone.utc)
-            last_access = _datetime_or_none(row[3]) or created_at
-            cur.execute(edge_sql, (id, id))
-            edge_row = cur.fetchone()
-            edge_count = edge_row[0] if edge_row else 0
-
-        from memman.store.node import compute_effective_importance
-        now = datetime.now(timezone.utc)
-        days_since = (now - last_access).total_seconds() / 86400.0
-        ei = compute_effective_importance(
-            importance, access_count, days_since, edge_count)
-        with self._conn.cursor() as cur:
-            cur.execute(update_sql, (ei, id))
-        return ei
-
-    def get_retention_candidates(
-            self, *, threshold: float,
-            limit: int) -> tuple[list[dict[str, Any]], int]:
-        from memman.store.model import is_immune
-        from memman.store.node import compute_effective_importance
-        rows_sql = self._q(f"""
-select {_INSIGHT_COLS}
-from {{s}}.insights
-where deleted_at is null
-""")
-        with self._conn.cursor() as cur:
-            cur.execute(rows_sql)
-            rows = cur.fetchall()
-        if not rows:
-            return [], 0
-
-        edge_counts: dict[str, int] = {}
-        edge_sql = self._q("""
-select id, sum(cnt) from (
-    select source_id as id, count(*) as cnt
-    from {s}.edges
-    group by source_id
-    union all
-    select target_id as id, count(*) as cnt
-    from {s}.edges
-    group by target_id
-) t
-group by id
-""")
-        with self._conn.cursor() as cur:
-            cur.execute(edge_sql)
-            for rid, cnt in cur.fetchall():
-                edge_counts[rid] = int(cnt)
-
-        now = datetime.now(timezone.utc)
-        candidates: list[dict[str, Any]] = []
-        updates: list[tuple[float, str]] = []
-        for r in rows:
-            ins = _row_to_insight(r)
-            last_access = ins.last_accessed_at or (
-                ins.created_at or now)
-            days_since = (now - last_access).total_seconds() / 86400.0
-            ec = edge_counts.get(ins.id, 0)
-            ei = compute_effective_importance(
-                ins.importance, ins.access_count, days_since, ec)
-            immune = is_immune(ins.importance, ins.access_count)
-            updates.append((ei, ins.id))
-            if ei < threshold and not immune:
-                candidates.append({
-                    'insight': ins,
-                    'effective_importance': ei,
-                    'days_since_access': days_since,
-                    'edge_count': ec,
-                    'immune': immune,
-                    })
-
-        if updates:
-            update_many_sql = self._q("""
-update {s}.insights
-set effective_importance = %s
-where id = %s
-""")
-            with self._conn.cursor() as cur:
-                cur.executemany(update_many_sql, updates)
-        candidates.sort(key=lambda c: c['effective_importance'])
-        if limit > 0:
-            candidates = candidates[:limit]
-        return candidates, len(rows)
-
     def count_active(self) -> int:
         sql = self._q("""
 select count(*) from {s}.insights where deleted_at is null
@@ -835,20 +725,6 @@ order by count(*) desc
                     prompt_version=r[0], model_id=r[1], count=int(r[2]))
                 for r in cur.fetchall()
                 ]
-
-    def boost_retention(self, id: Id) -> None:
-        sql = self._q("""
-update {s}.insights
-set access_count = access_count + 3,
-    last_accessed_at = now(),
-    updated_at = now()
-where id = %s and deleted_at is null
-""")
-        with self._conn.cursor() as cur:
-            cur.execute(sql, (id,))
-            if cur.rowcount == 0:
-                raise ValueError(
-                    f'insight {id} not found or already deleted')
 
     def get_recent_in_window(
             self, *, exclude_id: Id, window_hours: float,
@@ -2755,12 +2631,12 @@ class PostgresMigrator(Migrator):
                 optional += ['session_id', 'queue_uuid']
             if has_corrob:
                 optional.append('corroboration_count')
-            idx = {name: 21 + n for n, name in enumerate(optional)}
+            idx = {name: 20 + n for n, name in enumerate(optional)}
             optional_select = ''.join(f', {c}' for c in optional)
             cur.execute(f"""
 select id, content, category, importance, entities,
        source, access_count, keywords, summary, semantic_facts,
-       last_accessed_at, embedding, effective_importance,
+       last_accessed_at, embedding,
        linked_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, model_id, embedding_model
        {optional_select}
@@ -2784,14 +2660,13 @@ order by id
                         list(r[9]) if r[9] is not None else None),
                     last_accessed_at=r[10],
                     embedding=emb,
-                    effective_importance=float(r[12]),
-                    linked_at=r[13],
-                    enriched_at=r[14],
-                    created_at=r[15],
-                    updated_at=r[16],
-                    deleted_at=r[17],
-                    prompt_version=r[18], model_id=r[19],
-                    embedding_model=r[20],
+                    linked_at=r[12],
+                    enriched_at=r[13],
+                    created_at=r[14],
+                    updated_at=r[15],
+                    deleted_at=r[16],
+                    prompt_version=r[17], model_id=r[18],
+                    embedding_model=r[19],
                     session_id=(
                         r[idx['session_id']] if has_new else None),
                     queue_uuid=(
@@ -2906,7 +2781,6 @@ order by sqlite_id
                             if ins.semantic_facts is not None
                             else None,
                             ins.last_accessed_at, emb,
-                            ins.effective_importance,
                             ins.linked_at, ins.enriched_at,
                             ins.created_at, ins.updated_at,
                             ins.deleted_at, ins.prompt_version,
@@ -2928,16 +2802,16 @@ order by sqlite_id
                             ' entities, source, access_count,'
                             ' keywords, summary, semantic_facts,'
                             ' last_accessed_at, embedding,'
-                            ' effective_importance, linked_at,'
-                            ' enriched_at, created_at, updated_at,'
-                            ' deleted_at, prompt_version, model_id,'
+                            ' linked_at, enriched_at, created_at,'
+                            ' updated_at, deleted_at,'
+                            ' prompt_version, model_id,'
                             ' embedding_model, session_id,'
                             ' queue_uuid, corroboration_count,'
                             ' kw_tokens)'
                             ' values (%s, %s, %s, %s, %s::jsonb,'
                             ' %s, %s, %s::jsonb, %s, %s::jsonb,'
                             ' %s, %s, %s, %s, %s, %s, %s, %s,'
-                            ' %s, %s, %s, %s, %s, %s, %s)'
+                            ' %s, %s, %s, %s, %s, %s)'
                             ' on conflict (id) do nothing',
                             insight_rows)
 

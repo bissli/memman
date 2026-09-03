@@ -359,7 +359,6 @@ create table if not exists insights (
     last_accessed_at text,
     embedding   blob,
     embedding_pending blob,
-    effective_importance real default 0.5,
     linked_at   text,
     enriched_at text,
     created_at  text not null,
@@ -395,7 +394,6 @@ create index if not exists idx_insights_queue_uuid on insights(queue_uuid);
 -- Load-bearing as the schema canary, not as a query index: this is
 -- the statement that makes a 0.18.x store fail at open (see _migrate).
 create index if not exists idx_insights_corroboration on insights(corroboration_count);
-create index if not exists idx_insights_effective_imp on insights(effective_importance);
 -- Carries `query_insights`' whole sort order, so `recall --basic`
 -- honors its limit from the index instead of reading every active
 -- row into a temp b-tree.

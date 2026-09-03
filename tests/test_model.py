@@ -3,9 +3,8 @@
 from datetime import datetime, timezone
 
 from memman.store.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge
-from memman.store.model import Insight, base_weight, format_float
-from memman.store.model import format_timestamp, insight_to_brief_dict
-from memman.store.model import is_immune, parse_timestamp
+from memman.store.model import Insight, format_float, format_timestamp
+from memman.store.model import insight_to_brief_dict, parse_timestamp
 
 
 def test_parse_entities_null():
@@ -69,24 +68,6 @@ def test_semantic_default_values():
     e = Edge()
     assert e.edge_type == 'semantic'
     assert e.weight == 0.5
-
-
-def test_base_weight_values():
-    """Verify base_weight maps importance correctly."""
-    assert base_weight(5) == 1.0
-    assert base_weight(4) == 0.8
-    assert base_weight(3) == 0.5
-    assert base_weight(2) == 0.3
-    assert base_weight(1) == 0.15
-
-
-def test_is_immune():
-    """Verify immunity rules."""
-    assert is_immune(4, 0) is True
-    assert is_immune(5, 0) is True
-    assert is_immune(1, 3) is True
-    assert is_immune(3, 2) is False
-    assert is_immune(1, 0) is False
 
 
 def test_format_timestamp():
@@ -154,7 +135,7 @@ def test_brief_dict_projects_exact_fields_and_values():
     """The projection is exactly five keys carrying the right five values.
 
     Mutation: reading an adjacent field -- `ins.source` for `category`,
-        `ins.effective_importance` for `importance`, or `ins.updated_at`
+        `ins.access_count` for `importance`, or `ins.updated_at`
         for `created_at`. All sit beside the real ones in
         `insight_to_delta_dict` and `insight_to_full_dict`, which this
         projection was written from, so a copy slip lands on them. A
@@ -166,7 +147,7 @@ def test_brief_dict_projects_exact_fields_and_values():
                   updated_at=BRIEF_TS_OTHER, content='c' * 400,
                   category='decision',
                   importance=5, entities=['alpha'], source='agent',
-                  effective_importance=1.5, summary='s')
+                  access_count=7, summary='s')
     assert insight_to_brief_dict(ins) == {
         'id': 'b3',
         'category': 'decision',

@@ -155,14 +155,15 @@ is worth copying; the usable band depends on the embedder and store.
 nothing there; it lists them in `meta.ignored` rather than obeying
 them.
 
-## Forgetting and protecting
+## Forgetting
 
 ```bash
 memman forget <id>                    # soft-delete
-memman insights protect <id>          # boost retention
-memman insights candidates            # list low-retention candidates
 memman insights review                # scan content quality issues
 ```
+
+Nothing else deletes: the store is uncapped and a stored insight
+persists until someone forgets it.
 
 ## Working with relationships
 

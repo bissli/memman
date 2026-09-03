@@ -820,7 +820,6 @@ def make_insight(**overrides) -> Insight:
         'updated_at': now,
         'deleted_at': None,
         'last_accessed_at': None,
-        'effective_importance': 0.0,
         }
     defaults.update(overrides)
     if 'entities' in overrides and overrides['entities'] is None:

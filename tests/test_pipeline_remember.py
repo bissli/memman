@@ -1,64 +1,11 @@
-"""Tests for hot-path observability in `pipeline.remember`.
+"""Tests for `pipeline.remember`'s planning and prompt pinning.
 
-The `apply_all` block in `remember.run_remember` calls
-`refresh_effective_importance` and falls back to a quiet default
-(0.0) when it raises. F.4 turns the silent exception into a
-`logger.warning` line so operators can see real failures (e.g., DB
-pool exhaustion, schema drift) without losing the transactional
-fallback.
+Covers the two invariants the drain's write path cannot express in
+its own output: the reconcile candidate list must carry the
+strongest near-duplicate rather than the first ones the cache
+happened to yield, and `compute_prompt_version` must not move
+except deliberately.
 """
-
-import logging
-
-
-def _new_insight(content: str):
-    """Build a fresh Insight for the pipeline test."""
-    import uuid
-    from datetime import datetime, timezone
-
-    from memman.store.model import Insight
-    now = datetime.now(timezone.utc)
-    return Insight(
-        id=str(uuid.uuid4()),
-        content=content,
-        category='fact',
-        importance=3,
-        entities=[],
-        source='test',
-        access_count=0,
-        created_at=now,
-        updated_at=now,
-        deleted_at=None,
-        last_accessed_at=None,
-        effective_importance=0.0)
-
-
-def test_refresh_effective_importance_failure_is_logged(
-        tmp_backend, monkeypatch, caplog):
-    """A raising `refresh_effective_importance` produces a warn line.
-
-    The fallback (`ei = 0.0`) still applies so the transaction
-    completes, but the failure is visible in operator logs.
-    """
-    from memman.embed.fingerprint import bound_embedder
-    from memman.pipeline.remember import run_remember
-
-    def _boom(*args, **kwargs):
-        raise RuntimeError('forced importance failure')
-
-    monkeypatch.setattr(
-        tmp_backend.nodes, 'refresh_effective_importance', _boom)
-    insight = _new_insight('Go uses sqlite for persistent storage')
-    with caplog.at_level(logging.WARNING, logger='memman'):
-        run_remember(
-            tmp_backend, insight,
-            content=insight.content,
-            ec=bound_embedder(tmp_backend), store_name='test',
-            no_reconcile=True)
-    matches = [
-        r for r in caplog.records
-        if 'refresh_effective_importance failed' in r.getMessage()]
-    assert matches
 
 
 def test_reconcile_candidates_ranked_by_similarity(monkeypatch):

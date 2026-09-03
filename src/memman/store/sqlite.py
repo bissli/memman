@@ -103,15 +103,6 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
             self, id: Id, *, queue_uuid: str | None = None) -> bool:
         return _node.increment_corroboration(self._db, id, queue_uuid)
 
-    def refresh_effective_importance(self, id: Id) -> float:
-        return _node.refresh_effective_importance(self._db, id)
-
-    def get_retention_candidates(
-            self, *, threshold: float,
-            limit: int) -> tuple[list[dict[str, Any]], int]:
-        return _node.get_retention_candidates(
-            self._db, threshold, limit)
-
     def count_active(self) -> int:
         return _node.count_active_insights(self._db)
 
@@ -144,9 +135,6 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
                 prompt_version=r[0], model_id=r[1], count=r[2])
             for r in rows
             ]
-
-    def boost_retention(self, id: Id) -> None:
-        _node.boost_retention(self._db, id)
 
     def get_recent_in_window(
             self, *, exclude_id: Id, window_hours: float,
@@ -1080,12 +1068,12 @@ class SqliteMigrator(Migrator):
                 optional += ['session_id', 'queue_uuid']
             if has_corrob:
                 optional.append('corroboration_count')
-            idx = {name: 22 + n for n, name in enumerate(optional)}
+            idx = {name: 21 + n for n, name in enumerate(optional)}
             extra = ''.join(f', {c}' for c in optional)
             rows = conn.execute(f"""
 select id, content, category, importance, entities,
        source, access_count, keywords, summary, semantic_facts,
-       last_accessed_at, embedding, effective_importance,
+       last_accessed_at, embedding,
        linked_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, model_id, embedding_model,
        embedding_pending{extra}
@@ -1108,17 +1096,16 @@ order by id
                     last_accessed_at=(
                         parse_timestamp(r[10]) if r[10] else None),
                     embedding=emb,
-                    effective_importance=float(r[12]),
                     linked_at=(
-                        parse_timestamp(r[13]) if r[13] else None),
+                        parse_timestamp(r[12]) if r[12] else None),
                     enriched_at=(
-                        parse_timestamp(r[14]) if r[14] else None),
-                    created_at=parse_timestamp(r[15]),
-                    updated_at=parse_timestamp(r[16]),
+                        parse_timestamp(r[13]) if r[13] else None),
+                    created_at=parse_timestamp(r[14]),
+                    updated_at=parse_timestamp(r[15]),
                     deleted_at=(
-                        parse_timestamp(r[17]) if r[17] else None),
-                    prompt_version=r[18], model_id=r[19],
-                    embedding_model=r[20],
+                        parse_timestamp(r[16]) if r[16] else None),
+                    prompt_version=r[17], model_id=r[18],
+                    embedding_model=r[19],
                     session_id=(
                         r[idx['session_id']] if has_new else None),
                     queue_uuid=(
@@ -1126,8 +1113,8 @@ order by id
                     corroboration_count=(
                         int(r[idx['corroboration_count']])
                         if has_corrob else 0)))
-                if r[21] is not None:
-                    pv = deserialize_vector(r[21])
+                if r[20] is not None:
+                    pv = deserialize_vector(r[20])
                     if pv is not None:
                         pending.append(PendingReembed(
                             insight_id=r[0], vector=pv))
@@ -1236,7 +1223,6 @@ order by id
                         format_timestamp(ins.last_accessed_at)
                         if ins.last_accessed_at else None,
                         emb_blob,
-                        ins.effective_importance,
                         format_timestamp(ins.linked_at)
                         if ins.linked_at else None,
                         format_timestamp(ins.enriched_at)
@@ -1259,13 +1245,12 @@ order by id
                         ' entities, source, access_count,'
                         ' keywords, summary, semantic_facts,'
                         ' last_accessed_at, embedding,'
-                        ' effective_importance, linked_at,'
-                        ' enriched_at, created_at, updated_at,'
-                        ' deleted_at, prompt_version, model_id,'
-                        ' embedding_model, session_id, queue_uuid,'
-                        ' corroboration_count)'
+                        ' linked_at, enriched_at, created_at,'
+                        ' updated_at, deleted_at, prompt_version,'
+                        ' model_id, embedding_model, session_id,'
+                        ' queue_uuid, corroboration_count)'
                         ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
-                        ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         insight_rows)
 
                 edge_rows = [(

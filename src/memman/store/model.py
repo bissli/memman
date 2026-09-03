@@ -47,7 +47,6 @@ class Insight:
     updated_at: datetime | None = None
     deleted_at: datetime | None = None
     last_accessed_at: datetime | None = None
-    effective_importance: float = 0.0
     prompt_version: str | None = None
     model_id: str | None = None
     embedding_model: str | None = None
@@ -364,20 +363,3 @@ def parse_timestamp(s: str) -> datetime:
 def format_float(value: float) -> str:
     """Format float to 4 decimal places (Go parity)."""
     return f'{value:.4f}'
-
-
-def base_weight(importance: int) -> float:
-    """Map importance (1-5) to a base weight."""
-    weights = {5: 1.0, 4: 0.8, 3: 0.5, 2: 0.3}
-    return weights.get(importance, 0.15)
-
-
-def is_immune(importance: int, access_count: int) -> bool:
-    """Whether an insight is exempt from retention review.
-
-    Read by `get_retention_candidates`, which only ever REPORTS: an
-    immune row is never offered to the operator as a deletion
-    candidate. Nothing deletes on this predicate -- the store is
-    uncapped and automatic deletion was removed.
-    """
-    return importance >= 4 or access_count >= 3

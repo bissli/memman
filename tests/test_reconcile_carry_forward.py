@@ -124,7 +124,7 @@ def test_merge_carries_target_access_count(tmp_db, tmp_backend):
     """Verify recall history on the target survives the merge.
 
     Mutation: leaving access_count at the incoming write's zero, which
-        makes a long-used insight look brand new to pruning.
+        erases every recall the target had served.
     Oracle: hand-computed 7, the target's stored count.
     """
     insert_insight(tmp_db, make_insight(

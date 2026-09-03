@@ -40,8 +40,7 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
             access_count=0,
             updated_at=datetime.now(timezone.utc),
             deleted_at=None,
-            last_accessed_at=None,
-            effective_importance=0.0)
+            last_accessed_at=None)
         insert_insight(db, ins)
         set_meta(
             db, 'embed_fingerprint',

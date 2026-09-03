@@ -8,8 +8,6 @@ from memman.store.db import valid_store_name, write_active
 from memman.store.edge import count_insights_with_entity
 from memman.store.edge import find_insights_with_entity, get_edges_by_node
 from memman.store.edge import get_edges_by_source_and_type, insert_edge
-from memman.store.model import base_weight, is_immune
-from memman.store.node import compute_effective_importance
 from memman.store.node import count_active_insights, get_all_active_insights
 from memman.store.node import get_embedding, get_insight_by_id
 from memman.store.node import get_insight_by_id_include_deleted
@@ -379,90 +377,6 @@ class TestInTransactionNested:
 
         with pytest.raises(RuntimeError):
             tmp_db.in_transaction(fn)
-
-
-# --- Lifecycle ---
-
-
-class TestComputeEffectiveImportance:
-    """EI formula: base * access_factor * decay * edge_factor."""
-
-    def test_new_insight(self):
-        """Brand new insight: importance=3, 0 accesses, 0 days, 0 edges."""
-        ei = compute_effective_importance(3, 0, 0, 0)
-        assert abs(ei - 0.5) < 0.01
-
-    def test_max_importance(self):
-        """Max importance (5) with no decay yields 1.0."""
-        ei = compute_effective_importance(5, 0, 0, 0)
-        assert ei == 1.0
-
-    def test_decay(self):
-        """After 30 days (one half-life), EI drops to ~50%."""
-        fresh = compute_effective_importance(3, 0, 0, 0)
-        decayed = compute_effective_importance(3, 0, 30, 0)
-        ratio = decayed / fresh
-        assert abs(ratio - 0.5) < 0.01
-
-    def test_high_access(self):
-        """Higher access count increases EI."""
-        low = compute_effective_importance(3, 0, 0, 0)
-        high = compute_effective_importance(3, 10, 0, 0)
-        assert high > low
-
-    def test_edge_bonus(self):
-        """Edges increase EI."""
-        no_edge = compute_effective_importance(3, 0, 0, 0)
-        with_edge = compute_effective_importance(3, 0, 0, 5)
-        assert with_edge > no_edge
-
-    def test_edge_capped(self):
-        """Edge factor caps at 5 edges."""
-        e5 = compute_effective_importance(3, 0, 0, 5)
-        e10 = compute_effective_importance(3, 0, 0, 10)
-        assert e5 == e10
-
-
-class TestIsImmune:
-    """Immunity based on importance and access_count thresholds."""
-
-    def test_importance_4_immune(self):
-        """Importance >= 4 is immune."""
-        assert is_immune(4, 0) is True
-
-    def test_importance_5_immune(self):
-        """Importance = 5 is immune."""
-        assert is_immune(5, 0) is True
-
-    def test_access_3_immune(self):
-        """access_count >= 3 is immune."""
-        assert is_immune(1, 3) is True
-
-    def test_not_immune(self):
-        """importance=3, access=2 is not immune."""
-        assert is_immune(3, 2) is False
-
-    def test_lowest_not_immune(self):
-        """importance=1, access=0 is not immune."""
-        assert is_immune(1, 0) is False
-
-
-class TestBaseWeight:
-    """Map importance level to base weight."""
-
-    def test_weights(self):
-        """Verify all importance-to-weight mappings."""
-        cases = [
-            (5, 1.0),
-            (4, 0.8),
-            (3, 0.5),
-            (2, 0.3),
-            (1, 0.15),
-            ]
-        for importance, want in cases:
-            got = base_weight(importance)
-            assert got == want, (
-                f'base_weight({importance}): want {want}, got {got}')
 
 
 # --- Oplog ---

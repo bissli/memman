@@ -39,8 +39,7 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
             access_count=0,
             updated_at=datetime.now(timezone.utc),
             deleted_at=None,
-            last_accessed_at=None,
-            effective_importance=0.0)
+            last_accessed_at=None)
         insert_insight(db, ins)
         set_meta(db, 'embed_fingerprint',
                  '{"provider":"voyage","model":"voyage-3-lite","dim":512}')
@@ -189,6 +188,146 @@ def test_migrate_to_sqlite_preserves_oplog_legacy_ids(tmp_path, pg_dsn):
         finally:
             db.close()
         assert restored_ids == original_oplog_ids
+    finally:
+        _drop_schema(pg_dsn, store)
+
+
+_FIDELITY_ROW = {
+    'id': 'rb-fid-1',
+    'content': 'field fidelity round-trip subject',
+    'category': 'decision',
+    'importance': 4,
+    'entities': ['alpha', 'beta'],
+    'source': 'fidelity-test',
+    'access_count': 11,
+    'keywords': ['kw-one', 'kw-two'],
+    'summary': 'the summary text',
+    'semantic_facts': ['fact-one'],
+    'last_accessed_at': datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+    'linked_at': datetime(2026, 2, 3, 4, 5, 6, tzinfo=timezone.utc),
+    'enriched_at': datetime(2026, 3, 4, 5, 6, 7, tzinfo=timezone.utc),
+    'created_at': datetime(2026, 4, 5, 6, 7, 8, tzinfo=timezone.utc),
+    'updated_at': datetime(2026, 5, 6, 7, 8, 9, tzinfo=timezone.utc),
+    'deleted_at': None,
+    'prompt_version': 'pv-aaaa',
+    'model_id': 'mid-bbbb',
+    'embedding_model': 'em-cccc',
+    'session_id': 'sess-dddd',
+    'queue_uuid': 'quuid-eeee',
+    'corroboration_count': 7,
+    }
+
+
+def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
+    """Write one insight whose every column carries a distinct value."""
+    import json
+
+    from memman.store.db import open_db, set_meta, store_dir
+    from memman.store.model import format_timestamp
+    r = _FIDELITY_ROW
+    sdir = store_dir(str(data_dir), store)
+    db = open_db(sdir)
+    try:
+        db.conn.execute(
+            'insert into insights ('
+            ' id, content, category, importance, entities, source,'
+            ' access_count, keywords, summary, semantic_facts,'
+            ' last_accessed_at, linked_at, enriched_at, created_at,'
+            ' updated_at, deleted_at, prompt_version, model_id,'
+            ' embedding_model, session_id, queue_uuid,'
+            ' corroboration_count)'
+            ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
+            ' ?, ?, ?, ?, ?, ?, ?)',
+            (r['id'], r['content'], r['category'], r['importance'],
+             json.dumps(r['entities']), r['source'], r['access_count'],
+             json.dumps(r['keywords']), r['summary'],
+             json.dumps(r['semantic_facts']),
+             format_timestamp(r['last_accessed_at']),
+             format_timestamp(r['linked_at']),
+             format_timestamp(r['enriched_at']),
+             format_timestamp(r['created_at']),
+             format_timestamp(r['updated_at']), None,
+             r['prompt_version'], r['model_id'], r['embedding_model'],
+             r['session_id'], r['queue_uuid'], r['corroboration_count']))
+        db.conn.commit()
+        set_meta(db, 'embed_fingerprint',
+                 '{"provider":"voyage","model":"voyage-3-lite","dim":512}')
+    finally:
+        db.close()
+    return Path(sdir)
+
+
+def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
+    """Each insight column survives sqlite -> postgres -> sqlite in place.
+
+    All four migrator halves read and write the `insights` column
+    list POSITIONALLY -- two `select ... r[N]` scans whose trailing
+    optional columns are addressed off a hardcoded base offset, and
+    two `insert` column lists paired with a value tuple by position.
+    Adding or removing one column shifts every later index, and the
+    shifted read still type-checks, so the corruption is silent.
+    Distinct values per column are what make it audible.
+
+    Mutation: dropping or inserting a column in either migrator's
+        `iter_for_swap` select or apply insert without moving the
+        `r[N]` indices and the `idx` base offset with it -- e.g.
+        `linked_at` landing in `enriched_at`, or a timestamp landing
+        in `deleted_at` and soft-deleting the row.
+    Oracle: `_FIDELITY_ROW`, hand-written with a different value in
+        every column, compared field by field after the round-trip.
+    """
+    from memman.store.db import open_db, store_dir
+    from memman.store.postgres import PostgresMigrator
+    from memman.store.sqlite import SqliteMigrator
+
+    store = 'rb_fidelity'
+    _seed_fidelity_store(tmp_path, store)
+    _drop_schema(pg_dsn, store)
+    try:
+        source = store_dir(str(tmp_path), store)
+        src_mig = SqliteMigrator(str(tmp_path))
+        src_mig.preflight_source(store)
+        payload = src_mig.gather(store)
+        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig.preflight_target(store)
+        tgt_mig.apply(store, payload)
+        shutil.rmtree(source)
+
+        target = store_dir(str(tmp_path), store)
+        rev_src = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        rev_src.preflight_source(store)
+        rev_payload = rev_src.gather(store)
+        rev_tgt = SqliteMigrator(str(tmp_path))
+        rev_tgt.preflight_target(store)
+        rev_tgt.apply(store, rev_payload)
+
+        assert len(rev_payload.insights) == 1
+        got = rev_payload.insights[0]
+        for name, want in _FIDELITY_ROW.items():
+            assert getattr(got, name) == want, (
+                f'postgres gather returned {name}='
+                f'{getattr(got, name)!r}, want {want!r}')
+
+        db = open_db(target)
+        try:
+            row = db.conn.execute(
+                'select category, importance, access_count, summary,'
+                ' last_accessed_at, linked_at, enriched_at, created_at,'
+                ' updated_at, deleted_at, prompt_version, model_id,'
+                ' embedding_model, session_id, queue_uuid,'
+                ' corroboration_count'
+                ' from insights where id = ?',
+                (_FIDELITY_ROW['id'],)).fetchone()
+        finally:
+            db.close()
+        r = _FIDELITY_ROW
+        assert tuple(row) == (
+            r['category'], r['importance'], r['access_count'],
+            r['summary'], '2026-01-02T03:04:05Z',
+            '2026-02-03T04:05:06Z', '2026-03-04T05:06:07Z',
+            '2026-04-05T06:07:08Z', '2026-05-06T07:08:09Z', None,
+            r['prompt_version'], r['model_id'], r['embedding_model'],
+            r['session_id'], r['queue_uuid'], r['corroboration_count'])
     finally:
         _drop_schema(pg_dsn, store)
 

@@ -2,19 +2,15 @@
 
 import json
 import logging
-import math
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from memman.store.model import Insight, base_weight, format_timestamp
-from memman.store.model import is_immune, parse_timestamp
+from memman.store.model import Insight, format_timestamp, parse_timestamp
 
 if TYPE_CHECKING:
     from memman.store.db import DB
 
 logger = logging.getLogger('memman')
-
-HALF_LIFE_DAYS = 30.0
 
 
 def insert_insight(db: 'DB', i: Insight) -> None:
@@ -192,9 +188,9 @@ def increment_corroboration(
         db: 'DB', id: str, queue_uuid: str | None = None) -> bool:
     """Bump corroboration_count on a LIVE insight.
 
-    Never touches `access_count` or `last_accessed_at`: those feed
-    the retention-immunity criterion, and a restated fact must not
-    earn pruning immunity.
+    Never touches `access_count` or `last_accessed_at`: those
+    record what recall RETURNED, and a restated fact was not
+    returned.
 
     Parameters
     ----------
@@ -233,131 +229,6 @@ where id = ? and deleted_at is null
 """
     cursor = db._exec(sql, (queue_uuid, id))
     return cursor.rowcount == 1
-
-
-def compute_effective_importance(
-        importance: int, access_count: int,
-        days_since_access: float, edge_count: int) -> float:
-    """Calculate the current effective importance."""
-    base = base_weight(importance)
-    access_factor = math.log(1.0 + access_count)
-    access_factor = max(access_factor, 1.0)
-    decay_factor = math.pow(0.5, days_since_access / HALF_LIFE_DAYS)
-    edges = min(edge_count, 5)
-    edge_factor = 1.0 + 0.1 * edges
-    return base * access_factor * decay_factor * edge_factor
-
-
-def refresh_effective_importance(db: 'DB', id: str) -> float:
-    """Recompute and store effective_importance for one insight."""
-    sql = """
-select importance, access_count, created_at, last_accessed_at
-from insights
-where id = ? and deleted_at is null
-"""
-    row = db._query(sql, (id,)).fetchone()
-    if row is None:
-        raise ValueError(f'insight {id} not found')
-
-    importance, access_count, created_at_str, last_accessed_at_str = row
-    last_access = parse_timestamp(created_at_str)
-    if last_accessed_at_str:
-        try:
-            last_access = parse_timestamp(last_accessed_at_str)
-        except ValueError:
-            pass
-
-    now = datetime.now(timezone.utc)
-    days_since = (now - last_access).total_seconds() / 86400.0
-
-    edge_sql = """
-select (select count(*) from edges where source_id = ?)
-     + (select count(*) from edges where target_id = ?)
-"""
-    edge_row = db._query(edge_sql, (id, id)).fetchone()
-    edge_count = edge_row[0] if edge_row else 0
-
-    ei = compute_effective_importance(
-        importance, access_count, days_since, edge_count)
-
-    db._exec(
-        'update insights set effective_importance = ? where id = ?',
-        (ei, id))
-    return ei
-
-
-def get_retention_candidates(
-        db: 'DB', threshold: float,
-        limit: int) -> tuple[list[dict[str, Any]], int]:
-    """Return non-immune insights sorted by effective_importance ascending."""
-    sql = f"""
-select {_INSIGHT_COLUMNS}
-from insights
-where deleted_at is null
-"""
-    rows = db._query(sql).fetchall()
-
-    insight_rows: list[tuple[Insight, datetime]] = []
-    for r in rows:
-        ins = _scan_insight(r)
-        last_access = (
-            ins.last_accessed_at
-            or ins.created_at
-            or datetime.now(timezone.utc))
-        insight_rows.append((ins, last_access))
-
-    ec_sql = """
-select id, sum(cnt) from (
-    select source_id as id, count(*) as cnt
-    from edges
-    group by source_id
-    union all
-    select target_id as id, count(*) as cnt
-    from edges
-    group by target_id
-)
-group by id
-"""
-    ec_rows = db._query(ec_sql).fetchall()
-    edge_counts: dict[str, int] = dict(ec_rows)
-
-    now = datetime.now(timezone.utc)
-    updates = []
-    candidates = []
-    for ins, last_access in insight_rows:
-        days_since = (now - last_access).total_seconds() / 86400.0
-        ec = edge_counts.get(ins.id, 0)
-        ei = compute_effective_importance(
-            ins.importance, ins.access_count, days_since, ec)
-        immune = is_immune(ins.importance, ins.access_count)
-        updates.append((ei, ins.id))
-
-        if ei < threshold and not immune:
-            candidates.append({
-                'insight': ins,
-                'effective_importance': ei,
-                'days_since_access': days_since,
-                'edge_count': ec,
-                'immune': immune,
-                })
-
-    if updates:
-        def apply_ei_updates() -> None:
-            for ei_val, uid in updates:
-                db._exec(
-                    'update insights set effective_importance = ?'
-                    ' where id = ?', (ei_val, uid))
-        try:
-            db.in_transaction(apply_ei_updates)
-        except Exception as e:
-            logger.warning('batch EI update failed, rolled back: %s', e)
-
-    candidates.sort(
-        key=lambda c: float(c['effective_importance']))  # type: ignore[arg-type]
-    total = len(insight_rows)
-    if limit > 0 and len(candidates) > limit:
-        candidates = candidates[:limit]
-    return candidates, total
 
 
 def count_active_insights(db: 'DB') -> int:
@@ -520,21 +391,6 @@ def review_content_quality(
         key=lambda x: len(x['quality_warnings']),  # type: ignore[arg-type]
         reverse=True)
     return flagged[:limit]
-
-
-def boost_retention(db: 'DB', id: str) -> None:
-    """Boost an insight's retention: access_count +3, refreshes last_accessed_at."""
-    now = format_timestamp(datetime.now(timezone.utc))
-    sql = """
-update insights
-set access_count = access_count + 3,
-    last_accessed_at = ?,
-    updated_at = ?
-where id = ? and deleted_at is null
-"""
-    cursor = db._exec(sql, (now, now, id))
-    if cursor.rowcount == 0:
-        raise ValueError(f'insight {id} not found or already deleted')
 
 
 def get_recent_insights_in_window(

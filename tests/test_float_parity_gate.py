@@ -84,8 +84,7 @@ def _populate(backend, topic_centers: list[list[float]]) -> None:
                 created_at=None,
                 updated_at=None,
                 deleted_at=None,
-                last_accessed_at=None,
-                effective_importance=0.0)
+                last_accessed_at=None)
             backend.nodes.insert(ins)
             vec = _perturb(center, seed=t_idx * 100 + k, scale=CORPUS_NOISE)
             backend.nodes.update_embedding(ins_id, vec, 'voyage-3-lite')
