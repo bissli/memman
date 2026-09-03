@@ -682,6 +682,14 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
         raise click.ClickException(
             f'importance must be 1-5, got {imp}')
 
+    # Notes:
+    # - Canonicalize here rather than in the drain: the enqueue
+    #   reports success to the caller, so a list the worker would
+    #   reject has to fail now or the write is lost silently.
+    # - Storing the parsed form leaves the drain's own re-parse
+    #   idempotent, so it cannot fail on a row that got this far.
+    entities_clean = ','.join(_parse_entities(entities))
+
     from memman.search.quality import check_content_quality
     quality_warnings = check_content_quality(content_str)
 
@@ -705,7 +713,7 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
             conn, store=name, content=content_str,
             hint_cat=cat_hint, hint_imp=imp_hint,
             hint_source=source,
-            hint_entities=entities or None,
+            hint_entities=entities_clean or None,
             hint_no_reconcile=no_reconcile,
             session_id=session or None,
             priority=0)
@@ -1723,6 +1731,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         source = old.source
     if entities_src != click.core.ParameterSource.COMMANDLINE:
         entities = ','.join(old.entities) if old.entities else ''
+    entities_clean = ','.join(_parse_entities(entities))
 
     from memman.queue import enqueue, queue_db
     with queue_db(data_dir_val) as conn:
@@ -1730,7 +1739,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             conn, store=name, content=content_str,
             hint_cat=cat, hint_imp=imp,
             hint_source=source,
-            hint_entities=entities or None,
+            hint_entities=entities_clean or None,
             hint_replaced_id=id,
             hint_no_reconcile=not reconcile,
             session_id=session or None,
