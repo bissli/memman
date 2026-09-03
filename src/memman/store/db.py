@@ -396,6 +396,11 @@ create index if not exists idx_insights_queue_uuid on insights(queue_uuid);
 -- the statement that makes a 0.18.x store fail at open (see _migrate).
 create index if not exists idx_insights_corroboration on insights(corroboration_count);
 create index if not exists idx_insights_effective_imp on insights(effective_importance);
+-- Carries `query_insights`' whole sort order, so the listing honors
+-- its limit from the index instead of reading every active row into
+-- a temp b-tree.
+create index if not exists idx_insights_deleted_importance_created
+    on insights(deleted_at, importance, created_at);
 create index if not exists idx_insights_pending_link
     on insights(linked_at)
     where linked_at is null and deleted_at is null;
