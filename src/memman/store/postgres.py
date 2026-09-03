@@ -37,6 +37,7 @@ from memman.migrate import PAYLOAD_VERSION, Artifact, BackendFeatures
 from memman.migrate import MigrateEdge, MigrateError, MigrateInsight
 from memman.migrate import MigrateOpLog, MigrationPayload, Migrator
 from memman.migrate import PendingReembed, SwapState, sanitize_identifier
+from memman.search.keyword import insight_tokens
 from memman.store.backend import Backend, EdgeStore, MetaStore, NodeStore
 from memman.store.backend import Oplog, RecallSession, _check_identifier
 from memman.store.base import BaseNodeStore
@@ -138,7 +139,8 @@ create table if not exists {schema}.insights (
     embedding_model text,
     session_id  text,
     queue_uuid  text,
-    corroboration_count integer not null default 0
+    corroboration_count integer not null default 0,
+    kw_tokens   text[] not null
 );
 
 create table if not exists {schema}.edges (
@@ -202,6 +204,10 @@ create index if not exists idx_insights_eff_imp_{schema}
 create index if not exists idx_insights_pending_link_{schema}
     on {schema}.insights(linked_at)
     where linked_at is null and deleted_at is null;
+create index if not exists idx_insights_kw_tokens_{schema}
+    on {schema}.insights using gin (kw_tokens)
+    where deleted_at is null;
+
 create index if not exists idx_edges_source_{schema}
     on {schema}.edges(source_id);
 create index if not exists idx_edges_target_{schema}
@@ -452,8 +458,8 @@ where attrelid = (%s || '.insights')::regclass
 insert into {s}.insights
     (id, content, category, importance, entities,
      source, access_count, prompt_version, model_id, embedding_model,
-     session_id, queue_uuid, corroboration_count)
-values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s)
+     session_id, queue_uuid, corroboration_count, kw_tokens)
+values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (
@@ -461,7 +467,8 @@ values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s)
                 ins.entities_json(), ins.source, ins.access_count,
                 ins.prompt_version, ins.model_id, ins.embedding_model,
                 ins.session_id, ins.queue_uuid,
-                ins.corroboration_count))
+                ins.corroboration_count,
+                sorted(insight_tokens(ins))))
 
     def get(self, id: Id) -> Insight | None:
         sql = self._q(f"""
@@ -536,9 +543,13 @@ limit %s
 
     def soft_delete(
             self, id: Id, *, tolerate_missing: bool = False) -> bool:
+        # Emptying `kw_tokens` sheds a token set the keyword scan can
+        # no longer reach: 69% of rows on the biggest store are
+        # soft-deleted, and populating them too measured at +56% of
+        # table size against +17% for active rows alone.
         update_sql = self._q("""
 update {s}.insights
-set deleted_at = now(), updated_at = now()
+set deleted_at = now(), updated_at = now(), kw_tokens = '{{}}'
 where id = %s and deleted_at is null
 """)
         delete_sql = self._q("""
@@ -563,14 +574,30 @@ where source_id = %s or target_id = %s
             if key not in seen:
                 seen.add(key)
                 deduped.append(e)
+        # `kw_tokens` covers content AND entities, so an entity edit
+        # that left it alone would keep answering `keyword_counts`
+        # from the pre-edit token set. Content is read back rather
+        # than taken from the caller because both call sites pass
+        # entities only.
+        content_sql = self._q(
+            'select content from {s}.insights where id = %s')
         sql = self._q("""
 update {s}.insights
-set entities = %s::jsonb, updated_at = now()
+set entities = %s::jsonb,
+    kw_tokens = %s,
+    updated_at = now()
 where id = %s
 """)
         with self._conn.cursor() as cur:
-            cur.execute(
-                sql, (Insight(entities=deduped).entities_json(), id))
+            cur.execute(content_sql, (id,))
+            row = cur.fetchone()
+            if row is None:
+                return
+            edited = Insight(content=row[0], entities=deduped)
+            cur.execute(sql, (
+                edited.entities_json(),
+                sorted(insight_tokens(edited)),
+                id))
 
     def update_enrichment(
             self, id: Id, *, keywords: list[str], summary: str,
@@ -1804,42 +1831,39 @@ where deleted_at is null and embedding is not null
 
         Notes
         -----
-        - `regexp_split_to_array` on the lowercased text with
-          `[^a-z0-9]+` is `keyword._WORD_RE` expressed in SQL, so the
-          count matches the Python route exactly rather than
-          approximately. A tsvector route would stem and would move
-          `kw_score` on every consumer of it.
-        - Entities go through `jsonb_array_elements_text`, so each one
-          is split as the decoded string `insight_tokens` tokenizes,
-          not as the escapes its JSON encoding would carry.
-        - Unindexed, so this is a sequential scan: it saves the
-          round-trip of shipping every row's text to score one query,
-          not the scan itself. A GIN index is a separate change that
-          has to keep the count identical.
+        - `kw_tokens` holds the row's distinct tokens as
+          `keyword.insight_tokens` produced them at write time, so
+          the count matches the Python route exactly rather than
+          approximately. Nothing here re-derives the tokenizer: the
+          earlier SQL form re-expressed `_WORD_RE` as
+          `regexp_split_to_array(lower(...), '[^a-z0-9]+')` on every
+          row of every recall, which cost 0.54 ms per active row and
+          again per matched row, 75% of recall on the largest store.
+        - Stopword filtering on the row side cannot change the
+          count, because `query_tokens` is stopword-filtered too and
+          `intersect` only ever sees tokens present in both. Checked
+          against the SQL form over 1,443 rows and all 1,849 distinct
+          logged queries of one store: the two counts never differed.
+        - `kw_tokens && query` is exactly `matched > 0`, so the GIN
+          index answers the filter and the intersect runs only on
+          rows that can contribute. Unnesting the STORED array beats
+          walking the query against it with `= any` above four query
+          tokens, 49 ms against 124 at twelve.
         """
         if not query_tokens:
             return {}
         assert self._conn is not None
         sql = f"""
-select id, matched
-from (
-    select i.id as id, cardinality(array(
-            select unnest(%s::text[])
-            intersect
-            select unnest(regexp_split_to_array(lower(
-                i.content || ' ' || coalesce((
-                    select string_agg(e, ' ')
-                    from jsonb_array_elements_text(
-                        coalesce(i.entities, '[]'::jsonb)) e), '')),
-                '[^a-z0-9]+'))
-            )) as matched
-    from {self._schema}.insights i
-    where i.deleted_at is null
-) scored
-where matched > 0
+select i.id, cardinality(array(
+        select unnest(%(q)s::text[])
+        intersect
+        select unnest(i.kw_tokens)
+        )) as matched
+from {self._schema}.insights i
+where i.deleted_at is null and i.kw_tokens && %(q)s::text[]
 """
         with self._conn.cursor() as cur:
-            cur.execute(sql, (sorted(query_tokens),))
+            cur.execute(sql, {'q': sorted(query_tokens)})
             return {r[0]: int(r[1]) for r in cur}
 
     def vectors_for_ids(
@@ -2888,7 +2912,11 @@ order by sqlite_id
                             ins.deleted_at, ins.prompt_version,
                             ins.model_id, ins.embedding_model,
                             ins.session_id, ins.queue_uuid,
-                            ins.corroboration_count))
+                            ins.corroboration_count,
+                            [] if ins.deleted_at else sorted(
+                                insight_tokens(Insight(
+                                    content=ins.content,
+                                    entities=list(ins.entities))))))
                     with conn.cursor() as cur:
                         # apply always writes the NEW schema, so the
                         # new columns are listed unconditionally --
@@ -2904,11 +2932,12 @@ order by sqlite_id
                             ' enriched_at, created_at, updated_at,'
                             ' deleted_at, prompt_version, model_id,'
                             ' embedding_model, session_id,'
-                            ' queue_uuid, corroboration_count)'
+                            ' queue_uuid, corroboration_count,'
+                            ' kw_tokens)'
                             ' values (%s, %s, %s, %s, %s::jsonb,'
                             ' %s, %s, %s::jsonb, %s, %s::jsonb,'
                             ' %s, %s, %s, %s, %s, %s, %s, %s,'
-                            ' %s, %s, %s, %s, %s, %s)'
+                            ' %s, %s, %s, %s, %s, %s, %s)'
                             ' on conflict (id) do nothing',
                             insight_rows)
 
