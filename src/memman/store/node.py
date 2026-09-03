@@ -774,20 +774,6 @@ def embedding_stats(db: 'DB') -> tuple[int, int]:
     return total, embedded
 
 
-def get_insights_without_embedding(
-        db: 'DB', limit: int = 100) -> list[Insight]:
-    """Return active insights that lack embeddings."""
-    sql = f"""
-select {_INSIGHT_COLUMNS}
-from insights
-where deleted_at is null and embedding is null
-order by importance desc, created_at desc
-limit ?
-"""
-    rows = db._query(sql, (limit,)).fetchall()
-    return [_scan_insight(r) for r in rows]
-
-
 def stamp_linked(db: 'DB', insight_id: str, ts: str) -> None:
     """Set linked_at timestamp for an insight."""
     db._exec(

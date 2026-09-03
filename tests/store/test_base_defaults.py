@@ -1,6 +1,6 @@
 """Cross-backend contract for `BaseNodeStore` defaulted verbs.
 
-Locks the behavior of the three NodeStore verbs that compose from
+Locks the behavior of the two NodeStore verbs that compose from
 other Protocol verbs and have a Python-side default in
 `memman.store.base`. Both SQLite and Postgres implementations
 must continue to return identical shapes after the override is
@@ -43,38 +43,6 @@ def _seed(backend, ids: list[tuple[str, str, str]],
         for rid in embed_ids:
             backend.nodes.update_embedding(
                 rid, _vec(0.1, 0.2, 0.3), 'voyage-3-lite')
-
-
-class TestGetWithoutEmbedding:
-    """`get_without_embedding` returns active rows lacking embeddings."""
-
-    def test_returns_only_unembedded(self, backend):
-        """Rows with embedding are excluded.
-        """
-        _seed(
-            backend,
-            [('w-1', 'a', 'cli'), ('w-2', 'b', 'cli')],
-            with_embedding=['w-1'])
-        rows = backend.nodes.get_without_embedding(limit=10)
-        ids = {r.id for r in rows}
-        assert ids == {'w-2'}
-
-    def test_respects_limit(self, backend):
-        """Returns at most `limit` rows.
-        """
-        _seed(
-            backend,
-            [(f'w-{i:02d}', f'c{i}', 'cli') for i in range(5)])
-        rows = backend.nodes.get_without_embedding(limit=2)
-        assert len(rows) == 2
-
-    def test_excludes_soft_deleted(self, backend):
-        """Soft-deleted rows are excluded.
-        """
-        _seed(backend, [('w-d1', 'a', 'cli')])
-        backend.nodes.soft_delete('w-d1')
-        rows = backend.nodes.get_without_embedding(limit=10)
-        assert all(r.id != 'w-d1' for r in rows)
 
 
 class TestReviewContentQuality:
