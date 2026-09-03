@@ -173,7 +173,7 @@ def test_ragged_embedding_widths_do_not_break_recall(tmp_backend):
 
     with tmp_backend.recall_session() as session:
         sims = session.similarities(query)
-        anchors = session.vector_anchors(query, k=10, min_sim=0.1)
+        anchors = session.vector_anchors(query, k=10)
 
     assert set(sims) == {'wide-0', 'wide-1', 'wide-2'}
     assert {a for a, _s in anchors} == {'wide-0', 'wide-1', 'wide-2'}
@@ -284,7 +284,7 @@ def test_minority_width_query_still_scores_its_own_rows(tmp_backend):
 
     with tmp_backend.recall_session() as session:
         sims = session.similarities(query)
-        anchors = session.vector_anchors(query, k=10, min_sim=0.1)
+        anchors = session.vector_anchors(query, k=10)
         vectors = session.vectors_for_ids(
             ['majority-0', 'minority-0'])
 

@@ -6,9 +6,26 @@ on SQLite (float64 numpy) at >= 4/5. Validates that float-precision
 differences do not visibly perturb retrieval rank.
 
 The corpus is structured (topic centers x insights per topic) rather
-than random, so cosines for the matching topic clear
-`VECTOR_SEARCH_MIN_SIM=0.10`. A random corpus produces cosines near
-0 in 512-dim space, which the threshold filters out.
+than random, so the matching topic's cosines are high and the top-5
+is decided by the vector channel rather than by which near-orthogonal
+rows happen to cross a boundary. A random 512-dim corpus gives cosines
+near 0, where float32 and float64 legitimately disagree on rank.
+
+Notes
+-----
+- A sibling `test_threshold_zone_does_not_collapse_result_set` was
+  deleted with `VECTOR_SEARCH_MIN_SIM`. It asserted that neither
+  backend's cutoff collapses the result set to empty, and it could
+  never fail: on its query, 'topic insight', the keyword channel
+  matches all 60 rows and the recency channel seeds 30 more, so the
+  page is full whatever the vector cutoff admits. Measured on the
+  shipped code: 60 of 60 keyword rows and a 5-row page on all five of
+  its queries, at vector-anchor counts from 11 to 30.
+- The behavior it was reaching for - the two backends agreeing at the
+  surviving sign boundary - is DECLARED UNCOVERED. Reaching it needs
+  a corpus built at cosine ~1e-8, where float32 and float64 disagree
+  on sign; on this corpus the boundary sits at the median, 11 to 36
+  of 60 rows clear it per query, and no test on it can have teeth.
 """
 
 import random
@@ -81,73 +98,6 @@ def _top5_ids(backend, qvec) -> set[str]:
         query_vec=qvec,
         limit=5, intent_override='GENERAL')
     return {r['insight'].id for r in result['results'][:5]}
-
-
-def test_threshold_zone_does_not_collapse_result_set(tmp_path, pg_dsn):
-    """Threshold-zone characterization: neither backend returns empty.
-
-    The high-cosine test below asserts strong rank parity (>= 4/5).
-    This sibling characterization test addresses the documented float-
-    precision gap near `VECTOR_SEARCH_MIN_SIM=0.10`: with uncorrelated
-    queries against a structured corpus, cosines flicker around the
-    cutoff and float32 vs float64 can disagree on which exact hits
-    cross. We do NOT assert intersection here -- the docstring at the
-    top of this module is honest that low-cosine ranking is sensitive
-    to representation -- but we DO assert the weaker invariant that
-    matters for production: neither backend's cutoff collapses the
-    result set to empty when the other still finds hits, and any hits
-    returned all clear the cutoff.
-    """
-    from memman.store.postgres import drop_postgres_store
-    from memman.store.postgres import open_postgres_backend
-    from memman.store.sqlite import drop_sqlite_store, open_sqlite_backend
-
-    topic_centers = [_gaussian_unit(seed=i) for i in range(N_TOPICS)]
-    sqlite_data_dir = str(tmp_path / 'memman')
-    sqlite_backend = open_sqlite_backend('parity_thresh', sqlite_data_dir)
-    sqlite_backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
-    _populate(sqlite_backend, topic_centers)
-
-    try:
-        drop_postgres_store('parity_thresh', pg_dsn)
-    except Exception:
-        pass
-    postgres_backend = open_postgres_backend('parity_thresh', pg_dsn)
-    postgres_backend.meta.set(META_KEY, seed_default_fingerprint().to_json())
-    _populate(postgres_backend, topic_centers)
-
-    n_threshold_queries = 5
-    try:
-        empty_disagreements = 0
-        for q in range(n_threshold_queries):
-            qvec = _gaussian_unit(seed=20000 + q)
-            sqlite_top = _top5_ids(sqlite_backend, qvec)
-            postgres_top = _top5_ids(postgres_backend, qvec)
-            if (sqlite_top and not postgres_top) or (
-                    postgres_top and not sqlite_top):
-                empty_disagreements += 1
-        assert empty_disagreements == 0, (
-            f'{empty_disagreements} queries returned hits on one'
-            f' backend but empty on the other -- a regression in the'
-            f' threshold cutoff handling between sqlite/postgres'
-            f' beyond the documented ranking-precision gap')
-    finally:
-        try:
-            sqlite_backend.close()
-        except Exception:
-            pass
-        try:
-            drop_sqlite_store('parity_thresh', sqlite_data_dir)
-        except Exception:
-            pass
-        try:
-            postgres_backend.close()
-        except Exception:
-            pass
-        try:
-            drop_postgres_store('parity_thresh', pg_dsn)
-        except Exception:
-            pass
 
 
 def test_float32_float64_top5_intersection_geq_4_across_20_queries(
