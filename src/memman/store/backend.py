@@ -663,13 +663,16 @@ class RecallSession(Protocol):
           `service`. Measured across all fifteen live stores: 25 of
           3,715 active rows lose an entity token, and a 70-config
           recall A/B moved 7 results, all from ONE row. Postgres
-          matches Python exactly. Closing the gap means changing
+          matches Python exactly, and by construction rather than by
+          agreement: it stores the set `insight_tokens` built at
+          write time. Closing the gap means changing
           `_WORD_RE`, which moves the drain's reconciliation
           candidates and causal-edge inference, so it is its own
           change with its own sweep -- not this one.
         - Counted where the text already lives -- k index probes on
-          SQLite, one query on Postgres -- so the pipeline never
-          tokenizes the whole store to score one query.
+          SQLite, one indexed query on Postgres -- so the pipeline
+          never tokenizes the whole store to score one query, and
+          neither backend tokenizes a row at recall time at all.
         """
         ...
 

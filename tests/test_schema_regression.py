@@ -53,14 +53,35 @@ def _columns_under(ddl: str, table: str) -> set[str]:
 def test_migrate_insight_fields_cover_pg_baseline_schema_columns():
     """Every postgres `insights` DDL column has a `MigrateInsight` field.
 
-    Excludes `embedding_pending` (added on demand by the swap path,
-    not a payload-time field — the gather path probes the column
-    list at runtime).
+    Two columns are excluded, for different reasons, and neither
+    exclusion weakens the pin for a third.
+
+    `embedding_pending` is added on demand by the swap path and is
+    not a payload-time field - the gather path probes the column
+    list at runtime.
+
+    `kw_tokens` is DERIVED from `content` and `entities`, which the
+    payload does carry, so `PostgresMigrator.apply` recomputes it
+    through `keyword.insight_tokens` instead of transporting it.
+    Carrying it would put a second copy of the tokenizer in the wire
+    format. `PAYLOAD_VERSION` is deliberately NOT bumped for it: no
+    `MigrationPayload` field changed, and a bump would refuse stale
+    payloads that are in fact still compatible. The recompute is not
+    on trust - the column is `not null`, so an `apply` that omitted
+    it raises `NotNullViolation` and takes three tests in
+    `test_migrate_verify.py` and `test_migrate_dim_resolution.py`
+    with it.
+
+    Mutation: adding a column to `PG_BASELINE_SCHEMA` without a
+        matching `MigrateInsight` field, which drops it silently on
+        every store-to-store migration.
+    Oracle: the DDL text itself, parsed, against the dataclass
+        fields.
     """
     cols = _columns_under(
         PG_BASELINE_SCHEMA.replace('{schema}', 'store_x')
         .replace('{dim}', '512'), 'insights')
-    cols -= {'embedding_pending'}
+    cols -= {'embedding_pending', 'kw_tokens'}
     missing = cols - _MIGRATE_INSIGHT_FIELDS
     assert not missing, (
         f'Postgres baseline insights columns missing from'

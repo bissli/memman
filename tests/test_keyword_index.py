@@ -454,3 +454,61 @@ def test_non_ascii_divergence_stays_where_it_is(backend, backend_kind):
     assert got.get('kw-nonascii') == (1 if backend_kind == 'sqlite' else 3), (
         'sqlite indexes the whole word and matches only "fallback";'
         ' postgres splits exactly as _WORD_RE does')
+
+
+@pytest.mark.postgres
+def test_a_row_cannot_exist_without_its_token_set(request, pg_dsn):
+    """A row cannot exist without its token set: `kw_tokens` is NOT NULL.
+
+    A null there is invisible: `kw_tokens && query` yields NULL, the
+    row drops out of the keyword channel, and every score it should
+    have contributed reads as a legitimate zero. No query can tell
+    that state from a row with no matching token, which is why the
+    column constraint - not a check or a doctor warning - is what
+    rules it out.
+
+    Mutation: declaring the column nullable, which is the change
+        someone makes to let a backfill land in batches, and which
+        would let a partial backfill score silently at zero for as
+        long as nobody re-measured.
+    Oracle: postgres itself refuses the write. Asserted in both
+        directions - a null UPDATE raises, and the same row survives
+        being set to an empty array, which is what `soft_delete`
+        does.
+    """
+    # Local because psycopg and the postgres backend are an optional
+    # extra: importing them at module scope breaks collection of the
+    # sqlite half of this file wherever the extra is absent.
+    import psycopg
+    from memman.store.postgres import _store_schema, drop_postgres_store
+    from memman.store.postgres import open_postgres_backend
+    from tests.conftest import _safe_store_name
+
+    store = _safe_store_name(request.node.name)
+    drop_postgres_store(store, pg_dsn)
+    backend = open_postgres_backend(store, pg_dsn)
+    table = f'{_store_schema(store)}.insights'
+    try:
+        _seed(backend)
+
+        with pytest.raises(psycopg.errors.NotNullViolation):
+            with backend._conn.cursor() as cur:
+                cur.execute(f'update {table} set kw_tokens = null')
+        backend._conn.rollback()
+
+        with backend._conn.cursor() as cur:
+            cur.execute(
+                f"update {table} set kw_tokens = '{{}}' where id = %s",
+                ('kw-a',))
+        backend._conn.commit()
+        with backend.recall_session() as session:
+            got = session.keyword_counts({'brown'})
+        assert 'kw-a' not in got and 'kw-b' in got, (
+            'an emptied row leaves the keyword channel and its'
+            ' siblings stay, which is what soft_delete relies on')
+    finally:
+        try:
+            backend.close()
+        except Exception:
+            pass
+        drop_postgres_store(store, pg_dsn)
