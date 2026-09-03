@@ -100,6 +100,27 @@ def compute_prompt_version() -> str:
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
+# Notes:
+# - SIMILARITY_RECONCILE_THRESHOLD gates which stored rows become
+#   reconciliation candidates. It is MEASURED INERT over the range it
+#   acts on rather than swept for an optimum, which is the honest
+#   claim: a restatement's cosine against the row it restates is
+#   0.7593 to 1.0000, so the floor has 0.26 of headroom even at the
+#   hardest rung and never decides an outcome.
+# - The ladder is eight restatements of one fact at increasing
+#   distance, byte-identical out to a fully abstract reframing, judged
+#   5 times each against sonnet-4.6 with zero disagreement; the
+#   reconciler answered NONE on all eight. Four different facts at
+#   high lexical overlap were also correct. See
+#   experiments/recall_bench/dedup_residual.py and its
+#   results/dedup_residual.json (2026-09-02).
+# - Do NOT reason about this floor from the RECALL-side cosine
+#   distribution, whose median is 0.2424 and whose 99th percentile
+#   sits below 0.5. That distribution is query-to-row, where a short
+#   query meets a long document; this gate is row-to-row between two
+#   paraphrases of comparable length, and the two distributions are
+#   nowhere near each other. Reading across them predicts the exact
+#   opposite of what the gate does.
 SIMILARITY_RECONCILE_THRESHOLD = 0.5
 MAX_SIMILAR_FOR_RECONCILE = 10
 KEYWORD_HITS_LIMIT = 5
