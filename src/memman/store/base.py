@@ -8,7 +8,7 @@ each verb when a SQL pushdown is materially faster.
 from collections.abc import Iterator
 from typing import Any
 
-from memman.store.model import Id, Insight
+from memman.store.model import Id
 
 
 class BaseNodeStore:
@@ -19,25 +19,6 @@ class BaseNodeStore:
     None against a None argument, where SQL's `= ?` never matches
     NULL. Each backend implements it in SQL.
     """
-
-    def get_without_embedding(
-            self, *, limit: int = 100) -> list[Insight]:
-        """Default: cross `get_all_active` with embedded-id set.
-
-        Returns rows that have no embedding, ordered by
-        `importance desc, created_at desc`. `get_all_active`
-        already returns `created_at desc`, so a stable sort by
-        `-importance` preserves the secondary order.
-        """
-        embedded = {
-            rid for rid, _content, _blob
-            in self.get_all_embeddings()}  # type: ignore[attr-defined]
-        rows = [
-            ins for ins
-            in self.get_all_active()  # type: ignore[attr-defined]
-            if ins.id not in embedded]
-        rows.sort(key=lambda i: -i.importance)
-        return rows[:limit]
 
     def review_content_quality(
             self, *, limit: int) -> list[dict[str, Any]]:

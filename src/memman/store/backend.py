@@ -246,11 +246,11 @@ class NodeStore(Protocol):
     def get_all_embeddings(self) -> list[tuple[Id, str, bytes]]:
         """Return all (id, content, blob) triples for active insights.
 
-        Used by the `BaseNodeStore` defaults for
-        `get_without_embedding` / `iter_embeddings_as_vecs`. Pipeline
-        paths prefer `iter_embeddings_as_vecs` directly; the recall
-        path uses `RecallSession.similarities` instead, which scores
-        without shipping the blobs.
+        Used by the `BaseNodeStore` default for
+        `iter_embeddings_as_vecs`. Pipeline paths prefer
+        `iter_embeddings_as_vecs` directly; the recall path uses
+        `RecallSession.similarities` instead, which scores without
+        shipping the blobs.
         """
         ...
 
@@ -291,10 +291,6 @@ class NodeStore(Protocol):
         healthy store has one bucket. More than one bucket means a
         dim mismatch -- the doctor consistency check flags this.
         """
-        ...
-
-    def get_without_embedding(self, *, limit: int = 100) -> list[Insight]:
-        """Return active insights that lack embeddings."""
         ...
 
     def stamp_linked(self, id: Id) -> None:

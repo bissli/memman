@@ -227,9 +227,6 @@ group by length(embedding)
         rows = self._db._query(sql).fetchall()
         return {int(size): int(count) for size, count in rows}
 
-    def get_without_embedding(self, *, limit: int = 100) -> list[Insight]:
-        return _node.get_insights_without_embedding(self._db, limit)
-
     def stamp_linked(self, id: Id) -> None:
         ts = format_timestamp(datetime.now(timezone.utc))
         _node.stamp_linked(self._db, id, ts)

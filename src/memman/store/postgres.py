@@ -1040,19 +1040,6 @@ group by vector_dims(embedding)
             return {
                 int(size): int(count) for size, count in cur.fetchall()}
 
-    def get_without_embedding(
-            self, *, limit: int = 100) -> list[Insight]:
-        sql = self._q(f"""
-select {_INSIGHT_COLS}
-from {{s}}.insights
-where deleted_at is null and embedding is null
-order by importance desc, created_at desc
-limit %s
-""")
-        with self._conn.cursor() as cur:
-            cur.execute(sql, (limit,))
-            return [_row_to_insight(r) for r in cur.fetchall()]
-
     def stamp_linked(self, id: Id) -> None:
         with self._conn.cursor() as cur:
             cur.execute(self._q(

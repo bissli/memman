@@ -122,8 +122,8 @@ def test_none_target_dead_at_apply_degrades_to_an_embedded_add(
 
     Mutation: dropping `embed_vec` from the NONE branch's FactPlan --
         the degraded add lands unembedded, invisible to the vector
-        channel and never repaired, since nothing calls
-        `get_without_embedding`.
+        channel and never repaired, since the store has no
+        null-embedding repair path.
     Oracle: the stored row's embedding read back from the store,
         against the same row's presence on the active list.
     """
