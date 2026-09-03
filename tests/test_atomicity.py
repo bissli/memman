@@ -3,9 +3,8 @@
 After autocommit=True landed on PostgresBackend, every statement
 commits independently unless explicitly grouped under
 `backend.transaction()`. These tests assert that the wrapping is in
-place for the three CLI paths fixed in the cleanup pass:
+place for the two CLI paths that group more than one statement:
 
-- `insights protect` (boost_retention + refresh_effective_importance + oplog.log)
 - `recall --basic` (per-result increment_access_count + oplog.log)
 - `graph link` (existence checks + reverse-edge upsert + oplog.log)
 
@@ -67,23 +66,6 @@ def _wrap_backend_open(monkeypatch):
 
     monkeypatch.setattr(session_mod, 'active_store', wrapped)
     return entries
-
-
-def test_insights_protect_runs_in_one_transaction(tmp_path, monkeypatch):
-    """`insights protect` opens exactly one transaction."""
-    monkeypatch.delenv('MEMMAN_STORE', raising=False)
-    data_dir = str(tmp_path)
-    pathlib.Path(data_dir).mkdir(exist_ok=True, parents=True)
-    _insert_seed_insight(data_dir, 'default', 'p-1', 'protect target')
-
-    entries = _wrap_backend_open(monkeypatch)
-
-    runner = CliRunner()
-    result = runner.invoke(
-        cli, ['--data-dir', data_dir, 'insights', 'protect', 'p-1'])
-    assert result.exit_code == 0, result.output
-    assert entries.count('begin') == 1, entries
-    assert entries.count('commit') == 1, entries
 
 
 def test_recall_basic_mutations_run_in_one_transaction(tmp_path, monkeypatch):

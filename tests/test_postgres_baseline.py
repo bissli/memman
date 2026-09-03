@@ -358,8 +358,7 @@ def test_postgres_recall_issues_pgvector_distance_operator(
             category='fact', importance=3, entities=[],
             source='hnsw-smoke', access_count=0,
             created_at=None, updated_at=None,
-            deleted_at=None, last_accessed_at=None,
-            effective_importance=0.0)
+            deleted_at=None, last_accessed_at=None)
         backend.nodes.insert(ins)
         backend.nodes.update_embedding(
             ins.id, _voyage_shape_vector(seed=i), 'voyage-3-lite')

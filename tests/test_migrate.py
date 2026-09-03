@@ -37,8 +37,7 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
             access_count=0,
             updated_at=datetime.now(timezone.utc),
             deleted_at=None,
-            last_accessed_at=None,
-            effective_importance=0.0)
+            last_accessed_at=None)
         insert_insight(db, ins)
         from memman.store.db import set_meta
         set_meta(db, 'embed_fingerprint',
@@ -62,7 +61,8 @@ def test_migrate_dry_run_reports_counts_without_writing(tmp_path, pg_dsn):
     src = SqliteMigrator(str(tmp_path))
     src.preflight_source('mig_dry')
     payload = src.gather('mig_dry')
-    assert payload.insights and len(payload.insights) == 1
+    assert payload.insights
+    assert len(payload.insights) == 1
     assert len(payload.meta) >= 1
 
     with psycopg.connect(pg_dsn, autocommit=True) as conn:

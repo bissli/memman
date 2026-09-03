@@ -760,6 +760,41 @@ class TestHardening:
         finally:
             db.close()
 
+    def test_schema_columns_ignores_a_retired_column(self, tmp_path):
+        """The check passes whether or not a retired column is present.
+
+        A store that predates the retention-metric removal still
+        carries `effective_importance`; one created after it does
+        not, and the fleet holds both at once during a migration.
+        `EXPECTED_INSIGHT_COLUMNS` is ONE set shared by both
+        backends, so a retired name left in it reports `fail` on
+        every already-migrated store, with a remedy (rebuild) that
+        cannot help -- and a check written as set EQUALITY would
+        report `fail` on every not-yet-migrated one instead.
+
+        Mutation: re-adding a retired name to
+            `doctor.EXPECTED_INSIGHT_COLUMNS`, or comparing the two
+            sets with `==` rather than subtracting.
+        Oracle: the check's own status on one store in each of the
+            two states, arranged by adding the column and dropping
+            it again.
+        """
+        from memman.store.sqlite import SqliteBackend
+        db = open_db(str(tmp_path))
+        try:
+            db._conn.execute(
+                'alter table insights add column'
+                ' effective_importance real default 0.5')
+            legacy = check_schema_columns(SqliteBackend(db))
+            db._conn.execute(
+                'alter table insights drop column effective_importance')
+            migrated = check_schema_columns(SqliteBackend(db))
+        finally:
+            db.close()
+        assert legacy['status'] == 'pass', legacy['detail']
+        assert migrated['status'] == 'pass', migrated['detail']
+        assert migrated['detail']['missing'] == []
+
     def test_schema_columns_fails_when_column_missing(self, tmp_path):
         """A DB without provenance columns should fail the schema check.
         """

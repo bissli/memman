@@ -523,23 +523,6 @@ class TestRanking:
         assert any('postgres' in h['content'].lower() for h in hits)
 
 
-class TestGCLifecycle:
-    """GC surfaces low-value insights and respects protections."""
-
-    def test_gc_produces_stats(self, runner):
-        """GC returns JSON with total_insights field."""
-        remember(runner,
-                 'HAProxy health checks configured with 3 second interval',
-                 no_reconcile=True, imp='1')
-        remember(runner,
-                 'Logstash pipeline processes 10000 events per second',
-                 no_reconcile=True, imp='1')
-        result = invoke(runner, ['insights', 'candidates'])
-        assert result.exit_code == 0
-        data = json.loads(result.output)
-        assert 'total_insights' in data
-
-
 class TestOplogChronology:
     """Operation log entries are in chronological order."""
 
@@ -754,11 +737,11 @@ class TestRecallCompleteness:
         assert len(basic_hits) > 0, 'Basic recall should also find it'
 
 
-class TestGarbageCollection:
-    """GC surfaces low-value insights and respects protections."""
+class TestContentReview:
+    """`insights review` surfaces transient content for an operator."""
 
-    def test_gc_review_flags_transient_not_durable(self, runner):
-        """GC --review flags transient content, not durable content."""
+    def test_review_flags_transient_not_durable(self, runner):
+        """A stored instance id is flagged; a durable decision is not."""
         remember(runner,
                  'Production outage traced to instance i-0c220c2402a5245bc running out of memory causing cascading failure',
                  no_reconcile=True)
@@ -770,19 +753,6 @@ class TestGarbageCollection:
         assert data['total_flagged'] >= 1
         flagged = [r['content'] for r in data['review_results']]
         assert any('i-0c220c2402a5245bc' in c.lower() for c in flagged)
-
-    def test_gc_keep_protects_specific_id(self, runner):
-        """GC --keep <id> does not include that ID in candidates."""
-        kept = remember(runner,
-                        'Terraform state backend uses S3 with DynamoDB locking',
-                        no_reconcile=True, imp='1')
-        remember(runner,
-                 'Ansible playbook deploys nginx to staging environment',
-                 no_reconcile=True, imp='1')
-        result = invoke(runner, ['insights', 'protect', kept['id']])
-        data = json.loads(result.output)
-        candidate_ids = [c['id'] for c in data.get('candidates', [])]
-        assert kept['id'] not in candidate_ids
 
 
 class TestOperationLog:

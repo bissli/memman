@@ -259,19 +259,12 @@ def run_remember(
         fact_results: list[dict[str, Any]] = []
 
         def apply_all() -> None:
-            new_ids: list[str] = []
             corroborated_ids: set[str] = set()
             for plan in plans:
                 result = _apply_plan(
                     backend, plan, embed_cache, store_name=store_name,
                     corroborated_ids=corroborated_ids)
                 fact_results.append(result)
-                # Keyed on the RESULT action, not the plan's: a
-                # corroborate whose target vanished mid-drain degrades
-                # to an add and must join the refresh/prune-exclusion
-                # set like any other insert.
-                if result.get('action') not in {'skipped', 'deleted'}:
-                    new_ids.append(result['id'])
                 if (plan.action == 'skipped'
                         and result.get('action') == 'add'
                         and plan.fact_insight is not None):
@@ -288,19 +281,6 @@ def run_remember(
                     if plan.embed_vec is not None:
                         embed_cache[plan.fact_insight.id] = (
                             plan.embed_vec)
-
-            for nid in new_ids:
-                try:
-                    ei = backend.nodes.refresh_effective_importance(nid)
-                except Exception as exc:
-                    logger.warning(
-                        'refresh_effective_importance failed for %s: %s',
-                        nid, exc)
-                    ei = 0.0
-                for r in fact_results:
-                    if r.get('id') == nid:
-                        r['effective_importance'] = ei
-                        break
 
         with backend.transaction():
             apply_all()

@@ -48,7 +48,6 @@ create table insights (
     last_accessed_at text,
     embedding   blob,
     embedding_pending blob,
-    effective_importance real default 0.5,
     linked_at   text,
     enriched_at text,
     created_at  text not null,
@@ -86,7 +85,7 @@ def _mi(id, created_at, *, source='user', deleted_at=None):
         importance=3, entities=[], source=source, access_count=0,
         keywords=None, summary=None, semantic_facts=None,
         last_accessed_at=None, embedding=None,
-        effective_importance=0.5, linked_at=None, enriched_at=None,
+        linked_at=None, enriched_at=None,
         created_at=created_at, updated_at=created_at,
         deleted_at=deleted_at, prompt_version=None, model_id=None,
         embedding_model=None, session_id=None, queue_uuid=None,
@@ -149,25 +148,6 @@ def _make_old_store(data_dir, store):
     finally:
         conn.close()
     return sdir
-
-
-def test_touched_ids_excludes_dead_endpoints():
-    """`touched_ids` carries only live, non-soft-deleted endpoints.
-
-    `refresh_effective_importance` selects `where deleted_at is null`
-    and raises `ValueError` on a miss — after `apply` committed and
-    the original directory was archived away.
-
-    Mutation: leaving `touched_ids` unintersected with live ids.
-    Oracle: orphan edges touching one live id, one soft-deleted id
-        and one missing id yield exactly the live id.
-    """
-    p = _payload(
-        [_mi('a', NOW), _mi('d', NOW, deleted_at=NOW)],
-        [_semantic('a', 'ghost'), _semantic('d', 'ghost')])
-    result = mig.repair_payload(p)
-    assert result.orphan_edges_dropped == 2
-    assert result.touched_ids == {'a'}
 
 
 def test_repair_drops_orphan_edges(tmp_path):

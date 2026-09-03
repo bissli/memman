@@ -36,7 +36,6 @@ from memman.embed import SUPPORTED_EMBED_PROVIDERS as _EMBED_PROVIDER_CHOICES
 from memman.store.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge
 from memman.store.model import Insight, format_timestamp
 from memman.store.model import insight_to_brief_dict, insight_to_full_dict
-from memman.store.model import is_immune
 from memman.store.sqlite import open_ro_db
 from tqdm import tqdm
 
@@ -463,7 +462,7 @@ def queue(ctx: click.Context) -> None:
 
 @cli.group()
 def insights() -> None:
-    """Operations on stored insights (read, prune, protect)."""
+    """Operations on stored insights (read, review, resolve)."""
 
 
 @cli.group()
@@ -2105,9 +2104,9 @@ def scheduler_start(ctx: click.Context, text_output: bool) -> None:
 def scheduler_stop(ctx: click.Context, text_output: bool) -> None:
     """Stop the scheduler. Trigger files stay; memman becomes recall-only.
 
-    Writes (`remember`/`replace`/`forget`/`graph link`/`graph rebuild`/
-    `insights protect`) reject until `scheduler start` re-arms the
-    worker. Use `memman uninstall` to remove trigger files entirely.
+    Writes (`remember`/`replace`/`forget`/`graph link`/`graph
+    rebuild`) reject until `scheduler start` re-arms the worker. Use
+    `memman uninstall` to remove trigger files entirely.
     """
     from memman.setup.scheduler import stop
     try:
@@ -2899,57 +2898,14 @@ def log_worker(ctx: click.Context, errors: bool, stack: bool,
 
 
 @claude_callable
-@insights.command('candidates')
-@click.option('--threshold', default=0.5, type=float,
-              help='Effective-importance cutoff; insights below are surfaced (default 0.5).')
-@click.option('--limit', default=20, type=int, help='Max candidates returned')
-@click.pass_context
-def insights_candidates(ctx: click.Context, threshold: float,
-                        limit: int) -> None:
-    """List insights with low effective importance.
-
-    Surfaces candidates only — does NOT delete. Use `memman forget <id>`
-    to actually remove an insight, or `memman insights protect <id>` to
-    boost its retention.
-    """
-    with _active_backend(ctx) as backend:
-        candidates, total = backend.nodes.get_retention_candidates(
-            threshold=threshold, limit=limit)
-        out_candidates = []
-        for c in candidates:
-            ins = c['insight']
-            out_candidates.append({
-                'id': ins.id,
-                'content': ins.content,
-                'category': ins.category,
-                'importance': ins.importance,
-                'access_count': ins.access_count,
-                'effective_importance': c['effective_importance'],
-                'days_since_access': c['days_since_access'],
-                'edge_count': c['edge_count'],
-                'immune': c['immune'],
-                })
-        _json_out({
-            'total_insights': total,
-            'threshold': threshold,
-            'candidates_found': len(candidates),
-            'candidates': out_candidates,
-            'actions': {
-                'purge': 'memman forget <id>',
-                'protect': 'memman insights protect <id>',
-                },
-            })
-
-
-@claude_callable
 @insights.command('review')
 @click.option('--limit', default=20, type=int, help='Max flagged results')
 @click.pass_context
 def insights_review(ctx: click.Context, limit: int) -> None:
     """Scan stored insights for content quality issues.
 
-    Different criteria than `candidates`: this checks content quality
-    (transient phrasing, low signal) rather than retention score.
+    Flags transient phrasing and low-signal content, so an
+    operator can decide whether to `memman forget` a row.
     """
     from memman.search.quality import check_content_quality
 
@@ -2970,44 +2926,7 @@ def insights_review(ctx: click.Context, limit: int) -> None:
                 'quality_warnings': f['quality_warnings'],
                 } for f in flagged],
             'total_flagged': len(flagged),
-            'actions': {
-                'forget': 'memman forget <id>',
-                'protect': 'memman insights protect <id>',
-                },
-            })
-
-
-@claude_callable
-@insights.command('protect')
-@click.argument('id')
-@click.pass_context
-def insights_protect(ctx: click.Context, id: str) -> None:
-    """Boost retention of an insight.
-
-    Increments access count by 3 and refreshes effective importance,
-    keeping the insight off retention-candidate lists.
-    """
-    _require_started('protect insights')
-
-    with _active_backend(ctx) as backend:
-        ins = backend.nodes.get(id)
-        if ins is None:
-            raise click.ClickException(
-                f'insight {id} not found or already deleted')
-        with backend.transaction():
-            backend.nodes.boost_retention(id)
-            ei = backend.nodes.refresh_effective_importance(id)
-            backend.oplog.log(
-                operation='protect', insight_id=id,
-                detail=f'access+3, ei={ei:.4f}')
-        new_access = ins.access_count + 3
-        _json_out({
-            'status': 'retained',
-            'id': id,
-            'content': ins.content,
-            'new_access': new_access,
-            'effective_importance': ei,
-            'immune': is_immune(ins.importance, new_access),
+            'actions': {'forget': 'memman forget <id>'},
             })
 
 

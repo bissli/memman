@@ -1013,21 +1013,11 @@ class TestLog:
         assert result.exit_code == 0
 
 
-class TestGc:
-    """`memman gc` suggest / review."""
+class TestInsightsReview:
+    """`memman insights review` flags transient content."""
 
-    def test_gc_suggest(self, runner):
-        """GC suggest mode returns JSON."""
-        invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
-        result = invoke(runner, ['insights', 'candidates'])
-        assert result.exit_code == 0
-        data = json.loads(result.output)
-        assert 'total_insights' in data
-
-    def test_gc_review(self, runner):
-        """GC --review flags transient content with 1 warning (stored)."""
+    def test_review_flags_transient_content(self, runner):
+        """A stored instance id is flagged; a durable decision is not."""
         invoke(runner, [
             'remember', 'Production outage traced to instance i-0c220c2402a5245bc running out of memory causing cascading failure',
             '--no-reconcile'])
@@ -1041,8 +1031,8 @@ class TestGc:
         flagged = [r['content'] for r in data['review_results']]
         assert any('i-0c220c2402a5245bc' in c.lower() for c in flagged)
 
-    def test_gc_review_empty(self, runner):
-        """GC --review with clean store returns zero flagged."""
+    def test_review_clean_store_flags_nothing(self, runner):
+        """A store of durable content returns zero flagged."""
         invoke(runner, [
             'remember', 'SQLite chosen for simplicity and embedded operation',
             '--no-reconcile'])
@@ -2061,9 +2051,9 @@ class TestIntraBatchDedup:
 class TestHotPathPurity:
     """Synchronous write commands must be LLM/embed-free.
 
-    `forget`, `graph link`, and `insights protect` mutate the store DB
-    synchronously and must make zero LLM or embed calls. Any future change
-    that adds such calls to these paths will fail one of these tests loudly.
+    `forget` and `graph link` mutate the store DB synchronously and
+    must make zero LLM or embed calls. Any future change that adds
+    such calls to these paths will fail one of these tests loudly.
     """
 
     @pytest.fixture
@@ -2128,20 +2118,6 @@ class TestHotPathPurity:
         r, data_dir = runner_with_seed
         out = r.invoke(cli, ['--data-dir', data_dir,
                              'graph', 'link', 'aud-a', 'aud-b'])
-        assert out.exit_code == 0, out.output
-
-    def test_insights_protect_makes_no_llm_or_embed_calls(
-            self, runner_with_seed, monkeypatch):
-        """`insights protect` is pure SQL."""
-        monkeypatch.setattr(
-            'memman.llm.client.MemmanLLMClient.complete',
-            self._make_failing_complete)
-        monkeypatch.setattr(
-            'memman.embed.voyage.Client.embed', self._make_failing_embed)
-
-        r, data_dir = runner_with_seed
-        out = r.invoke(cli, ['--data-dir', data_dir,
-                             'insights', 'protect', 'aud-a'])
         assert out.exit_code == 0, out.output
 
 

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from memman.embed.fingerprint import bound_embedder
 from memman.pipeline.remember import run_remember
-from memman.store.model import Insight, is_immune
+from memman.store.model import Insight
 from tests.conftest import make_insight
 
 
@@ -193,17 +193,18 @@ def test_corroborate_writes_oplog_row(tmp_backend, monkeypatch):
     assert [r[0] for r in rows] == [tid]
 
 
-def test_corroboration_does_not_confer_immunity(
+def test_corroboration_does_not_inflate_access_count(
         tmp_backend, monkeypatch):
-    """Corroboration never feeds the retention-immunity criterion.
+    """Corroboration never touches `access_count`.
 
-    `access_count >= 3` grants pruning immunity; "the agent said it
-    three times" must not.
+    `access_count` means "times this row was returned" and nothing
+    else, so a restatement must leave it alone -- otherwise the one
+    counter that records retrieval starts recording writes too.
 
     Mutation: bumping `access_count` instead of (or alongside)
         `corroboration_count`.
     Oracle: after three exact-match skips the target's access_count
-        is still 0 and `is_immune` stays False.
+        is still 0 while corroboration_count reads 3.
     """
     tid = _store(tmp_backend, 'Redis caches session tokens')
     _spy_reconcile(monkeypatch)
@@ -212,7 +213,6 @@ def test_corroboration_does_not_confer_immunity(
     stored = tmp_backend.nodes.get(tid)
     assert stored.corroboration_count == 3
     assert stored.access_count == 0
-    assert is_immune(stored.importance, stored.access_count) is False
 
 
 def test_corroborate_adopts_restating_queue_uuid(

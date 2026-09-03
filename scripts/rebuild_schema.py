@@ -49,14 +49,12 @@ import sys
 import tempfile
 import time
 from contextlib import closing
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import memman
 from memman.migrate import PAYLOAD_VERSION, MigrationPayload, held_drain_lock
-from memman.store import node as _node
-from memman.store.db import default_data_dir, list_local_store_dirs, open_db
-from memman.store.db import store_dir
+from memman.store.db import default_data_dir, list_local_store_dirs, store_dir
 from memman.store.factory import resolve_store_backend
 from memman.store.sqlite import SqliteMigrator
 from tqdm import tqdm
@@ -67,7 +65,7 @@ BREADCRUMB_NAME = 'rebuild_schema.inflight'
 # The payload version this script's schema markers correspond to.
 # A future rebuild bumps this alongside SCHEMA_COLUMNS -- both guard
 # 2 and the final gate read them, so nothing else needs editing.
-EXPECTED_PAYLOAD_VERSION = 3
+EXPECTED_PAYLOAD_VERSION = 4
 SCHEMA_COLUMNS = frozenset(
     {'session_id', 'queue_uuid', 'corroboration_count'})
 SCHEMA_TAG = f'payload-v{EXPECTED_PAYLOAD_VERSION}'
@@ -109,7 +107,7 @@ def assert_correct_interpreter() -> None:
 
 @dataclass
 class RepairResult:
-    """Outcome of `repair_payload` -- the payload plus counters.
+    """Outcome of `repair_payload` -- the payload plus its counter.
 
     Attributes
     ----------
@@ -117,15 +115,10 @@ class RepairResult:
         The repaired payload (mutated in place and returned).
     orphan_edges_dropped : int
         Edges missing a live endpoint, dropped by the orphan filter.
-    touched_ids : set[str]
-        Live, non-soft-deleted endpoints of dropped edges --
-        `refresh_effective_importance` raises `ValueError` on a
-        missing or soft-deleted row, after `apply` has committed.
     """
 
     payload: MigrationPayload
     orphan_edges_dropped: int = 0
-    touched_ids: set = field(default_factory=set)
 
 
 def repair_payload(payload: MigrationPayload) -> RepairResult:
@@ -146,7 +139,7 @@ def repair_payload(payload: MigrationPayload) -> RepairResult:
     Returns
     -------
     RepairResult
-        Repaired payload plus the orphan counter and `touched_ids`.
+        Repaired payload plus the orphan counter.
     """
     result = RepairResult(payload)
 
@@ -159,10 +152,6 @@ def repair_payload(payload: MigrationPayload) -> RepairResult:
     payload.edges = [e for e in payload.edges
                      if e.source_id in live and e.target_id in live]
     result.orphan_edges_dropped = len(orphans)
-
-    alive = {i.id for i in payload.insights if i.deleted_at is None}
-    for e in orphans:
-        result.touched_ids |= {e.source_id, e.target_id} & alive
     return result
 
 
@@ -263,18 +252,16 @@ def migrate_store(
     """Run the per-store algorithm (already inside the drain lock).
 
     Steps: preflight -> gather -> repair -> archive -> drop ->
-    apply -> count check -> effective-importance refresh. Steps after
-    a successful archive are wrapped so ANY failure restores the
-    pre-migration directory and re-raises -- the failure mode this
-    guards is a valid, empty, doctor-clean store with the real rows
-    stranded in `archive/`.
+    apply -> count check. Steps after a successful archive are
+    wrapped so ANY failure restores the pre-migration directory and
+    re-raises -- the failure mode this guards is a valid, empty,
+    doctor-clean store with the real rows stranded in `archive/`.
     """
     m.preflight_source(store)
     payload = m.gather(store)
     result = repair_payload(payload)
     _log(f'{store}:'
-         f' orphan_edges_dropped={result.orphan_edges_dropped}'
-         f' touched={len(result.touched_ids)}')
+         f' orphan_edges_dropped={result.orphan_edges_dropped}')
     if dry_run:
         return result
 
@@ -297,12 +284,6 @@ def migrate_store(
         if mismatches:
             raise RuntimeError(
                 f'{store}: count check failed: {mismatches}')
-        db = open_db(sdir)
-        try:
-            for iid in sorted(result.touched_ids):
-                _node.refresh_effective_importance(db, iid)
-        finally:
-            db.close()
     except BaseException:
         sdir = Path(store_dir(data_dir, store))
         _log(f'{store}: FAILED after archive; rolling back from'

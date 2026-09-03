@@ -35,7 +35,7 @@
         <mxCell id="b7" value="&lt;b&gt;3-Signal Reranking&lt;/b&gt;&lt;br&gt;keyword + similarity + graph, intent-weighted" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="55" y="440" width="330" height="38" as="geometry" />
         </mxCell>
-        <mxCell id="b8" value="&lt;b&gt;Lifecycle &amp;amp; Decay&lt;/b&gt;&lt;br&gt;EI formula, retention review, immunity rules, GC" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="b8" value="&lt;b&gt;Lifecycle&lt;/b&gt;&lt;br&gt;operator-only deletion, content review" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="55" y="490" width="330" height="38" as="geometry" />
         </mxCell>
         <mxCell id="b9" value="&lt;b&gt;Duplicate Detection&lt;/b&gt;&lt;br&gt;content similarity, negation patterns" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">

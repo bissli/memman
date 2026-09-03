@@ -115,9 +115,9 @@ class NodeStore(Protocol):
             self, id: Id, *, queue_uuid: str | None = None) -> bool:
         """Bump corroboration_count for a live insight.
 
-        Observational counter only: it must never feed `is_immune`
-        or `compute_effective_importance` -- "the agent said it
-        twice" must not grant retention immunity.
+        Observational counter only: no ranking, retention or
+        reporting path reads it -- "the agent said it twice" must
+        not promote a row.
 
         Parameters
         ----------
@@ -135,17 +135,6 @@ class NodeStore(Protocol):
         bool
             True when a live row was bumped; False when the target
             is missing or soft-deleted.
-        """
-        ...
-
-    def refresh_effective_importance(self, id: Id) -> float:
-        """Recompute and persist effective_importance for one insight."""
-        ...
-
-    def get_retention_candidates(
-            self, *, threshold: float,
-            limit: int) -> tuple[list[dict[str, Any]], int]:
-        """Return non-immune insights sorted by effective_importance asc.
         """
         ...
 
@@ -191,10 +180,6 @@ class NodeStore(Protocol):
 
     def provenance_distribution(self) -> list[ProvenanceCount]:
         """Return (prompt_version, model_id, count) for active rows."""
-        ...
-
-    def boost_retention(self, id: Id) -> None:
-        """Boost an insight's retention: access_count +3."""
         ...
 
     def get_recent_in_window(

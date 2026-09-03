@@ -186,17 +186,13 @@ memman insights show <id>
 # Resolve a write to the insights it produced (key from remember/replace)
 memman insights by-queue <queue_uuid>
 
-# List low-retention candidates (read-only — does NOT delete)
-memman insights candidates --threshold 0.5 --limit 20
-
-# Boost retention of a specific insight (immune from candidates list)
-memman insights protect <id>
-
 # Scan stored insights for content quality issues
 memman insights review
 ```
 
-To delete an insight, use `memman forget <id>`.
+To delete an insight, use `memman forget <id>`. Nothing deletes on
+its own: the store is uncapped and carries no retention score, so a
+stored insight persists until an operator removes it.
 
 ### Embedding operations
 
@@ -221,11 +217,11 @@ Two switching paths:
 - **`embed swap`** is the online path. It populates `embedding_pending` (shadow column on SQLite, side column on Postgres) under the active provider while the existing column keeps serving recall, then commits an atomic cutover transaction. State machine: `backfilling → cutover → done`. Resumable via `--resume`; abortable via `--abort`. Per-store; the in-flight target is recorded in `meta.embed_swap_*` keys (deleted on completion).
 - **`embed reembed`** is the offline path: every store is rewritten in place with the current `MEMMAN_EMBED_PROVIDER`. Requires the scheduler to be **stopped** (`memman scheduler stop`).
 
-**Per-store embedder sovereignty.** Each store's `meta.embed_fingerprint` is the runtime authority over its embedder. Recall, drain, and graph rebuild all bind the embedder from the store's fingerprint, not from `MEMMAN_EMBED_PROVIDER`. One process can sequentially open two stores fingerprinted to different providers without env mutation — e.g., `MEMMAN_EMBED_PROVIDER=voyage memman --store openai_store recall ...` succeeds against an OpenAI-fingerprinted store. Switching a store's embedder is explicit (`embed swap` or `embed reembed`); there is no silent migration. Implementation details: [05-lifecycle.md § 5.5](design/05-lifecycle.md#55-embedding-support).
+**Per-store embedder sovereignty.** Each store's `meta.embed_fingerprint` is the runtime authority over its embedder. Recall, drain, and graph rebuild all bind the embedder from the store's fingerprint, not from `MEMMAN_EMBED_PROVIDER`. One process can sequentially open two stores fingerprinted to different providers without env mutation — e.g., `MEMMAN_EMBED_PROVIDER=voyage memman --store openai_store recall ...` succeeds against an OpenAI-fingerprinted store. Switching a store's embedder is explicit (`embed swap` or `embed reembed`); there is no silent migration. Implementation details: [05-lifecycle.md § 5.3](design/05-lifecycle.md#53-embedding-support).
 
 #### Using an embedding model not on the calibrated list
 
-The shipped `_thresholds_generated.py` covers 20 `(provider, model)` pairs across `voyage`, `openrouter`, and `ollama` (see [05-lifecycle.md § 5.5.1a](design/05-lifecycle.md#551a-calibrated-embedding-models)). A store bound to a model outside that list falls back to the surface-wide median (`code` = 0.6495, `claw` = 0.6840) and `memman doctor` reports `embed_threshold: warn` with `source: surface_median`. Semantic edges still get created — the fallback is bounded (mean nDCG@5 loss ~0.014 vs calibrated on the shipped triples).
+The shipped `_thresholds_generated.py` covers 20 `(provider, model)` pairs across `voyage`, `openrouter`, and `ollama` (see [05-lifecycle.md § 5.3.1a](design/05-lifecycle.md#531a-calibrated-embedding-models)). A store bound to a model outside that list falls back to the surface-wide median (`code` = 0.6495, `claw` = 0.6840) and `memman doctor` reports `embed_threshold: warn` with `source: surface_median`. Semantic edges still get created — the fallback is bounded (mean nDCG@5 loss ~0.014 vs calibrated on the shipped triples).
 
 Operators with a quality-critical store running an uncalibrated model can set a per-store override:
 

@@ -62,7 +62,7 @@ def test_recent_insights_in_llm_prompt(backend):
             'id': 'x', 'content': 'x', 'category': 'fact', 'importance': 3,
             'entities': [], 'source': 'test', 'access_count': 0,
             'created_at': now, 'updated_at': now, 'deleted_at': None,
-            'last_accessed_at': None, 'effective_importance': 0.0}
+            'last_accessed_at': None}
         defaults.update(kw)
         return Insight(**defaults)
 
