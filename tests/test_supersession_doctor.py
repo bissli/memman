@@ -52,7 +52,7 @@ def test_integrity_passes_on_a_clean_chain_with_a_forgotten_target(backend):
     assert result['status'] == 'pass'
     assert result['detail']['counts'] == {
         'dangling': 0, 'superseded_with_edges': 0,
-        'multi_predecessor': 0, 'self_pointer': 0}
+        'multi_predecessor': 0, 'self_pointer': 0, 'unterminated': 0}
 
 
 def test_integrity_fails_on_a_dangling_pointer(backend):
@@ -128,7 +128,10 @@ def test_partial_index_predicates_pass_on_a_fresh_store(backend):
     assert result['name'] == 'partial_index_predicates'
     assert result['status'] == 'pass'
     assert result['detail']['stale'] == []
-    assert result['detail']['checked'] >= 1
+    # SQLite declares one partial index on insights (pending-link);
+    # Postgres adds the GIN and HNSW ones.
+    expected = 1 if isinstance(backend, SqliteBackend) else 3
+    assert result['detail']['checked'] == expected
 
 
 def test_partial_index_predicates_fail_on_a_stale_definition(backend):
@@ -166,4 +169,55 @@ def test_partial_index_predicates_fail_on_a_stale_definition(backend):
     result = check_partial_index_predicates(backend)
     assert result['status'] == 'fail'
     assert result['detail']['stale'] == [name]
+    assert 'drop' in result['detail']['remedy']
+
+
+def test_integrity_fails_on_a_pointer_cycle(backend):
+    """Verify a chain that never reaches a row without a pointer fails.
+
+    A two-row cycle trips none of the other populations: both rows
+    leave every active read and the doctor would pass.
+
+    Mutation: dropping the `unterminated` population, or computing it
+        as "pointer at a superseded row", which also flags every
+        middle row of a legitimate chain.
+    Oracle: `x-1 -> x-2 -> x-1` set by raw SQL fails naming both rows,
+        while the legitimate chain `c-1 -> c-2 -> c-3` passes.
+    """
+    for rid in ('c-1', 'c-2', 'c-3', 'x-1', 'x-2'):
+        backend.nodes.insert(make_insight(id=rid, content=f'row {rid}'))
+    assert backend.nodes.supersede('c-1', 'c-2') is True
+    assert backend.nodes.supersede('c-2', 'c-3') is True
+    clean = check_supersession_integrity(backend)
+    assert clean['status'] == 'pass'
+
+    _point(backend, 'x-1', 'x-2')
+    _point(backend, 'x-2', 'x-1')
+    result = check_supersession_integrity(backend)
+    assert result['status'] == 'fail'
+    assert result['detail']['unterminated'] == ['x-1', 'x-2']
+    assert result['detail']['multi_predecessor'] == []
+
+
+def test_partial_index_predicates_fail_on_a_retired_index(tmp_backend):
+    """Verify the retired listing index is reported when a store still has it.
+
+    `alter table` alone leaves `idx_insights_deleted_importance_created`
+    in place, and it has no predicate for the stale check to read.
+
+    Mutation: checking predicates only, so the retired index survives
+        every doctor run as write amplification.
+    Oracle: the old index recreated by name on a fresh store -> fail
+        naming it under `retired`, with a remedy that says to drop it.
+    """
+    tmp_backend.nodes.insert(make_insight(id='p-1', content='row'))
+    tmp_backend._db._exec(
+        'create index idx_insights_deleted_importance_created'
+        ' on insights(deleted_at, importance, created_at)', ())
+
+    result = check_partial_index_predicates(tmp_backend)
+    assert result['status'] == 'fail'
+    assert result['detail']['retired'] == [
+        'idx_insights_deleted_importance_created']
+    assert result['detail']['stale'] == []
     assert 'drop' in result['detail']['remedy']

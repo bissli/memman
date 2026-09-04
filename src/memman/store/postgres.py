@@ -44,6 +44,7 @@ from memman.store.backend import Oplog, RecallSession, _check_identifier
 from memman.store.base import BaseNodeStore
 from memman.store.errors import BackendError, ConfigError
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
+from memman.store.node import unterminated_chains
 from memman.store.model import NodeStats, OpLogEntry, OpLogStats
 from memman.store.model import ProvenanceCount, ReembedRow, WorkerRun
 from memman.store.model import parse_timestamp
@@ -628,6 +629,9 @@ order by superseded_by
         self_sql = self._q("""
 select id from {s}.insights where superseded_by = id order by id
 """)
+        pointers_sql = self._q("""
+select id, superseded_by from {s}.insights where superseded_by is not null
+""")
         out: dict[str, list[Id]] = {}
         with self._conn.cursor() as cur:
             for key, sql in (('dangling', dangling_sql),
@@ -636,6 +640,8 @@ select id from {s}.insights where superseded_by = id order by id
                              ('self_pointer', self_sql)):
                 cur.execute(sql)
                 out[key] = [r[0] for r in cur.fetchall()]
+            cur.execute(pointers_sql)
+            out['unterminated'] = unterminated_chains(dict(cur.fetchall()))
         return out
 
     def update_entities(self, id: Id, entities: list[str]) -> None:

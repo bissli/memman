@@ -126,11 +126,13 @@ def check_supersession_integrity(backend: Backend) -> dict[str, Any]:
     """Verify every `superseded_by` pointer is well formed.
 
     The column carries no foreign key, so this check is the only
-    enforcement of pointer validity. Four populations, each empty on a
+    enforcement of pointer validity. Five populations, each empty on a
     healthy store: a pointer at an id absent from the table (a
     forgotten target is NOT dangling), a superseded row that still has
-    edges, a successor with two predecessors, and a self-pointer. The
-    detail carries every count and up to 20 ids per population.
+    edges, a successor with two predecessors, a self-pointer, and a
+    chain that never reaches a row without a pointer (a cycle, which
+    hides every member from the active view). The detail carries every
+    count and up to 20 ids per population.
     """
     populations = backend.nodes.supersession_integrity()
     counts = {key: len(ids) for key, ids in populations.items()}
@@ -144,20 +146,29 @@ def check_supersession_integrity(backend: Backend) -> dict[str, Any]:
         }
 
 
+RETIRED_INSIGHT_INDEXES = ('idx_insights_deleted_importance_created',)
+
+
 def check_partial_index_predicates(backend: Backend) -> dict[str, Any]:
-    """Verify every partial index on `insights` carries the current predicate.
+    """Verify every index on `insights` is one the current baseline declares.
 
     `create index if not exists` matches by name, so an index whose
     WHERE changed in code keeps its old predicate on a live store
     until it is dropped and the baseline recreates it. A definition is
     stale when its predicate names `deleted_at is null` without
     `superseded_by is null`; such an index still serves superseded
-    rows to the scan it backs.
+    rows to the scan it backs. An index the baseline no longer
+    declares is retired: it has no predicate to read, costs a write
+    per insert, and only a name check finds it.
     """
     definitions = backend.introspect_index_definitions('insights')
     stale: list[str] = []
+    retired: list[str] = []
     checked = 0
     for name, ddl in sorted(definitions.items()):
+        if name.startswith(RETIRED_INSIGHT_INDEXES):
+            retired.append(name)
+            continue
         _, _, predicate = ' '.join(ddl.lower().split()).partition(' where ')
         if not predicate:
             continue
@@ -165,12 +176,14 @@ def check_partial_index_predicates(backend: Backend) -> dict[str, Any]:
         if ('deleted_at is null' in predicate
                 and 'superseded_by is null' not in predicate):
             stale.append(name)
-    status = 'pass' if not stale else 'fail'
-    detail: dict[str, Any] = {'checked': checked, 'stale': stale}
-    if stale:
+    status = 'pass' if not stale and not retired else 'fail'
+    detail: dict[str, Any] = {
+        'checked': checked, 'stale': stale, 'retired': retired}
+    if stale or retired:
         detail['remedy'] = (
-            'drop ' + ', '.join(stale)
-            + '; the baseline recreates each on the next open')
+            'drop ' + ', '.join(stale + retired)
+            + '; the baseline recreates each current index on the next'
+            ' open')
     return {
         'name': 'partial_index_predicates',
         'status': status,

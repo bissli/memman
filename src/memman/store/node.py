@@ -206,18 +206,50 @@ where id = ? and deleted_at is null and superseded_by = ?
     return cursor.rowcount == 1
 
 
+def unterminated_chains(pointers: dict[str, str]) -> list[str]:
+    """Return the rows whose pointer chain never reaches a row without one.
+
+    Parameters
+    ----------
+    pointers : dict[str, str]
+        `{row id: superseded_by}` for every row carrying a pointer.
+
+    Returns
+    -------
+    list[str]
+        Sorted ids of every row on or feeding into a cycle. A chain
+        ending at a row with no pointer (current, forgotten, or absent
+        from the table) terminates; a middle row of such a chain is
+        not reported.
+    """
+    terminates: dict[str, bool] = {}
+    for start in pointers:
+        path: list[str] = []
+        node = start
+        while node in pointers and node not in terminates and node not in path:
+            path.append(node)
+            node = pointers[node]
+        outcome = terminates.get(node, node not in path)
+        for row in path:
+            terminates[row] = outcome
+    return sorted(row for row, ok in terminates.items() if not ok)
+
+
 def supersession_integrity(db: 'DB') -> dict[str, list[str]]:
-    """Return the four populations a well-formed pointer set leaves empty.
+    """Return the five populations a well-formed pointer set leaves empty.
 
     Returns
     -------
     dict[str, list[str]]
         `dangling`: rows whose pointer names an id absent from the
-        table (a forgotten target is NOT dangling). `superseded_with_
-        edges`: superseded, non-deleted rows that still have an edge.
-        `multi_predecessor`: successors named by two or more rows.
-        `self_pointer`: rows pointing at themselves. Each list is
-        sorted by id.
+        table (a forgotten target is NOT dangling).
+        `superseded_with_edges`: superseded, non-deleted rows that
+        still have an edge. `multi_predecessor`: successors named by
+        two or more rows. `self_pointer`: rows pointing at themselves.
+        `unterminated`: rows whose chain never reaches a row without a
+        pointer (a cycle), which no other population sees and which
+        removes every member from the active view. Each list is sorted
+        by id.
     """
     dangling = db._query("""
 select p.id
@@ -244,11 +276,15 @@ order by superseded_by
     selfp = db._query(
         'select id from insights where superseded_by = id order by id'
         ).fetchall()
+    pointers = dict(db._query(
+        'select id, superseded_by from insights'
+        ' where superseded_by is not null').fetchall())
     return {
         'dangling': [r[0] for r in dangling],
         'superseded_with_edges': [r[0] for r in with_edges],
         'multi_predecessor': [r[0] for r in multi],
         'self_pointer': [r[0] for r in selfp],
+        'unterminated': unterminated_chains(pointers),
         }
 
 
@@ -355,7 +391,7 @@ where id = ? and deleted_at is null and superseded_by is null
 
 
 def count_active_insights(db: 'DB') -> int:
-    """Return the number of current insights: neither deleted nor superseded."""
+    """Return the number of current insights, neither deleted nor superseded."""
     row = db._query(
         'select count(*) from insights'
         ' where deleted_at is null and superseded_by is null'
