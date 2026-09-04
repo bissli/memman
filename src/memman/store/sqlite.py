@@ -76,11 +76,10 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
 
     def query(
             self, *, keyword: str = '', category: str = '',
-            min_importance: int = 0, source: str = '',
-            limit: int = 20) -> list[Insight]:
+            source: str = '', limit: int = 20) -> list[Insight]:
         return _node.query_insights(
-            self._db, keyword=keyword, category=category,
-            min_importance=min_importance, source=source, limit=limit)
+            self._db, keyword=keyword, category=category, source=source,
+            limit=limit)
 
     def soft_delete(
             self, id: Id, *, tolerate_missing: bool = False) -> bool:
