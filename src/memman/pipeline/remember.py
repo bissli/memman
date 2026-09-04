@@ -285,6 +285,11 @@ def run_remember(
 
         with backend.transaction():
             apply_all()
+            # A later fact's causal edges were planned while an earlier
+            # fact's target was still current and may name it; every
+            # row this write superseded ends the write edgeless.
+            for target_id in superseded_in_batch:
+                backend.edges.delete_by_node(target_id)
     finally:
         if owned_executor is not None:
             owned_executor.shutdown(wait=True)
@@ -805,12 +810,13 @@ def _apply_plan(
     for edge in plan.causal_edges:
         backend.edges.upsert(edge)
 
-    if (plan.action in {'update', 'replace', 'supersede'}
-            and plan.target_id and not target_already_gone):
-        move_edges(backend, plan.target_id, fi.id, carried_edges)
-        # Sweeps the causal edges the plan itself aimed at the
-        # predecessor; `supersede` removed only the edges that existed
-        # before the plan ran.
+    if plan.action in {'update', 'replace', 'supersede'} and plan.target_id:
+        if not target_already_gone:
+            move_edges(backend, plan.target_id, fi.id, carried_edges)
+        # Sweeps the causal edges the plan itself aimed at the target,
+        # planned while the target was still current; `supersede`
+        # removed only the edges that existed before the plan ran, and
+        # a target already superseded must stay edgeless too.
         backend.edges.delete_by_node(plan.target_id)
 
     backend.nodes.stamp_linked(fi.id)
@@ -856,6 +862,6 @@ def _apply_plan(
         # add would hide it.
         result['target_id'] = plan.target_id
         result['target_superseded_by'] = target_superseded_by
-    elif plan.target_id:
+    elif plan.action in {'update', 'replace', 'supersede'} and plan.target_id:
         result['replaced_id'] = plan.target_id
     return result
