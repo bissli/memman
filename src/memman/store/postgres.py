@@ -138,7 +138,8 @@ create table if not exists {schema}.insights (
     session_id  text,
     queue_uuid  text,
     corroboration_count integer not null default 0,
-    kw_tokens   text[] not null
+    kw_tokens   text[] not null,
+    superseded_by text
 );
 
 create table if not exists {schema}.edges (
@@ -203,6 +204,9 @@ create index if not exists idx_insights_pending_link_{schema}
 create index if not exists idx_insights_kw_tokens_{schema}
     on {schema}.insights using gin (kw_tokens)
     where deleted_at is null;
+create index if not exists idx_insights_current_listing_{schema}
+    on {schema}.insights(importance, created_at)
+    where deleted_at is null and superseded_by is null;
 
 create index if not exists idx_edges_source_{schema}
     on {schema}.edges(source_id);
@@ -380,6 +384,8 @@ def _row_to_insight(row: tuple[Any, ...]) -> Insight:
         i.queue_uuid = row[15]
     if len(row) > 16 and row[16] is not None:
         i.corroboration_count = int(row[16])
+    if len(row) > 17 and row[17]:
+        i.superseded_by = row[17]
     return i
 
 
@@ -401,14 +407,15 @@ def _row_to_edge(row: tuple[Any, ...]) -> Edge:
     return e
 
 
-# `session_id`, `queue_uuid`, then `corroboration_count`, appended
-# last -- must stay byte-identical to node.py's _INSIGHT_COLUMNS
-# (see test_insight_column_lists_are_identical_across_backends).
+# `session_id`, `queue_uuid`, `corroboration_count`, then
+# `superseded_by`, appended last -- must stay byte-identical to
+# node.py's _INSIGHT_COLUMNS (see
+# test_insight_column_lists_are_identical_across_backends).
 _INSIGHT_COLS = (
     'id, content, category, importance, entities,'
     ' source, access_count, created_at, updated_at, deleted_at,'
     ' summary, linked_at, enriched_at, last_accessed_at,'
-    ' session_id, queue_uuid, corroboration_count')
+    ' session_id, queue_uuid, corroboration_count, superseded_by')
 
 
 class PostgresNodeStore(BaseNodeStore, NodeStore):
@@ -2615,7 +2622,7 @@ select id, content, category, importance, entities,
        last_accessed_at, embedding,
        linked_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, model_id, embedding_model,
-       session_id, queue_uuid, corroboration_count
+       session_id, queue_uuid, corroboration_count, superseded_by
        {pending_select}
 from {schema}.insights
 order by id
@@ -2645,10 +2652,11 @@ order by id
                     prompt_version=r[17], model_id=r[18],
                     embedding_model=r[19],
                     session_id=r[20], queue_uuid=r[21],
-                    corroboration_count=int(r[22])))
-                if has_pending and r[23] is not None:
+                    corroboration_count=int(r[22]),
+                    superseded_by=r[23]))
+                if has_pending and r[24] is not None:
                     pending.append(PendingReembed(
-                        insight_id=r[0], vector=list(r[23])))
+                        insight_id=r[0], vector=list(r[24])))
 
             cur.execute(f"""
 select source_id, target_id, edge_type, weight,
@@ -2760,7 +2768,8 @@ order by sqlite_id
                             [] if ins.deleted_at else sorted(
                                 insight_tokens(Insight(
                                     content=ins.content,
-                                    entities=list(ins.entities))))))
+                                    entities=list(ins.entities)))),
+                            ins.superseded_by))
                     with conn.cursor() as cur:
                         cur.executemany(
                             f'insert into {schema}.insights ('
@@ -2773,11 +2782,11 @@ order by sqlite_id
                             ' prompt_version, model_id,'
                             ' embedding_model, session_id,'
                             ' queue_uuid, corroboration_count,'
-                            ' kw_tokens)'
+                            ' kw_tokens, superseded_by)'
                             ' values (%s, %s, %s, %s, %s::jsonb,'
                             ' %s, %s, %s::jsonb, %s, %s::jsonb,'
                             ' %s, %s, %s, %s, %s, %s, %s, %s,'
-                            ' %s, %s, %s, %s, %s, %s)'
+                            ' %s, %s, %s, %s, %s, %s, %s)'
                             ' on conflict (id) do nothing',
                             insight_rows)
 

@@ -367,6 +367,29 @@ class TestRestore:
         with pytest.raises(RuntimeError, match='format_version 2'):
             restore(str(bundle), str(tmp_path / 'out_v2'))
 
+    def test_restore_refuses_v3_bundle(self, tmp_path):
+        """A pre-0.33.0 v3 bundle is refused, not silently restored.
+
+        Restore is a byte copy: a v3 bundle laid down under this build
+        yields a store missing `superseded_by` that fails at `open_db`
+        after restore reported success.
+
+        Mutation: forgetting the `BACKUP_FORMAT_VERSION` bump (v3
+            would then round-trip as current).
+        Oracle: `restore` raises naming the unsupported version 3.
+        """
+        staging = tmp_path / 'st_v3'
+        staging.mkdir()
+        (staging / 'manifest.json').write_text(json.dumps({
+            'format_version': 3, 'stores': [],
+            'active_store': 'default'}))
+        (staging / 'env.nonsecret').write_text('\n')
+        bundle = tmp_path / 'v3.tar.gz'
+        with tarfile.open(bundle, 'w:gz') as tar:
+            tar.add(staging, arcname='.')
+        with pytest.raises(RuntimeError, match='format_version 3'):
+            restore(str(bundle), str(tmp_path / 'out_v3'))
+
     def test_rejects_unknown_format_version(self, tmp_path):
         """A bundle with a newer format_version is refused."""
         staging = tmp_path / 'staging'

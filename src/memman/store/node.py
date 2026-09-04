@@ -39,14 +39,15 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         i.session_id, i.queue_uuid, i.corroboration_count))
 
 
-# `session_id`, `queue_uuid`, then `corroboration_count`, appended
-# last -- must stay byte-identical to postgres.py's _INSIGHT_COLS
-# (see test_insight_column_lists_are_identical_across_backends).
+# `session_id`, `queue_uuid`, `corroboration_count`, then
+# `superseded_by`, appended last -- must stay byte-identical to
+# postgres.py's _INSIGHT_COLS (see
+# test_insight_column_lists_are_identical_across_backends).
 _INSIGHT_COLUMNS = (
     'id, content, category, importance, entities,'
     ' source, access_count, created_at, updated_at, deleted_at,'
     ' summary, linked_at, enriched_at, last_accessed_at,'
-    ' session_id, queue_uuid, corroboration_count')
+    ' session_id, queue_uuid, corroboration_count, superseded_by')
 
 
 def get_insight_by_id(db: 'DB', id: str) -> Insight | None:
@@ -821,4 +822,6 @@ def _scan_insight(row: tuple[Any, ...]) -> Insight:
         i.queue_uuid = row[15]
     if len(row) > 16 and row[16] is not None:
         i.corroboration_count = int(row[16])
+    if len(row) > 17 and row[17]:
+        i.superseded_by = row[17]
     return i
