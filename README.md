@@ -88,7 +88,7 @@ NanoClaw moves the hot-path boundary into the container. Agent and worker share 
 - **LLM-supervised** — the host LLM decides what to remember and forget; a worker model handles fact extraction, reconciliation, enrichment, causal inference, and query expansion.
 - **Four-graph architecture** — temporal, entity, causal, and semantic edges.
 - **Intent-aware recall** — graph beam search with RRF fusion; query intent (WHY/WHEN/ENTITY/GENERAL) controls edge weights and traversal budget. Results are always relevance-ordered; WHY additionally carries its causal edges in `meta`.
-- **LLM reconciliation** — each fact classified as ADD/UPDATE/DELETE/NONE against existing memories. A byte-identical restatement skips the LLM entirely; a reworded one comes back as `NONE` naming the memory that already covers it. Either way the stored row's `corroboration_count` is bumped and no copy is written.
+- **LLM reconciliation** — each fact classified as ADD/UPDATE/SUPERSEDE/NONE against existing memories. A contradicted or refined memory is superseded, never deleted: it keeps its content behind `superseded_by`, leaves recall by default, and `memman insights show <id> --history` walks the chain. A byte-identical restatement skips the LLM entirely; a reworded one comes back as `NONE` naming the memory that already covers it. Either way the stored row's `corroboration_count` is bumped and no copy is written.
 - **Operator-only deletion** — a store is uncapped and nothing expires or is pruned on its own. `memman forget <id>` is the only thing that removes a memory; `memman insights review` surfaces transient content for that decision.
 - **Pluggable embeddings, per-store sovereignty** — registered providers include `voyage`, `openai` (any OpenAI-compatible endpoint: OpenAI, vLLM, LiteLLM, ...), `openrouter`, and `ollama`. Each store's `meta.embed_fingerprint` is the runtime authority over its embedder, so one process can serve multiple stores with different embedders. Switch online via `memman embed swap` or offline via `memman embed reembed`.
 - **Pluggable storage backend** — SQLite by default; Postgres + pgvector via the `memman[postgres]` extra. `memman migrate` copies a store between backends in a single command (idempotent, drain-lock-guarded, dry-run support).
@@ -255,7 +255,7 @@ The shipped `guide.md` (behavioral policy) and `SKILL.md` (command reference) li
 
 ### Pausing the scheduler
 
-`memman scheduler stop` sets the persistent state to STOPPED and disables the timer on systemd/launchd hosts. While stopped, memman is recall-only: `remember`, `replace`, `forget`, `graph link`, and `graph rebuild` exit with `Scheduler is stopped; cannot <verb>`. Resume with `memman scheduler start`. See [USAGE.md § Scheduler](docs/USAGE.md#scheduler) for the full verb list.
+`memman scheduler stop` sets the persistent state to STOPPED and disables the timer on systemd/launchd hosts. While stopped, memman is recall-only: `remember`, `replace`, `supersede`, `unsupersede`, `forget`, `graph link`, and `graph rebuild` exit with `Scheduler is stopped; cannot <verb>`. Resume with `memman scheduler start`. See [USAGE.md § Scheduler](docs/USAGE.md#scheduler) for the full verb list.
 
 ## Updating
 

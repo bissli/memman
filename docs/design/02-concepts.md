@@ -87,8 +87,16 @@ insights (
   created_at, updated_at, deleted_at,
   session_id,                                   -- Temporal chain key (nullable; no session, no backbone edge)
   queue_uuid,                                   -- Idempotency key from the queue row (shared by sibling facts; a corroborated row missing one adopts the restating row's)
-  corroboration_count                           -- Restatements observed, byte-identical or reworded (integer not null default 0)
+  corroboration_count,                          -- Restatements observed, byte-identical or reworded (integer not null default 0)
+  superseded_by                                 -- Successor id once a later write corrected this row (nullable, no FK)
 )
+
+-- A current row is `deleted_at is null and superseded_by is null`;
+-- every read, count and edge build applies both clauses. The pointer
+-- carries no foreign key: the pipeline writes it before the successor
+-- row exists, and the migrators apply rows in id order, so a
+-- predecessor can land before its successor. Doctor's
+-- `supersession_integrity` is the pointer's only validity check.
 
 -- Keyword index over insights (SQLite only; FTS5 external content,
 -- kept in sync by triggers on insert/delete/update-of the two

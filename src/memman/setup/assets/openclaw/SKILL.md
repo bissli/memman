@@ -59,6 +59,16 @@ memman replace <id> "<new content>" --session $SESSION_ID
 and source unless you override per-flag; `--session` follows the
 same rule as `remember`.
 
+The original is superseded, not deleted: it keeps its content behind
+`superseded_by`, leaves every recall and listing, and `memman insights
+show <id> --history` reads the chain back. When the correction was
+stored as its own insight before the link was noticed, link the two
+existing rows instead of writing a third:
+
+```bash
+memman supersede <old_id> <new_id>
+```
+
 ## Recalling what you know
 
 Recall: vector + graph traversal + cross-encoder reranker. Reranker
@@ -152,6 +162,9 @@ memman insights review                # scan for content quality issues
 `insights review` only surfaces rows — it deletes nothing. Use
 `forget <id>` to actually remove. Nothing else deletes: the store is
 uncapped and a stored insight persists until someone forgets it.
+Supersession (`replace`, `supersede`, a reconcile merge) hides without
+deleting; `memman unsupersede <id>` brings a superseded row back once
+its successor has been forgotten.
 
 ## Working with relationships
 

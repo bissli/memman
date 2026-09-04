@@ -101,7 +101,10 @@ Correct an existing insight by ID:
 memman replace <id> "<new content>"
 ```
 
-`replace` inherits metadata from the original unless overridden.
+`replace` inherits metadata from the original unless overridden. The
+original is superseded, not deleted: `memman insights show <id>
+--history` reads the chain back, and `memman supersede <old_id>
+<new_id>` links two rows that both already exist.
 
 ## Recalling and inspecting
 
@@ -163,7 +166,9 @@ memman insights review                # scan content quality issues
 ```
 
 Nothing else deletes: the store is uncapped and a stored insight
-persists until someone forgets it.
+persists until someone forgets it. Supersession hides without
+deleting; `memman unsupersede <id>` brings a superseded row back once
+its successor has been forgotten.
 
 ## Working with relationships
 
