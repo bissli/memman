@@ -7,7 +7,12 @@ gets the column by hand once, and the backup format moves to 4.
 Version note: the schema change and features first landed as the
 v0.33.0 tag, never published; 0.33.1 adds the fixes from an independent
 review of that tree and is the version fleets migrate to. The store
-schema and the backup format are identical across the two.
+schema and the backup format are identical across the two. 0.33.2
+lets `memman supersede` give a successor a second predecessor and
+drops the doctor's `multi_predecessor` population: a correction the
+reconciler wrote as a merge already has one predecessor, so curating
+a sibling claim onto it is a join, not a fork. Schema and backup
+format are unchanged.
 
 ## What changes
 
