@@ -149,20 +149,23 @@ RECONCILIATION_SYSTEM = (
     'memories and decide what to do.\n\n'
     'For each new fact, output one action:\n'
     '- ADD: new information not in existing memories\n'
-    '- UPDATE <id>: refines or supersedes memory <id>. '
+    '- UPDATE <id>: refines memory <id> with compatible detail. '
     'Provide merged text.\n'
-    '- DELETE <id>: memory <id> is contradicted by new facts\n'
+    '- SUPERSEDE <id>: contradicts memory <id>. Provide merged text '
+    'that states the new fact and keeps only the clauses of <id> '
+    'that are still true; never restate the contradicted claim as '
+    'true.\n'
     '- NONE <id>: memory <id> already captures the fact adequately\n\n'
     'Return JSON:\n'
     '{"actions": [\n'
     '  {"fact": "the fact text",\n'
-    '   "action": "ADD|UPDATE|DELETE|NONE",\n'
+    '   "action": "ADD|UPDATE|SUPERSEDE|NONE",\n'
     '   "target_id": null for ADD, else the numeric id,\n'
-    '   "merged_text": "merged content for UPDATE only",\n'
+    '   "merged_text": "merged content for UPDATE and SUPERSEDE",\n'
     '   "reason": "brief explanation"}\n'
     ']}\n\n'
     'Use the numeric IDs shown, not UUIDs. '
-    'Prefer UPDATE over DELETE+ADD when info evolves.')
+    'Use SUPERSEDE, not ADD, when a memory is contradicted.')
 
 QUERY_EXPANSION_SYSTEM = (
     'Expand a search query for a personal memory system.\n\n'
@@ -336,14 +339,22 @@ def reconcile_memories(
         if not isinstance(a, dict):
             continue
         action = a.get('action', 'ADD').upper()
-        if action not in {'ADD', 'UPDATE', 'DELETE', 'NONE'}:
+        # A DELETE the model still emits is a contradiction verdict.
+        # Without the alias it falls through to ADD and the
+        # contradicted peer stays live beside the new fact.
+        if action == 'DELETE':
+            action = 'SUPERSEDE'
+            a = {**a, 'merged_text': None}
+        if action not in {'ADD', 'UPDATE', 'SUPERSEDE', 'NONE'}:
             action = 'ADD'
         target_id = None
         if a.get('target_id') is not None:
-            numeric_id = str(a['target_id'])
-            target_id = id_map.get(numeric_id)
-            if target_id is None:
-                action = 'ADD'
+            target_id = id_map.get(str(a['target_id']))
+        # Every action but ADD addresses a row; with no resolvable
+        # row the fact is new information, not a link that never
+        # happened.
+        if target_id is None:
+            action = 'ADD'
         merged_text = a.get('merged_text')
         results.append({
             'fact': a.get('fact', ''),

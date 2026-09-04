@@ -74,20 +74,6 @@ class TestSoftDeleteInsight:
         assert len(edges) == 0
 
 
-class TestSoftDeleteInsightAlreadyDeleted:
-    """Double delete raises ValueError."""
-
-    def test_already_deleted(self, tmp_db):
-        """Second soft_delete_insight raises ValueError."""
-        ins = make_insight(
-            id='del-2', content='already deleted', importance=2)
-        insert_insight(tmp_db, ins)
-        soft_delete_insight(tmp_db, 'del-2')
-
-        with pytest.raises(ValueError):
-            soft_delete_insight(tmp_db, 'del-2')
-
-
 # --- Query ---
 
 

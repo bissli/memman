@@ -8,7 +8,7 @@ Structure:
 4. Planning phase — for each fact: embed, reconcile (LLM), decide
    action, enrich + causal (parallel LLM), re-embed if keywords.
    **No DB writes.**
-5. Apply phase — one transaction commits every planned soft-delete,
+5. Apply phase — one transaction commits every planned supersession,
    insert, edge, enrichment update, and stamp.
 
 The apply phase runs only after all LLM + embed work has returned.
@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+from memman import trace
 from memman.embed import EmbeddingProvider
 from memman.embed.vector import cosine_similarity
 from memman.exceptions import EmbedCredentialError
@@ -217,7 +218,7 @@ def run_remember(
         owned_executor = ThreadPoolExecutor(max_workers=2)
         executor = owned_executor
 
-    deleted_in_batch: set[str] = set()
+    superseded_in_batch: set[str] = set()
 
     plans: list[FactPlan] = []
     pending_replaced_id = replaced_id
@@ -229,7 +230,7 @@ def run_remember(
             plan, calls = _plan_fact(
                 fact, insight, pending_replaced_id, no_reconcile,
                 cat_explicit, imp_explicit, insights_by_id,
-                embed_cache, deleted_in_batch, llm_client,
+                embed_cache, superseded_in_batch, llm_client,
                 metadata_llm_client, ec,
                 backend, executor)
             llm_calls += calls
@@ -241,8 +242,8 @@ def run_remember(
                 plan.fact_insight.embedding_model = embed_model
 
             if plan.target_id and plan.action in {
-                    'delete', 'update', 'replace'}:
-                deleted_in_batch.add(plan.target_id)
+                    'update', 'replace', 'supersede'}:
+                superseded_in_batch.add(plan.target_id)
                 insights_by_id.pop(plan.target_id, None)
                 embed_cache.pop(plan.target_id, None)
 
@@ -295,12 +296,6 @@ def run_remember(
         }
 
 
-# A fact result carrying either action stored no copy of the incoming
-# write: the skip returns before planning an insert, and the delete
-# branch returns before `nodes.insert`.
-_STORED_NOTHING = frozenset({'skipped', 'deleted'})
-
-
 def skip_reason_for_result(result: Any) -> str:
     """Return why a `run_remember` result stored nothing, or `''`.
 
@@ -325,10 +320,7 @@ def skip_reason_for_result(result: Any) -> str:
     Notes
     -----
     - A write is lost only when NOTHING landed. A result mixing an
-      add with a skip or a delete stored the add, so it returns `''`.
-    - A `deleted` fact counts as storing nothing: the delete branch
-      returns before `nodes.insert`, so a write that only contradicted
-      an existing insight leaves no copy of itself behind.
+      add with a skip stored the add, so it returns `''`.
     - The two shapes spell the reason differently (`skip_reason` at
       the result level, `reason` per fact). Both must be read, or the
       reconcile skip -- every fact deduped onto an existing insight --
@@ -344,7 +336,7 @@ def skip_reason_for_result(result: Any) -> str:
     facts = result.get('facts') or []
     if not facts:
         return ''
-    if any(f.get('action') not in _STORED_NOTHING for f in facts):
+    if any(f.get('action') != 'skipped' for f in facts):
         return ''
     reasons = sorted({f.get('reason', '') for f in facts if f.get('reason')})
     return '; '.join(reasons) or 'skipped'
@@ -404,7 +396,7 @@ def _plan_fact(
         imp_explicit: bool,
         insights_by_id: dict[str, Insight],
         embed_cache: dict[str, list[float]],
-        deleted_in_batch: set[str],
+        superseded_in_batch: set[str],
         llm_client: Any,
         metadata_llm_client: Any,
         ec: Any,
@@ -449,7 +441,7 @@ def _plan_fact(
         seen: set[str] = set()
 
         for hit_ins, _score in keyword_hits:
-            if hit_ins.id in seen or hit_ins.id in deleted_in_batch:
+            if hit_ins.id in seen or hit_ins.id in superseded_in_batch:
                 continue
             similar.append((hit_ins.id, hit_ins.content))
             seen.add(hit_ins.id)
@@ -457,7 +449,7 @@ def _plan_fact(
         if fact_vec is not None:
             cosine_cands: list[tuple[float, str, str]] = []
             for eid, evec in embed_cache.items():
-                if eid in seen or eid in deleted_in_batch:
+                if eid in seen or eid in superseded_in_batch:
                     continue
                 ins = insights_by_id.get(eid)
                 if ins is None:
@@ -517,23 +509,15 @@ def _plan_fact(
                 target_id = r.get('target_id')
                 merged_text = r.get('merged_text')
 
-    if (action in {'UPDATE', 'REPLACE'}
+    if (action in {'UPDATE', 'REPLACE', 'SUPERSEDE'}
             and target_id
-            and target_id in deleted_in_batch):
-        return FactPlan(
-            action='skipped',
-            fact_text=fact_text,
-            fact_insight=Insight(
-                id=str(uuid.uuid4()), content=merged_text or fact_text,
-                category=fact_category, importance=fact_importance,
-                entities=fact_entities + list(parent.entities),
-                source=parent.source, access_count=parent.access_count,
-                created_at=parent.created_at,
-                updated_at=parent.updated_at,
-                session_id=parent.session_id,
-                queue_uuid=parent.queue_uuid),
-            skip_reason='target already deleted',
-            ), calls
+            and target_id in superseded_in_batch):
+        # An earlier fact in this write already took the target. A
+        # second pointer would fork the chain and a skip would drop
+        # the fact, so it lands as a plain add.
+        trace.event(
+            'batch_target_taken', target_id=target_id, action=action)
+        action, target_id, merged_text = 'ADD', None, None
 
     fact_id = str(uuid.uuid4())
     effective_text = merged_text or fact_text
@@ -574,22 +558,6 @@ def _plan_fact(
             target_id=target_id,
             embed_vec=embed_vec,
             skip_reason='already captured',
-            ), calls
-
-    if action == 'DELETE' and target_id:
-        if target_id in deleted_in_batch:
-            return FactPlan(
-                action='skipped',
-                fact_text=fact_text,
-                fact_insight=fact_insight,
-                skip_reason='target already deleted',
-                ), calls
-        return FactPlan(
-            action='delete',
-            fact_text=fact_text,
-            fact_insight=fact_insight,
-            target_id=target_id,
-            embed_vec=embed_vec,
             ), calls
 
     enrichment: dict[str, Any] = {}
@@ -649,6 +617,17 @@ def _apply_plan(
     the caller's per-invocation dedup set: an extractor emitting the
     same fact twice in one row must bump its target once, not per
     occurrence.
+
+    Notes
+    -----
+    - `update`, `replace` and `supersede` share one path: the target
+      is superseded (never deleted), its edges move to the successor,
+      and the successor inherits the entity union and recall history.
+      They differ only in the oplog operation name and in whether the
+      corroboration count carries, which `supersede` withholds.
+    - A target that is not current (forgotten, or superseded by an
+      earlier write) degrades the plan to a plain add whose result
+      names the target and its successor.
     """
     corroborate_degraded = False
     if plan.action == 'skipped':
@@ -697,73 +676,67 @@ def _apply_plan(
         'non-skipped FactPlan must carry a fact_insight')
     fi = plan.fact_insight
 
-    if plan.action == 'delete' and plan.target_id:
-        before_target = backend.nodes.get_include_deleted(plan.target_id)
-        before_delta = (
-            insight_to_delta_dict(before_target)
-            if before_target is not None else None)
-        deleted_now = backend.nodes.soft_delete(
-            plan.target_id, tolerate_missing=True)
-        if deleted_now:
-            backend.oplog.log(
-                operation='reconcile-delete',
-                insight_id=plan.target_id,
-                detail=f'contradicted by: {plan.fact_text[:200]}',
-                before=before_delta)
-        else:
-            logger.warning(
-                f'reconcile-delete target {plan.target_id} already gone;'
-                ' skipping')
-        return {
-            'id': fi.id,
-            'content': fi.content,
-            'action': 'deleted' if deleted_now else 'skipped',
-            'reason': ('contradicted an existing insight' if deleted_now
-                       else 'delete target already gone'),
-            'target_id': plan.target_id,
-            }
-
     target_already_gone = False
-    update_before_delta: dict[str, Any] | None = None
+    target_superseded_by: str | None = None
     carried_edges: list[Edge] = []
-    if plan.action in {'update', 'replace'} and plan.target_id:
-        op_name = ('replace' if plan.action == 'replace'
-                   else 'reconcile-update')
+    if plan.action in {'update', 'replace', 'supersede'} and plan.target_id:
+        op_name = {
+            'replace': 'replace',
+            'update': 'reconcile-update',
+            'supersede': 'reconcile-supersede',
+            }[plan.action]
         before_target = backend.nodes.get_include_deleted(plan.target_id)
-        update_before_delta = (
-            insight_to_delta_dict(before_target)
-            if before_target is not None else None)
-        if before_target is not None:
-            # A merge is a soft-delete plus an insert, so anything the
-            # successor does not copy here is destroyed with the
-            # target. Entities union rather than overwrite because the
-            # extractor sees only the incoming text and would
-            # otherwise narrow the merged row's entity set on every
-            # pass. Counts carry so corroboration and recall history
-            # survive a rewording.
+        # Snapshot before the pointer is written: `supersede` removes
+        # the predecessor's edges, and a later snapshot would also
+        # scoop up the plan's causal edges and the successor's own
+        # freshly minted ones.
+        carried_edges = backend.edges.by_node(plan.target_id)
+        # Notes:
+        # - The pointer is written BEFORE `nodes.insert`, and the
+        #   position is load-bearing: `create_temporal_edge` reads
+        #   `get_latest_by_session` and `get_recent_in_window`, so the
+        #   predecessor must already be out of the active set or the
+        #   successor chains its backbone to the row it replaced.
+        # - The predecessor keeps its content behind `superseded_by`;
+        #   what the successor copies is what the CURRENT view keeps.
+        #   Entities union rather than overwrite because the extractor
+        #   sees only the incoming text and would narrow the merged
+        #   row's entity set on every pass; recall history carries.
+        # - Corroboration carries on a refinement, not on a
+        #   contradiction: it counts restatements of the claim the
+        #   supersede just falsified.
+        linked = backend.nodes.supersede(plan.target_id, fi.id)
+        if not linked or before_target is None:
+            target_already_gone = True
+            carried_edges = []
+            target_superseded_by = (
+                before_target.superseded_by
+                if before_target is not None else None)
+            logger.warning(
+                f'{plan.action} target {plan.target_id} is not current;'
+                ' degrading to add')
+        else:
             fi.entities = list(dict.fromkeys(
                 list(fi.entities) + list(before_target.entities)))
-            fi.corroboration_count = max(
-                fi.corroboration_count, before_target.corroboration_count)
             fi.access_count = max(
                 fi.access_count, before_target.access_count)
-            # Snapshot before the sweep at the end of apply: taking it
-            # later would also scoop up the plan's causal edges and the
-            # successor's own freshly minted ones.
-            carried_edges = backend.edges.by_node(plan.target_id)
-        deleted_now = backend.nodes.soft_delete(
-            plan.target_id, tolerate_missing=True)
-        if deleted_now:
+            if plan.action != 'supersede':
+                fi.corroboration_count = max(
+                    fi.corroboration_count,
+                    before_target.corroboration_count)
+            detail = f'replaced by {fi.id}'
+            if plan.action == 'supersede' and fi.content == plan.fact_text:
+                # The model supplied no merged text, so the successor
+                # may have dropped clauses of the predecessor that are
+                # still true; the marker makes that rate measurable.
+                detail += ' (unmerged)'
+                trace.event(
+                    'supersede_unmerged', target_id=plan.target_id)
             backend.oplog.log(
                 operation=op_name, insight_id=plan.target_id,
-                detail=f'replaced by {fi.id}',
-                before=update_before_delta,
+                detail=detail,
+                before=insight_to_delta_dict(before_target),
                 after=insight_to_delta_dict(fi))
-        else:
-            target_already_gone = True
-            logger.warning(
-                f'{plan.action} target {plan.target_id} already deleted;'
-                ' degrading to add')
 
     backend.nodes.insert(fi)
     stored = backend.nodes.get(fi.id)
@@ -793,7 +766,7 @@ def _apply_plan(
     for edge in plan.causal_edges:
         backend.edges.upsert(edge)
 
-    if (plan.action in {'update', 'replace'}
+    if (plan.action in {'update', 'replace', 'supersede'}
             and plan.target_id and not target_already_gone):
         for edge in carried_edges:
             far_id = (edge.target_id if edge.source_id == plan.target_id
@@ -849,6 +822,11 @@ def _apply_plan(
         # target as `replaced_id` would claim a replace that never
         # happened; `target_id` still names the row that vanished.
         result['target_id'] = plan.target_id
-    elif plan.target_id and not target_already_gone:
+    elif target_already_gone:
+        # The row that now holds the topic is one read away; a silent
+        # add would hide it.
+        result['target_id'] = plan.target_id
+        result['target_superseded_by'] = target_superseded_by
+    elif plan.target_id:
         result['replaced_id'] = plan.target_id
     return result

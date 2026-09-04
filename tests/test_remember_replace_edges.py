@@ -1,13 +1,12 @@
-"""Defensive edge sweep in `_apply_plan` for replace/update flow.
+"""Defensive edge sweep in `_apply_plan` for the replace/update flow.
 
 When the LLM plan emits a causal edge that targets the same insight
-being replaced, the order of operations in `_apply_plan` (soft_delete
-first, edge inserts last) leaves a dangling edge pointing at the
-just-soft-deleted target. The defensive sweep at the end of the apply
-phase removes any such edges.
+being replaced, the order of operations in `_apply_plan` (supersede
+first, edge inserts last) would leave a dangling edge pointing at the
+just-superseded predecessor. The sweep at the end of the apply phase
+removes any such edges.
 
-The sweep must not touch edges to *retained* (non-deleted) history
-nodes.
+The sweep must not touch edges to retained (current) history nodes.
 """
 
 from datetime import datetime, timezone
@@ -35,9 +34,21 @@ def _make_plan(new_id, target_id, causal_edges):
 
 
 def test_apply_plan_sweeps_edges_pointing_at_replaced_target(tmp_db, tmp_backend):
-    """Causal edge whose target is the replaced insight does not survive."""
+    """Verify a replace supersedes the target and leaves it edgeless.
+
+    Mutation: writing the pointer after `nodes.insert` (the successor
+        then chains its temporal backbone to the row it replaced), or
+        dropping the trailing `delete_by_node` sweep, which leaves the
+        plan's own causal edge dangling into the predecessor.
+    Oracle: the predecessor read back current-but-superseded
+        (`deleted_at` null, `superseded_by` = the successor) with no
+        edges, and the far endpoint present on the successor.
+    """
     insert_insight(tmp_db, make_insight(id='old-1', content='original'))
     insert_insight(tmp_db, make_insight(id='ctx-1', content='context'))
+    insert_edge(tmp_db, make_edge(
+        source_id='ctx-1', target_id='old-1',
+        edge_type='semantic', weight=0.6))
 
     now = datetime.now(timezone.utc)
     leaked = Edge(
@@ -49,11 +60,14 @@ def test_apply_plan_sweeps_edges_pointing_at_replaced_target(tmp_db, tmp_backend
         new_id='new-1', target_id='old-1', causal_edges=[leaked])
     _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
 
-    deleted = get_insight_by_id_include_deleted(tmp_db, 'old-1')
-    assert deleted is not None
-    assert deleted.deleted_at is not None
-    edges = get_edges_by_node(tmp_db, 'old-1')
-    assert len(edges) == 0
+    old = get_insight_by_id_include_deleted(tmp_db, 'old-1')
+    assert old is not None
+    assert old.deleted_at is None
+    assert old.superseded_by == 'new-1'
+    assert get_edges_by_node(tmp_db, 'old-1') == []
+    moved = {(e.source_id, e.target_id, e.edge_type)
+             for e in get_edges_by_node(tmp_db, 'new-1')}
+    assert ('ctx-1', 'new-1', 'semantic') in moved
 
 
 def test_apply_plan_preserves_edges_to_retained_history_nodes(tmp_db, tmp_backend):

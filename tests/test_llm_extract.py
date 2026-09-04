@@ -464,3 +464,94 @@ class TestExpandQuery:
 def test_parse_json_response(raw, expected):
     """JSON response parsing strips code-block fences, rejects non-dicts."""
     assert parse_json_response(raw) == expected
+
+
+def test_reconcile_prompt_offers_supersede_and_never_delete():
+    """Verify the shipped prompt names SUPERSEDE and no longer names DELETE.
+
+    Mutation: SUPERSEDE in the parser but not the prompt (the model
+        never emits it, so the branch is dead), or DELETE left in the
+        prompt (the model discards the contradicting fact, the 5-for-5
+        fleet outcome the action is removed for).
+    Oracle: the `RECONCILIATION_SYSTEM` text itself: a SUPERSEDE action
+        line carrying the id placeholder, the action enum, and no
+        DELETE anywhere.
+    """
+    lines = RECONCILIATION_SYSTEM.split(chr(10))
+    assert any(ln.startswith('- SUPERSEDE <id>') for ln in lines)
+    assert 'ADD|UPDATE|SUPERSEDE|NONE' in RECONCILIATION_SYSTEM
+    assert 'DELETE' not in RECONCILIATION_SYSTEM
+
+
+def test_supersede_action_maps_target_and_merged_text():
+    """Verify SUPERSEDE resolves its numeric id and keeps the merged text.
+
+    Mutation: leaving SUPERSEDE out of the accepted set, so the
+        unknown-action fallback turns every contradiction into an ADD
+        beside the row it contradicts.
+    Oracle: the real uuid behind the numeric id and the canned merged
+        text, read back off the parsed action.
+    """
+    response = json.dumps({
+        'actions': [{
+            'fact': 'the broker is redis now',
+            'action': 'SUPERSEDE',
+            'target_id': '0',
+            'merged_text': 'the broker is redis now (was kombu)',
+            }],
+        })
+    existing = [('uuid-1', 'the broker is kombu')]
+    result = reconcile_memories(
+        FakeLLMClient(response), [{'text': 'the broker is redis now'}],
+        existing)
+    assert result[0]['action'] == 'SUPERSEDE'
+    assert result[0]['target_id'] == 'uuid-1'
+    assert result[0]['merged_text'] == 'the broker is redis now (was kombu)'
+
+
+def test_a_delete_emit_is_read_as_supersede():
+    """Verify a stray DELETE from the model lands as SUPERSEDE.
+
+    Mutation: dropping the alias, so DELETE falls through the
+        unknown-action fallback to ADD and the contradicted peer
+        stays live beside the new fact.
+    Oracle: the parsed action for a canned DELETE response: SUPERSEDE,
+        the mapped uuid, and no merged text.
+    """
+    response = json.dumps({
+        'actions': [{
+            'fact': 'postgres was abandoned',
+            'action': 'DELETE',
+            'target_id': '0',
+            'merged_text': None,
+            }],
+        })
+    existing = [('uuid-1', 'we run on postgres')]
+    result = reconcile_memories(
+        FakeLLMClient(response), [{'text': 'postgres was abandoned'}],
+        existing)
+    assert result[0] == {
+        'fact': 'postgres was abandoned', 'action': 'SUPERSEDE',
+        'target_id': 'uuid-1', 'merged_text': None}
+
+
+@pytest.mark.parametrize('action', ['UPDATE', 'SUPERSEDE', 'NONE'])
+@pytest.mark.parametrize('target', [None, '99'])
+def test_a_targetless_update_or_supersede_is_read_as_add(action, target):
+    """Verify a row-addressing action with no resolvable target becomes ADD.
+
+    Mutation: keeping the action when `target_id` is null, so the plan
+        inserts plainly and reports a link that never happened (the
+        shipped shape for UPDATE).
+    Oracle: parsed action 'ADD' with a null target, for both a null and
+        an unmapped numeric id.
+    """
+    response = json.dumps({
+        'actions': [{
+            'fact': 'x', 'action': action, 'target_id': target,
+            'merged_text': 'merged'}],
+        })
+    result = reconcile_memories(
+        FakeLLMClient(response), [{'text': 'x'}], [('uuid-1', 'mem 1')])
+    assert result[0]['action'] == 'ADD'
+    assert result[0]['target_id'] is None
