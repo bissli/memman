@@ -74,8 +74,15 @@ memman recall "auth" --cat decision --source agent
 # Simple SQL LIKE matching (faster, no graph traversal, no LLM expansion)
 memman recall "auth" --basic
 
-# Replace — deterministic replacement by ID (inherits metadata from original)
+# Replace — deterministic replacement by ID (inherits metadata from
+# original); the replaced row is superseded, never deleted
 memman replace <id> "Updated content" --cat decision --imp 5
+
+# Link two insights that both already exist as predecessor and successor
+memman supersede <old_id> <new_id>
+
+# Reverse a supersession once the successor has been forgotten
+memman unsupersede <old_id>
 
 # Forget — soft-delete an insight
 memman forget <id>
@@ -180,8 +187,12 @@ Auto-reindex of computed edges (semantic, entity, temporal) fires on `open_db()`
 ### Insights lifecycle
 
 ```bash
-# Read a single insight by ID (full content + metadata)
+# Read a single insight by ID (full content + metadata; a superseded
+# row shows its successor under `superseded_by`)
 memman insights show <id>
+
+# Walk the supersession chain through an id, oldest first
+memman insights show <id> --history
 
 # Resolve a write to the insights it produced (key from remember/replace)
 memman insights by-queue <queue_uuid>
@@ -190,9 +201,12 @@ memman insights by-queue <queue_uuid>
 memman insights review
 ```
 
-To delete an insight, use `memman forget <id>`. Nothing deletes on
-its own: the store is uncapped and carries no retention score, so a
-stored insight persists until an operator removes it.
+To delete an insight, use `memman forget <id>`. A `replace`, a
+reconcile merge, or `memman supersede` never deletes: the corrected
+row is superseded, keeps its content, and leaves recall and every
+listing. Nothing deletes on its own: the store is uncapped and carries
+no retention score, so a stored insight persists until an operator
+removes it.
 
 ### Embedding operations
 
@@ -309,7 +323,7 @@ To revert a single store without re-migrating data, set the backend flag directl
 
 ```bash
 memman status                                       # memory statistics; JSON includes stale_insights count
-memman doctor                                       # health checks (integrity, schema, enrichment, embeddings, fingerprint, queue, scheduler, drain heartbeat, env, no_stale_swap_meta, provenance_drift)
+memman doctor                                       # health checks (integrity, schema, partial_index_predicates, enrichment, embeddings, fingerprint, orphan and dangling edges, supersession_integrity, queue, scheduler, drain heartbeat, env, no_stale_swap_meta, provenance_drift)
 memman doctor --text                                # human-readable colored table
 memman config show                                  # effective configuration (env + on-disk)
 
@@ -459,7 +473,7 @@ The variables below are not installable — they are read from the env file on d
 `memman remember` appends one row to the queue in ~50 ms on the host session — no LLM calls, no embeddings, no edges. The full pipeline runs out of band:
 
 1. **Tier 1 (host)** — append a row to `~/.memman/queue.db` with `status='pending'`, the raw text, and any `--cat`/`--imp`/`--entities` hints. Returns `{action: queued, queue_id, queue_uuid, store}`. The `queue_uuid` is the join key: it is stamped on every insight this write produces and outlives the queue row, which `purge_done` drops about a minute after the drain.
-2. **Tier 2 (worker)** — systemd timer (Linux), launchd agent (macOS), or `memman scheduler serve` PID 1 (containers) invokes `memman scheduler drain --timeout 60` every 60 s under an `flock` on `~/.memman/drain.lock`. Per row: quality gate → LLM fact extraction → per-fact embed + similarity scan → exact-match dedup (a fact byte-identical to exactly one stored row skips the LLM and bumps that row's `corroboration_count`) or LLM reconciliation (ADD/UPDATE/DELETE/NONE, where `NONE <id>` names the memory that already covers a reworded fact and bumps it the same way) → insert/update → fast edges (temporal + entity + semantic) → parallel enrichment + LLM causal inference → re-embed → rebuild auto edges → mark done.
+2. **Tier 2 (worker)** — systemd timer (Linux), launchd agent (macOS), or `memman scheduler serve` PID 1 (containers) invokes `memman scheduler drain --timeout 60` every 60 s under an `flock` on `~/.memman/drain.lock`. Per row: quality gate → LLM fact extraction → per-fact embed + similarity scan → exact-match dedup (a fact byte-identical to exactly one stored row skips the LLM and bumps that row's `corroboration_count`) or LLM reconciliation (ADD/UPDATE/SUPERSEDE/NONE, where `NONE <id>` names the memory that already covers a reworded fact and bumps it the same way, and UPDATE and SUPERSEDE supersede their target rather than delete it) → insert/supersede → fast edges (temporal + entity + semantic) → parallel enrichment + LLM causal inference → re-embed → rebuild auto edges → mark done.
 
 The host session never blocks on the network. Newly stored memories become recallable on the next drain tick (default 60 s).
 

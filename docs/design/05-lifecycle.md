@@ -14,6 +14,7 @@ A store is **uncapped** and nothing deletes automatically. Deletion is always an
 
 - **No count cap.** A memory store's value grows with what it holds, so a capacity limit is the wrong shape for it. The former `MAX_INSIGHTS = 1000` also drove an `auto_prune` that soft-deleted real memories with only an oplog trace, and its predicate (`importance < 4 and access_count < 3`) made the deletions unpredictable rather than gentle: on a store of mostly high-importance rows it pruned nothing and the cap silently failed to bound anything, while on a store of low-importance rows it deleted freely.
 - **No retention score either.** A stored `effective_importance` once combined base importance, access frequency, a 30-day half-life and edge count into one number, and an `importance >= 4 or access_count >= 3` predicate exempted rows from the report it fed. Nothing read the column: both backends recomputed the score on every call and wrote the result back, and no query filtered or ordered by it. The report ranked ascending, and its edge term capped at five edges, so rows carrying dozens of edges scored identically to a row carrying five and the report nominated the best-connected rows in the store for deletion. The column, the predicate, the `insights candidates` report and the `insights protect` command that existed to keep a row off it are all gone.
+- **Supersession keeps content.** `replace` and the reconciler's UPDATE and SUPERSEDE never delete: the corrected row keeps its content behind `superseded_by`, leaves recall and every listing, and its edges move to the successor. `memman supersede <old> <new>` links two rows that both already exist; `memman unsupersede <id>` reverses a link once the successor is forgotten; `memman insights show <id> --history` walks the chain. Deletion stays operator-only.
 - **Scan cost is not a reason to cap.** Bounded recall latency is the storage layer's problem, not the operator's; see [04-pipelines.md § Smart recall](04-pipelines.md).
 - **`MAX_OPLOG_ENTRIES = 5000`**: the oplog is an audit trail, not memory, and a bounded trail is the point. Roughly five operations per insight at the scale where the value was chosen; retained without unbounded growth.
 - **`access_count` records retrievals and nothing else.** Recall increments it once per returned row. No write path and no operator command touches it, so it stays a faithful count of what recall returned -- which is also the limit of what it can answer, since a returned row is not a used one.
@@ -23,8 +24,11 @@ A store is **uncapped** and nothing deletes automatically. Deletion is always an
 Manual inspection lives under the `memman insights` group:
 
 ```bash
-# Read a single insight by ID
+# Read a single insight by ID (a superseded row shows its successor)
 memman insights show <id>
+
+# Walk the supersession chain through an id, oldest first
+memman insights show <id> --history
 
 # Resolve a write to the insights it produced
 memman insights by-queue <queue_uuid>
