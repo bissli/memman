@@ -37,8 +37,9 @@ schema and the backup format are identical across the two.
   reverses a link once the successor is forgotten, re-embeds the row
   and rebuilds its entity and semantic edges.
 - **Doctor.** `supersession_integrity` (dangling pointer, superseded
-  row with edges, successor with two predecessors, self-pointer, and a
-  pointer cycle that reaches no current head) and
+  row with edges, self-pointer, and a pointer cycle that reaches no
+  current head; a successor with two predecessors is a join, not a
+  defect) and
   `partial_index_predicates` (a partial index kept from the previous
   schema by name, or the retired listing index left in place).
   `schema_columns` expects `superseded_by`.

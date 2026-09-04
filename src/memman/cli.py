@@ -1870,9 +1870,10 @@ def supersede(ctx: click.Context, predecessor_id: str,
     Notes
     -----
     - Refused, naming the reason, when either id is missing, forgotten
-      or already superseded, when both name the same row, or when the
-      successor already has a predecessor (a chain has one row per
-      step; two predecessors is the fork the doctor reports).
+      or already superseded, or when both name the same row. A
+      successor may take a second predecessor: a correction the
+      reconciler wrote as a merge already has one, and curating a
+      sibling claim onto it joins the two chains.
     - `insights show <predecessor_id> --history` reads the link back;
       `unsupersede <predecessor_id>` reverses it once the successor is
       forgotten.
@@ -1891,34 +1892,27 @@ def supersede(ctx: click.Context, predecessor_id: str,
     # which every read-only command would otherwise pay for at start.
     from memman.pipeline.remember import move_edges
     from memman.store.model import insight_to_delta_dict
-    with _active_backend(ctx) as backend:
-        with backend.transaction():
-            old = backend.nodes.get_include_deleted(predecessor_id)
-            reason = _not_current_reason(old, predecessor_id)
-            if reason:
-                raise click.ClickException(reason)
-            reason = _not_current_reason(
-                backend.nodes.get_include_deleted(successor_id),
-                successor_id)
-            if reason:
-                raise click.ClickException(reason)
-            taken = backend.nodes.predecessors(successor_id)
-            if taken:
-                raise click.ClickException(
-                    f'insight {successor_id} already has a predecessor'
-                    f' ({taken[0].id}); a successor takes one, the doctor'
-                    ' reports two as a fork')
-            carried = backend.edges.by_node(predecessor_id)
-            if not backend.nodes.supersede(predecessor_id, successor_id):
-                raise click.ClickException(
-                    f'insight {predecessor_id} changed under this'
-                    ' command; re-read it')
-            moved = move_edges(
-                backend, predecessor_id, successor_id, carried)
-            backend.oplog.log(
-                operation='supersede', insight_id=predecessor_id,
-                detail=f'replaced by {successor_id}',
-                before=insight_to_delta_dict(old))
+    with _active_backend(ctx) as backend, backend.transaction():
+        old = backend.nodes.get_include_deleted(predecessor_id)
+        reason = _not_current_reason(old, predecessor_id)
+        if reason:
+            raise click.ClickException(reason)
+        reason = _not_current_reason(
+            backend.nodes.get_include_deleted(successor_id),
+            successor_id)
+        if reason:
+            raise click.ClickException(reason)
+        carried = backend.edges.by_node(predecessor_id)
+        if not backend.nodes.supersede(predecessor_id, successor_id):
+            raise click.ClickException(
+                f'insight {predecessor_id} changed under this'
+                ' command; re-read it')
+        moved = move_edges(
+            backend, predecessor_id, successor_id, carried)
+        backend.oplog.log(
+            operation='supersede', insight_id=predecessor_id,
+            detail=f'replaced by {successor_id}',
+            before=insight_to_delta_dict(old))
     _json_out({
         'predecessor': predecessor_id,
         'successor': successor_id,
@@ -3229,8 +3223,8 @@ def insights_show(ctx: click.Context, id: str, history: bool) -> None:
     Notes
     -----
     - The walk follows `superseded_by` forward and every row pointing
-      at a chain member backward, so it tolerates a successor with
-      two predecessors (impossible by construction, possible by hand).
+      at a chain member backward, so a successor with two predecessors
+      (a merge joined by a curated sibling) lists both.
     - Order is chain order, not timestamp order: rows written within
       one second still list predecessor first.
 

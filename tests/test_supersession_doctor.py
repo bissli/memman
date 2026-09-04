@@ -52,7 +52,7 @@ def test_integrity_passes_on_a_clean_chain_with_a_forgotten_target(backend):
     assert result['status'] == 'pass'
     assert result['detail']['counts'] == {
         'dangling': 0, 'superseded_with_edges': 0,
-        'multi_predecessor': 0, 'self_pointer': 0, 'unterminated': 0}
+        'self_pointer': 0, 'unterminated': 0}
 
 
 def test_integrity_fails_on_a_dangling_pointer(backend):
@@ -95,23 +95,28 @@ def test_integrity_fails_on_a_superseded_row_with_edges(backend):
     assert result['detail']['superseded_with_edges'] == ['e-1']
 
 
-def test_integrity_fails_on_a_fork_and_a_self_pointer(backend):
-    """Verify two predecessors on one successor, and a self-pointer, fail.
+def test_integrity_fails_on_a_self_pointer_and_passes_a_join(backend):
+    """Verify a self-pointer fails while two predecessors on one successor pass.
 
-    Mutation: dropping either population; a hand edit that forks a
-        chain or points a row at itself then passes.
-    Oracle: `m-1` and `m-2` both pointing at `m-3`, and `s-1` pointing
-        at itself, set by raw SQL -> the successor and the row named.
+    Mutation: treating a join (a merge's predecessor plus a curated
+        sibling converging on one successor) as a failure, which the
+        live fleet's own reconcile history trips on; or dropping the
+        self-pointer population.
+    Oracle: `m-1` and `m-2` both superseded by `m-3` pass every
+        population; `s-1` pointing at itself, set by raw SQL, fails
+        naming the row.
     """
     for rid in ('m-1', 'm-2', 'm-3', 's-1'):
         backend.nodes.insert(make_insight(id=rid, content=f'row {rid}'))
-    _point(backend, 'm-1', 'm-3')
-    _point(backend, 'm-2', 'm-3')
-    _point(backend, 's-1', 's-1')
+    assert backend.nodes.supersede('m-1', 'm-3') is True
+    assert backend.nodes.supersede('m-2', 'm-3') is True
+    joined = check_supersession_integrity(backend)
+    assert joined['status'] == 'pass'
+    assert 'multi_predecessor' not in joined['detail']
 
+    _point(backend, 's-1', 's-1')
     result = check_supersession_integrity(backend)
     assert result['status'] == 'fail'
-    assert result['detail']['multi_predecessor'] == ['m-3']
     assert result['detail']['self_pointer'] == ['s-1']
 
 
@@ -196,7 +201,6 @@ def test_integrity_fails_on_a_pointer_cycle(backend):
     result = check_supersession_integrity(backend)
     assert result['status'] == 'fail'
     assert result['detail']['unterminated'] == ['x-1', 'x-2']
-    assert result['detail']['multi_predecessor'] == []
 
 
 def test_partial_index_predicates_fail_on_a_retired_index(tmp_backend):

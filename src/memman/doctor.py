@@ -126,13 +126,14 @@ def check_supersession_integrity(backend: Backend) -> dict[str, Any]:
     """Verify every `superseded_by` pointer is well formed.
 
     The column carries no foreign key, so this check is the only
-    enforcement of pointer validity. Five populations, each empty on a
+    enforcement of pointer validity. Four populations, each empty on a
     healthy store: a pointer at an id absent from the table (a
     forgotten target is NOT dangling), a superseded row that still has
-    edges, a successor with two predecessors, a self-pointer, and a
-    chain that never reaches a row without a pointer (a cycle, which
-    hides every member from the active view). The detail carries every
-    count and up to 20 ids per population.
+    edges, a self-pointer, and a chain that never reaches a row without
+    a pointer (a cycle, which hides every member from the active view).
+    A successor with two predecessors is a join (a merge plus a curated
+    sibling), not a defect. The detail carries every count and up to 20
+    ids per population.
     """
     populations = backend.nodes.supersession_integrity()
     counts = {key: len(ids) for key, ids in populations.items()}

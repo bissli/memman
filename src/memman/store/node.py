@@ -236,7 +236,7 @@ def unterminated_chains(pointers: dict[str, str]) -> list[str]:
 
 
 def supersession_integrity(db: 'DB') -> dict[str, list[str]]:
-    """Return the five populations a well-formed pointer set leaves empty.
+    """Return the four populations a well-formed pointer set leaves empty.
 
     Returns
     -------
@@ -244,12 +244,12 @@ def supersession_integrity(db: 'DB') -> dict[str, list[str]]:
         `dangling`: rows whose pointer names an id absent from the
         table (a forgotten target is NOT dangling).
         `superseded_with_edges`: superseded, non-deleted rows that
-        still have an edge. `multi_predecessor`: successors named by
-        two or more rows. `self_pointer`: rows pointing at themselves.
+        still have an edge. `self_pointer`: rows pointing at themselves.
         `unterminated`: rows whose chain never reaches a row without a
         pointer (a cycle), which no other population sees and which
-        removes every member from the active view. Each list is sorted
-        by id.
+        removes every member from the active view. A successor with two
+        predecessors is a join (a merge plus a curated sibling), not a
+        defect. Each list is sorted by id.
     """
     dangling = db._query("""
 select p.id
@@ -265,14 +265,6 @@ join edges e on e.source_id = i.id or e.target_id = i.id
 where i.superseded_by is not null and i.deleted_at is null
 order by i.id
 """).fetchall()
-    multi = db._query("""
-select superseded_by
-from insights
-where superseded_by is not null
-group by superseded_by
-having count(*) > 1
-order by superseded_by
-""").fetchall()
     selfp = db._query(
         'select id from insights where superseded_by = id order by id'
         ).fetchall()
@@ -282,7 +274,6 @@ order by superseded_by
     return {
         'dangling': [r[0] for r in dangling],
         'superseded_with_edges': [r[0] for r in with_edges],
-        'multi_predecessor': [r[0] for r in multi],
         'self_pointer': [r[0] for r in selfp],
         'unterminated': unterminated_chains(pointers),
         }
