@@ -147,13 +147,15 @@ class NodeStore(Protocol):
         ...
 
     def supersession_integrity(self) -> dict[str, list[Id]]:
-        """The four pointer populations a healthy store leaves empty.
+        """The five pointer populations a healthy store leaves empty.
 
         Keys: `dangling` (pointer at an id absent from the table),
         `superseded_with_edges` (superseded, non-deleted row with any
         edge), `multi_predecessor` (successor named by two or more
-        rows), `self_pointer`. The column has no foreign key, so the
-        doctor check over this verb is the only pointer enforcement.
+        rows), `self_pointer`, `unterminated` (a chain that never
+        reaches a row without a pointer, so a cycle). The column has
+        no foreign key, so the doctor check over this verb is the only
+        pointer enforcement.
         """
         ...
 
