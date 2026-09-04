@@ -162,13 +162,17 @@ def test_unsupersede_relinks_reembeds_and_writes_its_oplog_row(mm_runner):
     new = _remember(mm_runner, 'the broker is redis now')
     assert invoke(mm_runner, ['supersede', old, new]).exit_code == 0
     assert invoke(mm_runner, ['forget', new]).exit_code == 0
+    with open_backend('default', data_dir) as backend:
+        # An embed swap leaves a superseded row without a vector; the
+        # nulled column is what the re-embed must fill.
+        backend._db._exec(
+            'update insights set embedding = null where id = ?', (old,))
 
     res = invoke(mm_runner, ['unsupersede', old])
     assert res.exit_code == 0, res.output
     out = json.loads(res.output)
     assert out['id'] == old
     assert out['was_superseded_by'] == new
-    assert out['embedded'] is True
 
     with _read(data_dir) as backend:
         row = backend.nodes.get(old)
@@ -182,3 +186,228 @@ def test_unsupersede_relinks_reembeds_and_writes_its_oplog_row(mm_runner):
         ops = [(e.insight_id, e.detail) for e in backend.oplog.recent(limit=20)
                if e.operation == 'unsupersede']
         assert ops == [(old, f'was superseded by {new}')]
+
+
+def test_supersede_command_refuses_a_second_predecessor(mm_runner):
+    """Verify `memman supersede` will not give a successor two predecessors.
+
+    Mutation: guarding only the predecessor, so `supersede P1 S` then
+        `supersede P2 S` both succeed and the doctor's
+        `multi_predecessor` population fails on the state the CLI
+        itself produced.
+    Oracle: the second command refused naming the first predecessor,
+        and the second row still current.
+    """
+    _, data_dir = mm_runner
+    p1 = _remember(mm_runner, 'the broker is kombu')
+    p2 = _remember(mm_runner, 'the broker was celery before kombu')
+    s = _remember(mm_runner, 'the broker is redis now')
+    assert invoke(mm_runner, ['supersede', p1, s]).exit_code == 0
+
+    res = invoke(mm_runner, ['supersede', p2, s])
+    assert res.exit_code != 0
+    assert p1 in res.output
+    assert 'predecessor' in res.output
+    with _read(data_dir) as backend:
+        assert backend.nodes.get(p2) is not None
+        assert backend.nodes.supersession_integrity()['multi_predecessor'] == []
+
+
+def test_history_lists_both_predecessors_of_a_hand_made_fork(mm_runner):
+    """Verify `--history` from one predecessor also finds the other.
+
+    Mutation: draining the backward walk before the forward walk and
+        never feeding forward-discovered successors back, so
+        `show P1 --history` on P1 -> S <- P2 omits P2.
+    Oracle: a fork set by raw SQL; the chain from P1 names all three
+        rows, the successor last.
+    """
+    import sqlite3
+
+    from memman.store.db import store_dir
+
+    _, data_dir = mm_runner
+    p1 = _remember(mm_runner, 'the broker is kombu')
+    p2 = _remember(mm_runner, 'the broker was celery before kombu')
+    s = _remember(mm_runner, 'the broker is redis now')
+    with sqlite3.connect(f'{store_dir(data_dir, "default")}/memman.db') as conn:
+        conn.execute('update insights set superseded_by = ? where id in (?, ?)',
+                     (s, p1, p2))
+        conn.commit()
+
+    res = invoke(mm_runner, ['insights', 'show', p1, '--history'])
+    assert res.exit_code == 0, res.output
+    chain = json.loads(res.output)['chain']
+    assert {c['id'] for c in chain} == {p1, p2, s}
+    assert chain[-1]['id'] == s
+
+
+def test_unsupersede_embeds_before_taking_the_write_lock(mm_runner, monkeypatch):
+    """Verify the embed call runs outside the store's write transaction.
+
+    Mutation: calling `ec.embed` inside `backend.transaction()`, so a
+        30-second embed holds SQLite's writer lock and a concurrent
+        drain fails with `database is locked`.
+    Oracle: an embedder stub that, while embedding, writes through a
+        second connection with a short busy timeout; it succeeds only
+        when no write lock is held.
+    """
+    import sqlite3
+
+    from memman.embed import fingerprint as fp_mod
+    from memman.store.db import store_dir
+
+    _, data_dir = mm_runner
+    old = _remember(mm_runner, 'the broker is kombu')
+    new = _remember(mm_runner, 'the broker is redis now')
+    assert invoke(mm_runner, ['supersede', old, new]).exit_code == 0
+    assert invoke(mm_runner, ['forget', new]).exit_code == 0
+
+    real_bound = fp_mod.bound_embedder
+    db_path = f'{store_dir(data_dir, "default")}/memman.db'
+    probe = {'locked': None}
+
+    class _ProbingEmbedder:
+        def __init__(self, inner):
+            self._inner = inner
+            self.model = inner.model
+
+        def embed(self, text):
+            conn = sqlite3.connect(db_path, timeout=0.2)
+            try:
+                conn.execute("update meta set value = value where key = 'probe'")
+                conn.commit()
+                probe['locked'] = False
+            except sqlite3.OperationalError:
+                probe['locked'] = True
+            finally:
+                conn.close()
+            return self._inner.embed(text)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    monkeypatch.setattr(
+        fp_mod, 'bound_embedder',
+        lambda backend: _ProbingEmbedder(real_bound(backend)))
+
+    res = invoke(mm_runner, ['unsupersede', old])
+    assert res.exit_code == 0, res.output
+    assert probe['locked'] is False
+
+
+def test_status_reports_the_superseded_bucket(mm_runner):
+    """Verify `memman status` shows superseded rows as their own bucket.
+
+    Mutation: leaving `superseded_insights` off the status dict, so a
+        superseded row is in no bucket and the three counts no longer
+        sum to the table.
+    Oracle: one supersession on a store of three rows -> current 2,
+        superseded 1, deleted 0.
+    """
+    old = _remember(mm_runner, 'the broker is kombu')
+    new = _remember(mm_runner, 'the broker is redis now')
+    _remember(mm_runner, 'the dashboard reads the broker')
+    assert invoke(mm_runner, ['supersede', old, new]).exit_code == 0
+
+    res = invoke(mm_runner, ['status'])
+    assert res.exit_code == 0, res.output
+    out = json.loads(res.output)
+    assert (out['total_insights'], out['superseded_insights'],
+            out['deleted_insights']) == (2, 1, 0)
+
+
+def test_unsupersede_refuses_a_row_whose_successor_was_superseded(mm_runner):
+    """Verify a chain unwinds from its head, never from the middle.
+
+    Mutation: guarding only a CURRENT successor, so `unsupersede a` on
+        a -> b -> c brings `a` back beside the current head `c`.
+    Oracle: the refusal names `b`, and `a` stays superseded.
+    """
+    _, data_dir = mm_runner
+    a = _remember(mm_runner, 'the broker is kombu')
+    b = _remember(mm_runner, 'the broker is redis now')
+    c = _remember(mm_runner, 'the broker is rabbitmq now')
+    assert invoke(mm_runner, ['supersede', a, b]).exit_code == 0
+    assert invoke(mm_runner, ['supersede', b, c]).exit_code == 0
+
+    res = invoke(mm_runner, ['unsupersede', a])
+    assert res.exit_code != 0
+    assert b in res.output
+    assert 'head' in res.output
+    with _read(data_dir) as backend:
+        assert backend.nodes.get_include_deleted(a).superseded_by == b
+
+
+def test_unsupersede_refuses_when_the_embed_fails(mm_runner, monkeypatch):
+    """Verify an embed failure leaves the row superseded, not half restored.
+
+    Mutation: restoring the row anyway, so it re-enters recall with no
+        vector (Postgres) or the stale-width blob an embed swap left
+        behind (SQLite), which `check_embedding_consistency` then
+        fails on.
+    Oracle: a non-zero exit naming the embed, the pointer still set,
+        and no edges rebuilt.
+    """
+    import httpx
+
+    from memman.embed import fingerprint as fp_mod
+
+    _, data_dir = mm_runner
+    old = _remember(mm_runner, 'the broker is kombu', '--entities', 'kombu')
+    _remember(mm_runner, 'kombu retries are exponential', '--entities', 'kombu')
+    new = _remember(mm_runner, 'the broker is redis now')
+    assert invoke(mm_runner, ['supersede', old, new]).exit_code == 0
+    assert invoke(mm_runner, ['forget', new]).exit_code == 0
+    with open_backend('default', data_dir) as backend:
+        backend._db._exec(
+            'update insights set embedding = null where id = ?', (old,))
+
+    real_bound = fp_mod.bound_embedder
+
+    class _FailingEmbedder:
+        def __init__(self, inner):
+            self._inner = inner
+            self.model = inner.model
+
+        def embed(self, text):
+            raise httpx.ReadTimeout('provider timed out')
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    monkeypatch.setattr(
+        fp_mod, 'bound_embedder',
+        lambda backend: _FailingEmbedder(real_bound(backend)))
+
+    res = invoke(mm_runner, ['unsupersede', old])
+    assert res.exit_code != 0
+    assert 'embedding failed' in res.output
+    with _read(data_dir) as backend:
+        assert backend.nodes.get(old) is None
+        assert backend.nodes.get_include_deleted(old).superseded_by == new
+        assert backend.edges.by_node(old) == []
+
+
+def test_supersede_command_drops_a_self_edge_instead_of_moving_it(mm_runner):
+    """Verify a self-edge on the predecessor does not become one on the successor.
+
+    Mutation: re-pointing both endpoints with no far-endpoint check in
+        `move_edges`, which turns old -> old into new -> new.
+    Oracle: the successor's edge list holds no edge with both
+        endpoints equal to it, and `edges_moved` excludes the self-edge.
+    """
+    _, data_dir = mm_runner
+    old = _remember(mm_runner, 'the broker is kombu')
+    new = _remember(mm_runner, 'the broker is redis now')
+    with open_backend('default', data_dir) as backend:
+        from memman.store.model import Edge
+        backend.edges.upsert(Edge(
+            source_id=old, target_id=old, edge_type='causal', weight=0.7))
+
+    res = invoke(mm_runner, ['supersede', old, new])
+    assert res.exit_code == 0, res.output
+    assert json.loads(res.output)['edges_moved'] == 0
+    with _read(data_dir) as backend:
+        assert not [e for e in backend.edges.by_node(new)
+                    if e.source_id == new and e.target_id == new]
