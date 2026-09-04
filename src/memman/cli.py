@@ -1870,7 +1870,9 @@ def supersede(ctx: click.Context, predecessor_id: str,
     Notes
     -----
     - Refused, naming the reason, when either id is missing, forgotten
-      or already superseded, or when both name the same row.
+      or already superseded, when both name the same row, or when the
+      successor already has a predecessor (a chain has one row per
+      step; two predecessors is the fork the doctor reports).
     - `insights show <predecessor_id> --history` reads the link back;
       `unsupersede <predecessor_id>` reverses it once the successor is
       forgotten.
@@ -1900,6 +1902,12 @@ def supersede(ctx: click.Context, predecessor_id: str,
                 successor_id)
             if reason:
                 raise click.ClickException(reason)
+            taken = backend.nodes.predecessors(successor_id)
+            if taken:
+                raise click.ClickException(
+                    f'insight {successor_id} already has a predecessor'
+                    f' ({taken[0].id}); a successor takes one, the doctor'
+                    ' reports two as a fork')
             carried = backend.edges.by_node(predecessor_id)
             if not backend.nodes.supersede(predecessor_id, successor_id):
                 raise click.ClickException(
@@ -1928,7 +1936,9 @@ def unsupersede(ctx: click.Context, id: str) -> None:
     Clears the row's `superseded_by`, re-embeds its content with the
     store's embedder, refreshes its keyword tokens, and rebuilds its
     entity and semantic edges, so it re-enters recall as a current
-    row. No temporal edge is minted: the row is not a new event.
+    row. No temporal edge is minted (the row is not a new event), and
+    the causal and manual edges the supersession moved onto the
+    forgotten successor are not restored.
 
     \b
     Parameters
@@ -1940,8 +1950,7 @@ def unsupersede(ctx: click.Context, id: str) -> None:
     Returns
     -------
     JSON
-        `{id, was_superseded_by, edges_created: {entity, semantic},
-        embedded}`.
+        `{id, was_superseded_by, edges_created: {entity, semantic}}`.
 
     \b
     Notes
@@ -1949,9 +1958,10 @@ def unsupersede(ctx: click.Context, id: str) -> None:
     - Refused while the successor is current: two current rows for
       one fact is the state supersession removes. Forget or supersede
       the successor first. Refused likewise when the successor was
-      itself superseded, since the chain then still has a current
-      head.
-    - Refused for a missing, forgotten, or not-superseded row.
+      itself superseded; the chain unwinds from its head.
+    - Refused for a missing, forgotten, or not-superseded row, and
+      when the embed fails: the row then stays superseded instead of
+      returning current with a missing or stale-width vector.
 
     \b
     Examples
@@ -1986,28 +1996,30 @@ def unsupersede(ctx: click.Context, id: str) -> None:
                     f' is current; forget or supersede {successor_id}'
                     ' first')
             raise click.ClickException(
-                f'insight {id} is superseded by {successor_id}, whose own'
-                ' successor is still current; unwind the chain from'
-                ' its head')
+                f'insight {id} is superseded by {successor_id}, which was'
+                ' itself superseded; unsupersede the chain from its head'
+                ' first')
         before = insight_to_delta_dict(row)
         ec = bound_embedder(backend)
         threshold = _resolve_semantic_threshold(backend, store_name=name)
+        # The embed is a network call; it runs before the transaction
+        # so a slow provider never holds the store's write lock, and a
+        # failure leaves the row superseded rather than current with a
+        # missing or stale-width vector.
+        try:
+            vec = ec.embed(row.content)
+        except EmbedCredentialError:
+            raise
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise click.ClickException(
+                f'insight {id} not restored: embedding failed ({exc});'
+                ' the row stays superseded, retry when the provider'
+                ' answers')
         with backend.transaction():
             if not backend.nodes.unsupersede(id, successor_id):
                 raise click.ClickException(
                     f'insight {id} changed under this command; re-read it')
-            embedded = False
-            try:
-                vec = ec.embed(row.content)
-            except EmbedCredentialError:
-                raise
-            except (httpx.HTTPError, RuntimeError) as exc:
-                logger.warning(
-                    f'unsupersede {id}: embed failed, row restored'
-                    f' without a vector: {exc}')
-            else:
-                backend.nodes.update_embedding(id, vec, ec.model)
-                embedded = True
+            backend.nodes.update_embedding(id, vec, ec.model)
             backend.nodes.update_entities(id, row.entities)
             row.superseded_by = None
             # Built after the pointer is cleared so the row's own
@@ -2026,7 +2038,6 @@ def unsupersede(ctx: click.Context, id: str) -> None:
         'id': id,
         'was_superseded_by': successor_id,
         'edges_created': edges_created,
-        'embedded': embedded,
         })
 
 
@@ -2930,6 +2941,7 @@ def status(ctx: click.Context) -> None:
             'backend': resolve_store_backend(store_name, data_dir),
             'backends_in_use': backends_in_use,
             'total_insights': node_stats.total_insights,
+            'superseded_insights': node_stats.superseded_insights,
             'deleted_insights': node_stats.deleted_insights,
             'stale_insights': stale_insights,
             'edge_count': node_stats.edge_count,
@@ -3240,18 +3252,17 @@ def insights_show(ctx: click.Context, id: str, history: bool) -> None:
         rows: dict[str, Insight] = {ins.id: ins}
         frontier = [ins]
         while frontier:
-            for pred in backend.nodes.predecessors(frontier.pop().id):
-                if pred.id not in rows:
-                    rows[pred.id] = pred
-                    frontier.append(pred)
-        cursor = ins
-        while cursor.superseded_by and cursor.superseded_by not in rows:
-            successor = backend.nodes.get_include_deleted(
-                cursor.superseded_by)
-            if successor is None:
-                break
-            rows[successor.id] = successor
-            cursor = successor
+            row = frontier.pop()
+            found = list(backend.nodes.predecessors(row.id))
+            if row.superseded_by and row.superseded_by not in rows:
+                successor = backend.nodes.get_include_deleted(
+                    row.superseded_by)
+                if successor is not None:
+                    found.append(successor)
+            for other in found:
+                if other.id not in rows:
+                    rows[other.id] = other
+                    frontier.append(other)
 
     def depth(row: Insight) -> int:
         steps, seen = 0, set()

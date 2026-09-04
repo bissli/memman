@@ -159,3 +159,29 @@ def test_pending_link_count_matches_its_id_list_after_supersession(backend):
     assert ids == ['p-2']
     assert backend.nodes.count_pending_links() == len(ids)
     assert backend.nodes.count_orphans() == (1, 1)
+
+
+def test_predecessors_and_unsupersede_on_both_backends(backend):
+    """Verify the backward walk and the compare-and-swap clear on each backend.
+
+    Mutation: a transposed column in `predecessors`' select, or an
+        `unsupersede` that ignores the expected successor and clears
+        any pointer.
+    Oracle: `p-1` read back whole through `predecessors('p-2')`; the
+        clear refused for a stale successor and accepted for the right
+        one, with the row current afterwards.
+    """
+    _seed_pair(backend)
+    backend.nodes.insert(make_insight(id='p-3', content='third statement'))
+    assert backend.nodes.supersede('p-1', 'p-2') is True
+
+    preds = backend.nodes.predecessors('p-2')
+    assert [(i.id, i.content, i.superseded_by) for i in preds] == [
+        ('p-1', 'first statement', 'p-2')]
+    assert backend.nodes.predecessors('p-1') == []
+
+    assert backend.nodes.unsupersede('p-1', 'p-3') is False
+    assert backend.nodes.get_include_deleted('p-1').superseded_by == 'p-2'
+    assert backend.nodes.unsupersede('p-1', 'p-2') is True
+    assert backend.nodes.get('p-1').superseded_by is None
+    assert backend.nodes.unsupersede('p-1', 'p-2') is False
