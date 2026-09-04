@@ -352,10 +352,14 @@ def reconcile_memories(
             target_id = id_map.get(str(a['target_id']))
         # Every action but ADD addresses a row; with no resolvable
         # row the fact is new information, not a link that never
-        # happened.
+        # happened. An ADD carries neither a target (the plan would
+        # report a replace that never ran) nor merged text (the row
+        # would store clauses of a memory it never resolved).
         if target_id is None:
             action = 'ADD'
         merged_text = a.get('merged_text')
+        if action == 'ADD':
+            target_id, merged_text = None, None
         results.append({
             'fact': a.get('fact', ''),
             'action': action,

@@ -31,16 +31,16 @@ def test_two_facts_on_one_predecessor_supersede_once_and_add_once(
     """Verify a second fact aimed at a taken predecessor lands as an add.
 
     Mutation: dropping `'supersede'` from the batch guard set, so the
-        second fact re-points the same predecessor (a fork); or keeping
+        second fact reaches `_apply_plan` still aimed at the taken
+        predecessor and lands as a DEGRADED add naming it; or keeping
         the shipped skip, which drops the second fact with a
         `target already deleted` reason and no row.
     Oracle: exactly one row carries a pointer, it names the first
-        successor, the second fact's text is stored as a plain add, and
-        no result is `skipped`.
+        successor, the second fact's text is stored as a clean add with
+        no `target_id`, and no result is `skipped`.
     """
     tmp_backend.nodes.insert(make_insight(
         id='old-1', content='the broker is kombu'))
-    taken = {'target': None}
 
     def _two_facts(llm_client, content):
         return [
@@ -51,7 +51,6 @@ def test_two_facts_on_one_predecessor_supersede_once_and_add_once(
             ]
 
     def _aim_at_old(llm_client, facts, existing):
-        taken['target'] = taken['target'] or 'old-1'
         return [{'fact': f['text'], 'action': 'SUPERSEDE',
                  'target_id': 'old-1', 'merged_text': None}
                 for f in facts]
@@ -67,6 +66,7 @@ def test_two_facts_on_one_predecessor_supersede_once_and_add_once(
     actions = [f['action'] for f in res['facts']]
     assert actions == ['supersede', 'add']
     assert 'skipped' not in actions
+    assert 'target_id' not in res['facts'][1]
     old = tmp_backend.nodes.get_include_deleted('old-1')
     assert old.superseded_by == res['facts'][0]['id']
     stored = {i.content for i in tmp_backend.nodes.get_all_active()}
@@ -78,8 +78,7 @@ def test_two_facts_on_one_predecessor_supersede_once_and_add_once(
     assert pointers == []
 
 
-def test_degraded_replace_names_the_target_and_its_successor(
-        tmp_db, tmp_backend):
+def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
     """Verify a replace whose target is already superseded says so.
 
     Mutation: reporting the degraded add with neither `target_id` nor
@@ -142,7 +141,7 @@ def test_drain_redirects_a_replace_to_the_chain_head(mm_runner):
     """
     from memman.store.factory import open_backend
 
-    r, data_dir = mm_runner
+    _, data_dir = mm_runner
     res = invoke(mm_runner, ['remember', 'the broker is kombu',
                              '--no-reconcile'])
     assert res.exit_code == 0, res.output
@@ -173,3 +172,143 @@ def test_drain_redirects_a_replace_to_the_chain_head(mm_runner):
         assert head.superseded_by is None
         assert old.deleted_at is None
         assert middle.deleted_at is None
+
+
+def test_sibling_causal_edge_into_a_superseded_row_is_swept(
+        tmp_backend, monkeypatch):
+    """Verify no fact in a write leaves an edge into a row the write superseded.
+
+    Causal candidates are drawn during planning, when the predecessor
+    is still current, so a later fact's causal edge can name a row an
+    earlier fact superseded.
+
+    Mutation: sweeping only each plan's own target after its upsert,
+        so the second fact's edge into the first fact's target lands
+        after that target's sweep ran.
+    Oracle: the predecessor read back edgeless and the integrity
+        population `superseded_with_edges` empty after the write.
+    """
+    from memman.store.model import Edge
+
+    tmp_backend.nodes.insert(make_insight(
+        id='old-1', content='the broker is kombu'))
+
+    def _two_facts(llm_client, content):
+        return [
+            {'text': 'the broker is redis now', 'category': 'fact',
+             'importance': 3, 'entities': []},
+            {'text': 'the dashboard reads the broker', 'category': 'fact',
+             'importance': 3, 'entities': []},
+            ]
+
+    def _first_supersedes(llm_client, facts, existing):
+        out = []
+        for f in facts:
+            if 'redis' in f['text']:
+                out.append({'fact': f['text'], 'action': 'SUPERSEDE',
+                            'target_id': 'old-1', 'merged_text': None})
+            else:
+                out.append({'fact': f['text'], 'action': 'ADD',
+                            'target_id': None, 'merged_text': None})
+        return out
+
+    def _causal_into_old(ro, insight, client):
+        return [Edge(source_id=insight.id, target_id='old-1',
+                     edge_type='causal', weight=0.9)]
+
+    monkeypatch.setattr('memman.llm.extract.extract_facts', _two_facts)
+    monkeypatch.setattr(
+        'memman.llm.extract.reconcile_memories', _first_supersedes)
+    monkeypatch.setattr(
+        'memman.pipeline.remember.infer_llm_causal_edges', _causal_into_old)
+
+    res = run_remember(
+        tmp_backend, _parent('the broker changed'), 'the broker changed',
+        ec=bound_embedder(tmp_backend), store_name='test')
+
+    assert [f['action'] for f in res['facts']] == ['supersede', 'add']
+    assert tmp_backend.edges.by_node('old-1') == []
+    assert tmp_backend.nodes.supersession_integrity()[
+        'superseded_with_edges'] == []
+
+
+def test_degraded_replace_leaves_no_edge_into_its_dead_target(
+        tmp_db, tmp_backend):
+    """Verify a degraded add still sweeps its plan's edges into the target.
+
+    Mutation: gating the trailing sweep on `not target_already_gone`,
+        so the plan's causal edge into an already superseded row lands
+        and stays.
+    Oracle: the superseded target read back edgeless after the
+        degraded apply.
+    """
+    from memman.store.model import Edge
+
+    tmp_backend.nodes.insert(make_insight(id='old-1', content='first'))
+    tmp_backend.nodes.insert(make_insight(id='new-1', content='second'))
+    assert tmp_backend.nodes.supersede('old-1', 'new-1') is True
+    plan = FactPlan(
+        action='replace', fact_text='third',
+        fact_insight=make_insight(id='late-1', content='third'),
+        target_id='old-1', embed_vec=None, enrichment={},
+        causal_edges=[Edge(source_id='late-1', target_id='old-1',
+                           edge_type='causal', weight=0.9)])
+
+    result = _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
+
+    assert result['action'] == 'add'
+    assert tmp_backend.edges.by_node('old-1') == []
+
+
+def test_a_plain_add_plan_with_a_target_reports_no_replaced_id(
+        tmp_db, tmp_backend):
+    """Verify `replaced_id` is reported only when a supersession happened.
+
+    Mutation: emitting `replaced_id` whenever the plan carries a
+        `target_id`, so an `add` plan decorated with a target claims a
+        replace that never ran.
+    Oracle: the result of an `add` plan carrying a target: no
+        `replaced_id`, and the target still current.
+    """
+    tmp_backend.nodes.insert(make_insight(id='old-1', content='first'))
+    plan = FactPlan(
+        action='add', fact_text='second',
+        fact_insight=make_insight(id='new-1', content='second'),
+        target_id='old-1', embed_vec=None, enrichment={}, causal_edges=[])
+
+    result = _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
+
+    assert 'replaced_id' not in result
+    assert tmp_backend.nodes.get('old-1') is not None
+
+
+@pytest.mark.no_auto_drain
+def test_drain_passes_a_forgotten_head_through_as_a_named_add(mm_runner):
+    """Verify a replace whose chain head was forgotten degrades, not redirects.
+
+    Mutation: redirecting onto the forgotten head (a replace of a
+        deleted row), or raising instead of degrading.
+    Oracle: the drained result reports `action: add` with the original
+        target and its successor named, no `redirected_from`, and no
+        failed queue row.
+    """
+    from memman.store.factory import open_backend
+
+    r, data_dir = mm_runner
+    res = invoke(mm_runner, ['remember', 'the broker is kombu',
+                             '--no-reconcile'])
+    assert res.exit_code == 0, res.output
+    assert invoke(mm_runner, ['scheduler', 'drain']).exit_code == 0
+    with open_backend('default', data_dir, read_only=True) as backend:
+        first = backend.nodes.get_all_active()[0].id
+
+    replaced = invoke(mm_runner, ['replace', first, 'the broker is redis now'])
+    assert replaced.exit_code == 0, replaced.output
+    assert invoke(mm_runner, ['scheduler', 'drain']).exit_code == 0
+    with open_backend('default', data_dir, read_only=True) as backend:
+        head = backend.nodes.get_include_deleted(first).superseded_by
+    assert invoke(mm_runner, ['forget', head]).exit_code == 0
+
+    queued = invoke(mm_runner, ['replace', first, 'the broker is rabbitmq now'])
+    assert queued.exit_code != 0
+    assert f'is superseded by {head}' in queued.output

@@ -553,5 +553,27 @@ def test_a_targetless_update_or_supersede_is_read_as_add(action, target):
         })
     result = reconcile_memories(
         FakeLLMClient(response), [{'text': 'x'}], [('uuid-1', 'mem 1')])
-    assert result[0]['action'] == 'ADD'
-    assert result[0]['target_id'] is None
+    assert result[0] == {'fact': 'x', 'action': 'ADD', 'target_id': None,
+                         'merged_text': None}
+
+
+@pytest.mark.parametrize('action', ['REPLACE', 'ADD', 'bogus'])
+def test_a_normalized_add_drops_the_target_and_merged_text(action):
+    """Verify an ADD never carries a target or merged text.
+
+    Mutation: normalizing the action to ADD while keeping the mapped
+        `target_id` (the plan then reports `replaced_id` for a row that
+        stays current) or the model's `merged_text` (the new row stores
+        clauses of a memory the parser never resolved).
+    Oracle: the parsed action for an unknown action, and for an ADD
+        the model decorated with a target, against a mapped id.
+    """
+    response = json.dumps({
+        'actions': [{
+            'fact': 'x', 'action': action, 'target_id': '0',
+            'merged_text': 'merged with mem 1'}],
+        })
+    result = reconcile_memories(
+        FakeLLMClient(response), [{'text': 'x'}], [('uuid-1', 'mem 1')])
+    assert result[0] == {'fact': 'x', 'action': 'ADD', 'target_id': None,
+                         'merged_text': None}
