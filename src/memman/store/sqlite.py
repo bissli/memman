@@ -94,6 +94,9 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
     def predecessors(self, successor_id: Id) -> list[Insight]:
         return _node.get_predecessors(self._db, successor_id)
 
+    def supersession_integrity(self) -> dict[str, list[Id]]:
+        return _node.supersession_integrity(self._db)
+
     def update_entities(self, id: Id, entities: list[str]) -> None:
         _node.update_entities(self._db, id, entities)
 
@@ -878,6 +881,14 @@ class SqliteBackend(Backend):
         rows = self._db._query(
             f'pragma table_info({table})').fetchall()
         return {row[1] for row in rows}
+
+    def introspect_index_definitions(self, table: str) -> dict[str, str]:
+        from memman.store.backend import _check_identifier
+        _check_identifier(table)
+        rows = self._db._query(
+            "select name, sql from sqlite_master where type = 'index'"
+            ' and tbl_name = ? and sql is not null', (table,)).fetchall()
+        return {row[0]: row[1] for row in rows}
 
     def start_run(self) -> int | None:
         """No-op: drain hangs are observable at the foreground prompt.

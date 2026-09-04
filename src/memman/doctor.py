@@ -122,6 +122,62 @@ def check_orphan_insights(backend: Backend) -> dict[str, Any]:
         }
 
 
+def check_supersession_integrity(backend: Backend) -> dict[str, Any]:
+    """Verify every `superseded_by` pointer is well formed.
+
+    The column carries no foreign key, so this check is the only
+    enforcement of pointer validity. Four populations, each empty on a
+    healthy store: a pointer at an id absent from the table (a
+    forgotten target is NOT dangling), a superseded row that still has
+    edges, a successor with two predecessors, and a self-pointer. The
+    detail carries every count and up to 20 ids per population.
+    """
+    populations = backend.nodes.supersession_integrity()
+    counts = {key: len(ids) for key, ids in populations.items()}
+    status = 'pass' if not any(counts.values()) else 'fail'
+    detail: dict[str, Any] = {'counts': counts}
+    detail.update({key: ids[:20] for key, ids in populations.items()})
+    return {
+        'name': 'supersession_integrity',
+        'status': status,
+        'detail': detail,
+        }
+
+
+def check_partial_index_predicates(backend: Backend) -> dict[str, Any]:
+    """Verify every partial index on `insights` carries the current predicate.
+
+    `create index if not exists` matches by name, so an index whose
+    WHERE changed in code keeps its old predicate on a live store
+    until it is dropped and the baseline recreates it. A definition is
+    stale when its predicate names `deleted_at is null` without
+    `superseded_by is null`; such an index still serves superseded
+    rows to the scan it backs.
+    """
+    definitions = backend.introspect_index_definitions('insights')
+    stale: list[str] = []
+    checked = 0
+    for name, ddl in sorted(definitions.items()):
+        _, _, predicate = ' '.join(ddl.lower().split()).partition(' where ')
+        if not predicate:
+            continue
+        checked += 1
+        if ('deleted_at is null' in predicate
+                and 'superseded_by is null' not in predicate):
+            stale.append(name)
+    status = 'pass' if not stale else 'fail'
+    detail: dict[str, Any] = {'checked': checked, 'stale': stale}
+    if stale:
+        detail['remedy'] = (
+            'drop ' + ', '.join(stale)
+            + '; the baseline recreates each on the next open')
+    return {
+        'name': 'partial_index_predicates',
+        'status': status,
+        'detail': detail,
+        }
+
+
 def check_dangling_edges(backend: Backend) -> dict[str, Any]:
     """Find edges touching a missing, deleted, or superseded insight."""
     by_type = backend.edges.count_dangling_by_type()
@@ -1184,6 +1240,8 @@ def run_all_checks(
             check_oplog_delta_coverage(backend),
             check_orphan_insights(backend),
             check_dangling_edges(backend),
+            check_supersession_integrity(backend),
+            check_partial_index_predicates(backend),
             check_embedding_consistency(backend),
             check_embed_fingerprint(backend),
             check_embed_threshold(backend, store_name=store_name),
@@ -1194,6 +1252,8 @@ def run_all_checks(
     else:
         checks.extend([
             check_schema_columns(backend),
+            check_partial_index_predicates(backend),
+            check_supersession_integrity(backend),
             check_embed_fingerprint(backend),
             check_no_stale_swap_meta(backend),
             ])

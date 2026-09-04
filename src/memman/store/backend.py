@@ -146,6 +146,17 @@ class NodeStore(Protocol):
         """
         ...
 
+    def supersession_integrity(self) -> dict[str, list[Id]]:
+        """The four pointer populations a healthy store leaves empty.
+
+        Keys: `dangling` (pointer at an id absent from the table),
+        `superseded_with_edges` (superseded, non-deleted row with any
+        edge), `multi_predecessor` (successor named by two or more
+        rows), `self_pointer`. The column has no foreign key, so the
+        doctor check over this verb is the only pointer enforcement.
+        """
+        ...
+
     def update_entities(self, id: Id, entities: list[str]) -> None:
         """Replace the entities array for an insight."""
         ...
@@ -893,6 +904,16 @@ class Backend(Protocol):
         Returns an empty set when the table does not exist (rather
         than raising) so doctor's schema-columns check can compute a
         symmetric difference cleanly across backends.
+        """
+        ...
+
+    def introspect_index_definitions(self, table: str) -> dict[str, str]:
+        """Return `{index name: DDL}` for every index on a named table.
+
+        SQLite: `sqlite_master.sql`, so an automatic primary-key index
+        (null DDL) is omitted. Postgres: `pg_indexes.indexdef` within
+        the store's schema. The doctor's partial-index check reads the
+        `where` clause of each definition.
         """
         ...
 

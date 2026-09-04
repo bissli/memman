@@ -206,6 +206,52 @@ where id = ? and deleted_at is null and superseded_by = ?
     return cursor.rowcount == 1
 
 
+def supersession_integrity(db: 'DB') -> dict[str, list[str]]:
+    """Return the four populations a well-formed pointer set leaves empty.
+
+    Returns
+    -------
+    dict[str, list[str]]
+        `dangling`: rows whose pointer names an id absent from the
+        table (a forgotten target is NOT dangling). `superseded_with_
+        edges`: superseded, non-deleted rows that still have an edge.
+        `multi_predecessor`: successors named by two or more rows.
+        `self_pointer`: rows pointing at themselves. Each list is
+        sorted by id.
+    """
+    dangling = db._query("""
+select p.id
+from insights p
+left join insights s on s.id = p.superseded_by
+where p.superseded_by is not null and s.id is null
+order by p.id
+""").fetchall()
+    with_edges = db._query("""
+select distinct i.id
+from insights i
+join edges e on e.source_id = i.id or e.target_id = i.id
+where i.superseded_by is not null and i.deleted_at is null
+order by i.id
+""").fetchall()
+    multi = db._query("""
+select superseded_by
+from insights
+where superseded_by is not null
+group by superseded_by
+having count(*) > 1
+order by superseded_by
+""").fetchall()
+    selfp = db._query(
+        'select id from insights where superseded_by = id order by id'
+        ).fetchall()
+    return {
+        'dangling': [r[0] for r in dangling],
+        'superseded_with_edges': [r[0] for r in with_edges],
+        'multi_predecessor': [r[0] for r in multi],
+        'self_pointer': [r[0] for r in selfp],
+        }
+
+
 def get_predecessors(db: 'DB', successor_id: str) -> list[Insight]:
     """Return every row whose `superseded_by` names `successor_id`.
 
