@@ -3,8 +3,8 @@
 `corroboration_count integer not null default 0` is appended after
 `queue_uuid` at every touch point. These tests pin the paths a silent
 omission would degrade: doctor's schema audit, the migration payload
-round-trip, and the gather probe that must substitute 0 when reading
-a pre-0.19.0 store.
+round-trip, and the baseline index that makes a pre-0.19.0 store fail
+at open.
 """
 
 import sqlite3
@@ -73,58 +73,8 @@ def test_migration_payload_round_trips_corroboration_count(tmp_path):
     assert row[0] == 5
 
 
-def test_gather_from_pre_phase2_schema_defaults_zero(tmp_path):
-    """Gather substitutes 0 when the source lacks the column.
-
-    The rebuild gathers from stores on the 0.18.x schema, where
-    `corroboration_count` does not exist; an unconditional select
-    raises on the first store and nothing is rebuilt.
-
-    Mutation: adding the column unconditionally to gather's select.
-    Oracle: gather succeeds against a column-less store and every
-        payload row defaults to 0.
-    """
-    data_dir = str(tmp_path)
-    db_path = _seed_store(data_dir, 'old')
-    with closing(sqlite3.connect(str(db_path))) as conn:
-        conn.execute('drop index idx_insights_corroboration')
-        conn.execute(
-            'alter table insights drop column corroboration_count')
-        conn.commit()
-    payload = SqliteMigrator(data_dir).gather('old')
-    assert payload.insights
-    assert all(
-        i.corroboration_count == 0 for i in payload.insights)
-
-
-def test_postgres_gather_probe_includes_corroboration_count():
-    """The Postgres gather probe's IN-list names the new column.
-
-    `has_corrob` derives from a merged `information_schema.columns`
-    query with a hardcoded IN-list; extending the ordered optional
-    list without extending the IN-list leaves `has_corrob`
-    permanently False, so the gather silently substitutes 0 on
-    every Postgres store.
-
-    Mutation: adding `corroboration_count` to the ordered optional
-        list but not to the IN-list filter.
-    Oracle: source text of the gather probe (read from source since
-        psycopg may be absent) names the column inside the IN-list
-        AND reads it back through the derived index map.
-    """
-    import inspect
-
-    from memman.store import node as node_mod
-    src = (Path(inspect.getsourcefile(node_mod)).parent
-           / 'postgres.py').read_text()
-    _, _, gather_body = src.partition('def gather')
-    _, _, in_list = gather_body.partition('column_name in')
-    assert "'corroboration_count'" in in_list[:300]
-    assert "idx['corroboration_count']" in gather_body
-
-
 def test_open_db_refuses_store_missing_corroboration_column(tmp_path):
-    """A 0.18.x-shape store fails at open naming the rebuild script.
+    """A 0.18.x-shape store fails at open with the schema diagnostic.
 
     `create table if not exists` no-ops on an existing table, so the
     ONLY statement that raises for a store already carrying
@@ -133,10 +83,10 @@ def test_open_db_refuses_store_missing_corroboration_column(tmp_path):
     Mutation: dropping `idx_insights_corroboration` from
         `_BASELINE_SCHEMA` -- the 0.18.x store opens silently and
         fails later with a raw OperationalError deep in a read path.
-    Oracle: `open_db` raises BackendError naming `MIGRATION_SCRIPT`.
+    Oracle: `open_db` raises BackendError naming the schema and the
+        missing column.
     """
     import pytest
-    from memman.store.db import MIGRATION_SCRIPT
 
     data_dir = str(tmp_path)
     db_path = _seed_store(data_dir, 'v018')
@@ -145,7 +95,7 @@ def test_open_db_refuses_store_missing_corroboration_column(tmp_path):
         conn.execute(
             'alter table insights drop column corroboration_count')
         conn.commit()
-    with pytest.raises(BackendError, match=MIGRATION_SCRIPT):
+    with pytest.raises(BackendError, match='predates the current schema'):
         open_db(store_dir(data_dir, 'v018'))
 
 

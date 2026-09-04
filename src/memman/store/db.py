@@ -427,13 +427,6 @@ create table if not exists meta (
 """
 
 
-# The one-off rebuild script every schema diagnostic points at.
-# Never hardcode the filename at a call site: the script gets renamed
-# (kept as generic rebuild machinery) after each migration and a
-# literal would point at a file that no longer exists.
-MIGRATION_SCRIPT = 'scripts/rebuild_schema.py'
-
-
 # Keyword channel index, applied by `_migrate` in one transaction
 # rather than from `_BASELINE_SCHEMA`. External content: FTS5 holds
 # the terms, the text stays in `insights`. Every row is indexed,
@@ -485,8 +478,8 @@ def _migrate(db: DB) -> None:
     Single-user tool: one authoritative schema (`_BASELINE_SCHEMA`),
     always the latest. `create table if not exists` creates a fresh
     database; pre-existing databases must already match the canonical
-    shape -- rebuild via `MIGRATION_SCRIPT` on schema change rather
-    than carrying `alter` migrations.
+    shape -- a schema change is applied to each live store by hand,
+    once, rather than carried here as an `alter` migration.
 
     Notes
     -----
@@ -514,8 +507,9 @@ def _migrate(db: DB) -> None:
         if 'no such column' in str(exc):
             name = Path(db.path).parent.name
             raise BackendError(
-                f'store {name} predates the current schema;'
-                f' rebuild with {MIGRATION_SCRIPT}') from exc
+                f'store {name} predates the current schema ({exc});'
+                ' add the missing column to the live store and drop'
+                ' its stale partial indexes, then reopen') from exc
         raise
     has_fts = db._conn.execute(
         "select 1 from sqlite_master"

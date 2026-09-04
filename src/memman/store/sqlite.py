@@ -1052,30 +1052,14 @@ class SqliteMigrator(Migrator):
                     f' embed_fingerprint meta key')
             fingerprint = Fingerprint.from_json(fp_str)
 
-            # Probe before selecting: a rebuild gathers from a
-            # PRE-migration store where the newest columns do not
-            # exist, so an unconditional select raises on the first
-            # store. `embedding_pending` sits at fixed index 21; the
-            # optional tail starts at 22.
-            present_cols = {
-                r[1] for r in conn.execute(
-                    'pragma table_info(insights)').fetchall()}
-            has_new = {'session_id', 'queue_uuid'} <= present_cols
-            has_corrob = 'corroboration_count' in present_cols
-            optional: list[str] = []
-            if has_new:
-                optional += ['session_id', 'queue_uuid']
-            if has_corrob:
-                optional.append('corroboration_count')
-            idx = {name: 21 + n for n, name in enumerate(optional)}
-            extra = ''.join(f', {c}' for c in optional)
-            rows = conn.execute(f"""
+            rows = conn.execute("""
 select id, content, category, importance, entities,
        source, access_count, keywords, summary, semantic_facts,
        last_accessed_at, embedding,
        linked_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, model_id, embedding_model,
-       embedding_pending{extra}
+       embedding_pending, session_id, queue_uuid,
+       corroboration_count
 from insights
 order by id
 """).fetchall()
@@ -1105,13 +1089,8 @@ order by id
                         parse_timestamp(r[16]) if r[16] else None),
                     prompt_version=r[17], model_id=r[18],
                     embedding_model=r[19],
-                    session_id=(
-                        r[idx['session_id']] if has_new else None),
-                    queue_uuid=(
-                        r[idx['queue_uuid']] if has_new else None),
-                    corroboration_count=(
-                        int(r[idx['corroboration_count']])
-                        if has_corrob else 0)))
+                    session_id=r[21], queue_uuid=r[22],
+                    corroboration_count=int(r[23])))
                 if r[20] is not None:
                     pv = deserialize_vector(r[20])
                     if pv is not None:
@@ -1235,9 +1214,6 @@ order by id
                         ins.session_id, ins.queue_uuid,
                         ins.corroboration_count))
                 if insight_rows:
-                    # apply always writes the NEW schema, so the new
-                    # columns are listed unconditionally -- the
-                    # asymmetry with gather's probe is the whole fix.
                     conn.executemany(
                         'insert into insights ('
                         ' id, content, category, importance,'
