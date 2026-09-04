@@ -496,8 +496,11 @@ def _migrate(db: DB) -> None:
     - A pre-migration store fails here on every open: `create table
       if not exists` no-ops on an existing table, so the tripwire is
       the baseline's `create index` on the NEWEST schema column
-      (currently `idx_insights_current_listing`, whose predicate
-      names `superseded_by`) raising `no such column`. Every schema
+      (the first `create index` that names `superseded_by`: here
+      `idx_insights_current_listing`, which lists it as a key column;
+      on Postgres the pending-link index, whose predicate is resolved
+      before the if-not-exists check) raising `no such column`. Every
+      schema
       change must index its newest column or the old store opens
       silently and fails later with a raw
       OperationalError. This is the primary schema diagnostic:
