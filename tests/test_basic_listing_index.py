@@ -1,7 +1,8 @@
 """The shipped SQLite schema has to order the `--basic` listing from an index.
 
-`query_insights` (`store/node.py`) filters on `deleted_at is null` and
-sorts `importance desc, created_at desc` under a limit. Its one caller
+`query_insights` (`store/node.py`) filters on `deleted_at is null and
+superseded_by is null` and sorts `importance desc, created_at desc`
+under a limit. Its one caller
 is `recall --basic` (`cli.py`), not the default scored path. Without an
 index carrying that order SQLite reads every active row into a temp
 b-tree before honoring the limit, so the cost grows with the store
@@ -16,7 +17,7 @@ from memman.store.db import open_db
 from memman.store.sqlite import SqliteBackend
 from tests.conftest import make_insight, set_created_at
 
-INDEX = 'idx_insights_deleted_importance_created'
+INDEX = 'idx_insights_current_listing'
 
 
 def _seed(backend):
@@ -44,11 +45,13 @@ def _plan_of(db, sql):
 def test_the_basic_listing_takes_its_order_from_an_index(tmp_path):
     """Verify the shipped schema sorts the `--basic` listing in the index.
 
-    Mutation: dropping the `(deleted_at, importance, created_at)`
-        declaration from `_BASELINE_SCHEMA`, narrowing it to
-        `(deleted_at, importance)`, or reversing it to
-        `(importance, deleted_at)`. Each one puts a temp b-tree back
-        in the plan - measured 1.289 -> 4.520 ms on a 1,312-row
+    Mutation: dropping the `(deleted_at, superseded_by, importance,
+        created_at)` declaration from `_BASELINE_SCHEMA`, narrowing
+        it to `(deleted_at, importance, created_at)`, reordering it
+        so `importance` leads, or redeclaring it as a partial index
+        on `(importance, created_at)` (the planner passes that over
+        for `idx_insights_deleted`). Each one puts a temp b-tree
+        back in the plan - measured 1.289 -> 4.520 ms on a 1,312-row
         store, growing with the store because the sort reads every
         active row before the limit applies.
     Oracle: sqlite's own `explain query plan`, asserted in both

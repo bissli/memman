@@ -395,21 +395,22 @@ create index if not exists idx_insights_queue_uuid on insights(queue_uuid);
 -- Load-bearing as the schema canary, not as a query index: this is
 -- the statement that makes a 0.18.x store fail at open (see _migrate).
 create index if not exists idx_insights_corroboration on insights(corroboration_count);
--- Carries `query_insights`' whole sort order, so `recall --basic`
--- honors its limit from the index instead of reading every active
--- row into a temp b-tree.
-create index if not exists idx_insights_deleted_importance_created
-    on insights(deleted_at, importance, created_at);
+-- `created_at` rides along so the scheduler's pending-link scan
+-- takes its order from the index; without it the planner prefers
+-- the listing index below and sorts every current row per tick.
 create index if not exists idx_insights_pending_link
-    on insights(linked_at)
-    where linked_at is null and deleted_at is null;
--- Load-bearing as the schema canary: the statement that makes a
--- 0.32.x store fail at open (see _migrate). It also carries the
--- current-row listing order once `query_insights` filters on both
--- null columns.
+    on insights(linked_at, created_at)
+    where linked_at is null and deleted_at is null and superseded_by is null;
+-- Load-bearing twice: as the schema canary, the statement that
+-- makes a 0.32.x store fail at open (see _migrate); and as the
+-- carrier of `query_insights`' whole predicate and sort order, so
+-- `recall --basic` honors its limit from the index instead of
+-- reading every current row into a temp b-tree. Declared as a
+-- plain composite, not a partial index: the planner searches the
+-- two leading null columns as equalities, while it passes over a
+-- partial `(importance, created_at)` for a temp b-tree.
 create index if not exists idx_insights_current_listing
-    on insights(importance, created_at)
-    where deleted_at is null and superseded_by is null;
+    on insights(deleted_at, superseded_by, importance, created_at);
 
 create index if not exists idx_edges_source on edges(source_id);
 create index if not exists idx_edges_target on edges(target_id);
@@ -438,9 +439,10 @@ create table if not exists meta (
 # Keyword channel index, applied by `_migrate` in one transaction
 # rather than from `_BASELINE_SCHEMA`. External content: FTS5 holds
 # the terms, the text stays in `insights`. Every row is indexed,
-# soft-deleted ones included, and `deleted_at` is applied by joining
-# `insights` at read -- an active-only index would need conditional
-# delete triggers, and a 'delete' whose old values are not exactly
+# soft-deleted and superseded ones included, and the active
+# predicate is applied by joining `insights` at read -- an
+# active-only index would need conditional delete triggers, and a
+# 'delete' whose old values are not exactly
 # what was indexed corrupts the index silently.
 _FTS_STATEMENTS = (
     """
@@ -495,8 +497,9 @@ def _migrate(db: DB) -> None:
       if not exists` no-ops on an existing table, so the tripwire is
       the baseline's `create index` on the NEWEST schema column
       (currently `idx_insights_current_listing`, whose predicate
-      names `superseded_by`) raising `no such column`. Every schema change must index its newest column or
-      the old store opens silently and fails later with a raw
+      names `superseded_by`) raising `no such column`. Every schema
+      change must index its newest column or the old store opens
+      silently and fails later with a raw
       OperationalError. This is the primary schema diagnostic:
       nothing that needs a live Backend can report on such a store.
     - Creating `insights_fts` also populates it, in ONE transaction.

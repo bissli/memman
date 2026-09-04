@@ -22,7 +22,17 @@ from memman.store.node import insert_insight
 from memman.store.sqlite import SqliteBackend, SqliteMigrator
 from tests.conftest import make_insight
 
-CANARY_INDEX = 'idx_insights_current_listing'
+
+def _drop_column(conn, column):
+    """Drop `column` and, first, every index whose DDL names it."""
+    indexes = conn.execute(
+        "select name from sqlite_master where type = 'index'"
+        " and tbl_name = 'insights' and sql like ?",
+        (f'%{column}%',)).fetchall()
+    for (name,) in indexes:
+        conn.execute(f'drop index {name}')
+    conn.execute(f'alter table insights drop column {column}')
+    conn.commit()
 
 
 def _seed_store(data_dir, store):
@@ -119,18 +129,15 @@ def test_open_db_refuses_a_store_missing_superseded_by(tmp_path):
     `corroboration_count` is the baseline index on the newest column.
 
     Mutation: dropping `idx_insights_current_listing` from
-        `_BASELINE_SCHEMA`, or declaring it without the
-        `superseded_by is null` predicate -- the 0.32.x store opens
-        silently and fails later with a raw OperationalError deep in
-        a read path.
+        `_BASELINE_SCHEMA`, or declaring it without `superseded_by`
+        among its columns -- the 0.32.x store opens silently and
+        fails later with a raw OperationalError deep in a read path.
     Oracle: `open_db` raises BackendError naming the schema and the
         missing column.
     """
     data_dir = str(tmp_path)
     db_path = _seed_store(data_dir, 'v032')
     with closing(sqlite3.connect(str(db_path))) as conn:
-        conn.execute(f'drop index {CANARY_INDEX}')
-        conn.execute('alter table insights drop column superseded_by')
-        conn.commit()
+        _drop_column(conn, 'superseded_by')
     with pytest.raises(BackendError, match='superseded_by'):
         open_db(store_dir(data_dir, 'v032'))

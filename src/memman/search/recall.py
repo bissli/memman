@@ -2,8 +2,8 @@
 
 Reads live storage on every request. The candidate universe is
 `nodes.get_all_active()` and the graph is one `edges.adjacency()`
-read, so recall cannot serve a row the store has deleted or miss one
-it holds.
+read, so recall cannot serve a row the store has deleted or
+superseded, and cannot miss one it holds as current.
 
 Notes
 -----
@@ -310,8 +310,9 @@ def intent_aware_recall(
     -----
     - Reads live storage on every call: the candidate universe is
       `nodes.get_all_active()` and the graph is one
-      `edges.adjacency()` read, so a row the store has deleted cannot
-      be returned and a row it holds cannot be hidden.
+      `edges.adjacency()` read, so a row the store has deleted or
+      superseded cannot be returned and a row it holds as current
+      cannot be hidden.
     - `category`/`source` filter the ANCHOR pools and the final result
       set, never the graph traversal: a hop through a non-matching
       neighbour is correct, and filtering the candidates loop would

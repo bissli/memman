@@ -123,7 +123,7 @@ def check_orphan_insights(backend: Backend) -> dict[str, Any]:
 
 
 def check_dangling_edges(backend: Backend) -> dict[str, Any]:
-    """Find edges referencing deleted or missing insights."""
+    """Find edges touching a missing, deleted, or superseded insight."""
     by_type = backend.edges.count_dangling_by_type()
     total = sum(by_type.values())
     status = 'pass' if total == 0 else 'fail'

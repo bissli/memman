@@ -255,6 +255,37 @@ def test_dangling_edge_does_not_enter_the_candidate_pool(tmp_backend):
     assert resp['meta']['traversed'] == 2
 
 
+def test_superseded_row_is_not_returned_by_recall(backend):
+    """Verify a superseded row leaves the candidate universe entirely.
+
+    Mutation: omitting `superseded_by is null` from `get_all_active`,
+        so the predecessor re-enters the pool and ranks beside its
+        successor as an equal.
+    Oracle: the returned id set and `meta.traversed` against the
+        three current rows, on both backends.
+    """
+    from memman.store.model import Edge
+
+    for n in range(4):
+        backend.nodes.insert(
+            make_insight(id=f'sup-{n}',
+                         content=f'superseded probe body {n} kombu'))
+    for target in ('sup-1', 'sup-2'):
+        e = Edge()
+        e.source_id, e.target_id = 'sup-0', target
+        e.edge_type, e.weight = 'entity', 0.9
+        backend.edges.upsert(e)
+    assert backend.nodes.supersede('sup-2', 'sup-3') is True
+
+    resp = intent_aware_recall(
+        backend, 'superseded probe kombu', None, 10,
+        intent_override='GENERAL')
+
+    returned = {r['insight'].id for r in resp['results']}
+    assert returned == {'sup-0', 'sup-1', 'sup-3'}
+    assert resp['meta']['traversed'] == 3
+
+
 def test_minority_width_query_still_scores_its_own_rows(tmp_backend):
     """Verify a query at the LESS common width still scores its rows.
 

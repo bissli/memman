@@ -125,6 +125,25 @@ class TestDanglingEdges:
         assert result['status'] == 'fail'
         assert result['detail']['count'] == 2
 
+    def test_edge_to_a_superseded_row_is_dangling(self, tmp_db, tmp_backend):
+        """An edge touching a superseded row counts as dangling.
+
+        Mutation: leaving the `not exists` endpoint tests on
+            `deleted_at` alone, so a supersession that failed to shed
+            its edges passes the doctor.
+        Oracle: two healthy rows, one edge pair, the pointer set by
+            raw SQL without touching the edges -> fail with count 2.
+        """
+        from memman.doctor import check_dangling_edges
+        _insert_healthy_insight(tmp_db, 'd-1')
+        _insert_healthy_insight(tmp_db, 'd-2')
+        _insert_edge_pair(tmp_db, 'd-1', 'd-2')
+        tmp_db._exec(
+            "update insights set superseded_by = 'd-1' where id = 'd-2'")
+        result = check_dangling_edges(tmp_backend)
+        assert result['status'] == 'fail'
+        assert result['detail']['count'] == 2
+
 
 class TestEmbeddingConsistency:
 

@@ -882,7 +882,8 @@ class TestRecallFreshness:
             conn.commit()
             expected = {
                 r[0] for r in conn.execute(
-                    'select id from insights where deleted_at is null')}
+                    'select id from insights'
+                    ' where deleted_at is null and superseded_by is null')}
         finally:
             conn.close()
 

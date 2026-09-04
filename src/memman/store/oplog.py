@@ -139,12 +139,13 @@ order by count(*) desc
 
     never_row = db._query(
         'select count(*) from insights'
-        ' where deleted_at is null and access_count = 0',
+        ' where deleted_at is null and superseded_by is null and access_count = 0',
         ()).fetchone()
     never_accessed = never_row[0] if never_row else 0
 
     total_row = db._query(
-        'select count(*) from insights where deleted_at is null',
+        'select count(*) from insights'
+        ' where deleted_at is null and superseded_by is null',
         ()).fetchone()
     total_active = total_row[0] if total_row else 0
 

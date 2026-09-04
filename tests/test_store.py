@@ -656,20 +656,30 @@ class TestEnrichmentSchema:
 
 
 class TestPendingLinkIndex:
-    """Partial index on linked_at for the pending-link scheduler scan."""
+    """Partial index on (linked_at, created_at) for the pending-link scan."""
 
     def test_pending_link_query_uses_index(self, tmp_path):
-        """EXPLAIN QUERY PLAN picks the partial index."""
+        """Verify the scheduler's pending-link scan is served by its index.
+
+        Mutation: dropping `created_at` from `idx_insights_pending_link`
+            (the planner then takes `idx_insights_current_listing` and
+            sorts every current row per tick), or dropping
+            `superseded_by is null` from its predicate (the partial
+            index no longer matches the query and is unusable).
+        Oracle: sqlite's own `explain query plan` naming the partial
+            index and reporting no sort step.
+        """
         from memman.store.db import open_db
         db = open_db(str(tmp_path))
         try:
             plan = db._conn.execute(
-                'EXPLAIN QUERY PLAN SELECT id FROM insights'
-                ' WHERE linked_at IS NULL AND deleted_at IS NULL'
-                ' ORDER BY created_at ASC LIMIT 10'
+                'explain query plan select id from insights'
+                ' where linked_at is null and deleted_at is null'
+                ' and superseded_by is null'
+                ' order by created_at asc limit 10'
                 ).fetchall()
         finally:
             db.close()
-        assert any(
-            'idx_insights_pending_link' in (row[3] if len(row) > 3 else '')
-            for row in plan), plan
+        steps = ' | '.join(row[3] for row in plan)
+        assert 'idx_insights_pending_link' in steps, plan
+        assert 'ORDER BY' not in steps, plan
