@@ -369,7 +369,8 @@ create table if not exists insights (
     embedding_model text,
     session_id  text,
     queue_uuid  text,
-    corroboration_count integer not null default 0
+    corroboration_count integer not null default 0,
+    superseded_by text
 );
 
 create table if not exists edges (
@@ -402,6 +403,13 @@ create index if not exists idx_insights_deleted_importance_created
 create index if not exists idx_insights_pending_link
     on insights(linked_at)
     where linked_at is null and deleted_at is null;
+-- Load-bearing as the schema canary: the statement that makes a
+-- 0.32.x store fail at open (see _migrate). It also carries the
+-- current-row listing order once `query_insights` filters on both
+-- null columns.
+create index if not exists idx_insights_current_listing
+    on insights(importance, created_at)
+    where deleted_at is null and superseded_by is null;
 
 create index if not exists idx_edges_source on edges(source_id);
 create index if not exists idx_edges_target on edges(target_id);
@@ -486,8 +494,8 @@ def _migrate(db: DB) -> None:
     - A pre-migration store fails here on every open: `create table
       if not exists` no-ops on an existing table, so the tripwire is
       the baseline's `create index` on the NEWEST schema column
-      (currently `idx_insights_corroboration`) raising `no such
-      column`. Every schema change must index its newest column or
+      (currently `idx_insights_current_listing`, whose predicate
+      names `superseded_by`) raising `no such column`. Every schema change must index its newest column or
       the old store opens silently and fails later with a raw
       OperationalError. This is the primary schema diagnostic:
       nothing that needs a live Backend can report on such a store.

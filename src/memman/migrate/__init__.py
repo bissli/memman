@@ -113,6 +113,7 @@ class MigrateInsight:
     session_id: str | None
     queue_uuid: str | None
     corroboration_count: int
+    superseded_by: str | None
 
 
 @dataclass

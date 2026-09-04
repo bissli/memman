@@ -215,6 +215,7 @@ _FIDELITY_ROW = {
     'session_id': 'sess-dddd',
     'queue_uuid': 'quuid-eeee',
     'corroboration_count': 7,
+    'superseded_by': 'rb-fid-successor',
     }
 
 
@@ -235,9 +236,9 @@ def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
             ' last_accessed_at, linked_at, enriched_at, created_at,'
             ' updated_at, deleted_at, prompt_version, model_id,'
             ' embedding_model, session_id, queue_uuid,'
-            ' corroboration_count)'
+            ' corroboration_count, superseded_by)'
             ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
-            ' ?, ?, ?, ?, ?, ?, ?)',
+            ' ?, ?, ?, ?, ?, ?, ?, ?)',
             (r['id'], r['content'], r['category'], r['importance'],
              json.dumps(r['entities']), r['source'], r['access_count'],
              json.dumps(r['keywords']), r['summary'],
@@ -248,7 +249,8 @@ def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
              format_timestamp(r['created_at']),
              format_timestamp(r['updated_at']), None,
              r['prompt_version'], r['model_id'], r['embedding_model'],
-             r['session_id'], r['queue_uuid'], r['corroboration_count']))
+             r['session_id'], r['queue_uuid'], r['corroboration_count'],
+             r['superseded_by']))
         db.conn.commit()
         set_meta(db, 'embed_fingerprint',
                  '{"provider":"voyage","model":"voyage-3-lite","dim":512}')
@@ -315,7 +317,7 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
                 ' last_accessed_at, linked_at, enriched_at, created_at,'
                 ' updated_at, deleted_at, prompt_version, model_id,'
                 ' embedding_model, session_id, queue_uuid,'
-                ' corroboration_count'
+                ' corroboration_count, superseded_by'
                 ' from insights where id = ?',
                 (_FIDELITY_ROW['id'],)).fetchone()
         finally:
@@ -327,7 +329,8 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
             '2026-02-03T04:05:06Z', '2026-03-04T05:06:07Z',
             '2026-04-05T06:07:08Z', '2026-05-06T07:08:09Z', None,
             r['prompt_version'], r['model_id'], r['embedding_model'],
-            r['session_id'], r['queue_uuid'], r['corroboration_count'])
+            r['session_id'], r['queue_uuid'], r['corroboration_count'],
+            r['superseded_by'])
     finally:
         _drop_schema(pg_dsn, store)
 

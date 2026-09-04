@@ -44,11 +44,12 @@ from memman.store.db import read_active, store_dir, write_active
 
 logger = logging.getLogger('memman')
 
-# v2: insights carry session_id/queue_uuid (0.18.0 schema). A v1
-# bundle restored onto 0.18.0 would yield an old-schema store, so
-# restore refuses on version mismatch; read v1 bundles with the
-# pinned memman@0173 install.
-BACKUP_FORMAT_VERSION = 3
+# Restore is a byte copy, so a bundle carries its schema with it
+# and a version mismatch is refused outright: v2 added
+# session_id/queue_uuid (0.18.0), v3 corroboration_count (0.19.0),
+# v4 superseded_by (0.33.0). An older bundle is read with the pinned
+# install of the release that wrote it.
+BACKUP_FORMAT_VERSION = 4
 DB_FILENAME = 'memman.db'
 QUEUE_FILENAME = 'queue.db'
 DUMP_FILENAME = 'dump.pgdump'

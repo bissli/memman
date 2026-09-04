@@ -56,6 +56,7 @@ class Insight:
     session_id: str | None = None
     queue_uuid: str | None = None
     corroboration_count: int = 0
+    superseded_by: str | None = None
 
     def entities_json(self) -> str:
         """Return entities as a JSON string for storage."""
@@ -212,9 +213,9 @@ def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
     Timestamps are formatted with
     `format_timestamp`; `updated_at` falls back to `created_at` so
     consumers always see a populated value. Optional fields
-    (`deleted_at`, `summary`, `linked_at`, `enriched_at`) are emitted
-    only when populated; the plumbing keys (`session_id`,
-    `queue_uuid`) are deliberately omitted.
+    (`deleted_at`, `superseded_by`, `summary`, `linked_at`,
+    `enriched_at`) are emitted only when populated; the plumbing keys
+    (`session_id`, `queue_uuid`) are deliberately omitted.
     """
     out: dict[str, Any] = {
         'id': ins.id,
@@ -230,6 +231,8 @@ def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
         }
     if ins.deleted_at:
         out['deleted_at'] = format_timestamp(ins.deleted_at)
+    if ins.superseded_by:
+        out['superseded_by'] = ins.superseded_by
     if ins.summary:
         out['summary'] = ins.summary
     if ins.linked_at:
