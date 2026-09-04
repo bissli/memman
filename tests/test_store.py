@@ -125,21 +125,6 @@ class TestQueryInsightsFilters:
         assert len(results) == 1
         assert results[0].id == 'q-2'
 
-    def test_min_importance_filter(self, tmp_db):
-        """min_importance filter returns only high-importance insights."""
-        insert_insight(tmp_db, make_insight(
-            id='q-1', content='Go language features',
-            importance=5, category='fact'))
-        insert_insight(tmp_db, make_insight(
-            id='q-2', content='Python web framework',
-            importance=2, category='decision'))
-        insert_insight(tmp_db, make_insight(
-            id='q-3', content='Go concurrency patterns',
-            importance=4, category='fact'))
-
-        results = query_insights(tmp_db, min_importance=4)
-        assert len(results) == 2
-
 
 # --- Edges ---
 

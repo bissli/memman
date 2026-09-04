@@ -505,8 +505,7 @@ where id = any(%s) and deleted_at is null
 
     def query(
             self, *, keyword: str = '', category: str = '',
-            min_importance: int = 0, source: str = '',
-            limit: int = 20) -> list[Insight]:
+            source: str = '', limit: int = 20) -> list[Insight]:
         conditions = ['deleted_at is null']
         args: list[Any] = []
         if keyword:
@@ -519,9 +518,6 @@ where id = any(%s) and deleted_at is null
         if category:
             conditions.append('category = %s')
             args.append(category)
-        if min_importance > 0:
-            conditions.append('importance >= %s')
-            args.append(min_importance)
         if source:
             conditions.append('source = %s')
             args.append(source)

@@ -76,8 +76,7 @@ where id = ?
 
 
 def query_insights(db: 'DB', keyword: str = '', category: str = '',
-                   min_importance: int = 0, source: str = '',
-                   limit: int = 20) -> list[Insight]:
+                   source: str = '', limit: int = 20) -> list[Insight]:
     """Return insights matching filters, ordered by importance desc, created_at desc."""
     conditions = ['deleted_at is null']
     args: list[Any] = []
@@ -94,9 +93,6 @@ def query_insights(db: 'DB', keyword: str = '', category: str = '',
     if category:
         conditions.append('category = ?')
         args.append(category)
-    if min_importance > 0:
-        conditions.append('importance >= ?')
-        args.append(min_importance)
     if source:
         conditions.append('source = ?')
         args.append(source)

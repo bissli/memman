@@ -86,8 +86,7 @@ class NodeStore(Protocol):
 
     def query(
             self, *, keyword: str = '', category: str = '',
-            min_importance: int = 0, source: str = '',
-            limit: int = 20) -> list[Insight]:
+            source: str = '', limit: int = 20) -> list[Insight]:
         """Filtered insight query, ordered by importance/created_at desc.
         """
         ...
