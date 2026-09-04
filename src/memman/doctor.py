@@ -15,7 +15,6 @@ from typing import Any
 
 from memman.llm import usage as llm_usage
 from memman.store.backend import Backend
-from memman.store.db import MIGRATION_SCRIPT
 
 logger = logging.getLogger('memman')
 
@@ -310,17 +309,17 @@ def check_schema_columns(backend: Backend) -> dict[str, Any]:
     """Verify the insights table has the canonical provenance columns.
 
     Single-user canonical-schema policy: missing columns mean the DB
-    predates a schema change; the remedy is a rebuild via the script
-    named by `MIGRATION_SCRIPT`. This check only ever fires for
-    stores that OPEN — a pre-migration SQLite store fails in
-    `_migrate` first, which carries the primary diagnostic.
+    predates a schema change; the remedy is adding them to the live
+    store by hand. This check only ever fires for stores that OPEN --
+    a pre-migration store fails at open first, which carries the
+    primary diagnostic.
     """
     present = backend.introspect_columns('insights')
     missing = sorted(EXPECTED_INSIGHT_COLUMNS - present)
     status = 'pass' if not missing else 'fail'
     detail: dict[str, Any] = {'missing': missing}
     if missing:
-        detail['remedy'] = f'rebuild with {MIGRATION_SCRIPT}'
+        detail['remedy'] = 'add the missing columns to the live store'
     return {
         'name': 'schema_columns',
         'status': status,

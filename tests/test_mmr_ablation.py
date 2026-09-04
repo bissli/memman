@@ -1,7 +1,7 @@
 """MMR diversity rerank (F6) and the repaired ablation harness.
 
-The harness is loaded via importlib (experiments/ is not a package),
-exactly like scripts/ in test_rebuild_schema.py. MMR tests
+The harness is loaded via importlib (experiments/ is not a package).
+MMR tests
 monkeypatch `MMR_LAMBDA`/`MMR_POOL` so they are independent of the
 shipped (measured) values.
 """

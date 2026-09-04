@@ -41,7 +41,6 @@ from memman.search.keyword import insight_tokens
 from memman.store.backend import Backend, EdgeStore, MetaStore, NodeStore
 from memman.store.backend import Oplog, RecallSession, _check_identifier
 from memman.store.base import BaseNodeStore
-from memman.store.db import MIGRATION_SCRIPT
 from memman.store.errors import BackendError, ConfigError
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
 from memman.store.model import NodeStats, OpLogEntry, OpLogStats
@@ -2225,15 +2224,12 @@ def apply_baseline_schema(
             # Mirrors the SQLite diagnostic in store/db.py::_migrate:
             # `create table if not exists` no-ops on an existing
             # table, so a pre-migration store trips the baseline's
-            # index on the newest column. The rebuild script is
-            # SQLite-only -- a pg-routed store migrates to sqlite on
-            # the previous release, rebuilds, and migrates back.
+            # index on the newest column.
             raise BackendError(
                 f'postgres schema {schema} predates the current'
-                f' schema; rebuild via {MIGRATION_SCRIPT} (SQLite'
-                ' only: migrate the store --to sqlite on the'
-                ' previous release, rebuild, then migrate back)'
-                ) from exc
+                f' schema ({exc}); add the missing column to the'
+                ' live schema and drop its stale partial indexes,'
+                ' then reopen') from exc
 
 
 def _ensure_baseline_schema(
@@ -2603,39 +2599,24 @@ class PostgresMigrator(Migrator):
                     f' meta.embed_fingerprint')
             fingerprint = Fingerprint.from_json(fp_str)
 
+            # `embedding_pending` is the one column the schema adds
+            # on demand (the swap path), so it alone is probed.
             cur.execute(
-                "select column_name from information_schema.columns"
+                "select 1 from information_schema.columns"
                 " where table_schema = %s"
                 " and table_name = 'insights'"
-                " and column_name in"
-                " ('embedding_pending', 'session_id', 'queue_uuid',"
-                " 'corroboration_count')",
+                " and column_name = 'embedding_pending'",
                 (schema,))
-            present_cols = {r[0] for r in cur.fetchall()}
-            has_pending = 'embedding_pending' in present_cols
-            has_new = {'session_id', 'queue_uuid'} <= present_cols
-            has_corrob = 'corroboration_count' in present_cols
-            # Notes:
-            # - Three INDEPENDENT optional column groups exist, so
-            #   the select has eight shapes; never hardcode trailing
-            #   indices. Build the tail as an ordered list and derive
-            #   positions from it.
-            optional: list[str] = []
-            if has_pending:
-                optional.append('embedding_pending')
-            if has_new:
-                optional += ['session_id', 'queue_uuid']
-            if has_corrob:
-                optional.append('corroboration_count')
-            idx = {name: 20 + n for n, name in enumerate(optional)}
-            optional_select = ''.join(f', {c}' for c in optional)
+            has_pending = cur.fetchone() is not None
+            pending_select = ', embedding_pending' if has_pending else ''
             cur.execute(f"""
 select id, content, category, importance, entities,
        source, access_count, keywords, summary, semantic_facts,
        last_accessed_at, embedding,
        linked_at, enriched_at, created_at, updated_at,
-       deleted_at, prompt_version, model_id, embedding_model
-       {optional_select}
+       deleted_at, prompt_version, model_id, embedding_model,
+       session_id, queue_uuid, corroboration_count
+       {pending_select}
 from {schema}.insights
 order by id
 """)
@@ -2663,18 +2644,11 @@ order by id
                     deleted_at=r[16],
                     prompt_version=r[17], model_id=r[18],
                     embedding_model=r[19],
-                    session_id=(
-                        r[idx['session_id']] if has_new else None),
-                    queue_uuid=(
-                        r[idx['queue_uuid']] if has_new else None),
-                    corroboration_count=(
-                        int(r[idx['corroboration_count']])
-                        if has_corrob else 0)))
-                if (has_pending
-                        and r[idx['embedding_pending']] is not None):
+                    session_id=r[20], queue_uuid=r[21],
+                    corroboration_count=int(r[22])))
+                if has_pending and r[23] is not None:
                     pending.append(PendingReembed(
-                        insight_id=r[0],
-                        vector=list(r[idx['embedding_pending']])))
+                        insight_id=r[0], vector=list(r[23])))
 
             cur.execute(f"""
 select source_id, target_id, edge_type, weight,
@@ -2788,10 +2762,6 @@ order by sqlite_id
                                     content=ins.content,
                                     entities=list(ins.entities))))))
                     with conn.cursor() as cur:
-                        # apply always writes the NEW schema, so the
-                        # new columns are listed unconditionally --
-                        # the asymmetry with gather's probe is the
-                        # whole fix.
                         cur.executemany(
                             f'insert into {schema}.insights ('
                             ' id, content, category, importance,'
