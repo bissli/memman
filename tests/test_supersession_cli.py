@@ -182,21 +182,24 @@ def test_unsupersede_relinks_reembeds_and_writes_its_oplog_row(mm_runner):
         edges = backend.edges.by_node(old)
         assert {e.edge_type for e in edges} <= {'entity', 'semantic'}
         assert any(e.edge_type == 'entity'
-                   and peer in (e.source_id, e.target_id) for e in edges)
+                   and peer in {e.source_id, e.target_id} for e in edges)
         ops = [(e.insight_id, e.detail) for e in backend.oplog.recent(limit=20)
                if e.operation == 'unsupersede']
         assert ops == [(old, f'was superseded by {new}')]
 
 
-def test_supersede_command_refuses_a_second_predecessor(mm_runner):
-    """Verify `memman supersede` will not give a successor two predecessors.
+def test_supersede_command_joins_a_second_predecessor(mm_runner):
+    """Verify a successor may take a second predecessor: a join, not a fork.
 
-    Mutation: guarding only the predecessor, so `supersede P1 S` then
-        `supersede P2 S` both succeed and the doctor's
-        `multi_predecessor` population fails on the state the CLI
-        itself produced.
-    Oracle: the second command refused naming the first predecessor,
-        and the second row still current.
+    A correction the reconciler wrote as a merge already has one
+    predecessor; curating a sibling claim onto it is the common case
+    on the live fleet (measured 2026-09-04 on both verified pairs).
+
+    Mutation: refusing a successor that already has a predecessor, so
+        the sibling claim stays current beside its correction.
+    Oracle: both commands succeed, both predecessors leave the active
+        set, `--history` from either predecessor lists all three rows
+        with the successor last, and the doctor passes.
     """
     _, data_dir = mm_runner
     p1 = _remember(mm_runner, 'the broker is kombu')
@@ -205,12 +208,18 @@ def test_supersede_command_refuses_a_second_predecessor(mm_runner):
     assert invoke(mm_runner, ['supersede', p1, s]).exit_code == 0
 
     res = invoke(mm_runner, ['supersede', p2, s])
-    assert res.exit_code != 0
-    assert p1 in res.output
-    assert 'predecessor' in res.output
+    assert res.exit_code == 0, res.output
     with _read(data_dir) as backend:
-        assert backend.nodes.get(p2) is not None
-        assert backend.nodes.supersession_integrity()['multi_predecessor'] == []
+        assert backend.nodes.get(p1) is None
+        assert backend.nodes.get(p2) is None
+        assert {i.id for i in backend.nodes.predecessors(s)} == {p1, p2}
+        assert all(not ids for ids in
+                   backend.nodes.supersession_integrity().values())
+    for start in (p1, p2):
+        chain = json.loads(invoke(
+            mm_runner, ['insights', 'show', start, '--history']).output)['chain']
+        assert {c['id'] for c in chain} == {p1, p2, s}
+        assert chain[-1]['id'] == s
 
 
 def test_history_lists_both_predecessors_of_a_hand_made_fork(mm_runner):
@@ -350,7 +359,6 @@ def test_unsupersede_refuses_when_the_embed_fails(mm_runner, monkeypatch):
         and no edges rebuilt.
     """
     import httpx
-
     from memman.embed import fingerprint as fp_mod
 
     _, data_dir = mm_runner

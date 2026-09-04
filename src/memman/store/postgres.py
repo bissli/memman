@@ -44,10 +44,10 @@ from memman.store.backend import Oplog, RecallSession, _check_identifier
 from memman.store.base import BaseNodeStore
 from memman.store.errors import BackendError, ConfigError
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
-from memman.store.node import unterminated_chains
 from memman.store.model import NodeStats, OpLogEntry, OpLogStats
 from memman.store.model import ProvenanceCount, ReembedRow, WorkerRun
 from memman.store.model import parse_timestamp
+from memman.store.node import unterminated_chains
 
 if TYPE_CHECKING:
     import psycopg
@@ -618,14 +618,6 @@ join {s}.edges e on e.source_id = i.id or e.target_id = i.id
 where i.superseded_by is not null and i.deleted_at is null
 order by i.id
 """)
-        multi_sql = self._q("""
-select superseded_by
-from {s}.insights
-where superseded_by is not null
-group by superseded_by
-having count(*) > 1
-order by superseded_by
-""")
         self_sql = self._q("""
 select id from {s}.insights where superseded_by = id order by id
 """)
@@ -636,7 +628,6 @@ select id, superseded_by from {s}.insights where superseded_by is not null
         with self._conn.cursor() as cur:
             for key, sql in (('dangling', dangling_sql),
                              ('superseded_with_edges', edges_sql),
-                             ('multi_predecessor', multi_sql),
                              ('self_pointer', self_sql)):
                 cur.execute(sql)
                 out[key] = [r[0] for r in cur.fetchall()]
