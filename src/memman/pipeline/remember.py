@@ -599,6 +599,45 @@ def _plan_fact(
         ), calls
 
 
+def move_edges(
+        backend: Backend, from_id: str, to_id: str,
+        carried: list[Edge]) -> int:
+    """Re-point a snapshot of a predecessor's edges onto its successor.
+
+    Parameters
+    ----------
+    backend : Backend
+        Open store; the caller holds the transaction.
+    from_id : str
+        The predecessor whose edges were snapshotted.
+    to_id : str
+        The successor that inherits them.
+    carried : list[Edge]
+        The predecessor's edges as read BEFORE its pointer was
+        written, since `supersede` removes them.
+
+    Returns
+    -------
+    int
+        Edges written onto the successor. An edge whose far endpoint
+        is the predecessor itself or the successor is dropped rather
+        than re-pointed into a self-edge.
+    """
+    moved = 0
+    for edge in carried:
+        far_id = edge.target_id if edge.source_id == from_id else edge.source_id
+        if far_id in {from_id, to_id}:
+            continue
+        backend.edges.upsert(Edge(
+            source_id=to_id if edge.source_id == from_id else edge.source_id,
+            target_id=to_id if edge.target_id == from_id else edge.target_id,
+            edge_type=edge.edge_type,
+            weight=edge.weight,
+            metadata=dict(edge.metadata)))
+        moved += 1
+    return moved
+
+
 def _apply_plan(
         backend: Backend,
         plan: FactPlan,
@@ -768,20 +807,10 @@ def _apply_plan(
 
     if (plan.action in {'update', 'replace', 'supersede'}
             and plan.target_id and not target_already_gone):
-        for edge in carried_edges:
-            far_id = (edge.target_id if edge.source_id == plan.target_id
-                      else edge.source_id)
-            if far_id in {plan.target_id, fi.id}:
-                continue
-            moved = Edge(
-                source_id=(fi.id if edge.source_id == plan.target_id
-                           else edge.source_id),
-                target_id=(fi.id if edge.target_id == plan.target_id
-                           else edge.target_id),
-                edge_type=edge.edge_type,
-                weight=edge.weight,
-                metadata=dict(edge.metadata))
-            backend.edges.upsert(moved)
+        move_edges(backend, plan.target_id, fi.id, carried_edges)
+        # Sweeps the causal edges the plan itself aimed at the
+        # predecessor; `supersede` removed only the edges that existed
+        # before the plan ran.
         backend.edges.delete_by_node(plan.target_id)
 
     backend.nodes.stamp_linked(fi.id)

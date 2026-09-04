@@ -1667,21 +1667,49 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
         _json_out(out)
 
 
+def _not_current_reason(ins: 'Insight | None', id: str) -> str:
+    """Return why `ins` is not a current row, or `''` when it is.
+
+    Parameters
+    ----------
+    ins : Insight | None
+        The row as read through `get_include_deleted`, or None.
+    id : str
+        The id the caller asked for, for the message.
+
+    Returns
+    -------
+    str
+        `''` for a current row; otherwise one of `not found`,
+        `was forgotten`, or `is superseded by <successor>`.
+    """
+    if ins is None:
+        return f'insight {id} not found'
+    if ins.deleted_at is not None:
+        return f'insight {id} was forgotten'
+    if ins.superseded_by:
+        return f'insight {id} is superseded by {ins.superseded_by}'
+    return ''
+
+
 def _forget_insight(backend: 'Backend', id: str) -> None:
     """Soft-delete `id` and write a forget oplog row carrying `before`.
+
+    A superseded row may be forgotten; a missing or already forgotten
+    one is refused with the reason.
     """
     from memman.store.model import insight_to_delta_dict
     with backend.transaction():
         before_ins = backend.nodes.get_include_deleted(id)
-        before_delta = (
-            insight_to_delta_dict(before_ins)
-            if before_ins is not None else None)
-        deleted = backend.nodes.soft_delete(id)
-        if not deleted:
-            raise click.ClickException(f'insight {id!r} not found')
+        if before_ins is None:
+            raise click.ClickException(f'insight {id} not found')
+        if before_ins.deleted_at is not None:
+            raise click.ClickException(f'insight {id} was forgotten')
+        if not backend.nodes.soft_delete(id):
+            raise click.ClickException(f'insight {id} not found')
         backend.oplog.log(
             operation='forget', insight_id=id, detail='',
-            before=before_delta)
+            before=insight_to_delta_dict(before_ins))
 
 
 @claude_callable
@@ -1724,6 +1752,13 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
 
     Notes
     -----
+    - The replaced insight is superseded, not deleted: it keeps its
+      content behind `superseded_by`, leaves every recall and listing,
+      and its edges move to the successor. `insights show <id>
+      --history` reads the chain back; `unsupersede` reverses it once
+      the successor is forgotten.
+    - The id must be current. A forgotten or already superseded id is
+      refused, the latter naming its successor.
     - Unflagged `--cat` / `--imp` / `--source` / `--entities` inherit
       the replaced insight's values; the inherited source is passed
       through verbatim (idempotency rides on the queue uuid, so a
@@ -1758,10 +1793,13 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
     name = _resolve_store_name(data_dir_val, ctx.obj['store'])
 
     with _active_backend(ctx) as backend:
-        old = backend.nodes.get(id)
-    if old is None:
-        raise click.ClickException(
-            f'insight {id} not found or already deleted')
+        old = backend.nodes.get_include_deleted(id)
+    reason = _not_current_reason(old, id)
+    if reason:
+        if old is not None and old.superseded_by:
+            reason += (f'; replace {old.superseded_by}, or run'
+                       f' insights show {id} --history')
+        raise click.ClickException(reason)
 
     cat_src = ctx.get_parameter_source('cat')
     imp_src = ctx.get_parameter_source('imp')
@@ -1795,6 +1833,200 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         'store': name,
         'replaced_id': id,
         'quality_warnings': quality_warnings,
+        })
+
+
+@claude_callable
+@cli.command()
+@click.argument('predecessor_id')
+@click.argument('successor_id')
+@click.pass_context
+def supersede(ctx: click.Context, predecessor_id: str,
+              successor_id: str) -> None:
+    """Mark one current insight as superseded by another current one.
+
+    The manual counterpart of the reconciler's SUPERSEDE, and the only
+    way to link two rows that BOTH already exist: `replace` always
+    inserts a new row. Neither row's content changes. The predecessor
+    leaves every recall and listing, keeps its content behind
+    `superseded_by`, and hands its edges to the successor.
+
+    \b
+    Parameters
+    ----------
+    predecessor_id : str
+        The row being superseded; must be current.
+    successor_id : str
+        The row that now holds the topic; must be current and a
+        different row.
+
+    \b
+    Returns
+    -------
+    JSON
+        `{predecessor, successor, edges_moved}`.
+
+    \b
+    Notes
+    -----
+    - Refused, naming the reason, when either id is missing, forgotten
+      or already superseded, or when both name the same row.
+    - `insights show <predecessor_id> --history` reads the link back;
+      `unsupersede <predecessor_id>` reverses it once the successor is
+      forgotten.
+
+    \b
+    Examples
+    --------
+    memman supersede 16c6c667-... b2b971ae-...
+    memman insights show 16c6c667-... --history
+    """  # noqa: D301, D410, D411
+    _require_started('write')
+    if predecessor_id == successor_id:
+        raise click.ClickException(
+            'predecessor and successor are the same insight')
+    # Lazy: the pipeline module imports the LLM and embedding stacks,
+    # which every read-only command would otherwise pay for at start.
+    from memman.pipeline.remember import move_edges
+    from memman.store.model import insight_to_delta_dict
+    with _active_backend(ctx) as backend:
+        with backend.transaction():
+            old = backend.nodes.get_include_deleted(predecessor_id)
+            reason = _not_current_reason(old, predecessor_id)
+            if reason:
+                raise click.ClickException(reason)
+            reason = _not_current_reason(
+                backend.nodes.get_include_deleted(successor_id),
+                successor_id)
+            if reason:
+                raise click.ClickException(reason)
+            carried = backend.edges.by_node(predecessor_id)
+            if not backend.nodes.supersede(predecessor_id, successor_id):
+                raise click.ClickException(
+                    f'insight {predecessor_id} changed under this'
+                    ' command; re-read it')
+            moved = move_edges(
+                backend, predecessor_id, successor_id, carried)
+            backend.oplog.log(
+                operation='supersede', insight_id=predecessor_id,
+                detail=f'replaced by {successor_id}',
+                before=insight_to_delta_dict(old))
+    _json_out({
+        'predecessor': predecessor_id,
+        'successor': successor_id,
+        'edges_moved': moved,
+        })
+
+
+@claude_callable
+@cli.command()
+@click.argument('id')
+@click.pass_context
+def unsupersede(ctx: click.Context, id: str) -> None:
+    """Bring a superseded insight back once its successor is gone.
+
+    Clears the row's `superseded_by`, re-embeds its content with the
+    store's embedder, refreshes its keyword tokens, and rebuilds its
+    entity and semantic edges, so it re-enters recall as a current
+    row. No temporal edge is minted: the row is not a new event.
+
+    \b
+    Parameters
+    ----------
+    id : str
+        A superseded row whose successor has been forgotten.
+
+    \b
+    Returns
+    -------
+    JSON
+        `{id, was_superseded_by, edges_created: {entity, semantic},
+        embedded}`.
+
+    \b
+    Notes
+    -----
+    - Refused while the successor is current: two current rows for
+      one fact is the state supersession removes. Forget or supersede
+      the successor first. Refused likewise when the successor was
+      itself superseded, since the chain then still has a current
+      head.
+    - Refused for a missing, forgotten, or not-superseded row.
+
+    \b
+    Examples
+    --------
+    memman forget b2b971ae-...
+    memman unsupersede 16c6c667-...
+    """  # noqa: D301, D410, D411
+    _require_started('write')
+    name = _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store'])
+    # Lazy: the embedding and graph stacks are only paid for here.
+    import httpx
+    from memman.embed.fingerprint import bound_embedder
+    from memman.exceptions import EmbedCredentialError
+    from memman.graph.engine import _resolve_semantic_threshold
+    from memman.graph.entity import create_entity_edges
+    from memman.graph.semantic import create_semantic_edges
+    from memman.store.model import insight_to_delta_dict
+    with _active_backend(ctx) as backend:
+        row = backend.nodes.get_include_deleted(id)
+        if row is None:
+            raise click.ClickException(f'insight {id} not found')
+        if row.deleted_at is not None:
+            raise click.ClickException(f'insight {id} was forgotten')
+        if not row.superseded_by:
+            raise click.ClickException(f'insight {id} is not superseded')
+        successor_id = row.superseded_by
+        successor = backend.nodes.get_include_deleted(successor_id)
+        if successor is not None and successor.deleted_at is None:
+            if successor.superseded_by is None:
+                raise click.ClickException(
+                    f'insight {id} is superseded by {successor_id}, which'
+                    f' is current; forget or supersede {successor_id}'
+                    ' first')
+            raise click.ClickException(
+                f'insight {id} is superseded by {successor_id}, whose own'
+                ' successor is still current; unwind the chain from'
+                ' its head')
+        before = insight_to_delta_dict(row)
+        ec = bound_embedder(backend)
+        threshold = _resolve_semantic_threshold(backend, store_name=name)
+        with backend.transaction():
+            if not backend.nodes.unsupersede(id, successor_id):
+                raise click.ClickException(
+                    f'insight {id} changed under this command; re-read it')
+            embedded = False
+            try:
+                vec = ec.embed(row.content)
+            except EmbedCredentialError:
+                raise
+            except (httpx.HTTPError, RuntimeError) as exc:
+                logger.warning(
+                    f'unsupersede {id}: embed failed, row restored'
+                    f' without a vector: {exc}')
+            else:
+                backend.nodes.update_embedding(id, vec, ec.model)
+                embedded = True
+            backend.nodes.update_entities(id, row.entities)
+            row.superseded_by = None
+            # Built after the pointer is cleared so the row's own
+            # vector is in the cache the semantic builder reads.
+            embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
+            edges_created = {
+                'entity': create_entity_edges(backend, row),
+                'semantic': create_semantic_edges(
+                    backend, row, embed_cache, threshold=threshold),
+                }
+            backend.nodes.stamp_linked(id)
+            backend.oplog.log(
+                operation='unsupersede', insight_id=id,
+                detail=f'was superseded by {successor_id}', before=before)
+    _json_out({
+        'id': id,
+        'was_superseded_by': successor_id,
+        'edges_created': edges_created,
+        'embedded': embedded,
         })
 
 
@@ -1841,10 +2073,10 @@ def graph_link(ctx: click.Context, source_id: str, target_id: str,
         with backend.transaction():
             if backend.nodes.get(source_id) is None:
                 raise click.ClickException(
-                    f'insight {source_id} not found')
+                    f'insight {source_id} not found or not current')
             if backend.nodes.get(target_id) is None:
                 raise click.ClickException(
-                    f'insight {target_id} not found')
+                    f'insight {target_id} not found or not current')
 
             existing_weight = backend.edges.get_weight(
                 source_id, target_id, edge_type)
@@ -2953,15 +3185,101 @@ def insights_review(ctx: click.Context, limit: int) -> None:
 @claude_callable
 @insights.command('show')
 @click.argument('id')
+@click.option('--history', is_flag=True,
+              help='Walk the supersession chain through this id.')
 @click.pass_context
-def insights_show(ctx: click.Context, id: str) -> None:
-    """Read a single insight by ID with full content and metadata."""
+def insights_show(ctx: click.Context, id: str, history: bool) -> None:
+    """Read one insight by id, or walk its supersession chain.
+
+    Without `--history`: the full insight, including a superseded
+    row (its `superseded_by` names the successor). A forgotten row is
+    refused. With `--history`: every row in the chain through this
+    id, oldest first, forgotten rows included and marked.
+
+    \b
+    Parameters
+    ----------
+    id : str
+        Any stored id. With `--history` a forgotten id is accepted so
+        a chain whose oldest row was forgotten stays walkable.
+
+    \b
+    Returns
+    -------
+    JSON
+        Without `--history`, the insight dict. With it,
+        `{requested, chain}` where each chain entry is `{id,
+        created_at, state, superseded_by, content}`; `state` is one of
+        `current`, `superseded`, `forgotten`, and a forgotten entry
+        carries no `content`.
+
+    \b
+    Notes
+    -----
+    - The walk follows `superseded_by` forward and every row pointing
+      at a chain member backward, so it tolerates a successor with
+      two predecessors (impossible by construction, possible by hand).
+    - Order is chain order, not timestamp order: rows written within
+      one second still list predecessor first.
+
+    \b
+    Examples
+    --------
+    memman insights show 16c6c667-...
+    memman insights show 16c6c667-... --history
+    """  # noqa: D301, D410, D411
     with _active_backend(ctx) as backend:
-        ins = backend.nodes.get(id)
+        ins = backend.nodes.get_include_deleted(id)
         if ins is None:
-            raise click.ClickException(
-                f'insight {id} not found or already deleted')
-        _json_out(insight_to_full_dict(ins))
+            raise click.ClickException(f'insight {id} not found')
+        if not history:
+            if ins.deleted_at is not None:
+                raise click.ClickException(f'insight {id} was forgotten')
+            _json_out(insight_to_full_dict(ins))
+            return
+        rows: dict[str, Insight] = {ins.id: ins}
+        frontier = [ins]
+        while frontier:
+            for pred in backend.nodes.predecessors(frontier.pop().id):
+                if pred.id not in rows:
+                    rows[pred.id] = pred
+                    frontier.append(pred)
+        cursor = ins
+        while cursor.superseded_by and cursor.superseded_by not in rows:
+            successor = backend.nodes.get_include_deleted(
+                cursor.superseded_by)
+            if successor is None:
+                break
+            rows[successor.id] = successor
+            cursor = successor
+
+    def depth(row: Insight) -> int:
+        steps, seen = 0, set()
+        while (row.superseded_by in rows and row.id not in seen):
+            seen.add(row.id)
+            row = rows[row.superseded_by]
+            steps += 1
+        return steps
+
+    chain = []
+    for row in sorted(rows.values(),
+                      key=lambda r: (-depth(r), r.created_at or '', r.id)):
+        if row.deleted_at is not None:
+            state = 'forgotten'
+        elif row.superseded_by:
+            state = 'superseded'
+        else:
+            state = 'current'
+        entry: dict[str, Any] = {
+            'id': row.id,
+            'created_at': format_timestamp(row.created_at),
+            'state': state,
+            'superseded_by': row.superseded_by,
+            }
+        if state != 'forgotten':
+            entry['content'] = row.content
+        chain.append(entry)
+    _json_out({'requested': id, 'chain': chain})
 
 
 @claude_callable
@@ -2990,7 +3308,9 @@ def insights_by_queue(ctx: click.Context, queue_uuid: str) -> None:
     JSON
         `{queue_uuid, store, count, results}`. `store` is the store
         SEARCHED, not the store the write targeted. `results` holds
-        one full insight dict per row, oldest first.
+        one full insight dict per row, oldest first; a row a later
+        write superseded is included with its `superseded_by` set,
+        since it is still where THIS write landed.
 
     \b
     Notes
