@@ -602,6 +602,42 @@ order by created_at, id
             cur.execute(sql, (successor_id,))
             return [_row_to_insight(r) for r in cur.fetchall()]
 
+    def supersession_integrity(self) -> dict[str, list[Id]]:
+        dangling_sql = self._q("""
+select p.id
+from {s}.insights p
+left join {s}.insights s on s.id = p.superseded_by
+where p.superseded_by is not null and s.id is null
+order by p.id
+""")
+        edges_sql = self._q("""
+select distinct i.id
+from {s}.insights i
+join {s}.edges e on e.source_id = i.id or e.target_id = i.id
+where i.superseded_by is not null and i.deleted_at is null
+order by i.id
+""")
+        multi_sql = self._q("""
+select superseded_by
+from {s}.insights
+where superseded_by is not null
+group by superseded_by
+having count(*) > 1
+order by superseded_by
+""")
+        self_sql = self._q("""
+select id from {s}.insights where superseded_by = id order by id
+""")
+        out: dict[str, list[Id]] = {}
+        with self._conn.cursor() as cur:
+            for key, sql in (('dangling', dangling_sql),
+                             ('superseded_with_edges', edges_sql),
+                             ('multi_predecessor', multi_sql),
+                             ('self_pointer', self_sql)):
+                cur.execute(sql)
+                out[key] = [r[0] for r in cur.fetchall()]
+        return out
+
     def update_entities(self, id: Id, entities: list[str]) -> None:
         seen: set[str] = set()
         deduped: list[str] = []
@@ -2082,6 +2118,16 @@ where table_schema = %s and table_name = %s
         with self._conn.cursor() as cur:
             cur.execute(sql, (self._schema, table))
             return {row[0] for row in cur.fetchall()}
+
+    def introspect_index_definitions(self, table: str) -> dict[str, str]:
+        _check_identifier(table)
+        sql = """
+select indexname, indexdef from pg_indexes
+where schemaname = %s and tablename = %s
+"""
+        with self._conn.cursor() as cur:
+            cur.execute(sql, (self._schema, table))
+            return {row[0]: row[1] for row in cur.fetchall()}
 
     def start_run(self) -> int | None:
         """Insert a per-store `worker_runs` row, return its id."""
