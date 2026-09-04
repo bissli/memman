@@ -797,6 +797,35 @@ class TestInsightsShow:
         assert result.exit_code != 0
         assert 'not found' in result.output.lower()
 
+    def test_show_returns_a_superseded_row_and_refuses_a_forgotten_one(
+            self, runner):
+        """Verify `show` reads history but not deletions.
+
+        Mutation: leaving `insights show` on `nodes.get`, which hides a
+            superseded row behind the same not-found as a missing one.
+        Oracle: the superseded row's JSON carries its pointer; the
+            forgotten row gets its own refusal; both backends.
+        """
+        old = remember(runner, 'Loki retention is seven days',
+                       no_reconcile=True)
+        result = invoke(runner, ['replace', old['id'],
+                                 'Loki retention is thirty days'])
+        new = parse_remember(result, runner)
+
+        shown = invoke(runner, ['insights', 'show', old['id']])
+        assert shown.exit_code == 0, shown.output
+        data = json.loads(shown.output)
+        assert data['id'] == old['id']
+        assert data['superseded_by'] == new['id']
+        assert 'deleted_at' not in data
+
+        gone = remember(runner, 'Tempo traces are sampled at one percent',
+                        no_reconcile=True)
+        invoke(runner, ['forget', gone['id']])
+        refused = invoke(runner, ['insights', 'show', gone['id']])
+        assert refused.exit_code != 0
+        assert 'was forgotten' in refused.output
+
 
 class TestStatusConsistency:
     """Status counts reflect actual state after mutations."""

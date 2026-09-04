@@ -88,6 +88,12 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
         return _node.supersede_insight(
             self._db, predecessor_id, successor_id)
 
+    def unsupersede(self, id: Id, expected_successor: Id) -> bool:
+        return _node.unsupersede_insight(self._db, id, expected_successor)
+
+    def predecessors(self, successor_id: Id) -> list[Insight]:
+        return _node.get_predecessors(self._db, successor_id)
+
     def update_entities(self, id: Id, entities: list[str]) -> None:
         _node.update_entities(self._db, id, entities)
 

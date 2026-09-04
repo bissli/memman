@@ -1133,7 +1133,12 @@ class TestReplace:
         assert 'not found' in result.output
 
     def test_replace_already_deleted(self, runner):
-        """Replace an already-deleted insight produces error."""
+        """Verify replacing a forgotten insight fails naming the deletion.
+
+        Mutation: preflighting with `nodes.get`, which cannot tell a
+            forgotten row from a missing one.
+        Oracle: the error text says the row was forgotten.
+        """
         result = invoke(runner, [
             'remember', 'Kafka consumer group rebalance strategy uses cooperative',
             '--no-reconcile'])
@@ -1144,7 +1149,32 @@ class TestReplace:
             'replace', old_id,
             'Kafka consumer group rebalance uses eager strategy'])
         assert result.exit_code != 0
-        assert 'not found' in result.output
+        assert 'was forgotten' in result.output
+
+    def test_replace_refuses_a_superseded_id_and_names_the_successor(
+            self, runner):
+        """Verify replacing a superseded id points at its successor.
+
+        Mutation: preflighting with `nodes.get` (a bare not-found), or
+            accepting the superseded id and forking the chain.
+        Oracle: the error text carries the successor's id and the
+            history command; the successor stays the one current row.
+        """
+        result = invoke(runner, [
+            'remember', 'Kafka retention is seven days', '--no-reconcile'])
+        old_id = parse_remember(result, runner)['id']
+        result = invoke(runner, [
+            'replace', old_id, 'Kafka retention is thirty days'])
+        new_id = parse_remember(result, runner)['id']
+
+        result = invoke(runner, [
+            'replace', old_id, 'Kafka retention is ninety days'])
+        assert result.exit_code != 0
+        assert f'is superseded by {new_id}' in result.output
+        assert '--history' in result.output
+        active = json.loads(invoke(
+            runner, ['recall', '--basic', 'Kafka']).output)['results']
+        assert [h['id'] for h in active] == [new_id]
 
     def test_replace_oplog_entries(self, runner):
         """Replace logs both replace and remember ops."""

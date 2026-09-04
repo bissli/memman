@@ -177,6 +177,51 @@ where id = ? and deleted_at is null and superseded_by is null
     return True
 
 
+def unsupersede_insight(
+        db: 'DB', id: str, expected_successor: str) -> bool:
+    """Clear a supersession pointer, compare-and-swap on the successor.
+
+    Parameters
+    ----------
+    id : str
+        The superseded row to bring back.
+    expected_successor : str
+        The successor the caller read; the update applies only while
+        the pointer still names it.
+
+    Returns
+    -------
+    bool
+        True when the pointer was cleared. False when the row is
+        missing, deleted, not superseded, or superseded by another row
+        since the caller read it.
+    """
+    now = format_timestamp(datetime.now(timezone.utc))
+    sql = """
+update insights
+set superseded_by = null, updated_at = ?
+where id = ? and deleted_at is null and superseded_by = ?
+"""
+    cursor = db._exec(sql, (now, id, expected_successor))
+    return cursor.rowcount == 1
+
+
+def get_predecessors(db: 'DB', successor_id: str) -> list[Insight]:
+    """Return every row whose `superseded_by` names `successor_id`.
+
+    Deleted rows are included: the history walk shows a forgotten
+    predecessor as forgotten rather than dropping it from the chain.
+    """
+    sql = f"""
+select {_INSIGHT_COLUMNS}
+from insights
+where superseded_by = ?
+order by created_at, id
+"""
+    rows = db._query(sql, (successor_id,)).fetchall()
+    return [_scan_insight(r) for r in rows]
+
+
 def update_entities(db: 'DB', id: str, entities: list[str]) -> None:
     """Update the entities field for an insight."""
     seen: set[str] = set()

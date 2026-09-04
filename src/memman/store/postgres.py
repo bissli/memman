@@ -581,6 +581,27 @@ where source_id = %s or target_id = %s
             cur.execute(delete_sql, (predecessor_id, predecessor_id))
         return True
 
+    def unsupersede(self, id: Id, expected_successor: Id) -> bool:
+        sql = self._q("""
+update {s}.insights
+set superseded_by = null, updated_at = now()
+where id = %s and deleted_at is null and superseded_by = %s
+""")
+        with self._conn.cursor() as cur:
+            cur.execute(sql, (id, expected_successor))
+            return bool(cur.rowcount == 1)
+
+    def predecessors(self, successor_id: Id) -> list[Insight]:
+        sql = self._q(f"""
+select {_INSIGHT_COLS}
+from {{s}}.insights
+where superseded_by = %s
+order by created_at, id
+""")
+        with self._conn.cursor() as cur:
+            cur.execute(sql, (successor_id,))
+            return [_row_to_insight(r) for r in cur.fetchall()]
+
     def update_entities(self, id: Id, entities: list[str]) -> None:
         seen: set[str] = set()
         deduped: list[str] = []

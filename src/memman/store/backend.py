@@ -129,6 +129,23 @@ class NodeStore(Protocol):
         """
         ...
 
+    def unsupersede(self, id: Id, expected_successor: Id) -> bool:
+        """Clear a supersession pointer while it still names the successor.
+
+        Returns False when the row is missing, deleted, not superseded,
+        or superseded by another row since the caller read it. The
+        caller rebuilds the row's edges and vector afterwards.
+        """
+        ...
+
+    def predecessors(self, successor_id: Id) -> list[Insight]:
+        """Every row whose `superseded_by` names `successor_id`.
+
+        Deleted rows included, oldest first; the history walk's
+        backward step.
+        """
+        ...
+
     def update_entities(self, id: Id, entities: list[str]) -> None:
         """Replace the entities array for an insight."""
         ...
