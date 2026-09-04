@@ -145,14 +145,21 @@ def test_supersession_reads_identically_to_a_soft_delete(twin_backends):
     assert superseded.nodes.embedding_stats() == deleted.nodes.embedding_stats()
     assert (superseded.nodes.embedding_size_distribution()
             == deleted.nodes.embedding_size_distribution())
-    assert superseded.nodes.provenance_distribution() == deleted.nodes.provenance_distribution()
-    assert superseded.nodes.count_pending_links() == deleted.nodes.count_pending_links()
-    assert superseded.nodes.count_stale_insights('pv-2') == deleted.nodes.count_stale_insights('pv-2')
-    assert superseded.nodes.stats().total_insights == deleted.nodes.stats().total_insights
-    assert superseded.edges.count_dangling_by_type() == deleted.edges.count_dangling_by_type()
-    assert superseded.oplog.stats().total_active == deleted.oplog.stats().total_active
+    assert (superseded.nodes.provenance_distribution()
+            == deleted.nodes.provenance_distribution())
+    assert (superseded.nodes.count_pending_links()
+            == deleted.nodes.count_pending_links())
+    assert (superseded.nodes.count_stale_insights('pv-2')
+            == deleted.nodes.count_stale_insights('pv-2'))
+    assert (superseded.nodes.stats().total_insights
+            == deleted.nodes.stats().total_insights)
+    assert (superseded.edges.count_dangling_by_type()
+            == deleted.edges.count_dangling_by_type())
+    assert (superseded.oplog.stats().total_active
+            == deleted.oplog.stats().total_active)
     with superseded.recall_session() as sa, deleted.recall_session() as sb:
-        assert sa.keyword_counts({'alpha', 'kombu'}) == sb.keyword_counts({'alpha', 'kombu'})
+        assert (sa.keyword_counts({'alpha', 'kombu'})
+                == sb.keyword_counts({'alpha', 'kombu'}))
         assert 'p-1' not in sa.keyword_counts({'kombu'})
 
     for backend in (superseded, deleted):
