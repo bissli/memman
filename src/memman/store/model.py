@@ -253,9 +253,21 @@ class OpLogStats:
 
 @dataclass
 class NodeStats:
-    """Aggregate node statistics returned by `backend.nodes.stats`."""
+    """Aggregate node statistics returned by `backend.nodes.stats`.
+
+    Attributes
+    ----------
+    total_insights : int
+        Current rows: neither deleted nor superseded.
+    superseded_insights : int
+        Rows with `superseded_by` set and `deleted_at` null.
+    deleted_insights : int
+        Rows with `deleted_at` set, superseded or not. The three
+        counts partition `count_total`.
+    """
 
     total_insights: int = 0
+    superseded_insights: int = 0
     deleted_insights: int = 0
     edge_count: int = 0
     oplog_count: int = 0

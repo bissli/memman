@@ -96,6 +96,36 @@ class NodeStore(Protocol):
         """Soft-delete an insight and remove its edges."""
         ...
 
+    def supersede(self, predecessor_id: Id, successor_id: Id) -> bool:
+        """Point a current insight at its successor and remove its edges.
+
+        Parameters
+        ----------
+        predecessor_id : Id
+            The row being superseded; must be neither deleted nor
+            already superseded.
+        successor_id : Id
+            The row that replaces it; not checked, since the pipeline
+            writes the pointer before the successor row exists.
+
+        Returns
+        -------
+        bool
+            True when the pointer was written and the predecessor's
+            edges removed; False when the predecessor is not current,
+            and the caller degrades to a plain add.
+
+        Notes
+        -----
+        - The guard makes a row superseded at most once, which rules
+          out forks in the chain.
+        - A superseded row leaves every active read exactly as a
+          soft-deleted one does; `get_include_deleted`,
+          `get_by_queue_uuid` and `has_active_with_queue_uuid` still
+          see it.
+        """
+        ...
+
     def update_entities(self, id: Id, entities: list[str]) -> None:
         """Replace the entities array for an insight."""
         ...
@@ -138,7 +168,7 @@ class NodeStore(Protocol):
         ...
 
     def count_active(self) -> int:
-        """Count non-deleted insights."""
+        """Count current insights: neither deleted nor superseded."""
         ...
 
     def count_total(self) -> int:
@@ -146,24 +176,26 @@ class NodeStore(Protocol):
         ...
 
     def has_active_with_queue_uuid(self, queue_uuid: str) -> bool:
-        """Return True if any active insight carries this queue uuid.
+        """Return True if a non-deleted insight carries this queue uuid.
 
         The idempotency check for queue replays; runs unconditionally
-        for every drained row. Backends implement it in SQL so a null
+        for every drained row and answers "did this write land", so a
+        superseded row counts. Backends implement it in SQL so a null
         `queue_uuid` on legacy rows can never match.
         """
         ...
 
     def get_by_queue_uuid(self, queue_uuid: str) -> list[Insight]:
-        """Return the active insights one queued write produced.
+        """Return the non-deleted insights one queued write produced.
 
         The write-to-read join: `remember` and `replace` hand the
         caller a `queue_uuid`, and this resolves it to the rows that
         write stored, oldest first, tiebroken on `id` so siblings
         sharing one transaction timestamp order identically on both
-        backends. Empty when the write stored nothing. Backends
-        implement it in SQL for the same NULL-matching reason as
-        `has_active_with_queue_uuid`.
+        backends. A row a later write superseded is still returned,
+        with `superseded_by` set. Empty when the write stored nothing.
+        Backends implement it in SQL for the same NULL-matching
+        reason as `has_active_with_queue_uuid`.
         """
         ...
 

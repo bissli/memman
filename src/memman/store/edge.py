@@ -97,7 +97,7 @@ def find_insights_with_entity(
     sql = """
 select distinct i.id
 from insights i, json_each(i.entities) je
-where i.deleted_at is null
+where i.deleted_at is null and i.superseded_by is null
   and i.id != ?
   and lower(trim(je.value)) = ?
 order by i.created_at desc
@@ -114,7 +114,7 @@ def count_insights_with_entity(
     sql = """
 select count(distinct i.id)
 from insights i, json_each(i.entities) je
-where i.deleted_at is null
+where i.deleted_at is null and i.superseded_by is null
   and i.id != ?
   and lower(trim(je.value)) = ?
 """
@@ -270,21 +270,23 @@ where source_id = ? and target_id = ? and edge_type = ?
 
 
 def count_dangling_by_type(db: 'DB') -> dict[str, int]:
-    """Return {edge_type: count} for edges referencing missing or deleted nodes.
+    """Return {edge_type: count} for edges with a non-current endpoint.
 
-    Used by `doctor.check_dangling_edges`. Keeps the set-difference
-    inside the database via a `not exists` subquery.
+    An endpoint is non-current when it is missing, soft-deleted, or
+    superseded; a superseded row must be edgeless. Used by
+    `doctor.check_dangling_edges`. Keeps the set-difference inside
+    the database via a `not exists` subquery.
     """
     sql = """
 select e.edge_type, count(*)
 from edges e
 where not exists (
     select 1 from insights i
-    where i.id = e.source_id and i.deleted_at is null
+    where i.id = e.source_id and i.deleted_at is null and i.superseded_by is null
 )
    or not exists (
     select 1 from insights i
-    where i.id = e.target_id and i.deleted_at is null
+    where i.id = e.target_id and i.deleted_at is null and i.superseded_by is null
 )
 group by e.edge_type
 """
@@ -299,7 +301,8 @@ def degree_distribution(db: 'DB') -> dict[str, int]:
     Used by `doctor.check_edge_degree`.
     """
     id_rows = db._query(
-        'select id from insights where deleted_at is null').fetchall()
+        'select id from insights'
+        ' where deleted_at is null and superseded_by is null').fetchall()
     if not id_rows:
         return {}
     degree_sql = """

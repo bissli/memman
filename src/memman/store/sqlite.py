@@ -86,6 +86,10 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
         return _node.soft_delete_insight(
             self._db, id, tolerate_missing=tolerate_missing)
 
+    def supersede(self, predecessor_id: Id, successor_id: Id) -> bool:
+        return _node.supersede_insight(
+            self._db, predecessor_id, successor_id)
+
     def update_entities(self, id: Id, entities: list[str]) -> None:
         _node.update_entities(self._db, id, entities)
 
@@ -159,6 +163,7 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
         d = _node.get_stats(self._db)
         return NodeStats(
             total_insights=d.get('total_insights', 0),
+            superseded_insights=d.get('superseded_insights', 0),
             deleted_insights=d.get('deleted_insights', 0),
             edge_count=d.get('edge_count', 0),
             oplog_count=d.get('oplog_count', 0),
@@ -191,7 +196,7 @@ select count(*),
                  or semantic_facts = ''
                 then 1 else 0 end)
 from insights
-where deleted_at is null
+where deleted_at is null and superseded_by is null
 """
         row = self._db._query(sql).fetchone()
         if row is None:
@@ -208,7 +213,7 @@ where deleted_at is null
         sql = """
 select length(embedding), count(*)
 from insights
-where deleted_at is null and embedding is not null
+where deleted_at is null and superseded_by is null and embedding is not null
 group by length(embedding)
 """
         rows = self._db._query(sql).fetchall()
@@ -501,7 +506,7 @@ class SqliteRecallSession(RecallSession):
         sql = """
 select id, category, source, embedding
 from insights
-where deleted_at is null and embedding is not null
+where deleted_at is null and superseded_by is null and embedding is not null
 """
         rows = [
             (rid, cat, src, blob)
@@ -622,7 +627,7 @@ where deleted_at is null and embedding is not null
 select i.id
 from insights_fts f
 join insights i on i.rowid = f.rowid
-where insights_fts match ? and i.deleted_at is null
+where insights_fts match ? and i.deleted_at is null and i.superseded_by is null
 """
         counts: dict[Id, int] = {}
         for token in query_tokens:

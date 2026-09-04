@@ -28,7 +28,8 @@ def bfs(backend: Backend, start_id: str,
     Returns dicts with keys `insight`, `hop`, `via_edge`. The
     bounded neighborhood comes from
     `backend.edges.get_neighborhood`; insights are hydrated via
-    `backend.nodes.get_many`. Soft-deleted neighbors are dropped.
+    `backend.nodes.get_many`. Soft-deleted and superseded neighbors
+    are dropped.
     """
     triples = backend.edges.get_neighborhood(
         start_id, depth=opts.max_depth,
