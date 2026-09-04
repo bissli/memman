@@ -81,10 +81,8 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
             self._db, keyword=keyword, category=category, source=source,
             limit=limit)
 
-    def soft_delete(
-            self, id: Id, *, tolerate_missing: bool = False) -> bool:
-        return _node.soft_delete_insight(
-            self._db, id, tolerate_missing=tolerate_missing)
+    def soft_delete(self, id: Id) -> bool:
+        return _node.soft_delete_insight(self._db, id)
 
     def supersede(self, predecessor_id: Id, successor_id: Id) -> bool:
         return _node.supersede_insight(

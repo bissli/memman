@@ -24,8 +24,13 @@ def _queue_uuid_of(data_dir, queue_id):
 
 
 def _stored_ids(data_dir, store, queue_uuid, active_only=True):
-    """Insight ids carrying `queue_uuid`, read by raw SQL."""
-    clause = ' and deleted_at is null' if active_only else ''
+    """Insight ids carrying `queue_uuid`, read by raw SQL.
+
+    `active_only` keeps the CURRENT rows: neither deleted nor
+    superseded.
+    """
+    clause = (' and deleted_at is null and superseded_by is null'
+              if active_only else '')
     path = f'{store_dir(data_dir, store)}/memman.db'
     with sqlite3.connect(path) as conn:
         return [r[0] for r in conn.execute(
@@ -84,9 +89,12 @@ def test_replace_returns_its_own_uuid_not_the_originals(mm_runner):
     assert second['queue_uuid'] == _queue_uuid_of(
         data_dir, second['queue_id'])
     assert _stored_ids(data_dir, second['store'], second['queue_uuid'])
-    # The superseded write's key must now resolve to nothing: its only
-    # row is a tombstone, which is the other half of "its own uuid".
+    # The superseded write's key still names its own row, which is no
+    # longer current: the other half of "its own uuid".
     assert _stored_ids(data_dir, first['store'], first['queue_uuid']) == []
+    assert _stored_ids(
+        data_dir, first['store'], first['queue_uuid'],
+        active_only=False) == [old_id]
 
 
 def test_by_queue_returns_exactly_the_rows_that_write_stored(mm_runner):
@@ -233,3 +241,30 @@ def test_get_by_queue_uuid_orders_siblings_deterministically(backend):
     assert [r.id for r in backend.nodes.get_by_queue_uuid('w-2')] == [
         'qu-other']
     assert backend.nodes.get_by_queue_uuid('w-none') == []
+
+
+def test_by_queue_shows_a_superseded_landing_row(mm_runner):
+    """A write whose row was later superseded still resolves to that row.
+
+    Mutation: adding `superseded_by is null` to `get_by_queue_uuid`,
+        which would answer `count: 0` for a write that landed and was
+        then corrected, sending the caller to `queue skipped` for a
+        write that stored something.
+    Oracle: the same uuid resolving to the original row before and
+        after a replace, with the pointer visible afterwards.
+    """
+    _, data_dir = mm_runner
+    raw = json.loads(invoke(mm_runner, [
+        'remember', 'etcd compacts revisions', '--no-reconcile']).output)
+    stored_id = _stored_ids(data_dir, raw['store'], raw['queue_uuid'])[0]
+    replaced = invoke(mm_runner, [
+        'replace', stored_id, 'etcd compacts revisions hourly'])
+    assert replaced.exit_code == 0, replaced.output
+    successor = _stored_ids(
+        data_dir, raw['store'], json.loads(replaced.output)['queue_uuid'])[0]
+
+    after = json.loads(invoke(
+        mm_runner, ['insights', 'by-queue', raw['queue_uuid']]).output)
+    assert after['count'] == 1
+    assert after['results'][0]['id'] == stored_id
+    assert after['results'][0]['superseded_by'] == successor

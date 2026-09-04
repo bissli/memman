@@ -540,8 +540,7 @@ limit %s
             cur.execute(sql, tuple(args))
             return [_row_to_insight(r) for r in cur.fetchall()]
 
-    def soft_delete(
-            self, id: Id, *, tolerate_missing: bool = False) -> bool:
+    def soft_delete(self, id: Id) -> bool:
         # Emptying `kw_tokens` sheds a token set the keyword scan can
         # no longer reach: 69% of rows on the biggest store are
         # soft-deleted, and populating them too measured at +56% of
@@ -558,10 +557,7 @@ where source_id = %s or target_id = %s
         with self._conn.cursor() as cur:
             cur.execute(update_sql, (id,))
             if cur.rowcount == 0:
-                if tolerate_missing:
-                    return False
-                raise ValueError(
-                    f'insight {id} not found or already deleted')
+                return False
             cur.execute(delete_sql, (id, id))
         return True
 

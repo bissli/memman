@@ -91,9 +91,12 @@ class NodeStore(Protocol):
         """
         ...
 
-    def soft_delete(
-            self, id: Id, *, tolerate_missing: bool = False) -> bool:
-        """Soft-delete an insight and remove its edges."""
+    def soft_delete(self, id: Id) -> bool:
+        """Soft-delete a non-deleted insight and remove its edges.
+
+        Returns False when the row is missing or already deleted; a
+        superseded row may still be deleted.
+        """
         ...
 
     def supersede(self, predecessor_id: Id, successor_id: Id) -> bool:

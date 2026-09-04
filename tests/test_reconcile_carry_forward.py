@@ -1,11 +1,12 @@
-"""Metadata and edges the reconcile merge must carry from its target.
+"""Metadata and edges a reconcile merge must carry from its predecessor.
 
-A reconcile UPDATE is not an in-place edit: `_apply_plan` soft-deletes
-the target and inserts a successor built from the incoming write. Every
-field the successor does not explicitly copy is therefore destroyed,
-along with the target's whole edge neighborhood.
+A reconcile UPDATE or SUPERSEDE is not an in-place edit: `_apply_plan`
+supersedes the target and inserts a successor built from the incoming
+write. The predecessor keeps its content behind `superseded_by`, but
+every field the successor does not explicitly copy is missing from the
+current view, along with the predecessor's whole edge neighborhood.
 
-These tests pin what survives a merge.
+These tests pin what the successor carries.
 """
 
 from memman.pipeline.remember import FactPlan, _apply_plan
@@ -14,8 +15,9 @@ from memman.store.node import get_insight_by_id, insert_insight
 from tests.conftest import make_edge, make_insight
 
 
-def _merge_plan(new_id, target_id, **insight_overrides):
-    """Build a reconcile-UPDATE FactPlan targeting `target_id`."""
+def _merge_plan(new_id, target_id, *, action='update', fact_text=None,
+                **insight_overrides):
+    """Build a reconcile FactPlan of `action` targeting `target_id`."""
     overrides = {
         'id': new_id,
         'content': 'merged content',
@@ -23,8 +25,8 @@ def _merge_plan(new_id, target_id, **insight_overrides):
         }
     overrides.update(insight_overrides)
     return FactPlan(
-        action='update',
-        fact_text='merged content',
+        action=action,
+        fact_text=fact_text or 'merged content',
         fact_insight=make_insight(**overrides),
         target_id=target_id,
         embed_vec=None,
@@ -136,3 +138,87 @@ def test_merge_carries_target_access_count(tmp_db, tmp_backend):
     successor = get_insight_by_id(tmp_db, 'new-1')
     assert successor is not None
     assert successor.access_count == 7
+
+
+def test_supersede_plan_links_the_predecessor_and_keeps_it(tmp_db, tmp_backend):
+    """Verify a SUPERSEDE plan supersedes the target instead of deleting it.
+
+    Mutation: routing `supersede` through `soft_delete` (the shipped
+        merge shape), or reading `merged_text` for UPDATE only so the
+        successor stores the bare fact.
+    Oracle: the predecessor read back with `deleted_at` null and
+        `superseded_by` naming the successor, the successor's merged
+        content, and a `reconcile-supersede` oplog row naming both.
+    """
+    insert_insight(tmp_db, make_insight(
+        id='old-1', content='the broker is kombu'))
+
+    plan = _merge_plan(
+        'new-1', 'old-1', action='supersede',
+        fact_text='the broker is redis now',
+        content='the broker is redis now (was kombu)')
+    result = _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
+
+    old = tmp_backend.nodes.get_include_deleted('old-1')
+    assert old.deleted_at is None
+    assert old.superseded_by == 'new-1'
+    assert get_insight_by_id(tmp_db, 'old-1') is None
+    assert get_insight_by_id(tmp_db, 'new-1').content == (
+        'the broker is redis now (was kombu)')
+    assert result['action'] == 'supersede'
+    assert result['replaced_id'] == 'old-1'
+    ops = {(e.operation, e.insight_id, e.detail)
+           for e in tmp_backend.oplog.recent(limit=10)}
+    assert ('reconcile-supersede', 'old-1', 'replaced by new-1') in ops
+
+
+def test_supersede_does_not_carry_corroboration_but_update_does(
+        tmp_db, tmp_backend):
+    """Verify corroboration carries on UPDATE and resets on SUPERSEDE.
+
+    Mutation: carrying the count on a contradiction, which credits the
+        new fact with every restatement of the claim it just falsified;
+        or dropping the carry on UPDATE.
+    Oracle: hand-computed 4 on the UPDATE successor and 0 on the
+        SUPERSEDE successor, from predecessors both stored at 4.
+    """
+    insert_insight(tmp_db, make_insight(
+        id='old-u', content='refined later', corroboration_count=4))
+    insert_insight(tmp_db, make_insight(
+        id='old-s', content='contradicted later', corroboration_count=4))
+
+    _apply_plan(tmp_backend, _merge_plan('new-u', 'old-u'),
+                embed_cache={}, store_name='test')
+    _apply_plan(tmp_backend, _merge_plan('new-s', 'old-s', action='supersede'),
+                embed_cache={}, store_name='test')
+
+    assert get_insight_by_id(tmp_db, 'new-u').corroboration_count == 4
+    assert get_insight_by_id(tmp_db, 'new-s').corroboration_count == 0
+
+
+def test_unmerged_supersede_is_marked_in_the_oplog(tmp_db, tmp_backend):
+    """Verify a SUPERSEDE that stored the bare fact is marked as unmerged.
+
+    Mutation: no marker, so the rate of successors that dropped the
+        predecessor's still-true clauses cannot be measured.
+    Oracle: the oplog detail ends with `(unmerged)` exactly when the
+        successor's content equals the fact text, and carries no
+        marker when the model supplied merged text.
+    """
+    insert_insight(tmp_db, make_insight(id='old-a', content='a'))
+    insert_insight(tmp_db, make_insight(id='old-b', content='b'))
+
+    _apply_plan(tmp_backend, _merge_plan(
+        'new-a', 'old-a', action='supersede',
+        fact_text='bare fact', content='bare fact'),
+        embed_cache={}, store_name='test')
+    _apply_plan(tmp_backend, _merge_plan(
+        'new-b', 'old-b', action='supersede',
+        fact_text='bare fact', content='bare fact merged with b'),
+        embed_cache={}, store_name='test')
+
+    details = {e.insight_id: e.detail
+               for e in tmp_backend.oplog.recent(limit=10)
+               if e.operation == 'reconcile-supersede'}
+    assert details['old-a'] == 'replaced by new-a (unmerged)'
+    assert details['old-b'] == 'replaced by new-b'

@@ -1433,10 +1433,28 @@ def _process_queue_row(
 
     now = datetime.now(timezone.utc)
     access_count = 0
-    if row.hint_replaced_id:
-        old = backend.nodes.get(row.hint_replaced_id)
-        if old is not None:
+    replaced_id = row.hint_replaced_id or ''
+    redirected_from = ''
+    if replaced_id:
+        # Notes:
+        # - The target may have been superseded between enqueue and
+        #   claim, by an earlier queued replace of the same id. The
+        #   replace follows the chain to its current head, so the
+        #   topic ends with one current row instead of two.
+        # - A forgotten or missing head passes the original id
+        #   through, and `_apply_plan` degrades to a named add.
+        old = backend.nodes.get_include_deleted(replaced_id)
+        seen: set[str] = set()
+        while (old is not None and old.superseded_by
+                and old.id not in seen):
+            seen.add(old.id)
+            old = backend.nodes.get_include_deleted(old.superseded_by)
+        if (old is not None and old.deleted_at is None
+                and old.superseded_by is None):
             access_count = old.access_count
+            if old.id != replaced_id:
+                redirected_from = replaced_id
+                replaced_id = old.id
     # Both fields must reach the parent Insight: _plan_fact copies
     # session_id and queue_uuid off it, so omitting either makes the
     # whole feature a silent no-op.
@@ -1452,7 +1470,7 @@ def _process_queue_row(
     result = run_remember(
         backend, insight, row.content,
         no_reconcile=row.hint_no_reconcile or bool(row.hint_replaced_id),
-        replaced_id=row.hint_replaced_id or '',
+        replaced_id=replaced_id,
         cat_explicit=row.hint_cat is not None,
         imp_explicit=row.hint_imp is not None,
         embed_cache=ctx.embed_cache,
@@ -1461,6 +1479,8 @@ def _process_queue_row(
         llm_client=ctx.llm_client,
         ec=ctx.ec,
         store_name=ctx.store_name)
+    if redirected_from:
+        result['redirected_from'] = redirected_from
     _json_out(result)
     return result
 
@@ -1656,7 +1676,7 @@ def _forget_insight(backend: 'Backend', id: str) -> None:
         before_delta = (
             insight_to_delta_dict(before_ins)
             if before_ins is not None else None)
-        deleted = backend.nodes.soft_delete(id, tolerate_missing=True)
+        deleted = backend.nodes.soft_delete(id)
         if not deleted:
             raise click.ClickException(f'insight {id!r} not found')
         backend.oplog.log(
