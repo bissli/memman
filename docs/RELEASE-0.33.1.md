@@ -12,7 +12,12 @@ lets `memman supersede` give a successor a second predecessor and
 drops the doctor's `multi_predecessor` population: a correction the
 reconciler wrote as a merge already has one predecessor, so curating
 a sibling claim onto it is a join, not a fork. Schema and backup
-format are unchanged.
+format are unchanged. 0.33.3 is documentation only: the SKILL files
+and the design docs no longer say that the worker splits a paragraph
+into several facts, that a contradicted row is deleted, that importance
+carries a retention tier, or that extraction yields one to five facts;
+it also records the column and edge-type decisions in 02-concepts.md,
+03-graph-model.md and 05-lifecycle.md.
 
 ## What changes
 
