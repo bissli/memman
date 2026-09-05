@@ -25,8 +25,9 @@ Importance is 2 (passing mention) to 5 (architectural / strong preference). The 
 
 A write is not guaranteed to land. The worker drops content its
 extractor judges trivial, folds a fact that merely restates a stored
-insight into that insight, and deletes a stored insight the new text
-contradicts. All three complete as `done`, so the queue reports
+insight into that insight, and supersedes a stored insight the new text
+contradicts (the old row keeps its content behind `superseded_by`
+and leaves recall). All three complete as `done`, so the queue reports
 success either way. When nothing at all was stored, the write is filed
 in the skipped ledger: read it back with `memman scheduler queue
 skipped`, which keeps the full content and the reason. A write that
@@ -201,9 +202,9 @@ memman doctor                         # health check (sqlite, queue, keys, sched
 
 - Never store secrets, passwords, or tokens.
 - Max 8,000 characters per insight; chunk longer content.
-- One self-contained fact per `remember` call. The enrichment worker
-  splits multi-fact blobs into atomic insights, so a tight paragraph is
-  fine — but write each call with one clear claim in mind.
+- One self-contained fact per `remember` call. The worker extracts
+  exactly one fact from each call, so a paragraph carrying two claims
+  keeps one and loses the other. One call per claim.
 - `--source agent` when storing on behalf of the user; `--source user`
   is the default for direct user statements.
 - No session, no temporal chain. You do not have to pass one:
