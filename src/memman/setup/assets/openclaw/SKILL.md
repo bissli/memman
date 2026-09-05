@@ -37,8 +37,9 @@ Importance is 2 (passing mention) to 5 (architectural / strong preference). The 
 
 A write is not guaranteed to land. The worker drops content its
 extractor judges trivial, folds a fact that merely restates a stored
-insight into that insight, and deletes a stored insight the new text
-contradicts. All three complete as `done`, so the queue reports
+insight into that insight, and supersedes a stored insight the new text
+contradicts (the old row keeps its content behind `superseded_by`
+and leaves recall). All three complete as `done`, so the queue reports
 success either way. When nothing at all was stored, the write is filed
 in the skipped ledger: read it back with `memman scheduler queue
 skipped`, which keeps the full content and the reason. A write that
