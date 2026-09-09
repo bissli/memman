@@ -112,7 +112,7 @@ def _top_level_json_values(raw: str, opener: str) -> list:
                 break
             try:
                 value, end = decoder.raw_decode(text, start)
-            except ValueError:
+            except (ValueError, RecursionError):
                 pos = start + 1
                 continue
             found.append(value)
@@ -152,7 +152,7 @@ def parse_json_response(raw: str) -> dict | None:
             parsed = json.loads(text)
             if isinstance(parsed, dict):
                 return parsed
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, RecursionError):
             pass
     objects = [v for v in _top_level_json_values(raw, '{') if isinstance(v, dict)]
     return objects[-1] if objects else None
@@ -180,7 +180,7 @@ def parse_json_list_response(raw: str) -> list | None:
             parsed = json.loads(text)
             if isinstance(parsed, list):
                 return parsed
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, RecursionError):
             pass
     lists = [v for v in _top_level_json_values(raw, '[') if isinstance(v, list)]
     of_objects = [v for v in lists if all(isinstance(x, dict) for x in v)]
