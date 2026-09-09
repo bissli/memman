@@ -309,3 +309,32 @@ def test_degraded_skip_still_builds_its_semantic_edges(tmp_db, tmp_backend):
     assert result['action'] == 'add'
     semantic = [e for e in get_edges_by_node(tmp_db, 'new-1') if e.edge_type == 'semantic']
     assert {e.source_id for e in semantic} | {e.target_id for e in semantic} >= {'new-1', 'near-1'}
+
+
+def test_unmerged_update_is_marked_in_the_oplog(tmp_db, tmp_backend):
+    """Verify an UPDATE that stored the bare fact is marked as unmerged too.
+
+    Mutation: the marker guarded on `relation == 'supersede'`, so an
+        update successor written without a merge text leaves no trace
+        and the F2 retire line under-counts the fallback.
+    Oracle: the `reconcile-update` oplog detail ends with `(unmerged)`
+        when the successor's content equals the fact text, and carries
+        no marker when a merge text was stored.
+    """
+    insert_insight(tmp_db, make_insight(id='old-a', content='a'))
+    insert_insight(tmp_db, make_insight(id='old-b', content='b'))
+
+    _apply_plan(tmp_backend, _merge_plan(
+        'new-a', 'old-a', action='update',
+        fact_text='bare fact', content='bare fact'),
+        embed_cache={}, store_name='test')
+    _apply_plan(tmp_backend, _merge_plan(
+        'new-b', 'old-b', action='update',
+        fact_text='bare fact', content='bare fact merged with b'),
+        embed_cache={}, store_name='test')
+
+    details = {e.insight_id: e.detail
+               for e in tmp_backend.oplog.recent(limit=10)
+               if e.operation == 'reconcile-update'}
+    assert details['old-a'] == 'replaced by new-a (unmerged)'
+    assert details['old-b'] == 'replaced by new-b'

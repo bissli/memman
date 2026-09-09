@@ -59,7 +59,8 @@ EMPTY_RETRY_DELAY = 0.1
 # a small cap truncates large insights mid-JSON and the parse fails,
 # so they get a larger token budget and a longer timeout. A caller
 # raises the budget for one call through `complete(max_tokens=)`; the
-# reconciler does, with `RECONCILE_MAX_TOKENS`.
+# reconcile stages do, with `SCREEN_MAX_TOKENS`, `VERDICT_MAX_TOKENS`
+# and `MERGE_MAX_TOKENS`.
 _ROLE_LIMITS = {
     ROLE_FAST: (FAST_MAX_TOKENS, ENRICHMENT_TIMEOUT),
     ROLE_SLOW_CANONICAL: (WORKER_MAX_TOKENS, WORKER_TIMEOUT),
