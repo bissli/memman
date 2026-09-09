@@ -1968,15 +1968,19 @@ class TestIntraBatchDedup:
                     },
                 ]
 
-        def _force_update(llm_client, fact, existing):
-            if not existing:
-                return {'action': 'ADD', 'targets': [], 'merged_text': None}
-            return {'action': 'UPDATE', 'targets': [(existing[0][0], 'update')],
-                    'merged_text': fact['text']}
+        def _screen_restates(llm_client, fact_text, memory):
+            return 'RESTATES', []
+
+        def _judge_update(llm_client, fact_text, memory):
+            return 'update'
+
+        def _merge_fact(llm_client, fact_text, target):
+            return fact_text
 
         with patch('memman.llm.extract.extract_facts', _two_facts), \
-        patch('memman.llm.extract.reconcile_memories',
-              _force_update):
+        patch('memman.llm.extract.screen_memory', _screen_restates), \
+        patch('memman.llm.extract.judge_memory', _judge_update), \
+        patch('memman.llm.extract.merge_successor', _merge_fact):
             result = invoke(runner, [
                 'remember', 'Kafka topic partitioning'])
         assert result.exit_code == 0, result.output
@@ -2055,11 +2059,14 @@ class TestIntraBatchDedup:
                     },
                 ]
 
-        def _force_update(llm_client, fact, existing):
-            if not existing:
-                return {'action': 'ADD', 'targets': [], 'merged_text': None}
-            return {'action': 'UPDATE', 'targets': [(existing[0][0], 'update')],
-                    'merged_text': fact['text']}
+        def _screen_restates(llm_client, fact_text, memory):
+            return 'RESTATES', []
+
+        def _judge_update(llm_client, fact_text, memory):
+            return 'update'
+
+        def _merge_fact(llm_client, fact_text, target):
+            return fact_text
 
         fixed_vec = [1.0] + [0.0] * 511
 
@@ -2068,8 +2075,9 @@ class TestIntraBatchDedup:
 
         with patch('memman.llm.extract.extract_facts',
                    _three_paraphrase_facts), \
-        patch('memman.llm.extract.reconcile_memories',
-              _force_update), \
+        patch('memman.llm.extract.screen_memory', _screen_restates), \
+        patch('memman.llm.extract.judge_memory', _judge_update), \
+        patch('memman.llm.extract.merge_successor', _merge_fact), \
         patch('memman.embed.voyage.Client.embed', _fixed_embed):
             result = invoke(runner, [
                 'remember', 'Delta mode dropdown defaults to incremental_sync'])

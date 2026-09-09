@@ -22,13 +22,13 @@ def test_reconcile_candidates_ranked_by_similarity(monkeypatch):
     from memman.pipeline import remember as rem
     from tests.conftest import make_insight
 
-    captured = {}
+    screened = []
 
-    def _fake_reconcile(client, fact, similar):
-        captured['similar'] = list(similar)
-        return {'action': 'ADD', 'targets': [], 'merged_text': None}
+    def _screen(client, fact_text, memory):
+        screened.append(memory[0])
+        return 'UNRELATED', []
 
-    monkeypatch.setattr(llm_extract, 'reconcile_memories', _fake_reconcile)
+    monkeypatch.setattr(llm_extract, 'screen_memory', _screen)
 
     fact_vec = [1.0, 0.0]
     med = [0.6, math.sqrt(1 - 0.6 * 0.6)]
@@ -55,8 +55,7 @@ def test_reconcile_candidates_ranked_by_similarity(monkeypatch):
         insights_by_id, embed_cache, set(),
         MagicMock(), MagicMock(), ec, MagicMock(), MagicMock())
 
-    ids = [cid for cid, _content in captured.get('similar', [])]
-    assert 'TOP' in ids, f'top-cosine insight crowded out; candidates={ids}'
+    assert 'TOP' in screened, f'top-cosine insight crowded out; screened={screened}'
 
 
 def test_prompt_version_unchanged_by_length_caps():
@@ -141,9 +140,8 @@ def test_reconcile_candidates_are_logged(tmp_backend, monkeypatch):
         lambda client, content: [
             {'text': content, 'category': 'fact', 'entities': []}])
     monkeypatch.setattr(
-        'memman.llm.extract.reconcile_memories',
-        lambda client, fact, similar: {
-            'action': 'ADD', 'targets': [], 'merged_text': None})
+        'memman.llm.extract.screen_memory',
+        lambda client, fact_text, memory: ('UNRELATED', []))
 
     fact_text = 'zulu yankee xray whiskey victor'
     res = run_remember(
@@ -177,9 +175,12 @@ def test_reconcile_candidates_are_logged_for_a_none_skip(tmp_backend, monkeypatc
         lambda client, content: [
             {'text': content, 'category': 'fact', 'entities': []}])
     monkeypatch.setattr(
-        'memman.llm.extract.reconcile_memories',
-        lambda client, fact, similar: {
-            'action': 'NONE', 'targets': [('cos-1', 'none')], 'merged_text': None})
+        'memman.llm.extract.screen_memory',
+        lambda client, fact_text, memory: (
+            ('RESTATES', []) if memory[0] == 'cos-1' else ('UNRELATED', [])))
+    monkeypatch.setattr(
+        'memman.llm.extract.judge_memory',
+        lambda client, fact_text, memory: 'none')
 
     fact_text = 'zulu yankee xray whiskey victor'
     res = run_remember(
@@ -191,3 +192,75 @@ def test_reconcile_candidates_are_logged_for_a_none_skip(tmp_backend, monkeypatc
     rows = _candidates_rows(tmp_backend)
     assert [key for key, _ in rows] == ['cos-1']
     assert {c['id'] for c in rows[0][1]['candidates']} == {'kw-1', 'cos-1'}
+
+
+def test_shortlist_takes_twenty_cosine_rows(monkeypatch):
+    """Verify the cosine rung fills the shortlist to twenty rows.
+
+    Mutation: the cap left at ten, so the three retrieval misses the
+        measured curve puts inside twenty never reach the screen.
+    Oracle: twenty-five planted rows above the floor and no keyword
+        hit, against the cap of twenty DESIGN 14.2 decided.
+    """
+    import math
+    from unittest.mock import MagicMock
+
+    from memman.llm import extract as llm_extract
+    from memman.pipeline import remember as rem
+    from tests.conftest import make_insight
+
+    monkeypatch.setattr(
+        llm_extract, 'screen_memory',
+        lambda client, fact_text, memory: ('UNRELATED', []))
+
+    insights_by_id = {}
+    embed_cache = {}
+    for i in range(25):
+        ins = make_insight(id=f'row{i}', content=f'candidate body number {i}')
+        insights_by_id[ins.id] = ins
+        cos = 0.95 - i * 0.01
+        embed_cache[ins.id] = [cos, math.sqrt(1 - cos * cos)]
+
+    fact = {'text': 'zzqq alpha brandnew', 'category': 'fact', 'entities': []}
+    ec = MagicMock()
+    ec.embed.return_value = [1.0, 0.0]
+
+    plans, _calls = rem._plan_fact(
+        fact, make_insight(id='parent', content='zzqq alpha brandnew'),
+        '', False, False, insights_by_id, embed_cache, set(),
+        MagicMock(), MagicMock(), ec, MagicMock(), MagicMock())
+
+    assert len(plans[0].candidates) == 20
+
+
+def test_apply_never_links_a_planned_row_before_it_is_inserted(tmp_backend, monkeypatch):
+    """Verify a write of two near-identical facts commits.
+
+    Mutation: leaving every planned row's vector in the drain cache
+        through the apply phase, so the first row's semantic-edge step
+        aims an edge at the second row before its insert and the
+        transaction fails on the foreign key.
+    Oracle: two stored rows with a semantic edge between them, on an
+        embedder that returns one vector for every text.
+    """
+    from memman.pipeline.remember import run_remember
+    from tests.conftest import make_insight
+
+    monkeypatch.setattr(
+        'memman.llm.extract.extract_facts',
+        lambda client, content: [
+            {'text': 'the broker is redis', 'category': 'fact', 'entities': []},
+            {'text': 'redis is the broker', 'category': 'fact', 'entities': []}])
+    monkeypatch.setattr(
+        'memman.llm.extract.screen_memory',
+        lambda client, fact_text, memory: ('UNRELATED', []))
+
+    res = run_remember(
+        tmp_backend, make_insight(id='parent', content='the broker'),
+        'the broker', ec=_FixedEmbedder([1.0, 0.0]), store_name='test')
+
+    ids = [f['id'] for f in res['facts']]
+    assert [f['action'] for f in res['facts']] == ['add', 'add']
+    linked = {e.target_id for e in tmp_backend.edges.by_node(ids[0])
+              if e.edge_type == 'semantic'}
+    assert ids[1] in linked

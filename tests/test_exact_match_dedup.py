@@ -31,21 +31,21 @@ def _store(backend, content):
 
 
 def _spy_reconcile(monkeypatch):
-    """Replace reconcile_memories with a recording ADD stub.
+    """Replace the screen with a recording UNRELATED stub.
 
-    Isolates the rung from the conftest mock's overlap heuristic
-    (which would return UPDATE for identical content), so a deleted
-    rung shows up as action 'add' plus a recorded call, never as a
-    coincidentally-identical outcome.
+    The screen is the first LLM call the rung skips, one per
+    shortlisted row. Isolating it from the conftest mock's overlap
+    heuristic (which would screen identical content in) means a
+    deleted rung shows up as action 'add' plus a recorded call, never
+    as a coincidentally-identical outcome.
     """
     calls = []
 
-    def _fake(llm_client, fact, similar):
-        calls.append((fact, similar))
-        return {'action': 'ADD', 'targets': [], 'merged_text': None}
+    def _fake(llm_client, fact_text, memory):
+        calls.append((fact_text, memory))
+        return 'UNRELATED', []
 
-    monkeypatch.setattr(
-        'memman.llm.extract.reconcile_memories', _fake)
+    monkeypatch.setattr('memman.llm.extract.screen_memory', _fake)
     return calls
 
 
@@ -80,13 +80,13 @@ def test_exact_match_two_hits_escalates_to_llm(
     call.
 
     Mutation: flipping `== 1` to `>= 1`.
-    Oracle: the spy records exactly one reconcile call.
+    Oracle: the spy records one screen call per identical row, two.
     """
     _store(tmp_backend, 'Redis caches session tokens')
     _store(tmp_backend, 'Redis caches session tokens')
     calls = _spy_reconcile(monkeypatch)
     res = _run(tmp_backend, 'Redis caches session tokens')
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert res['facts'][0]['action'] == 'add'
 
 
@@ -95,7 +95,7 @@ def test_exact_match_is_not_substring_match(tmp_backend, monkeypatch):
 
     Mutation: replacing the equality with `in` -- every superset fact
         would silently skip against its stored prefix.
-    Oracle: the spy records one reconcile call and the fact is added.
+    Oracle: the spy records one screen call and the fact is added.
     """
     _store(tmp_backend, 'Redis caches session tokens')
     calls = _spy_reconcile(monkeypatch)

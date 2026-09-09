@@ -391,11 +391,31 @@ def _mock_apis(request, monkeypatch):
 
 def _mock_llm_complete(self: object, system: str, user: str,
                        **kwargs: object) -> str:
-    """Route to appropriate mock based on system prompt content.
+    """Route a `complete` call to the mock for its system text.
 
-    Accepts and ignores keyword args (e.g. `temperature`) so callers
-    that pass them for reproducibility don't break the mock.
+    Parameters
+    ----------
+    self : object
+        The patched client instance, unused.
+    system : str
+        The system text; a marker unique to each pipeline stage picks
+        the mock.
+    user : str
+        The user body the mock parses.
+    **kwargs : object
+        Accepted and ignored (`stage`, `max_tokens`, `temperature`) so
+        callers that pass them do not break the mock.
+
+    Returns
+    -------
+    str
+        The canned JSON response for that stage; the fact-extraction
+        passthrough when no marker matches.
     """
+    if 'CONTRADICTS|REFINES|RESTATES|UNRELATED' in system:
+        return _mock_screen(user)
+    if 'SUCCESSOR TEXT' in system:
+        return _mock_merge(user)
     if 'ADD|UPDATE|SUPERSEDE|NONE' in system:
         return _mock_reconciliation(user)
     if 'Expand a search query' in system:
@@ -408,59 +428,102 @@ def _mock_llm_complete(self: object, system: str, user: str,
                                   'entities': []}]})
 
 
-def _mock_reconciliation(prompt: str) -> str:
-    """Generate a reconciliation response in the one-fact contract.
+def _split_reconcile_body(prompt: str) -> tuple[dict[str, str], str]:
+    """The numbered memories and the fact of a stage body.
 
-    Parses the structured prompt for the existing memories and the one
-    new fact. Word overlap with the closest memory decides: UPDATE over
-    0.6, NONE over 0.4, else ADD. One entry, top-level `merged_text`.
+    Parameters
+    ----------
+    prompt : str
+        A screen, verdict or merge body: `EXISTING MEMORIES:` rows
+        under `[n]`, or one bare `EXISTING MEMORY:` row (the screen
+        body), an optional `CONTRADICTED CLAUSES` block, then the text
+        after `NEW FACT:`.
+
+    Returns
+    -------
+    tuple[dict[str, str], str]
+        The memories by numeric id (the bare screen row under `'0'`,
+        its lines joined by a space) and the fact text; the clause
+        block is skipped.
     """
-    existing = {}
-    fact_lines = []
-    in_existing = False
-    in_new = False
+    existing: dict[str, list[str]] = {}
+    fact_lines: list[str] = []
+    section = ''
+    current = ''
     for line in prompt.split('\n'):
-        if line.startswith('EXISTING MEMORIES:'):
-            in_existing = True
-            in_new = False
+        if line.startswith(('EXISTING MEMORIES:', 'EXISTING MEMORY:')):
+            section = 'existing'
+            continue
+        if line.startswith('CONTRADICTED CLAUSES'):
+            section = 'clauses'
             continue
         if line.startswith('NEW FACT:'):
-            in_new = True
-            in_existing = False
+            section = 'new'
             continue
-        if in_existing:
+        if section == 'existing':
             m = re.match(r'\[(\d+)\]\s+(.*)', line)
             if m:
-                existing[m.group(1)] = m.group(2)
-        if in_new and line.strip():
+                current = m.group(1)
+                existing[current] = [m.group(2)]
+            elif line.strip():
+                current = current or '0'
+                existing.setdefault(current, []).append(line.strip())
+        if section == 'new' and line.strip():
             fact_lines.append(line.strip())
+    return {k: ' '.join(v) for k, v in existing.items()}, ' '.join(fact_lines)
 
-    fact = ' '.join(fact_lines)
-    fact_lower = fact.lower()
-    best_id = None
-    best_overlap = 0
+
+def _closest_overlap(existing: dict[str, str], fact: str) -> tuple[str | None, float]:
+    """The memory id with the highest word-set Jaccard against the fact."""
+    words_f = set(fact.lower().split())
+    best_id, best_overlap = None, 0.0
     for eid, econtent in existing.items():
-        words_f = set(fact_lower.split())
         words_e = set(econtent.lower().split())
         overlap = len(words_f & words_e) / max(len(words_f | words_e), 1)
         if overlap > best_overlap:
-            best_overlap = overlap
-            best_id = eid
+            best_overlap, best_id = overlap, eid
+    return best_id, best_overlap
+
+
+def _mock_screen(prompt: str) -> str:
+    """Generate a screen response: RESTATES over 0.4 overlap, else UNRELATED.
+
+    Mirrors the verdict mock's floor so every row the verdict mock
+    would act on is screened in and every other row is dropped.
+    """
+    existing, fact = _split_reconcile_body(prompt)
+    _best_id, overlap = _closest_overlap(existing, fact)
+    relation = 'RESTATES' if overlap > 0.4 else 'UNRELATED'
+    return json.dumps({'relation': relation, 'contradicted_clauses': [],
+                       'reason': 'word overlap'})
+
+
+def _mock_merge(prompt: str) -> str:
+    """Generate a merge response carrying the fact as the successor text."""
+    _existing, fact = _split_reconcile_body(prompt)
+    return json.dumps({'merged_text': fact})
+
+
+def _mock_reconciliation(prompt: str) -> str:
+    """Generate a verdict response over the one row the body shows.
+
+    Word overlap with the row decides: UPDATE over 0.6, NONE over 0.4,
+    else ADD. One entry, no merged text.
+    """
+    existing, fact = _split_reconcile_body(prompt)
+    best_id, best_overlap = _closest_overlap(existing, fact)
 
     if best_overlap > 0.6:
         return json.dumps({
-            'merged_text': fact,
             'actions': [{'action': 'UPDATE', 'target_id': best_id,
                          'reason': 'similar content, updating'}],
             })
     if best_overlap > 0.4:
         return json.dumps({
-            'merged_text': None,
             'actions': [{'action': 'NONE', 'target_id': best_id,
                          'reason': 'already captured'}],
             })
     return json.dumps({
-        'merged_text': None,
         'actions': [{'action': 'ADD', 'target_id': None,
                      'reason': 'new information'}],
         })

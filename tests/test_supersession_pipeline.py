@@ -26,15 +26,33 @@ def _parent(content):
         created_at=now, updated_at=now)
 
 
+def _contradict(monkeypatch, target_ids, when=lambda fact_text: True, merged=lambda tid: None):
+    """Stub the three stages: `target_ids` are contradicted and superseded.
+
+    `when` gates the contradiction on the fact text; `merged` is the
+    stage-3 text per target id, None for the fact-text fallback.
+    """
+    def _screen(client, fact_text, memory):
+        if memory[0] in target_ids and when(fact_text):
+            return 'CONTRADICTS', []
+        return 'UNRELATED', []
+
+    monkeypatch.setattr('memman.llm.extract.screen_memory', _screen)
+    monkeypatch.setattr(
+        'memman.llm.extract.judge_memory', lambda client, fact_text, memory: 'supersede')
+    monkeypatch.setattr(
+        'memman.llm.extract.merge_successor',
+        lambda client, fact_text, target: merged(target[0]))
+
+
 def test_two_facts_on_one_predecessor_supersede_once_and_add_once(
         tmp_backend, monkeypatch):
-    """Verify a second fact aimed at a taken predecessor lands as an add.
+    """Verify a second fact contradicting a taken predecessor lands as an add.
 
-    Mutation: dropping `'supersede'` from the batch guard set, so the
-        second fact reaches `_apply_plan` still aimed at the taken
-        predecessor and lands as a DEGRADED add naming it; or keeping
-        the shipped skip, which drops the second fact with a
-        `target already deleted` reason and no row.
+    Mutation: dropping the batch exclusion from the shortlist, so the
+        second fact is shown the row the first fact retired, supersedes
+        it again and forks the chain; or degrading it to a skip, which
+        drops the second fact with no row.
     Oracle: exactly one row carries a pointer, it names the first
         successor, the second fact's text is stored as a clean add with
         no `target_id`, and no result is `skipped`.
@@ -50,13 +68,8 @@ def test_two_facts_on_one_predecessor_supersede_once_and_add_once(
              'importance': 3, 'entities': []},
             ]
 
-    def _aim_at_old(llm_client, fact, existing):
-        return {'action': 'SUPERSEDE', 'targets': [('old-1', 'supersede')],
-                'merged_text': None}
-
     monkeypatch.setattr('memman.llm.extract.extract_facts', _two_facts)
-    monkeypatch.setattr(
-        'memman.llm.extract.reconcile_memories', _aim_at_old)
+    _contradict(monkeypatch, {'old-1'})
 
     res = run_remember(
         tmp_backend, _parent('the broker changed'), 'the broker changed',
@@ -199,19 +212,12 @@ def test_sibling_causal_edge_into_a_superseded_row_is_swept(
              'importance': 3, 'entities': []},
             ]
 
-    def _first_supersedes(llm_client, fact, existing):
-        if 'redis' in fact['text']:
-            return {'action': 'SUPERSEDE', 'targets': [('old-1', 'supersede')],
-                    'merged_text': None}
-        return {'action': 'ADD', 'targets': [], 'merged_text': None}
-
     def _causal_into_old(ro, insight, client):
         return [Edge(source_id=insight.id, target_id='old-1',
                      edge_type='causal', weight=0.9)]
 
     monkeypatch.setattr('memman.llm.extract.extract_facts', _two_facts)
-    monkeypatch.setattr(
-        'memman.llm.extract.reconcile_memories', _first_supersedes)
+    _contradict(monkeypatch, {'old-1'}, when=lambda fact_text: 'redis' in fact_text)
     monkeypatch.setattr(
         'memman.pipeline.remember.infer_llm_causal_edges', _causal_into_old)
 
@@ -279,12 +285,12 @@ def test_a_plain_add_plan_with_a_target_reports_no_replaced_id(
 def test_one_fact_supersedes_every_contradicted_row(tmp_backend, monkeypatch):
     """Verify a fact that contradicts two rows supersedes both in one write.
 
-    Mutation: acting on the first target only (the `recon[0]` contract),
-        which leaves the second contradicted row current beside the fact.
-    Oracle: both predecessors read back with `superseded_by` naming the
-        one successor, two `reconcile-supersede` oplog rows, `replaced_ids`
-        listing both, and the far endpoint of each predecessor's edge on
-        the successor.
+    Mutation: acting on the first target only, which leaves the second
+        contradicted row current beside the fact; or one successor for
+        both, which moves every predecessor's edges onto one row.
+    Oracle: each predecessor read back with `superseded_by` naming its
+        own successor, one `reconcile-supersede` oplog row each, and the
+        far endpoint of each predecessor's edge on its own successor.
     """
     from memman.store.model import Edge
 
@@ -298,38 +304,37 @@ def test_one_fact_supersedes_every_contradicted_row(tmp_backend, monkeypatch):
     def _one_fact(llm_client, content):
         return [{'text': content, 'category': 'fact', 'entities': []}]
 
-    def _two_targets(llm_client, fact, existing):
-        return {'action': 'SUPERSEDE',
-                'targets': [('old-1', 'supersede'), ('old-2', 'supersede')],
-                'merged_text': 'X is no longer so; Y holds'}
-
     monkeypatch.setattr('memman.llm.extract.extract_facts', _one_fact)
-    monkeypatch.setattr('memman.llm.extract.reconcile_memories', _two_targets)
+    _contradict(monkeypatch, {'old-1', 'old-2'},
+                merged=lambda target_id: f'X is no longer so at {target_id}; Y holds')
 
     res = run_remember(
         tmp_backend, _parent('the broker is redis and X no longer holds'),
         'the broker is redis and X no longer holds',
         ec=bound_embedder(tmp_backend), store_name='test')
 
-    fact = res['facts'][0]
-    assert fact['action'] == 'supersede'
-    assert fact['replaced_ids'] == ['old-1', 'old-2']
-    for old in ('old-1', 'old-2'):
+    by_target = {f['replaced_ids'][0]: f for f in res['facts']}
+    assert set(by_target) == {'old-1', 'old-2'}
+    ops = [(e.operation, e.insight_id) for e in tmp_backend.oplog.recent(limit=20)]
+    for old, far in (('old-1', 'ctx-1'), ('old-2', 'ctx-2')):
+        fact = by_target[old]
+        assert fact['action'] == 'supersede'
+        assert fact['content'] == f'X is no longer so at {old}; Y holds'
         assert tmp_backend.nodes.get_include_deleted(old).superseded_by == fact['id']
         assert tmp_backend.edges.by_node(old) == []
-    ops = [(e.operation, e.insight_id) for e in tmp_backend.oplog.recent(limit=20)]
-    assert ops.count(('reconcile-supersede', 'old-1')) == 1
-    assert ops.count(('reconcile-supersede', 'old-2')) == 1
-    causal_far = {e.source_id for e in tmp_backend.edges.by_node(fact['id'])
-                  if e.edge_type == 'causal'}
-    assert causal_far == {'ctx-1', 'ctx-2'}
+        assert ops.count(('reconcile-supersede', old)) == 1
+        causal_far = {e.source_id for e in tmp_backend.edges.by_node(fact['id'])
+                      if e.edge_type == 'causal'}
+        assert causal_far == {far}
 
 
 def test_batch_drops_only_the_taken_target(tmp_backend, monkeypatch):
-    """Verify a later fact keeps its free targets when one is already taken.
+    """Verify a later fact retires its free target when another is already taken.
 
-    Mutation: degrading the whole plan to ADD when any target is taken
-        in the batch, which leaves the free contradicted row current.
+    Mutation: dropping the batch exclusion from the shortlist, so the
+        taken row is screened again and the second fact forks its
+        chain; or skipping the second fact whenever a row it would
+        have contradicted is taken, which leaves the free row current.
     Oracle: the free row's `superseded_by` naming the second successor,
         and the second fact's action `supersede` with `replaced_ids`
         listing the free row alone.
@@ -344,16 +349,18 @@ def test_batch_drops_only_the_taken_target(tmp_backend, monkeypatch):
              'entities': []},
             ]
 
-    def _aim(llm_client, fact, existing):
-        if fact['text'].startswith('nothing'):
-            return {'action': 'SUPERSEDE',
-                    'targets': [('old-1', 'supersede'), ('old-2', 'supersede')],
-                    'merged_text': None}
-        return {'action': 'SUPERSEDE', 'targets': [('old-1', 'supersede')],
-                'merged_text': None}
+    def _screen(client, fact_text, memory):
+        if memory[0] == 'old-1' or (
+                memory[0] == 'old-2' and fact_text.startswith('nothing')):
+            return 'CONTRADICTS', []
+        return 'UNRELATED', []
 
     monkeypatch.setattr('memman.llm.extract.extract_facts', _two_facts)
-    monkeypatch.setattr('memman.llm.extract.reconcile_memories', _aim)
+    monkeypatch.setattr('memman.llm.extract.screen_memory', _screen)
+    monkeypatch.setattr(
+        'memman.llm.extract.judge_memory', lambda client, fact_text, memory: 'supersede')
+    monkeypatch.setattr(
+        'memman.llm.extract.merge_successor', lambda client, fact_text, target: None)
 
     res = run_remember(
         tmp_backend, _parent('the broker changed'), 'the broker changed',

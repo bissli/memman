@@ -2,7 +2,6 @@
 
 import logging
 import re
-from typing import Any
 
 import cachetools
 from memman import config, trace
@@ -162,10 +161,55 @@ Output: {"facts": [{"text": "Every login attempt is verified against the LDAP di
 
 Now process the user's input. Return ONLY JSON, no commentary."""
 
-# The reconciler answers over up to ten candidates that can run to 90 KB
-# of text, and a response cut at the role ceiling fails to parse and
-# lands the fact as ADD; measured on the 2026-09-05 probe.
-RECONCILE_MAX_TOKENS = 8192
+# Notes:
+# - The three stage texts ship byte for byte as the probe measured
+#   them: the screen is `prompt_pairwise-v1.txt`; the
+#   verdict is `prompt_candidate-v3-verdict.txt` without the
+#   several-memories tie-break sentence, which has no referent when one
+#   row is shown per call and folded 2 of 11 synthetic restatements as
+#   UPDATE; the merge is `prompt_merge-v1.txt`.
+#   `tests/test_reconcile_stages.py` pins each text by hash, so an edit
+#   re-pins deliberately, after a measurement.
+# - Ceilings: one of 1,998 screen responses reached 1024 on a
+#   reasoning preamble and none 2048; the verdict cell ran at 2048 with
+#   one truncation in 1,221, a runaway enumeration; one whole-body
+#   merge over 37.6 K chars exhausted 8192, and the per-target body is
+#   the size cure.
+SCREEN_MAX_TOKENS = 2048
+VERDICT_MAX_TOKENS = 2048
+MERGE_MAX_TOKENS = 8192
+
+SCREEN_RELATIONS = frozenset({'CONTRADICTS', 'REFINES', 'RESTATES', 'UNRELATED'})
+UNJUDGED = 'UNJUDGED'
+
+# Notes:
+# - The write path's disposition of every verdict token the text
+#   offers, keyed on the `takes only` line of RECONCILIATION_SYSTEM;
+#   `tests/test_reconcile_stages.py` pins the keys to that line, so a
+#   token added to the text without a row fails the suite.
+# - The reader skips an entry whose token is outside the table (the
+#   model's stray word), so it can neither write nor block, and a
+#   lookup here never sees one.
+VERDICT_DISPOSITION = {
+    'SUPERSEDE': 'supersede',
+    'UPDATE': 'update',
+    'NONE': 'none',
+    'ADD': 'keep',
+    }
+
+PAIRWISE_SCREEN_SYSTEM = """You are a memory manager. ONE EXISTING MEMORY and ONE NEW FACT arrive. The fact is the newer statement. Judge the memory's present-tense claims against the fact and name their relation.
+
+Relations, judged on present-tense claims only:
+- CONTRADICTS: the memory asserts something the fact says is no longer so or never was: a changed value or name, a mechanism that was removed or replaced, a decision that was reversed, or a question the memory left open that the fact settles the other way. A memory that reports a dated event, or what was true at a stated time, is not contradicted by a later state. A fact that says something is no longer true, or corrects an earlier statement, contradicts a memory that asserts the old state.
+- REFINES: the fact adds compatible detail to the memory's subject and overturns nothing the memory asserts.
+- RESTATES: the memory already carries every claim the fact makes.
+- UNRELATED: a different subject, or compatible independent claims.
+
+Return ONLY JSON, no commentary:
+{"relation": "CONTRADICTS|REFINES|RESTATES|UNRELATED",
+ "contradicted_clauses": ["<each clause of the memory the fact overturns, quoted from the memory>"],
+ "reason": "brief explanation"}
+contradicted_clauses is empty unless the relation is CONTRADICTS."""
 
 RECONCILIATION_SYSTEM = """You are a memory manager. One NEW FACT arrives with a list of EXISTING MEMORIES, each under a numeric id. Judge EVERY memory against the fact and return one action per memory whose state the fact changes. A memory whose state the fact does not change gets no entry.
 
@@ -177,16 +221,13 @@ Relations, judged on present-tense claims only:
 
 Actions:
 - SUPERSEDE <id>: the fact contradicts memory <id>. Name EVERY contradicted memory, not only the closest one. A memory the fact merely repeats or extends is never superseded.
-- UPDATE <id>: the fact refines memory <id>. At most one. When several memories restate the fact, UPDATE the most complete one; the others get no entry.
+- UPDATE <id>: the fact refines memory <id>. At most one.
 - NONE <id>: memory <id> restates the fact. Alone.
 - ADD: no memory is contradicted, refined, or restating. Alone.
 The action field takes only ADD, UPDATE, SUPERSEDE, or NONE.
 
-merged_text is required when any action is UPDATE or SUPERSEDE. It states the new fact and keeps EVERY clause of every named memory that the fact does not contradict, in that memory's own words where possible. It drops only the contradicted clauses and never restates a contradicted claim as true. Otherwise it is null.
-
 Return JSON:
-{"merged_text": "<text or null>",
- "actions": [
+{"actions": [
   {"action": "ADD|UPDATE|SUPERSEDE|NONE",
    "target_id": null for ADD, else the numeric id,
    "reason": "brief explanation"}
@@ -195,6 +236,18 @@ Return JSON:
 When one memory restates the fact and another contradicts it, the restating memory takes UPDATE (it is folded into the successor) and the contradicted one takes SUPERSEDE; NONE is for a fact that changes nothing.
 
 Use the numeric IDs shown, not UUIDs. A contradicted memory gets SUPERSEDE, never ADD."""
+
+MERGE_SYSTEM = """You are a memory manager. A NEW FACT arrives with the EXISTING MEMORIES it changes. Each memory is listed under a numeric id with the clauses the fact overturns (CONTRADICTED CLAUSES); a memory listed with no contradicted clauses is one the fact only adds detail to. Write the SUCCESSOR TEXT that replaces every listed memory.
+
+The successor text:
+- states the new fact;
+- keeps EVERY clause of every listed memory that is not among its contradicted clauses, in that memory's own words where possible;
+- drops each contradicted clause and never restates it as true;
+- adds nothing that neither the fact nor a listed memory states;
+- is one canonical paragraph of prose (no headers, no bullet lists, no back-references such as "memory 0").
+
+Return ONLY JSON, no commentary:
+{"merged_text": "<the successor text>"}"""
 
 QUERY_EXPANSION_SYSTEM = (
     'Expand a search query for a personal memory system.\n\n'
@@ -308,132 +361,192 @@ def _passthrough_fact(content: str, category: str) -> list[dict]:
         }]
 
 
-def reconcile_memories(
+def screen_memory(
         llm_client: MemmanLLMClient,
-        fact: dict,
-        existing_memories: list[tuple[str, str]]) -> dict:
-    """Judge one fact against every candidate memory via the LLM.
+        fact_text: str,
+        memory: tuple[str, str]) -> tuple[str, list[str]]:
+    """Stage 1: one row's relation to the fact and the clauses overturned.
 
     Parameters
     ----------
     llm_client : MemmanLLMClient
         The slow canonical client; one `complete` call per invocation.
-    fact : dict
-        One extracted fact; only `text` is read.
-    existing_memories : list[tuple[str, str]]
-        `(real_id, content)` pairs, the reconcile shortlist. Shown to
-        the model under numeric ids so it cannot hallucinate a uuid.
+    fact_text : str
+        The new fact as extracted.
+    memory : tuple[str, str]
+        `(real_id, content)`, the row under judgment.
 
     Returns
     -------
-    dict
-        `action` in `ADD | UPDATE | SUPERSEDE | NONE`; `targets`, a list
-        of `(real_id, relation)` with relation `supersede`, `update` or
-        `none`; `merged_text`, the successor's content for UPDATE and
-        SUPERSEDE, else None. Every failure path (an empty shortlist, an
-        LLM error, a parse error, no usable entry) returns ADD with no
-        targets and no merged text.
+    tuple[str, list[str]]
+        The relation, one of `SCREEN_RELATIONS` or `UNJUDGED`, and the
+        clauses of the row the fact overturns, quoted from the row;
+        empty unless the relation is CONTRADICTS.
 
     Notes
     -----
-    - Normalization, in order: DELETE reads as SUPERSEDE; an unknown
-      action or an unresolvable id drops its entry; a duplicate id keeps
-      its first UPDATE or SUPERSEDE entry (an ADD or NONE on the same id
-      never shields it); when any UPDATE or SUPERSEDE survives, ADD and
-      NONE entries are dropped, UPDATE keeps its first target, and the
-      action is SUPERSEDE if any target is supersede; else the first
-      NONE with a resolved id is the answer; else ADD.
-    - `merged_text` is read from the top level and, when that is empty,
-      from the first kept linking entry that carries one.
+    - Fail-open: an LLM error, an unparsed body, a missing or unknown
+      relation is `UNJUDGED`, and the keep rule shows an UNJUDGED row
+      to stage 2 rather than drop it.
     """
-    add = {'action': 'ADD', 'targets': [], 'merged_text': None}
-    if not existing_memories:
-        return dict(add)
-
-    id_map = {}
-    memory_lines = []
-    for idx, (real_id, content) in enumerate(existing_memories):
-        id_map[str(idx)] = real_id
-        memory_lines.append(f'[{idx}] {content}')
-    prompt = (
-        'EXISTING MEMORIES:\n'
-        + '\n'.join(memory_lines)
-        + '\n\nNEW FACT:\n'
-        + fact['text'])
-
-    trace.event('reconcile_start', existing_count=len(existing_memories))
+    real_id, content = memory
+    body = f'EXISTING MEMORY:\n{content}\n\nNEW FACT:\n{fact_text}'
     try:
         raw = llm_client.complete(
-            RECONCILIATION_SYSTEM, prompt,
-            stage=llm_usage.STAGE_RECONCILIATION,
-            max_tokens=RECONCILE_MAX_TOKENS)
+            PAIRWISE_SCREEN_SYSTEM, body,
+            stage=llm_usage.STAGE_SCREEN,
+            max_tokens=SCREEN_MAX_TOKENS)
     except Exception as exc:
-        logger.debug('LLM reconciliation failed, defaulting to ADD')
         trace.event(
-            'reconcile_result',
-            outcome='error',
+            'screen_result', target_id=real_id, outcome='error',
             error=f'{type(exc).__name__}: {exc}')
-        return dict(add)
+        return UNJUDGED, []
+    parsed = parse_json_response(raw)
+    relation = (str(parsed.get('relation', '')).upper()
+                if isinstance(parsed, dict) else '')
+    if relation not in SCREEN_RELATIONS:
+        trace.event(
+            'screen_result', target_id=real_id, outcome='unjudged', raw=raw)
+        return UNJUDGED, []
+    clauses: list[str] = []
+    if relation == 'CONTRADICTS':
+        quoted = parsed.get('contradicted_clauses')
+        if isinstance(quoted, list):
+            clauses = [c for c in quoted if isinstance(c, str) and c.strip()]
+    trace.event(
+        'screen_result', target_id=real_id, outcome='ok',
+        relation=relation, clauses=len(clauses))
+    return relation, clauses
+
+
+def judge_memory(
+        llm_client: MemmanLLMClient,
+        fact_text: str,
+        memory: tuple[str, str]) -> str:
+    """Stage 2: the write path's verdict on one screened row.
+
+    Parameters
+    ----------
+    llm_client : MemmanLLMClient
+        The slow canonical client; one `complete` call per invocation.
+    fact_text : str
+        The new fact as extracted.
+    memory : tuple[str, str]
+        `(real_id, content)`, the one row shown under `[0]`.
+
+    Returns
+    -------
+    str
+        `supersede`, `update`, `none`, or `keep` for no write against
+        the row.
+
+    Notes
+    -----
+    - The id map is the measured `first` variant: the first entry
+      with a known token that names ANY non-null id decides, whatever
+      id it names. The model numbers sections of the one row and judges
+      a section (25 rows of 1,221 on the probe), and every such verdict
+      is about the row shown.
+    - An entry with a null id is skipped: an ADD there neither decides
+      nor blocks, a row verdict there is dropped. DELETE reads as
+      SUPERSEDE. An entry whose token is outside `VERDICT_DISPOSITION`
+      is skipped the same way, so the next known entry decides.
+    - Fail-closed: an LLM error or an unparsed body is `keep`.
+    """
+    real_id, content = memory
+    body = f'EXISTING MEMORIES:\n[0] {content}\n\nNEW FACT:\n{fact_text}'
+    trace.event('reconcile_start', target_id=real_id)
+    try:
+        raw = llm_client.complete(
+            RECONCILIATION_SYSTEM, body,
+            stage=llm_usage.STAGE_RECONCILIATION,
+            max_tokens=VERDICT_MAX_TOKENS)
+    except Exception as exc:
+        trace.event(
+            'reconcile_result', target_id=real_id, outcome='error',
+            error=f'{type(exc).__name__}: {exc}')
+        return 'keep'
 
     parsed = parse_json_response(raw)
     if parsed is None or not isinstance(parsed.get('actions'), list):
-        trace.event('reconcile_result', outcome='parse_error', raw=raw)
-        return dict(add)
+        trace.event(
+            'reconcile_result', target_id=real_id, outcome='parse_error',
+            raw=raw)
+        return 'keep'
 
-    linked: list[tuple[str, str, Any]] = []
-    linked_ids: set[str] = set()
-    nones: list[str] = []
-    n_entries = 0
-    for a in parsed['actions']:
-        if not isinstance(a, dict):
+    verdict = 'keep'
+    for entry in parsed['actions']:
+        if not isinstance(entry, dict) or entry.get('target_id') is None:
             continue
-        action = str(a.get('action', '')).upper()
-        # A DELETE the model still emits is a contradiction verdict.
+        action = str(entry.get('action', '')).upper()
         if action == 'DELETE':
             action = 'SUPERSEDE'
-        if action not in {'ADD', 'UPDATE', 'SUPERSEDE', 'NONE'}:
+        if action not in VERDICT_DISPOSITION:
             continue
-        target_id = None
-        if a.get('target_id') is not None:
-            target_id = id_map.get(str(a['target_id']))
-        if action != 'ADD' and target_id is None:
-            continue
-        n_entries += 1
-        if action == 'NONE':
-            nones.append(target_id)
-        elif action != 'ADD' and target_id not in linked_ids:
-            linked_ids.add(target_id)
-            linked.append((target_id, action.lower(), a.get('merged_text')))
+        verdict = VERDICT_DISPOSITION[action]
+        break
+    trace.event(
+        'reconcile_result', target_id=real_id, outcome='ok', verdict=verdict)
+    return verdict
 
-    supersedes = [t for t, rel, _m in linked if rel == 'supersede']
-    updates = [t for t, rel, _m in linked if rel == 'update'][:1]
-    kept = [(t, rel, m) for t, rel, m in linked
-            if rel == 'supersede' or t in updates]
-    merged_text = parsed.get('merged_text')
-    if not isinstance(merged_text, str) or not merged_text.strip():
-        merged_text = next(
-            (m for _t, _rel, m in kept if isinstance(m, str) and m.strip()),
-            None)
 
-    if kept:
-        result = {
-            'action': 'SUPERSEDE' if supersedes else 'UPDATE',
-            'targets': [(t, rel) for t, rel, _m in kept],
-            'merged_text': merged_text,
-            }
-    elif nones:
-        result = {'action': 'NONE', 'targets': [(nones[0], 'none')],
-                  'merged_text': None}
-    else:
-        result = dict(add)
+def merge_successor(
+        llm_client: MemmanLLMClient,
+        fact_text: str,
+        target: tuple[str, str, list[str]]) -> str | None:
+    """Stage 3: the successor text for one retiring target.
 
-    if n_entries == 0:
-        trace.event('reconcile_result', outcome='empty', fallback='ADD')
-    else:
+    Parameters
+    ----------
+    llm_client : MemmanLLMClient
+        The slow canonical client; one `complete` call per invocation.
+    fact_text : str
+        The new fact as extracted.
+    target : tuple[str, str, list[str]]
+        `(real_id, content, clauses)`: the retiring row and the clauses
+        the screen quoted as contradicted; empty for an update target
+        or a row the screen did not call CONTRADICTS.
+
+    Returns
+    -------
+    str | None
+        The merged text, stripped; None on an LLM error, an unparsed
+        body or an empty text, so the caller stores the fact and marks
+        the oplog row `(unmerged)`.
+
+    Notes
+    -----
+    - One target per call: on the probe the row-alone body kept the
+      clauses the whole body dropped, b = 6 to 8 against c = 0 on
+      every judged line.
+    """
+    real_id, content, clauses = target
+    clause_lines = [f'- {clause}' for clause in clauses] or ['(none)']
+    body = (
+        f'EXISTING MEMORIES:\n[0] {content}\n'
+        'CONTRADICTED CLAUSES of [0]:\n' + '\n'.join(clause_lines)
+        + f'\n\nNEW FACT:\n{fact_text}')
+    try:
+        raw = llm_client.complete(
+            MERGE_SYSTEM, body,
+            stage=llm_usage.STAGE_MERGE,
+            max_tokens=MERGE_MAX_TOKENS)
+    except Exception as exc:
         trace.event(
-            'reconcile_result', outcome='ok',
-            action=result['action'], targets=result['targets'])
-    return result
+            'reconcile_merge', target_id=real_id, clauses=len(clauses),
+            outcome='error', error=f'{type(exc).__name__}: {exc}')
+        return None
+    parsed = parse_json_response(raw)
+    text = parsed.get('merged_text') if isinstance(parsed, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        trace.event(
+            'reconcile_merge', target_id=real_id, clauses=len(clauses),
+            outcome='no_text', raw=raw)
+        return None
+    trace.event(
+        'reconcile_merge', target_id=real_id, clauses=len(clauses),
+        outcome='ok')
+    return text.strip()
 
 
 _EXPAND_CACHE_TTL = 300

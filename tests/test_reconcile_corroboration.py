@@ -38,17 +38,20 @@ def _stub_none(monkeypatch, target_id):
 
     The conftest mock decides NONE from word overlap, so a stub is
     what makes the verdict the fixture rather than the fixture's
-    phrasing. The recorded calls separate a real failure from an
-    empty shortlist, where `reconcile_memories` never runs at all.
+    phrasing. The recorded verdict calls separate a real failure from
+    an empty shortlist, where no stage runs at all.
     """
     calls = []
 
-    def _fake(llm_client, fact, similar):
-        calls.append((fact, similar))
-        return {'action': 'NONE', 'targets': [(target_id, 'none')],
-                'merged_text': None}
+    def _screen(llm_client, fact_text, memory):
+        return 'RESTATES', []
 
-    monkeypatch.setattr('memman.llm.extract.reconcile_memories', _fake)
+    def _judge(llm_client, fact_text, memory):
+        calls.append((fact_text, memory))
+        return 'none' if memory[0] == target_id else 'keep'
+
+    monkeypatch.setattr('memman.llm.extract.screen_memory', _screen)
+    monkeypatch.setattr('memman.llm.extract.judge_memory', _judge)
     return calls
 
 
