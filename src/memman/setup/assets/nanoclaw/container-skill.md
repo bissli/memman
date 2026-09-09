@@ -60,8 +60,9 @@ Run this decision tree after every substantive response:
 says so: it names what is no longer true and what is true now, in one
 self-contained statement, and goes in with `memman remember` like any
 other fact. The worker finds every stored row the fact contradicts and
-supersedes each with one merge that keeps their still-true clauses; a
-settled open question is a correction of the row that left it open.
+supersedes each with its own merge that keeps that row's still-true
+clauses; a settled open question is a correction of the row that left
+it open.
 
 **Step 3 — Is it worth storing?**
   Rebuilding from scratch costs more than storing + recalling?
