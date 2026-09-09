@@ -147,8 +147,9 @@ the reasoning and conclusions.
 says so: it names what is no longer true and what is true now, in one
 self-contained statement, and goes in with `memman remember` like any
 other fact. The worker finds every stored row the fact contradicts and
-supersedes each with one merge that keeps their still-true clauses; a
-settled open question is a correction of the row that left it open.
+supersedes each with its own merge that keeps that row's still-true
+clauses; a settled open question is a correction of the row that left
+it open.
 
 **`--imp`** is a sort key for listings and tie-breaks (1-5, default 3). Pass
 `--imp 5` for a fact the whole system rests on; otherwise omit it.
