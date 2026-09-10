@@ -75,6 +75,37 @@ class NodeStore(Protocol):
         """Return one insight by id, including soft-deleted rows."""
         ...
 
+    def resolve_id(self, id_or_prefix: str) -> str:
+        """Resolve an exact id or an unambiguous prefix to a full id.
+
+        Parameters
+        ----------
+        id_or_prefix : str
+            A full insight id or a prefix of one.
+
+        Returns
+        -------
+        str
+            The full id when the argument is an exact id or a prefix
+            that matches exactly one row (including deleted and
+            superseded rows). Returns the argument unchanged when no
+            row matches, so the caller's existing not-found path fires.
+
+        Raises
+        ------
+        ValueError
+            When the prefix matches two or more rows; the message names
+            the prefix and the match count.
+
+        Notes
+        -----
+        - Exact match takes priority over prefix match: a full id that
+          is also a prefix of another row resolves to itself.
+        - Resolution scans all rows including deleted and superseded
+          ones; each command's own get applies its state filter.
+        """
+        ...
+
     def get_many(self, ids: Sequence[Id]) -> list[Insight]:
         """Return active insights for the given ids, in input order.
 

@@ -20,7 +20,8 @@ return is attributable to your session.
 
 A brief page of 20 costs a fraction of a full page of 5 and carries
 several times the relevant material, so scan wide and open what earns
-it with `memman insights show <id>`.
+it with `memman insights show <id>` (any unambiguous prefix of the id
+works).
 
 On the scored path (no `--basic`) the recall response's `meta`
 object carries:
