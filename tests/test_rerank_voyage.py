@@ -28,6 +28,7 @@ class TestProviderRegistry:
             get_client()
 
 
+@pytest.mark.no_mock_rerank
 class TestVoyageClient:
     """Voyage rerank Client behavior."""
 

@@ -53,7 +53,7 @@ def test_reconcile_candidates_ranked_by_similarity(monkeypatch):
     rem._plan_fact(
         fact, parent, '', False, False,
         insights_by_id, embed_cache, set(),
-        MagicMock(), MagicMock(), ec, MagicMock(), MagicMock())
+        MagicMock(), MagicMock(), ec, MagicMock(), MagicMock(), 'teststore')
 
     assert 'TOP' in screened, f'top-cosine insight crowded out; screened={screened}'
 
@@ -194,15 +194,25 @@ def test_reconcile_candidates_are_logged_for_a_none_skip(tmp_backend, monkeypatc
     assert {c['id'] for c in rows[0][1]['candidates']} == {'kw-1', 'cos-1'}
 
 
-def test_shortlist_takes_twenty_cosine_rows(monkeypatch):
-    """Verify the cosine rung fills the shortlist to twenty rows.
-
-    Mutation: the cap left at ten, so the three retrieval misses the
-        measured curve puts inside twenty never reach the screen.
-    Oracle: twenty-five planted rows above the floor and no keyword
-        hit, against the cap of twenty DESIGN 14.2 decided.
-    """
+def _plant_cosine_rows(count, top=0.95, step=0.01):
+    """Rows `row0..row{count-1}` at cosine `top - i * step` to the fact `[1, 0]`."""
     import math
+
+    from tests.conftest import make_insight
+
+    insights_by_id = {}
+    embed_cache = {}
+    for i in range(count):
+        ins = make_insight(id=f'row{i}', content=f'candidate body number {i}')
+        insights_by_id[ins.id] = ins
+        cos = top - i * step
+        embed_cache[ins.id] = [cos, math.sqrt(1 - cos * cos)]
+    return insights_by_id, embed_cache
+
+
+def _plan_shortlist(monkeypatch, insights_by_id, embed_cache,
+                    fact_text='zzqq alpha brandnew'):
+    """Run `_plan_fact` with the screen stubbed UNRELATED; return the candidates."""
     from unittest.mock import MagicMock
 
     from memman.llm import extract as llm_extract
@@ -212,25 +222,220 @@ def test_shortlist_takes_twenty_cosine_rows(monkeypatch):
     monkeypatch.setattr(
         llm_extract, 'screen_memory',
         lambda client, fact_text, memory: ('UNRELATED', []))
-
-    insights_by_id = {}
-    embed_cache = {}
-    for i in range(25):
-        ins = make_insight(id=f'row{i}', content=f'candidate body number {i}')
-        insights_by_id[ins.id] = ins
-        cos = 0.95 - i * 0.01
-        embed_cache[ins.id] = [cos, math.sqrt(1 - cos * cos)]
-
-    fact = {'text': 'zzqq alpha brandnew', 'category': 'fact', 'entities': []}
+    fact = {'text': fact_text, 'category': 'fact', 'entities': []}
     ec = MagicMock()
     ec.embed.return_value = [1.0, 0.0]
-
     plans, _calls = rem._plan_fact(
-        fact, make_insight(id='parent', content='zzqq alpha brandnew'),
+        fact, make_insight(id='parent', content=fact_text),
         '', False, False, insights_by_id, embed_cache, set(),
-        MagicMock(), MagicMock(), ec, MagicMock(), MagicMock())
+        MagicMock(), MagicMock(), ec, MagicMock(), MagicMock(), 'teststore')
+    return plans[0].candidates
 
-    assert len(plans[0].candidates) == 20
+
+def test_shortlist_fills_to_twenty_rows(monkeypatch):
+    """Verify the two scored rungs fill the shortlist to twenty rows.
+
+    Mutation: the cap left at ten, or the slots the keyword rung leaves
+        empty not passed to the rerank rung, so the list stops short.
+    Oracle: twenty-five planted rows and no keyword hit under the
+        passthrough reranker, against the cap of twenty: nine cosine
+        rows then eleven rerank rows.
+    """
+    from memman.pipeline import remember as rem
+
+    insights_by_id, embed_cache = _plant_cosine_rows(25)
+
+    candidates = _plan_shortlist(monkeypatch, insights_by_id, embed_cache)
+
+    assert [c.id for c in candidates] == [f'row{i}' for i in range(20)]
+    assert [c.rung for c in candidates] == (
+        ['cosine'] * rem.RECONCILE_COSINE_SLOTS
+        + ['rerank'] * (20 - rem.RECONCILE_COSINE_SLOTS))
+
+
+def test_shortlist_rerank_slots_follow_the_reranker(monkeypatch):
+    """Verify the rerank slots take the reranker's order, skipping taken rows.
+
+    Mutation: the rerank slots filled in cosine order, or the cosine rows
+        already taken not skipped so they appear twice.
+    Oracle: a stub reranker that inverts the cosine order over thirty
+        rows; hand-computed: row0..row8 by cosine, then row29 down to
+        row19 by rerank score.
+    """
+    from memman.pipeline import remember as rem
+
+    insights_by_id, embed_cache = _plant_cosine_rows(30)
+    monkeypatch.setattr(
+        'memman.rerank.voyage.Client.rerank',
+        lambda self, query, documents, top_k=None: [
+            (i, i / 100) for i in reversed(range(len(documents)))])
+
+    candidates = _plan_shortlist(monkeypatch, insights_by_id, embed_cache)
+
+    cosine_ids = [f'row{i}' for i in range(rem.RECONCILE_COSINE_SLOTS)]
+    rerank_ids = [f'row{i}' for i in range(29, 18, -1)]
+    assert [c.id for c in candidates] == cosine_ids + rerank_ids
+    assert [c.rung for c in candidates][rem.RECONCILE_COSINE_SLOTS:] == ['rerank'] * 11
+    assert [round(c.score, 2) for c in candidates][rem.RECONCILE_COSINE_SLOTS:] == [
+        i / 100 for i in range(29, 18, -1)]
+
+
+def test_shortlist_rerank_pool_is_the_top_hundred_by_cosine(monkeypatch):
+    """Verify the reranker sees the top 100 rows by cosine, floor or none.
+
+    Mutation: the pool left unbounded (every row sent), the 0.5 floor
+        kept (rows below it never sent), the keyword row left out of the
+        pool, or the keyword row counted against the cosine quota.
+    Oracle: 130 planted rows whose cosine falls below 0.5 from row82 on,
+        plus one keyword-hit row at cosine 0.999; the stub records the
+        documents it receives; one keyword, nine cosine, ten rerank.
+    """
+    from memman.pipeline import remember as rem
+    from tests.conftest import make_insight
+
+    insights_by_id, embed_cache = _plant_cosine_rows(130, top=0.99, step=0.006)
+    kw = make_insight(id='kw-hit', content='zzqq alpha brandnew as stored')
+    insights_by_id[kw.id] = kw
+    embed_cache[kw.id] = [0.999, (1 - 0.999 ** 2) ** 0.5]
+    received = []
+    monkeypatch.setattr(
+        'memman.rerank.voyage.Client.rerank',
+        lambda self, query, documents, top_k=None: received.append(list(documents)) or [
+            (i, 1.0 - i / 200) for i in range(len(documents))])
+
+    candidates = _plan_shortlist(monkeypatch, insights_by_id, embed_cache)
+
+    assert len(received) == 1
+    assert len(received[0]) == 100
+    assert received[0] == (
+        [kw.content] + [f'candidate body number {i}' for i in range(99)])
+    assert embed_cache['row82'][0] < 0.5 < embed_cache['row81'][0]
+    ids = [c.id for c in candidates]
+    assert ids[0] == 'kw-hit'
+    assert candidates[0].rung == 'keyword'
+    assert len(ids) == len(set(ids)) == 20
+    rungs = [c.rung for c in candidates]
+    assert rungs.count('cosine') == rem.RECONCILE_COSINE_SLOTS
+    assert rungs.count('rerank') == 20 - 1 - rem.RECONCILE_COSINE_SLOTS
+
+
+def test_shortlist_falls_back_to_cosine_when_the_reranker_fails(monkeypatch):
+    """Verify a failed rerank call leaves a cosine-ordered shortlist.
+
+    Mutation: the exception propagating and losing the fact, or the
+        rerank slots left empty so the screen sees nine rows.
+    Oracle: a stub reranker that raises; twenty cosine rows in cosine
+        order, every rung `cosine`.
+    """
+    def _boom(self, query, documents, top_k=None):
+        raise RuntimeError('Voyage rerank returned status 500')
+
+    insights_by_id, embed_cache = _plant_cosine_rows(25)
+    monkeypatch.setattr('memman.rerank.voyage.Client.rerank', _boom)
+
+    candidates = _plan_shortlist(monkeypatch, insights_by_id, embed_cache)
+
+    assert [c.id for c in candidates] == [f'row{i}' for i in range(20)]
+    assert {c.rung for c in candidates} == {'cosine'}
+
+
+def test_shortlist_skips_the_reranker_when_the_store_disables_rerank(
+        monkeypatch, env_file):
+    """Verify the per-store rerank toggle governs the write path too.
+
+    Mutation: the toggle read under the wrong key, or ignored, so a store
+        an operator switched off still pays the rerank call; the rung's
+        failure fallback would hide that, so the spy is the oracle.
+    Oracle: `MEMMAN_RERANK_ENABLED_teststore=false` in the env file and a
+        spy reranker that records every call; the list is cosine only.
+    """
+    calls = []
+
+    def _spy(self, query, documents, top_k=None):
+        calls.append(len(documents))
+        return [(i, 1.0) for i in range(len(documents))]
+
+    env_file('MEMMAN_RERANK_ENABLED_teststore', 'false')
+    insights_by_id, embed_cache = _plant_cosine_rows(25)
+    monkeypatch.setattr('memman.rerank.voyage.Client.rerank', _spy)
+
+    candidates = _plan_shortlist(monkeypatch, insights_by_id, embed_cache)
+
+    assert calls == []
+    assert [c.id for c in candidates] == [f'row{i}' for i in range(20)]
+    assert {c.rung for c in candidates} == {'cosine'}
+
+
+def test_shortlist_pool_keeps_positive_cosines_only(monkeypatch):
+    """Verify the sign boundary: rows at cosine <= 0 never reach the reranker.
+
+    Mutation: the sign boundary dropped, so orthogonal and anti-correlated
+        rows are sent, ranked, and screened.
+    Oracle: twelve rows above zero, one at zero and five below; the stub
+        records the documents it receives; the list holds the twelve.
+    """
+    import math
+
+    from tests.conftest import make_insight
+
+    insights_by_id, embed_cache = _plant_cosine_rows(12, top=0.6, step=0.05)
+    for i, cos in enumerate([0.0, -0.1, -0.2, -0.3, -0.4, -0.5]):
+        ins = make_insight(id=f'neg{i}', content=f'unrelated body number {i}')
+        insights_by_id[ins.id] = ins
+        embed_cache[ins.id] = [cos, math.sqrt(1 - cos * cos)]
+    received = []
+
+    def _record(self, query, documents, top_k=None):
+        received.append(list(documents))
+        return [(i, 1.0 - i / 100) for i in range(len(documents))]
+
+    monkeypatch.setattr('memman.rerank.voyage.Client.rerank', _record)
+
+    candidates = _plan_shortlist(monkeypatch, insights_by_id, embed_cache)
+
+    assert received == [[f'candidate body number {i}' for i in range(12)]]
+    assert [c.id for c in candidates] == [f'row{i}' for i in range(12)]
+
+
+def test_shortlist_rerank_ties_order_by_id_descending(monkeypatch):
+    """Verify equal rerank scores order by id descending, not provider order.
+
+    Mutation: the tie rule reduced to the score alone, so Python's stable
+        sort keeps the provider's order and a provider that reorders ties
+        changes the shortlist run to run.
+    Oracle: a stub that scores every document 0.5; hand-computed over the
+        untaken ids as strings: row9 first, then row24 down to row15.
+    """
+    from memman.pipeline import remember as rem
+
+    insights_by_id, embed_cache = _plant_cosine_rows(25)
+    monkeypatch.setattr(
+        'memman.rerank.voyage.Client.rerank',
+        lambda self, query, documents, top_k=None: [
+            (i, 0.5) for i in range(len(documents))])
+
+    candidates = _plan_shortlist(monkeypatch, insights_by_id, embed_cache)
+
+    cosine_ids = [f'row{i}' for i in range(rem.RECONCILE_COSINE_SLOTS)]
+    assert [c.id for c in candidates] == cosine_ids + ['row9'] + [
+        f'row{i}' for i in range(24, 14, -1)]
+
+
+def test_shortlist_quotas_match_the_measured_plateau():
+    """Pin the cosine slot count and the rerank pool to their measured values.
+
+    Mutation: a quota moved without re-measuring the plateau, or the
+        write path's pool drifting from the read path's shortlist.
+    Oracle: the zero-call measurement of 2026-09-10 over 64 cases, where
+        every cosine slot count from 6 to 12 reaches 6 of the 8 missed
+        targets with all 59 kept and 9 is its middle; the read path's
+        `RERANK_SHORTLIST`.
+    """
+    from memman.pipeline import remember as rem
+    from memman.search import recall
+
+    assert rem.RECONCILE_COSINE_SLOTS == 9
+    assert rem.RERANK_POOL == recall.RERANK_SHORTLIST == 100
 
 
 def test_apply_never_links_a_planned_row_before_it_is_inserted(tmp_backend, monkeypatch):

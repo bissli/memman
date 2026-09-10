@@ -84,6 +84,7 @@ build-backend = "poetry.core.masonry.api"
 testpaths = ["tests"]
 markers = [
     "no_mock_llm: skip the autouse MemmanLLMClient.complete mock; keep ZDR + embedding stubs",
+    "no_mock_rerank: skip the autouse Voyage rerank passthrough; the test drives the real client method",
     "no_scheduler_started_mock: skip the autouse scheduler-started mock; tests run with the real read_state",
     "no_autoseed_fingerprint: skip the autouse meta.embed_fingerprint seed; exercises raw assert_consistent semantics",
     "no_auto_drain: skip the autouse post-write drain wrapper; tests inspect pre-drain queue state",
