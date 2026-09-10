@@ -724,6 +724,28 @@ class TestSetupCli:
         assert result.exit_code == 0
         assert shipped.strip() in result.output
 
+    def test_guide_names_no_host_tool(self):
+        """Verify the shared guide.md names no host-specific tool.
+
+        Mutation: the shared guide naming Bash, so the OpenClaw
+            bootstrap names a tool that host does not expose.
+        Oracle: the exact tokens 'via Bash' and 'the `exec` tool' read
+            from the two SKILL files confirm they disagree, so the shared
+            text must name neither; the emitted guide carries no 'Bash'
+            and no 'exec' at all.
+        """
+        from importlib.resources import files as pkg_files
+        assets = pkg_files('memman.setup.assets')
+        claude_skill = assets.joinpath('claude/SKILL.md').read_text()
+        openclaw_skill = assets.joinpath('openclaw/SKILL.md').read_text()
+        assert 'via Bash' in claude_skill
+        assert 'the `exec` tool' in openclaw_skill
+        runner = CliRunner()
+        result = runner.invoke(cli, ['guide'])
+        assert result.exit_code == 0
+        assert 'Bash' not in result.output
+        assert 'exec' not in result.output
+
     def test_guide_command_ignores_any_local_override_file(self, tmp_path, monkeypatch):
         """`memman guide` must NOT read ~/.memman/prompt/guide.local.md.
 
