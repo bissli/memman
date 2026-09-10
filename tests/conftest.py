@@ -357,6 +357,8 @@ def _mock_apis(request, monkeypatch):
     should mark themselves with `@pytest.mark.no_mock_llm` to skip
     the method-level patch while keeping the resolver and embedding
     stubs in place.
+    Tests that exercise the real `rerank.voyage.Client.rerank` method
+    mark themselves `@pytest.mark.no_mock_rerank` the same way.
     """
     if 'tests/e2e/' in str(request.node.fspath):
         return
@@ -381,6 +383,9 @@ def _mock_apis(request, monkeypatch):
         'memman.embed.voyage.Client.embed_batch', _mock_embed_batch)
     monkeypatch.setattr(
         'memman.embed.voyage.Client.available', lambda self: True)
+    if 'no_mock_rerank' not in request.keywords:
+        monkeypatch.setattr(
+            'memman.rerank.voyage.Client.rerank', _mock_rerank)
     from memman import config
     config.reset_file_cache()
     from memman.llm import client as llm_client_mod
@@ -569,6 +574,19 @@ def _extract_mock_entities(text: str) -> list[str]:
         if word not in stopwords and word not in entities:
             entities.append(word)
     return entities[:5]
+
+
+def _mock_rerank(self: object, query: str, documents: list[str],
+                 top_k: int | None = None) -> list[tuple[int, float]]:
+    """Passthrough reranker: input order preserved, scores descending.
+
+    The write path's shortlist reranks its cosine pool on every fact, so
+    without this stub every pipeline test would post to Voyage. Keeping
+    the input order means a test that plants rows by cosine sees the
+    rerank slots filled in that same order unless it installs its own
+    stub.
+    """
+    return [(i, 1.0 - i / max(1, len(documents))) for i in range(len(documents))]
 
 
 def _mock_embed_batch(

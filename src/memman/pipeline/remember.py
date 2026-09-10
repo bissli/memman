@@ -24,6 +24,7 @@ import functools
 import hashlib
 import json
 import logging
+import time
 import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -31,7 +32,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 import httpx
-from memman import trace
+from memman import config, trace
 from memman.embed import EmbeddingProvider
 from memman.embed.vector import cosine_similarity
 from memman.exceptions import EmbedCredentialError
@@ -43,6 +44,7 @@ from memman.graph.semantic import create_semantic_edges
 from memman.llm import extract as llm_extract
 from memman.llm.client import MemmanLLMClient, get_llm_client
 from memman.llm.extract import _WS_COLLAPSE_RE, UNJUDGED
+from memman.rerank import get_client as get_rerank_client
 from memman.search.keyword import keyword_search
 from memman.search.quality import check_content_quality
 from memman.store.backend import Backend
@@ -107,29 +109,26 @@ def compute_prompt_version() -> str:
 
 
 # Notes:
-# - SIMILARITY_RECONCILE_THRESHOLD gates which stored rows become
-#   reconciliation candidates. It is MEASURED INERT over the range it
-#   acts on rather than swept for an optimum, which is the honest
-#   claim: a restatement's cosine against the row it restates is
-#   0.7593 to 1.0000, so the floor has 0.26 of headroom even at the
-#   hardest rung and never decides an outcome.
-# - The ladder is eight restatements of one fact at increasing
-#   distance, byte-identical out to a fully abstract reframing, judged
-#   5 times each against sonnet-4.6 with zero disagreement; the
-#   reconciler answered NONE on all eight. Four different facts at
-#   high lexical overlap were also correct. See
-#   experiments/recall_bench/dedup_residual.py and its
-#   results/dedup_residual.json (2026-09-02).
-# - Do NOT reason about this floor from the RECALL-side cosine
-#   distribution, whose median is 0.2424 and whose 99th percentile
-#   sits below 0.5. That distribution is query-to-row, where a short
-#   query meets a long document; this gate is row-to-row between two
-#   paraphrases of comparable length, and the two distributions are
-#   nowhere near each other. Reading across them predicts the exact
-#   opposite of what the gate does.
-SIMILARITY_RECONCILE_THRESHOLD = 0.5
+# - The reconcile shortlist is the keyword rung, then
+#   RECONCILE_COSINE_SLOTS rows by cosine, then the cross-encoder's
+#   order over the top RERANK_POOL rows by cosine until the cap. No
+#   absolute cosine anywhere: a fixed value means a different thing
+#   under every embedding model. The one boundary kept is the sign,
+#   as `vector_anchors` keeps it on the read path: an orthogonal row
+#   is orthogonal under every model.
+# - RERANK_POOL mirrors the read path's RERANK_SHORTLIST: one call
+#   over at most 100 documents, the shape every recall already pays.
+# - RECONCILE_COSINE_SLOTS is a quota, not a score. Measured over 64
+#   frozen cases with 67 supersede targets (2026-09-10): every split
+#   from 6 to 12 cosine slots reaches 65 of the 67 with none lost,
+#   against the floored 15-slot cosine rung's 62; 9 is the middle of
+#   that plateau. Both edges move with the embedding and rerank
+#   models, so a model swap re-measures the plateau, not this
+#   constant.
 MAX_SIMILAR_FOR_RECONCILE = 20
 KEYWORD_HITS_LIMIT = 5
+RECONCILE_COSINE_SLOTS = 9
+RERANK_POOL = 100
 
 
 # Notes:
@@ -157,9 +156,10 @@ class Candidate:
     id : str
         The stored row.
     rung : str
-        `keyword` or `cosine`, the rung that shortlisted it.
+        `keyword`, `cosine` or `rerank`, the rung that shortlisted it.
     score : float
-        The rung's score.
+        The rung's score: a keyword score, a cosine, or the reranker's
+        relevance.
     relation : str | None
         The screen's relation, one of `SCREEN_DISPOSITION`; None when
         the exact-match rung answered before the screen ran.
@@ -371,7 +371,7 @@ def run_remember(
                 cat_explicit, insights_by_id,
                 embed_cache, superseded_in_batch, llm_client,
                 metadata_llm_client, ec,
-                backend, executor)
+                backend, executor, store_name)
             llm_calls += calls
             pending_replaced_id = ''
 
@@ -566,6 +566,7 @@ def _plan_fact(
         ec: Any,
         backend: Backend,
         executor: ThreadPoolExecutor,
+        store_name: str,
         ) -> tuple[list[FactPlan], int]:
     """Plan a single fact without touching the DB.
 
@@ -598,6 +599,9 @@ def _plan_fact(
         Open store, read only here.
     executor : ThreadPoolExecutor
         The drain's two-worker executor for enrichment and causal.
+    store_name : str
+        The store being written; its per-store rerank toggle governs
+        the shortlist's rerank rung.
 
     Returns
     -------
@@ -608,6 +612,16 @@ def _plan_fact(
 
     Notes
     -----
+    - The shortlist holds at most `MAX_SIMILAR_FOR_RECONCILE` rows: up
+      to `KEYWORD_HITS_LIMIT` keyword hits, then up to
+      `RECONCILE_COSINE_SLOTS` rows by cosine, then the reranker's
+      order over the top `RERANK_POOL` rows by cosine until the cap,
+      each rung skipping rows already taken. A slot the keyword rung
+      leaves empty goes to the rerank rung; the cosine order fills
+      what a failed, disabled or exhausted rerank cannot.
+    - The rerank call honors `MEMMAN_RERANK_ENABLED_<store>` and the
+      global `MEMMAN_RERANK_ENABLED` as recall does; a failure is
+      logged and traced and never loses the fact.
     - Stage 1 screens every shortlisted row in parallel on an executor
       sized to the shortlist; stage 2 shows each kept row alone; stage
       3 writes one merge text per retiring target. The stage functions
@@ -664,21 +678,80 @@ def _plan_fact(
             seen.add(hit_ins.id)
 
         if fact_vec is not None:
-            cosine_cands: list[tuple[float, str, str]] = []
-            for eid, evec in embed_cache.items():
-                if eid in seen or eid in superseded_in_batch:
+            # Notes:
+            # - Positive cosines only: the sign is the one boundary
+            #   that means the same thing under every embedding model,
+            #   and a zero-norm or mismatched-dimension vector scores
+            #   0.0 and must not enter the pool as a tie.
+            # - Keyword rows stay in the pool so the call is the
+            #   measured one; the union skips rows already taken, so
+            #   their rerank ranks consume no slot.
+            # - Ties by id descending here and in the rerank order, so
+            #   two equal scores place the same way on every run.
+            scored_rows = (
+                (cosine_similarity(fact_vec, evec), eid)
+                for eid, evec in embed_cache.items()
+                if eid not in superseded_in_batch and eid in insights_by_id)
+            pool = sorted(
+                (row for row in scored_rows if row[0] > 0.0),
+                reverse=True)[:RERANK_POOL]
+            cosine_taken = 0
+            for sim, cid in pool:
+                if (cosine_taken >= RECONCILE_COSINE_SLOTS
+                        or len(similar) >= MAX_SIMILAR_FOR_RECONCILE):
+                    break
+                if cid in seen:
                     continue
-                ins = insights_by_id.get(eid)
-                if ins is None:
-                    continue
-                sim = cosine_similarity(fact_vec, evec)
-                if sim >= SIMILARITY_RECONCILE_THRESHOLD:
-                    cosine_cands.append((sim, ins.id, ins.content))
-            cosine_cands.sort(key=lambda c: c[0], reverse=True)
-            for sim, cid, ccontent in cosine_cands:
+                similar.append((cid, insights_by_id[cid].content))
+                candidates.append(Candidate(cid, 'cosine', float(sim)))
+                seen.add(cid)
+                cosine_taken += 1
+
+            rerank_order: list[tuple[str, float]] = []
+            rerank_event: dict[str, Any] = {'pool': len(pool), 'status': 'skipped'}
+            pool_open = [cid for _sim, cid in pool if cid not in seen]
+            if pool_open and len(similar) < MAX_SIMILAR_FOR_RECONCILE:
+                per_store_rerank = config.get_store_rerank_enabled(store_name)
+                rerank_enabled = (
+                    per_store_rerank if per_store_rerank is not None
+                    else config.get_bool(config.RERANK_ENABLED, default=True))
+                if not rerank_enabled:
+                    rerank_event['status'] = 'disabled'
+                else:
+                    rerank_t0 = time.monotonic()
+                    try:
+                        scored = get_rerank_client().rerank(
+                            fact_text,
+                            [insights_by_id[cid].content for _sim, cid in pool])
+                        rerank_order = sorted(
+                            ((pool[index][1], float(score)) for index, score in scored),
+                            key=lambda row: (row[1], row[0]), reverse=True)
+                        rerank_event['status'] = 'ok'
+                    except Exception as exc:
+                        logger.warning(
+                            f'reconcile rerank failed; the cosine order fills'
+                            f' the shortlist: {exc}')
+                        rerank_event['status'] = 'failed'
+                        rerank_event['error'] = f'{type(exc).__name__}: {exc}'[:500]
+                    rerank_event['elapsed_ms'] = int(
+                        (time.monotonic() - rerank_t0) * 1000)
+            rerank_taken = 0
+            for cid, score in rerank_order:
                 if len(similar) >= MAX_SIMILAR_FOR_RECONCILE:
                     break
-                similar.append((cid, ccontent))
+                if cid in seen:
+                    continue
+                similar.append((cid, insights_by_id[cid].content))
+                candidates.append(Candidate(cid, 'rerank', score))
+                seen.add(cid)
+                rerank_taken += 1
+            trace.event('reconcile_rerank', taken=rerank_taken, **rerank_event)
+            for sim, cid in pool:
+                if len(similar) >= MAX_SIMILAR_FOR_RECONCILE:
+                    break
+                if cid in seen:
+                    continue
+                similar.append((cid, insights_by_id[cid].content))
                 candidates.append(Candidate(cid, 'cosine', float(sim)))
                 seen.add(cid)
 
