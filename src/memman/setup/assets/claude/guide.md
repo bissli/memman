@@ -160,7 +160,7 @@ The text you pass must be **self-contained** — dereference anaphora
 
 **How to store**: run
 `memman remember "<self-contained text>" --session $SESSION_ID`
-directly via Bash in your current turn. No sub-agent delegation.
+directly in your current turn. No sub-agent delegation.
 **Always pass `--session`** — it links this session's writes into one
 temporal chain (WHEN recall walks it); a write without it joins no
 chain. Use the session id shown above verbatim. A literal
