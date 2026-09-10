@@ -77,14 +77,40 @@ reps each.
 
 | line | 0.34.0 batch call | one row per call |
 | --- | --- | --- |
-| verified contradictions retired (59 confirmed targets) | 34 | 49 (McNemar b=16 c=1, p=0.0003) |
+| verified contradictions retired (59 cases with a confirmed target) | 34 | 49 (McNemar b=16 c=1, p=0.0003) |
 | strict protected rows retired (157 rows, 74 cases) | 47 | 36 |
 | restatements answered NONE (11 synthetic) | 11 of 11 | 9 of 11; both losses applied the tie-break sentence the text no longer carries |
 | merge texts dropping a true clause (24 headline cases) | 13 of 24, whole body | 7 of 24, one target per call (b=6 to 8, c=0) |
 | reconcile wall time per fact, p50 / p90 | 15 s / 54 s, one call | screen p90 5.5 s with rows in parallel, then verdict 6.8 s / 14.7 s with rows in parallel, then merge p50 7.6 s per target in parallel |
 
-The gate re-run of the whole procedure beside the batch arm, at cap 20
-and three reps, is the ship condition and is recorded here when it runs.
+The gate ran the whole procedure, the three stages through the repo's
+own functions, beside the 0.34.0 batch call at cap 20, on the same 178
+cases, three reps each, on `anthropic/claude-sonnet-4.6`. The batch arm
+ran as shipped, at its 4,096-token output cap, and hit the cap on 68 of
+534 case-reps, 32 of them parsing to no object. The first three lines
+are retire counts (supersede, update or replace) on the ratified pools,
+paired by exact McNemar on the same cases or rows; the merge line is a
+judged rate over the cases where the arm retired the record; each
+interval is Wilson at 95 percent. Each bar is design section 9 as
+written.
+
+| line | bar | 0.34.0 batch call, cap 20 | staged reconcile | pairing | read |
+| --- | --- | --- | --- | --- | --- |
+| verified contradictions retired (59 cases with a confirmed target) | b > c, p < 0.05 | 35 | 48 | b=16 c=3, p=0.0044 | pass |
+| strict protected rows retired (157 rows, 74 cases) | the intervals overlap | 42 = 0.268 [0.204, 0.342] | 26 = 0.166 [0.116, 0.232] | rows, b=13 c=29, p=0.0195 | pass |
+| restatements answered NONE naming the row (11 synthetic) | at or above the batch's low bound | 11 of 11 [0.741, 1.000] | 9 of 11 [0.523, 0.949] | b=0 c=2 | pass |
+| merge texts dropping a true clause (cases with a retiring rep, case majority over reps) | decidable at 25 cases per arm; no pass bar | 13 of 20 [0.43, 0.82] | 4 of 26 [0.06, 0.34] | 17 paired cases, b=1 c=10, p=0.012 | better; the batch arm has 20 cases |
+| prompt / completion tokens per fact, p50 | reported | 19.9 K / 1.5 K in one call | 44.9 K / 5.3 K over 22 calls | 3.1 times the cost per fact | - |
+| wall time per fact, p50 / p90 | reported | 18.0 s / 58.6 s | 20.7 s / 74.6 s | - | - |
+
+Beside the bars: section 9(a) names SUPERSEDE recall, and that line reads
+33 against 45, b=16 c=4, p=0.012; the merge asserted the contradicted
+claim as still true in 3 of 26 cases against the batch's 2 of 20, not
+separable; the two NONE misses fold the fact into the restated row as
+an update and retire no other row; retires on unlabeled shortlist rows
+rose from 0.070 to 0.125, and the field measurement after rollout reads
+that share. Two blind judges agreed on 111 of 117 merge texts and a
+third settled the rest.
 
 ## Rollout
 
