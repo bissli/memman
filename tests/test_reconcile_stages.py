@@ -363,6 +363,38 @@ def test_merge_lists_the_target_its_clauses_then_the_fact():
     assert call['max_tokens'] == MERGE_MAX_TOKENS == 8192
 
 
+def test_merge_suppresses_clauses_copied_from_the_fact(monkeypatch):
+    """Verify a clause copied from the fact is not rendered in the body.
+
+    Mutation: rendering a clause the screen copied from the fact, so
+        the merge deletes the fact's own correction from the successor;
+        or comparing raw text, which lets a fact sentence through when
+        the screen changed its case or wrapping.
+    Oracle: three hand-built clauses - one verbatim in the target
+        content (rendered), one in the fact and absent from the content,
+        differing from the fact by case and a double space (not
+        rendered), one present in both (rendered) - asserted on the
+        exact clause block; the trace carries the suppressed count.
+    """
+    from memman import trace
+    events = []
+    monkeypatch.setattr(trace, 'event',
+                        lambda name, **kw: events.append((name, kw)))
+    client = _Client(json.dumps({'merged_text': 'ok'}))
+    merge_successor(
+        client,
+        'the queue is redis and the cache is warm',
+        ('m-1',
+         'the queue is durable and the cache is warm and the logger is active',
+         ['the queue is durable', 'The queue  is REDIS', 'the cache is warm']))
+    body = client.calls[0]['user']
+    clause_block = body.split('CONTRADICTED CLAUSES')[1].split('NEW FACT')[0]
+    assert clause_block == ' of [0]:\n- the queue is durable\n- the cache is warm\n\n'
+    merged = [kw for name, kw in events if name == 'reconcile_merge']
+    assert merged[-1]['clauses'] == 2
+    assert merged[-1]['suppressed'] == 1
+
+
 def test_merge_marks_an_update_target_with_no_clauses():
     """Verify a target with no quoted clauses is listed under `(none)`.
 
