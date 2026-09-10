@@ -519,9 +519,29 @@ def merge_successor(
     - One target per call: on the probe the row-alone body kept the
       clauses the whole body dropped, b = 6 to 8 against c = 0 on
       every judged line.
+    - Over the 0.35.0 gate's 534 SCREENED case-reps, 46 of 4,239
+      clauses were sentences copied from the NEW FACT that do not occur
+      in the target memory (31 case-reps); on those the merge deleted
+      the fact's own correction from the successor. A clause whose
+      normalized text appears in the fact but not in the target content
+      is a fact-copied clause and is suppressed before rendering.
     """
     real_id, content, clauses = target
-    clause_lines = [f'- {clause}' for clause in clauses] or ['(none)']
+    norm_fact = ' '.join(fact_text.lower().split())
+    norm_content = ' '.join(content.lower().split())
+    # Notes:
+    # - A clause found in the fact but not in the target is a fact
+    #   sentence the screen copied, not a memory clause; handed to the
+    #   merge it makes the merge delete the fact's own correction.
+    # - Whitespace and case are collapsed because the screen returns
+    #   clauses in the model's own wrapping and casing.
+    filtered_clauses = [
+        c for c in clauses
+        if (nc := ' '.join(c.lower().split())) in norm_content
+        or nc not in norm_fact
+        ]
+    suppressed = len(clauses) - len(filtered_clauses)
+    clause_lines = [f'- {clause}' for clause in filtered_clauses] or ['(none)']
     body = (
         f'EXISTING MEMORIES:\n[0] {content}\n'
         'CONTRADICTED CLAUSES of [0]:\n' + '\n'.join(clause_lines)
@@ -533,18 +553,21 @@ def merge_successor(
             max_tokens=MERGE_MAX_TOKENS)
     except Exception as exc:
         trace.event(
-            'reconcile_merge', target_id=real_id, clauses=len(clauses),
+            'reconcile_merge', target_id=real_id,
+            clauses=len(filtered_clauses), suppressed=suppressed,
             outcome='error', error=f'{type(exc).__name__}: {exc}')
         return None
     parsed = parse_json_response(raw)
     text = parsed.get('merged_text') if isinstance(parsed, dict) else None
     if not isinstance(text, str) or not text.strip():
         trace.event(
-            'reconcile_merge', target_id=real_id, clauses=len(clauses),
+            'reconcile_merge', target_id=real_id,
+            clauses=len(filtered_clauses), suppressed=suppressed,
             outcome='no_text', raw=raw)
         return None
     trace.event(
-        'reconcile_merge', target_id=real_id, clauses=len(clauses),
+        'reconcile_merge', target_id=real_id,
+        clauses=len(filtered_clauses), suppressed=suppressed,
         outcome='ok')
     return text.strip()
 
