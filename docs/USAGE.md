@@ -88,6 +88,10 @@ memman unsupersede <old_id>
 memman forget <id>
 ```
 
+Every command that takes an insight id also accepts any unambiguous
+prefix of it, such as the eight-character ids memman prints; an
+ambiguous prefix is refused with the number of rows it matches.
+
 **Remember flags:**
 
 | Flag             | Default   | Description                                                                                                                       |

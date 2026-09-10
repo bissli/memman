@@ -5,6 +5,7 @@ module imports.
 """
 
 import json
+import os
 
 import pytest
 from tests.conftest import invoke, parse_remember
@@ -825,6 +826,143 @@ class TestInsightsShow:
         refused = invoke(runner, ['insights', 'show', gone['id']])
         assert refused.exit_code != 0
         assert 'was forgotten' in refused.output
+
+
+class TestResolveId:
+    """Node-store prefix resolution and CLI id-argument coverage."""
+
+    def test_unique_prefix_resolves_to_full_id(self, tmp_backend):
+        """Prefix shorter than the full id resolves when it is unique.
+
+        Mutation: keeping 'where id = ?' exact lookup, which returns
+            None for a partial id even when one row has it as a prefix.
+        Oracle: hand-built rows sharing the first 4 chars; the 8-char
+            prefix is unique and resolves to the first row's full id.
+        """
+        from tests.conftest import make_insight
+        tmp_backend.nodes.insert(make_insight(id='aaaabbbb-cccc-dddd'))
+        tmp_backend.nodes.insert(make_insight(id='aaaaxxx1-cccc-dddd'))
+        resolved = tmp_backend.nodes.resolve_id('aaaabbbb')
+        assert resolved == 'aaaabbbb-cccc-dddd'
+
+    def test_shared_prefix_raises_with_count(self, tmp_backend):
+        """Ambiguous prefix raises ValueError naming the match count.
+
+        Mutation: first-match resolution, which silently returns one of
+            several matching rows instead of raising.
+        Oracle: ValueError raised with '2' in the message for a prefix
+            matching both stored ids.
+        """
+        from tests.conftest import make_insight
+        tmp_backend.nodes.insert(make_insight(id='aaaabbbb-cccc-dddd'))
+        tmp_backend.nodes.insert(make_insight(id='aaaaxxx1-cccc-dddd'))
+        with pytest.raises(ValueError, match='2'):
+            tmp_backend.nodes.resolve_id('aaaa')
+
+    def test_full_id_wins_over_prefix_match(self, tmp_backend):
+        """Full id resolves to itself even when it is another row's prefix.
+
+        Mutation: reading a full id as a prefix, which would match both
+            rows and raise ValueError.
+        Oracle: rows 'abcd' and 'abcd-1234'; exact id 'abcd' resolves
+            to 'abcd', not to ValueError.
+        """
+        from tests.conftest import make_insight
+        tmp_backend.nodes.insert(make_insight(id='abcd'))
+        tmp_backend.nodes.insert(make_insight(id='abcd-1234'))
+        resolved = tmp_backend.nodes.resolve_id('abcd')
+        assert resolved == 'abcd'
+
+    def test_graph_related_unknown_id_exits_nonzero(self, runner):
+        """graph related on an unknown id exits non-zero with 'not found'.
+
+        Mutation: the empty-list fallthrough in graph_related, which
+            returns exit 0 and an empty list when bfs finds no neighbors
+            for an id absent from the store.
+        Oracle: exit_code != 0 and 'not found' in output.
+        """
+        result = invoke(runner, ['graph', 'related', 'no-such-id'])
+        assert result.exit_code != 0
+        assert 'not found' in result.output.lower()
+
+    def test_supersede_refuses_a_prefix_and_the_full_id_of_one_row(
+            self, runner):
+        """Verify the same-row guard compares resolved ids, not raw text.
+
+        Mutation: comparing the raw arguments before resolution, which
+            lets a prefix and the full id of one row pass the guard and
+            supersede the row with itself.
+        Oracle: exit non-zero naming the same-insight refusal; the row
+            stays current.
+        """
+        fact = remember(runner, 'Grafana dashboards refresh every minute',
+                        no_reconcile=True)
+        result = invoke(runner, ['supersede', fact['id'][:8], fact['id']])
+        assert result.exit_code != 0
+        assert 'same insight' in result.output
+        shown = invoke(runner, ['insights', 'show', fact['id']])
+        assert json.loads(shown.output).get('superseded_by') is None
+
+    def test_graph_link_refuses_a_prefix_and_the_full_id_of_one_row(
+            self, runner):
+        """Verify the self-link guard compares resolved ids, not raw text.
+
+        Mutation: comparing the raw arguments before resolution, which
+            lets a prefix and the full id of one row store a self-edge.
+        Oracle: exit non-zero naming the self-link refusal.
+        """
+        fact = remember(runner, 'Prometheus scrapes every fifteen seconds',
+                        no_reconcile=True)
+        result = invoke(runner, ['graph', 'link', fact['id'][:8], fact['id']])
+        assert result.exit_code != 0
+        assert 'itself' in result.output
+
+    def test_show_accepts_an_unambiguous_prefix(self, runner):
+        """Verify a CLI command resolves an 8-char prefix to the full id.
+
+        Mutation: dropping the resolve_id call from the command, so the
+            prefix reaches the exact-id lookup and reads as not found.
+        Oracle: the JSON id returned equals the full stored id.
+        """
+        fact = remember(runner, 'Tempo keeps traces for three days',
+                        no_reconcile=True)
+        result = invoke(runner, ['insights', 'show', fact['id'][:8]])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)['id'] == fact['id']
+
+    def test_ambiguous_prefix_exits_nonzero_naming_the_count(self, runner):
+        """Verify an ambiguous prefix is refused at the CLI with its count.
+
+        Mutation: first-match resolution, which shows one of the two
+            rows and exits zero.
+        Oracle: the common prefix of two stored ids exits non-zero and
+            the output names the two matches.
+        """
+        first = remember(runner, 'Loki indexes labels only', no_reconcile=True)
+        second = remember(runner, 'Mimir stores metrics long term',
+                          no_reconcile=True)
+        prefix = os.path.commonprefix([first['id'], second['id']])
+        result = invoke(runner, ['insights', 'show', prefix])
+        assert result.exit_code != 0
+        assert '2' in result.output
+
+    def test_prefix_resolves_a_forgotten_and_a_superseded_row(self, tmp_backend):
+        """Verify resolution scans deleted and superseded rows too.
+
+        Mutation: adding 'and deleted_at is null' or 'and superseded_by
+            is null' to the prefix query, which hides the rows that
+            `insights show` and `unsupersede` must still reach.
+        Oracle: a soft-deleted row and a superseded row each resolve
+            from an 8-char prefix.
+        """
+        from tests.conftest import make_insight
+        tmp_backend.nodes.insert(make_insight(id='deadbeef-0001'))
+        tmp_backend.nodes.soft_delete('deadbeef-0001')
+        tmp_backend.nodes.insert(make_insight(id='feedface-0001'))
+        tmp_backend.nodes.insert(make_insight(id='0badf00d-0001'))
+        tmp_backend.nodes.supersede('feedface-0001', '0badf00d-0001')
+        assert tmp_backend.nodes.resolve_id('deadbeef') == 'deadbeef-0001'
+        assert tmp_backend.nodes.resolve_id('feedface') == 'feedface-0001'
 
 
 class TestStatusConsistency:

@@ -64,6 +64,25 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
     def get_include_deleted(self, id: Id) -> Insight | None:
         return _node.get_insight_by_id_include_deleted(self._db, id)
 
+    def resolve_id(self, id_or_prefix: str) -> str:
+        """Resolve an exact id or unambiguous prefix to a full id.
+        """
+        exact = self._db._query(
+            'select id from insights where id = ?',
+            (id_or_prefix,)).fetchone()
+        if exact is not None:
+            return exact[0]
+        rows = self._db._query(
+            'select id from insights'
+            ' where substr(id, 1, length(?)) = ?',
+            (id_or_prefix, id_or_prefix)).fetchall()
+        if len(rows) == 1:
+            return rows[0][0]
+        if len(rows) == 0:
+            return id_or_prefix
+        raise ValueError(
+            f'prefix {id_or_prefix!r} matches {len(rows)} rows')
+
     def get_many(self, ids: Sequence[Id]) -> list[Insight]:
         if not ids:
             return []

@@ -496,6 +496,28 @@ where id = %s
             row = cur.fetchone()
             return _row_to_insight(row) if row else None
 
+    def resolve_id(self, id_or_prefix: str) -> str:
+        """Resolve an exact id or unambiguous prefix to a full id.
+        """
+        exact_sql = self._q('select id from {s}.insights where id = %s')
+        with self._conn.cursor() as cur:
+            cur.execute(exact_sql, (id_or_prefix,))
+            exact = cur.fetchone()
+        if exact is not None:
+            return exact[0]
+        prefix_sql = self._q(
+            'select id from {s}.insights'
+            ' where substr(id, 1, length(%s)) = %s')
+        with self._conn.cursor() as cur:
+            cur.execute(prefix_sql, (id_or_prefix, id_or_prefix))
+            rows = cur.fetchall()
+        if len(rows) == 1:
+            return rows[0][0]
+        if len(rows) == 0:
+            return id_or_prefix
+        raise ValueError(
+            f'prefix {id_or_prefix!r} matches {len(rows)} rows')
+
     def get_many(self, ids: Sequence[Id]) -> list[Insight]:
         if not ids:
             return []

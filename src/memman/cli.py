@@ -1718,10 +1718,17 @@ def _forget_insight(backend: 'Backend', id: str) -> None:
 @click.argument('id')
 @click.pass_context
 def forget(ctx: click.Context, id: str) -> None:
-    """Soft-delete an insight. Rejected when the scheduler is stopped."""
+    """Soft-delete an insight. Rejected when the scheduler is stopped.
+
+    ID is a full insight id or any unambiguous prefix of one.
+    """
     _require_started('write')
 
     with _active_backend(ctx) as backend:
+        try:
+            id = backend.nodes.resolve_id(id)
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
         _forget_insight(backend, id)
         _json_out({
             'id': id,
@@ -1751,6 +1758,8 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             cat: str, imp: int, source: str,
             entities: str, reconcile: bool, session: str) -> None:
     """Replace an insight by ID with new content via the queue.
+
+    ID is a full insight id or any unambiguous prefix of one.
 
     Notes
     -----
@@ -1795,6 +1804,10 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
     name = _resolve_store_name(data_dir_val, ctx.obj['store'])
 
     with _active_backend(ctx) as backend:
+        try:
+            id = backend.nodes.resolve_id(id)
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
         old = backend.nodes.get_include_deleted(id)
     reason = _not_current_reason(old, id)
     if reason:
@@ -1847,6 +1860,8 @@ def supersede(ctx: click.Context, predecessor_id: str,
               successor_id: str) -> None:
     """Mark one current insight as superseded by another current one.
 
+    Ids are full insight ids or any unambiguous prefix of one.
+
     The manual counterpart of the reconciler's SUPERSEDE, and the only
     way to link two rows that BOTH already exist: `replace` always
     inserts a new row. Neither row's content changes. The predecessor
@@ -1887,14 +1902,19 @@ def supersede(ctx: click.Context, predecessor_id: str,
     memman insights show 16c6c667-... --history
     """  # noqa: D301, D410, D411
     _require_started('write')
-    if predecessor_id == successor_id:
-        raise click.ClickException(
-            'predecessor and successor are the same insight')
     # Lazy: the pipeline module imports the LLM and embedding stacks,
     # which every read-only command would otherwise pay for at start.
     from memman.pipeline.remember import move_edges
     from memman.store.model import insight_to_delta_dict
     with _active_backend(ctx) as backend, backend.transaction():
+        try:
+            predecessor_id = backend.nodes.resolve_id(predecessor_id)
+            successor_id = backend.nodes.resolve_id(successor_id)
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
+        if predecessor_id == successor_id:
+            raise click.ClickException(
+                'predecessor and successor are the same insight')
         old = backend.nodes.get_include_deleted(predecessor_id)
         reason = _not_current_reason(old, predecessor_id)
         if reason:
@@ -1928,6 +1948,8 @@ def supersede(ctx: click.Context, predecessor_id: str,
 @click.pass_context
 def unsupersede(ctx: click.Context, id: str) -> None:
     """Bring a superseded insight back once its successor is gone.
+
+    ID is a full insight id or any unambiguous prefix of one.
 
     Clears the row's `superseded_by`, re-embeds its content with the
     store's embedder, refreshes its keyword tokens, and rebuilds its
@@ -1976,6 +1998,10 @@ def unsupersede(ctx: click.Context, id: str) -> None:
     from memman.graph.semantic import create_semantic_edges
     from memman.store.model import insight_to_delta_dict
     with _active_backend(ctx) as backend:
+        try:
+            id = backend.nodes.resolve_id(id)
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
         row = backend.nodes.get_include_deleted(id)
         if row is None:
             raise click.ClickException(f'insight {id} not found')
@@ -2047,7 +2073,10 @@ def unsupersede(ctx: click.Context, id: str) -> None:
 @click.pass_context
 def graph_link(ctx: click.Context, source_id: str, target_id: str,
                edge_type: str, weight: float, meta: str) -> None:
-    """Create a manual edge between two insights."""
+    """Create a manual edge between two insights.
+
+    Ids are full insight ids or any unambiguous prefix of one.
+    """
     _require_started('create edges')
 
     if edge_type not in VALID_EDGE_TYPES:
@@ -2071,12 +2100,16 @@ def graph_link(ctx: click.Context, source_id: str, target_id: str,
                 + type(metadata).__name__)
     metadata.setdefault('created_by', 'claude')
 
-    if source_id == target_id:
-        raise click.ClickException(
-            'cannot link an insight to itself')
-
     now = datetime.now(timezone.utc)
     with _active_backend(ctx) as backend:
+        try:
+            source_id = backend.nodes.resolve_id(source_id)
+            target_id = backend.nodes.resolve_id(target_id)
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
+        if source_id == target_id:
+            raise click.ClickException(
+                'cannot link an insight to itself')
         with backend.transaction():
             if backend.nodes.get(source_id) is None:
                 raise click.ClickException(
@@ -2126,10 +2159,19 @@ def graph_link(ctx: click.Context, source_id: str, target_id: str,
 @click.pass_context
 def graph_related(ctx: click.Context, id: str, edge: str,
                   depth: int) -> None:
-    """Find connected insights via graph traversal."""
+    """Find connected insights via graph traversal.
+
+    ID is a full insight id or any unambiguous prefix of one.
+    """
     from memman.graph.bfs import BFSOptions, bfs
 
     with _active_backend(ctx) as backend:
+        try:
+            id = backend.nodes.resolve_id(id)
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
+        if backend.nodes.get_include_deleted(id) is None:
+            raise click.ClickException(f'insight {id} not found')
         nodes = bfs(backend, id, BFSOptions(
             max_depth=depth, max_nodes=0, edge_filter=edge))
         out = []
@@ -3199,6 +3241,8 @@ def insights_review(ctx: click.Context, limit: int) -> None:
 def insights_show(ctx: click.Context, id: str, history: bool) -> None:
     """Read one insight by id, or walk its supersession chain.
 
+    ID is a full insight id or any unambiguous prefix of one.
+
     Without `--history`: the full insight, including a superseded
     row (its `superseded_by` names the successor). A forgotten row is
     refused. With `--history`: every row in the chain through this
@@ -3237,6 +3281,10 @@ def insights_show(ctx: click.Context, id: str, history: bool) -> None:
     memman insights show 16c6c667-... --history
     """  # noqa: D301, D410, D411
     with _active_backend(ctx) as backend:
+        try:
+            id = backend.nodes.resolve_id(id)
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
         ins = backend.nodes.get_include_deleted(id)
         if ins is None:
             raise click.ClickException(f'insight {id} not found')
