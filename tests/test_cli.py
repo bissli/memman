@@ -2284,3 +2284,47 @@ class TestCorruptStoreErrorHygiene:
         assert seam, [r.getMessage() for r in caplog.records]
         assert seam[0].exc_info is not None
         assert 'BackendError' in logging.Formatter().format(seam[0])
+
+
+def test_drain_routes_the_reconcile_stages_to_the_fast_worker_client(runner):
+    """Verify the drain hands the three stages the fast-worker client and extraction the canonical one.
+
+    Mutation: `_StoreContext` hoisting one canonical client and passing
+        it for every stage, the shape the tier gate did not select.
+    Oracle: the stage stubs record the client they receive; identity
+        against the process's cached role clients.
+    """
+    from memman.llm.client import get_llm_client
+
+    seen = {'extract': [], 'screen': [], 'judge': [], 'merge': []}
+    invoke(runner, ['remember', 'the broker is kombu', '--no-reconcile'])
+
+    def _one_fact(llm_client, content):
+        seen['extract'].append(llm_client)
+        return [{'text': 'the broker is redis', 'category': 'fact',
+                 'importance': 3, 'entities': []}]
+
+    def _screen(llm_client, fact_text, memory):
+        seen['screen'].append(llm_client)
+        return 'CONTRADICTS', ['kombu']
+
+    def _judge(llm_client, fact_text, memory):
+        seen['judge'].append(llm_client)
+        return 'supersede'
+
+    def _merge(llm_client, fact_text, target):
+        seen['merge'].append(llm_client)
+        return 'the broker is redis'
+
+    with patch('memman.llm.extract.extract_facts', _one_fact), \
+    patch('memman.llm.extract.screen_memory', _screen), \
+    patch('memman.llm.extract.judge_memory', _judge), \
+    patch('memman.llm.extract.merge_successor', _merge):
+        result = invoke(runner, ['remember', 'the broker is redis'])
+    assert result.exit_code == 0, result.output
+
+    stage_clients = seen['screen'] + seen['judge'] + seen['merge']
+    assert len(stage_clients) == 3
+    assert seen['extract'] == [get_llm_client('slow_canonical')]
+    assert stage_clients[0] is not get_llm_client('slow_canonical')
+    assert all(client is get_llm_client('fast_worker') for client in stage_clients)

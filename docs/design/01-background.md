@@ -68,7 +68,7 @@ Where MAGMA's reference implementation is a Python library with in-memory Networ
 | Dimension          | LLM-Embedded (Mem0, etc.) | LLM-Supervised (memman)                                                                                                                                              |
 | ------------------ | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | LLM capability     | One model for everything  | Host LLM + three-role pipeline split (fast / slow_canonical / slow_metadata; each model tunable)                                                                     |
-| Pipeline LLM       | One model for everything  | `fast` for recall expansion; `slow_canonical` for extraction/reconciliation; `slow_metadata` for enrichment/causal inference (each tunable via `MEMMAN_LLM_MODEL_*`) |
+| Pipeline LLM       | One model for everything  | `fast` for recall expansion and, as `fast_worker`, the three reconcile stages; `slow_canonical` for extraction; `slow_metadata` for enrichment/causal inference (each tunable via `MEMMAN_LLM_MODEL_*`) |
 | Network dependency | Required                  | Required (LLM + embedding provider APIs)                                                                                                                             |
 | Swappability       | API-bound                 | Any LLM CLI                                                                                                                                                          |
 

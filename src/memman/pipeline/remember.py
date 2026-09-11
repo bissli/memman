@@ -125,10 +125,18 @@ def compute_prompt_version() -> str:
 #   that plateau. Both edges move with the embedding and rerank
 #   models, so a model swap re-measures the plateau, not this
 #   constant.
+# - RERANK_SCREEN_SLOTS is the cut between the shortlist and the
+#   screen: the screen sees the reranker's top ten scored rows and
+#   every row the reranker did not score. A rank quota, not a score.
+#   Measured over 534 case-reps on two model tiers (2026-09-11): no
+#   confirmed target sat below rerank rank 10, and the cut held every
+#   gate line at the uncut value at 10.7 screen calls per fact
+#   against 20. A swap of the rerank model re-measures the rank.
 MAX_SIMILAR_FOR_RECONCILE = 20
 KEYWORD_HITS_LIMIT = 5
 RECONCILE_COSINE_SLOTS = 9
 RERANK_POOL = 100
+RERANK_SCREEN_SLOTS = 10
 
 
 # Notes:
@@ -162,7 +170,8 @@ class Candidate:
         relevance.
     relation : str | None
         The screen's relation, one of `SCREEN_DISPOSITION`; None when
-        the exact-match rung answered before the screen ran.
+        the exact-match rung answered before the screen ran, or when
+        the cut (`RERANK_SCREEN_SLOTS`) left the row unscreened.
     screened : bool
         True when the row reached the verdict call.
     verdict : str | None
@@ -296,6 +305,7 @@ def run_remember(
         insights_by_id: dict[str, Insight] | None = None,
         executor: ThreadPoolExecutor | None = None,
         llm_client: MemmanLLMClient | None = None,
+        stage_llm_client: MemmanLLMClient | None = None,
         *,
         store_name: str,
         ) -> dict[str, Any]:
@@ -306,10 +316,13 @@ def run_remember(
     `ec` is the store-bound embed client (resolved from the store's
     `meta.embed_fingerprint` via `bound_embedder`); production callers
     pass `_StoreContext.ec`. `embed_cache`, `insights_by_id`,
-    `executor`, `llm_client` are optional drain-scope state hoisted
-    by `_drain_queue` to amortize setup across rows in one drain pass.
-    When omitted (e.g., direct test use), the function builds them
-    from the backend itself.
+    `executor`, `llm_client`, `stage_llm_client` are optional
+    drain-scope state hoisted by `_drain_queue` to amortize setup
+    across rows in one drain pass. When omitted (e.g., direct test
+    use), the function builds them from the backend itself.
+    `llm_client` is the `slow_canonical` role, for extraction;
+    `stage_llm_client` is the `fast_worker` role, for the three
+    reconcile stages.
 
     `store_name` selects the per-store surface
     (`MEMMAN_SURFACE_<store>`) for the threshold lookup. It is
@@ -325,6 +338,8 @@ def run_remember(
         metadata_llm_client = get_llm_client('slow_metadata')
     else:
         metadata_llm_client = llm_client
+    if stage_llm_client is None:
+        stage_llm_client = get_llm_client('fast_worker')
     llm_calls = 0
 
     if no_reconcile:
@@ -363,13 +378,14 @@ def run_remember(
     pending_replaced_id = replaced_id
     prompt_version = compute_prompt_version()
     llm_model_id = llm_client.model
+    stage_model_id = stage_llm_client.model
     embed_model = ec.model
     try:
         for fact in facts:
             fact_plans, calls = _plan_fact(
                 fact, insight, pending_replaced_id, no_reconcile,
                 cat_explicit, insights_by_id,
-                embed_cache, superseded_in_batch, llm_client,
+                embed_cache, superseded_in_batch, stage_llm_client,
                 metadata_llm_client, ec,
                 backend, executor, store_name)
             llm_calls += calls
@@ -378,7 +394,14 @@ def run_remember(
             for plan in fact_plans:
                 if plan.fact_insight is not None:
                     plan.fact_insight.prompt_version = prompt_version
-                    plan.fact_insight.model_id = llm_model_id
+                    # `model_id` names the model behind the row's
+                    # content: a merge text is the stage model's, an
+                    # extracted fact (or a failed merge's fallback to
+                    # it) the canonical model's.
+                    plan.fact_insight.model_id = (
+                        stage_model_id
+                        if plan.fact_insight.content != plan.fact_text
+                        else llm_model_id)
                     plan.fact_insight.embedding_model = embed_model
 
                 if plan.targets and plan.action in {
@@ -561,7 +584,7 @@ def _plan_fact(
         insights_by_id: dict[str, Insight],
         embed_cache: dict[str, list[float]],
         superseded_in_batch: set[str],
-        llm_client: Any,
+        stage_llm_client: Any,
         metadata_llm_client: Any,
         ec: Any,
         backend: Backend,
@@ -589,8 +612,8 @@ def _plan_fact(
     superseded_in_batch : set[str]
         Rows an earlier fact of this write already retired; they leave
         the shortlist, so no later fact can fork their chain.
-    llm_client : Any
-        The slow canonical client for the three reconcile stages.
+    stage_llm_client : Any
+        The fast-worker client for the three reconcile stages.
     metadata_llm_client : Any
         The slow metadata client for enrichment and causal inference.
     ec : Any
@@ -622,11 +645,16 @@ def _plan_fact(
     - The rerank call honors `MEMMAN_RERANK_ENABLED_<store>` and the
       global `MEMMAN_RERANK_ENABLED` as recall does; a failure is
       logged and traced and never loses the fact.
-    - Stage 1 screens every shortlisted row in parallel on an executor
-      sized to the shortlist; stage 2 shows each kept row alone; stage
-      3 writes one merge text per retiring target. The stage functions
-      are `llm.extract.screen_memory`, `judge_memory` and
-      `merge_successor`.
+    - The screen sees the reranker's top `RERANK_SCREEN_SLOTS` scored
+      rows plus every shortlisted row the reranker did not score (a
+      keyword hit outside the pool; every row when the rerank failed
+      or was disabled). A row the cut leaves unscreened keeps
+      `relation` None and `screened` False on its candidate.
+    - Stage 1 screens the kept rows in parallel on an executor sized
+      to them; stage 2 shows each kept row alone; stage 3 writes one
+      merge text per retiring target. The stage functions are
+      `llm.extract.screen_memory`, `judge_memory` and
+      `merge_successor`, on `stage_llm_client`.
     - Enriched-text re-embeds are deferred to a row-level batch pass
       (`_batch_enriched_embeds`) so multiple plans in one row collapse
       into one HTTP round-trip.
@@ -660,6 +688,7 @@ def _plan_fact(
     candidates: list[Candidate] = []
     similar: list[tuple[str, str]] = []
     clauses_by_id: dict[str, list[str]] = {}
+    rerank_score_by_id: dict[str, float] = {}
 
     if replaced_id:
         action = 'REPLACE'
@@ -726,6 +755,7 @@ def _plan_fact(
                         rerank_order = sorted(
                             ((pool[index][1], float(score)) for index, score in scored),
                             key=lambda row: (row[1], row[0]), reverse=True)
+                        rerank_score_by_id = dict(rerank_order)
                         rerank_event['status'] = 'ok'
                     except Exception as exc:
                         logger.warning(
@@ -754,6 +784,21 @@ def _plan_fact(
                 similar.append((cid, insights_by_id[cid].content))
                 candidates.append(Candidate(cid, 'cosine', float(sim)))
                 seen.add(cid)
+
+        # Notes:
+        # - The reranker's order predicts which rows the screen needs:
+        #   the top RERANK_SCREEN_SLOTS scored rows and every unscored
+        #   row are screened, the rest of the shortlist is not.
+        # - An unscored row (a keyword hit outside the pool, or every
+        #   row when the rerank failed or was disabled) is always
+        #   screened: the cut never acts on a score it does not have.
+        scored_ids = sorted(
+            (cid for cid, _content in similar if cid in rerank_score_by_id),
+            key=lambda cid: (rerank_score_by_id[cid], cid), reverse=True)
+        screen_ids = (
+            {cid for cid, _content in similar if cid not in rerank_score_by_id}
+            | set(scored_ids[:RERANK_SCREEN_SLOTS]))
+        to_screen = [row for row in similar if row[0] in screen_ids]
 
         if similar:
             # Exact-match rung: byte-identical content (modulo case
@@ -784,35 +829,37 @@ def _plan_fact(
                     )], calls
 
             # Notes:
-            # - One worker per shortlisted row: a screen call ends in
-            #   seconds and twenty of them serialized on the drain's
+            # - One worker per screened row: a screen call ends in
+            #   seconds and a dozen of them serialized on the drain's
             #   two-worker executor would take a minute per fact.
             # - The same pool serves stage 2, whose rows are a subset.
-            with ThreadPoolExecutor(max_workers=len(similar)) as stage_pool:
+            with ThreadPoolExecutor(max_workers=len(to_screen)) as stage_pool:
                 screened = list(stage_pool.map(
                     lambda row: llm_extract.screen_memory(
-                        llm_client, fact_text, row),
-                    similar))
-                calls += len(similar)
+                        stage_llm_client, fact_text, row),
+                    to_screen))
+                calls += len(to_screen)
                 relation_by_id = {
                     row[0]: relation
-                    for row, (relation, _clauses) in zip(similar, screened)}
+                    for row, (relation, _clauses) in zip(to_screen, screened)}
                 clauses_by_id = {
                     row[0]: clauses
-                    for row, (_relation, clauses) in zip(similar, screened)}
-                kept = screened_rows(similar, relation_by_id)
+                    for row, (_relation, clauses) in zip(to_screen, screened)}
+                kept = screened_rows(to_screen, relation_by_id)
                 kept_ids = {row_id for row_id, _content in kept}
                 for candidate in candidates:
-                    candidate.relation = relation_by_id[candidate.id]
+                    candidate.relation = relation_by_id.get(candidate.id)
                     candidate.screened = candidate.id in kept_ids
                 trace.event(
-                    'reconcile_screen', rows=len(similar), kept=len(kept),
+                    'reconcile_screen', shortlist=len(similar),
+                    rows=len(to_screen), cut=len(similar) - len(to_screen),
+                    kept=len(kept),
                     relations=dict(Counter(relation_by_id.values())))
 
                 if kept:
                     verdicts = list(stage_pool.map(
                         lambda row: llm_extract.judge_memory(
-                            llm_client, fact_text, row),
+                            stage_llm_client, fact_text, row),
                         kept))
                     calls += len(kept)
                     verdict_by_id = {
@@ -853,7 +900,7 @@ def _plan_fact(
         with ThreadPoolExecutor(max_workers=len(targets)) as merge_pool:
             merged = list(merge_pool.map(
                 lambda target: llm_extract.merge_successor(
-                    llm_client, fact_text, target),
+                    stage_llm_client, fact_text, target),
                 merge_targets))
         calls += len(targets)
         plan_specs = [([target], merged_text or fact_text)

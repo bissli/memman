@@ -211,17 +211,22 @@ def _plant_cosine_rows(count, top=0.95, step=0.01):
 
 
 def _plan_shortlist(monkeypatch, insights_by_id, embed_cache,
-                    fact_text='zzqq alpha brandnew'):
-    """Run `_plan_fact` with the screen stubbed UNRELATED; return the candidates."""
+                    fact_text='zzqq alpha brandnew', screen=None):
+    """Run `_plan_fact` with the screen stubbed; return the candidates.
+
+    `screen` maps a `(insight_id, content)` row to the stub's answer;
+    the default answers UNRELATED for every row.
+    """
     from unittest.mock import MagicMock
 
     from memman.llm import extract as llm_extract
     from memman.pipeline import remember as rem
     from tests.conftest import make_insight
 
+    screen = screen or (lambda memory: ('UNRELATED', []))
     monkeypatch.setattr(
         llm_extract, 'screen_memory',
-        lambda client, fact_text, memory: ('UNRELATED', []))
+        lambda client, fact_text, memory: screen(memory))
     fact = {'text': fact_text, 'category': 'fact', 'entities': []}
     ec = MagicMock()
     ec.embed.return_value = [1.0, 0.0]
@@ -317,6 +322,77 @@ def test_shortlist_rerank_pool_is_the_top_hundred_by_cosine(monkeypatch):
     rungs = [c.rung for c in candidates]
     assert rungs.count('cosine') == rem.RECONCILE_COSINE_SLOTS
     assert rungs.count('rerank') == 20 - 1 - rem.RECONCILE_COSINE_SLOTS
+
+
+def test_screen_cut_keeps_unscored_rows_and_the_reranker_top_ten(monkeypatch):
+    """Verify the screen sees every unscored row plus the reranker's top ten.
+
+    Mutation: the cut taking nine or eleven scored rows, dropping an
+        unscored keyword row, or ranking the scored rows by cosine
+        instead of rerank score.
+    Oracle: five keyword-hit rows with no vector (unscored) and fifteen
+        cosine rows under a reranker that inverts the cosine order, so
+        the rerank top ten is row14 down to row5 and the cut removes
+        row0 to row4, the highest cosines; the screen stub's call log,
+        the candidates left without a relation, and the
+        `reconcile_screen` event's shortlist, rows and cut counts.
+    """
+    from tests.conftest import make_insight
+
+    insights_by_id, embed_cache = _plant_cosine_rows(15)
+    for i in range(5):
+        kw = make_insight(id=f'kw{i}', content=f'zzqq alpha brandnew stored {i}')
+        insights_by_id[kw.id] = kw
+    monkeypatch.setattr(
+        'memman.rerank.voyage.Client.rerank',
+        lambda self, query, documents, top_k=None: [
+            (i, i / 100) for i in reversed(range(len(documents)))])
+    screened = []
+    events = []
+    monkeypatch.setattr(
+        'memman.trace.event',
+        lambda name, **fields: events.append((name, fields)))
+
+    candidates = _plan_shortlist(
+        monkeypatch, insights_by_id, embed_cache,
+        screen=lambda memory: screened.append(memory[0]) or ('UNRELATED', []))
+
+    assert len(screened) == 15
+    assert set(screened) == (
+        {f'kw{i}' for i in range(5)} | {f'row{i}' for i in range(5, 15)})
+    by_id = {c.id: c for c in candidates}
+    assert len(by_id) == 20
+    assert {cid for cid, c in by_id.items() if c.relation is None} == {
+        f'row{i}' for i in range(5)}
+    assert not any(c.screened for c in by_id.values())
+    screen_events = [fields for name, fields in events if name == 'reconcile_screen']
+    assert screen_events == [{
+        'shortlist': 20, 'rows': 15, 'cut': 5, 'kept': 0,
+        'relations': {'UNRELATED': 15}}]
+
+
+def test_screen_cut_screens_every_row_when_the_reranker_fails(monkeypatch):
+    """Verify a failed rerank leaves every shortlist row screened.
+
+    Mutation: the cut applied to unscored rows (ten of twenty screened),
+        or the cut ranking by cosine when no rerank score exists.
+    Oracle: a reranker that raises over twenty-five cosine rows: the
+        screen stub logs all twenty shortlist ids and no candidate is
+        left without a relation.
+    """
+    def _boom(self, query, documents, top_k=None):
+        raise RuntimeError('Voyage rerank returned status 500')
+
+    insights_by_id, embed_cache = _plant_cosine_rows(25)
+    monkeypatch.setattr('memman.rerank.voyage.Client.rerank', _boom)
+    screened = []
+
+    candidates = _plan_shortlist(
+        monkeypatch, insights_by_id, embed_cache,
+        screen=lambda memory: screened.append(memory[0]) or ('UNRELATED', []))
+
+    assert sorted(screened) == sorted(f'row{i}' for i in range(20))
+    assert [c.relation for c in candidates] == ['UNRELATED'] * 20
 
 
 def test_shortlist_falls_back_to_cosine_when_the_reranker_fails(monkeypatch):
