@@ -8,6 +8,7 @@ three stage functions stubbed and read the store back.
 """
 
 import json
+from types import SimpleNamespace
 
 from memman.embed.fingerprint import bound_embedder
 from memman.llm.extract import UNJUDGED
@@ -118,25 +119,34 @@ def _plant(backend, *rows):
 
 
 def _stub_stages(monkeypatch, screen, judge, merge):
-    """Install the three stage stubs and return their call logs."""
-    calls = {'screen': [], 'judge': [], 'merge': []}
+    """Install the three stage stubs and return their call logs.
+
+    `calls['clients']` records the client object each stage received,
+    extraction included.
+    """
+    calls = {'screen': [], 'judge': [], 'merge': [],
+             'clients': {'extract': [], 'screen': [], 'judge': [], 'merge': []}}
+
+    def _extract(client, content):
+        calls['clients']['extract'].append(client)
+        return [{'text': content, 'category': 'fact', 'entities': []}]
 
     def _screen(client, fact_text, memory):
         calls['screen'].append(memory[0])
+        calls['clients']['screen'].append(client)
         return screen(memory[0])
 
     def _judge(client, fact_text, memory):
         calls['judge'].append(memory[0])
+        calls['clients']['judge'].append(client)
         return judge(memory[0])
 
     def _merge(client, fact_text, target):
         calls['merge'].append(target)
+        calls['clients']['merge'].append(client)
         return merge(target[0])
 
-    monkeypatch.setattr(
-        'memman.llm.extract.extract_facts',
-        lambda client, content: [
-            {'text': content, 'category': 'fact', 'entities': []}])
+    monkeypatch.setattr('memman.llm.extract.extract_facts', _extract)
     monkeypatch.setattr('memman.llm.extract.screen_memory', _screen)
     monkeypatch.setattr('memman.llm.extract.judge_memory', _judge)
     monkeypatch.setattr('memman.llm.extract.merge_successor', _merge)
@@ -335,6 +345,76 @@ def test_candidates_row_carries_relation_screened_and_verdict(tmp_backend, monke
         ('old-2', 'UNRELATED', False, None),
         ('old-3', 'REFINES', False, None),
         }
+
+
+def test_reconcile_stages_run_on_the_stage_client(tmp_backend, monkeypatch):
+    """Verify extraction keeps the canonical client and the stages take the stage client.
+
+    Mutation: a stage handed the canonical client (the sonnet shape the
+        tier gate did not select), or extraction moved to the stage
+        client.
+    Oracle: two sentinel clients passed to `run_remember`; the stubs
+        log which one each stage received.
+    """
+    caches = _plant(tmp_backend, ('old-1', 'the broker is kombu'))
+    calls = _stub_stages(
+        monkeypatch, screen=lambda rid: ('CONTRADICTS', ['kombu']),
+        judge=lambda rid: 'supersede', merge=lambda rid: 'merged')
+    canonical = SimpleNamespace(model='canonical-model')
+    stage = SimpleNamespace(model='stage-model')
+
+    run_remember(
+        tmp_backend, make_insight(id='parent', content='the broker is redis'),
+        'the broker is redis', ec=_FixedEmbedder([1.0, 0.0]),
+        embed_cache=caches[1], insights_by_id=caches[0],
+        llm_client=canonical, stage_llm_client=stage, store_name='test')
+
+    assert calls['clients']['extract'] == [canonical]
+    stage_clients = (calls['clients']['screen'] + calls['clients']['judge']
+                     + calls['clients']['merge'])
+    assert len(stage_clients) == 3
+    assert all(client is stage for client in stage_clients)
+
+
+def test_a_merged_successor_records_the_stage_model_as_its_provenance(
+        tmp_backend, monkeypatch):
+    """Verify `model_id` names the model behind the row's content: the stage
+    model for a merge text, the canonical model for an extracted fact.
+
+    Mutation: stamping every row with the extraction model, so a
+        successor written by the fast model is attributed to the
+        canonical one.
+    Oracle: two sentinel clients with distinct model strings; the
+        store's provenance distribution over active rows counts one
+        `stage-model` row (the successor) and one `canonical-model` row
+        (a plain add).
+    """
+    caches = _plant(tmp_backend, ('old-1', 'the broker is kombu'))
+    _stub_stages(
+        monkeypatch, screen=lambda rid: ('CONTRADICTS', ['kombu']),
+        judge=lambda rid: 'supersede', merge=lambda rid: 'the broker is redis, merged')
+    canonical = SimpleNamespace(model='canonical-model')
+    stage = SimpleNamespace(model='stage-model')
+
+    res = run_remember(
+        tmp_backend, make_insight(id='parent', content='the broker is redis'),
+        'the broker is redis', ec=_FixedEmbedder([1.0, 0.0]),
+        embed_cache=caches[1], insights_by_id=caches[0],
+        llm_client=canonical, stage_llm_client=stage, store_name='test')
+    _stub_stages(
+        monkeypatch, screen=lambda rid: ('UNRELATED', []),
+        judge=lambda rid: 'keep', merge=lambda rid: None)
+    res_add = run_remember(
+        tmp_backend, make_insight(id='parent-2', content='tea is hot'),
+        'tea is hot', ec=_FixedEmbedder([0.0, 1.0]),
+        embed_cache=caches[1], insights_by_id=caches[0],
+        llm_client=canonical, stage_llm_client=stage, store_name='test')
+
+    successor = tmp_backend.nodes.get_include_deleted(res['facts'][0]['id'])
+    assert successor.content == 'the broker is redis, merged'
+    assert res_add['facts'][0]['action'] == 'add'
+    by_model = {p.model_id: p.count for p in tmp_backend.nodes.provenance_distribution()}
+    assert by_model == {'stage-model': 1, 'canonical-model': 1}
 
 
 def test_stage_executor_is_sized_to_the_shortlist(tmp_backend, monkeypatch):

@@ -186,8 +186,8 @@ def _get_llm_client_or_fail(role: str) -> 'MemmanLLMClient':
 
     Keeps `memman.llm` free of `click` — the CLI boundary is the only
     place that should know how to surface a user-facing config error.
-    `role` is `'fast'`, `'slow_canonical'`, or `'slow_metadata'` (worker pipeline,
-    operator rebuilds).
+    `role` is `'fast'`, `'fast_worker'`, `'slow_canonical'`, or
+    `'slow_metadata'` (worker pipeline, operator rebuilds).
     """
     from memman.exceptions import ConfigError
     from memman.llm.client import get_llm_client
@@ -1288,6 +1288,7 @@ class _StoreContext:
         self.ec = _fp_mod.bound_embedder(self.backend)
         self._stored_fp = stored
         self.llm_client = get_llm_client('slow_canonical')
+        self.stage_llm_client = get_llm_client('fast_worker')
         self.embed_cache: dict[str, list[float]] = dict(
             self.backend.nodes.iter_embeddings_as_vecs())
         self.insights_by_id = {
@@ -1477,6 +1478,7 @@ def _process_queue_row(
         insights_by_id=ctx.insights_by_id,
         executor=executor,
         llm_client=ctx.llm_client,
+        stage_llm_client=ctx.stage_llm_client,
         ec=ctx.ec,
         store_name=ctx.store_name)
     if redirected_from:

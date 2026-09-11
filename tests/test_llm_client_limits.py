@@ -38,6 +38,23 @@ def test_slow_metadata_role_gets_large_budget():
     assert client.timeout >= 60.0
 
 
+def test_fast_worker_role_reads_the_fast_model_at_worker_limits():
+    """Verify the reconcile stages' role pairs the fast model with the worker budget.
+
+    Mutation: the role reading the slow-canonical model, or keeping the
+        fast role's 1024-token, 10-second limits (a haiku merge runs to
+        8,192 tokens and tens of seconds).
+    Oracle: the fast role's own model string beside the worker roles'
+        limits, both read from the same process.
+    """
+    reset_role_cache()
+    client = get_llm_client('fast_worker')
+    assert client.model == get_llm_client('fast').model
+    assert client.max_tokens == get_llm_client('slow_canonical').max_tokens
+    assert client.timeout == get_llm_client('slow_canonical').timeout
+    assert client.timeout > get_llm_client('fast').timeout
+
+
 class _RecordingSession:
     """An HTTP session that records every request body and answers 200."""
 
