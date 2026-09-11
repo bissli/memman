@@ -100,7 +100,10 @@ def _top_level_json_values(raw: str, opener: str) -> list:
         nothing decodes, with lone backslashes repaired; a valid escape
         pair is never touched.
     """
-    decoder = json.JSONDecoder()
+    # strict=False keeps a raw newline or tab inside a string value:
+    # a model that copies a memory's paragraph breaks into merged_text
+    # emits them unescaped, and the strict default refuses the object.
+    decoder = json.JSONDecoder(strict=False)
     repaired = _ESCAPE_RUN_RE.sub(
         lambda m: '\\\\' if m.group(0) == '\\' else m.group(0), raw)
     for text in (raw, repaired) if repaired != raw else (raw,):
@@ -149,7 +152,7 @@ def parse_json_response(raw: str) -> dict | None:
     """
     for text in (raw, strip_code_fences(raw)):
         try:
-            parsed = json.loads(text)
+            parsed = json.loads(text, strict=False)
             if isinstance(parsed, dict):
                 return parsed
         except (json.JSONDecodeError, ValueError, RecursionError):
@@ -177,7 +180,7 @@ def parse_json_list_response(raw: str) -> list | None:
     """
     for text in (raw, strip_code_fences(raw)):
         try:
-            parsed = json.loads(text)
+            parsed = json.loads(text, strict=False)
             if isinstance(parsed, list):
                 return parsed
         except (json.JSONDecodeError, ValueError, RecursionError):
