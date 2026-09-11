@@ -79,3 +79,28 @@ def test_parse_json_list_response_prefers_the_list_of_objects():
            'I linked [0] to [1] because the second describes the fix.')
     assert parse_json_list_response(raw) == [
         {'source_id': 'a', 'target_id': 'b', 'confidence': 0.9}]
+
+
+def test_parse_json_response_keeps_a_literal_newline_inside_a_string():
+    """Verify a raw newline inside a string value does not fail the decode.
+
+    Mutation: decoding with `json`'s strict default, which refuses a
+        control character inside a string and returns None here (the
+        merge stage then stores the fact unmerged).
+    Oracle: the hand-written two-paragraph text, newline kept.
+    """
+    raw = '{"merged_text": "First paragraph.\n\nSecond paragraph."}'
+    assert parse_json_response(raw) == {
+        'merged_text': 'First paragraph.\n\nSecond paragraph.'}
+
+
+def test_parse_json_response_scan_keeps_a_literal_newline_inside_a_string():
+    """Verify the object-after-prose scan is as lenient as the whole-text read.
+
+    Mutation: a strict `JSONDecoder` in the scan, which skips the object
+        and returns None while the whole-text path alone would have read
+        a bare object.
+    Oracle: the hand-written value with its newline.
+    """
+    raw = 'Here is the merge.\n\n{"merged_text": "Line one.\nLine two."}'
+    assert parse_json_response(raw) == {'merged_text': 'Line one.\nLine two.'}
