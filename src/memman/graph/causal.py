@@ -104,7 +104,27 @@ def _build_llm_prompt(
         neighbors: list[dict[str, Any]],
         recent: list[Insight],
         ) -> str:
-    """Build the user prompt for LLM causal inference."""
+    """Build the user prompt for LLM causal inference.
+
+    Parameters
+    ----------
+    insight : Insight
+        The new row, rendered first under its own header.
+    neighbors : list[dict[str, Any]]
+        Graph-reached candidate rows, each `{'insight': Insight, ...}`.
+    recent : list[Insight]
+        Recency-reached candidate rows, disjoint from `neighbors`.
+
+    Returns
+    -------
+    str
+        The prompt body.
+
+    Notes
+    -----
+    - Both lists carry candidates only. A row the caller will later
+      reject renders text no edge can use and is paid for per token.
+    """
     parts = [f'NEW INSIGHT (id={insight.id}):\n{insight.content}\n']
 
     if neighbors:
@@ -121,7 +141,32 @@ def _build_llm_prompt(
 def infer_llm_causal_edges(
         backend: Backend, insight: Insight,
         llm_client: Any) -> list[Edge]:
-    """Infer causal edges via LLM, returning Edge objects without inserting."""
+    """Infer causal edges via LLM, returning Edge objects without inserting.
+
+    Parameters
+    ----------
+    backend : Backend
+        Store the graph neighbors and the recent rows are read from.
+    insight : Insight
+        The newly written row every returned edge touches.
+    llm_client : Any
+        Client exposing `complete(system, user, stage=...)`.
+
+    Returns
+    -------
+    list[Edge]
+        Causal edges at or above `LLM_CONFIDENCE_FLOOR`, unsaved. Empty
+        when no row clears `MIN_CAUSAL_OVERLAP`, the call fails, or the
+        response does not parse.
+
+    Notes
+    -----
+    - The prompt renders exactly the rows that may become an edge
+      endpoint. `valid_ids` bars a row below `MIN_CAUSAL_OVERLAP`, so
+      rendering one buys no edge and is paid for per token.
+    - A row both the graph walk and the recent query reach is rendered
+      once, as a graph neighbor.
+    """
     from memman.graph.bfs import BFSOptions, bfs
 
     neighbors = bfs(backend, insight.id, BFSOptions(
@@ -130,19 +175,27 @@ def infer_llm_causal_edges(
         exclude_id=insight.id, limit=LLM_RECENT_COUNT)
 
     new_tokens = tokenize(insight.content)
-    candidates = []
+    neighbor_candidates = []
     for n in neighbors:
         prev_tokens = tokenize(n['insight'].content)
         overlap = token_overlap(new_tokens, prev_tokens)
         if overlap >= MIN_CAUSAL_OVERLAP:
-            candidates.append(n)
+            neighbor_candidates.append(n)
 
+    neighbor_ids = {n['insight'].id for n in neighbor_candidates}
+    recent_candidates = []
     for r in recent:
+        if r.id in neighbor_ids:
+            continue
         prev_tokens = tokenize(r.content)
         overlap = token_overlap(new_tokens, prev_tokens)
         if overlap >= MIN_CAUSAL_OVERLAP:
-            if not any(n['insight'].id == r.id for n in candidates):
-                candidates.append({'insight': r, 'hop': 0, 'via_edge': ''})
+            recent_candidates.append(r)
+
+    candidates = neighbor_candidates + [
+        {'insight': r, 'hop': 0, 'via_edge': ''}
+        for r in recent_candidates
+        ]
 
     if not candidates:
         trace.event(
@@ -151,12 +204,13 @@ def infer_llm_causal_edges(
             reason='no_candidates')
         return []
 
-    prompt = _build_llm_prompt(insight, candidates, recent)
+    prompt = _build_llm_prompt(
+        insight, neighbor_candidates, recent_candidates)
     trace.event(
         'causal_infer_start',
         insight_id=insight.id,
         candidate_count=len(candidates),
-        recent_count=len(recent))
+        recent_count=len(recent_candidates))
 
     try:
         raw = llm_client.complete(
