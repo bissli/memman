@@ -222,6 +222,41 @@ def test_one_gone_target_does_not_degrade_the_other(tmp_db, tmp_backend):
     assert tmp_backend.nodes.get_include_deleted('old-1').superseded_by == 'new-1'
 
 
+def test_a_gone_target_is_recorded_in_the_oplog(tmp_db, tmp_backend):
+    """Verify a dropped target leaves an operator-readable record.
+
+    A target can vanish between the plan and the apply, and the write
+    then degrades to a plain add: no pointer, no supersession, and the
+    caller's correction silently does not attach. The row IS stored,
+    so nothing is lost, but without a record the operator who ran
+    `replace` has no way to learn the correction did not land.
+
+    Mutation: dropping the gone target with the warning log alone,
+        which reaches the drain's own stdout and no per-store surface,
+        so `memman log list` shows the degraded write as an ordinary
+        add.
+    Oracle: the oplog read back for the successor, which must hold a
+        `target-gone` row naming the requested target, beside the
+        `reconcile-supersede` row for the target that did link.
+    """
+    insert_insight(tmp_db, make_insight(id='old-1', content='current claim'))
+    insert_insight(tmp_db, make_insight(id='gone-1', content='forgotten claim'))
+    assert tmp_backend.nodes.soft_delete('gone-1') is True
+
+    plan = FactPlan(
+        action='supersede', fact_text='both are wrong',
+        fact_insight=make_insight(id='new-1', content='both are wrong'),
+        targets=[('gone-1', 'supersede'), ('old-1', 'supersede')],
+        embed_vec=None, enrichment={}, causal_edges=[])
+    _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
+
+    ops = {(e.operation, e.insight_id): e.detail
+           for e in tmp_backend.oplog.recent(limit=50)}
+    assert ('target-gone', 'new-1') in ops
+    assert 'gone-1' in ops[('target-gone', 'new-1')]
+    assert ('reconcile-supersede', 'old-1') in ops
+
+
 def test_mixed_update_and_supersede_targets_log_their_own_operation(
         tmp_db, tmp_backend):
     """Verify each target's oplog row and carry follow its own relation.

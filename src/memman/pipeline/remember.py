@@ -1260,6 +1260,22 @@ def _apply_plan(
                 detail=detail,
                 before=insight_to_delta_dict(before_target),
                 after=insight_to_delta_dict(fi))
+        # Notes:
+        # - The row is stored either way, so nothing is lost, but a
+        #   caller who ran `replace` to correct one row otherwise gets
+        #   a new unlinked row and no sign the correction missed.
+        # - The row is filed against the SUCCESSOR, which is readable;
+        #   the requested target may be gone from the table entirely,
+        #   and it is named in the detail instead.
+        # - Not the `skipped_writes` ledger: that table's rule is that
+        #   a write storing even one fact is never filed, and this one
+        #   stored its fact.
+        for gone in targets_gone:
+            backend.oplog.log(
+                operation='target-gone', insight_id=fi.id,
+                detail=f'{plan.action} target {gone["id"]} was not current;'
+                f' stored without the link',
+                after=insight_to_delta_dict(fi))
         if not linked_targets:
             logger.warning(
                 f'{plan.action}: every target is gone; degrading to add')
