@@ -373,6 +373,7 @@ def run_remember(
         executor = owned_executor
 
     superseded_in_batch: set[str] = set()
+    added_in_batch: set[str] = set()
 
     plans: list[FactPlan] = []
     pending_replaced_id = replaced_id
@@ -385,8 +386,8 @@ def run_remember(
             fact_plans, calls = _plan_fact(
                 fact, insight, pending_replaced_id, no_reconcile,
                 cat_explicit, insights_by_id,
-                embed_cache, superseded_in_batch, stage_llm_client,
-                metadata_llm_client, ec,
+                embed_cache, superseded_in_batch, added_in_batch,
+                stage_llm_client, metadata_llm_client, ec,
                 backend, executor, store_name)
             llm_calls += calls
             pending_replaced_id = ''
@@ -413,6 +414,7 @@ def run_remember(
 
                 if plan.fact_insight and plan.action != 'skipped':
                     insights_by_id[plan.fact_insight.id] = plan.fact_insight
+                    added_in_batch.add(plan.fact_insight.id)
                     vec = plan.enriched_vec or plan.embed_vec
                     if vec is not None:
                         embed_cache[plan.fact_insight.id] = vec
@@ -584,6 +586,7 @@ def _plan_fact(
         insights_by_id: dict[str, Insight],
         embed_cache: dict[str, list[float]],
         superseded_in_batch: set[str],
+        added_in_batch: set[str],
         stage_llm_client: Any,
         metadata_llm_client: Any,
         ec: Any,
@@ -612,6 +615,11 @@ def _plan_fact(
     superseded_in_batch : set[str]
         Rows an earlier fact of this write already retired; they leave
         the shortlist, so no later fact can fork their chain.
+    added_in_batch : set[str]
+        Rows THIS write authored. They stay in the shortlist, so a
+        later fact can still match and corroborate one, but none may
+        be retired: no merge runs against a row the write itself
+        wrote, so superseding a sibling drops its claim outright.
     stage_llm_client : Any
         The fast-worker client for the three reconcile stages.
     metadata_llm_client : Any
@@ -867,21 +875,47 @@ def _plan_fact(
                     for candidate in candidates:
                         candidate.verdict = verdict_by_id.get(candidate.id)
                     action, targets = assemble_verdicts(kept, verdict_by_id)
+                    # A sibling carries a claim this same write just
+                    # made, and no merge runs against a row the write
+                    # itself authored, so retiring one loses the claim.
+                    targets = [
+                        (target_id, relation)
+                        for target_id, relation in targets
+                        if not (relation == 'supersede'
+                                and target_id in added_in_batch)]
+                    if not targets:
+                        action = 'ADD'
+                    elif action == 'SUPERSEDE' and not any(
+                            relation == 'supersede'
+                            for _target_id, relation in targets):
+                        action = 'UPDATE'
 
     if action == 'NONE':
-        # Carry the target the model named, and the vector alongside
-        # it for the same reason the exact-match rung does: a target
-        # soft-deleted between planning and apply degrades to an add,
-        # which reads `plan.embed_vec`.
-        return [FactPlan(
-            action='skipped',
-            fact_text=fact_text,
-            fact_insight=new_row(fact_text),
-            targets=targets,
-            candidates=candidates,
-            embed_vec=fact_vec,
-            skip_reason='already captured',
-            )], calls
+        # Notes:
+        # - RESTATES is the one screen relation whose own text says
+        #   the target carries every claim the fact makes; a NONE
+        #   verdict on a REFINES or unjudged target would discard
+        #   clauses no stored row holds.
+        # - The screen already ran, so its answer rides
+        #   `Candidate.relation` and this costs no LLM call.
+        covered = {candidate.id for candidate in candidates
+                   if candidate.relation == 'RESTATES'}
+        if targets and targets[0][0] in covered:
+            # Carry the target the model named, and the vector
+            # alongside it for the same reason the exact-match rung
+            # does: a target soft-deleted between planning and apply
+            # degrades to an add, which reads `plan.embed_vec`.
+            return [FactPlan(
+                action='skipped',
+                fact_text=fact_text,
+                fact_insight=new_row(fact_text),
+                targets=targets,
+                candidates=candidates,
+                embed_vec=fact_vec,
+                skip_reason='already captured',
+                )], calls
+        action = 'ADD'
+        targets = []
 
     if action in {'UPDATE', 'SUPERSEDE'}:
         # Notes:

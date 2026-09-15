@@ -470,10 +470,16 @@ def test_a_successor_retired_in_the_same_write_leaves_the_drain_cache(
         tmp_backend, monkeypatch):
     """Verify a row retired later in the same write leaves both caches.
 
+    The second fact takes an UPDATE verdict rather than a supersede
+    one: a sibling the write itself authored can no longer be a
+    supersede target, and `superseded_in_batch` is seeded for update,
+    replace and supersede alike, so the eviction under test is
+    reached either way.
+
     Mutation: re-registering every inserted row in the drain cache and
-        never evicting the ones the write itself superseded, so the next
+        never evicting the ones the write itself retired, so the next
         queue row of the drain builds semantic edges onto a retired row.
-    Oracle: two facts, the second contradicting the first's successor;
+    Oracle: two facts, the second retiring the first's successor;
         after the write the first successor is in neither drain cache
         and the second is in both.
     """
@@ -488,7 +494,7 @@ def test_a_successor_retired_in_the_same_write_leaves_the_drain_cache(
             ('CONTRADICTS', []) if 'rabbit' in fact_text else ('UNRELATED', [])))
     monkeypatch.setattr(
         'memman.llm.extract.judge_memory',
-        lambda client, fact_text, memory: 'supersede')
+        lambda client, fact_text, memory: 'update')
     monkeypatch.setattr(
         'memman.llm.extract.merge_successor',
         lambda client, fact_text, target: None)
@@ -500,7 +506,7 @@ def test_a_successor_retired_in_the_same_write_leaves_the_drain_cache(
         insights_by_id=insights_by_id, store_name='test')
 
     first, second = res['facts']
-    assert (first['action'], second['action']) == ('add', 'supersede')
+    assert (first['action'], second['action']) == ('add', 'update')
     assert second['replaced_ids'] == [first['id']]
     assert first['id'] not in embed_cache
     assert first['id'] not in insights_by_id

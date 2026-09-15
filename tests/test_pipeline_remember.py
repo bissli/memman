@@ -52,7 +52,7 @@ def test_reconcile_candidates_ranked_by_similarity(monkeypatch):
 
     rem._plan_fact(
         fact, parent, '', False, False,
-        insights_by_id, embed_cache, set(),
+        insights_by_id, embed_cache, set(), set(),
         MagicMock(), MagicMock(), ec, MagicMock(), MagicMock(), 'teststore')
 
     assert 'TOP' in screened, f'top-cosine insight crowded out; screened={screened}'
@@ -232,7 +232,7 @@ def _plan_shortlist(monkeypatch, insights_by_id, embed_cache,
     ec.embed.return_value = [1.0, 0.0]
     plans, _calls = rem._plan_fact(
         fact, make_insight(id='parent', content=fact_text),
-        '', False, False, insights_by_id, embed_cache, set(),
+        '', False, False, insights_by_id, embed_cache, set(), set(),
         MagicMock(), MagicMock(), ec, MagicMock(), MagicMock(), 'teststore')
     return plans[0].candidates
 
