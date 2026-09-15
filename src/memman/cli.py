@@ -741,6 +741,9 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     if imp < 1 or imp > 5:
         raise click.ClickException(
             f'importance must be 1-5, got {imp}')
+    if not source.strip():
+        raise click.ClickException(
+            'source must not be empty; the default is user')
 
     # Validate here rather than in the drain: the enqueue reports
     # success to the caller, so a list the worker would reject has to
@@ -1826,13 +1829,6 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             f'content too long ({content_bytes} bytes, max 8000);'
             ' consider chunking into multiple remember calls')
 
-    if cat not in VALID_CATEGORIES:
-        valid = ', '.join(sorted(VALID_CATEGORIES))
-        raise click.ClickException(
-            f'invalid category {cat!r}; valid: {valid}')
-    if imp < 1 or imp > 5:
-        raise click.ClickException(
-            f'importance must be 1-5, got {imp}')
 
     from memman.search.quality import check_content_quality
     quality_warnings = check_content_quality(content_str)
@@ -1863,6 +1859,22 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         imp = old.importance
     if source_src != click.core.ParameterSource.COMMANDLINE:
         source = old.source
+
+    # Validate what is actually ENQUEUED, not only what the caller
+    # typed. A value inherited from a row written under an older
+    # vocabulary would otherwise reach the drain, which coerces an
+    # unusable category to fact and an out-of-range importance to 3
+    # in a worker the caller has already walked away from.
+    if cat not in VALID_CATEGORIES:
+        valid = ', '.join(sorted(VALID_CATEGORIES))
+        raise click.ClickException(
+            f'invalid category {cat!r}; valid: {valid}')
+    if imp < 1 or imp > 5:
+        raise click.ClickException(
+            f'importance must be 1-5, got {imp}')
+    if not source.strip():
+        raise click.ClickException(
+            'source must not be empty; the default is user')
     # Notes:
     # - The inherited list is persisted data the enrichment path
     #   wrote uncapped, so only a caller-typed list is validated.
