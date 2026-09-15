@@ -46,7 +46,7 @@ from memman.store.errors import BackendError, ConfigError
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
 from memman.store.model import NodeStats, OpLogEntry, OpLogStats
 from memman.store.model import ProvenanceCount, ReembedRow, WorkerRun
-from memman.store.model import parse_timestamp
+from memman.store.model import format_timestamp, parse_timestamp
 from memman.store.node import unterminated_chains
 
 if TYPE_CHECKING:
@@ -458,17 +458,37 @@ where attrelid = (%s || '.insights')::regclass
         return self._embedding_dim
 
     def insert(self, ins: Insight) -> None:
+        """Insert a new insight, stamping the timestamps server-side.
+
+        Notes
+        -----
+        - Caller-passed `created_at` / `updated_at` are IGNORED, as in
+          `node.insert_insight`. Tests that need a controlled
+          insertion time use `set_created_at` in `tests/conftest.py`.
+        - The stamp is one Python clock read through
+          `format_timestamp`, the same function and the same whole
+          second the SQLite path uses, rather than the column's
+          `default now()`. The resolution is load-bearing, not
+          cosmetic: `edges.find_with_entity` orders by `created_at`
+          descending and breaks ties on `id`, so a microsecond stamp
+          here against a second-granular one there would pick a
+          different neighbor set from identical content, and entity
+          edges are written from that set in both directions.
+        """
+        now = format_timestamp(datetime.now(timezone.utc))
         sql = self._q("""
 insert into {s}.insights
     (id, content, category, importance, entities,
-     source, access_count, prompt_version, model_id, embedding_model,
+     source, access_count, created_at, updated_at,
+     prompt_version, model_id, embedding_model,
      session_id, queue_uuid, corroboration_count, kw_tokens)
-values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (
                 ins.id, ins.content, ins.category, ins.importance,
                 ins.entities_json(), ins.source, ins.access_count,
+                now, now,
                 ins.prompt_version, ins.model_id, ins.embedding_model,
                 ins.session_id, ins.queue_uuid,
                 ins.corroboration_count,
@@ -1272,12 +1292,13 @@ where source_id = %s and edge_type = %s
             limit: int) -> list[Id]:
         ent = entity.strip().lower()
         sql = self._q("""
-select distinct i.id
-from {s}.insights i, jsonb_array_elements_text(i.entities) je
+select i.id
+from {s}.insights i
 where i.deleted_at is null and i.superseded_by is null
   and i.id <> %s
-  and lower(trim(je)) = %s
-order by i.id
+  and exists (select 1 from jsonb_array_elements_text(i.entities) je
+              where lower(trim(je)) = %s)
+order by i.created_at desc, i.id
 limit %s
 """)
         with self._conn.cursor() as cur:
@@ -1288,11 +1309,12 @@ limit %s
             self, entity: str, *, exclude_id: Id) -> int:
         ent = entity.strip().lower()
         sql = self._q("""
-select count(distinct i.id)
-from {s}.insights i, jsonb_array_elements_text(i.entities) je
+select count(*)
+from {s}.insights i
 where i.deleted_at is null and i.superseded_by is null
   and i.id <> %s
-  and lower(trim(je)) = %s
+  and exists (select 1 from jsonb_array_elements_text(i.entities) je
+              where lower(trim(je)) = %s)
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (exclude_id, ent))

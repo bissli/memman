@@ -479,12 +479,50 @@ class EdgeStore(Protocol):
     def find_with_entity(
             self, entity: str, *, exclude_id: Id,
             limit: int) -> list[Id]:
-        """Insight ids that have the given entity."""
+        """Active insight ids carrying an entity, newest first.
+
+        Parameters
+        ----------
+        entity : str
+            Name to match, compared case- and space-insensitively
+            against each stored name.
+        exclude_id : Id
+            Insight to leave out, normally the row asking.
+        limit : int
+            Most ids to return.
+
+        Returns
+        -------
+        list[Id]
+            Ids ordered by `created_at` descending, ties broken by
+            ascending id. A row is named once however many of its
+            stored names match. Case and surrounding space are folded,
+            within the limit in the notes below.
+
+        Notes
+        -----
+        - Both backends must answer the same ids in the same order for
+          the same content: `create_entity_edges` writes an edge to
+          every id returned, in both directions, so this ordering is
+          baked into the stored graph and a divergence is permanent.
+        - The tiebreak carries the ordering rather than decorating it.
+          Both insert paths stamp `created_at` from one Python clock
+          read cut to the whole second, so rows written in the same
+          second tie and their ids decide -- which is why the stamp
+          resolution has to match across backends as much as the
+          ordering clause does.
+        - The name fold is the one part that does NOT match. SQLite's
+          `lower()` is ASCII-only and Postgres's is Unicode-aware, so
+          a name whose case differs outside ASCII matches on Postgres
+          and not on SQLite. Folding one way on both sides needs a
+          normalized key decided in Python on the write path, which
+          this contract does not yet require.
+        """
         ...
 
     def count_with_entity(
             self, entity: str, *, exclude_id: Id) -> int:
-        """Count distinct insights that contain the entity."""
+        """Count active insights carrying the entity, excluding one row."""
         ...
 
     def all(self) -> list[Edge]:
@@ -740,9 +778,8 @@ class RecallSession(Protocol):
           i-diaeresis is one FTS term and two Python tokens, and an
           entity reaches the index as its stored JSON text, so
           `"the\\nservice"` indexes as `nservice` where Python reads
-          `service`. Measured across all fifteen live stores: 25 of
-          3,715 active rows lose an entity token, and a 70-config
-          recall A/B moved 7 results, all from ONE row. Postgres
+          `service`. A stored row is affected only if it carries such
+          a run, so the reach is narrow, but it is not nil. Postgres
           matches Python exactly, and by construction rather than by
           agreement: it stores the set `insight_tokens` built at
           write time. Closing the gap means changing

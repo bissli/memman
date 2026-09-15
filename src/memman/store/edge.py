@@ -93,14 +93,37 @@ where source_id = ? and edge_type = ?
 def find_insights_with_entity(
         db: 'DB', entity: str, exclude_id: str,
         limit: int) -> list[str]:
-    """Return insight IDs that have the given entity."""
+    """Active insight ids carrying an entity, newest first.
+
+    The ordering contract, and why both backends share it, is on
+    `EdgeStore.find_with_entity` in `store/backend.py`.
+
+    Parameters
+    ----------
+    db : DB
+        Open SQLite handle.
+    entity : str
+        Name to match, compared case- and space-insensitively against
+        each stored name.
+    exclude_id : str
+        Insight to leave out, normally the row asking.
+    limit : int
+        Most ids to return.
+
+    Returns
+    -------
+    list[str]
+        Ids ordered by `created_at` descending, ties broken by
+        ascending id.
+    """
     sql = """
-select distinct i.id
-from insights i, json_each(i.entities) je
+select i.id
+from insights i
 where i.deleted_at is null and i.superseded_by is null
   and i.id != ?
-  and lower(trim(je.value)) = ?
-order by i.created_at desc
+  and exists (select 1 from json_each(i.entities) je
+              where lower(trim(je.value)) = ?)
+order by i.created_at desc, i.id
 limit ?
 """
     rows = db._query(
@@ -110,13 +133,14 @@ limit ?
 
 def count_insights_with_entity(
         db: 'DB', entity: str, exclude_id: str) -> int:
-    """Count distinct insights that contain the given entity."""
+    """Count active insights carrying the given entity, excluding one row."""
     sql = """
-select count(distinct i.id)
-from insights i, json_each(i.entities) je
+select count(*)
+from insights i
 where i.deleted_at is null and i.superseded_by is null
   and i.id != ?
-  and lower(trim(je.value)) = ?
+  and exists (select 1 from json_each(i.entities) je
+              where lower(trim(je.value)) = ?)
 """
     row = db._query(sql, (exclude_id, entity.strip().lower())).fetchone()
     return row[0] if row else 0
