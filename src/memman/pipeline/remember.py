@@ -48,8 +48,8 @@ from memman.rerank import get_client as get_rerank_client
 from memman.search.keyword import keyword_search
 from memman.search.quality import check_content_quality
 from memman.store.backend import Backend
-from memman.store.model import Edge, Insight, dedupe_entities
-from memman.store.model import format_timestamp
+from memman.store.model import MAX_ROW_ENTITIES, Edge, Insight
+from memman.store.model import dedupe_entities, format_timestamp
 from memman.store.model import insight_to_delta_dict
 
 logger = logging.getLogger('memman')
@@ -1209,13 +1209,26 @@ def _apply_plan(
         #   contradiction: it counts restatements of the claim the
         #   supersede just falsified.
         for _target_id, relation, before_target in predecessors:
-            # A replace carries the caller's own entity list, which
-            # the CLI already seeded from the target when the flag
-            # was omitted. Unioning the target's names back in would
-            # make a typed list additive and an empty one inert.
+            # Notes:
+            # - A replace carries the caller's own entity list, which
+            #   the CLI already seeded from the target when the flag
+            #   was omitted. Unioning the target's names back in would
+            #   make a typed list additive and an empty one inert.
+            # - The union is monotonic, so the cap is what keeps a
+            #   repeatedly superseded row from carrying every name any
+            #   predecessor ever held. An inherited name whose carrier
+            #   is superseded matches no active row, so it costs a
+            #   `find_with_entity` query and takes no edge budget, and
+            #   the edge loop never breaks.
+            # - The row's own list leads, so the cut normally takes
+            #   the oldest inherited names, which is the same order
+            #   the edge budget is spent in. Where that own list
+            #   already fills the cap the cut lands inside it, on the
+            #   enrichment's names, which sit at its tail.
             if relation != 'replace':
                 fi.entities = list(dict.fromkeys(
-                    list(fi.entities) + list(before_target.entities)))
+                    list(fi.entities)
+                    + list(before_target.entities)))[:MAX_ROW_ENTITIES]
             fi.access_count = max(
                 fi.access_count, before_target.access_count)
             if relation != 'supersede':

@@ -133,6 +133,9 @@ class OpLogEntry:
     after: dict[str, Any] | None = None
 
 
+MAX_ROW_ENTITIES = 50
+
+
 def dedupe_entities(entities: list[str]) -> list[str]:
     """Fold case and whitespace variants of one entity name into one.
 
@@ -219,10 +222,10 @@ def insight_to_brief_dict(ins: 'Insight') -> dict[str, Any]:
     - `truncated` marks content the caller has NOT seen, so it fires
       only when the fallback actually cut something. Marking every
       fallback would be false for most of them -- the compression gate
-      blanks summaries precisely when content is short, so 230 of the
-      253 summary-less rows across ten live stores sit under the
-      limit -- and would send the caller to `insights show` for a row
-      it already holds in full.
+      blanks a summary precisely when the content is short enough not
+      to need one, so a summary-less row is usually under the limit
+      already -- and would send the caller to `insights show` for a
+      row it already holds in full.
     """
     out: dict[str, Any] = {
         'id': ins.id,
