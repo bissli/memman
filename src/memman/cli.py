@@ -238,11 +238,59 @@ def _parse_since(since: str) -> str:
 
 
 def _parse_entities(entities: str) -> list[str]:
-    """Parse and validate comma-separated entities.
+    """Split a comma-separated entity string into a canonical list.
+
+    Parameters
+    ----------
+    entities : str
+        Comma-separated entity names. An empty or whitespace-only
+        segment is dropped.
+
+    Returns
+    -------
+    list[str]
+        The names in input order, each stripped, none empty.
 
     Notes
     -----
-    - Both caps below are MEASURED against the population they see,
+    - No cap fires here. The caps live in
+      `_validate_caller_entities` and govern CALLER INPUT alone.
+      Two callers read STORED data instead: the drain re-parses a
+      string the enqueue already canonicalized, and `replace`
+      inherits the list the enrichment path wrote. Neither is caller
+      input, so a caller cap refuses data that is already persisted.
+    """
+    entity_list: list[str] = []
+    if not entities:
+        return entity_list
+    for e in entities.split(','):
+        e = e.strip()
+        if e:
+            entity_list.append(e)
+    return entity_list
+
+
+def _validate_caller_entities(entities: str) -> list[str]:
+    """Parse a caller-supplied `--entities` value and cap it.
+
+    Parameters
+    ----------
+    entities : str
+        The `--entities` value as the caller typed it.
+
+    Returns
+    -------
+    list[str]
+        The parsed names, at most 50, each at most 200 chars.
+
+    Raises
+    ------
+    click.ClickException
+        On more than 50 names, or on one name over 200 chars.
+
+    Notes
+    -----
+    - Both caps are MEASURED against the population they see,
       fleet-wide on 2026-09-03: 6,220 active rows carrying 116,057
       entities across 24 stores.
     - The 200-char per-entity cap is INERT. Longest observed entity
@@ -264,17 +312,12 @@ def _parse_entities(entities: str) -> list[str]:
       exhaust the whole edge budget and later ones produce no edge
       at all. Stored median is 20.
     """
-    entity_list: list[str] = []
-    if not entities:
-        return entity_list
-    for e in entities.split(','):
-        e = e.strip()
-        if e:
-            if len(e) > 200:
-                raise click.ClickException(
-                    f'entity too long ({len(e)} chars, max 200):'
-                    f' {e[:50]}')
-            entity_list.append(e)
+    entity_list = _parse_entities(entities)
+    for e in entity_list:
+        if len(e) > 200:
+            raise click.ClickException(
+                f'entity too long ({len(e)} chars, max 200):'
+                f' {e[:50]}')
     if len(entity_list) > 50:
         raise click.ClickException(
             f'too many entities ({len(entity_list)}, max 50)')
@@ -713,7 +756,7 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     #   reject has to fail now or the write is lost silently.
     # - Storing the parsed form leaves the drain's own re-parse
     #   idempotent, so it cannot fail on a row that got this far.
-    entities_clean = ','.join(_parse_entities(entities))
+    entities_clean = ','.join(_validate_caller_entities(entities))
 
     from memman.search.quality import check_content_quality
     quality_warnings = check_content_quality(content_str)
@@ -1828,9 +1871,15 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         imp = old.importance
     if source_src != click.core.ParameterSource.COMMANDLINE:
         source = old.source
-    if entities_src != click.core.ParameterSource.COMMANDLINE:
-        entities = ','.join(old.entities) if old.entities else ''
-    entities_clean = ','.join(_parse_entities(entities))
+    # Notes:
+    # - The inherited list is persisted data the enrichment path
+    #   wrote uncapped, so only a caller-typed list is validated.
+    #   Capping the inherited one makes any row grown past 50
+    #   entities permanently unreplaceable.
+    if entities_src == click.core.ParameterSource.COMMANDLINE:
+        entities_clean = ','.join(_validate_caller_entities(entities))
+    else:
+        entities_clean = ','.join(old.entities) if old.entities else ''
 
     from memman.queue import enqueue, queue_db
     with queue_db(data_dir_val) as conn:

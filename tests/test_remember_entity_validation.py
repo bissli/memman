@@ -1,15 +1,20 @@
 """`remember` must reject an unusable `--entities` list at enqueue.
 
-The cap itself lives in `_parse_entities`. Its only caller used to be
-the DRAIN path, so an oversized list enqueued cleanly, reported
-`{"action": "queued"}` at exit 0, and then died in the worker after
-`MAX_ATTEMPTS` identical failures with the content never stored. These
+The caps live in `_validate_caller_entities`. They once sat in
+`_parse_entities`, whose only caller was the DRAIN path, so an
+oversized list enqueued cleanly, reported `{"action": "queued"}` at
+exit 0, and then died in the worker after `MAX_ATTEMPTS` identical
+failures with the content never stored. The caps then reached a second
+population they do not govern: the entity list `replace` inherits from
+the row it replaces, which the enrichment path writes uncapped. These
 tests pin the placement, not the values: 50 entities and 200 chars are
 unmeasured and deliberately unchanged here.
 """
 
 import json
 
+from memman.store.db import read_active
+from memman.store.factory import open_backend
 from tests.conftest import invoke, parse_remember
 
 
@@ -108,3 +113,44 @@ def test_replace_rejects_an_oversized_entity_list_too(mm_runner):
     assert result.exit_code != 0
     assert 'too many entities' in result.output
     assert len(_queue_rows(data_dir)) == before
+
+
+def test_replace_inherits_an_oversized_stored_entity_list(mm_runner):
+    """Verify `replace` without `--entities` carries a 66-entity list through.
+
+    The enrichment path writes `entities` without passing through
+    `_parse_entities` and merges as a monotonic union, so a stored
+    list grows past the caller cap on its own. Applying the
+    caller-input cap to that inherited list makes the row
+    permanently unreplaceable, whatever the replacement text says.
+
+    Mutation: validating the INHERITED entity list against the
+        caller-input cap -- the defect this test was written
+        against -- or truncating it to 50 instead of passing it
+        whole.
+    Oracle: a hand-built 66-entity list, counted back off the
+        enqueued row and off the stored successor.
+    """
+    _, data_dir = mm_runner
+    grown = [f'ent{i}' for i in range(66)]
+
+    first = invoke(mm_runner, [
+        'remember', 'a note whose entity list outgrows the cap',
+        '--no-reconcile'])
+    old = parse_remember(first, mm_runner)
+
+    name = read_active(data_dir) or 'default'
+    backend = open_backend(name, data_dir)
+    backend.nodes.update_entities(old['id'], grown)
+    assert len(backend.nodes.get(old['id']).entities) == 66
+
+    result = invoke(mm_runner, [
+        'replace', old['id'], 'x', '--no-reconcile'])
+
+    assert result.exit_code == 0, result.output
+    queue_id = json.loads(result.output)['queue_id']
+    rows = {r[0]: r for r in _queue_rows(data_dir)}
+    assert rows[queue_id][2].split(',') == grown
+    successor = parse_remember(result, mm_runner)
+    assert open_backend(name, data_dir).nodes.get(
+        successor['id']).entities == grown
