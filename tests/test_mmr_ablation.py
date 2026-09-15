@@ -10,11 +10,12 @@ import importlib.util
 import json
 import sys
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from memman.search import recall as recall_mod
 from memman.search.recall import intent_aware_recall
-from tests.conftest import make_insight
+from tests.conftest import make_insight, set_created_at
 
 _SPEC = importlib.util.spec_from_file_location(
     'run_ablation',
@@ -25,16 +26,24 @@ sys.modules['run_ablation'] = ablation
 _SPEC.loader.exec_module(ablation)
 
 
-def _seed_vec(backend, iid, content, vec):
+def _seed_vec(backend, iid, content, vec, minutes_ago):
     backend.nodes.insert(make_insight(id=iid, content=content))
     backend.nodes.update_embedding(iid, vec, 'test-model')
+    # `created_at` is server-stamped at second resolution, so three
+    # rows written in one call share a timestamp and the recency
+    # signal ranks them by a tie the store breaks arbitrarily. Spacing
+    # them makes that rung deterministic.
+    set_created_at(
+        backend, iid,
+        datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+        - timedelta(minutes=minutes_ago))
 
 
 def _abc_pool(backend):
     """A + near-duplicate B ranked above diverse C by pure relevance."""
-    _seed_vec(backend, 'mmr-a', 'anchor row body a', [1.0, 0.0, 0.0])
-    _seed_vec(backend, 'mmr-b', 'anchor row body b', [0.995, 0.0999, 0.0])
-    _seed_vec(backend, 'mmr-c', 'anchor row body c', [0.5, 0.0, 0.866])
+    _seed_vec(backend, 'mmr-a', 'anchor row body a', [1.0, 0.0, 0.0], 3)
+    _seed_vec(backend, 'mmr-b', 'anchor row body b', [0.995, 0.0999, 0.0], 2)
+    _seed_vec(backend, 'mmr-c', 'anchor row body c', [0.5, 0.0, 0.866], 1)
 
 
 def _recall_ids(backend, **kwargs):
@@ -198,7 +207,7 @@ def test_mmr_mixed_dim_rows_hold_position(tmp_backend, monkeypatch):
         (C above B) at lambda 0.5.
     """
     _abc_pool(tmp_backend)
-    _seed_vec(tmp_backend, 'mmr-z', 'off dim filler row', [0.1, 0.2])
+    _seed_vec(tmp_backend, 'mmr-z', 'off dim filler row', [0.1, 0.2], 4)
     monkeypatch.setattr(recall_mod, 'MMR_LAMBDA', 1.0)
     baseline = _recall_ids(tmp_backend)
     assert baseline.index('mmr-z') == 3
