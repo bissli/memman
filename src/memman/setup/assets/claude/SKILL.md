@@ -17,7 +17,7 @@ recall walks. Omit `--session`: it reads `$CLAUDE_CODE_SESSION_ID` by
 itself. Pass it only to pin a different id.
 
 ```bash
-memman remember "<fact>" --cat <category> --imp <1-5> --entities "e1,e2" --source agent
+memman remember "<fact>" --cat <category> --imp <1-5> --entity e1 --entity e2 --source agent
 ```
 
 Categories: `preference` · `decision` · `fact` · `insight` · `context`.
@@ -192,13 +192,13 @@ memman doctor                         # health check (sqlite, queue, keys, sched
 
 ## Operator commands the agent rarely runs
 
-| Command                                              | Purpose                             |
-| ---------------------------------------------------- | ----------------------------------- |
-| `memman log list [--since 7d --stats --text]`        | Operation audit log                 |
-| `memman scheduler status`                            | Worker state, next run, log paths   |
-| `memman scheduler queue list`                        | Inspect deferred-write queue        |
-| `memman store list` / `use <name>` / `create <name>` | Multi-store management              |
-| `memman config show`                                 | Effective settings (env + on-disk)  |
+| Command                                              | Purpose                            |
+| ---------------------------------------------------- | ---------------------------------- |
+| `memman log list [--since 7d --stats --text]`        | Operation audit log                |
+| `memman scheduler status`                            | Worker state, next run, log paths  |
+| `memman scheduler queue list`                        | Inspect deferred-write queue       |
+| `memman store list` / `use <name>` / `create <name>` | Multi-store management             |
+| `memman config show`                                 | Effective settings (env + on-disk) |
 
 ## Guardrails
 

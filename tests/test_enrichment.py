@@ -429,11 +429,11 @@ class TestLengthCaps:
         assert result['entities'] == valid
 
     def test_user_supplied_entities_are_not_capped(self):
-        """Over-long user `--entities` survive; over-long LLM ones drop.
+        """Over-long user `--entity` values survive; over-long LLM ones drop.
 
         `merged` is seeded from `insight.entities`, which carries the
-        user's `--entities` all the way down -- length-filtering
-        `merged` would drop over-long USER entities.
+        user's `--entity` values all the way down -- length-filtering
+        `merged` would drop over-long user entities.
 
         Mutation: applying the length cap to `merged` instead of
             `llm_entities`.
@@ -456,7 +456,7 @@ class TestLengthCaps:
 
         `MAX_ENRICH_ENTITIES` exists to stop an over-eager model
         inflating the entity graph, but `merged` is seeded from
-        `insight.entities`, which carries the user's `--entities`.
+        `insight.entities`, which carries the user's `--entity` values.
         Capping the merged list therefore binds caller input the CLI
         already accepted and reported success for.
 

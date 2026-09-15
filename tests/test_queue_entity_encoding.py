@@ -3,12 +3,12 @@
 An entity name may contain a comma. An LDAP distinguished name always
 does. A comma-joined column silently cut such a name into fragments on
 the one command that sends a STORED list back through the queue,
-`memman replace` without `--entities`. Every fragment then became a
+`memman replace` without `--entity`. Every fragment then became a
 named entity of its own, spending the entity-edge budget and growing
 the row's list on each pass.
 
-These tests pin the wire contract, not the caller-facing `--entities`
-grammar, which stays comma-separated.
+These tests pin the wire contract, not the caller-facing `--entity`
+flag.
 """
 
 import json
@@ -50,8 +50,8 @@ def test_replace_keeps_a_comma_bearing_inherited_entity_whole(mm_runner):
         `OU=Servers,DC=example,DC=com`, against the successor's. The
         teeth are on the ABSENCE of fragments: the DN itself is
         present on the broken code too, re-added by the predecessor
-        union at `pipeline/remember.py:1153`, so asserting only that
-        the DN survives passes on the defect.
+        entity union in `_apply_plan`, so asserting only that the DN
+        survives passes on the defect.
     """
     _, data_dir = mm_runner
     first = invoke(mm_runner, [

@@ -30,12 +30,17 @@ def remember(runner_tuple, content, no_reconcile=False, **flags):
     we look up the newly-stored insight by the queue row's
     `queue_uuid` (since D1, `source` is provenance and defaults to
     `'user'`) so existing assertions like `data['id']` keep working.
+
+    A flag whose value is a list or tuple repeats, one occurrence per
+    item, which is how `--entity` supplies several names.
     """
     args = ['remember', content]
     if no_reconcile:
         args.append('--no-reconcile')
     for k, v in flags.items():
-        args.extend([f'--{k}', str(v)])
+        values = v if isinstance(v, (list, tuple)) else [v]
+        for value in values:
+            args.extend([f'--{k}', str(value)])
     result = invoke(runner_tuple, args)
     assert result.exit_code == 0, result.output
     return parse_remember(result, runner_tuple)
@@ -576,7 +581,7 @@ class TestRecallFindsContentByEntities:
         """
         remember(runner,
                  'Kubernetes pod scheduling uses affinity rules and taints for node placement',
-                 no_reconcile=True, entities='Kubernetes')
+                 no_reconcile=True, entity='Kubernetes')
         hits = recall_basic(runner, 'Kubernetes')
         assert len(hits) > 0
 
@@ -729,7 +734,7 @@ class TestRecallCompleteness:
         """
         remember(runner,
                  'AWS Lambda serverless functions with DynamoDB backend',
-                 no_reconcile=True, entities='Lambda,DynamoDB')
+                 no_reconcile=True, entity=('Lambda', 'DynamoDB'))
 
         search_hits = search_cmd(runner, 'Lambda')
         basic_hits = recall_basic(runner, 'Lambda')
@@ -874,7 +879,7 @@ class TestResolveId:
         assert resolved == 'abcd'
 
     def test_graph_related_unknown_id_exits_nonzero(self, runner):
-        """graph related on an unknown id exits non-zero with 'not found'.
+        """Graph related on an unknown id exits non-zero with 'not found'.
 
         Mutation: the empty-list fallthrough in graph_related, which
             returns exit 0 and an empty list when bfs finds no neighbors

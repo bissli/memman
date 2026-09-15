@@ -56,7 +56,7 @@ Two live-read commands (called by hooks, not by hand):
 ```bash
 # Remember — store a new insight (LLM reconciliation: duplicates skipped, conflicts resolved)
 memman remember "Chose Qdrant over Milvus for vector search" \
-  --cat decision --imp 5 --entities "Qdrant,Milvus" --source agent
+  --cat decision --imp 5 --entity Qdrant --entity Milvus --source agent
 
 # Skip LLM reconciliation (direct insert)
 memman remember "Raw note" --no-reconcile
@@ -94,28 +94,28 @@ ambiguous prefix is refused with the number of rows it matches.
 
 **Remember flags:**
 
-| Flag             | Default   | Description                                                                                                                       |
-| ---------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `--cat`          | `fact`    | Category: `preference`, `decision`, `fact`, `insight`, `context`                                                                  |
-| `--imp`          | `3`       | Importance 1-5, a sort key stored as passed                                                                                       |
-| `--entities`     |           | Comma-separated entities (merged with LLM-extracted)                                                                              |
-| `--source`       | `user`    | Source: `user` (default), `agent`, or a locator for imported material; stored verbatim; recall filters by exact match             |
-| `--session`      | (env)     | Session id for the temporal chain; defaults to `$MEMMAN_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID`. No session, no backbone edge |
-| `--no-reconcile` | `false`   | Store the text verbatim: skip extraction and reconciliation, so the write cannot be dropped or folded away                        |
+| Flag             | Default | Description                                                                                                                       |
+| ---------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `--cat`          | `fact`  | Category: `preference`, `decision`, `fact`, `insight`, `context`                                                                  |
+| `--imp`          | `3`     | Importance 1-5, a sort key stored as passed                                                                                       |
+| `--entity`       |         | Entity name (repeatable; merged with LLM-extracted)                                                                               |
+| `--source`       | `user`  | Source: `user` (default), `agent`, or a locator for imported material; stored verbatim; recall filters by exact match             |
+| `--session`      | (env)   | Session id for the temporal chain; defaults to `$MEMMAN_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID`. No session, no backbone edge |
+| `--no-reconcile` | `false` | Store the text verbatim: skip extraction and reconciliation, so the write cannot be dropped or folded away                        |
 
 **Recall flags:**
 
-| Flag          | Default       | Description                                                                                                                              |
-| ------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `--limit`     | `10`          | Max results                                                                                                                              |
-| `--intent`    | (auto-detect) | Override intent: `WHY`, `WHEN`, `ENTITY`, `GENERAL`; validated always, but inert under `--basic` and named in `meta.ignored`             |
-| `--cat`       |               | Filter by category                                                                                                                       |
-| `--source`    |               | Filter by source                                                                                                                         |
+| Flag          | Default       | Description                                                                                                                                                                         |
+| ------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--limit`     | `10`          | Max results                                                                                                                                                                         |
+| `--intent`    | (auto-detect) | Override intent: `WHY`, `WHEN`, `ENTITY`, `GENERAL`; validated always, but inert under `--basic` and named in `meta.ignored`                                                        |
+| `--cat`       |               | Filter by category                                                                                                                                                                  |
+| `--source`    |               | Filter by source                                                                                                                                                                    |
 | `--basic`     | `false`       | Use simple SQL LIKE matching instead of smart recall; returns before ranking so it carries no `score` or `signals`, and names `--intent` / `--expand` in `meta.ignored` when passed |
-| `--brief`     | `false`       | Cut each result to id, category, importance, created_at, summary                                                                         |
-| `--session`   |               | Calling session id, recorded on the `recall-detail` oplog row so a return is attributable to a session                                    |
-| `--expand`    | `false`       | Opt-in LLM query expansion (synonyms + intent hint); inert under `--basic` and named in `meta.ignored`                                   |
-| `--min-score` | `0.0`         | Relevance floor on keyword+similarity, 0.0 to 2.0 (`0.0` = off); rejected with `--basic`                                                 |
+| `--brief`     | `false`       | Cut each result to id, category, importance, created_at, summary                                                                                                                    |
+| `--session`   |               | Calling session id, recorded on the `recall-detail` oplog row so a return is attributable to a session                                                                              |
+| `--expand`    | `false`       | Opt-in LLM query expansion (synonyms + intent hint); inert under `--basic` and named in `meta.ignored`                                                                              |
+| `--min-score` | `0.0`         | Relevance floor on keyword+similarity, 0.0 to 2.0 (`0.0` = off); rejected with `--basic`                                                                                            |
 
 The cross-encoder rerank stage is on by default and auto-skips on 1-2 token
 queries. Provider is selected via `MEMMAN_RERANK_PROVIDER` (any registered
@@ -363,9 +363,10 @@ memman scheduler queue retry --all-stale # requeue every row currently in status
 memman scheduler queue purge --done      # delete rows where status='done'
 memman scheduler queue purge --stale     # delete rows where status='stale'
 memman scheduler queue purge --skipped   # empty the skipped-write ledger
+memman scheduler queue purge --failed    # file then delete rows where status='failed'
 ```
 
-A skipped write is a row the pipeline completed without storing an insight: its extraction came back empty, or every extracted fact restated an existing insight and was folded into it as a corroboration. All of these mark the row `done`, and `purge_done` deletes it a minute later, so the `skipped_writes` ledger is what survives. It keeps the full content, the reason, the store, and the session id, and `stats` reports its size under `skipped` (alongside `stale`, which it also reports). The rule is all-or-nothing: a write that stored even one fact is not filed.
+A skipped write is a row that stored no insight. Usually the pipeline completed and stored nothing: its extraction came back empty, or every extracted fact restated an existing insight and was folded into it as a corroboration. All of these mark the row `done`, and `purge_done` deletes it a minute later, so the `skipped_writes` ledger is what survives. A row that exhausted its retries and parked at `status='failed'` usually stored nothing either, and `queue purge --failed` files it here before deleting it, with a reason naming the failure and the row's `queue_uuid`. That last part matters: the drain's error handling extends past the store commit, so a row can reach `failed` with its insights already written. Resolve the uuid with `memman insights by-queue <uuid>` before re-entering such an entry, or the re-entry duplicates a stored write. The ledger keeps the full content, the reason, the store, and the session id, and `stats` reports its size under `skipped` (alongside `stale`, which it also reports). The rule is all-or-nothing: a write that stored even one fact is not filed.
 
 Nothing prunes the ledger on a timer: `purge_done` never reaches it. `queue purge --skipped` empties it, `store remove` drops one store's entries, and a `backup restore` replaces it wholesale with the archive's copy. The listing spans every store, and it holds raw content, so treat it as sensitive. Pass `--no-reconcile` on `remember` to bypass every drop and store the text verbatim.
 
@@ -476,7 +477,7 @@ The variables below are not installable — they are read from the env file on d
 
 `memman remember` appends one row to the queue in ~50 ms on the host session — no LLM calls, no embeddings, no edges. The full pipeline runs out of band:
 
-1. **Tier 1 (host)** — append a row to `~/.memman/queue.db` with `status='pending'`, the raw text, and any `--cat`/`--imp`/`--entities` hints. Returns `{action: queued, queue_id, queue_uuid, store}`. The `queue_uuid` is the join key: it is stamped on every insight this write produces and outlives the queue row, which `purge_done` drops about a minute after the drain.
+1. **Tier 1 (host)** — append a row to `~/.memman/queue.db` with `status='pending'`, the raw text, and any `--cat`/`--imp`/`--entity` hints. Returns `{action: queued, queue_id, queue_uuid, store}`. The `queue_uuid` is the join key: it is stamped on every insight this write produces and outlives the queue row, which `purge_done` drops about a minute after the drain.
 2. **Tier 2 (worker)** — systemd timer (Linux), launchd agent (macOS), or `memman scheduler serve` PID 1 (containers) invokes `memman scheduler drain --timeout 60` every 60 s under an `flock` on `~/.memman/drain.lock`. Per row: quality gate → LLM fact extraction → per-fact embed + similarity scan → exact-match dedup (a fact byte-identical to exactly one stored row skips the LLM and bumps that row's `corroboration_count`) or LLM reconciliation (ADD/UPDATE/SUPERSEDE/NONE, where `NONE <id>` names the memory that already covers a reworded fact and bumps it the same way, and UPDATE and SUPERSEDE supersede their target rather than delete it) → insert/supersede → fast edges (temporal + entity + semantic) → parallel enrichment + LLM causal inference → re-embed → rebuild auto edges → mark done.
 
 The host session never blocks on the network. Newly stored memories become recallable on the next drain tick (default 60 s).

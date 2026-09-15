@@ -29,7 +29,7 @@ session's writes into one temporal chain; a write without it joins
 no chain.
 
 ```bash
-memman remember "<fact>" --cat <category> --imp <1-5> --entities "e1,e2" --source agent --session $SESSION_ID
+memman remember "<fact>" --cat <category> --imp <1-5> --entity e1 --entity e2 --source agent --session $SESSION_ID
 ```
 
 Categories: `preference` · `decision` · `fact` · `insight` · `context`.

@@ -1,7 +1,7 @@
-"""`remember` must reject an unusable `--entities` list at enqueue.
+"""`remember` must reject an unusable `--entity` list at enqueue.
 
-The caps live in `_validate_caller_entities`, which parses the
-`--entities` argument grammar. They were once applied where the DRAIN
+The caps live in `_validate_caller_entities`, which validates each
+`--entity` occurrence. They were once applied where the DRAIN
 reads the queue instead, so an oversized list enqueued cleanly,
 reported `{"action": "queued"}` at exit 0, and then died in the worker
 after `MAX_ATTEMPTS` identical failures with the content never stored.
@@ -38,11 +38,11 @@ def test_oversized_entity_list_is_rejected_before_enqueue(mm_runner):
         which must stay at zero.
     """
     _, data_dir = mm_runner
-    entities = ','.join(f'e{i}' for i in range(51))
+    args = ['remember', 'a note carrying one entity too many']
+    for i in range(51):
+        args += ['--entity', f'e{i}']
 
-    result = invoke(mm_runner, [
-        'remember', 'a note carrying one entity too many',
-        '--entities', entities])
+    result = invoke(mm_runner, args)
 
     assert result.exit_code != 0
     assert 'too many entities' in result.output
@@ -61,7 +61,7 @@ def test_overlong_single_entity_is_rejected_before_enqueue(mm_runner):
 
     result = invoke(mm_runner, [
         'remember', 'a note carrying one overlong entity',
-        '--entities', 'x' * 201])
+        '--entity', 'x' * 201])
 
     assert result.exit_code != 0
     assert 'entity too long' in result.output
@@ -85,9 +85,10 @@ def test_entity_list_at_the_cap_still_enqueues(mm_runner):
     _, data_dir = mm_runner
     wanted = [f'e{i}' for i in range(49)] + ['x' * 200]
 
-    result = invoke(mm_runner, [
-        'remember', 'a note carrying exactly the cap',
-        '--entities', ','.join(wanted)])
+    args = ['remember', 'a note carrying exactly the cap']
+    for e in wanted:
+        args += ['--entity', e]
+    result = invoke(mm_runner, args)
 
     assert result.exit_code == 0
     queue_id = json.loads(result.output)['queue_id']
@@ -132,9 +133,10 @@ def test_replace_rejects_an_oversized_entity_list_too(mm_runner):
     old = parse_remember(first, mm_runner)
     before = len(_queue_rows(data_dir))
 
-    result = invoke(mm_runner, [
-        'replace', old['id'], 'the replacement text',
-        '--entities', ','.join(f'e{i}' for i in range(51))])
+    args = ['replace', old['id'], 'the replacement text']
+    for i in range(51):
+        args += ['--entity', f'e{i}']
+    result = invoke(mm_runner, args)
 
     assert result.exit_code != 0
     assert 'too many entities' in result.output
@@ -142,7 +144,7 @@ def test_replace_rejects_an_oversized_entity_list_too(mm_runner):
 
 
 def test_replace_inherits_an_oversized_stored_entity_list(mm_runner):
-    """Verify `replace` without `--entities` carries a 66-entity list through.
+    """Verify `replace` without `--entity` carries a 66-entity list through.
 
     The enrichment path writes `entities` without passing through
     `_validate_caller_entities` and merges as a monotonic union, so a

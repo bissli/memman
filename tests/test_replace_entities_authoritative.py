@@ -1,8 +1,8 @@
-"""A typed `replace --entities` decides the successor's entity list.
+"""A typed `replace --entity` decides the successor's entity list.
 
 `replace`'s own docstring says an unflagged `--cat` / `--imp` /
-`--source` / `--entities` inherits the replaced insight's value. The
-first three override when typed; `--entities` did not. The predecessor
+`--source` / `--entity` inherits the replaced insight's value. The
+first three override when typed; `--entity` did not. The predecessor
 union in `_apply_plan` re-added the target's names after the caller's
 list was already set, so a typed list could only ADD names and an
 empty one did nothing at all.
@@ -29,7 +29,7 @@ def _seed(mm_runner, data_dir, entities):
 
 
 def test_a_typed_entity_list_replaces_the_inherited_one(mm_runner):
-    """Verify a typed `--entities` drops the names it did not name.
+    """Verify a typed `--entity` drops the names it did not name.
 
     Mutation: unioning the predecessor's entity list into the
         successor on a `replace`, so a typed list can only add and
@@ -42,17 +42,17 @@ def test_a_typed_entity_list_replaces_the_inherited_one(mm_runner):
 
     result = invoke(mm_runner, [
         'replace', old_id, 'the broker is rabbit now',
-        '--entities', 'rabbitmq'])
+        '--entity', 'rabbitmq'])
 
     assert result.exit_code == 0, result.output
     successor = parse_remember(result, mm_runner)
     stored = open_backend(name, data_dir).nodes.get(successor['id']).entities
     assert 'rabbitmq' in stored
-    assert [e for e in stored if e in ('kombu', 'celery')] == []
+    assert [e for e in stored if e in {'kombu', 'celery'}] == []
 
 
 def test_an_empty_typed_entity_list_clears_the_inherited_one(mm_runner):
-    """Verify `--entities ''` clears rather than silently inheriting.
+    """Verify `--entity ''` clears rather than silently inheriting.
 
     Mutation: treating a typed empty list as "not given", which
         makes the flag indistinguishable from omitting it and leaves
@@ -64,16 +64,16 @@ def test_an_empty_typed_entity_list_clears_the_inherited_one(mm_runner):
     old_id, name = _seed(mm_runner, data_dir, ['kombu', 'celery'])
 
     result = invoke(mm_runner, [
-        'replace', old_id, 'the broker is gone', '--entities', ''])
+        'replace', old_id, 'the broker is gone', '--entity', ''])
 
     assert result.exit_code == 0, result.output
     successor = parse_remember(result, mm_runner)
     stored = open_backend(name, data_dir).nodes.get(successor['id']).entities
-    assert [e for e in stored if e in ('kombu', 'celery')] == []
+    assert [e for e in stored if e in {'kombu', 'celery'}] == []
 
 
 def test_an_unflagged_replace_still_inherits_every_name(mm_runner):
-    """Verify omitting `--entities` carries the stored list whole.
+    """Verify omitting `--entity` carries the stored list whole.
 
     The paired control: dropping the union outright would break
     inheritance if the CLI were not already encoding the stored list
@@ -93,7 +93,7 @@ def test_an_unflagged_replace_still_inherits_every_name(mm_runner):
     assert result.exit_code == 0, result.output
     successor = parse_remember(result, mm_runner)
     stored = open_backend(name, data_dir).nodes.get(successor['id']).entities
-    assert [e for e in stored if e in ('kombu', 'celery')] == [
+    assert [e for e in stored if e in {'kombu', 'celery'}] == [
         'kombu', 'celery']
 
 

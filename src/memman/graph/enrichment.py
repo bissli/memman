@@ -83,17 +83,17 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
         if name]
     # Length cap BEFORE the merge loop and before the count cap:
     # `merged` is seeded from insight.entities, which carries the
-    # user's --entities (uncapped by design), and 20 valid entities
-    # plus 3 over-long ones must yield 20, not 17.
+    # user's --entity values, and 20 valid entities plus 3 over-long
+    # ones must yield 20, not 17.
     llm_entities = drop_overlong_strings(
         llm_entities, kind='entity', owner=insight.id)
 
     # Notes:
     # - The count cap bounds what the MODEL adds, never the seed.
-    #   `merged` starts as the user's --entities, which the CLI has
-    #   already accepted and reported success for, so capping the
-    #   merged list discarded caller input and spent the model's own
-    #   budget on the seed.
+    #   `merged` starts as the user's --entity values, which the CLI
+    #   already validated and accepted, so capping the merged list
+    #   discarded caller input and spent the model's own budget on
+    #   the seed.
     existing = {e.strip().lower() for e in insight.entities}
     merged = list(insight.entities)
     added = 0

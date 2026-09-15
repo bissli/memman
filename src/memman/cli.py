@@ -33,9 +33,10 @@ from memman.store.factory import known_backends, list_stores
 _BACKEND_CHOICES = sorted(known_backends())
 
 from memman.embed import SUPPORTED_EMBED_PROVIDERS as _EMBED_PROVIDER_CHOICES
-from memman.store.model import VALID_CATEGORIES, VALID_EDGE_TYPES, Edge
-from memman.store.model import Insight, format_timestamp
-from memman.store.model import insight_to_brief_dict, insight_to_full_dict
+from memman.store.model import MAX_ROW_ENTITIES, VALID_CATEGORIES
+from memman.store.model import VALID_EDGE_TYPES, Edge, Insight
+from memman.store.model import format_timestamp, insight_to_brief_dict
+from memman.store.model import insight_to_full_dict
 from memman.store.sqlite import open_ro_db
 from tqdm import tqdm
 
@@ -255,42 +256,44 @@ def _entities_json(entity_list: list[str]) -> str | None:
     return json.dumps(entity_list) if entity_list else None
 
 
-def _validate_caller_entities(entities: str) -> list[str]:
-    """Parse a caller-supplied `--entities` value and cap it.
+def _validate_caller_entities(entities: tuple[str, ...]) -> list[str]:
+    """Validate the caller-supplied `--entity` occurrences.
 
     Parameters
     ----------
-    entities : str
-        The `--entities` value as the caller typed it. An empty or
-        whitespace-only segment is dropped.
+    entities : tuple[str, ...]
+        One name per `--entity` occurrence, in the order typed. An
+        empty or whitespace-only occurrence is dropped.
 
     Returns
     -------
     list[str]
-        The names in input order, at most 50, each at most 200 chars.
+        The names in input order, at most MAX_ROW_ENTITIES, each at
+        most 200 chars.
 
     Raises
     ------
     click.ClickException
-        On more than 50 names, or on one name over 200 chars.
+        On more than MAX_ROW_ENTITIES names, or on one name over 200
+        chars.
 
     Notes
     -----
-    - The comma split is the `--entities` ARGUMENT grammar and
-      nothing else. The queue column is JSON (`queue.enqueue`), so a
-      STORED name may itself contain a comma and never passes
-      through here; both caps below govern CALLER INPUT alone.
-    - The 200-char per-entity cap has never fired against a real
-      name and is kept only as a guard against a pathological
-      argument.
-    - The 50-entity cap governs THIS path alone, and it does not
-      describe what the column holds: stored rows already run past
-      it. `pipeline/remember.py` sets entities from the enrichment
-      without passing through here, and merges them as a monotonic
-      union on every reconciliation, so the machine path is
-      deliberately unbounded while a caller is refused at 51.
-      Raising or removing this cap is a design question, not a
-      tuning one - see QUEUE-1 Q2.
+    - One name per occurrence, split on nothing. The option was once
+      one comma-separated value, which no quoting could make express
+      a name containing a comma -- an LDAP distinguished name always
+      does -- so a caller repairing a shredded name reproduced the
+      shredding.
+    - The 200-char per-entity cap guards against a pathological
+      argument rather than a real name.
+    - MAX_ROW_ENTITIES is the same bound the predecessor union
+      applies in `pipeline/remember.py`, so one constant governs both
+      the typed list and the union. It does NOT bound what a row
+      holds: the enrichment adds up to MAX_ENRICH_ENTITIES names on
+      top of whatever seeds it, and the list a `replace` inherits
+      passes whole however long it is, so a stored row can carry more
+      than the cap either way. The next reconciliation trims the
+      inherited case.
     - Neither cap is the binding constraint on usefulness.
       `graph/entity.py` caps entity edges at MAX_TOTAL_ENTITY_EDGES
       = 50 and counts two per target (forward and reverse) at
@@ -298,19 +301,16 @@ def _validate_caller_entities(entities: str) -> list[str]:
       exhaust the whole edge budget and later ones produce no edge
       at all.
     """
-    entity_list: list[str] = []
-    for e in entities.split(',') if entities else []:
-        e = e.strip()
-        if e:
-            entity_list.append(e)
+    entity_list = [e.strip() for e in entities if e.strip()]
     for e in entity_list:
         if len(e) > 200:
             raise click.ClickException(
                 f'entity too long ({len(e)} chars, max 200):'
                 f' {e[:50]}')
-    if len(entity_list) > 50:
+    if len(entity_list) > MAX_ROW_ENTITIES:
         raise click.ClickException(
-            f'too many entities ({len(entity_list)}, max 50)')
+            f'too many entities ({len(entity_list)},'
+            f' max {MAX_ROW_ENTITIES})')
     return entity_list
 
 
@@ -695,9 +695,10 @@ def config_show(ctx: click.Context) -> None:
 @click.option('--imp', default=3, type=int,
               help='Sort key for listings and tie-breaks (1-5, default 3)')
 @click.option('--source', default='user', help='Source')
-@click.option('--entities', default='',
-              help='Comma-separated entities. A name containing a'
-                   ' comma cannot be expressed here.')
+@click.option('--entity', 'entities', multiple=True,
+              help='Entity name. Repeat the option per name; the'
+                   ' value is never split, so a name may contain a'
+                   ' comma.')
 @click.option('--no-reconcile', is_flag=True, default=False,
               help='Store the text verbatim: skip fact extraction and'
                    ' reconciliation, so the write cannot be dropped as'
@@ -708,7 +709,7 @@ def config_show(ctx: click.Context) -> None:
                    ' $MEMMAN_SESSION_ID, then $CLAUDE_CODE_SESSION_ID)')
 @click.pass_context
 def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
-             imp: int, source: str, entities: str,
+             imp: int, source: str, entities: tuple[str, ...],
              no_reconcile: bool, session: str) -> None:
     """Store a new insight via the queue.
 
@@ -1783,9 +1784,10 @@ def forget(ctx: click.Context, id: str) -> None:
 @click.option('--imp', default=3, type=int,
               help='Sort key for listings and tie-breaks (1-5, default 3)')
 @click.option('--source', default='user', help='Source')
-@click.option('--entities', default='',
-              help='Comma-separated entities. A name containing a'
-                   ' comma cannot be expressed here.')
+@click.option('--entity', 'entities', multiple=True,
+              help='Entity name. Repeat the option per name; the'
+                   ' value is never split, so a name may contain a'
+                   ' comma.')
 @click.option('--session', default='',
               envvar=[config.SESSION_ID, config.CLAUDE_SESSION_ID],
               help='Session id for the temporal chain (defaults to'
@@ -1793,7 +1795,7 @@ def forget(ctx: click.Context, id: str) -> None:
 @click.pass_context
 def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             cat: str, imp: int, source: str,
-            entities: str, session: str) -> None:
+            entities: tuple[str, ...], session: str) -> None:
     """Replace an insight by ID with new content via the queue.
 
     ID is a full insight id or any unambiguous prefix of one.
@@ -1807,11 +1809,11 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
       the successor is forgotten.
     - The id must be current. A forgotten or already superseded id is
       refused, the latter naming its successor.
-    - Unflagged `--cat` / `--imp` / `--source` / `--entities` inherit
+    - Unflagged `--cat` / `--imp` / `--source` / `--entity` inherit
       the replaced insight's values; the inherited source is passed
       through verbatim (idempotency rides on the queue uuid, so a
       non-null source hint no longer suppresses the replay check).
-      Each of the four overrides when typed, `--entities ''` included,
+      Each of the four overrides when typed, `--entity ''` included,
       which clears the list; enrichment then rebuilds it from the new
       content.
     - A replace never reconciles. It targets one id, so no fact
@@ -1832,7 +1834,6 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         raise click.ClickException(
             f'content too long ({content_bytes} bytes, max 8000);'
             ' consider chunking into multiple remember calls')
-
 
     from memman.search.quality import check_content_quality
     quality_warnings = check_content_quality(content_str)
@@ -1880,14 +1881,12 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         raise click.ClickException(
             'source must not be empty; the default is user')
     # Notes:
-    # - The inherited list is persisted data the enrichment path
-    #   wrote uncapped, so only a caller-typed list is validated.
-    #   Capping the inherited one makes any row grown past 50
-    #   entities permanently unreplaceable.
+    # - The inherited list is persisted data, so only a caller-typed
+    #   list is validated. Capping the inherited one makes any row
+    #   already over the cap permanently unreplaceable.
     # - A stored name may itself contain a comma - an LDAP
     #   distinguished name always does - so the inherited list is
-    #   encoded rather than re-parsed. Splitting one on commas cut a
-    #   single name into a fragment per component.
+    #   encoded rather than re-parsed.
     if entities_src == click.core.ParameterSource.COMMANDLINE:
         entities_json = _entities_json(_validate_caller_entities(entities))
     else:
@@ -2282,12 +2281,16 @@ def queue_failed(ctx: click.Context, limit: int) -> None:
 @click.option('--limit', default=50, type=int, help='Max results')
 @click.pass_context
 def queue_skipped(ctx: click.Context, limit: int) -> None:
-    """List drained writes that stored no insight.
+    """List writes that stored no insight.
 
     A write whose extraction came back empty, or whose every fact
     reconciled onto an existing insight, completes as `done` and is
-    purged from the queue a minute later. This ledger keeps its full
-    content and the reason nothing was stored.
+    purged from the queue a minute later. A write that exhausted its
+    retries usually stored nothing either, and `queue purge --failed`
+    files it here before deleting the row, naming its `queue_uuid` so
+    `insights by-queue` can settle whether anything was in fact
+    stored. This ledger keeps the full content and the reason nothing
+    was stored.
 
     Parameters
     ----------
@@ -2354,10 +2357,13 @@ def queue_retry(
               help='Delete all rows with status=stale')
 @click.option('--skipped', 'skipped', is_flag=True, default=False,
               help='Empty the skipped-write ledger')
+@click.option('--failed', 'failed', is_flag=True, default=False,
+              help='Delete all rows with status=failed, filing each'
+                   ' row content into the skipped-write ledger first')
 @click.pass_context
 def queue_purge(ctx: click.Context, done: bool, stale: bool,
-                skipped: bool) -> None:
-    """Remove completed or stale queue rows, or empty the skip ledger.
+                skipped: bool, failed: bool) -> None:
+    """Remove completed, stale or failed queue rows, or empty the ledger.
 
     Parameters
     ----------
@@ -2370,25 +2376,34 @@ def queue_purge(ctx: click.Context, done: bool, stale: bool,
         `purge_done` never reaches it and `purge_store` clears only
         one store, so the full content of every skipped write is kept
         until this runs.
+    failed : bool
+        Delete every row in status `failed`, filing its content into
+        the ledger on the way out. `queue retry` only re-pends such a
+        row, which replays whatever broke it, so this is the one verb
+        that retires a row a retry cannot fix.
 
     Examples
     --------
     memman scheduler queue purge --done
-    memman scheduler queue purge --skipped
+    memman scheduler queue purge --failed
     """
-    chosen = [f for f in (done, stale, skipped) if f]
+    chosen = [f for f in (done, stale, skipped, failed) if f]
     if len(chosen) > 1:
         raise click.ClickException(
-            'pass exactly one of --done, --stale, --skipped')
+            'pass exactly one of --done, --stale, --skipped, --failed')
     if not chosen:
         raise click.ClickException(
-            'pass --done, --stale, or --skipped to confirm deletion')
-    from memman.queue import purge_done, purge_skipped, purge_stale, queue_db
+            'pass --done, --stale, --skipped, or --failed'
+            ' to confirm deletion')
+    from memman.queue import purge_done, purge_failed, purge_skipped
+    from memman.queue import purge_stale, queue_db
     with queue_db(ctx.obj['data_dir']) as conn:
         if skipped:
             deleted = purge_skipped(conn)
         elif done:
             deleted = purge_done(conn)
+        elif failed:
+            deleted = purge_failed(conn)
         else:
             deleted = purge_stale(conn)
         _json_out({'deleted': deleted})

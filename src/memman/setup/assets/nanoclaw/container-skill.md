@@ -76,7 +76,7 @@ it open.
 ## Storing what you learn
 
 ```bash
-memman remember "<fact>" --cat <category> --imp <1-5> --entities "e1,e2" --source agent --session $SESSION_ID
+memman remember "<fact>" --cat <category> --imp <1-5> --entity e1 --entity e2 --source agent --session $SESSION_ID
 ```
 
 Always pass `--session` with your session id — it links the
