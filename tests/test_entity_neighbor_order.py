@@ -104,13 +104,20 @@ def test_the_stamp_resolution_is_the_same_on_either_backend(backend):
         whole seconds and two rows inserted inside one second must
         compare equal.
     """
-    for insight_id in ('res-1', 'res-2'):
-        backend.nodes.insert(make_insight(
-            id=insight_id, content=f'a row named {insight_id}',
-            entities=[ENTITY]))
-
-    first = backend.nodes.get('res-1').created_at
-    second = backend.nodes.get('res-2').created_at
+    # The pair only shares an ordering key when both inserts land in
+    # one clock second, so a pair that straddles a tick says nothing
+    # either way. Re-arrange on fresh ids until it does; the assertion
+    # below runs on every path.
+    for attempt in range(8):
+        a, b = f'res-{attempt}-1', f'res-{attempt}-2'
+        for insight_id in (a, b):
+            backend.nodes.insert(make_insight(
+                id=insight_id, content=f'a row named {insight_id}',
+                entities=[ENTITY]))
+        first = backend.nodes.get(a).created_at
+        second = backend.nodes.get(b).created_at
+        if first == second:
+            break
 
     assert first.microsecond == 0
     assert second.microsecond == 0
