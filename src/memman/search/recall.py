@@ -1,4 +1,4 @@
-"""Intent-aware recall with beam search, RRF, Kahn's topological sort.
+"""Intent-aware recall with beam search and RRF fusion.
 
 Reads live storage on every request. The candidate universe is
 `nodes.get_all_active()` and the graph is one `edges.adjacency()`
@@ -112,8 +112,8 @@ RERANK_WEIGHTS: dict[str, tuple[float, float, float]] = {
 
 
 RECALL_HINTS: dict[str, str] = {
-    'WHY': ('Rows are relevance-ordered; meta.causal_edges lists the '
-            '[cause, effect] pairs among them'),
+    'WHY': ('Rows are relevance-ordered; weigh each row against its '
+            'siblings to account for what the query asks about'),
     'WHEN': ('Rows are relevance-ordered; each carries created_at - '
              'order by it to reconstruct the timeline'),
     'ENTITY': 'Describe the entity using evidence across these memories',
@@ -134,9 +134,6 @@ def _bidirectional_adjacency(
     Beam search walks edges as undirected; `EdgeStore.adjacency()`
     returns them keyed by source. This helper materializes the reverse
     direction so `nid -> incoming + outgoing` is one dict lookup.
-
-    The input's lists are not mutated, so the caller can keep the
-    directed map for the source-keyed causal lookup.
     """
     bidir: dict[str, list[tuple[str, str, float]]] = {}
     for source_id, edges in directed.items():
@@ -303,8 +300,7 @@ def intent_aware_recall(
     dict[str, Any]
         `{'results': [...], 'meta': {...}}`; `meta.anchor_count` is
         the filtered anchor count and `meta.traversed` is deliberately
-        unfiltered. On `WHY`, `meta.causal_edges` carries the
-        `[cause, effect]` pairs among the returned rows (see Notes).
+        unfiltered.
 
     Notes
     -----
@@ -334,14 +330,6 @@ def intent_aware_recall(
     - Rows come back in relevance order at every `limit`, so the
       first `n` of a `limit`-`m` recall are the `limit`-`n` recall.
       Nothing re-sorts after the limit slice.
-    - `meta.causal_edges` is present on `WHY` and only there, empty
-      list included: "no causal relation among these rows" is a fact
-      the caller cannot derive from the rows. It is built from the
-      SOURCE-KEYED `directed` adjacency, never the symmetrized
-      `bidir` the beam walks, so each pair reads cause-then-effect.
-      Pairs are emitted in returned-row order rather than by
-      iterating an id set, since string hashing is salted per
-      process.
     """
     if intent_override:
         intent = intent_override
@@ -380,8 +368,7 @@ def intent_aware_recall(
     # - `adjacency()` skips `metadata`, whose per-row json.loads was
     #   69% of the equivalent `edges.all()` and which traversal
     #   discards.
-    directed = backend.edges.adjacency()
-    bidir = _bidirectional_adjacency(directed)
+    bidir = _bidirectional_adjacency(backend.edges.adjacency())
     phantom_ids: set[str] = set()
 
     def _edges_lookup(nid: str) -> Any:
@@ -389,12 +376,6 @@ def intent_aware_recall(
 
     def _insight_lookup(nid: str) -> Insight | None:
         return insights_by_id.get(nid)
-
-    def _causal_edges_lookup(source_id: str) -> list[str]:
-        return [
-            target for target, etype, _w
-            in directed.get(source_id, ())
-            if etype == 'causal']
 
     query_tokens = tokenize(query)
 
@@ -722,16 +703,5 @@ def intent_aware_recall(
         'hint': RECALL_HINTS.get(intent, RECALL_HINTS['GENERAL']),
         'reranked': reranked,
         }
-
-    if intent == 'WHY':
-        # Iterate `results`, never the id set: str hashing is salted
-        # per process, so a set-ordered payload would differ run to
-        # run and make two recalls incomparable.
-        returned_ids = {r['insight'].id for r in results}
-        meta['causal_edges'] = [
-            [r['insight'].id, target]
-            for r in results
-            for target in _causal_edges_lookup(r['insight'].id)
-            if target in returned_ids]
 
     return {'results': results, 'meta': meta}

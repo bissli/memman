@@ -5,7 +5,7 @@ description: Add persistent graph-based memory to NanoClaw agents using memman. 
 
 # /add-memman
 
-Add [memman](https://github.com/bissli/memman) persistent memory to your NanoClaw installation. After running this skill, every agent session will have access to a per-group memory graph that persists across conversations.
+Add [memman](https://github.com/bissli/memman) persistent memory to a NanoClaw installation. After this skill runs, every agent session has a per-group memory graph that persists across conversations.
 
 ## Architecture
 
@@ -62,7 +62,7 @@ RUN install -d -o node -g node -m 755 /home/node/.memman \
 
 Replace whatever long-running primitive the container currently uses
 (`CMD ["sleep", "infinity"]`, an entrypoint script that waits, etc.)
-with the memman scheduler loop. PID 1 *is* the scheduler — if the
+with the memman scheduler loop. PID 1 *is* the scheduler: if the
 container is alive, the drain loop is alive.
 
 ```dockerfile
@@ -84,7 +84,7 @@ trap 'kill -TERM $scheduler_pid 2>/dev/null; wait $scheduler_pid' TERM INT
 exec "$@"
 ```
 
-The `trap` is mandatory — without it, a SIGTERM kills only the user
+The `trap` is mandatory: without it, a SIGTERM kills only the user
 entrypoint and leaves the backgrounded scheduler orphaned.
 
 **`queue.db` is per-container**: it lives at `$HOME/.memman/queue.db`
@@ -101,8 +101,8 @@ Create this file with the memman container skill content. This skill teaches the
 
 - **Memory stores section**: Explain that the default store is per-group (private, read-write) and the global store is shared (read-only, accessed via `--store global`).
 - **Recall guide**: Default recall on every new user message. Use `memman recall "<query>" --brief --limit 20` (the cross-encoder reranker runs by default on multi-token queries; auto-skipped on 1-2 token queries). Also check the global store: `memman recall "<query>" --store global --brief --limit 20`. Craft focused keyword-rich queries. Rows are relevance-ordered; judge each against the query rather than against a fixed score.
-- **Remember guide**: Decision tree — Step 1: Does this exchange contain a user directive, reasoning conclusion, or durable observed state? Step 2: Does this correct something already stored? Say so in the text and remember it. Step 3: Is it worth storing?
-- **Workflow**: remember → graph link (evaluate semantic/causal candidates with judgment) → recall.
+- **Remember guide**: Decision tree. Step 1: Does this exchange contain a user directive, reasoning conclusion, or durable observed state? Step 2: Does this correct something already stored? Say so in the text and remember it. Step 3: Is it worth storing?
+- **Workflow**: remember → graph link (evaluate candidates with judgment) → recall.
 - **Commands**: Full memman command reference (remember, replace, recall, forget, graph link/related, insights review/show/by-queue, status, doctor, log list).
 - **Guardrails**: Never store secrets. Never write to the global store. Categories: preference, decision, insight, fact, context. Max 8,000 chars per insight.
 
@@ -133,14 +133,14 @@ if (fs.existsSync(globalMemManDir)) {
 }
 ```
 
-Adapt the mount syntax to match the existing pattern in `container-runner.ts` (it may use string format like `hostPath:containerPath:ro` or an object format — match whichever the file uses).
+Adapt the mount syntax to match the existing pattern in `container-runner.ts` (it may use string format like `hostPath:containerPath:ro` or an object format; match whichever the file uses).
 
 **Important**: The `mkdirSync` call ensures the per-group memman directory exists on the host before the container starts, preventing mount failures.
 
 ### 2d. Add lifecycle hook scripts
 
 memman ships the three lifecycle hook scripts as files inside the
-installed package. Locate them and copy them into your container build
+installed package. Locate them and copy them into the container build
 context:
 
 ```bash
@@ -152,14 +152,14 @@ chmod +x container/hooks/memman/*.sh
 
 The three scripts are:
 
-- `prime.sh` — SessionStart: prints `[memman] Memory active (N insights, M edges).`
-- `user_prompt.sh` — UserPromptSubmit: prints a recall/remember reminder.
-- `stop.sh` — Stop: returns `{"decision":"block", ...}` JSON so the agent
+- `prime.sh` (SessionStart): prints `[memman] Memory active (N insights, M edges).`
+- `user_prompt.sh` (UserPromptSubmit): prints a recall/remember reminder.
+- `stop.sh` (Stop): returns `{"decision":"block", ...}` JSON so the agent
   gets one more turn to evaluate remembering. Honors `stop_hook_active`
   to prevent loops.
 
-Read the actual scripts in your installed package to see the exact bytes
-the test suite verifies.
+Read the scripts in the installed package to see the exact bytes the
+test suite verifies.
 
 ### 2e. Copy hooks into container and register in settings.json
 
@@ -205,7 +205,7 @@ Adapt this to match the existing settings.json construction pattern in `containe
 
 ## Phase 3: Setup
 
-1. Initialize the global shared store on the host (optional — skip if you don't need cross-group shared memory):
+1. Initialize the global shared store on the host (optional: skip it when no cross-group shared memory is wanted):
    ```bash
    memman store create global
    ```
@@ -249,7 +249,7 @@ Adapt this to match the existing settings.json construction pattern in `containe
 
 ## Removal
 
-To remove memman from your NanoClaw installation:
+To remove memman from a NanoClaw installation:
 
 1. Remove from Dockerfile: delete the `RUN pip install ... memman` block, the `ENV MEMMAN_SCHEDULER_KIND` block, the `CMD ["memman", "scheduler", "serve", ...]` line (or wrapper if used), and the `COPY hooks/memman/` line
 2. Remove container skill: `rm -rf container/skills/memman/`

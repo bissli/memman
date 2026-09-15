@@ -49,21 +49,20 @@ An Edge connects two insights:
 │ Edge                                       │
 ├────────────────────────────────────────────┤
 │ source_id  : UUID  ──→  target_id : UUID   │
-│ edge_type  : temporal | semantic |         │
-│              causal   | entity             │
+│ edge_type  : temporal | semantic | entity  │
 │ weight     : 0.0 ~ 1.0                     │
 │ metadata   : {"sub_type": "backbone", ...} │
 └────────────────────────────────────────────┘
 ```
 
-The four edge types form the MAGMA four-graph model, detailed in [Graph Model](03-graph-model.md).
+memman keeps three of MAGMA's four graphs. [Graph Model](03-graph-model.md) details them.
 
 ## 2.3 Database schema
 
 Each named store is physically isolated via its own backend, chosen per store via `MEMMAN_BACKEND_<store>` (falling back to `MEMMAN_DEFAULT_BACKEND` when unset):
 
-- **SQLite (default)** — one `~/.memman/data/<store>/memman.db` file per store, in WAL mode (concurrent reads + serial writer). Schema source of truth: `_BASELINE_SCHEMA` in `src/memman/store/db.py`.
-- **Postgres** — one Postgres schema per store (`store_<name>`) sharing one database; `pgvector` provides the `vector(N)` column type. Schema source of truth: `PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py`. Enabled with the `memman[postgres]` install extra.
+- **SQLite (default)** - one `~/.memman/data/<store>/memman.db` file per store, in WAL mode (concurrent reads + serial writer). Schema source of truth: `_BASELINE_SCHEMA` in `src/memman/store/db.py`.
+- **Postgres** - one Postgres schema per store (`store_<name>`) sharing one database; `pgvector` provides the `vector(N)` column type. Schema source of truth: `PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py`. Enabled with the `memman[postgres]` install extra.
 
 Backend choice is per-store, so a `work` store on Postgres can coexist with a `default` store on SQLite under the same data dir. `memman migrate <store>` is symmetric (`--to postgres` / `--to sqlite`) and flips `MEMMAN_BACKEND_<store>` accordingly; `MEMMAN_DEFAULT_BACKEND` only changes what newly-created stores fall back to. See [Migrating between SQLite and Postgres](../USAGE.md#migrating-between-sqlite-and-postgres).
 
@@ -121,9 +120,9 @@ meta (
 )
 ```
 
-Provenance columns (`prompt_version`, `model_id`, `embedding_model`) record what produced each insight, and they are read for two different jobs. `model_id` and `embedding_model` are write provenance: the models behind the row's content and its vector. `prompt_version` is the STALENESS KEY, and it hashes exactly what `graph rebuild --stale-only` can replay -- the enrichment prompt, the causal prompt, and the `slow_metadata` model. Extraction and reconciliation prompts are excluded on purpose: a stored row cannot be re-extracted, because the source blob leaves the queue about a minute after its drain. So a change to either of those is invisible to `stale_insights`, and the tradeoff is deliberate -- the alternative reports every row in every store stale for a change nothing can fix, and `graph rebuild --stale-only` then clears the report by re-enriching, which addresses nothing. `embedding_model` powers `memman embed reembed` the same way.
+Provenance columns (`prompt_version`, `model_id`, `embedding_model`) record what produced each insight, and they are read for two different jobs. `model_id` and `embedding_model` are write provenance: the models behind the row's content and its vector. `prompt_version` is the STALENESS KEY, and it hashes exactly what `graph rebuild --stale-only` can replay -- the enrichment prompt and the `slow_metadata` model. Extraction and reconciliation prompts are excluded on purpose: a stored row cannot be re-extracted, because the source blob leaves the queue about a minute after its drain. So a change to either of those is invisible to `stale_insights`, and the tradeoff is deliberate -- the alternative reports every row in every store stale for a change nothing can fix, and `graph rebuild --stale-only` then clears the report by re-enriching, which addresses nothing. `embedding_model` powers `memman embed reembed` the same way.
 
-**Corroboration semantics.** `corroboration_count` counts restatements, and two routes reach it. The exact-match rung catches a fact byte-identical (modulo case and whitespace) to exactly one stored row and skips the LLM entirely. The reconciler catches a REWORDED restatement: it answers `NONE` and names the memory that already covers the fact. Either route skips the write, bumps the named row's counter, and records a `reconcile-corroborate` oplog row. The second route is why the prompt spells the NONE action `NONE <id>` and requires an id for every action but ADD. Measured live on `claude-haiku-4.5` and `claude-sonnet-4.6`, 16 cases x 2 repeats each, the earlier id-less wording returned a null target on 39 of 48 reworded restatements against 4 of 48 for the current wording (Fisher exact p=9e-14) -- which is why the counter read 0 on all but 1 of 5,896 rows before this change. The counter is observational only — no ranking, retention or reporting path reads it, so "the agent said it twice" cannot promote a row. It is per-row-identity, carried by max on an UPDATE or REPLACE (the successor of a refinement keeps the count) and reset to the incoming write's zero on a SUPERSEDE (restatements of a falsified claim do not corroborate its correction); the superseded row keeps its own count behind `superseded_by`. Bump mechanics: the restating queue row's `queue_uuid` is adopted only when the target carries none — the creating row's replay guard outranks the restating row's, so a populated key is never clobbered (the cost is that a crash-reclaimed all-skips restating row may re-bump once); a target no longer current between planning and apply (forgotten, or superseded by an earlier write) degrades the skip to a plain add rather than dropping the fact; and one queue row bumps a given target at most once regardless of how many restatements its extraction emits. Its one measurable use is the reconciler's restatement recall, caught over caught plus missed, where the missed count comes from a labeled sample of current rows. The column's exit is named: it goes at the next schema-touching release, with `increment_corroboration`, the bump path in `_apply_plan` and its index, unless a reader beyond `insight_to_full_dict` exists by then.
+**Corroboration semantics.** `corroboration_count` counts restatements, and two routes reach it. The exact-match rung catches a fact byte-identical (modulo case and whitespace) to exactly one stored row and skips the LLM entirely. The reconciler catches a REWORDED restatement: it answers `NONE` and names the memory that already covers the fact. Either route skips the write, bumps the named row's counter, and records a `reconcile-corroborate` oplog row. The second route is why the prompt spells the NONE action `NONE <id>` and requires an id for every action but ADD. Measured live on `claude-haiku-4.5` and `claude-sonnet-4.6`, 16 cases x 2 repeats each, the earlier id-less wording returned a null target on 39 of 48 reworded restatements against 4 of 48 for the current wording (Fisher exact p=9e-14) -- which is why the counter read 0 on all but a single stored row before this change. The counter is observational only - no ranking, retention or reporting path reads it, so "the agent said it twice" cannot promote a row. It is per-row-identity, carried by max on an UPDATE or REPLACE (the successor of a refinement keeps the count) and reset to the incoming write's zero on a SUPERSEDE (restatements of a falsified claim do not corroborate its correction); the superseded row keeps its own count behind `superseded_by`. Bump mechanics: the restating queue row's `queue_uuid` is adopted only when the target carries none - the creating row's replay guard outranks the restating row's, so a populated key is never clobbered (the cost is that a crash-reclaimed all-skips restating row may re-bump once); a target no longer current between planning and apply (forgotten, or superseded by an earlier write) degrades the skip to a plain add rather than dropping the fact; and one queue row bumps a given target at most once regardless of how many restatements its extraction emits. Its one measurable use is the reconciler's restatement recall, caught over caught plus missed, where the missed count comes from a labeled sample of current rows. The column's exit is named: it goes at the next schema-touching release, with `increment_corroboration`, the bump path in `_apply_plan` and its index, unless a reader beyond `insight_to_full_dict` exists by then.
 
 ---
 
@@ -144,7 +143,7 @@ memman's architecture is divided into five layers:
 ├──────────────────────────────────────────────────────────────┤
 │  Core Engine          search/ (recall, intent, keyword,        │
 │                                quality)                        │
-│                       graph/  (temporal, entity, causal,       │
+│                       graph/  (temporal, entity,               │
 │                                semantic, engine, bfs,          │
 │                                enrichment)                     │
 │                       embed/  (voyage, openai_compat,          │
@@ -183,7 +182,7 @@ memman/
 │   ├── trace.py              # JSONL debug tracing
 │   ├── pipeline/             # remember (drain worker)
 │   ├── store/                # Storage backends (sqlite, postgres)
-│   ├── graph/                # MAGMA four-graph implementation
+│   ├── graph/                # Graph edges (temporal, entity, semantic)
 │   ├── search/               # Retrieval algorithms
 │   ├── embed/                # Pluggable embedding providers
 │   ├── rerank/               # Cross-encoder rerank (pluggable)
@@ -222,17 +221,17 @@ memman/
 
 That tree is the default layout, where the data directory is `~/.memman`. Under a non-default `--data-dir`, `env`, `active`, `queue.db`, `data/` and `logs/memman.log` all move with it. What stays under `~/.memman` is `compact/` and the four scheduler redirects, `logs/enrich.{log,err}` and `logs/backup.{log,err}`: the systemd unit pins those to `%h/.memman/logs`, and the launchd plist bakes the absolute home in at install time, so neither reads the data dir. `memman scheduler status` prints the enrich and rotated paths, and `memman log worker --stack` reads the rotated one together with its backups.
 
-Each store is fully independent — insights, edges, and oplog do not cross stores. On SQLite this is one `memman.db` per store; on Postgres it is one `store_<name>` schema per store inside one shared database. Shipped assets (`guide.md`, `SKILL.md`) live inside the installed package and are read via `importlib.resources`; nothing memman deploys lives under `~/.memman/`. `~/.memman/` is user state: memory data, API keys, caches, logs, queued work.
+Each store is fully independent - insights, edges, and oplog do not cross stores. On SQLite this is one `memman.db` per store; on Postgres it is one `store_<name>` schema per store inside one shared database. Shipped assets (`guide.md`, `SKILL.md`) live inside the installed package and are read via `importlib.resources`; nothing memman deploys lives under `~/.memman/`. `~/.memman/` is user state: memory data, API keys, caches, logs, queued work.
 
 `Backend` is a context manager; CLI and pipeline call sites open it via `with open_backend(store, data_dir) as backend:` so the SQLite handle or Postgres pool checkout releases deterministically. `BaseNodeStore` in `src/memman/store/base.py` holds Python-side computations (effective-importance recomputation, low-retention candidate scoring) shared by both backends.
 
-When a store routes to Postgres, its `~/.memman/data/<store>/memman.db` file is unused at runtime — rows live in `store_<name>` and drain heartbeats in `store_<name>.worker_runs`. The deferred-write queue is always SQLite at `~/.memman/queue.db`. The SQLite store file remains on disk after `memman migrate <store>` as a durable fallback; the operator removes it after verifying the new backend with `memman doctor`.
+When a store routes to Postgres, its `~/.memman/data/<store>/memman.db` file is unused at runtime - rows live in `store_<name>` and drain heartbeats in `store_<name>.worker_runs`. The deferred-write queue is always SQLite at `~/.memman/queue.db`. The SQLite store file remains on disk after `memman migrate <store>` as a durable fallback; the operator removes it after verifying the new backend with `memman doctor`.
 
 ## 2.6 Store isolation
 
 memman supports named stores for data isolation between different agents, projects, or scenarios.
 
-**Why named stores instead of just `--data-dir`?** `--data-dir` overrides the entire base directory — a blunt instrument that requires callers to manage full paths. Named stores give semantic clarity (`MEMMAN_STORE=work` vs `--data-dir ~/.memman-work`) and work naturally with environment variables, the standard isolation mechanism for concurrent processes.
+**Why named stores instead of just `--data-dir`?** `--data-dir` overrides the entire base directory - a blunt instrument that requires callers to manage full paths. Named stores give semantic clarity (`MEMMAN_STORE=work` vs `--data-dir ~/.memman-work`) and work naturally with environment variables, the standard isolation mechanism for concurrent processes.
 
 Resolution priority (highest to lowest):
 
@@ -243,6 +242,6 @@ Resolution priority (highest to lowest):
 | Mechanism          | Scenario                                                      |
 | ------------------ | ------------------------------------------------------------- |
 | `--store` flag     | One-off CLI override, scripting                               |
-| `MEMMAN_STORE` env | Per-process isolation — different agents use different stores |
-| `active` file      | Persistent user preference — `memman store use work`          |
+| `MEMMAN_STORE` env | Per-process isolation - different agents use different stores |
+| `active` file      | Persistent user preference - `memman store use work`          |
 | `"default"`        | Zero-config fallback                                          |

@@ -12,7 +12,7 @@
 | Category     | Captures                                | Example                                |
 | ------------ | --------------------------------------- | -------------------------------------- |
 | `preference` | User-stated likes, dislikes, style      | "Prefers snake_case, dislikes ORMs"    |
-| `decision`   | Architectural choices with rationale    | "Chose SQLite — zero deps, embeddable" |
+| `decision`   | Architectural choices with rationale    | "Chose SQLite - zero deps, embeddable" |
 | `fact`       | Durable truths about systems/domains    | "API rate limit is 100 req/s"          |
 | `insight`    | Conclusions from multi-source reasoning | "Beam search outperforms BFS here"     |
 | `context`    | Project background, user environment    | "Monorepo, deploys to AWS ECS"         |
@@ -54,10 +54,10 @@ memman splits along a hot-path boundary. The agent's turn does only fast local w
 
 | Step                    | Where   | Latency       | Notes                                                                    |
 | ----------------------- | ------- | ------------- | ------------------------------------------------------------------------ |
-| `memman recall --basic` | inside  | ~50–200 ms    | local read only — no network on a store already stamped                  |
+| `memman recall --basic` | inside  | ~50-200 ms    | local read only - no network on a store already stamped                  |
 | `memman recall`         | inside  | network-bound | local read, plus one call to encode the query and one to reorder results |
-| agent reasoning         | inside  | —             | uses recall results as context                                           |
-| `memman remember`       | inside  | ~50 ms        | enqueue only — no LLM, no embed, no edges, no network                    |
+| agent reasoning         | inside  | -             | uses recall results as context                                           |
+| `memman remember`       | inside  | ~50 ms        | enqueue only - no LLM, no embed, no edges, no network                    |
 | drain trigger           | outside | every 60 s+   | systemd/launchd timer or serve loop                                      |
 | LLM extraction          | outside | network-bound | external LLM provider call                                               |
 | embedding               | outside | network-bound | external embedding provider call                                         |
@@ -65,10 +65,10 @@ memman splits along a hot-path boundary. The agent's turn does only fast local w
 
 Two invariants follow from this split:
 
-- **Hot-path discipline.** The agent's turn never extracts facts, reconciles them, or writes to the graph. `remember` appends to a queue file and reaches no network. `recall` reads the local database and, on its default path, calls the embedding provider to encode the query and the reranker to reorder the top results; `--basic` makes neither call. Opening the store needs the embedding provider's key on every path, `--basic` included — see [Where keys are needed](#where-keys-are-needed).
-- **One-way visibility.** A memory written this turn is **not** recallable later in the same turn — it lands for future sessions only.
+- **Hot-path discipline.** The agent's turn never extracts facts, reconciles them, or writes to the graph. `remember` appends to a queue file and reaches no network. `recall` reads the local database and, on its default path, calls the embedding provider to encode the query and the reranker to reorder the top results; `--basic` makes neither call. Opening the store needs the embedding provider's key on every path, `--basic` included - see [Where keys are needed](#where-keys-are-needed).
+- **One-way visibility.** A memory written this turn is **not** recallable later in the same turn - it lands for future sessions only.
 
-### OpenClaw and NanoClaw — same split, different topology
+### OpenClaw and NanoClaw - same split, different topology
 
 The hot-path/background split is universal across integrations. What changes is **what triggers the recall/remember reminders** and **where the worker runs**:
 
@@ -80,24 +80,24 @@ The hot-path/background split is universal across integrations. What changes is 
 
 OpenClaw sits on the same host as Claude Code: install memman once on the host and the worker is shared. The agent invokes `memman` via the `exec` tool rather than Bash-hook nudges.
 
-NanoClaw moves the hot-path boundary into the container. Agent and worker share one container; the SQLite data dir is volume-mounted from `~/.memman/data/{group}/` (rw) on the host so memory survives container restarts, and an optional `~/.memman/data/global/` is mounted read-only into every container for shared knowledge. Each WhatsApp group gets its own container and its own private store. `queue.db` sits outside the volume mount — pending writes are seconds old and re-driven on the next drain tick, so a restart loses at most one cycle of unprocessed items.
+NanoClaw moves the hot-path boundary into the container. Agent and worker share one container; the SQLite data dir is volume-mounted from `~/.memman/data/{group}/` (rw) on the host so memory survives container restarts, and an optional `~/.memman/data/global/` is mounted read-only into every container for shared knowledge. Each WhatsApp group gets its own container and its own private store. `queue.db` sits outside the volume mount - pending writes are seconds old and re-driven on the next drain tick, so a restart loses at most one cycle of unprocessed items.
 
 ## Features
 
-- **Hook-driven** — six lifecycle hooks handle memory operations automatically.
-- **LLM-supervised** — the host LLM decides what to remember and forget; a worker model handles fact extraction, reconciliation, enrichment, causal inference, and query expansion.
-- **Four-graph architecture** — temporal, entity, causal, and semantic edges.
-- **Intent-aware recall** — graph beam search with RRF fusion; query intent (WHY/WHEN/ENTITY/GENERAL) controls edge weights and traversal budget. Results are always relevance-ordered; WHY additionally carries its causal edges in `meta`.
+- **Hook-driven** - six lifecycle hooks handle memory operations automatically.
+- **LLM-supervised** - the host LLM decides what to remember and forget; a worker model handles fact extraction, reconciliation, enrichment, and query expansion.
+- **Multi-graph architecture** - temporal, entity, and semantic edges.
+- **Intent-aware recall** - graph beam search with RRF fusion. Query intent (WHY/WHEN/ENTITY/GENERAL) controls edge weights and traversal budget. Results always come back in relevance order.
 - **LLM reconciliation** - each fact screened against every shortlisted memory one pair per call, then judged ADD/UPDATE/SUPERSEDE/NONE per kept row, then merged into one successor per retired row. A contradicted or refined memory is superseded, never deleted: it keeps its content behind `superseded_by`, leaves recall by default, and `memman insights show <id> --history` walks the chain. A byte-identical restatement skips the LLM entirely; a reworded one comes back as `NONE` naming the memory that already covers it. Either way the stored row's `corroboration_count` is bumped and no copy is written.
-- **Operator-only deletion** — a store is uncapped and nothing expires or is pruned on its own. `memman forget <id>` is the only thing that removes a memory; `memman insights review` surfaces transient content for that decision.
-- **Pluggable embeddings, per-store sovereignty** — registered providers include `voyage`, `openai` (any OpenAI-compatible endpoint: OpenAI, vLLM, LiteLLM, ...), `openrouter`, and `ollama`. Each store's `meta.embed_fingerprint` is the runtime authority over its embedder, so one process can serve multiple stores with different embedders. Switch online via `memman embed swap` or offline via `memman embed reembed`.
-- **Pluggable storage backend** — SQLite by default; Postgres + pgvector via the `memman[postgres]` extra. `memman migrate` copies a store between backends in a single command (idempotent, drain-lock-guarded, dry-run support).
-- **External scheduled backups** — `memman backup schedule '<cron>' <dir>` snapshots every store to an external, durable directory (e.g. a Dropbox path) on a cron schedule, online and non-disruptively, with keep-last-N retention. Secrets are excluded from bundles; `memman backup restore` rebuilds a working store after total loss of `~/.memman/`. See [USAGE.md § Backup](docs/USAGE.md#backup).
+- **Operator-only deletion** - a store is uncapped and nothing expires or is pruned on its own. `memman forget <id>` is the only thing that removes a memory; `memman insights review` surfaces transient content for that decision.
+- **Pluggable embeddings, per-store sovereignty** - registered providers include `voyage`, `openai` (any OpenAI-compatible endpoint: OpenAI, vLLM, LiteLLM, ...), `openrouter`, and `ollama`. Each store's `meta.embed_fingerprint` is the runtime authority over its embedder, so one process can serve multiple stores with different embedders. Switch online via `memman embed swap` or offline via `memman embed reembed`.
+- **Pluggable storage backend** - SQLite by default; Postgres + pgvector via the `memman[postgres]` extra. `memman migrate` copies a store between backends in a single command (idempotent, drain-lock-guarded, dry-run support).
+- **External scheduled backups** - `memman backup schedule '<cron>' <dir>` snapshots every store to an external, durable directory (e.g. a Dropbox path) on a cron schedule, online and non-disruptively, with keep-last-N retention. Secrets are excluded from bundles; `memman backup restore` rebuilds a working store after total loss of `~/.memman/`. See [USAGE.md § Backup](docs/USAGE.md#backup).
 
 ## Install
 
 > [!IMPORTANT]
-> **The API keys belong to memman, not to the agent.** The agent authenticates as it always has — Claude Code runs on its own Claude login, which memman neither reads nor bills against. The keys below pay for the calls memman makes on its own behalf: the background worker that extracts and embeds each memory, and the two calls recall makes to rank results. A Claude Pro / Max or ChatGPT Plus subscription does **not** cover them, since a chat subscription and the developer APIs are billed separately. Any registered provider works (OpenRouter, OpenAI-compatible endpoints, Voyage, Ollama, ...), and an install running Ollama on both sides needs no key at all. [Where keys are needed](#where-keys-are-needed) breaks this down per command.
+> **The API keys belong to memman, not to the agent.** The agent authenticates as it always has - Claude Code runs on its own Claude login, which memman neither reads nor bills against. The keys below pay for the calls memman makes on its own behalf: the background worker that extracts and embeds each memory, and the two calls recall makes to rank results. A Claude Pro / Max or ChatGPT Plus subscription does **not** cover them, since a chat subscription and the developer APIs are billed separately. Any registered provider works (OpenRouter, OpenAI-compatible endpoints, Voyage, Ollama, ...), and an install running Ollama on both sides needs no key at all. [Where keys are needed](#where-keys-are-needed) breaks this down per command.
 
 ```bash
 pipx install memman
@@ -106,7 +106,7 @@ pipx install memman
 memman install
 ```
 
-In a TTY, the install wizard prompts for an LLM endpoint URL and an embedding provider, then collects the keys those two need (masked input). It does not ask for the reranker's key unless Voyage embeddings were chosen; set `MEMMAN_VOYAGE_API_KEY` afterwards, or turn reranking off — see [Reranker](#reranker). Pre-seeded defaults are accepted with Enter, but any registered provider works equally well — see [Provider setup](#provider-setup) below for the full list. Loopback LLM endpoints (Ollama, local vLLM/LiteLLM) may leave the API key blank. Headless / CI installs need the keys exported (or pre-written into `~/.memman/env`) and should pass `--no-wizard`. After install, the env file at `~/.memman/env` (mode 0600) is the canonical source of truth; runtime never reads the shell for installable settings. Change a setting with `memman config set KEY VALUE`. See [CONTRIBUTING.md § Variable reference](CONTRIBUTING.md#variable-reference) for the full key list and [USAGE.md § Configuration](docs/USAGE.md#configuration) for the precedence model.
+In a TTY, the install wizard prompts for an LLM endpoint URL and an embedding provider, then collects the keys those two need (masked input). It does not ask for the reranker's key unless Voyage embeddings were chosen; set `MEMMAN_VOYAGE_API_KEY` afterwards, or turn reranking off - see [Reranker](#reranker). Pre-seeded defaults are accepted with Enter, but any registered provider works equally well - see [Provider setup](#provider-setup) below for the full list. Loopback LLM endpoints (Ollama, local vLLM/LiteLLM) may leave the API key blank. Headless / CI installs need the keys exported (or pre-written into `~/.memman/env`) and should pass `--no-wizard`. After install, the env file at `~/.memman/env` (mode 0600) is the canonical source of truth; runtime never reads the shell for installable settings. Change a setting with `memman config set KEY VALUE`. See [CONTRIBUTING.md § Variable reference](CONTRIBUTING.md#variable-reference) for the full key list and [USAGE.md § Configuration](docs/USAGE.md#configuration) for the precedence model.
 
 ### Provider setup
 
@@ -118,9 +118,9 @@ The agent's own login is never involved. These are the calls memman makes on its
 
 | What runs                                                | Where           | Key it needs                                          | Without that key                                                   |
 | -------------------------------------------------------- | --------------- | ----------------------------------------------------- | ------------------------------------------------------------------ |
-| `memman remember`                                        | inside the turn | none                                                  | works — the only verb that opens no store                          |
+| `memman remember`                                        | inside the turn | none                                                  | works - the only verb that opens no store                          |
 | every verb that opens a store, `recall --basic` included | inside the turn | the active embedding provider's key (none for Ollama) | the command stops: `MEMMAN_VOYAGE_API_KEY is not set in <dir>/env` |
-| `recall` — reorder the top results                       | inside the turn | `MEMMAN_VOYAGE_API_KEY`                               | recall keeps its earlier order, and logs why                       |
+| `recall` - reorder the top results                       | inside the turn | `MEMMAN_VOYAGE_API_KEY`                               | recall keeps its earlier order, and logs why                       |
 | `recall --expand`                                        | inside the turn | `MEMMAN_LLM_API_KEY` (blank for a local LLM)          | the LLM rejects the call and the command stops                     |
 | fact extraction, reconciliation, enrichment              | worker          | `MEMMAN_LLM_API_KEY` (blank for a local LLM)          | no memory is ever stored                                           |
 | embedding, edge inference                                | worker          | the active embedding provider's key                   | no memory is ever stored                                           |
@@ -128,7 +128,7 @@ The agent's own login is never involved. These are the calls memman makes on its
 
 Three things worth knowing before picking a provider:
 
-- **One key gates almost everything: the one named by `MEMMAN_EMBED_PROVIDER`.** Opening a store constructs that provider's client, and the client demands its key before any query runs, so `recall`, `forget`, `replace`, `insights show`, `graph`, and `status` all exit with `MEMMAN_VOYAGE_API_KEY is not set in <dir>/env` when it is absent. `recall --basic` exits the same way — skipping the vector path does not skip opening the store. `memman remember` is the one exception, since it appends to the queue without opening a store. An Ollama embedder needs no key and satisfies the check for free.
+- **One key gates almost everything: the one named by `MEMMAN_EMBED_PROVIDER`.** Opening a store constructs that provider's client, and the client demands its key before any query runs, so `recall`, `forget`, `replace`, `insights show`, `graph`, and `status` all exit with `MEMMAN_VOYAGE_API_KEY is not set in <dir>/env` when it is absent. `recall --basic` exits the same way - skipping the vector path does not skip opening the store. `memman remember` is the one exception, since it appends to the queue without opening a store. An Ollama embedder needs no key and satisfies the check for free.
 - **The key must sit in `~/.memman/env`, not in the shell.** Runtime reads that file alone, so an exported variable does nothing. `memman config set KEY VALUE` writes it.
 - **Reranking asks for a Voyage key whatever the embedding provider is.** It is on by default, and Voyage is the only reranker shipped, so an install on `openai` or `ollama` embeddings still wants `MEMMAN_VOYAGE_API_KEY`. Set it, or turn reranking off with `memman config set MEMMAN_RERANK_ENABLED false` (per store: `MEMMAN_RERANK_ENABLED_<store>`). This is the one key whose absence degrades rather than stops: every recall of more than two words silently keeps the order it had before reranking.
 
@@ -164,7 +164,7 @@ Four embed providers are registered. Each store records its active `(provider, m
 | `openrouter` | `baai/bge-m3` (1024d)    | reuses `MEMMAN_OPENROUTER_API_KEY` + `MEMMAN_OPENROUTER_ENDPOINT` |
 | `ollama`     | `nomic-embed-text`       | local; `MEMMAN_OLLAMA_HOST` (default `http://localhost:11434`)    |
 
-20 `(provider, model)` pairs across `voyage`, `openrouter`, and `ollama` ship with a per-surface calibrated `AUTO_SEMANTIC_THRESHOLD` — see [docs/design/05-lifecycle.md § 5.3.1a](docs/design/05-lifecycle.md#531a-calibrated-embedding-models) for the table. A store on any other `(provider, model)` falls back to the surface-wide median (bounded mean nDCG@5 loss ~0.014 against the calibrated triples).
+20 `(provider, model)` pairs across `voyage`, `openrouter`, and `ollama` ship with a per-surface calibrated `AUTO_SEMANTIC_THRESHOLD` - see [docs/design/05-lifecycle.md § 5.3.1a](docs/design/05-lifecycle.md#531a-calibrated-embedding-models) for the table. A store on any other `(provider, model)` falls back to the surface-wide median (bounded mean nDCG@5 loss ~0.014 against the calibrated triples).
 
 Switch on a new install:
 
@@ -183,7 +183,7 @@ One reranker ships, and it is on by default. It scores the top recall results ag
 | ---------------------------- | --------------- | ---------------------------------------------------- |
 | `MEMMAN_RERANK_ENABLED`      | `true`          | set `false` to skip reranking and its key entirely   |
 | `MEMMAN_RERANK_PROVIDER`     | `voyage`        | the only provider registered today                   |
-| `MEMMAN_VOYAGE_API_KEY`      | —               | authenticates the reranker, whatever the embedder is |
+| `MEMMAN_VOYAGE_API_KEY`      | -               | authenticates the reranker, whatever the embedder is |
 | `MEMMAN_VOYAGE_RERANK_MODEL` | `rerank-3-lite` | model slug                                           |
 
 Reranking skips itself on queries of two words or fewer, since there is little to reorder.
@@ -209,7 +209,7 @@ memman install --target openclaw
 memman install --target claude-code
 ```
 
-For NanoClaw (agents inside Linux containers), install memman on the host as above, then run the `/add-memman` skill in the NanoClaw project — it modifies the Dockerfile, adds a container skill, and wires volume mounts. Each WhatsApp group gets its own isolated store, with optional global shared memory (read-only).
+For NanoClaw (agents inside Linux containers), install memman on the host as above, then run the `/add-memman` skill in the NanoClaw project - it modifies the Dockerfile, adds a container skill, and wires volume mounts. Each WhatsApp group gets its own isolated store, with optional global shared memory (read-only).
 
 Start a new Claude Code session (or restart the OpenClaw gateway) to activate.
 
@@ -219,7 +219,7 @@ For editable installs and the test suite, see [Development](#development).
 
 ### Memory shared across sessions
 
-By default, all sessions use the same `default` store — a decision remembered in one session is available in every future session.
+By default, all sessions use the same `default` store - a decision remembered in one session is available in every future session.
 
 ### Isolation per project or agent
 
@@ -274,7 +274,7 @@ memman uninstall            # remove hooks, skill, settings entries, scheduler u
 pipx uninstall memman       # remove the memman binary
 ```
 
-Either can run alone. `memman uninstall` never deletes anything under `~/.memman/` — the memory store, the API keys, and the scheduler logs all survive.
+Either can run alone. `memman uninstall` never deletes anything under `~/.memman/` - the memory store, the API keys, and the scheduler logs all survive.
 
 ## Development
 
@@ -287,18 +287,18 @@ memman install      # deploy integration
 memman uninstall    # remove integration
 ```
 
-**Dependencies**: Python 3.11+, Click, httpx, cachetools, tqdm, numpy. **Keys**: the worker needs whatever the configured LLM endpoint asks for (`MEMMAN_LLM_API_KEY`, blank for a local endpoint) plus the active embedding provider's key. Reranking uses `MEMMAN_VOYAGE_API_KEY`, and skips itself without one. Every side is pluggable with one edit — see [Where keys are needed](#where-keys-are-needed) for what breaks without each key, and [USAGE.md § Configuration](docs/USAGE.md#configuration) for the precedence model.
+**Dependencies**: Python 3.11+, Click, httpx, cachetools, tqdm, numpy. **Keys**: the worker needs whatever the configured LLM endpoint asks for (`MEMMAN_LLM_API_KEY`, blank for a local endpoint) plus the active embedding provider's key. Reranking uses `MEMMAN_VOYAGE_API_KEY`, and skips itself without one. Every side is pluggable with one edit - see [Where keys are needed](#where-keys-are-needed) for what breaks without each key, and [USAGE.md § Configuration](docs/USAGE.md#configuration) for the precedence model.
 
 ## Documentation
 
-- [Design & Architecture](docs/DESIGN.md) — philosophy, algorithms, integration design
-- [Usage & Reference](docs/USAGE.md) — CLI commands, configuration, embedding support
-- [Architecture Diagrams](docs/diagrams/) — system architecture, pipelines, lifecycle management
+- [Design & Architecture](docs/DESIGN.md) - philosophy, algorithms, integration design
+- [Usage & Reference](docs/USAGE.md) - CLI commands, configuration, embedding support
+- [Architecture Diagrams](docs/diagrams/) - system architecture, pipelines, lifecycle management
 
 ## References
 
-- **MAGMA** — Jiang et al. [A Multi-Graph based Agentic Memory Architecture](https://arxiv.org/abs/2601.03236). 2025. Four-graph model (temporal, entity, causal, semantic) with intent-adaptive retrieval and beam search traversal.
-- **RRF** — Cormack, Clarke & Buttcher. [Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods](https://dl.acm.org/doi/10.1145/1571941.1572114). SIGIR 2009. Multi-signal anchor fusion with k=60.
+- **MAGMA** - Jiang et al. [A Multi-Graph based Agentic Memory Architecture](https://arxiv.org/abs/2601.03236). 2025. Four-graph model (temporal, entity, causal, semantic) with intent-adaptive retrieval and beam search traversal.
+- **RRF** - Cormack, Clarke & Buttcher. [Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods](https://dl.acm.org/doi/10.1145/1571941.1572114). SIGIR 2009. Multi-signal anchor fusion with k=60.
 
 ## License
 

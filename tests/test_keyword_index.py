@@ -437,7 +437,7 @@ def test_non_ascii_divergence_stays_where_it_is(backend, backend_kind):
     -----
     - This asserts a DIVERGENCE, on purpose. SQLite cannot reproduce
       `_WORD_RE` without changing `_WORD_RE` itself, which would move
-      the drain's reconciliation and causal-edge inference and needs
+      the drain's reconciliation and needs
       its own sweep. The gap is documented on
       `RecallSession.keyword_counts` with its measured cost; this
       test is what stops it growing unnoticed.

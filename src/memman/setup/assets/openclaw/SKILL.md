@@ -10,22 +10,21 @@ metadata:
 
 # memman
 
-`memman` is a CLI on PATH — invoke commands directly via the `exec`
-tool. Memory is organized into typed insights and a graph of edges
-between them.
+`memman` is a CLI on PATH. Invoke commands directly via the `exec`
+tool. Memory is typed insights and a graph of edges between them.
 
 OpenClaw is host-resident, so the host's systemd or launchd-driven
 worker drains queued writes. `memman remember` returns as soon as the
 write is queued; recall reads the latest committed state. If
 `memman scheduler stop` is ever run on the host, memman becomes
-recall-only — every write returns a clear error pointing at
+recall-only: every write returns an error pointing at
 `memman scheduler start`.
 
 ## Storing what you learn
 
 Store one self-contained fact per call. Pick the most accurate `--cat`.
-**Always pass `--session` with your session id** — it links the
-session's writes into one temporal chain; a write without it joins
+**Always pass `--session` with the session id**: it links the
+session's writes into one temporal chain. A write without it joins
 no chain.
 
 ```bash
@@ -49,18 +48,18 @@ stored even one fact is not filed, so a single folded fact in a
 multi-fact write leaves no ledger row. To store text verbatim and bypass
 all three, pass `--no-reconcile`.
 
-To correct a stored insight by ID without losing its `access_count` and
-edges (`corroboration_count` — the count of restatements, whether
-byte-identical or reworded, shown in recall/get JSON — resets, since
-the successor is a new row identity):
+To correct a stored insight by ID and keep its `access_count` and
+edges:
 
 ```bash
 memman replace <id> "<new content>" --session $SESSION_ID
 ```
 
-`replace` inherits the original's category, importance, entities,
-and source unless you override per-flag; `--session` follows the
-same rule as `remember`.
+`corroboration_count` (restatements seen, byte-identical or reworded;
+shown in recall/get JSON) resets, since the successor is a new row
+identity. `replace` inherits the original's category, importance,
+entities, and source unless a flag overrides one. `--session` follows
+the same rule as `remember`.
 
 The original is superseded, not deleted: it keeps its content behind
 `superseded_by`, leaves every recall and listing, and `memman insights
@@ -87,8 +86,8 @@ unambiguous. Add `--cat` or `--source` to filter (`--source` is an exact match).
 
 Recall returns rows even when nothing matches: a recency channel
 seeds the newest insights as anchors regardless. An empty `results`
-therefore means the store itself is empty, not that the query failed. A full page is
-therefore not evidence that anything on it is relevant -- and a page
+therefore means the store itself is empty, not that the query failed.
+A full page is not evidence that anything on it is relevant. A page
 that looks thin usually is not, because the store nearly always holds
 something bearing on a query drawn from the same work. Judge each row
 on its merits against the query. Each row carries its own `score` and
@@ -103,18 +102,16 @@ bears on the query, re-ask in the store's own words before concluding
 it is empty.
 
 Rows come back in relevance order at every `--limit`, so the first `n`
-of a page of `m` are exactly a page of `n`. On `WHY`,
-`meta.causal_edges` carries the `[cause, effect]` pairs among the
-returned rows.
+of a page of `m` are exactly a page of `n`.
 
 `--min-score` drops rows whose keyword plus similarity sum is under
-the floor (0.0 to 2.0, `0.0` = off, rejected with `--basic` -- a
-filter that quietly did nothing would certify rows it never checked,
-unlike `--intent` and `--expand`, which `--basic` names in
-`meta.ignored` instead). Leave it off by default: the deep tail of a
-recall is often where the useful row sits. There is no value worth
-copying -- the usable band depends on the embedder and the store, so
-find it by running the query with and without a floor.
+the floor (0.0 to 2.0, `0.0` = off). `--basic` rejects it: a filter
+that quietly did nothing would certify rows it never checked, unlike
+`--intent` and `--expand`, which `--basic` names in `meta.ignored`
+instead. Leave it off by default: the deep tail of a recall is often
+where the useful row sits. No value is worth copying. The usable band
+depends on the embedder and the store, so find it by running the
+query with and without a floor.
 
 Fast token-only lookup that skips graph and reranking; rows come back
 ranked by importance, then recency:
@@ -124,14 +121,14 @@ memman recall "<keyword>" --basic
 ```
 
 Add `--brief` to cut each insight to `id`, `category`, `importance`,
-`created_at`, and `summary`, on both paths; the ranked path keeps the `score`,
-`intent`, and `signals` keys around each insight. A row left without a
-summary falls back to its content instead. `truncated: true` means the
-text you got is a raw content prefix cut at 200 characters. Its
-ABSENCE does not mean you hold the whole row: a summarized row carries
-no marker however much its summary left out, and a fallback row is
-marked only when its content ran past the cut. `memman insights show
-<id>` is how you read the rest of any row worth more than a scan.
+`created_at`, and `summary`, on both paths; the ranked path keeps the
+`score`, `intent`, and `signals` keys around each insight. A row with
+no summary falls back to its content, so no row comes back blank.
+`truncated: true` marks a fallback row whose content ran past the
+cut: the text is a raw 200-character content prefix. The marker's
+ABSENCE does not prove the row is whole: a summarized row carries no
+marker however much its summary left out. `memman insights show <id>`
+reads the rest of any row worth more than a scan.
 
 A brief row carries `created_at`, so a WHEN query reconstructs a
 timeline by sorting on that field rather than by reading row order,
@@ -162,8 +159,8 @@ memman forget <id>                    # soft-delete
 memman insights review                # scan for content quality issues
 ```
 
-`insights review` only surfaces rows — it deletes nothing. Use
-`forget <id>` to actually remove. Nothing else deletes: the store is
+`insights review` only surfaces rows. It deletes nothing. Use
+`forget <id>` to remove. Nothing else deletes: the store is
 uncapped and a stored insight persists until someone forgets it.
 Supersession (`replace`, `supersede`, a reconcile merge) hides without
 deleting; `memman unsupersede <id>` brings a superseded row back once
@@ -171,14 +168,17 @@ its successor has been forgotten.
 
 ## Working with relationships
 
+The graph holds three edge types between insights: `temporal` (same
+session chain, or close in time), `semantic` (similar content), and
+`entity` (a shared entity). The worker computes all three during
+enrichment. A manual link adds an edge the worker would not find on
+its own; `graph related` walks the edges out from an insight:
+
 ```bash
 memman graph link <src> <tgt> --type semantic --weight 0.85
-memman graph link <src> <tgt> --type causal --weight 0.8 \
-    --meta '{"sub_type": "causes"}'
+memman graph link <src> <tgt> --type entity --weight 0.8
 memman graph related <id> --depth 2
 ```
-
-Causal `sub_type` values: `causes` · `enables` · `prevents`.
 
 ## Inspecting the system
 

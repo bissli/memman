@@ -99,7 +99,7 @@ def list_local_store_dirs(base_dir: str) -> list[str]:
     `<base_dir>/data/`.
 
     SQLite-only filesystem scanner. Cross-backend enumeration
-    (filesystem dirs ∪ Postgres `pg_namespace`) lives in
+    (filesystem dirs plus Postgres `pg_namespace`) lives in
     `memman.store.factory.list_stores`; that is the helper to use
     from any code path that can encounter postgres-routed stores.
     """
@@ -376,7 +376,7 @@ create table if not exists insights (
 create table if not exists edges (
     source_id   text not null,
     target_id   text not null,
-    edge_type   text not null check(edge_type in ('temporal','semantic','causal','entity')),
+    edge_type   text not null check(edge_type in ('temporal','semantic','entity')),
     weight      real default 1.0,
     metadata    text default '{}',
     created_at  text not null,

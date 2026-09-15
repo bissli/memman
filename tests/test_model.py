@@ -54,10 +54,46 @@ def test_parse_metadata_invalid_json():
 
 
 def test_valid_edge_types():
-    """All 4 edge types accepted, invalid rejected."""
-    for et in ('temporal', 'semantic', 'causal', 'entity'):
+    """The three edge types the store writes are accepted, others not.
+
+    Mutation: readmitting a type nothing mints, which `graph link`
+        would then accept into a store whose check constraint
+        rejects it.
+    Oracle: the literal member set, named one by one.
+    """
+    for et in ('temporal', 'semantic', 'entity'):
         assert et in VALID_EDGE_TYPES
+    assert VALID_EDGE_TYPES == {'temporal', 'semantic', 'entity'}
     assert 'narrative' not in VALID_EDGE_TYPES
+
+
+def test_schema_check_constraints_match_valid_edge_types():
+    """Both backends' DDL admits exactly the types the code validates.
+
+    The edge-type set is written three times: `VALID_EDGE_TYPES`, the
+    SQLite baseline DDL, and the Postgres baseline DDL. The schema
+    strings stay literal because a store's schema is a fixed baseline,
+    so nothing but this test couples them.
+
+    Mutation: adding or removing a member of `VALID_EDGE_TYPES`
+        without editing both DDL strings -- the application would
+        then accept an edge type the store's check constraint
+        rejects, or reject one it allows.
+    Oracle: the member list parsed back out of each DDL string,
+        compared against the constant.
+    """
+    import re
+
+    from memman.store.db import _BASELINE_SCHEMA
+    from memman.store.postgres import PG_BASELINE_SCHEMA
+
+    pattern = re.compile(r'edge_type in \(([^)]*)\)')
+    for label, ddl in (('sqlite', _BASELINE_SCHEMA),
+                       ('postgres', PG_BASELINE_SCHEMA)):
+        found = pattern.search(ddl)
+        assert found is not None, f'no edge_type check in {label} DDL'
+        members = {m.strip().strip("'") for m in found.group(1).split(',')}
+        assert members == VALID_EDGE_TYPES, label
 
 
 def test_semantic_default_values():

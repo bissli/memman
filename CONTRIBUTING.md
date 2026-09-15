@@ -16,7 +16,7 @@ The project uses Poetry; run commands via `poetry run <cmd>` or inside `poetry s
 
 The operator-facing model (env file location, install precedence, override path) lives in [USAGE.md § Configuration](docs/USAGE.md#configuration). The contributor-side facts:
 
-- Defaults live in `config.INSTALL_DEFAULTS` and are written to `<MEMMAN_DATA_DIR>/env` by `memman install` only — there is no code-default fallback at runtime. If a key is missing from the env file, the resolver returns `None` and the caller raises `ConfigError` with `run memman install` guidance.
+- Defaults live in `config.INSTALL_DEFAULTS` and are written to `<MEMMAN_DATA_DIR>/env` by `memman install` only - there is no code-default fallback at runtime. If a key is missing from the env file, the resolver returns `None` and the caller raises `ConfigError` with `run memman install` guidance.
 - Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`, `MEMMAN_SESSION_ID`) are read directly from `os.environ` and excluded from the env-file model. `CLAUDE_CODE_SESSION_ID` is read the same way, but it is not memman's variable, so it sits outside `_ALL_VARS` and `memman config show` never reports it.
 - `memman doctor` has an `env_completeness` check that warns when a new `INSTALLABLE_KEYS` entry is missing, and an `optional_extras` check that reports which `memman[extras]` install groups resolve at runtime.
 
@@ -24,10 +24,10 @@ The operator-facing model (env file location, install precedence, override path)
 
 The `Type` column distinguishes how each variable is sourced:
 
-- `required` — must be present in the env file before any command runs (`memman install` prompts for these in TTY mode and fails otherwise).
-- `installed` — optional INSTALLABLE_KEYS; seeded by `memman install` from defaults or a one-time shell pull, then read from the env file. Override later with `memman config set KEY VALUE`.
-- `process` — never persisted; read directly from `os.environ` by the component that owns them.
-- `foreign` — owned and exported by another tool; memman reads it and never persists, installs, or reports it.
+- `required` - must be present in the env file before any command runs (`memman install` prompts for these in TTY mode and fails otherwise).
+- `installed` - optional INSTALLABLE_KEYS; seeded by `memman install` from defaults or a one-time shell pull, then read from the env file. Override later with `memman config set KEY VALUE`.
+- `process` - never persisted; read directly from `os.environ` by the component that owns them.
+- `foreign` - owned and exported by another tool; memman reads it and never persists, installs, or reports it.
 
 | Variable                          | Type      | Purpose                                                                                                                                                                                                                             |
 | --------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -37,7 +37,7 @@ The `Type` column distinguishes how each variable is sourced:
 | `MEMMAN_LLM_API_KEY`              | installed | Bearer token for the configured LLM endpoint. Required for any non-loopback endpoint; loopback endpoints (Ollama, local vLLM/LiteLLM) may leave it blank.                                                                           |
 | `MEMMAN_LLM_MODEL_FAST`           | installed | Hot-path model id. OpenRouter endpoints resolve the latest at install time; other endpoints are prompted interactively.                                                                                                             |
 | `MEMMAN_LLM_MODEL_SLOW_CANONICAL` | installed | Worker model for canonical content (fact extraction, reconciliation). OpenRouter endpoints resolve the latest at install time; other endpoints are prompted interactively.                                                          |
-| `MEMMAN_LLM_MODEL_SLOW_METADATA`  | installed | Worker model for derived metadata (enrichment summaries/keywords, causal-edge inference). OpenRouter endpoints resolve the latest at install time; other endpoints are prompted interactively.                                      |
+| `MEMMAN_LLM_MODEL_SLOW_METADATA`  | installed | Worker model for derived metadata (enrichment summaries/keywords). OpenRouter endpoints resolve the latest at install time; other endpoints are prompted interactively.                                      |
 | `MEMMAN_EMBED_PROVIDER`           | installed | `voyage` (default), `openai`, `openrouter`, or `ollama`.                                                                                                                                                                            |
 | `MEMMAN_OPENROUTER_ENDPOINT`      | installed | OpenRouter base URL (default `https://openrouter.ai/api/v1`).                                                                                                                                                                       |
 | `MEMMAN_LOG_LEVEL`                | installed | Logger level when neither `--verbose` nor `--debug` is passed (default `WARNING`).                                                                                                                                                  |
@@ -60,23 +60,23 @@ The `Type` column distinguishes how each variable is sourced:
 | `MEMMAN_WORKER`                   | process   | Set to `1` by the systemd/launchd unit; enables the rotating worker log.                                                                                                                                                            |
 | `MEMMAN_SCHEDULER_KIND`           | process   | Deployment directive (set by container entrypoint or auto-detected).                                                                                                                                                                |
 | `MEMMAN_DEBUG`                    | process   | Runtime toggle; persistent state lives in `~/.memman/debug.state` instead.                                                                                                                                                          |
-| `MEMMAN_SESSION_ID`               | process   | Default for `remember`/`replace` `--session` (the temporal chain key). Deliberately never persisted to the env file — a stale persisted id would fuse every later write into one false backbone chain.                              |
+| `MEMMAN_SESSION_ID`               | process   | Default for `remember`/`replace` `--session` (the temporal chain key). Deliberately never persisted to the env file - a stale persisted id would fuse every later write into one false backbone chain.                              |
 | `CLAUDE_CODE_SESSION_ID`          | foreign   | Second fallback for `--session`, behind `MEMMAN_SESSION_ID`. Claude Code exports it into every Bash call, a subagent's included, with the parent id. Never persisted, never reported by `memman config show`.                       |
 
 ## Conventions
 
 ### Schema sources of truth
 
-Both backends use one schema source of truth per backend, additive-only: column additions and new indexes only — never `DROP COLUMN`, `RENAME`, `DROP TABLE`, `TRUNCATE`, or column-type/nullability changes.
+Both backends use one schema source of truth per backend, additive-only: column additions and new indexes only - never `DROP COLUMN`, `RENAME`, `DROP TABLE`, `TRUNCATE`, or column-type/nullability changes.
 
-**SQLite** — `_BASELINE_SCHEMA` in `src/memman/store/db.py` (per-store DB) and `src/memman/queue.py` (queue DB). No `PRAGMA user_version` ladder. Fresh databases are created via `CREATE TABLE IF NOT EXISTS`; existing stores get one-off `ALTER TABLE` invocations against `~/.memman/data/*/memman.db` and `~/.memman/queue.db`.
+**SQLite** - `_BASELINE_SCHEMA` in `src/memman/store/db.py` (per-store DB) and `src/memman/queue.py` (queue DB). No `PRAGMA user_version` ladder. Fresh databases are created via `CREATE TABLE IF NOT EXISTS`; existing stores get one-off `ALTER TABLE` invocations against `~/.memman/data/*/memman.db` and `~/.memman/queue.db`.
 
-**Postgres** — `PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py` creates per-store schemas (`store_<name>`), each carrying its own `worker_runs` table for drain heartbeats. The deferred-write queue is always SQLite (`<data_dir>/queue.db`); Postgres has no shared queue schema. Existing stores receive one-off `ALTER TABLE` invocations against the live Postgres server when a column is added.
+**Postgres** - `PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py` creates per-store schemas (`store_<name>`), each carrying its own `worker_runs` table for drain heartbeats. The deferred-write queue is always SQLite (`<data_dir>/queue.db`); Postgres has no shared queue schema. Existing stores receive one-off `ALTER TABLE` invocations against the live Postgres server when a column is added.
 
 When a schema change is needed:
 
 1. Update the relevant baseline (`_BASELINE_SCHEMA` for SQLite, `PG_BASELINE_SCHEMA` for Postgres). Fresh databases pick the change up automatically.
-2. For existing stores, rebuild each store with `scripts/rebuild_schema.py` (gather → repair → apply; `--probe` rehearses against throwaway copies first). Since 0.18.0 a pre-migration store hard-fails at `open_db` naming that script (`MIGRATION_SCRIPT` in `store/db.py`) — hand-run `ALTER TABLE` is no longer the mechanism, and the queue DB is wipe-and-recreate on schema change.
+2. For existing stores, rebuild each store with `scripts/rebuild_schema.py` (gather → repair → apply; `--probe` rehearses against throwaway copies first). Since 0.18.0 a pre-migration store hard-fails at `open_db` naming that script (`MIGRATION_SCRIPT` in `store/db.py`) - hand-run `ALTER TABLE` is no longer the mechanism, and the queue DB is wipe-and-recreate on schema change.
 3. Extend both migrator `gather`s with a conditional column probe (a rebuild gathers from stores that predate the new column) and bump `PAYLOAD_VERSION`; bump `BACKUP_FORMAT_VERSION` whenever an insights column changes.
 4. Commit the schema change and the evidence (test asserting the column is present) in the same change.
 
@@ -97,9 +97,9 @@ The two migrators (`SqliteMigrator`, `PostgresMigrator`) extend a common `Migrat
 
 ### LLM dispatch
 
-`src/memman/llm/client.py` defines a single concrete `MemmanLLMClient` that posts to whatever URL `MEMMAN_LLM_ENDPOINT` resolves to (default `https://openrouter.ai/api/v1`). All reachable frontier vendors expose an OpenAI-compatible `/chat/completions` shim, so one wire protocol covers OpenRouter, OpenAI, Anthropic (`https://api.anthropic.com/v1`), Google (`https://generativelanguage.googleapis.com/v1beta/openai`), Ollama, vLLM, LiteLLM, and any other OpenAI-compat endpoint. There is no provider registry and no per-vendor subclass — switching providers is an `MEMMAN_LLM_ENDPOINT` / `MEMMAN_LLM_API_KEY` edit.
+`src/memman/llm/client.py` defines a single concrete `MemmanLLMClient` that posts to whatever URL `MEMMAN_LLM_ENDPOINT` resolves to (default `https://openrouter.ai/api/v1`). All reachable frontier vendors expose an OpenAI-compatible `/chat/completions` shim, so one wire protocol covers OpenRouter, OpenAI, Anthropic (`https://api.anthropic.com/v1`), Google (`https://generativelanguage.googleapis.com/v1beta/openai`), Ollama, vLLM, LiteLLM, and any other OpenAI-compat endpoint. There is no provider registry and no per-vendor subclass - switching providers is an `MEMMAN_LLM_ENDPOINT` / `MEMMAN_LLM_API_KEY` edit.
 
-The client adds OpenRouter attribution headers (`HTTP-Referer`, `X-Title`) when `config.is_openrouter_endpoint(endpoint)` matches; for any other host the request goes through plain. Loopback endpoints (`localhost`, `127.0.0.1`, `::1`) may omit `MEMMAN_LLM_API_KEY` — the client drops the `Authorization` header when the key is blank.
+The client adds OpenRouter attribution headers (`HTTP-Referer`, `X-Title`) when `config.is_openrouter_endpoint(endpoint)` matches; for any other host the request goes through plain. Loopback endpoints (`localhost`, `127.0.0.1`, `::1`) may omit `MEMMAN_LLM_API_KEY` - the client drops the `Authorization` header when the key is blank.
 
 Per-role model selection comes from `MEMMAN_LLM_MODEL_FAST` / `_SLOW_CANONICAL` / `_SLOW_METADATA`. For OpenRouter endpoints these are resolved against `/v1/models` at install time; for non-OpenRouter endpoints the install wizard prompts interactively for each slug.
 
@@ -113,5 +113,5 @@ Retry policy, timeouts, and JSON parsing helpers live in `src/memman/_http.py` a
 ## Filing changes
 
 - No deprecated code or backward-compat shims. When a name changes, delete the old reader in the same commit.
-- Keep `src/memman/config.py` as the canonical list of env vars — no scattered `os.environ.get('NEW_VAR')` call sites.
+- Keep `src/memman/config.py` as the canonical list of env vars - no scattered `os.environ.get('NEW_VAR')` call sites.
 - Match existing CLI output conventions: most subcommands emit flat JSON via `_json_out(...)`. Recall wraps in `{results, meta}`.

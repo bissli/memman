@@ -1,6 +1,6 @@
 """Graph integration tests ported from Go integration_test.go.
 
-Exercises temporal, entity, causal, semantic, BFS, and engine
+Exercises temporal, entity, semantic, BFS, and engine
 modules against the Backend Protocol; parametrized over
 `{sqlite, postgres}`. Tests that need controlled `created_at`
 values use the `set_created_at` helper to issue a raw UPDATE
@@ -29,7 +29,7 @@ class TestTemporalBackboneChain:
     def test_backbone_chains_on_session(self, backend):
         """Same session, different sources: both backbone directions exist.
 
-        Mutation: reverting the chain key to `source` — the differing
+        Mutation: reverting the chain key to `source` - the differing
             sources would then produce no backbone edge.
         Oracle: both `precedes` and `succeeds` backbone edges on the
             newer insight.
@@ -99,7 +99,7 @@ class TestTemporalNoSession:
     def test_absent_session_creates_no_backbone(self, backend):
         """A null session produces no backbone edge to a same-source row.
 
-        Mutation: falling back to `source` when `session_id` is null —
+        Mutation: falling back to `source` when `session_id` is null -
             the shared source would then mint a false backbone edge,
             reproducing the measured pathology.
         Oracle: zero backbone edges despite an earlier same-source row.
@@ -121,7 +121,7 @@ class TestTemporalNoSession:
         """An empty-string session must not chain (`'' = ''` matches in SQL).
 
         Mutation: dropping the falsy guard inside
-            `get_latest_by_session` — two `session_id=''` rows would
+            `get_latest_by_session` - two `session_id=''` rows would
             then fuse into one false chain.
         Oracle: zero backbone edges between two empty-session rows.
         """
@@ -244,7 +244,7 @@ class TestEntityIdfWeightedEdges:
 
 
 class TestBFSBasic:
-    """A→B→C graph: B at hop 1, C at hop 2, D disconnected."""
+    """A -> B -> C graph: B at hop 1, C at hop 2, D disconnected."""
 
     def test_bfs_basic(self, backend):
         """BFS from A reaches B (hop 1) and C (hop 2) but not D."""
@@ -533,7 +533,7 @@ class TestSemanticThresholdEnvOverride:
 
 
 class TestFastEdgesEngine:
-    """fast_edges generates temporal + entity + causal edges (no semantic)."""
+    """fast_edges generates temporal + entity edges (no semantic)."""
 
     def test_fast_edges_creates_edges(self, backend):
         """Two insights with shared entity and same source create edges."""

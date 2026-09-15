@@ -1,4 +1,23 @@
-"""Query intent detection and intent-specific edge type weights."""
+"""Query intent detection and intent-specific edge type weights.
+
+Notes
+-----
+- Every vector sums to 1.0. The reason is not cross-intent
+  comparison, which never happens: one recall carries one intent and
+  `graph_score` is min-max normalized over that call's own pool. The
+  sum fixes the STRUCTURAL term's scale against the two terms it is
+  summed with inside a call - the anchor's RRF score and
+  `LAMBDA2 * semantic` - neither of which these weights touch.
+- That balance is load-bearing, not cosmetic. Because a traversal
+  score is `anchor_rrf + LAMBDA1 * structural + LAMBDA2 * semantic`,
+  scaling only the middle term is not a transform min-max undoes: it
+  re-ranks rows, and it changes which nodes the beam keeps at its
+  cut. Changing a vector here changes retrieved order.
+- The types weighted here are exactly the edge types the store
+  writes. A vector naming a type nothing mints contributes nothing
+  while still consuming the 1.0 budget, which silently shrinks every
+  other type's share.
+"""
 
 import re
 
@@ -11,20 +30,16 @@ ENTITY_PATTERN = re.compile(
 
 INTENT_WEIGHTS: dict[str, dict[str, float]] = {
     'WHY': {
-        'causal': 0.70, 'temporal': 0.20,
-        'entity': 0.05, 'semantic': 0.05,
+        'temporal': 0.666, 'entity': 0.167, 'semantic': 0.167,
         },
     'WHEN': {
-        'temporal': 0.65, 'causal': 0.15,
-        'entity': 0.10, 'semantic': 0.10,
+        'temporal': 0.764, 'entity': 0.118, 'semantic': 0.118,
         },
     'ENTITY': {
-        'entity': 0.55, 'semantic': 0.30,
-        'temporal': 0.05, 'causal': 0.10,
+        'entity': 0.611, 'semantic': 0.333, 'temporal': 0.056,
         },
     'GENERAL': {
-        'temporal': 0.25, 'semantic': 0.25,
-        'causal': 0.25, 'entity': 0.25,
+        'temporal': 0.334, 'semantic': 0.333, 'entity': 0.333,
         },
     }
 

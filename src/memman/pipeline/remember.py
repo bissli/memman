@@ -1,17 +1,16 @@
-"""Remember pipeline — single entry point shared by sync CLI and worker.
+"""Remember pipeline - single entry point shared by sync CLI and worker.
 
 Structure:
 
-1. Quality check — early return on reject.
+1. Quality check - early return on reject.
 2. LLM fact extraction (unless `no_reconcile`).
 3. Read-only snapshot of embeddings + active insights.
 4. Planning phase - for each fact: embed, shortlist, screen every
    shortlisted row (one LLM call per row, in parallel), show the kept
    rows to the verdict call one per row, assemble the verdicts, write
-   one merge text per retiring target (one call each), then enrich +
-   causal (parallel LLM) per planned row and re-embed if keywords.
-   **No DB writes.**
-5. Apply phase — one transaction commits every planned supersession,
+   one merge text per retiring target (one call each), then enrich
+   per planned row and re-embed if keywords. **No DB writes.**
+5. Apply phase - one transaction commits every planned supersession,
    insert, edge, enrichment update, and stamp.
 
 The apply phase runs only after all LLM + embed work has returned.
@@ -36,7 +35,6 @@ from memman import config, trace
 from memman.embed import EmbeddingProvider
 from memman.embed.vector import cosine_similarity
 from memman.exceptions import EmbedCredentialError
-from memman.graph.causal import infer_llm_causal_edges
 from memman.graph.engine import _resolve_semantic_threshold, fast_edges
 from memman.graph.enrichment import build_enriched_text, enrich_with_llm
 from memman.graph.entity import create_entity_edges
@@ -62,9 +60,8 @@ def compute_prompt_version() -> str:
     Returns
     -------
     str
-        First 16 hex chars of a SHA-256 over the enrichment prompt,
-        the causal-inference prompt, and the resolved
-        `MEMMAN_LLM_MODEL_SLOW_METADATA` id.
+        First 16 hex chars of a SHA-256 over the enrichment prompt
+        and the resolved `MEMMAN_LLM_MODEL_SLOW_METADATA` id.
 
     Notes
     -----
@@ -81,9 +78,9 @@ def compute_prompt_version() -> str:
       about a minute after its drain, so there is nothing to replay
       and nothing to report.
     - The metadata model id IS folded in, because `link_pending`
-      runs both the enrichment and the causal call on
-      `slow_metadata`. The canonical model is excluded for the same
-      reason extraction is - it shapes content no rebuild rewrites.
+      runs the enrichment call on `slow_metadata`. The canonical
+      model is excluded for the same reason extraction is - it shapes
+      content no rebuild rewrites.
     - An unresolvable metadata model hashes as the empty string, so a
       store with no model configured still yields a stable key rather
       than raising on the `status` path.
@@ -97,15 +94,13 @@ def compute_prompt_version() -> str:
     # untestable.
     from memman import config
     from memman.exceptions import ConfigError
-    from memman.graph.causal import LLM_SYSTEM_PROMPT as CAUSAL_PROMPT
     from memman.graph.enrichment import ENRICHMENT_SYSTEM_PROMPT
 
     try:
         metadata_model = config.require(config.LLM_MODEL_SLOW_METADATA)
     except ConfigError:
         metadata_model = ''
-    blob = (f'{ENRICHMENT_SYSTEM_PROMPT}\x00{CAUSAL_PROMPT}'
-            f'\x00{metadata_model}')
+    blob = f'{ENRICHMENT_SYSTEM_PROMPT}\x00{metadata_model}'
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
@@ -289,7 +284,6 @@ class FactPlan:
     candidates: list[Candidate] = field(default_factory=list)
     embed_vec: list[float] | None = None
     enrichment: dict[str, Any] = field(default_factory=dict)
-    causal_edges: list[Edge] = field(default_factory=list)
     enriched_vec: list[float] | None = None
     skip_reason: str = ''
 
@@ -304,7 +298,6 @@ def run_remember(
         cat_explicit: bool = False,
         embed_cache: dict[str, list[float]] | None = None,
         insights_by_id: dict[str, Insight] | None = None,
-        executor: ThreadPoolExecutor | None = None,
         llm_client: MemmanLLMClient | None = None,
         stage_llm_client: MemmanLLMClient | None = None,
         *,
@@ -317,7 +310,7 @@ def run_remember(
     `ec` is the store-bound embed client (resolved from the store's
     `meta.embed_fingerprint` via `bound_embedder`); production callers
     pass `_StoreContext.ec`. `embed_cache`, `insights_by_id`,
-    `executor`, `llm_client`, `stage_llm_client` are optional
+    `llm_client`, `stage_llm_client` are optional
     drain-scope state hoisted by `_drain_queue` to amortize setup
     across rows in one drain pass. When omitted (e.g., direct test
     use), the function builds them from the backend itself.
@@ -368,11 +361,6 @@ def run_remember(
         all_insights = backend.nodes.get_all_active()
         insights_by_id = {i.id: i for i in all_insights}
 
-    owned_executor: ThreadPoolExecutor | None = None
-    if executor is None:
-        owned_executor = ThreadPoolExecutor(max_workers=2)
-        executor = owned_executor
-
     superseded_in_batch: set[str] = set()
     added_in_batch: set[str] = set()
 
@@ -382,103 +370,98 @@ def run_remember(
     llm_model_id = llm_client.model
     stage_model_id = stage_llm_client.model
     embed_model = ec.model
-    try:
-        for fact in facts:
-            fact_plans, calls = _plan_fact(
-                fact, insight, pending_replaced_id, no_reconcile,
-                cat_explicit, insights_by_id,
-                embed_cache, superseded_in_batch, added_in_batch,
-                stage_llm_client, metadata_llm_client, ec,
-                backend, executor, store_name)
-            llm_calls += calls
-            pending_replaced_id = ''
+    for fact in facts:
+        fact_plans, calls = _plan_fact(
+            fact, insight, pending_replaced_id, no_reconcile,
+            cat_explicit, insights_by_id,
+            embed_cache, superseded_in_batch, added_in_batch,
+            stage_llm_client, metadata_llm_client, ec,
+            backend, store_name)
+        llm_calls += calls
+        pending_replaced_id = ''
 
-            for plan in fact_plans:
-                if plan.fact_insight is not None:
-                    plan.fact_insight.prompt_version = prompt_version
-                    # `model_id` names the model behind the row's
-                    # content: a merge text is the stage model's, an
-                    # extracted fact (or a failed merge's fallback to
-                    # it) the canonical model's.
-                    plan.fact_insight.model_id = (
-                        stage_model_id
-                        if plan.fact_insight.content != plan.fact_text
-                        else llm_model_id)
-                    plan.fact_insight.embedding_model = embed_model
-
-                if plan.targets and plan.action in {
-                        'update', 'replace', 'supersede'}:
-                    for target_id, _relation in plan.targets:
-                        superseded_in_batch.add(target_id)
-                        insights_by_id.pop(target_id, None)
-                        embed_cache.pop(target_id, None)
-
-                if plan.fact_insight and plan.action != 'skipped':
-                    insights_by_id[plan.fact_insight.id] = plan.fact_insight
-                    added_in_batch.add(plan.fact_insight.id)
-                    vec = plan.enriched_vec or plan.embed_vec
-                    if vec is not None:
-                        embed_cache[plan.fact_insight.id] = vec
-
-                plans.append(plan)
-
-        _batch_enriched_embeds(plans, ec)
-
-        fact_results: list[dict[str, Any]] = []
-
-        def apply_all() -> None:
-            corroborated_ids: set[str] = set()
-            for plan in plans:
-                result = _apply_plan(
-                    backend, plan, embed_cache, store_name=store_name,
-                    corroborated_ids=corroborated_ids)
-                fact_results.append(result)
-                if (plan.action == 'skipped'
-                        and result.get('action') == 'add'
-                        and plan.fact_insight is not None):
-                    # Repair the drain-scoped caches the planning
-                    # loop never touched for a skipped plan: evict
-                    # the dead target and register the inserted
-                    # copy, or every later row exact-matches the
-                    # same stale entry and inserts another copy.
-                    if plan.targets:
-                        insights_by_id.pop(plan.targets[0][0], None)
-                        embed_cache.pop(plan.targets[0][0], None)
-                    insights_by_id[plan.fact_insight.id] = (
-                        plan.fact_insight)
-                    if plan.embed_vec is not None:
-                        embed_cache[plan.fact_insight.id] = (
-                            plan.embed_vec)
-
-        # Notes:
-        # - Planned rows entered the caches so later facts of this write
-        #   could shortlist them, but the apply phase inserts them one
-        #   at a time and the semantic-edge builder reads the cache: a
-        #   planned row still in it is an edge target that does not
-        #   exist yet, and the insert fails on the foreign key.
-        # - Each plan re-registers its row, with the vector it stored,
-        #   once inserted.
-        for plan in plans:
+        for plan in fact_plans:
             if plan.fact_insight is not None:
-                embed_cache.pop(plan.fact_insight.id, None)
+                plan.fact_insight.prompt_version = prompt_version
+                # `model_id` names the model behind the row's
+                # content: a merge text is the stage model's, an
+                # extracted fact (or a failed merge's fallback to
+                # it) the canonical model's.
+                plan.fact_insight.model_id = (
+                    stage_model_id
+                    if plan.fact_insight.content != plan.fact_text
+                    else llm_model_id)
+                plan.fact_insight.embedding_model = embed_model
 
-        with backend.transaction():
-            apply_all()
-            # Notes:
-            # - A later fact's causal edges were planned while an
-            #   earlier fact's target was still current and may name
-            #   it; every row this write superseded ends the write
-            #   edgeless.
-            # - A successor of this write that a later fact of the same
-            #   write retired re-entered the cache at its insert; it
-            #   leaves again here, or the next row of the drain builds
-            #   semantic edges onto a superseded row.
-            for target_id in superseded_in_batch:
-                backend.edges.delete_by_node(target_id)
-                embed_cache.pop(target_id, None)
-    finally:
-        if owned_executor is not None:
-            owned_executor.shutdown(wait=True)
+            if plan.targets and plan.action in {
+                    'update', 'replace', 'supersede'}:
+                for target_id, _relation in plan.targets:
+                    superseded_in_batch.add(target_id)
+                    insights_by_id.pop(target_id, None)
+                    embed_cache.pop(target_id, None)
+
+            if plan.fact_insight and plan.action != 'skipped':
+                insights_by_id[plan.fact_insight.id] = plan.fact_insight
+                added_in_batch.add(plan.fact_insight.id)
+                vec = plan.enriched_vec or plan.embed_vec
+                if vec is not None:
+                    embed_cache[plan.fact_insight.id] = vec
+
+            plans.append(plan)
+
+    _batch_enriched_embeds(plans, ec)
+
+    fact_results: list[dict[str, Any]] = []
+
+    def apply_all() -> None:
+        corroborated_ids: set[str] = set()
+        for plan in plans:
+            result = _apply_plan(
+                backend, plan, embed_cache, store_name=store_name,
+                corroborated_ids=corroborated_ids)
+            fact_results.append(result)
+            if (plan.action == 'skipped'
+                    and result.get('action') == 'add'
+                    and plan.fact_insight is not None):
+                # Repair the drain-scoped caches the planning
+                # loop never touched for a skipped plan: evict
+                # the dead target and register the inserted
+                # copy, or every later row exact-matches the
+                # same stale entry and inserts another copy.
+                if plan.targets:
+                    insights_by_id.pop(plan.targets[0][0], None)
+                    embed_cache.pop(plan.targets[0][0], None)
+                insights_by_id[plan.fact_insight.id] = (
+                    plan.fact_insight)
+                if plan.embed_vec is not None:
+                    embed_cache[plan.fact_insight.id] = (
+                        plan.embed_vec)
+
+    # Notes:
+    # - Planned rows entered the caches so later facts of this write
+    #   could shortlist them, but the apply phase inserts them one
+    #   at a time and the semantic-edge builder reads the cache: a
+    #   planned row still in it is an edge target that does not
+    #   exist yet, and the insert fails on the foreign key.
+    # - Each plan re-registers its row, with the vector it stored,
+    #   once inserted.
+    for plan in plans:
+        if plan.fact_insight is not None:
+            embed_cache.pop(plan.fact_insight.id, None)
+
+    with backend.transaction():
+        apply_all()
+        # Notes:
+        # - A later fact's edges are minted while an earlier
+        #   fact's target is still current and may name it; every
+        #   row this write superseded ends the write edgeless.
+        # - A successor of this write that a later fact of the same
+        #   write retired re-entered the cache at its insert; it
+        #   leaves again here, or the next row of the drain builds
+        #   semantic edges onto a superseded row.
+        for target_id in superseded_in_batch:
+            backend.edges.delete_by_node(target_id)
+            embed_cache.pop(target_id, None)
 
     return {
         'facts': fact_results,
@@ -592,7 +575,6 @@ def _plan_fact(
         metadata_llm_client: Any,
         ec: Any,
         backend: Backend,
-        executor: ThreadPoolExecutor,
         store_name: str,
         ) -> tuple[list[FactPlan], int]:
     """Plan a single fact without touching the DB.
@@ -625,13 +607,11 @@ def _plan_fact(
     stage_llm_client : Any
         The fast-worker client for the three reconcile stages.
     metadata_llm_client : Any
-        The slow metadata client for enrichment and causal inference.
+        The slow metadata client for enrichment.
     ec : Any
         The store's bound embed provider.
     backend : Backend
         Open store, read only here.
-    executor : ThreadPoolExecutor
-        The drain's two-worker executor for enrichment and causal.
     store_name : str
         The store being written; its per-store rerank toggle governs
         the shortlist's rerank rung.
@@ -660,8 +640,8 @@ def _plan_fact(
       keyword hit outside the pool; every row when the rerank failed
       or was disabled). A row the cut leaves unscreened keeps
       `relation` None and `screened` False on its candidate.
-    - Stage 1 screens the kept rows in parallel on an executor sized
-      to them; stage 2 shows each kept row alone; stage 3 writes one
+    - Stage 1 screens the kept rows on a pool sized to them; stage
+      2 shows each kept row alone; stage 3 writes one
       merge text per retiring target. The stage functions are
       `llm.extract.screen_memory`, `judge_memory` and
       `merge_successor`, on `stage_llm_client`.
@@ -840,8 +820,8 @@ def _plan_fact(
 
             # Notes:
             # - One worker per screened row: a screen call ends in
-            #   seconds and a dozen of them serialized on the drain's
-            #   two-worker executor would take a minute per fact.
+            #   seconds, and a dozen of them run one after another
+            #   would take a minute per fact.
             # - The same pool serves stage 2, whose rows are a subset.
             with ThreadPoolExecutor(max_workers=len(to_screen)) as stage_pool:
                 screened = list(stage_pool.map(
@@ -980,25 +960,12 @@ def _plan_fact(
                     f'merged embed failed; falling back to fact vector:'
                     f' {exc}')
 
-        def _do_enrich(row: Insight = fact_insight) -> dict[str, Any]:
-            return enrich_with_llm(row, metadata_llm_client)
-
-        def _do_causal(row: Insight = fact_insight) -> list[Edge]:
-            with backend.readonly_context() as ro:
-                return infer_llm_causal_edges(ro, row, metadata_llm_client)
-
-        fut_e = executor.submit(_do_enrich)
-        fut_c = executor.submit(_do_causal)
         try:
-            enrichment = fut_e.result()
+            enrichment = enrich_with_llm(
+                fact_insight, metadata_llm_client)
             calls += 1
         except Exception:
             enrichment = {}
-        try:
-            causal_edges = fut_c.result()
-            calls += 1
-        except Exception:
-            causal_edges = []
 
         if enrichment:
             fact_insight.entities = enrichment.get('entities', [])
@@ -1011,7 +978,6 @@ def _plan_fact(
             candidates=candidates if idx == 0 else [],
             embed_vec=embed_vec,
             enrichment=enrichment,
-            causal_edges=causal_edges,
             enriched_vec=None,
             ))
     return plans, calls
@@ -1174,8 +1140,7 @@ def _apply_plan(
             before_target = backend.nodes.get_include_deleted(target_id)
             # Snapshot before the pointer is written: `supersede` removes
             # the predecessor's edges, and a later snapshot would also
-            # scoop up the plan's causal edges and the successor's own
-            # freshly minted ones.
+            # scoop up the successor's own freshly minted edges.
             carried_edges = backend.edges.by_node(target_id)
             # The pointer is written BEFORE `nodes.insert`, and the
             # position is load-bearing: `create_temporal_edge` reads
@@ -1314,16 +1279,13 @@ def _apply_plan(
     edge_stats['semantic'] = create_semantic_edges(
         backend, fi, embed_cache, threshold=semantic_threshold)
 
-    for edge in plan.causal_edges:
-        backend.edges.upsert(edge)
-
     if linking:
         for target_id, carried_edges in carried:
             move_edges(backend, target_id, fi.id, carried_edges)
-        # Sweeps the causal edges the plan itself aimed at a target,
-        # planned while the target was still current; `supersede`
-        # removed only the edges that existed before the plan ran, and
-        # a target already superseded must stay edgeless too.
+        # Sweeps the edges this write just minted that name a target;
+        # `supersede` removed only the edges that existed before the
+        # plan ran, and a target already superseded must stay edgeless
+        # too.
         for target_id, _relation in plan.targets:
             backend.edges.delete_by_node(target_id)
 
@@ -1354,10 +1316,7 @@ def _apply_plan(
         'created_at': (
             format_timestamp(fi.created_at)
             if fi.created_at is not None else ''),
-        'edges_created': {
-            **edge_stats,
-            'causal': len(plan.causal_edges),
-            },
+        'edges_created': dict(edge_stats),
         'enrichment': {
             'keywords': plan.enrichment.get('keywords', []),
             'summary': plan.enrichment.get('summary', ''),

@@ -124,7 +124,7 @@ def _require_started(action: str) -> None:
     """Reject the current CLI invocation when the scheduler is stopped.
 
     Single gate for write-producing commands. When the scheduler is
-    stopped, memman is recall-only — every write returns exit 1 with a
+    stopped, memman is recall-only - every write returns exit 1 with a
     fixed message that points the operator at `memman scheduler start`.
     """
     from memman.setup.scheduler import STATE_STOPPED, read_state
@@ -185,7 +185,7 @@ def _ensure_store_backend_key(store_name: str, data_dir: str) -> None:
 def _get_llm_client_or_fail(role: str) -> 'MemmanLLMClient':
     """Return a per-role LLM client, re-wrapping ConfigError as ClickException.
 
-    Keeps `memman.llm` free of `click` — the CLI boundary is the only
+    Keeps `memman.llm` free of `click` - the CLI boundary is the only
     place that should know how to surface a user-facing config error.
     `role` is `'fast'`, `'fast_worker'`, `'slow_canonical'`, or
     `'slow_metadata'` (worker pipeline, operator rebuilds).
@@ -1103,8 +1103,6 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
             timeout=timeout,
             stores=store_list)
 
-        from concurrent.futures import ThreadPoolExecutor
-
         conn = stack.enter_context(queue_db(data_dir_val))
         processed = 0
         failed = 0
@@ -1112,7 +1110,6 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         skipped_writes = 0
         touched_stores: set[str] = set()
         store_contexts: dict[str, _StoreContext] = {}
-        executor = ThreadPoolExecutor(max_workers=2)
         run_error: str | None = None
 
         last_hb = _LAST_HEARTBEAT_AT.get(data_dir_val, 0.0)
@@ -1181,7 +1178,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
             row_usage_snap = llm_usage.snapshot()
             try:
                 row_t0 = _time.monotonic()
-                row_result = _process_queue_row(row, ctx, executor)
+                row_result = _process_queue_row(row, ctx)
                 row_elapsed_ms = int((_time.monotonic() - row_t0) * 1000)
                 # Notes:
                 # - The ledger is observability, so its own failure
@@ -1252,7 +1249,6 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         run_error = f'{type(exc).__name__}: {exc}'
         raise
     finally:
-        executor.shutdown(wait=True)
         try:
             from memman.maintenance import run_maintenance
             run_maintenance(
@@ -1411,8 +1407,7 @@ class _StoreContext:
 
 def _process_queue_row(
         row: 'memman.queue.QueueRow',
-        ctx: _StoreContext,
-        executor: 'ThreadPoolExecutor') -> dict[str, Any]:
+        ctx: _StoreContext) -> dict[str, Any]:
     """Run the full remember pipeline on a claimed queue row.
 
     The insight's `source` is `row.hint_source` verbatim (provenance
@@ -1421,10 +1416,10 @@ def _process_queue_row(
     enforced unconditionally via `row.queue_uuid`; `row.session_id`
     carries the temporal chain key onto the stored insight.
 
-    Hoisted state (db, embed_cache, insights_by_id, llm_client, ec,
-    executor) comes from `ctx` and the drain-level executor. The
-    drain loop snapshots and restores `ctx`'s caches around this call
-    so a transaction failure can't pollute the next row's planning.
+    Hoisted state (db, embed_cache, insights_by_id, llm_client, ec)
+    comes from `ctx`. The drain loop snapshots and restores `ctx`'s
+    caches around this call so a transaction failure can't pollute
+    the next row's planning.
 
     Returns
     -------
@@ -1513,7 +1508,6 @@ def _process_queue_row(
         cat_explicit=row.hint_cat is not None,
         embed_cache=ctx.embed_cache,
         insights_by_id=ctx.insights_by_id,
-        executor=executor,
         llm_client=ctx.llm_client,
         stage_llm_client=ctx.stage_llm_client,
         ec=ctx.ec,
@@ -2017,8 +2011,8 @@ def unsupersede(ctx: click.Context, id: str) -> None:
     store's embedder, refreshes its keyword tokens, and rebuilds its
     entity and semantic edges, so it re-enters recall as a current
     row. No temporal edge is minted (the row is not a new event), and
-    the causal and manual edges the supersession moved onto the
-    forgotten successor are not restored.
+    the manual edges the supersession moved onto the forgotten
+    successor are not restored.
 
     \b
     Parameters
@@ -2644,7 +2638,7 @@ def scheduler_debug() -> None:
     fallback when MEMMAN_DEBUG is unset. Affects future scheduler-fired
     drains and any CLI invocation in a shell that does not export
     MEMMAN_DEBUG. Trace logs land at ~/.memman/logs/debug.log (mode
-    600) and include raw LLM request/response bodies — including
+    600) and include raw LLM request/response bodies - including
     memory content. Turn off when done.
     """
 
@@ -3077,7 +3071,7 @@ def status(ctx: click.Context) -> None:
 def doctor(ctx: click.Context, text_output: bool) -> None:
     """Run health checks on the database, scheduler, and providers.
 
-    Exits 0 on pass/warn, 1 on fail — usable as a CI/scripted gate.
+    Exits 0 on pass/warn, 1 on fail - usable as a CI/scripted gate.
     """
     from memman.doctor import run_all_checks
 
@@ -4011,7 +4005,7 @@ def _emit_guide(session_id: str = '') -> None:
 
 @cli.command(hidden=True)
 def guide() -> None:
-    """Print the memman behavioral guide. Hidden — called by openclaw bootstrap."""
+    """Print the memman behavioral guide. Hidden - called by openclaw bootstrap."""
     _emit_guide()
 
 
@@ -4085,9 +4079,9 @@ def _graph_rebuild_stale_only(
     """Stale-only branch of `graph rebuild`.
 
     Filters work to rows whose persisted `prompt_version` no longer
-    matches `compute_prompt_version()` -- the enrichment and causal
-    prompts plus the `slow_metadata` model, which is exactly the set
-    this command replays. Works on SQLite and Postgres
+    matches `compute_prompt_version()` -- the enrichment prompt plus
+    the `slow_metadata` model, which is exactly the set this command
+    replays. Works on SQLite and Postgres
     (the wholesale rebuild's SQLite-only guard does not apply here:
     the per-row writes through `link_pending` are the same traffic
     the `remember` hot path already exercises). Lock + predicate +
@@ -4220,9 +4214,9 @@ def _graph_rebuild_stale_only(
                    ' progress while the inner tqdm bar is suppressed).')
 @click.option('--stale-only', is_flag=True, default=False,
               help='Re-enrich only rows whose prompt_version no longer'
-                   ' matches the active config -- the enrichment and'
-                   ' causal prompts plus the slow_metadata model, which'
-                   ' is exactly what this command replays. Cross-backend'
+                   ' matches the active config -- the enrichment prompt'
+                   ' plus the slow_metadata model, which is exactly what'
+                   ' this command replays. Cross-backend'
                    ' (works on Postgres). NULL provenance rows are not'
                    ' swept; they need a separate backfill.')
 @click.pass_context

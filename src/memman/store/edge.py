@@ -196,7 +196,6 @@ _PER_NODE_CREATED_BY_FILTER = {
                " not in ('claude', 'manual'))"),
     'semantic': ("(json_extract(metadata, '$.created_by') is null"
                  " or json_extract(metadata, '$.created_by') = 'auto')"),
-    'causal': "json_extract(metadata, '$.created_by') = 'llm'",
     }
 
 _REINDEX_CREATED_BY_FILTER = {
@@ -204,9 +203,6 @@ _REINDEX_CREATED_BY_FILTER = {
     'entity': ("(json_extract(metadata, '$.created_by') is null"
                " or json_extract(metadata, '$.created_by')"
                " not in ('claude', 'manual'))"),
-    'causal': ("(json_extract(metadata, '$.created_by') is null"
-               " or json_extract(metadata, '$.created_by')"
-               " not in ('llm', 'claude', 'manual'))"),
     }
 
 
@@ -217,7 +213,6 @@ def delete_auto_edges_for_node(
     Filter varies by edge_type:
     - entity: deletes null + non-claude/manual
     - semantic: deletes null + auto
-    - causal: deletes llm only
     """
     filt = _PER_NODE_CREATED_BY_FILTER[edge_type]
     sql = f"""
@@ -235,7 +230,6 @@ def delete_auto_edges_by_type(db: 'DB', edge_type: str) -> None:
     Filter varies by edge_type:
     - semantic: deletes auto only
     - entity: deletes null + non-claude/manual
-    - causal: deletes null + non-llm/claude/manual (heuristic)
     """
     filt = _REINDEX_CREATED_BY_FILTER[edge_type]
     db._exec(

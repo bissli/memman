@@ -53,7 +53,7 @@ def test_reconcile_candidates_ranked_by_similarity(monkeypatch):
     rem._plan_fact(
         fact, parent, '', False, False,
         insights_by_id, embed_cache, set(), set(),
-        MagicMock(), MagicMock(), ec, MagicMock(), MagicMock(), 'teststore')
+        MagicMock(), MagicMock(), ec, MagicMock(), 'teststore')
 
     assert 'TOP' in screened, f'top-cosine insight crowded out; screened={screened}'
 
@@ -67,8 +67,8 @@ def test_prompt_version_unchanged_by_length_caps():
     surfaces -- every stored row in every store goes stale at once,
     and only a `graph rebuild --stale` clears it.
 
-    Two inputs now move this value and neither is a length cap: the
-    enrichment prompt and the causal prompt. So does the configured
+    Two inputs move this value and neither is a length cap: the
+    enrichment prompt, and the configured
     `MEMMAN_LLM_MODEL_SLOW_METADATA`, which the key folds in and which
     the suite seeds from `INSTALL_DEFAULTS` -- changing that default
     re-pins this test, deliberately.
@@ -76,11 +76,11 @@ def test_prompt_version_unchanged_by_length_caps():
     Mutation: "fixing" the length caps inside a system prompt, or any
         other incidental edit to a hashed input -- the hash moves and
         every stored row goes stale for a change nobody intended.
-    Oracle: the hash of the two replayable prompts plus the seeded
+    Oracle: the hash of the replayable prompt plus the seeded
         metadata model, pinned.
     """
     from memman.pipeline.remember import compute_prompt_version
-    assert compute_prompt_version() == '6a60ef0080b1ab9f'
+    assert compute_prompt_version() == '51c3531c1305b02f'
 
 
 class _FixedEmbedder:
@@ -233,7 +233,7 @@ def _plan_shortlist(monkeypatch, insights_by_id, embed_cache,
     plans, _calls = rem._plan_fact(
         fact, make_insight(id='parent', content=fact_text),
         '', False, False, insights_by_id, embed_cache, set(), set(),
-        MagicMock(), MagicMock(), ec, MagicMock(), MagicMock(), 'teststore')
+        MagicMock(), MagicMock(), ec, MagicMock(), 'teststore')
     return plans[0].candidates
 
 

@@ -56,7 +56,7 @@ def test_parse_json_response_repairs_a_lone_backslash():
 
 
 def test_parse_json_list_response_reads_the_list_after_prose():
-    """Verify a causal-edge list behind a paragraph of reasoning is still read.
+    """Verify an edge list behind a paragraph of reasoning is still read.
 
     Mutation: trying only the whole text and the whole text with fences
         stripped, which returns None and drops every edge of the response.

@@ -62,13 +62,13 @@ def test_usage_attributed_to_originating_stage(monkeypatch):
 
     An empty-retrying call bills each attempt; a success-only
     recorder books zero for the empties, and a stage mixup charges
-    enrichment's spend to causal.
+    enrichment's spend to another stage.
 
     Mutation: swapping two stage labels, or reading `usage` only at
         the success site (dropping retry accumulation).
     Oracle: an [empty-with-usage, valid] sequence on 'enrichment'
         records 2 calls / 15 prompt tokens there; a single valid call
-        on 'causal' records 1 call / 7 -- exact per-stage sums.
+        on 'merge' records 1 call / 7 -- exact per-stage sums.
     """
     monkeypatch.setattr(llm_client_mod.time, 'sleep', lambda s: None)
     before = usage.snapshot()
@@ -82,13 +82,13 @@ def test_usage_attributed_to_originating_stage(monkeypatch):
         'sys', 'user', stage=usage.STAGE_ENRICHMENT) == 'ok'
     _install_fake_post(monkeypatch, [_valid()])
     assert _client().complete(
-        'sys', 'user', stage=usage.STAGE_CAUSAL) == 'ok'
+        'sys', 'user', stage=usage.STAGE_MERGE) == 'ok'
     d = usage.delta(before, usage.snapshot())
     assert d[usage.STAGE_ENRICHMENT]['calls'] == 2
     assert d[usage.STAGE_ENRICHMENT]['prompt_tokens'] == 15
     assert d[usage.STAGE_ENRICHMENT]['completion_tokens'] == 3
-    assert d[usage.STAGE_CAUSAL]['calls'] == 1
-    assert d[usage.STAGE_CAUSAL]['prompt_tokens'] == 7
+    assert d[usage.STAGE_MERGE]['calls'] == 1
+    assert d[usage.STAGE_MERGE]['prompt_tokens'] == 7
 
 
 @pytest.mark.no_mock_llm
@@ -160,11 +160,11 @@ def test_unparseable_200_body_is_booked_and_retried(monkeypatch):
     _install_fake_post(monkeypatch, [
         (200, '<html>bad gateway page</html>'), _valid()])
     assert _client().complete(
-        'sys', 'user', stage=usage.STAGE_CAUSAL) == 'ok'
+        'sys', 'user', stage=usage.STAGE_MERGE) == 'ok'
     d = usage.delta(before, usage.snapshot())
-    assert d[usage.STAGE_CAUSAL]['calls'] == 2
-    assert d[usage.STAGE_CAUSAL]['missing_usage'] == 1
-    assert d[usage.STAGE_CAUSAL]['prompt_tokens'] == 7
+    assert d[usage.STAGE_MERGE]['calls'] == 2
+    assert d[usage.STAGE_MERGE]['missing_usage'] == 1
+    assert d[usage.STAGE_MERGE]['prompt_tokens'] == 7
 
 
 @pytest.mark.no_mock_llm
@@ -198,8 +198,8 @@ def test_missing_usage_block_counts_call_not_tokens(monkeypatch):
 def test_concurrent_stages_do_not_interleave_usage():
     """Two threads recording into one stage sum exactly.
 
-    Enrichment and causal run concurrently on a two-worker executor,
-    so `record` races are the production case, not a theoretical one.
+    The drain screens rows concurrently on its executor, so `record`
+    races are the production case, not a theoretical one.
 
     Mutation: removing the `Lock` around the ledger update -- the
         read-modify-write interleaves and updates are lost.
@@ -285,7 +285,7 @@ def test_drain_json_carries_llm_usage_delta(mm_runner, monkeypatch):
 
     from memman.cli import cli
 
-    def _stub_row(row, ctx, executor):
+    def _stub_row(row, ctx):
         usage.record(
             usage.STAGE_EXTRACTION,
             {'prompt_tokens': 11, 'completion_tokens': 2,

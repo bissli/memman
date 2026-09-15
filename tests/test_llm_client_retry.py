@@ -3,7 +3,7 @@
 A transient empty body from a flaky local endpoint (Ollama, llama.cpp)
 must be retried inside `complete()` rather than surfaced, because every
 pipeline call site swallows the exception and permanently degrades the
-row (passthrough fact, missing enrichment, no causal edges).
+row (passthrough fact, missing enrichment).
 """
 
 import httpx
@@ -74,7 +74,7 @@ def test_empty_choices_raises_after_last_attempt(monkeypatch):
 def test_empty_content_string_retries(monkeypatch, empty_content):
     """Empty, whitespace-only, and null content all retry like no choices.
 
-    Mutation: treating only missing `choices` as empty — an empty or
+    Mutation: treating only missing `choices` as empty - an empty or
         null `content` string would then be returned to the caller
         (None with no exception at all, the latent bug).
     Oracle: spy transport counts 2 POSTs and the valid second body's

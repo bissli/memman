@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 
 from memman.embed import EmbeddingProvider
 from memman.embed import thresholds as embed_thresholds
@@ -17,7 +16,7 @@ from memman.graph.temporal import MAX_PROXIMITY_EDGES, MIN_PROXIMITY_WEIGHT
 from memman.graph.temporal import TEMPORAL_WINDOW_HOURS, create_temporal_edge
 from memman.llm.client import MemmanLLMClient
 from memman.store.backend import Backend
-from memman.store.model import Edge, Insight, dedupe_entities
+from memman.store.model import Insight, dedupe_entities
 
 logger = logging.getLogger('memman')
 
@@ -25,7 +24,6 @@ logger = logging.getLogger('memman')
 def fast_edges(backend: Backend, insight: Insight) -> dict[str, int]:
     """Run cheap edge generators (temporal + entity).
 
-    LLM causal inference is deferred to link_pending().
     Semantic edges are deferred to link_pending().
     """
     return {
@@ -50,8 +48,8 @@ def link_pending(
         ) -> int:
     """Process insights where linked_at IS NULL.
 
-    Creates semantic edges (and optionally LLM causal/enrichment edges)
-    for pending insights. Returns the number of insights processed.
+    Creates semantic edges (and optionally LLM enrichment edges) for
+    pending insights. Returns the number of insights processed.
 
     `store_name` plumbs through to `_resolve_semantic_threshold` so the
     per-store surface (`MEMMAN_SURFACE_<store>`) selects the right row
@@ -73,7 +71,6 @@ def link_pending(
     if metadata_llm_client is None:
         metadata_llm_client = llm_client
 
-    from memman.graph.causal import infer_llm_causal_edges
     from memman.graph.enrichment import enrich_with_llm
     from memman.pipeline.remember import compute_prompt_version
 
@@ -97,33 +94,17 @@ def link_pending(
 
         # Already-enriched rows whose linked_at was cleared (e.g. by a
         # constants-hash reindex) only need re-linking, not a fresh LLM
-        # enrich/causal pass: the existing enrichment and LLM causal
-        # edges remain valid. Forced rebuilds clear enriched_at first
-        # (reset_for_rebuild), so they take the full path below.
+        # enrich pass: the existing enrichment edges remain valid.
+        # Forced rebuilds clear enriched_at first (reset_for_rebuild),
+        # so they take the full path below.
         relink_only = insight.enriched_at is not None
 
         enrichment: dict = {}
-        causal_edges: list[Edge] = []
         if not relink_only:
-            def _do_causal() -> list[Edge]:
-                with backend.readonly_context() as ro:
-                    return infer_llm_causal_edges(
-                        ro, insight, metadata_llm_client)
-
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                fut_enrich = pool.submit(
-                    enrich_with_llm, insight, metadata_llm_client)
-                fut_causal = pool.submit(_do_causal)
-                try:
-                    enrichment = fut_enrich.result()
-                except Exception:
-                    enrichment = {}
-                if on_progress:
-                    on_progress('causal', insight)
-                try:
-                    causal_edges = fut_causal.result()
-                except Exception:
-                    causal_edges = []
+            try:
+                enrichment = enrich_with_llm(insight, metadata_llm_client)
+            except Exception:
+                enrichment = {}
 
         keywords = enrichment.get('keywords', [])
         new_vec = None
@@ -169,11 +150,6 @@ def link_pending(
             sem_count = create_semantic_edges(
                 backend, insight, embed_cache,
                 threshold=semantic_threshold)
-
-            if not relink_only:
-                backend.edges.delete_auto_for_node(insight.id, 'causal')
-                for edge in causal_edges:
-                    backend.edges.upsert(edge)
 
             backend.nodes.stamp_linked(insight_id)
             if enrichment and not reembed_failed:
@@ -265,9 +241,6 @@ def reindex_auto_edges(
         chunk_size: int = REINDEX_CHUNK_SIZE) -> dict[str, int]:
     """Delete auto-created edges and re-create semantic/entity edges.
 
-    Heuristic causal edges are deleted (replaced by LLM in Tier 3).
-    LLM/manual causal edges are preserved.
-
     `store_name` plumbs through to `_resolve_semantic_threshold` for
     per-store surface dispatch. It is keyword-only and required: an
     omitted store name silently resolves the code-surface row and
@@ -279,7 +252,7 @@ def reindex_auto_edges(
     sub-second. A reader (e.g. recall on the hot path) waiting on the
     write lock sees at most ~200-400ms of blocking per chunk, well
     inside the 5s `busy_timeout`. The bulk deletes of `semantic`,
-    `entity`, `causal`, and low-weight temporal edges happen in a
+    `entity`, and low-weight temporal edges happen in a
     short global pre-pass; per-chunk per-insight delete-then-create
     is idempotent because `backend.edges.upsert` is additive.
 
@@ -294,14 +267,12 @@ def reindex_auto_edges(
     entity_del = backend.edges.count_auto_by_type('entity')
     temporal_del = backend.edges.count_low_weight_temporal_proximity(
         min_weight=MIN_PROXIMITY_WEIGHT)
-    causal_del = backend.edges.count_auto_by_type('causal')
 
     if dry_run:
         dry_stats: dict[str, int] = {
             'semantic_deleted': semantic_del,
             'entity_deleted': entity_del,
             'temporal_pruned': temporal_del,
-            'causal_deleted': causal_del,
             'semantic_created': 0,
             'entity_created': 0,
             'dry_run': 1,
@@ -322,7 +293,6 @@ def reindex_auto_edges(
         'semantic_deleted': semantic_del,
         'entity_deleted': entity_del,
         'temporal_pruned': temporal_del,
-        'causal_deleted': causal_del,
         'semantic_created': 0,
         'entity_created': 0,
         }
@@ -332,7 +302,6 @@ def reindex_auto_edges(
         backend.edges.delete_auto_by_type('entity')
         backend.edges.delete_low_weight_temporal_proximity(
             min_weight=MIN_PROXIMITY_WEIGHT)
-        backend.edges.delete_auto_by_type('causal')
 
     insights = backend.nodes.get_all_active()
     if insights:

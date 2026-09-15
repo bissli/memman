@@ -31,7 +31,6 @@ def _merge_plan(new_id, target_id, *, action='update', fact_text=None,
         targets=[(target_id, action)],
         embed_vec=None,
         enrichment={},
-        causal_edges=[],
         )
 
 
@@ -60,7 +59,7 @@ def test_merge_repoints_target_edges_to_successor(tmp_db, tmp_backend):
 
     Mutation: leaving the bare `delete_by_node` with no re-point, which
         drops the target's whole neighborhood.
-    Oracle: the causal edge's own type and weight read back off the
+    Oracle: the entity edge's own type and weight read back off the
         successor. `fast_edges` mints temporal-proximity edges between
         any two nodes created moments apart, so matching on the
         neighbor id alone passes without the re-point.
@@ -69,7 +68,7 @@ def test_merge_repoints_target_edges_to_successor(tmp_db, tmp_backend):
     insert_insight(tmp_db, make_insight(id='ctx-1', content='context'))
     insert_edge(tmp_db, make_edge(
         source_id='ctx-1', target_id='old-1',
-        edge_type='causal', weight=0.83))
+        edge_type='entity', weight=0.83))
 
     plan = _merge_plan('new-1', 'old-1')
     _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
@@ -77,7 +76,7 @@ def test_merge_repoints_target_edges_to_successor(tmp_db, tmp_backend):
     assert get_edges_by_node(tmp_db, 'old-1') == []
     carried = [
         e for e in get_edges_by_node(tmp_db, 'new-1')
-        if e.edge_type == 'causal']
+        if e.edge_type == 'entity']
     assert len(carried) == 1
     assert carried[0].source_id == 'ctx-1'
     assert carried[0].target_id == 'new-1'
@@ -94,7 +93,7 @@ def test_merge_repoint_drops_target_self_edge(tmp_db, tmp_backend):
     insert_insight(tmp_db, make_insight(id='old-1', content='original'))
     insert_edge(tmp_db, make_edge(
         source_id='old-1', target_id='old-1',
-        edge_type='causal', weight=0.7))
+        edge_type='entity', weight=0.7))
 
     plan = _merge_plan('new-1', 'old-1')
     _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
@@ -213,7 +212,7 @@ def test_one_gone_target_does_not_degrade_the_other(tmp_db, tmp_backend):
         action='supersede', fact_text='both are wrong',
         fact_insight=make_insight(id='new-1', content='both are wrong'),
         targets=[('gone-1', 'supersede'), ('old-1', 'supersede')],
-        embed_vec=None, enrichment={}, causal_edges=[])
+        embed_vec=None, enrichment={})
     result = _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
 
     assert result['action'] == 'supersede'
@@ -247,7 +246,7 @@ def test_a_gone_target_is_recorded_in_the_oplog(tmp_db, tmp_backend):
         action='supersede', fact_text='both are wrong',
         fact_insight=make_insight(id='new-1', content='both are wrong'),
         targets=[('gone-1', 'supersede'), ('old-1', 'supersede')],
-        embed_vec=None, enrichment={}, causal_edges=[])
+        embed_vec=None, enrichment={})
     _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
 
     ops = {(e.operation, e.insight_id): e.detail
@@ -277,7 +276,7 @@ def test_mixed_update_and_supersede_targets_log_their_own_operation(
         action='supersede', fact_text='refined and corrected',
         fact_insight=make_insight(id='new-1', content='refined and corrected'),
         targets=[('old-s', 'supersede'), ('old-u', 'update')],
-        embed_vec=None, enrichment={}, causal_edges=[])
+        embed_vec=None, enrichment={})
     result = _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
 
     ops = {(e.operation, e.insight_id) for e in tmp_backend.oplog.recent(limit=10)}

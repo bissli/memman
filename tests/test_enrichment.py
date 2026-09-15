@@ -332,9 +332,11 @@ class TestBuildEnrichedText:
 def test_link_pending_relink_only_skips_enrich(tmp_db, tmp_backend):
     """An already-enriched pending-link row relinks without an LLM pass.
 
-    Regression: link_pending re-ran enrich_with_llm/causal unconditionally,
-    so relinking after a constants-hash clear_linked_at re-enriched every
-    already-enriched row at LLM cost.
+    Mutation: dropping the `relink_only` guard so `enrich_with_llm`
+        fires on every `link_pending` pass -- a constants-hash
+        clear_linked_at would then re-enrich the whole corpus at LLM
+        cost, charged against the spend ceiling.
+    Oracle: the mock client, asserted never called.
     """
     from memman.store.model import format_timestamp
     from memman.store.node import stamp_enriched

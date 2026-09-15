@@ -475,7 +475,7 @@ def test_reindex_concurrent_writers_no_edges_lost(pg_dsn):
                     backend.edges.upsert(
                         Edge(
                             source_id='seed0', target_id='manual1',
-                            edge_type='causal',
+                            edge_type='semantic',
                             weight=1.0,
                             metadata={'created_by': 'manual'}))
         except Exception as e:

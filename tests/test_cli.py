@@ -1,4 +1,4 @@
-"""Tests for memman.cli — Click CLI commands via CliRunner.
+"""Tests for memman.cli - Click CLI commands via CliRunner.
 
 All tests use real Haiku LLM and Voyage embedding APIs.
 Requires OPENROUTER_API_KEY and VOYAGE_API_KEY in environment.
@@ -1240,30 +1240,45 @@ class TestLink:
     """`memman graph link` direct edge creation."""
 
     def test_link_creates_both_directions(self, runner):
-        """Link creates edges in both directions atomically."""
+        """Link creates edges in both directions atomically.
+
+        Mutation: writing only the forward row, so a traversal from
+            the target never reaches the source.
+        Oracle: both rows read straight out of the edges table,
+            matched on `created_by = 'claude'`. The enrichment pass
+            mints an entity and a temporal edge between any two
+            insights, so a `graph related` assertion would pass on an
+            auto edge even if `graph link` wrote nothing. The anchors
+            are textually distant, so no auto semantic edge competes.
+        """
+        from memman.store.db import open_read_only, store_dir
+
         r1 = invoke(runner, [
-            'remember', 'FastAPI chosen for async API development',
+            'remember', 'chose SQLite because embedded serverless',
             '--no-reconcile'])
         id1 = parse_remember(r1, runner)['id']
         r2 = invoke(runner, [
-            'remember', 'Uvicorn configured as ASGI server for FastAPI',
+            'remember', 'preferred color is emerald green',
             '--no-reconcile'])
         id2 = parse_remember(r2, runner)['id']
 
-        result = invoke(runner, ['graph', 'link', id1, id2, '--type', 'causal'])
+        result = invoke(
+            runner, ['graph', 'link', id1, id2, '--type', 'semantic'])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data['status'] == 'linked'
 
-        fwd = invoke(runner, ['graph', 'related', id1, '--edge', 'causal'])
-        assert fwd.exit_code == 0
-        fwd_data = json.loads(fwd.output)
-        assert any(e['id'] == id2 for e in fwd_data)
-
-        rev = invoke(runner, ['graph', 'related', id2, '--edge', 'causal'])
-        assert rev.exit_code == 0
-        rev_data = json.loads(rev.output)
-        assert any(e['id'] == id1 for e in rev_data)
+        _, data_dir = runner
+        db = open_read_only(store_dir(data_dir, 'default'))
+        try:
+            manual = db._query(
+                "select source_id, target_id from edges"
+                " where json_extract(metadata, '$.created_by') = 'claude'"
+                " and edge_type = 'semantic'").fetchall()
+        finally:
+            db.close()
+        assert (id1, id2) in {(r[0], r[1]) for r in manual}
+        assert (id2, id1) in {(r[0], r[1]) for r in manual}
 
     def test_link_respects_user_created_by(self, runner):
         """User-provided --meta['created_by'] is preserved, not clobbered to 'claude'.
@@ -1343,29 +1358,40 @@ class TestLink:
         assert '0.9' in data['warning']
 
     def test_link_returns_actual_db_weight(self, runner):
-        """Link output weight reflects the DB value, not the user-supplied value."""
+        """Link output weight reflects the DB value, not the user-supplied value.
+
+        Mutation: echoing the requested weight back instead of reading
+            the stored row, which would report 0.3 after the upsert
+            kept 0.9.
+        Oracle: the second call's own output, against the weight the
+            first call stored. The type is `semantic` because the
+            enrichment pass mints an entity edge at weight 1.0 between
+            any two insights, which would satisfy `>= 0.9` on its own.
+        """
         r1 = invoke(runner, [
-            'remember', 'FastAPI chosen for async API development',
+            'remember', 'chose SQLite because embedded serverless',
             '--no-reconcile'])
         id1 = parse_remember(r1, runner)['id']
         r2 = invoke(runner, [
-            'remember', 'Uvicorn configured as ASGI server for FastAPI',
+            'remember', 'preferred color is emerald green',
             '--no-reconcile'])
         id2 = parse_remember(r2, runner)['id']
 
-        invoke(runner, ['graph', 'link', id1, id2, '--type', 'causal', '--weight', '0.9'])
-        result = invoke(runner, ['graph', 'link', id1, id2, '--type', 'causal', '--weight', '0.3'])
+        invoke(runner, [
+            'graph', 'link', id1, id2, '--type', 'semantic', '--weight', '0.9'])
+        result = invoke(runner, [
+            'graph', 'link', id1, id2, '--type', 'semantic', '--weight', '0.3'])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data['weight'] >= 0.9, (
             f'Link output shows {data["weight"]} but should be >= 0.9 '
             f'(MAX preserves higher weight over requested 0.3)')
         assert data['weight'] != 0.3, (
-            'Link output should not show 0.3 — MAX should preserve higher')
+            'Link output should not show 0.3 - MAX should preserve higher')
 
 
 class TestSingleTierEnrichment:
-    """Remember runs enrichment + causal inline via ThreadPoolExecutor."""
+    """Remember runs enrichment inline on the drain worker."""
 
     def test_output_has_enrichment_dict(self, runner):
         """Worker enrichment lands keywords/summary/entities on the row."""
@@ -1394,27 +1420,6 @@ class TestSingleTierEnrichment:
         assert semantic_facts is not None
         assert entities is not None
 
-    def test_output_has_causal_count(self, runner):
-        """Worker creates a (possibly empty) causal-edge set per insight."""
-        from memman.store.db import open_read_only, store_dir
-
-        result = invoke(runner, [
-            'remember', 'PostgreSQL chosen for JSONB support in API layer',
-            '--no-reconcile'])
-        assert result.exit_code == 0
-        data = parse_remember(result, runner)
-        iid = data['id']
-
-        _, data_dir = runner
-        db = open_read_only(store_dir(data_dir, 'default'))
-        try:
-            count = db._query(
-                "SELECT COUNT(*) FROM edges WHERE source_id = ?"
-                " AND edge_type = 'causal'", (iid,)).fetchone()[0]
-        finally:
-            db.close()
-        assert isinstance(count, int)
-
     def test_no_link_pending_in_output(self, runner):
         """Output no longer includes link_pending field."""
         result = invoke(runner, [
@@ -1423,15 +1428,6 @@ class TestSingleTierEnrichment:
         assert result.exit_code == 0
         raw = json.loads(result.output)
         assert 'link_pending' not in raw
-
-    def test_no_causal_candidates_in_output(self, runner):
-        """Output no longer includes causal_candidates field."""
-        result = invoke(runner, [
-            'remember', 'Terraform modules organized by service boundaries',
-            '--no-reconcile'])
-        assert result.exit_code == 0
-        data = parse_remember(result, runner)
-        assert 'causal_candidates' not in data
 
     def test_linked_at_stamped_after_remember(self, runner):
         """linked_at is non-NULL after remember returns."""
@@ -1483,7 +1479,7 @@ class TestSingleTierEnrichment:
 
 
 class TestGraphRebuild:
-    """Graph rebuild command tests — dry-run, live, edge preservation."""
+    """Graph rebuild command tests - dry-run, live, edge preservation."""
 
     def test_rebuild_dry_run_reports_count(self, tmp_path, monkeypatch):
         """Dry run reports total insights without modifying DB."""
@@ -1640,7 +1636,7 @@ class TestGraphRebuild:
                   if e.edge_type == 'semantic'
                   and e.metadata.get('created_by') == 'claude']
         assert len(manual) == 1, (
-            'rebuild deleted manual claude edge — '
+            'rebuild deleted manual claude edge - '
             'should preserve created_by=claude')
         db.close()
 

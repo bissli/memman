@@ -3,31 +3,30 @@ name: memman
 description: Persistent graph-based memory. Recall context before responding, remember insights after. Each group has private memory; global memory is read-only.
 ---
 
-# memman — Persistent Memory
+# memman - Persistent Memory
 
 `memman` is a CLI on PATH inside the container. Memory is organized into
 typed insights and a graph of edges between them. PID 1 of the container
 is `memman scheduler serve`, which drains the write queue every 60
-seconds. From the agent's perspective `remember` returns immediately
-with `{action: queued, queue_id, queue_uuid}`; the new insight becomes
-recallable within the next drain interval. Keep the `queue_uuid` if you
-need to find what the write stored -- `memman insights by-queue <uuid>`
-resolves it once the drain has run.
+seconds. `remember` returns at once with `{action: queued, queue_id,
+queue_uuid}`. The new insight becomes recallable within the next drain
+interval. Keep the `queue_uuid` to find what the write stored:
+`memman insights by-queue <uuid>` resolves it once the drain has run.
 
 If `memman scheduler stop` is run inside the container, memman becomes
 recall-only and the serve loop exits at its next iteration. Because the
 serve loop is PID 1, the container also exits. To resume, restart the
-container — do not invoke `scheduler stop` inside a container where
-serve is PID 1 unless you intend to terminate the container.
+container. Do not invoke `scheduler stop` inside a container where
+serve is PID 1 except to terminate the container.
 
 ## Memory stores
 
 - **Private** (default): per-group, read-write. All writes go here.
 - **Global**: shared across all groups, read-only. Append `--store global` to read it.
 
-Never write to the global store — the mount is read-only.
+Never write to the global store: the mount is read-only.
 
-## Recall — before responding
+## Recall - before responding
 
 **Default: recall on every new user message**, unless ALL of these apply:
 - Direct follow-up within a topic already fully in context
@@ -44,19 +43,19 @@ The cross-encoder reranker runs by default on multi-token queries
 
 Note: `--store` is a root-group flag and must come **before** the subcommand name (e.g. `recall`).
 
-Craft a focused, keyword-rich query — do not pass the raw user prompt.
+Craft a focused, keyword-rich query. Do not pass the raw user prompt.
 
-## Remember — after responding
+## Remember - after responding
 
 Run this decision tree after every substantive response:
 
-**Step 1 — Does this exchange contain any of these?**
-  a) User directive — preference, decision, correction, explicit "remember this"
-  b) Reasoning conclusion — non-trivial judgment from multi-source synthesis
-  c) Durable observed state — system fact, environment detail, architectural finding
+**Step 1 - Does this exchange contain any of these?**
+  a) User directive: preference, decision, correction, explicit "remember this"
+  b) Reasoning conclusion: non-trivial judgment from multi-source synthesis
+  c) Durable observed state: system fact, environment detail, architectural finding
   → No to all → STOP.
 
-**Step 2 — Does this correct something already stored?** Then the text
+**Step 2 - Does this correct something already stored?** Then the text
 says so: it names what is no longer true and what is true now, in one
 self-contained statement, and goes in with `memman remember` like any
 other fact. The worker finds every stored row the fact contradicts and
@@ -64,7 +63,7 @@ supersedes each with its own merge that keeps that row's still-true
 clauses; a settled open question is a correction of the row that left
 it open.
 
-**Step 3 — Is it worth storing?**
+**Step 3 - Is it worth storing?**
   Rebuilding from scratch costs more than storing + recalling?
   - Single-query public facts → No
   - Multi-source synthesis with non-obvious conclusions → Yes
@@ -79,9 +78,8 @@ it open.
 memman remember "<fact>" --cat <category> --imp <1-5> --entity e1 --entity e2 --source agent --session $SESSION_ID
 ```
 
-Always pass `--session` with your session id — it links the
-session's writes into one temporal chain; a write without it joins
-no chain.
+Always pass `--session` with the session id: it links the session's
+writes into one temporal chain. A write without it joins no chain.
 
 Categories: `preference` · `decision` · `fact` · `insight` · `context`.
 
@@ -122,13 +120,13 @@ memman insights show <id>                              # read by ID
 memman insights by-queue <queue_uuid>                  # what one write stored
 ```
 
-`--brief` works on both paths. A row left without a summary falls back
-to its content instead, so no row comes back blank. `truncated: true`
-means the text you got is a raw content prefix cut at 200 characters.
-Its ABSENCE does not mean you hold the whole row: a summarized row
-carries no marker however much its summary left out, and a fallback
-row is marked only when its content ran past the cut. `memman insights
-show <id>` is how you read the rest of any row worth more than a scan.
+`--brief` works on both paths. A row with no summary falls back to its
+content, so no row comes back blank. `truncated: true` marks a
+fallback row whose content ran past the cut: the text is a raw
+200-character content prefix. The marker's ABSENCE does not prove the
+row is whole: a summarized row carries no marker however much its
+summary left out. `memman insights show <id>` reads the rest of any
+row worth more than a scan.
 
 A brief row carries `created_at`, so a WHEN query reconstructs a
 timeline by sorting on that field rather than by reading row order,
@@ -138,8 +136,8 @@ Add `--intent WHY|WHEN|ENTITY` to bias ranking when intent is unambiguous.
 
 Recall returns rows even when nothing matches: a recency channel
 seeds the newest insights as anchors regardless. An empty `results`
-therefore means the store itself is empty, not that the query failed. A full page is
-therefore not evidence that anything on it is relevant -- and a page
+therefore means the store itself is empty, not that the query failed.
+A full page is not evidence that anything on it is relevant. A page
 that looks thin usually is not, because the store nearly always holds
 something bearing on a query drawn from the same work. Judge each row
 on its merits against the query. Each row carries its own `score` and
@@ -154,14 +152,13 @@ bears on the query, re-ask in the store's own words before concluding
 it is empty.
 
 Rows come back in relevance order at every `--limit`, so the first `n`
-of a page of `m` are exactly a page of `n`. On `WHY`,
-`meta.causal_edges` carries the `[cause, effect]` pairs among the
-returned rows.
+of a page of `m` are exactly a page of `n`.
+
 `--min-score` drops rows whose keyword plus similarity sum is under
-the floor (0.0 to 2.0, `0.0` = off, rejected with `--basic`). No value
-is worth copying; the usable band depends on the embedder and store.
+the floor (0.0 to 2.0, `0.0` = off). `--basic` rejects it. No value is
+worth copying: the usable band depends on the embedder and the store.
 `--basic` returns before ranking, so `--intent` and `--expand` do
-nothing there; it lists them in `meta.ignored` rather than obeying
+nothing there, and it lists them in `meta.ignored` rather than obeying
 them.
 
 ## Forgetting
@@ -178,14 +175,17 @@ its successor has been forgotten.
 
 ## Working with relationships
 
+The graph holds three edge types between insights: `temporal` (same
+session chain, or close in time), `semantic` (similar content), and
+`entity` (a shared entity). The worker computes all three during
+enrichment. A manual link adds an edge the worker would not find on
+its own; `graph related` walks the edges out from an insight:
+
 ```bash
 memman graph link <src> <tgt> --type semantic --weight 0.85
-memman graph link <src> <tgt> --type causal --weight 0.8 \
-    --meta '{"sub_type": "causes"}'
+memman graph link <src> <tgt> --type entity --weight 0.8
 memman graph related <id> --depth 2
 ```
-
-Causal `sub_type` values: `causes` · `enables` · `prevents`.
 
 ## Inspecting the system
 
@@ -198,7 +198,7 @@ memman log list [--since 7d]          # operation audit log
 ## Guardrails
 
 - Never store secrets, passwords, or tokens.
-- Never write to the global store — it is mounted read-only.
+- Never write to the global store: it is mounted read-only.
 - Max 8,000 characters per insight.
 - One self-contained fact per `remember` call.
 - `--source agent` for the agent's own conclusion, a locator (URL,

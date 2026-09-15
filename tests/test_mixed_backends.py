@@ -208,11 +208,11 @@ def test_cross_backend_retry(tmp_path, env_file, pg_dsn, monkeypatch):
         attempts_seen = [0]
         real_process = memman_cli._process_queue_row
 
-        def flaky_process(row, ctx, executor):
+        def flaky_process(row, ctx):
             attempts_seen[0] += 1
             if attempts_seen[0] == 1:
                 raise RuntimeError('transient failure on sqlite leg')
-            return real_process(row, ctx, executor)
+            return real_process(row, ctx)
 
         monkeypatch.setattr(
             'memman.cli._process_queue_row', flaky_process)

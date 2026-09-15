@@ -17,8 +17,8 @@ Four roles exist:
   `MEMMAN_LLM_MODEL_FAST`.
 - `slow_canonical` -- canonical-content path (fact extraction). Reads
   `MEMMAN_LLM_MODEL_SLOW_CANONICAL`.
-- `slow_metadata` -- derived-metadata path (enrichment, causal-edge
-  inference). Reads `MEMMAN_LLM_MODEL_SLOW_METADATA`.
+- `slow_metadata` -- derived-metadata path (enrichment). Reads
+  `MEMMAN_LLM_MODEL_SLOW_METADATA`.
 
 Routing the recall path to a small/fast model and the worker to a
 larger/slow/reasoning model means switching the worker model never

@@ -76,7 +76,7 @@
         <mxCell id="a_search" value="&lt;b&gt;search/&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=11;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="60" y="370" width="310" height="130" as="geometry" />
         </mxCell>
-        <mxCell id="a_recall" value="&lt;b&gt;recall.py&lt;/b&gt;&lt;br&gt;intent_aware_recall&lt;br&gt;beam_search_from_anchor&lt;br&gt;causal_topological_sort" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=5;" vertex="1" parent="1">
+        <mxCell id="a_recall" value="&lt;b&gt;recall.py&lt;/b&gt;&lt;br&gt;intent_aware_recall&lt;br&gt;beam_search_from_anchor" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=5;" vertex="1" parent="1">
           <mxGeometry x="70" y="395" width="140" height="90" as="geometry" />
         </mxCell>
         <mxCell id="a_kw" value="&lt;b&gt;keyword.py&lt;/b&gt;&lt;br&gt;keyword_search (drain)&lt;br&gt;tokenize (stopwords)&lt;br&gt;recall counts via insights_fts" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=5;" vertex="1" parent="1">
@@ -99,15 +99,6 @@
         </mxCell>
         <mxCell id="a_sem" value="&lt;b&gt;semantic.py&lt;/b&gt;&lt;br&gt;auto: cos≥AUTO_SEMANTIC_THRESHOLD" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
           <mxGeometry x="510" y="455" width="100" height="50" as="geometry" />
-        </mxCell>
-        <mxCell id="a_cau" value="&lt;b&gt;causal.py&lt;/b&gt;&lt;br&gt;LLM inference&lt;br&gt;(parallel)" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#FFE6E6;strokeColor=#b85450;" vertex="1" parent="1">
-          <mxGeometry x="620" y="455" width="100" height="50" as="geometry" />
-        </mxCell>
-        <mxCell id="a_lbl_auto" value="auto" style="text;html=1;fontSize=8;fillColor=none;strokeColor=none;fontColor=#82b366;fontStyle=1;" vertex="1" parent="1">
-          <mxGeometry x="735" y="395" width="30" height="15" as="geometry" />
-        </mxCell>
-        <mxCell id="a_lbl_llm" value="LLM" style="text;html=1;fontSize=8;fillColor=none;strokeColor=none;fontColor=#b85450;fontStyle=1;" vertex="1" parent="1">
-          <mxGeometry x="735" y="460" width="40" height="25" as="geometry" />
         </mxCell>
         <mxCell id="a_embed" value="&lt;b&gt;embed/&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=11;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="870" y="370" width="270" height="130" as="geometry" />

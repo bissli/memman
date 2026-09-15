@@ -1,6 +1,6 @@
 """Black-box behavioral tests for memman memory management system.
 
-These tests verify behavioral invariants through the CLI only — no internal
+These tests verify behavioral invariants through the CLI only - no internal
 module imports.
 """
 
@@ -81,9 +81,7 @@ def result_ids(results):
     return [r['id'] for r in results]
 
 
-# ═══════════════════════════════════════════════════════════════════
-# PART 1: CORE INVARIANTS — the system MUST satisfy these
-# ═══════════════════════════════════════════════════════════════════
+# --- PART 1: CORE INVARIANTS - the system MUST satisfy these ---
 
 
 class TestPersistence:
@@ -120,7 +118,7 @@ class TestPersistence:
             hits = recall_basic(runner, keyword)
             hit_ids = result_ids(hits)
             assert ids[i] in hit_ids, (
-                f'Could not recall "{keyword}" — got: {contents(hits)[:3]}')
+                f'Could not recall "{keyword}" - got: {contents(hits)[:3]}')
 
     def test_partial_keyword_match(self, runner):
         """Partial keyword from content is enough to find insight."""
@@ -288,14 +286,14 @@ class TestDeduplication:
     def test_reconcile_runs_when_similar_exists(self, runner):
         """Without --no-reconcile, similar content triggers reconciliation.
 
-        Real LLM decides action — may be add/update/none/delete/skipped.
+        Real LLM decides action - may be add/update/none/delete/skipped.
         Under the queue+drain architecture, the user-facing return is
         always 'queued'; `parse_remember` looks up the post-drain row
         by the queue row's `queue_uuid` and returns action='add' when
         a fresh row was inserted. When the LLM reconciles as
         UPDATE/DELETE/NONE/SKIPPED, no row with that uuid exists and
         `parse_remember` falls through to the raw
-        `{action: 'queued', ...}` payload — which is a valid
+        `{action: 'queued', ...}` payload - which is a valid
         reconciliation outcome, not a failure.
         """
         text = 'Go error handling with sentinel values and wrapping'
@@ -322,7 +320,7 @@ class TestGraphTraversal:
                      no_reconcile=True)
         b = remember(runner, 'token rotation schedule every 24 hours',
                      no_reconcile=True)
-        invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'semantic'])
+        invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'entity'])
 
         result = invoke(runner, ['graph', 'related', a['id']])
         assert b['id'] in result.output
@@ -332,18 +330,18 @@ class TestGraphTraversal:
 
         Anchors use textually distant content so the auto-semantic
         edge generator does not fire at the active per-surface
-        threshold — otherwise the explicit causal edge we add would be
-        shadowed by an automatic semantic edge between the same pair.
+        threshold - otherwise the explicit edge we add would be
+        shadowed by an automatic one between the same pair.
         """
         a = remember(runner, 'chose SQLite because embedded serverless',
                      no_reconcile=True)
         b = remember(runner, 'preferred color is emerald green',
                      no_reconcile=True)
-        invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'causal'])
+        invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'entity'])
 
-        result_causal = invoke(runner, ['graph', 'related', a['id'],
-                                        '--edge', 'causal'])
-        assert b['id'] in result_causal.output
+        result_entity = invoke(runner, ['graph', 'related', a['id'],
+                                        '--edge', 'entity'])
+        assert b['id'] in result_entity.output
         result_semantic = invoke(runner, ['graph', 'related', a['id'],
                                           '--edge', 'semantic'])
         assert b['id'] not in result_semantic.output
@@ -354,7 +352,7 @@ class TestGraphTraversal:
                      no_reconcile=True)
         b = remember(runner, 'protobuf schema evolution rules',
                      no_reconcile=True)
-        invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'semantic'])
+        invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'entity'])
 
         remember(runner, 'Kafka topic partitioning strategy uses key-based routing for ordering guarantees', no_reconcile=True)
 
@@ -364,24 +362,30 @@ class TestGraphTraversal:
     def test_related_respects_depth(self, runner):
         """Depth=1 returns only direct neighbors, not hop-2 nodes.
 
-        Uses --edge causal to isolate from auto-created temporal
-        proximity edges that shortcut the graph.
+        Uses --edge semantic on three mutually unrelated anchors:
+        temporal proximity and entity edges are both auto-minted
+        between every pair here and would shortcut a -> c, while the
+        auto-semantic generator does not fire at this distance, so the
+        semantic graph holds exactly the two links this test writes.
         """
-        a = remember(runner, 'API gateway routing rules', no_reconcile=True)
-        b = remember(runner, 'rate limiting middleware', no_reconcile=True)
-        c = remember(runner, 'circuit breaker pattern', no_reconcile=True)
-        invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'causal'])
-        invoke(runner, ['graph', 'link', b['id'], c['id'], '--type', 'causal'])
+        a = remember(runner, 'chose SQLite because embedded serverless',
+                     no_reconcile=True)
+        b = remember(runner, 'preferred color is emerald green',
+                     no_reconcile=True)
+        c = remember(runner, 'the office plant is a fiddle leaf fig',
+                     no_reconcile=True)
+        invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'semantic'])
+        invoke(runner, ['graph', 'link', b['id'], c['id'], '--type', 'semantic'])
 
         result_d1 = invoke(runner, ['graph', 'related', a['id'],
-                                    '--edge', 'causal', '--depth', '1'])
+                                    '--edge', 'semantic', '--depth', '1'])
         data_d1 = json.loads(result_d1.output)
         ids_d1 = [r['id'] for r in data_d1]
         assert b['id'] in ids_d1
         assert c['id'] not in ids_d1
 
         result_d2 = invoke(runner, ['graph', 'related', a['id'],
-                                    '--edge', 'causal', '--depth', '2'])
+                                    '--edge', 'semantic', '--depth', '2'])
         data_d2 = json.loads(result_d2.output)
         ids_d2 = [r['id'] for r in data_d2]
         assert b['id'] in ids_d2
@@ -400,15 +404,15 @@ class TestComposition:
         c = remember(runner, 'REST pagination cursor-based approach',
                      no_reconcile=True)
         link_ab = invoke(runner, ['graph', 'link', a['id'], b['id'],
-                                  '--type', 'causal'])
+                                  '--type', 'entity'])
         assert link_ab.exit_code == 0
         link_ac = invoke(runner, ['graph', 'link', a['id'], c['id'],
-                                  '--type', 'causal'])
+                                  '--type', 'entity'])
         assert link_ac.exit_code == 0
         invoke(runner, ['forget', b['id']])
 
         result = invoke(runner, ['graph', 'related', a['id'],
-                                 '--edge', 'causal'])
+                                 '--edge', 'entity'])
         assert result.exit_code == 0
         assert c['id'] in result.output
         assert b['id'] not in result.output
@@ -550,7 +554,7 @@ class TestStatusAfterMutations:
     """Status counts reflect actual state after mixed mutations."""
 
     def test_status_count_after_mixed_mutations(self, runner):
-        """Store 4, forget 1, replace 1 — status shows 4 total.
+        """Store 4, forget 1, replace 1 - status shows 4 total.
 
         Replace creates a new row and soft-deletes the old one,
         so 4 inserts - 1 forget - 1 replaced + 1 new = 3 active
@@ -618,7 +622,7 @@ class TestContradictionDetection:
     def test_contradiction_triggers_reconciliation(self, runner):
         """Storing contradictory content triggers LLM reconciliation.
 
-        Real LLM handles contradiction — we verify valid action.
+        Real LLM handles contradiction - we verify valid action.
         """
         remember(runner,
                  'Redis is single-threaded and cannot use multiple cores',
@@ -688,7 +692,7 @@ class TestRecallPrecisionUnderNoise:
 
 
 class TestStoreIsolation:
-    """Named stores are airtight — no data leakage."""
+    """Named stores are airtight - no data leakage."""
 
     def test_insight_invisible_across_stores(self, runner):
         """Insight stored in 'work' is invisible from default store."""
@@ -730,7 +734,7 @@ class TestRecallCompleteness:
         """If search finds it, basic recall should find it too.
 
         A user should not need to know which retrieval command
-        to use — they should all find the same insights.
+        to use - they should all find the same insights.
         """
         remember(runner,
                  'AWS Lambda serverless functions with DynamoDB backend',
@@ -974,7 +978,7 @@ class TestStatusConsistency:
     """Status counts reflect actual state after mutations."""
 
     def test_status_count_after_inserts_and_forget(self, runner):
-        """Store 4, forget 1 — status shows 3 total."""
+        """Store 4, forget 1 - status shows 3 total."""
         techs = ['Prometheus', 'Thanos', 'Cortex', 'Mimir']
         stored = [remember(
                 runner,

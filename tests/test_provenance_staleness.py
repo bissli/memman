@@ -25,7 +25,6 @@ from tests.conftest import make_insight
 
 REPLAYED_PROMPTS = [
     ('memman.graph.enrichment', 'ENRICHMENT_SYSTEM_PROMPT'),
-    ('memman.graph.causal', 'LLM_SYSTEM_PROMPT'),
     ]
 WRITE_ONLY_PROMPTS = [
     ('memman.llm.extract', 'FACT_EXTRACTION_SYSTEM'),
@@ -45,8 +44,8 @@ def test_key_moves_for_a_prompt_the_rebuild_replays(
         module, attr, monkeypatch):
     """Editing a prompt `link_pending` re-runs marks rows stale.
 
-    Mutation: dropping the enrichment or causal prompt from the key --
-        an edit then changes what every rebuilt row gets while
+    Mutation: dropping the enrichment prompt from the key -- an edit
+        then changes what every rebuilt row gets while
         `stale_insights` stays 0, so the one drift the remedy CAN fix
         is the one nobody is told about.
     Oracle: the key recomputed with that single prompt perturbed,

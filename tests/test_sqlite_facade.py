@@ -116,14 +116,6 @@ def test_write_lock_is_no_op_on_sqlite(backend):
     assert backend.nodes.get('wl') is not None
 
 
-def test_readonly_context_yields_separate_backend(backend):
-    """readonly_context() yields a Backend whose writes would fail."""
-    backend.nodes.insert(Insight(id='ro', content='read me'))
-    with backend.readonly_context() as ro:
-        assert ro is not backend
-        assert ro.nodes.get('ro').content == 'read me'
-
-
 def test_open_sqlite_backend_returns_sqlite_backend(tmp_path):
     """open_sqlite_backend(store, data_dir) returns a SqliteBackend.
     """
@@ -168,22 +160,24 @@ def test_drop_store_dispatches_to_sqlite(tmp_path):
         not pathlib.Path(tmp_path / 'data' / 'gone2').exists())
 
 
-def test_readonly_context_reports_a_missing_database(tmp_path):
-    """`readonly_context` on a deleted store file raises `BackendError`.
+def test_open_read_only_reports_a_missing_database(tmp_path):
+    """`open_read_only` on a deleted store file raises `BackendError`.
 
     Mutation: reverting `open_read_only`'s missing-file leg to
-        `FileNotFoundError`. Its three other callers wrap the call in
-        `except Exception` and degrade silently, so this method is the
-        only place the type is observable.
+        `FileNotFoundError`. Every caller wraps the call in
+        `except Exception` and degrades silently, so a direct call is
+        the only place the type is observable.
     Oracle: `BackendError` sits outside the `OSError` hierarchy, so
         `pytest.raises(BackendError)` discriminates the two.
     """
+    from memman.store.db import open_read_only
     from memman.store.errors import BackendError
 
     bk = open_sqlite_backend('gone', str(tmp_path))
+    store_dir = pathlib.Path(tmp_path) / 'data' / 'gone'
     try:
-        (pathlib.Path(tmp_path) / 'data' / 'gone' / 'memman.db').unlink()
-        with pytest.raises(BackendError), bk.readonly_context():
-            pass
+        (store_dir / 'memman.db').unlink()
+        with pytest.raises(BackendError):
+            open_read_only(str(store_dir))
     finally:
         bk.close()

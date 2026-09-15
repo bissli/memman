@@ -142,17 +142,23 @@ class TestIntentRouting:
             total = sum(w.values())
             assert 0.99 < total < 1.01
 
-    def test_get_weights_why_prioritizes_causal(self):
-        """WHY intent has highest causal weight."""
+    def test_get_weights_why_prioritizes_temporal(self):
+        """WHY leans temporal hard enough to stay distinct from GENERAL.
+
+        Mutation: leaving WHY's surviving weights at their unnormalized
+            values, which sinks WHY's temporal below GENERAL's and
+            makes WHY a weaker GENERAL rather than its own vector.
+        Oracle: GENERAL's own temporal weight, read from the same
+            table, plus WHY's other two entries.
+        """
         w = get_weights('WHY')
-        assert w['causal'] > w['temporal']
-        assert w['causal'] > w['semantic']
-        assert w['causal'] > w['entity']
+        assert w['temporal'] > w['semantic']
+        assert w['temporal'] > w['entity']
+        assert w['temporal'] > get_weights('GENERAL')['temporal']
 
     def test_get_weights_when_prioritizes_temporal(self):
         """WHEN intent has highest temporal weight."""
         w = get_weights('WHEN')
-        assert w['temporal'] > w['causal']
         assert w['temporal'] > w['semantic']
         assert w['temporal'] > w['entity']
 
@@ -160,7 +166,7 @@ class TestIntentRouting:
         """ENTITY intent has highest entity weight."""
         w = get_weights('ENTITY')
         assert w['entity'] > w['temporal']
-        assert w['entity'] > w['causal']
+        assert w['entity'] > w['semantic']
 
     def test_get_weights_unknown_fallback(self):
         """Unknown intent falls back to GENERAL weights."""
@@ -276,15 +282,15 @@ class TestRecallRanking:
 
         Mutation: reinstating a hint that asserts an ordering the
             reply no longer has ("newest-first", "earlier results
-            cause later ones"), or promising `meta.causal_edges`
-            while the WHY branch that builds it is gone.
+            cause later ones"), or promising `meta.causal_edges`,
+            which no reply carries.
         Oracle: the pinned strings, plus the key set of the same
-            reply - the WHY hint names `causal_edges`, so the reply
-            must carry it, and no other intent may.
+            reply - no intent may carry `causal_edges`.
         """
         expected_hints = {
-            'WHY': ('Rows are relevance-ordered; meta.causal_edges '
-                    'lists the [cause, effect] pairs among them'),
+            'WHY': ('Rows are relevance-ordered; weigh each row '
+                    'against its siblings to account for what the '
+                    'query asks about'),
             'WHEN': ('Rows are relevance-ordered; each carries '
                      'created_at - order by it to reconstruct the '
                      'timeline'),
@@ -304,7 +310,7 @@ class TestRecallRanking:
             meta = result['meta']
             assert meta['hint'] == expected
             assert 'newest-first' not in meta['hint']
-            assert ('causal_edges' in meta) is (intent == 'WHY')
+            assert 'causal_edges' not in meta
             assert 'ordering' not in meta
             assert 'sparse' not in meta
 

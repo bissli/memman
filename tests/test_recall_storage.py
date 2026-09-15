@@ -21,7 +21,7 @@ def _seed_graph(backend):
     specs = [
         (ids[0], ids[1], 'entity', 0.8),
         (ids[1], ids[2], 'semantic', 0.6),
-        (ids[2], ids[3], 'causal', 1.0),
+        (ids[2], ids[3], 'semantic', 1.0),
         (ids[0], ids[3], 'temporal', 0.3),
         (ids[3], ids[0], 'entity', 0.5),
         ]
@@ -71,39 +71,21 @@ def test_adjacency_matches_edges_all(backend):
 def test_bidirectional_mirror_adds_the_reverse_hop():
     """Verify the mirror makes a one-way edge reachable from its target.
 
-    Beam search walks edges as undirected, but `causal` edges and
-    manual `graph link` rows are stored one-way only, so without the
-    mirror the traversal can never reach a cause from its effect.
+    Beam search walks edges as undirected, but `EdgeStore.adjacency()`
+    keys every row by its source alone, so without the mirror the
+    traversal can never reach a source from its target.
 
     Mutation: returning the directed map unchanged, or mirroring only
         some edge types.
     Oracle: a hand-built one-way map; the reverse entry is asserted
         by value, not against another call of the same helper.
     """
-    directed = {'cause': [('effect', 'causal', 0.9)]}
+    directed = {'head': [('tail', 'semantic', 0.9)]}
 
     mirrored = _bidirectional_adjacency(directed)
 
-    assert mirrored['cause'] == [('effect', 'causal', 0.9)]
-    assert mirrored['effect'] == [('cause', 'causal', 0.9)]
-
-
-def test_adjacency_does_not_mutate_its_input(backend):
-    """Verify the bidirectional mirror leaves the directed map intact.
-
-    Recall keeps the directed map for the source-keyed causal lookup
-    after mirroring it for traversal, so an in-place mirror would make
-    every causal edge look bidirectional and corrupt WHY ordering.
-
-    Mutation: mirroring in place (`directed.setdefault(...).append`)
-        instead of building a new map.
-    Oracle: a deep copy of the directed map taken before mirroring.
-    """
-    _seed_graph(backend)
-    directed = backend.edges.adjacency()
-    before = {k: list(v) for k, v in directed.items()}
-    _bidirectional_adjacency(directed)
-    assert directed == before
+    assert mirrored['head'] == [('tail', 'semantic', 0.9)]
+    assert mirrored['tail'] == [('head', 'semantic', 0.9)]
 
 
 def test_similarities_omits_nonpositive_and_unembedded(backend):

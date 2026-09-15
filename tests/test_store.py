@@ -161,11 +161,11 @@ class TestEdgeUpsert:
         insert_insight(tmp_db, make_insight(id='um-2', content='b'))
         insert_edge(tmp_db, make_edge(
             source_id='um-1', target_id='um-2',
-            edge_type='causal', weight=0.7,
+            edge_type='semantic', weight=0.7,
             metadata={'created_by': 'regex'}))
         insert_edge(tmp_db, make_edge(
             source_id='um-1', target_id='um-2',
-            edge_type='causal', weight=0.5,
+            edge_type='semantic', weight=0.5,
             metadata={'created_by': 'llm', 'confidence': 0.9}))
         edges = get_edges_by_node(tmp_db, 'um-1')
         assert len(edges) == 1
@@ -177,11 +177,11 @@ class TestEdgeUpsert:
         insert_insight(tmp_db, make_insight(id='uh-2', content='b'))
         insert_edge(tmp_db, make_edge(
             source_id='uh-1', target_id='uh-2',
-            edge_type='causal', weight=0.5,
+            edge_type='semantic', weight=0.5,
             metadata={'created_by': 'regex'}))
         insert_edge(tmp_db, make_edge(
             source_id='uh-1', target_id='uh-2',
-            edge_type='causal', weight=0.9,
+            edge_type='semantic', weight=0.9,
             metadata={'created_by': 'llm', 'confidence': 0.9}))
         edges = get_edges_by_node(tmp_db, 'uh-1')
         assert len(edges) == 1
@@ -194,11 +194,11 @@ class TestEdgeUpsert:
         insert_insight(tmp_db, make_insight(id='ueq-2', content='b'))
         insert_edge(tmp_db, make_edge(
             source_id='ueq-1', target_id='ueq-2',
-            edge_type='causal', weight=0.8,
+            edge_type='semantic', weight=0.8,
             metadata={'created_by': 'regex', 'rationale': 'v1'}))
         insert_edge(tmp_db, make_edge(
             source_id='ueq-1', target_id='ueq-2',
-            edge_type='causal', weight=0.8,
+            edge_type='semantic', weight=0.8,
             metadata={'created_by': 'llm', 'rationale': 'v2'}))
         edges = get_edges_by_node(tmp_db, 'ueq-1')
         assert len(edges) == 1

@@ -15,7 +15,7 @@ import pytest
 from memman.embed.fingerprint import bound_embedder
 from memman.pipeline.remember import FactPlan, _apply_plan, run_remember
 from memman.store.model import Insight
-from tests.conftest import invoke, make_insight
+from tests.conftest import invoke, make_insight, mint_edge_into
 
 
 def _parent(content):
@@ -116,8 +116,8 @@ def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
             action='replace', fact_text='third',
             fact_insight=make_insight(
                 id=new_id, content='third', entities=['own']),
-            targets=[(target_id, 'replace')], embed_vec=None, enrichment={},
-            causal_edges=[])
+            targets=[(target_id, 'replace')], embed_vec=None,
+            enrichment={})
 
     late = _apply_plan(tmp_backend, _replace('late-1', 'old-1'),
                        embed_cache={}, store_name='test')
@@ -185,13 +185,13 @@ def test_drain_redirects_a_replace_to_the_chain_head(mm_runner):
         assert middle.deleted_at is None
 
 
-def test_sibling_causal_edge_into_a_superseded_row_is_swept(
+def test_sibling_edge_into_a_superseded_row_is_swept(
         tmp_backend, monkeypatch):
     """Verify no fact in a write leaves an edge into a row the write superseded.
 
-    Causal candidates are drawn during planning, when the predecessor
-    is still current, so a later fact's causal edge can name a row an
-    earlier fact superseded.
+    Each fact mints its edges at its own apply, when a row an EARLIER
+    fact superseded is already retired, so a later fact can still name
+    it.
 
     Mutation: sweeping only each plan's own target after its upsert,
         so the second fact's edge into the first fact's target lands
@@ -199,8 +199,6 @@ def test_sibling_causal_edge_into_a_superseded_row_is_swept(
     Oracle: the predecessor read back edgeless and the integrity
         population `superseded_with_edges` empty after the write.
     """
-    from memman.store.model import Edge
-
     tmp_backend.nodes.insert(make_insight(
         id='old-1', content='the broker is kombu'))
 
@@ -212,14 +210,9 @@ def test_sibling_causal_edge_into_a_superseded_row_is_swept(
              'importance': 3, 'entities': []},
             ]
 
-    def _causal_into_old(ro, insight, client):
-        return [Edge(source_id=insight.id, target_id='old-1',
-                     edge_type='causal', weight=0.9)]
-
     monkeypatch.setattr('memman.llm.extract.extract_facts', _two_facts)
     _contradict(monkeypatch, {'old-1'}, when=lambda fact_text: 'redis' in fact_text)
-    monkeypatch.setattr(
-        'memman.pipeline.remember.infer_llm_causal_edges', _causal_into_old)
+    mint_edge_into(monkeypatch, 'old-1')
 
     res = run_remember(
         tmp_backend, _parent('the broker changed'), 'the broker changed',
@@ -232,26 +225,23 @@ def test_sibling_causal_edge_into_a_superseded_row_is_swept(
 
 
 def test_degraded_replace_leaves_no_edge_into_its_dead_target(
-        tmp_db, tmp_backend):
-    """Verify a degraded add still sweeps its plan's edges into the target.
+        tmp_db, tmp_backend, monkeypatch):
+    """Verify a degraded add still sweeps its own edges into the target.
 
     Mutation: gating the trailing sweep on `not target_already_gone`,
-        so the plan's causal edge into an already superseded row lands
-        and stays.
+        so an edge into an already superseded row lands and stays.
     Oracle: the superseded target read back edgeless after the
         degraded apply.
     """
-    from memman.store.model import Edge
-
     tmp_backend.nodes.insert(make_insight(id='old-1', content='first'))
     tmp_backend.nodes.insert(make_insight(id='new-1', content='second'))
     assert tmp_backend.nodes.supersede('old-1', 'new-1') is True
+
+    mint_edge_into(monkeypatch, 'old-1')
     plan = FactPlan(
         action='replace', fact_text='third',
         fact_insight=make_insight(id='late-1', content='third'),
-        targets=[('old-1', 'replace')], embed_vec=None, enrichment={},
-        causal_edges=[Edge(source_id='late-1', target_id='old-1',
-                           edge_type='causal', weight=0.9)])
+        targets=[('old-1', 'replace')], embed_vec=None, enrichment={})
 
     result = _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
 
@@ -273,8 +263,7 @@ def test_a_plain_add_plan_with_a_target_reports_no_replaced_id(
     plan = FactPlan(
         action='add', fact_text='second',
         fact_insight=make_insight(id='new-1', content='second'),
-        targets=[('old-1', 'replace')], embed_vec=None, enrichment={},
-        causal_edges=[])
+        targets=[('old-1', 'replace')], embed_vec=None, enrichment={})
 
     result = _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
 
@@ -299,7 +288,7 @@ def test_one_fact_supersedes_every_contradicted_row(tmp_backend, monkeypatch):
             id=old, content=f'the broker at {old} is kombu and X holds'))
         tmp_backend.nodes.insert(make_insight(id=far, content=f'{far} context'))
         tmp_backend.edges.upsert(Edge(source_id=far, target_id=old,
-                                      edge_type='causal', weight=0.8))
+                                      edge_type='semantic', weight=0.8))
 
     def _one_fact(llm_client, content):
         return [{'text': content, 'category': 'fact', 'entities': []}]
@@ -323,9 +312,9 @@ def test_one_fact_supersedes_every_contradicted_row(tmp_backend, monkeypatch):
         assert tmp_backend.nodes.get_include_deleted(old).superseded_by == fact['id']
         assert tmp_backend.edges.by_node(old) == []
         assert ops.count(('reconcile-supersede', old)) == 1
-        causal_far = {e.source_id for e in tmp_backend.edges.by_node(fact['id'])
-                      if e.edge_type == 'causal'}
-        assert causal_far == {far}
+        carried_far = {e.source_id for e in tmp_backend.edges.by_node(fact['id'])
+                       if e.edge_type == 'semantic'}
+        assert carried_far == {far}
 
 
 def test_batch_drops_only_the_taken_target(tmp_backend, monkeypatch):

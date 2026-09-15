@@ -815,20 +815,6 @@ class SqliteBackend(Backend):
         yield True
 
     @contextmanager
-    def readonly_context(self) -> Iterator['SqliteBackend']:
-        """Yield a read-only Backend bound to a separate connection.
-
-        Opens the database with `mode=ro` and closes on exit. The
-        new SqliteBackend wraps the same DB path with a different
-        underlying connection.
-        """
-        ro_db = _db.open_read_only(str(Path(self._db.path).parent))
-        try:
-            yield SqliteBackend(ro_db)
-        finally:
-            ro_db.close()
-
-    @contextmanager
     def recall_session(self) -> Iterator[SqliteRecallSession]:
         """Yield a SqliteRecallSession for one recall request.
 

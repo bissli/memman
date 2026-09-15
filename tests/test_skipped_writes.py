@@ -258,7 +258,7 @@ def test_drain_records_nothing_for_a_stored_write(mm_runner, monkeypatch):
     """
     from memman.cli import cli
 
-    def _stub_add(row, ctx, executor):
+    def _stub_add(row, ctx):
         return {'facts': [{'id': 'a', 'action': 'add'}], 'llm_calls': 1}
 
     monkeypatch.setattr('memman.cli._process_queue_row', _stub_add)
@@ -295,7 +295,7 @@ def test_ledger_write_failure_does_not_fail_the_row(
     from memman import queue as queue_mod
     from memman.cli import cli
 
-    def _stub_skip(row, ctx, executor):
+    def _stub_skip(row, ctx):
         return {
             'id': 'x', 'content': row.content, 'action': 'skipped',
             'skip_reason': 'trivial content', 'llm_calls': 1,

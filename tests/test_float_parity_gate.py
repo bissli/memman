@@ -101,7 +101,7 @@ def _top5_ids(backend, qvec) -> set[str]:
 
 def test_float32_float64_top5_intersection_geq_4_across_20_queries(
         tmp_path, pg_dsn):
-    """Sqlite top-5 ∩ postgres top-5 >= 4 for each of 20 query vectors."""
+    """Sqlite and postgres top-5 sets overlap by >= 4 on 20 query vectors."""
     from memman.store.postgres import drop_postgres_store
     from memman.store.postgres import open_postgres_backend
     from memman.store.sqlite import drop_sqlite_store, open_sqlite_backend

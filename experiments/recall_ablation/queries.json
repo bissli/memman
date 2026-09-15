@@ -37,13 +37,13 @@
   },
   {
     "query": "why was query_parser deleted",
-    "kind": "why-causal",
+    "kind": "why",
     "expected_intent": "WHY",
-    "notes": "WHY intent probe; tests rerank vs causal_topological_sort interaction"
+    "notes": "WHY intent probe; tests rerank vs graph traversal interaction"
   },
   {
     "query": "why did the OpenSearch race condition emerge",
-    "kind": "why-causal",
+    "kind": "why",
     "expected_intent": "WHY",
     "notes": "WHY intent probe"
   },

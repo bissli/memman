@@ -1,4 +1,4 @@
-# memman — Usage & Reference
+# memman - Usage & Reference
 
 ## Global flags
 
@@ -54,14 +54,14 @@ Two live-read commands (called by hooks, not by hand):
 ### Core
 
 ```bash
-# Remember — store a new insight (LLM reconciliation: duplicates skipped, conflicts resolved)
+# Remember - store a new insight (LLM reconciliation: duplicates skipped, conflicts resolved)
 memman remember "Chose Qdrant over Milvus for vector search" \
   --cat decision --imp 5 --entity Qdrant --entity Milvus --source agent
 
 # Skip LLM reconciliation (direct insert)
 memman remember "Raw note" --no-reconcile
 
-# Recall — intent-aware graph-enhanced retrieval (default)
+# Recall - intent-aware graph-enhanced retrieval (default)
 memman recall "vector database" --limit 10
 
 # Recall with explicit intent override
@@ -74,7 +74,7 @@ memman recall "auth" --cat decision --source agent
 # Simple SQL LIKE matching (faster, no graph traversal, no LLM expansion)
 memman recall "auth" --basic
 
-# Replace — deterministic replacement by ID (inherits metadata from
+# Replace - deterministic replacement by ID (inherits metadata from
 # original); the replaced row is superseded, never deleted
 memman replace <id> "Updated content" --cat decision --imp 5
 
@@ -84,7 +84,7 @@ memman supersede <old_id> <new_id>
 # Reverse a supersession once the successor has been forgotten
 memman unsupersede <old_id>
 
-# Forget — soft-delete an insight
+# Forget - soft-delete an insight
 memman forget <id>
 ```
 
@@ -142,11 +142,8 @@ the response.
 
 Rows come back in relevance order at every `--limit`, so the first `n`
 rows of a page of `m` are exactly what a page of `n` returns. Nothing
-re-sorts after the limit cut. On `WHY`, `meta.causal_edges` carries
-the `[cause, effect]` pairs among the returned rows, cause first; an
-empty list means those rows carry no causal relation to each other.
-On `WHEN`, sort on each row's `created_at`, which `--brief` also
-carries.
+re-sorts after the limit cut. A `WHEN` timeline comes from each row's
+`created_at`, which `--brief` also carries.
 
 If a query returns nothing that bears on it, the likeliest cause is
 vocabulary: re-ask in the store's own words before concluding the
@@ -167,15 +164,15 @@ floor and watching what leaves.
 ### Graph operations
 
 ```bash
-# Link — create a typed edge
+# Link - create a typed edge
 memman graph link <source_id> <target_id> --type semantic --weight 0.85
-memman graph link <source_id> <target_id> --type causal --weight 0.8 \
-  --meta '{"sub_type":"causes","reason":"..."}'
+memman graph link <source_id> <target_id> --type entity --weight 0.8 \
+  --meta '{"reason":"..."}'
 
-# Related — BFS traversal from an insight
-memman graph related <id> --edge causal --depth 2
+# Related - BFS traversal from an insight
+memman graph related <id> --edge semantic --depth 2
 
-# Rebuild — full LLM re-enrichment + re-embed + edge rebuild
+# Rebuild - full LLM re-enrichment + re-embed + edge rebuild
 memman graph rebuild              # process all insights
 memman graph rebuild --dry-run    # preview count without modifying DB
 memman graph rebuild --stale-only # re-enrich only rows whose prompt_version
@@ -184,9 +181,9 @@ memman graph rebuild --stale-only # re-enrich only rows whose prompt_version
 
 Auto-reindex of computed edges (semantic, entity, temporal) fires on `open_db()` when graph constants have changed; no operator command for it.
 
-`graph rebuild` re-enriches all insights through the full LLM pipeline (enrichment, re-embedding, causal inference, edge recreation). Processes in batches of 20. Returns `{"processed": N, "remaining": 0}`. Rejected when the scheduler is stopped.
+`graph rebuild` re-enriches all insights through the full LLM pipeline (enrichment, re-embedding, edge recreation). Processes in batches of 20. Returns `{"processed": N, "remaining": 0}`. Rejected when the scheduler is stopped.
 
-`--stale-only` is the targeted variant: it only touches rows whose persisted `prompt_version` no longer matches `compute_prompt_version()` -- the enrichment prompt, the causal prompt, and the `slow_metadata` model, which is exactly the set this command replays. A `model_id` difference is deliberately NOT staleness: that column records the model behind the row's content, which no rebuild rewrites, so reporting it would nag forever with no remedy. Cross-backend (works on Postgres, unlike wholesale `graph rebuild` which remains SQLite-only). Shares the `'rebuild'` advisory lock so it cannot race a wholesale rebuild. NULL-provenance rows are not swept; they need a separate backfill.
+`--stale-only` is the targeted variant: it only touches rows whose persisted `prompt_version` no longer matches `compute_prompt_version()` -- the enrichment prompt and the `slow_metadata` model, which is exactly the set this command replays. A `model_id` difference is deliberately NOT staleness: that column records the model behind the row's content, which no rebuild rewrites, so reporting it would nag forever with no remedy. Cross-backend (works on Postgres, unlike wholesale `graph rebuild` which remains SQLite-only). Shares the `'rebuild'` advisory lock so it cannot race a wholesale rebuild. NULL-provenance rows are not swept; they need a separate backfill.
 
 ### Insights lifecycle
 
@@ -235,11 +232,11 @@ Two switching paths:
 - **`embed swap`** is the online path. It populates `embedding_pending` (shadow column on SQLite, side column on Postgres) under the active provider while the existing column keeps serving recall, then commits an atomic cutover transaction. State machine: `backfilling → cutover → done`. Resumable via `--resume`; abortable via `--abort`. Per-store; the in-flight target is recorded in `meta.embed_swap_*` keys (deleted on completion).
 - **`embed reembed`** is the offline path: every store is rewritten in place with the current `MEMMAN_EMBED_PROVIDER`. Requires the scheduler to be **stopped** (`memman scheduler stop`).
 
-**Per-store embedder sovereignty.** Each store's `meta.embed_fingerprint` is the runtime authority over its embedder. Recall, drain, and graph rebuild all bind the embedder from the store's fingerprint, not from `MEMMAN_EMBED_PROVIDER`. One process can sequentially open two stores fingerprinted to different providers without env mutation — e.g., `MEMMAN_EMBED_PROVIDER=voyage memman --store openai_store recall ...` succeeds against an OpenAI-fingerprinted store. Switching a store's embedder is explicit (`embed swap` or `embed reembed`); there is no silent migration. Implementation details: [05-lifecycle.md § 5.3](design/05-lifecycle.md#53-embedding-support).
+**Per-store embedder sovereignty.** Each store's `meta.embed_fingerprint` is the runtime authority over its embedder. Recall, drain, and graph rebuild all bind the embedder from the store's fingerprint, not from `MEMMAN_EMBED_PROVIDER`. One process can sequentially open two stores fingerprinted to different providers without env mutation - e.g., `MEMMAN_EMBED_PROVIDER=voyage memman --store openai_store recall ...` succeeds against an OpenAI-fingerprinted store. Switching a store's embedder is explicit (`embed swap` or `embed reembed`); there is no silent migration. Implementation details: [05-lifecycle.md § 5.3](design/05-lifecycle.md#53-embedding-support).
 
 #### Using an embedding model not on the calibrated list
 
-The shipped `_thresholds_generated.py` covers 20 `(provider, model)` pairs across `voyage`, `openrouter`, and `ollama` (see [05-lifecycle.md § 5.3.1a](design/05-lifecycle.md#531a-calibrated-embedding-models)). A store bound to a model outside that list falls back to the surface-wide median (`code` = 0.6495, `claw` = 0.6840) and `memman doctor` reports `embed_threshold: warn` with `source: surface_median`. Semantic edges still get created — the fallback is bounded (mean nDCG@5 loss ~0.014 vs calibrated on the shipped triples).
+The shipped `_thresholds_generated.py` covers 20 `(provider, model)` pairs across `voyage`, `openrouter`, and `ollama` (see [05-lifecycle.md § 5.3.1a](design/05-lifecycle.md#531a-calibrated-embedding-models)). A store bound to a model outside that list falls back to the surface-wide median (`code` = 0.6495, `claw` = 0.6840) and `memman doctor` reports `embed_threshold: warn` with `source: surface_median`. Semantic edges still get created - the fallback is bounded (mean nDCG@5 loss ~0.014 vs calibrated on the shipped triples).
 
 Operators with a quality-critical store running an uncalibrated model can set a per-store override:
 
@@ -256,7 +253,7 @@ memman doctor               # embed_threshold detail shows source
 
 The override takes precedence over both the calibrated table and the median fallback. Doctor validates the value: numeric must be in `(0.0, 1.0)`; sentinels `skip` and `none` disable edges; anything else fails the check.
 
-**Upgrading from a version with a single shared `AUTO_SEMANTIC_THRESHOLD`.** Existing stores keep working after the upgrade (no schema migration). Newly remembered insights are linked at the per-fingerprint calibrated threshold, but pre-existing semantic edges keep whatever weights they were created with — so two insights inserted before the upgrade may show a different edge population than two near-identical insights inserted after. To rebalance the whole store at the current threshold, run `memman graph rebuild <store>`. This is optional; existing edges remain valid.
+**Upgrading from a version with a single shared `AUTO_SEMANTIC_THRESHOLD`.** Existing stores keep working after the upgrade (no schema migration). Newly remembered insights are linked at the per-fingerprint calibrated threshold, but pre-existing semantic edges keep whatever weights they were created with - so two insights inserted before the upgrade may show a different edge population than two near-identical insights inserted after. To rebalance the whole store at the current threshold, run `memman graph rebuild <store>`. This is optional; existing edges remain valid.
 
 
 
@@ -305,7 +302,7 @@ Do not set `MEMMAN_DATA_DIR` per directory. The scheduler unit is installed once
 | `--to postgres` | SQLite store (preserved)                                     | `store_<name>` schema in PG | `MEMMAN_BACKEND_<store>=postgres` |
 | `--to sqlite`   | Postgres `store_<name>` (dumped to `archive/`, then dropped) | Fresh SQLite store          | `MEMMAN_BACKEND_<store>=sqlite`   |
 
-The command echoes a plan (source paths, redacted destination DSN, per-store target schema state — `ABSENT` / `EMPTY` / `POPULATED`) and prompts for confirmation. Stores already on the target backend emit a warning and are skipped (idempotent). `--dry-run` is supported only with `--to postgres`.
+The command echoes a plan (source paths, redacted destination DSN, per-store target schema state - `ABSENT` / `EMPTY` / `POPULATED`) and prompts for confirmation. Stores already on the target backend emit a warning and are skipped (idempotent). `--dry-run` is supported only with `--to postgres`.
 
 ```bash
 # Forward (default): SQLite -> Postgres, dry-run plan only
@@ -376,7 +373,7 @@ When the scheduler is stopped, memman is recall-only: every write exits 1 with `
 
 ### Backup
 
-`memman backup` snapshots every store to an **external, durable directory** (e.g. a Dropbox path) on a cron schedule, rotates old bundles, and can rebuild a working store after total loss of `~/.memman/`. Bundles are written **only** to the target directory, never into `~/.memman/` (which is per-host and disposable, so an in-place archive dies with it). Snapshots are online and non-disruptive — the enrichment worker keeps draining (SQLite via the `sqlite3` online-backup API, Postgres via `pg_dump -Fc`), so no scheduler stop is needed.
+`memman backup` snapshots every store to an **external, durable directory** (e.g. a Dropbox path) on a cron schedule, rotates old bundles, and can rebuild a working store after total loss of `~/.memman/`. Bundles are written **only** to the target directory, never into `~/.memman/` (which is per-host and disposable, so an in-place archive dies with it). Snapshots are online and non-disruptive - the enrichment worker keeps draining (SQLite via the `sqlite3` online-backup API, Postgres via `pg_dump -Fc`), so no scheduler stop is needed.
 
 ```bash
 memman backup run [TARGET]                        # build one bundle now (TARGET or MEMMAN_BACKUP_TARGET)
@@ -389,7 +386,7 @@ memman backup restore BUNDLE [--yes]               # rebuild stores + non-secret
 
 The cron string is a 5-field expression (`min hour dom month dow`, interpreted in local time) and is translated to the host's native scheduler at install time: systemd `OnCalendar=` (+`Persistent=true` for sleep/power-off catch-up), launchd `StartCalendarInterval`, or an in-process matcher in `serve` mode. The target directory is created if it does not exist. Retention keeps the newest `MEMMAN_BACKUP_KEEP` bundles (default 7).
 
-Each bundle is one atomic `.tar.gz` plus an uncompressed sidecar `<bundle>.manifest.json` (for cheap `list`). A failing store is recorded with `status="failed"` in the manifest and never aborts the whole bundle. The global write queue (`queue.db`) is snapshotted too — and before the store DBs — so a `remember` that has not yet drained into its store is never lost: it rides in the bundle and drains on the restored host (the manifest records `queue_pending`). In `serve` mode the loop also drains the queue to empty before snapshotting, so the bundle is settled when possible.
+Each bundle is one atomic `.tar.gz` plus an uncompressed sidecar `<bundle>.manifest.json` (for cheap `list`). A failing store is recorded with `status="failed"` in the manifest and never aborts the whole bundle. The global write queue (`queue.db`) is snapshotted too - and before the store DBs - so a `remember` that has not yet drained into its store is never lost: it rides in the bundle and drains on the restored host (the manifest records `queue_pending`). In `serve` mode the loop also drains the queue to empty before snapshotting, so the bundle is settled when possible.
 
 **Secrets are excluded.** API keys, the default Postgres DSN, and every per-store `MEMMAN_POSTGRES_DSN_<store>` are stripped from the bundle's `env.nonsecret` member; per-store backend selection and model/provider/threshold knobs are kept. On `restore`, the non-secret config is merged first (so per-store backend routing is in place), each store is written by its manifest `backend` (SQLite file copy, or `pg_restore` resolving the DSN on the target host), and the active-store pointer is restored. `restore` holds the shared `drain.lock` and reports `secret_keys_needed` (re-enter these on the host), `pg_restore_skipped` (postgres stores with no DSN configured here), `embed_mismatch` (stores whose fingerprint differs from the restored embedding config), and any `failed` stores.
 
@@ -414,7 +411,7 @@ memman reads config at runtime from one source: `<MEMMAN_DATA_DIR>/env`, a `KEY=
 
 `memman config set KEY VALUE` is the override path. Use it after install to change a backend, rotate an API key, or update a DSN. Conflicts between an `INSTALLABLE_KEYS` flag and an existing env-file value are rejected with the exact `memman config set ...` command to run.
 
-Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`, `MEMMAN_SESSION_ID`) are not persisted to the file; they are read directly from `os.environ` by the components that own them. `MEMMAN_SESSION_ID` in particular is never written to the env file on purpose — a stale persisted session id would fuse every later write into one false temporal chain. `--session` then falls back to `CLAUDE_CODE_SESSION_ID`. Claude Code owns and exports it; memman only reads it, and never persists it either.
+Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`, `MEMMAN_SESSION_ID`) are not persisted to the file; they are read directly from `os.environ` by the components that own them. `MEMMAN_SESSION_ID` in particular is never written to the env file on purpose - a stale persisted session id would fuse every later write into one false temporal chain. `--session` then falls back to `CLAUDE_CODE_SESSION_ID`. Claude Code owns and exports it; memman only reads it, and never persists it either.
 
 The full variable list lives in [CONTRIBUTING.md § Variable reference](../CONTRIBUTING.md#variable-reference).
 
@@ -422,16 +419,16 @@ The full variable list lives in [CONTRIBUTING.md § Variable reference](../CONTR
 
 Run `memman install` in a TTY to get the interactive wizard. It prompts for the LLM endpoint URL (any OpenAI-compatible endpoint; ships defaulted to `https://openrouter.ai/api/v1`); for OpenRouter endpoints it auto-resolves the three role model slugs (`MEMMAN_LLM_MODEL_FAST` / `_SLOW_CANONICAL` / `_SLOW_METADATA`) against `/v1/models`, for any other endpoint it prompts for each slug interactively. It then prompts (masked input) for `MEMMAN_LLM_API_KEY` (required for non-loopback endpoints; loopback endpoints like Ollama may leave it blank), then for the embedding provider (any registered provider; ships defaulted to `voyage`) and the matching key for that provider (e.g. `MEMMAN_VOYAGE_API_KEY` for voyage, `MEMMAN_OPENAI_EMBED_API_KEY` for openai; openrouter reuses the LLM key). It also offers a backend selector (sqlite/postgres) when the `memman[postgres]` extra is installed; the wizard probes the DSN, verifies the `pgvector` extension, and (for non-localhost DSNs) emits a hint about PgBouncer transaction pooling. Headless installs bypass the wizard:
 
-- `--backend [sqlite|postgres]` — explicit backend choice; required in non-interactive mode if you want anything other than sqlite.
-- `--pg-dsn URL` — Postgres DSN; required with `--backend postgres` in non-interactive mode. The DSN may omit the password to use `~/.pgpass`, `PGSERVICE`, or `PGPASSWORD`.
-- `--no-wizard` — disables prompts even in a TTY; flags + defaults only.
+- `--backend [sqlite|postgres]` - explicit backend choice; required in non-interactive mode if you want anything other than sqlite.
+- `--pg-dsn URL` - Postgres DSN; required with `--backend postgres` in non-interactive mode. The DSN may omit the password to use `~/.pgpass`, `PGSERVICE`, or `PGPASSWORD`.
+- `--no-wizard` - disables prompts even in a TTY; flags + defaults only.
 
 ### Backend selection
 
 memman routes each store through a backend chosen by env-file lookup:
 
-1. `MEMMAN_BACKEND_<store>` — explicit per-store override (e.g., `MEMMAN_BACKEND_work=postgres`).
-2. `MEMMAN_DEFAULT_BACKEND` — fallback when no per-store key is set (default `sqlite`).
+1. `MEMMAN_BACKEND_<store>` - explicit per-store override (e.g., `MEMMAN_BACKEND_work=postgres`).
+2. `MEMMAN_DEFAULT_BACKEND` - fallback when no per-store key is set (default `sqlite`).
 
 `memman migrate <store>` writes `MEMMAN_BACKEND_<store>=postgres` so a single store can move to Postgres while others stay on SQLite. Use `memman config set MEMMAN_DEFAULT_BACKEND postgres` only when you want every newly-created store to default to Postgres.
 
@@ -448,7 +445,7 @@ memman config set-pg-dsn --default       # writes MEMMAN_DEFAULT_POSTGRES_DSN
 memman config set-pg-dsn --store work    # writes MEMMAN_POSTGRES_DSN_work
 ```
 
-Leave the password prompt empty to produce a passwordless DSN that defers to `~/.pgpass` (recommended on shared hosts). The command does not probe connectivity — verify with `memman doctor` or `memman migrate --dry-run`.
+Leave the password prompt empty to produce a passwordless DSN that defers to `~/.pgpass` (recommended on shared hosts). The command does not probe connectivity - verify with `memman doctor` or `memman migrate --dry-run`.
 
 | Scenario     | DSN                                                      | Notes                                                  |
 | ------------ | -------------------------------------------------------- | ------------------------------------------------------ |
@@ -457,11 +454,11 @@ Leave the password prompt empty to produce a passwordless DSN that defers to `~/
 | `~/.pgpass`  | `postgresql://memman@db.internal:5432/memman`            | passwordless URL, recommended                          |
 | TLS-required | `postgresql://memman@db.internal/memman?sslmode=require` | + any libpq parameter (e.g. `application_name=memman`) |
 
-> **Security.** `MEMMAN_DEFAULT_POSTGRES_DSN` and any `MEMMAN_POSTGRES_DSN_<store>` are stored plaintext in `~/.memman/env` at mode 0600. Root and any process running as your user can read them. For shared hosts, prefer `~/.pgpass` (mode 0600) and a passwordless DSN — psycopg3 sources the password from `~/.pgpass`, `PGSERVICE`, or `PGPASSWORD` automatically.
+> **Security.** `MEMMAN_DEFAULT_POSTGRES_DSN` and any `MEMMAN_POSTGRES_DSN_<store>` are stored plaintext in `~/.memman/env` at mode 0600. Root and any process running as your user can read them. For shared hosts, prefer `~/.pgpass` (mode 0600) and a passwordless DSN - psycopg3 sources the password from `~/.pgpass`, `PGSERVICE`, or `PGPASSWORD` automatically.
 
 ### Runtime tunables
 
-The variables below are not installable — they are read from the env file on demand by the components that own them, with no install-time seeding:
+The variables below are not installable - they are read from the env file on demand by the components that own them, with no install-time seeding:
 
 | Variable                          | Default         | Description                                                                                                           |
 | --------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------- |
@@ -475,21 +472,21 @@ The variables below are not installable — they are read from the env file on d
 
 ### Write pipeline (deferred, two-tier)
 
-`memman remember` appends one row to the queue in ~50 ms on the host session — no LLM calls, no embeddings, no edges. The full pipeline runs out of band:
+`memman remember` appends one row to the queue in ~50 ms on the host session - no LLM calls, no embeddings, no edges. The full pipeline runs out of band:
 
-1. **Tier 1 (host)** — append a row to `~/.memman/queue.db` with `status='pending'`, the raw text, and any `--cat`/`--imp`/`--entity` hints. Returns `{action: queued, queue_id, queue_uuid, store}`. The `queue_uuid` is the join key: it is stamped on every insight this write produces and outlives the queue row, which `purge_done` drops about a minute after the drain.
-2. **Tier 2 (worker)** — systemd timer (Linux), launchd agent (macOS), or `memman scheduler serve` PID 1 (containers) invokes `memman scheduler drain --timeout 60` every 60 s under an `flock` on `~/.memman/drain.lock`. Per row: quality gate → LLM fact extraction → per-fact embed + similarity scan → exact-match dedup (a fact byte-identical to exactly one stored row skips the LLM and bumps that row's `corroboration_count`) or LLM reconciliation (ADD/UPDATE/SUPERSEDE/NONE, where `NONE <id>` names the memory that already covers a reworded fact and bumps it the same way, and UPDATE and SUPERSEDE supersede their target rather than delete it) → insert/supersede → fast edges (temporal + entity + semantic) → parallel enrichment + LLM causal inference → re-embed → rebuild auto edges → mark done.
+1. **Tier 1 (host)** - append a row to `~/.memman/queue.db` with `status='pending'`, the raw text, and any `--cat`/`--imp`/`--entity` hints. Returns `{action: queued, queue_id, queue_uuid, store}`. The `queue_uuid` is the join key: it is stamped on every insight this write produces and outlives the queue row, which `purge_done` drops about a minute after the drain.
+2. **Tier 2 (worker)** - systemd timer (Linux), launchd agent (macOS), or `memman scheduler serve` PID 1 (containers) invokes `memman scheduler drain --timeout 60` every 60 s under an `flock` on `~/.memman/drain.lock`. Per row: quality gate → LLM fact extraction → per-fact embed + similarity scan → exact-match dedup (a fact byte-identical to exactly one stored row skips the LLM and bumps that row's `corroboration_count`) or LLM reconciliation (ADD/UPDATE/SUPERSEDE/NONE, where `NONE <id>` names the memory that already covers a reworded fact and bumps it the same way, and UPDATE and SUPERSEDE supersede their target rather than delete it) → insert/supersede → fast edges (temporal + entity + semantic) → enrichment → re-embed → rebuild auto edges → mark done.
 
 The host session never blocks on the network. Newly stored memories become recallable on the next drain tick (default 60 s).
 
 ### Recall pipeline
 
-1. **LLM query expansion** (opt-in via `--expand`) — synonyms and intent detection.
-2. **RRF anchor selection** — keyword + vector + recency fused with K=60.
-3. **Beam search** — intent-weighted graph traversal from anchors.
-4. **3-signal rerank** — keyword, similarity, graph (intent-weighted). A stored entity name reaches the keyword signal because a candidate's token set unions its content tokens with its entity-name tokens.
-   - **4a. MMR diversity re-sort** — one-shot re-sort of the top 200; shipped disabled (`MMR_LAMBDA = 1.0`, measured a no-op under the cross-encoder rerank at both placements — see `experiments/recall_ablation/README.md`).
-5. **Cross-encoder rerank** (on by default; toggle per-store via `MEMMAN_RERANK_ENABLED_<store>`) — the configured reranker (default `voyage` / `rerank-3-lite`) re-scores the top 100 candidates; replaces the multi-signal score for the final ordering. Auto-skips on 1-2 token queries.
-6. **Structure payload** — WHY carries `meta.causal_edges`, the `[cause, effect]` pairs among the returned rows. Nothing re-sorts after the limit cut: rows come back in relevance order on every intent.
+1. **LLM query expansion** (opt-in via `--expand`) - synonyms and intent detection.
+2. **RRF anchor selection** - keyword + vector + recency fused with K=60.
+3. **Beam search** - intent-weighted graph traversal from anchors.
+4. **3-signal rerank** - keyword, similarity, graph (intent-weighted). A stored entity name reaches the keyword signal because a candidate's token set unions its content tokens with its entity-name tokens.
+   - **4a. MMR diversity re-sort** - one-shot re-sort of the top 200; shipped disabled (`MMR_LAMBDA = 1.0`, measured a no-op under the cross-encoder rerank at both placements - see `experiments/recall_ablation/README.md`).
+5. **Cross-encoder rerank** (on by default; toggle per-store via `MEMMAN_RERANK_ENABLED_<store>`) - the configured reranker (default `voyage` / `rerank-3-lite`) re-scores the top 100 candidates; replaces the multi-signal score for the final ordering. Auto-skips on 1-2 token queries.
+6. **Ordering** - nothing re-sorts after the limit cut: rows come back in relevance order on every intent.
 
 Inspired by [MAGMA](https://arxiv.org/abs/2601.03236). See [Design & Architecture](DESIGN.md) for the full deep dive.

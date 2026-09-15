@@ -6,7 +6,7 @@ tests that:
   no longer exist under the queue model
 - duplicated unit-suite coverage with weaker `status.edge_count`
   assertions
-- coupled to LLM-output stability (specific entity strings, causal
+- coupled to LLM-output stability (specific entity strings, edge
   edge counts) and would re-break on every model swap
 
 The 17 surviving tests exercise unique end-to-end behavior the unit

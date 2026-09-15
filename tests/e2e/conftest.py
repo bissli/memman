@@ -2,7 +2,7 @@
 
 The unit suite at `tests/conftest.py` autouses two patches
 (`_scheduler_started`, `_mock_apis`) that are explicitly guarded
-against the `tests/e2e/` subtree — see those fixtures' first-line
+against the `tests/e2e/` subtree - see those fixtures' first-line
 short-circuit. We re-emphasize the contract here:
 
 - e2e tests must run the *real* `memman` CLI in a subprocess with no
@@ -20,7 +20,6 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-
 from memman import config
 
 _PLACEHOLDER = 'placeholder-for-non-live-tests'
@@ -106,7 +105,7 @@ def memman_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     `<tmp>/memman_data/`. `MEMMAN_SCHEDULER_KIND=serve` is set so
     scheduler-stop / -start commands route to the serve branch
     rather than raising. Two-step HOME patch (env + Path.home class
-    attr) — the env var alone is not enough on macOS, where
+    attr) - the env var alone is not enough on macOS, where
     `Path.home()` may use `pwd.getpwuid` instead of `$HOME`.
     """
     home = tmp_path
@@ -128,7 +127,7 @@ def memman_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def live_keys() -> dict[str, str]:
     """Gate live-key tests; fail-loud under MEMMAN_E2E_REQUIRE_LIVE=1.
 
-    Tests that exercise enrichment, causal inference, intent
+    Tests that exercise enrichment, intent
     expansion, or any path that hits OpenRouter / Voyage take this
     fixture as a dependency. Returns the actual key values for
     callers that need to pass them through into containers. With
@@ -144,7 +143,7 @@ def live_keys() -> dict[str, str]:
     keys = {}
     for name in ('MEMMAN_OPENROUTER_API_KEY', 'MEMMAN_VOYAGE_API_KEY'):
         val = resolve_e2e_secret(name)
-        if val == _PLACEHOLDER or val == 'mock-key-for-testing':
+        if val in {_PLACEHOLDER, 'mock-key-for-testing'}:
             msg = f'{name} not set; live e2e test cannot run'
             if require:
                 pytest.fail(msg)

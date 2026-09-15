@@ -17,7 +17,6 @@ from tests.conftest import make_edge, make_insight
 _EDGE_KW = {
     'entity': {'weight': 0.5, 'extra': {'entity': 'Go'}},
     'semantic': {'weight': 0.7, 'extra': {'cosine': '0.70'}},
-    'causal': {'weight': 0.9, 'extra': {}},
 }
 
 
@@ -35,8 +34,6 @@ def _setup_node_pair(db, id_a='n-1', id_b='n-2'):
     ('semantic', 'claude', 1),
     ('semantic', 'auto', 0),
     ('semantic', None, 0),
-    ('causal', 'claude', 1),
-    ('causal', 'llm', 0),
 ])
 def test_delete_auto_edges_for_node_by_type(
         tmp_db, edge_type, created_by, expected_remaining):
@@ -132,32 +129,6 @@ class TestDeleteAutoEdgesByType:
         assert len(edges) == 1
         assert edges[0].metadata['created_by'] == 'claude'
 
-    def test_causal_preserves_llm_claude_manual(self, tmp_db):
-        """Global causal delete preserves llm, claude, manual."""
-        insert_insight(tmp_db, make_insight(
-            id='c-1', content='a'))
-        insert_insight(tmp_db, make_insight(
-            id='c-2', content='b'))
-        insert_insight(tmp_db, make_insight(
-            id='c-3', content='c'))
-        insert_insight(tmp_db, make_insight(
-            id='c-4', content='d'))
-        insert_edge(tmp_db, make_edge(
-            source_id='c-1', target_id='c-2',
-            edge_type='causal', weight=0.9,
-            metadata={'created_by': 'llm'}))
-        insert_edge(tmp_db, make_edge(
-            source_id='c-1', target_id='c-3',
-            edge_type='causal', weight=0.8,
-            metadata={'created_by': 'claude'}))
-        insert_edge(tmp_db, make_edge(
-            source_id='c-1', target_id='c-4',
-            edge_type='causal', weight=0.7,
-            metadata={'created_by': 'manual'}))
-        delete_auto_edges_by_type(tmp_db, 'causal')
-        edges = get_all_edges(tmp_db)
-        assert len(edges) == 3
-
 
 class TestCountAutoEdges:
     """Count functions match delete filters."""
@@ -235,7 +206,7 @@ class TestTemporalProximity:
 
 
 def _seed_neighborhood(backend) -> None:
-    """Build a 5-node graph: a -> b -> c (semantic), a -> d (causal),
+    """Build a 5-node graph: a -> b -> c (semantic), a -> d (entity),
     plus an isolated e.
     """
     from memman.store.model import Edge, Insight
@@ -249,7 +220,7 @@ def _seed_neighborhood(backend) -> None:
         source_id='b', target_id='c', edge_type='semantic',
         weight=1.0))
     backend.edges.upsert(Edge(
-        source_id='a', target_id='d', edge_type='causal',
+        source_id='a', target_id='d', edge_type='entity',
         weight=1.0))
 
 
@@ -270,11 +241,19 @@ class TestGetNeighborhood:
         nbrs = {nid for nid, _hop, _etype in triples}
         assert nbrs == {'b', 'c', 'd'}
 
-    def test_edge_filter_causal(self, backend):
-        """edge_filter='causal' walks only causal edges."""
+    def test_edge_filter_entity(self, backend):
+        """edge_filter='entity' walks only entity edges.
+
+        Mutation: ignoring `edge_filter` in `get_neighborhood`, which
+            would return the semantic arm `b` and its hop-2 node `c`
+            alongside `d`.
+        Oracle: the hand-built graph in `_seed_neighborhood`, where
+            `d` is reachable from `a` by its one entity edge and
+            nothing else is.
+        """
         _seed_neighborhood(backend)
         triples = backend.edges.get_neighborhood(
-            'a', depth=2, edge_filter='causal')
+            'a', depth=2, edge_filter='entity')
         nbrs = {nid for nid, _hop, _etype in triples}
         assert nbrs == {'d'}
 

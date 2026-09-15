@@ -81,7 +81,14 @@ class TestGraphTraversal:
     """Graph edges discover insights unreachable by keyword or recency."""
 
     def test_graph_traversal_discovers_unreachable_insight(self, backend):
-        """Insight with no keyword overlap found via graph edges only."""
+        """Insight with no keyword overlap found via graph edges only.
+
+        Mutation: skipping `beam_search_from_anchor`, so a row reached
+            only by an edge never enters the result set.
+        Oracle: `graph-3` present with a zero keyword signal and a
+            positive graph signal -- the pair rules out its arriving
+            by keyword match.
+        """
         _insert_fillers(backend)
         backend.nodes.insert(make_insight(
             id='graph-1',
@@ -98,7 +105,7 @@ class TestGraphTraversal:
 
         backend.edges.upsert(make_edge(
             source_id='graph-1', target_id='graph-2',
-            edge_type='causal', weight=0.8))
+            edge_type='entity', weight=0.8))
         backend.edges.upsert(make_edge(
             source_id='graph-2', target_id='graph-3',
             edge_type='semantic', weight=0.8))
@@ -115,11 +122,21 @@ class TestGraphTraversal:
         assert g3['signals']['graph'] > 0
 
 
-class TestWhyIntentCausalOrdering:
-    """WHY intent places causes before effects via topological sort."""
+class TestWhyIntentTraversal:
+    """WHY intent reaches a linked row through the graph."""
 
-    def test_why_intent_causal_ordering(self, backend):
-        """Cause insight appears before effect in WHY results."""
+    def test_why_intent_reaches_a_linked_row(self, backend):
+        """A row linked to a hit is reached through the graph under WHY.
+
+        Mutation: dropping the structural term from the WHY scoring,
+            or skipping traversal on that intent -- `why-effect` then
+            enters only on its own keyword overlap and its graph
+            signal falls to zero.
+        Oracle: the `graph` signal on the returned row, which is
+            non-zero only for a row the traversal scored. Presence in
+            the page is not the oracle: the store is small enough that
+            every row comes back regardless.
+        """
         _insert_fillers(backend)
         backend.nodes.insert(make_insight(
             id='why-cause',
@@ -127,12 +144,12 @@ class TestWhyIntentCausalOrdering:
             importance=4))
         backend.nodes.insert(make_insight(
             id='why-effect',
-            content='SQLite chosen enables single-file deployment',
+            content='the whole thing ships as one artifact',
             importance=4))
 
         backend.edges.upsert(make_edge(
             source_id='why-cause', target_id='why-effect',
-            edge_type='causal', weight=0.9))
+            edge_type='entity', weight=0.9))
 
         result = intent_aware_recall(
             backend,
@@ -144,14 +161,8 @@ class TestWhyIntentCausalOrdering:
         effect = _find_result(result['results'], 'why-effect')
         assert cause is not None
         assert effect is not None
-
-        cause_idx = next(
-            i for i, r in enumerate(result['results'])
-            if r['insight'].id == 'why-cause')
-        effect_idx = next(
-            i for i, r in enumerate(result['results'])
-            if r['insight'].id == 'why-effect')
-        assert cause_idx < effect_idx
+        assert effect['signals']['keyword'] == 0.0
+        assert effect['signals']['graph'] > 0
 
 
 class TestRelevanceOrderingSurvivesTheLimit:
@@ -161,10 +172,10 @@ class TestRelevanceOrderingSurvivesTheLimit:
     def test_results_are_score_descending(self, backend, intent):
         """Every intent returns rows in descending score order.
 
-        Mutation: reinstating either post-limit re-sort - the WHEN
-            sort on `(created_at, score)` or the WHY
-            causal-topological sort - both of which reorder a page
-            that was already cut by score.
+        Mutation: adding any intent-specific reorder after the
+            `results[:limit]` slice - a WHEN sort on
+            `(created_at, score)`, or a WHY reorder along the graph -
+            either of which moves a page already cut by score.
         Oracle: the returned rows sorted by `-score` independently,
             compared as an id sequence.
         """
@@ -221,76 +232,6 @@ class TestRelevanceOrderingSurvivesTheLimit:
         assert len(narrow['results']) == 3
         assert ([r['insight'].id for r in narrow['results']]
                 == [r['insight'].id for r in wide['results']][:3])
-
-
-class TestWhyCausalEdgePayload:
-    """WHY carries its causal structure in meta, not in row order."""
-
-    def test_causal_edges_cover_returned_pairs_and_keep_direction(
-            self, backend):
-        """meta.causal_edges holds every returned pair, cause first.
-
-        Mutation: building the list from the symmetrized `bidir`
-            adjacency the beam walks (which would add the reverse of
-            every pair), from the PRE-slice candidate set (which
-            would name ids the caller never received), or omitting
-            the intersection with the returned ids.
-        Oracle: the edge written directly to the store, plus the
-            assertion that its reverse is absent - the store holds
-            `cause -> effect` and only that direction.
-        """
-        _insert_fillers(backend)
-        backend.nodes.insert(make_insight(
-            id='cause-a',
-            content='database production migration locked the table',
-            importance=4))
-        backend.nodes.insert(make_insight(
-            id='effect-b',
-            content='database production migration timed out queries',
-            importance=4))
-        backend.edges.upsert(make_edge(
-            source_id='cause-a', target_id='effect-b',
-            edge_type='causal', weight=0.9))
-
-        result = intent_aware_recall(
-            backend, query='database production migration',
-            query_vec=None, limit=20, intent_override='WHY')
-
-        edges = result['meta']['causal_edges']
-        returned = {r['insight'].id for r in result['results']}
-        assert 'cause-a' in returned
-        assert 'effect-b' in returned
-        assert ['cause-a', 'effect-b'] in edges
-        assert ['effect-b', 'cause-a'] not in edges
-        assert all(src in returned and tgt in returned
-                   for src, tgt in edges)
-
-    def test_causal_edges_absent_on_other_intents(self, backend):
-        """Only WHY carries the payload; an empty list still counts.
-
-        Mutation: emitting `causal_edges` for every intent, which
-            would spend tokens on a key three intents in four cannot
-            populate, or omitting the key on a WHY page that happens
-            to have no causal pair - "these rows are unrelated" is a
-            fact the rows cannot convey.
-        Oracle: the key set per intent, on a store with no causal
-            edge at all.
-        """
-        _insert_fillers(backend)
-        backend.nodes.insert(make_insight(
-            id='lone', content='database production migration notes',
-            importance=4))
-
-        why = intent_aware_recall(
-            backend, query='database production migration',
-            query_vec=None, limit=5, intent_override='WHY')
-        assert why['meta']['causal_edges'] == []
-
-        for intent in ('WHEN', 'ENTITY', 'GENERAL'):
-            other = intent_aware_recall(
-                backend, query='database production migration',
-                query_vec=None, limit=5, intent_override=intent)
-            assert 'causal_edges' not in other['meta']
 
 
 class TestImportanceTiebreaker:

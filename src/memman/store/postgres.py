@@ -155,7 +155,7 @@ create table if not exists {schema}.edges (
     foreign key (source_id) references {schema}.insights(id) on delete cascade,
     foreign key (target_id) references {schema}.insights(id) on delete cascade,
     constraint edges_edge_type_check_{schema}
-        check (edge_type in ('temporal','semantic','causal','entity'))
+        check (edge_type in ('temporal','semantic','entity'))
 );
 
 create table if not exists {schema}.oplog (
@@ -231,9 +231,6 @@ _REINDEX_CREATED_BY_FILTER = {
     'entity': ("(metadata->>'created_by' is null"
                " or metadata->>'created_by'"
                " not in ('claude', 'manual'))"),
-    'causal': ("(metadata->>'created_by' is null"
-               " or metadata->>'created_by'"
-               " not in ('llm', 'claude', 'manual'))"),
     }
 
 _PER_NODE_CREATED_BY_FILTER = {
@@ -242,7 +239,6 @@ _PER_NODE_CREATED_BY_FILTER = {
                " not in ('claude', 'manual'))"),
     'semantic': ("(metadata->>'created_by' is null"
                  " or metadata->>'created_by' = 'auto')"),
-    'causal': "metadata->>'created_by' = 'llm'",
     }
 
 
@@ -1890,8 +1886,8 @@ class PostgresBackend(Backend):
 
     Single primary connection per backend. `transaction()` uses
     psycopg's nested transaction (BEGIN / SAVEPOINT). `recall_session`
-    and `readonly_context` open dedicated autocommit connections so
-    long reads don't share a connection with active writes.
+    opens a dedicated autocommit connection so a long read does not
+    share a connection with active writes.
     """
 
     nodes: PostgresNodeStore
@@ -1948,25 +1944,6 @@ class PostgresBackend(Backend):
             with self._conn.cursor() as cur:
                 cur.execute('select pg_advisory_xact_lock(%s)', (key,))
             yield
-
-    @contextmanager
-    def readonly_context(self) -> Iterator[PostgresBackend]:
-        """Yield a Backend bound to a separate autocommit connection.
-
-        Postgres autocommit lets reader threads see commits from the
-        main backend connection as they land. The per-call connection
-        is closed deterministically on context exit.
-        """
-        ro_conn = _open_connection(self._dsn, autocommit=True)
-        ro = PostgresBackend(
-            self._dsn, self._store, conn=ro_conn, owns_conn=False)
-        try:
-            yield ro
-        finally:
-            try:
-                ro_conn.close()
-            except Exception:
-                pass
 
     @contextmanager
     def recall_session(self) -> Iterator[PostgresRecallSession]:

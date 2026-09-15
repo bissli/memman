@@ -29,7 +29,7 @@ VALID_CATEGORIES = {
     'insight', 'context',
     }
 
-VALID_EDGE_TYPES = {'temporal', 'semantic', 'causal', 'entity'}
+VALID_EDGE_TYPES = {'temporal', 'semantic', 'entity'}
 
 
 @dataclass

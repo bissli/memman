@@ -172,7 +172,15 @@ class TestLinkPending:
             f'LLM calls made inside transaction: {llm_calls_in_tx}')
 
     def test_progress_callback_called(self, tmp_db, tmp_backend):
-        """on_progress receives enrich, causal, done stages per insight."""
+        """on_progress receives enrich and done stages per insight.
+
+        Mutation: dropping an `on_progress` call, or emitting a stage
+            name no consumer expects -- a caller rendering a progress
+            bar then stalls on a stage that never arrives.
+            `'causal'` is asserted absent because its emitter is gone.
+        Oracle: the stage list collected by the callback, checked
+            against the closed set the pass can emit.
+        """
         _insert_pending(tmp_db, 'pc-1', 'callback test content')
 
         calls = []
@@ -184,7 +192,7 @@ class TestLinkPending:
 
         stages = [c[0] for c in calls]
         assert 'enrich' in stages
-        assert 'causal' in stages
+        assert 'causal' not in stages
         assert 'done' in stages
         assert all(c[1] == 'pc-1' for c in calls)
 

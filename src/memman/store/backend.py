@@ -23,9 +23,6 @@ Distributed-shaping commitments baked into this Protocol surface:
    the outer transaction (SAVEPOINT-like or no-op). Required by the
    nested `apply_all` write pattern.
 
-4. **`Backend.readonly_context()` semantics.** SQLite spawns a separate
-   read-only connection. Postgres MUST yield a connection in autocommit
-   mode so reader threads see main-thread commits as they land.
 """
 
 import re
@@ -784,8 +781,8 @@ class RecallSession(Protocol):
           agreement: it stores the set `insight_tokens` built at
           write time. Closing the gap means changing
           `_WORD_RE`, which moves the drain's reconciliation
-          candidates and causal-edge inference, so it is its own
-          change with its own sweep -- not this one.
+          candidates, so it is its own change with its own sweep --
+          not this one.
         - Counted where the text already lives -- k index probes on
           SQLite, one indexed query on Postgres -- so the pipeline
           never tokenizes the whole store to score one query, and
@@ -924,16 +921,6 @@ class Backend(Protocol):
 
     def swap_abort(self) -> None:
         """Drop or null `embedding_pending` and clear all swap meta.
-        """
-        ...
-
-    def readonly_context(
-            self) -> AbstractContextManager['Backend']:
-        """Yield a read-only Backend bound to a separate connection.
-
-        SQLite: opens the database with `mode=ro`. Postgres: yields
-        a connection in autocommit mode so writes from another
-        thread/process are visible immediately.
         """
         ...
 

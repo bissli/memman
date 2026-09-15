@@ -427,8 +427,6 @@ def _mock_llm_complete(self: object, system: str, user: str,
         return _mock_query_expansion(user)
     if 'keyword' in system.lower() and 'enrichment' in system.lower():
         return _mock_enrichment(user)
-    if 'causal' in system.lower():
-        return _mock_causal(user)
     return json.dumps({'facts': [{'text': user, 'category': 'fact',
                                   'entities': []}]})
 
@@ -553,11 +551,6 @@ def _mock_enrichment(content: str) -> str:
         'summary': content[:100],
         'entities': _extract_mock_entities(content),
         })
-
-
-def _mock_causal(content: str) -> str:
-    """Generate realistic causal analysis response."""
-    return json.dumps({'causal_links': []})
 
 
 def _extract_mock_entities(text: str) -> list[str]:
@@ -869,6 +862,26 @@ def make_edge(**overrides) -> Edge:
     return Edge(**defaults)
 
 
+def mint_edge_into(monkeypatch, target_id: str) -> None:
+    """Make an apply's semantic pass emit one edge at `target_id`.
+
+    The apply phase mints a row's edges after the write has already
+    superseded its targets, so a test that needs an edge aimed at a
+    retired row has to inject it there rather than pre-insert it.
+    Patches `memman.pipeline.remember.create_semantic_edges`, which
+    is the only edge generator the apply calls with a stub-friendly
+    signature.
+    """
+    def _stub(backend, insight, cache, **kw):
+        backend.edges.upsert(Edge(
+            source_id=insight.id, target_id=target_id,
+            edge_type='semantic', weight=1.0))
+        return 1
+
+    monkeypatch.setattr(
+        'memman.pipeline.remember.create_semantic_edges', _stub)
+
+
 def insert_pending(db, insight_id: str, content: str = 'test content',
                    **kw) -> None:
     """Insert an insight with linked_at = NULL.
@@ -1015,8 +1028,8 @@ def parse_remember(result, runner_tuple=None):
     invocation, so the new insight lives in the store DB carrying the
     queue row's `queue_uuid` (source is provenance and defaults to
     `'user'` since D1, so it no longer identifies the row). This
-    helper reads the uuid off the queue row — `purge_done` retains
-    done rows for 60 s, ample inside a test — and looks the insight
+    helper reads the uuid off the queue row - `purge_done` retains
+    done rows for 60 s, ample inside a test - and looks the insight
     up by it. Postgres-aware: switches the lookup query when the
     per-store `MEMMAN_BACKEND_<store>=postgres` resolves.
     """

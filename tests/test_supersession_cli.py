@@ -81,7 +81,7 @@ def test_supersede_command_links_two_current_rows(mm_runner):
     new = _remember(mm_runner, 'the broker is redis now')
     ctx = _remember(mm_runner, 'the broker feeds the dashboard')
     assert invoke(mm_runner, ['graph', 'link', old, ctx,
-                              '--type', 'causal']).exit_code == 0
+                              '--type', 'semantic']).exit_code == 0
 
     res = invoke(mm_runner, ['supersede', old, new])
     assert res.exit_code == 0, res.output
@@ -94,7 +94,7 @@ def test_supersede_command_links_two_current_rows(mm_runner):
         assert backend.nodes.get(old) is None
         assert backend.edges.by_node(old) == []
         moved = {(e.source_id, e.target_id) for e in backend.edges.by_node(new)
-                 if e.edge_type == 'causal'}
+                 if e.edge_type == 'semantic'}
         assert moved == {(new, ctx), (ctx, new)}
         ops = [e for e in backend.oplog.recent(limit=20)
                if e.operation == 'supersede']
@@ -411,7 +411,7 @@ def test_supersede_command_drops_a_self_edge_instead_of_moving_it(mm_runner):
     with open_backend('default', data_dir) as backend:
         from memman.store.model import Edge
         backend.edges.upsert(Edge(
-            source_id=old, target_id=old, edge_type='causal', weight=0.7))
+            source_id=old, target_id=old, edge_type='semantic', weight=0.7))
 
     res = invoke(mm_runner, ['supersede', old, new])
     assert res.exit_code == 0, res.output
