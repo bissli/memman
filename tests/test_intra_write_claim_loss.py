@@ -110,6 +110,126 @@ def test_a_stored_row_is_still_superseded(tmp_backend, monkeypatch):
         res['facts'][0]['id'])
 
 
+def test_a_sibling_of_one_write_is_never_updated(tmp_backend, monkeypatch):
+    """Verify an `update` verdict cannot retire a sibling either.
+
+    `update` is supersede-plus-pointer, so it retires its target down
+    the same path. The merge stage was thought to keep the sibling's
+    clauses alive on that path, but a merge returning no text falls
+    back to the bare fact, and then the sibling's claim is stored
+    nowhere.
+
+    Mutation: filtering the sibling targets on `supersede` alone, so
+        an `update` verdict retires the first fact of a write and a
+        two-claim write stores one claim. This is the live defect,
+        written down as the thing that was actually wrong.
+    Oracle: the two hand-named fact texts handed to the extractor,
+        both of which must be present in the store afterward. The
+        merge stub returns None, which is the shipped fallback, so the
+        successor text cannot carry the retired sibling's clause.
+    """
+    monkeypatch.setattr(
+        'memman.llm.extract.extract_facts', _two_unrelated_facts)
+    monkeypatch.setattr(
+        'memman.llm.extract.screen_memory',
+        lambda client, fact_text, memory: ('CONTRADICTS', []))
+    monkeypatch.setattr(
+        'memman.llm.extract.judge_memory',
+        lambda client, fact_text, memory: 'update')
+    monkeypatch.setattr(
+        'memman.llm.extract.merge_successor',
+        lambda client, fact_text, target: None)
+
+    res = run_remember(
+        tmp_backend, _parent('two things changed'), 'two things changed',
+        ec=bound_embedder(tmp_backend), store_name='test')
+
+    assert [f['action'] for f in res['facts']] == ['add', 'add']
+    assert sorted(i.content for i in tmp_backend.nodes.get_all_active()) == [
+        'the broker is redis now', 'the cache eviction policy is lru']
+
+
+def test_a_stored_row_is_still_updated(tmp_backend, monkeypatch):
+    """Verify the sibling filter does not bar a STORED update target.
+
+    The paired control: a filter that barred every update target would
+    pass the test above and leave no row ever refined.
+
+    Mutation: barring every update target rather than only a sibling
+        the same write authored.
+    Oracle: the stored row's own `superseded_by` pointer, which must
+        name the new fact.
+    """
+    tmp_backend.nodes.insert(make_insight(
+        id='old-1', content='the broker is kombu'))
+
+    monkeypatch.setattr(
+        'memman.llm.extract.extract_facts',
+        lambda client, content: [
+            {'text': 'the broker is redis now', 'category': 'fact',
+             'importance': 3, 'entities': []}])
+    monkeypatch.setattr(
+        'memman.llm.extract.screen_memory',
+        lambda client, fact_text, memory: (
+            'CONTRADICTS' if memory[0] == 'old-1' else 'UNRELATED', []))
+    monkeypatch.setattr(
+        'memman.llm.extract.judge_memory',
+        lambda client, fact_text, memory: 'update')
+    monkeypatch.setattr(
+        'memman.llm.extract.merge_successor',
+        lambda client, fact_text, target: None)
+
+    res = run_remember(
+        tmp_backend, _parent('the broker changed'), 'the broker changed',
+        ec=bound_embedder(tmp_backend), store_name='test')
+
+    assert res['facts'][0]['action'] == 'update'
+    assert tmp_backend.nodes.get_include_deleted('old-1').superseded_by == (
+        res['facts'][0]['id'])
+
+
+def test_a_mixed_target_list_keeps_the_stored_half(
+        tmp_backend, monkeypatch):
+    """Verify a sibling target is dropped without the stored one going too.
+
+    One verdict can name both a stored row and a sibling. The filter
+    has to remove the sibling alone; discarding the whole list instead
+    strands the contradicted stored row live forever, and no other
+    test in this file supplies a mixed list.
+
+    Mutation: emptying the target list whenever ANY target is a
+        sibling, rather than dropping the sibling entries. The whole
+        suite stays green under it.
+    Oracle: the seeded row's own `superseded_by` pointer, which must
+        name the second fact, together with both sibling texts, which
+        must both stay active.
+    """
+    tmp_backend.nodes.insert(make_insight(
+        id='old-1', content='the broker is kombu'))
+
+    monkeypatch.setattr(
+        'memman.llm.extract.extract_facts', _two_unrelated_facts)
+    monkeypatch.setattr(
+        'memman.llm.extract.screen_memory',
+        lambda client, fact_text, memory: ('CONTRADICTS', []))
+    monkeypatch.setattr(
+        'memman.llm.extract.judge_memory',
+        lambda client, fact_text, memory: (
+            'supersede' if memory[0] == 'old-1' else 'none'))
+    monkeypatch.setattr(
+        'memman.llm.extract.merge_successor',
+        lambda client, fact_text, target: None)
+
+    res = run_remember(
+        tmp_backend, _parent('two things changed'), 'two things changed',
+        ec=bound_embedder(tmp_backend), store_name='test')
+
+    assert tmp_backend.nodes.get_include_deleted('old-1').superseded_by == (
+        res['facts'][1]['id'])
+    assert sorted(i.content for i in tmp_backend.nodes.get_all_active()) == [
+        'the broker is redis now', 'the cache eviction policy is lru']
+
+
 def _one_fact(llm_client, content):
     """Extract a single fact carrying a clause no stored row holds."""
     return [{'text': 'the parser handles slash swaps and wires'

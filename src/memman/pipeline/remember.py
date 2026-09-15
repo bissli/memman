@@ -619,8 +619,9 @@ def _plan_fact(
     added_in_batch : set[str]
         Rows THIS write authored. They stay in the shortlist, so a
         later fact can still match and corroborate one, but none may
-        be retired: no merge runs against a row the write itself
-        wrote, so superseding a sibling drops its claim outright.
+        be retired by `supersede` or `update`: the retired row leaves
+        the active set, and the successor text is best effort, so the
+        sibling's claim can end up stored nowhere.
     stage_llm_client : Any
         The fast-worker client for the three reconcile stages.
     metadata_llm_client : Any
@@ -876,14 +877,35 @@ def _plan_fact(
                     for candidate in candidates:
                         candidate.verdict = verdict_by_id.get(candidate.id)
                     action, targets = assemble_verdicts(kept, verdict_by_id)
-                    # A sibling carries a claim this same write just
-                    # made, and no merge runs against a row the write
-                    # itself authored, so retiring one loses the claim.
+                    # Notes:
+                    # - A sibling carries a claim this same write just
+                    #   made, and retiring it moves that claim out of
+                    #   the active set. The successor text is the only
+                    #   place it could survive, and a merge returning
+                    #   no text falls back to the bare fact, so the
+                    #   claim is stored nowhere.
+                    # - `update` retires its target down the same
+                    #   path as `supersede`, so both are barred.
+                    #   Intra-write collapse happens through the
+                    #   exact-match rung and the RESTATES skip alone,
+                    #   both lossless: the screen has said the target
+                    #   carries every claim the fact makes.
+                    # - The event is the only record of a strip. The
+                    #   `reconcile-candidates` oplog row carries the
+                    #   raw verdict, so without it a barred target
+                    #   reads as one that retired a row.
+                    barred = [
+                        target_id
+                        for target_id, relation in targets
+                        if relation in {'supersede', 'update'}
+                        and target_id in added_in_batch]
+                    for target_id in barred:
+                        trace.event(
+                            'sibling_target_barred', target_id=target_id)
                     targets = [
                         (target_id, relation)
                         for target_id, relation in targets
-                        if not (relation == 'supersede'
-                                and target_id in added_in_batch)]
+                        if target_id not in barred]
                     if not targets:
                         action = 'ADD'
                     elif action == 'SUPERSEDE' and not any(

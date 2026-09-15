@@ -1823,10 +1823,24 @@ def _rows_for_queue_id(data_dir, store, queue_id):
 
 
 class TestIntraBatchDedup:
-    """Sibling facts from the same remember call must deduplicate."""
+    """How two facts of one remember call may and may not collapse."""
 
     def test_similar_sibling_facts_deduplicated(self, runner):
-        """When extraction produces two paraphrases, only one is stored."""
+        """Two paraphrases of one write collapse through the NONE skip.
+
+        The only lossless route left: a sibling may not be retired,
+        so collapse happens where the screen has said the target
+        already carries every claim the fact makes. This is the one
+        test pinning that the collapse still HAPPENS.
+
+        Mutation: narrowing the NONE skip so a RESTATES sibling
+            stores its own row, which would leave every paraphrase of
+            a write as a separate row; or barring the skip against a
+            sibling the way supersede and update are barred.
+        Oracle: the two hand-written paraphrases, which the mock
+            screen calls RESTATES and the mock verdict answers NONE,
+            against a single stored row.
+        """
         def _two_similar_facts(llm_client, content):
             return [
                 {
@@ -1909,8 +1923,24 @@ class TestIntraBatchDedup:
             f'expected 1 stored fact from single thought, got '
             f'{len(rows)}: queue_id={queue_id}')
 
-    def test_two_updates_same_target_no_duplicate(self, runner):
-        """Sibling UPDATEs must not create duplicates from stale candidates."""
+    def test_sibling_update_keeps_both_facts_and_retires_the_stored_row(
+            self, runner):
+        """An UPDATE verdict retires a stored row but never a sibling.
+
+        Two facts of one write both answer UPDATE. The first targets
+        the pre-existing row and retires it; the second targets the
+        first, which the same write authored, and stores as its own
+        row instead. Collapsing there would drop whatever the first
+        fact said and the second did not.
+
+        Mutation: filtering the sibling targets on `supersede` alone,
+            which lets the second fact retire the first; or barring
+            every update target, which strands the pre-existing row
+            live.
+        Oracle: the three hand-written texts. Both sibling texts must
+            be active and the seeded text must not be, which no
+            single-count assertion can distinguish.
+        """
         invoke(runner, [
             'remember', 'PostgreSQL chosen for ACID compliance and JSON support',
             '--no-reconcile'])
@@ -1940,12 +1970,28 @@ class TestIntraBatchDedup:
         assert result.exit_code == 0, result.output
 
         search_result = invoke(runner, ['recall', '--basic', 'PostgreSQL'])
-        active = json.loads(search_result.output)['results']
-        assert len(active) == 1, (
-            f'expected 1 active PostgreSQL insight, got {len(active)}')
+        active = [r['content']
+                  for r in json.loads(search_result.output)['results']]
+        assert len(active) == 2, active
+        tails = ' | '.join(active)
+        assert 'plus extensions' in tails
+        assert 'with replication' in tails
 
-    def test_forced_update_stale_target_no_duplicate(self, runner):
-        """Forced UPDATE against stale target must not create a duplicate."""
+    def test_a_forced_update_verdict_still_spares_the_sibling(self, runner):
+        """Every memory screening RESTATES does not license retiring a sibling.
+
+        The screen answers RESTATES for every memory and the verdict
+        is UPDATE for every one, which is the strongest push toward
+        collapse the stages can produce. Intra-write collapse runs
+        through the NONE skip alone, so an UPDATE verdict on a sibling
+        stores its own row however close the two texts are.
+
+        Mutation: filtering the sibling targets on `supersede` alone,
+            so the second fact retires the first and its added clause
+            is dropped.
+        Oracle: the two hand-written tail clauses, which differ only
+            in that tail, so both must be readable back.
+        """
         invoke(runner, [
             'remember', 'Kafka uses topic partitioning for message ordering',
             '--no-reconcile'])
@@ -1986,15 +2032,31 @@ class TestIntraBatchDedup:
         assert result.exit_code == 0, result.output
 
         search_result = invoke(runner, ['recall', '--basic', 'Kafka'])
-        active = json.loads(search_result.output)['results']
-        assert len(active) == 1, (
-            f'expected 1 active Kafka insight, got {len(active)}')
+        active = [r['content']
+                  for r in json.loads(search_result.output)['results']]
+        assert len(active) == 2, active
+        tails = ' | '.join(active)
+        assert 'consumer groups' in tails
+        assert 'and replication' in tails
 
     @pytest.mark.skipif(
         'not config.getoption("--live")',
         reason='requires --live for real LLM calls')
     def test_near_identical_updates_no_duplicate_live(self, runner):
-        """Near-identical sibling facts must not create duplicates with real LLM."""
+        """A real model collapses near-identical siblings, losing nothing.
+
+        The mocked tests pin the rule; this one asks whether a real
+        screen and verdict reach the lossless route for texts this
+        close. A sibling can no longer be retired, so the collapse
+        has to arrive as a skip rather than as a supersession.
+
+        Mutation: a screen or verdict change that sends a paraphrase
+            sibling down the retiring path, which the filter then
+            bars, leaving two rows where one was intended.
+        Oracle: the seeded text and the two near-identical facts. One
+            active row means the skip fired; two mean the verdict
+            asked to retire a sibling and was barred.
+        """
         invoke(runner, [
             'remember', 'Redis cache uses 4GB max memory for session storage',
             '--no-reconcile'])
@@ -2024,13 +2086,30 @@ class TestIntraBatchDedup:
         assert result.exit_code == 0, result.output
 
         search_result = invoke(runner, ['recall', '--basic', 'Redis'])
-        active = json.loads(search_result.output)['results']
+        active = [r['content']
+                  for r in json.loads(search_result.output)['results']]
         assert len(active) == 1, (
-            f'expected 1 active Redis insight, got {len(active)}')
+            f'expected the skip to collapse these, got {active}')
+        assert 'session storage' in active[0]
 
     def test_update_reconciliation_no_dangling_edges(self, runner):
-        """Chained intra-batch UPDATEs must not leave semantic edges to soft-deleted insights."""
+        """A retired row leaves no semantic edge behind it.
+
+        A stored row is seeded first so the write actually retires
+        something. Without it the three sibling facts all land as
+        plain adds, nothing is superseded, and the dangling-edge
+        sweep runs over a store with no supersession in it.
+
+        Mutation: dropping the edge cleanup on supersede, so the
+            retired row keeps semantic edges pointing at it.
+        Oracle: `check_dangling_edges`, an independent sweep that
+            counts edges whose endpoint is soft-deleted or
+            superseded.
+        """
         _r, data_dir = runner
+        invoke(runner, [
+            'remember', 'Delta mode dropdown defaults to incremental_sync',
+            '--no-reconcile'])
 
         def _three_paraphrase_facts(llm_client, content):
             return [
@@ -2088,9 +2167,13 @@ class TestIntraBatchDedup:
         from memman.store.db import open_db
         from memman.store.sqlite import SqliteBackend
         db = open_db(str(store_path))
+        retired = db._query(
+            'select count(*) from insights'
+            ' where superseded_by is not null').fetchone()[0]
         doctor_result = check_dangling_edges(SqliteBackend(db))
         db.close()
 
+        assert retired > 0, 'nothing was retired; the sweep proves nothing'
         assert doctor_result['status'] == 'pass', (
             f'dangling edges found: {doctor_result["detail"]}')
         assert doctor_result['detail']['count'] == 0

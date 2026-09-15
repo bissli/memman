@@ -466,49 +466,52 @@ def test_run_remember_reports_one_result_per_successor(tmp_backend, monkeypatch)
     assert sorted(f['replaced_ids'][0] for f in res['facts']) == ['old-1', 'old-2']
 
 
-def test_a_successor_retired_in_the_same_write_leaves_the_drain_cache(
+def test_a_row_retired_by_this_write_leaves_the_drain_cache(
         tmp_backend, monkeypatch):
-    """Verify a row retired later in the same write leaves both caches.
+    """Verify a row this write retires leaves both drain caches.
 
-    The second fact takes an UPDATE verdict rather than a supersede
-    one: a sibling the write itself authored can no longer be a
-    supersede target, and `superseded_in_batch` is seeded for update,
-    replace and supersede alike, so the eviction under test is
-    reached either way.
+    The retired row is a pre-existing stored one, seeded into both
+    caches as a real drain seeds them. A sibling the write itself
+    authored can be retired by no relation, so a stored row is the
+    only thing an eviction can be driven from.
 
     Mutation: re-registering every inserted row in the drain cache and
         never evicting the ones the write itself retired, so the next
-        queue row of the drain builds semantic edges onto a retired row.
-    Oracle: two facts, the second retiring the first's successor;
-        after the write the first successor is in neither drain cache
-        and the second is in both.
+        queue row of the drain builds semantic edges onto a retired
+        row.
+    Oracle: the seeded row's id, which must be in neither cache after
+        the write, against the successor's, which must be in both.
     """
+    stored = make_insight(id='old-1', content='the broker is redis')
+    tmp_backend.nodes.insert(stored)
     monkeypatch.setattr(
         'memman.llm.extract.extract_facts',
         lambda client, content: [
-            {'text': 'the broker is redis', 'category': 'fact', 'entities': []},
-            {'text': 'the broker is rabbit', 'category': 'fact', 'entities': []}])
+            {'text': 'the broker is rabbit', 'category': 'fact',
+             'entities': []}])
     monkeypatch.setattr(
         'memman.llm.extract.screen_memory',
         lambda client, fact_text, memory: (
-            ('CONTRADICTS', []) if 'rabbit' in fact_text else ('UNRELATED', [])))
+            ('CONTRADICTS', []) if memory[0] == 'old-1'
+            else ('UNRELATED', [])))
     monkeypatch.setattr(
         'memman.llm.extract.judge_memory',
         lambda client, fact_text, memory: 'update')
     monkeypatch.setattr(
         'memman.llm.extract.merge_successor',
         lambda client, fact_text, target: None)
-    embed_cache, insights_by_id = {}, {}
+    embed_cache = {'old-1': [1.0, 0.0]}
+    insights_by_id = {'old-1': stored}
 
     res = run_remember(
         tmp_backend, make_insight(id='parent', content='the broker'), 'the broker',
         ec=_FixedEmbedder([1.0, 0.0]), embed_cache=embed_cache,
         insights_by_id=insights_by_id, store_name='test')
 
-    first, second = res['facts']
-    assert (first['action'], second['action']) == ('add', 'update')
-    assert second['replaced_ids'] == [first['id']]
-    assert first['id'] not in embed_cache
-    assert first['id'] not in insights_by_id
-    assert second['id'] in embed_cache
-    assert second['id'] in insights_by_id
+    fact = res['facts'][0]
+    assert fact['action'] == 'update'
+    assert fact['replaced_ids'] == ['old-1']
+    assert 'old-1' not in embed_cache
+    assert 'old-1' not in insights_by_id
+    assert fact['id'] in embed_cache
+    assert fact['id'] in insights_by_id
