@@ -62,7 +62,7 @@ def test_replace_keeps_a_comma_bearing_inherited_entity_whole(mm_runner):
     open_backend(name, data_dir).nodes.update_entities(old['id'], [DN])
 
     result = invoke(mm_runner, [
-        'replace', old['id'], 'a corrected note', '--no-reconcile'])
+        'replace', old['id'], 'a corrected note'])
 
     assert result.exit_code == 0, result.output
     successor = parse_remember(result, mm_runner)

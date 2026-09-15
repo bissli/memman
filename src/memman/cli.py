@@ -1507,7 +1507,7 @@ def _process_queue_row(
     from memman.pipeline.remember import run_remember
     result = run_remember(
         backend, insight, row.content,
-        no_reconcile=row.hint_no_reconcile or bool(row.hint_replaced_id),
+        no_reconcile=row.hint_no_reconcile,
         replaced_id=replaced_id,
         cat_explicit=row.hint_cat is not None,
         embed_cache=ctx.embed_cache,
@@ -1786,9 +1786,6 @@ def forget(ctx: click.Context, id: str) -> None:
 @click.option('--entities', default='',
               help='Comma-separated entities. A name containing a'
                    ' comma cannot be expressed here.')
-@click.option('--reconcile/--no-reconcile', 'reconcile', default=False,
-              help=('Run LLM reconciliation against existing insights.'
-                    ' Default: skip — replace targets a specific id.'))
 @click.option('--session', default='',
               envvar=[config.SESSION_ID, config.CLAUDE_SESSION_ID],
               help='Session id for the temporal chain (defaults to'
@@ -1796,7 +1793,7 @@ def forget(ctx: click.Context, id: str) -> None:
 @click.pass_context
 def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             cat: str, imp: int, source: str,
-            entities: str, reconcile: bool, session: str) -> None:
+            entities: str, session: str) -> None:
     """Replace an insight by ID with new content via the queue.
 
     ID is a full insight id or any unambiguous prefix of one.
@@ -1814,6 +1811,13 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
       the replaced insight's values; the inherited source is passed
       through verbatim (idempotency rides on the queue uuid, so a
       non-null source hint no longer suppresses the replay check).
+      Each of the four overrides when typed, `--entities ''` included,
+      which clears the list; enrichment then rebuilds it from the new
+      content.
+    - A replace never reconciles. It targets one id, so no fact
+      extraction runs and the content lands as a single row exactly
+      as typed; enrichment still runs and rebuilds keywords, summary
+      and entities.
     - `--session` does not inherit: the successor carries the session
       that wrote it, so it enters that session's backbone chain.
       It also inherits the replaced insight's edges, including that
@@ -1897,7 +1901,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             hint_source=source,
             hint_entities=entities_json,
             hint_replaced_id=id,
-            hint_no_reconcile=not reconcile,
+            hint_no_reconcile=True,
             session_id=session or None,
             priority=0)
     _json_out({

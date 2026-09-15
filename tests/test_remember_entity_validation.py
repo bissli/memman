@@ -175,7 +175,7 @@ def test_replace_inherits_an_oversized_stored_entity_list(mm_runner):
     assert len(backend.nodes.get(old['id']).entities) == 66
 
     result = invoke(mm_runner, [
-        'replace', old['id'], 'x', '--no-reconcile'])
+        'replace', old['id'], 'x'])
 
     assert result.exit_code == 0, result.output
     queue_id = json.loads(result.output)['queue_id']

@@ -1180,13 +1180,20 @@ def _apply_plan(
         #   Entities union rather than overwrite because the extractor
         #   sees only the incoming text and would narrow the merged
         #   row's entity set on every pass; recall history carries as
-        #   the max over every linked target.
+        #   the max over every linked target. A replace is the
+        #   exception: no extractor runs and the caller named the
+        #   list, so it stands as given.
         # - Corroboration carries on a refinement, not on a
         #   contradiction: it counts restatements of the claim the
         #   supersede just falsified.
         for _target_id, relation, before_target in predecessors:
-            fi.entities = list(dict.fromkeys(
-                list(fi.entities) + list(before_target.entities)))
+            # A replace carries the caller's own entity list, which
+            # the CLI already seeded from the target when the flag
+            # was omitted. Unioning the target's names back in would
+            # make a typed list additive and an empty one inert.
+            if relation != 'replace':
+                fi.entities = list(dict.fromkeys(
+                    list(fi.entities) + list(before_target.entities)))
             fi.access_count = max(
                 fi.access_count, before_target.access_count)
             if relation != 'supersede':

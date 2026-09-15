@@ -141,8 +141,8 @@ def test_replace_of_identical_content_still_replaces(
         tmp_backend, monkeypatch):
     """`replace` with identical content must still replace.
 
-    The CLI routes replace with `no_reconcile=... or
-    bool(hint_replaced_id)`, so the rung must never intercept it.
+    `replace` always enqueues `hint_no_reconcile`, so the rung must
+    never intercept it.
 
     Mutation: the same hoist, reached via the replace route.
     Oracle: action is 'replace', the target row is gone, and the new
