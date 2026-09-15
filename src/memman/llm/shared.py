@@ -15,9 +15,9 @@ logger = logging.getLogger('memman')
 
 # Guardrail bounding pathological LLM output (a sentence or paragraph
 # emitted as one entity/keyword), NOT a retrieval tunable -- it needs
-# no ablation-harness sweep. Measured: the longest legitimate strings
-# fleet-wide (cloud ARNs, directory DNs, Windows paths) reach 137
-# chars, so 200 passes every observed legitimate value.
+# no ablation-harness sweep. 200 chars clears the long legitimate
+# forms a name can take: a cloud ARN, a directory distinguished name,
+# a Windows path.
 MAX_ENRICH_STRING_CHARS = 200
 
 
@@ -29,7 +29,7 @@ def drop_overlong_strings(
     ----------
     values : list[str]
         LLM-proposed entities or keywords. Never pass user-supplied
-        values -- `--entities` is uncapped by design.
+        values -- the CLI validates them before enqueue.
     kind : str
         'entity' or 'keyword', for the drop log line.
     owner : str
@@ -47,8 +47,8 @@ def drop_overlong_strings(
       preserving the pathology under a new name.
     - The cap is a guardrail bounding pathological LLM output, NOT a
       retrieval tunable: it needs no ablation-harness sweep. It is
-      measured against the fleet's longest legitimate strings
-      (137 chars), not tuned for retrieval quality.
+      set to clear the long legitimate forms a name can take, not
+      tuned for retrieval quality.
     - Extraction-side drops are logged by content prefix, not
       insight id: no insight exists yet at extraction time, so the
       spec's log-the-id requirement is unmeetable there by

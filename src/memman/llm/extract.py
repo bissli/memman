@@ -516,15 +516,15 @@ def merge_successor(
 
     Notes
     -----
-    - One target per call: on the probe the row-alone body kept the
-      clauses the whole body dropped, b = 6 to 8 against c = 0 on
-      every judged line.
-    - Over the 0.35.0 gate's 534 SCREENED case-reps, 46 of 4,239
-      clauses were sentences copied from the NEW FACT that do not occur
-      in the target memory (31 case-reps); on those the merge deleted
-      the fact's own correction from the successor. A clause whose
-      normalized text appears in the fact but not in the target content
-      is a fact-copied clause and is suppressed before rendering.
+    - One target per call: a body listing the row alone keeps clauses
+      that a body listing every row drops.
+    - The screen can quote, as a contradicted clause, a sentence it
+      copied from the NEW FACT rather than from the target memory.
+      Handed to the merge, such a clause makes the merge delete the
+      fact's own correction from the successor. A clause whose
+      normalized text appears in the fact but not in the target
+      content is a fact-copied clause and is suppressed before
+      rendering.
     """
     real_id, content, clauses = target
     norm_fact = ' '.join(fact_text.lower().split())
