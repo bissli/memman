@@ -5,7 +5,8 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from memman.store.model import Insight, format_timestamp, parse_timestamp
+from memman.store.model import Insight, dedupe_entities, format_timestamp
+from memman.store.model import parse_timestamp
 
 if TYPE_CHECKING:
     from memman.store.db import DB
@@ -297,13 +298,7 @@ order by created_at, id
 
 def update_entities(db: 'DB', id: str, entities: list[str]) -> None:
     """Update the entities field for an insight."""
-    seen: set[str] = set()
-    deduped: list[str] = []
-    for e in entities:
-        key = e.strip().lower()
-        if key not in seen:
-            seen.add(key)
-            deduped.append(e)
+    deduped = dedupe_entities(entities)
     now = format_timestamp(datetime.now(timezone.utc))
     db._exec(
         'update insights set entities = ?, updated_at = ? where id = ?',

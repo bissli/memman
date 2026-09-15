@@ -48,7 +48,8 @@ from memman.rerank import get_client as get_rerank_client
 from memman.search.keyword import keyword_search
 from memman.search.quality import check_content_quality
 from memman.store.backend import Backend
-from memman.store.model import Edge, Insight, format_timestamp
+from memman.store.model import Edge, Insight, dedupe_entities
+from memman.store.model import format_timestamp
 from memman.store.model import insight_to_delta_dict
 
 logger = logging.getLogger('memman')
@@ -1238,6 +1239,10 @@ def _apply_plan(
         backend.nodes.update_embedding(
             fi.id, final_vec, fi.embedding_model or '')
     if fi.entities:
+        # Normalize before the column, the edge builder and the result
+        # dict read it: folding only on the way into the store makes
+        # the write report an entity the store does not hold.
+        fi.entities = dedupe_entities(fi.entities)
         backend.nodes.update_entities(fi.id, fi.entities)
 
     backend.oplog.log(

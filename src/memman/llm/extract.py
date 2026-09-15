@@ -334,7 +334,7 @@ def extract_facts(
         if not isinstance(entities, list):
             entities = []
         entities = drop_overlong_strings(
-            [str(e) for e in entities if e],
+            [name for name in (str(e).strip() for e in entities) if name],
             kind='entity', owner=f'extracted fact {text[:32]!r}')
         facts.append({
             'text': text,

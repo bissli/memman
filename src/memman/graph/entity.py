@@ -34,12 +34,22 @@ def create_entity_edges(
     use_idf = total_docs > 5
 
     count = 0
+    # Notes:
+    # - An edge's key is (source_id, target_id, edge_type) and does
+    #   not carry the entity label, so a neighbor an earlier entity
+    #   already linked would spend budget, write no new row, and
+    #   relabel that edge. `linked` keeps the budget on distinct
+    #   neighbors and leaves the first entity to reach one holding
+    #   the label.
+    linked: set[str] = set()
 
     for entity in insight.entities:
         if count >= MAX_TOTAL_ENTITY_EDGES:
             break
-        ids = backend.edges.find_with_entity(
-            entity, exclude_id=insight.id, limit=MAX_ENTITY_LINKS)
+        ids = [
+            target_id for target_id in backend.edges.find_with_entity(
+                entity, exclude_id=insight.id, limit=MAX_ENTITY_LINKS)
+            if target_id not in linked]
         if not ids:
             continue
 
@@ -55,6 +65,7 @@ def create_entity_edges(
         for target_id in ids:
             if count >= MAX_TOTAL_ENTITY_EDGES:
                 break
+            linked.add(target_id)
             if not dry_run:
                 backend.edges.upsert(Edge(
                     source_id=insight.id, target_id=target_id,

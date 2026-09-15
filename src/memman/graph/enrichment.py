@@ -78,7 +78,9 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
     llm_entities = parsed.get('entities', [])
     if not isinstance(llm_entities, list):
         llm_entities = []
-    llm_entities = [str(e) for e in llm_entities if e]
+    llm_entities = [
+        name for name in (str(e).strip() for e in llm_entities)
+        if name]
     # Length cap BEFORE the merge loop and before the count cap:
     # `merged` is seeded from insight.entities, which carries the
     # user's --entities (uncapped by design), and 20 valid entities

@@ -17,7 +17,7 @@ from memman.graph.temporal import MAX_PROXIMITY_EDGES, MIN_PROXIMITY_WEIGHT
 from memman.graph.temporal import TEMPORAL_WINDOW_HOURS, create_temporal_edge
 from memman.llm.client import MemmanLLMClient
 from memman.store.backend import Backend
-from memman.store.model import Edge, Insight
+from memman.store.model import Edge, Insight, dedupe_entities
 
 logger = logging.getLogger('memman')
 
@@ -152,9 +152,9 @@ def link_pending(
                     keywords=enrichment.get('keywords', []),
                     summary=enrichment.get('summary', ''),
                     semantic_facts=enrichment.get('semantic_facts', []))
-                backend.nodes.update_entities(
-                    insight.id, enrichment.get('entities', []))
-                insight.entities = enrichment.get('entities', [])
+                entities = dedupe_entities(enrichment.get('entities', []))
+                backend.nodes.update_entities(insight.id, entities)
+                insight.entities = entities
 
             if new_vec is not None:
                 if embed_cache is not None:

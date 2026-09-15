@@ -133,6 +133,39 @@ class OpLogEntry:
     after: dict[str, Any] | None = None
 
 
+def dedupe_entities(entities: list[str]) -> list[str]:
+    """Fold case and whitespace variants of one entity name into one.
+
+    Parameters
+    ----------
+    entities : list[str]
+        Entity names as written by a caller, the extractor or the
+        enrichment, in priority order.
+
+    Returns
+    -------
+    list[str]
+        The names in input order, each stripped, none empty, one per
+        name compared case-insensitively. The FIRST form of a name
+        wins, so the highest-priority writer decides its casing.
+
+    Notes
+    -----
+    - The stored column, the entity-edge builder, the result JSON and
+      the oplog delta all read this list. Folding in only one of them
+      makes a write report an entity the store does not hold.
+    """
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for entity in entities:
+        name = entity.strip()
+        key = name.lower()
+        if name and key not in seen:
+            seen.add(key)
+            deduped.append(name)
+    return deduped
+
+
 def insight_to_delta_dict(ins: 'Insight') -> dict[str, Any]:
     """Return the content fields of an insight for oplog deltas.
 
