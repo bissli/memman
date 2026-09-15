@@ -391,8 +391,9 @@ def record_skipped_write(
         store: str,
         content: str,
         skip_reason: str,
-        session_id: str | None = None) -> None:
-    """Record a drained row whose pipeline stored no insight.
+        session_id: str | None = None,
+        processed_at: int | None = None) -> None:
+    """Record a drained row that stored no insight.
 
     Parameters
     ----------
@@ -409,6 +410,12 @@ def record_skipped_write(
         Why nothing was stored, as reported by the pipeline.
     session_id : str or None, optional
         Session the write came from, for tracing it back.
+    processed_at : int or None, optional
+        When the row stopped being the queue's problem. Defaults to
+        now, which is right for a drain filing its own row and wrong
+        for `purge_failed` filing a row that failed earlier -- the
+        ledger reads newest-first, so a purge-time stamp would sort
+        an old failure above genuinely newer skips.
     """
     sql = """
 insert or replace into skipped_writes
@@ -420,7 +427,7 @@ values (?, ?, ?, ?, ?, ?)
         store,
         content,
         skip_reason,
-        int(time.time()),
+        int(time.time()) if processed_at is None else processed_at,
         session_id))
 
 
@@ -706,6 +713,54 @@ where status = ?
 def purge_stale(conn: sqlite3.Connection) -> int:
     """Delete all stale rows. Returns deleted count."""
     cur = conn.execute("delete from queue where status = 'stale'")
+    return cur.rowcount
+
+
+def purge_failed(conn: sqlite3.Connection) -> int:
+    """File every failed row into the ledger, then delete it.
+
+    Returns
+    -------
+    int
+        Queue rows deleted.
+
+    Notes
+    -----
+    - `retry_row` only re-pends a failed row, which replays whatever
+      broke it. This is the one verb that retires a row whose own
+      stored content is the fault.
+    - A failed row USUALLY stored nothing, which is what earns it a
+      place in the ledger. It is not a guarantee: the drain's error
+      handling extends past the store commit, so a row can reach
+      `failed` with its insights already written. The reason therefore
+      names the `queue_uuid`, which `memman insights by-queue`
+      resolves, so an operator can tell a lost write from a stored one
+      before re-entering it.
+    - The row's own `processed_at` carries over, so a purged failure
+      keeps its place in the ledger's newest-first order instead of
+      dating itself to the purge.
+    - The delete names the ids just filed rather than the status: a
+      row another connection fails between the read and the delete
+      would otherwise go without a ledger entry, and the entry is the
+      only surviving copy of its content.
+    """
+    rows = conn.execute(
+        'select id, store, content, last_error, processed_at, session_id,'
+        " queue_uuid from queue where status = 'failed'").fetchall()
+    if not rows:
+        return 0
+    for (row_id, store, content, last_error, processed_at,
+            session_id, queue_uuid) in rows:
+        record_skipped_write(
+            conn, row_id, store, content,
+            f'queue row failed (queue_uuid {queue_uuid}):'
+            f' {last_error or "no error recorded"}',
+            session_id=session_id,
+            processed_at=processed_at)
+    ids = [row[0] for row in rows]
+    placeholders = ','.join('?' * len(ids))
+    cur = conn.execute(
+        f'delete from queue where id in ({placeholders})', ids)
     return cur.rowcount
 
 
