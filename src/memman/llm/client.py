@@ -96,6 +96,7 @@ class MemmanLLMClient:
             max_tokens: int = 1024,
             timeout: float = ENRICHMENT_TIMEOUT,
             extra_headers: dict[str, str] | None = None,
+            provider_routing: dict | None = None,
             ) -> None:
         """Initialize with endpoint, API key, and an explicit model id.
 
@@ -104,7 +105,13 @@ class MemmanLLMClient:
         vLLM/LiteLLM). `extra_headers` is merged on top of the standard
         headers and is used to attach attribution headers for known
         endpoints (OpenRouter).
+
+        `provider_routing` is sent verbatim as the request body's
+        `provider` field and is omitted entirely when None. The field
+        is OpenRouter's, so only an OpenRouter endpoint is given one;
+        a vendor-neutral shim would reject an unknown key.
         """
+        self.provider_routing = provider_routing
         if not model:
             raise ConfigError(
                 'model is empty; run `memman install` to populate the'
@@ -181,6 +188,8 @@ class MemmanLLMClient:
             }
         if temperature is not None:
             body['temperature'] = temperature
+        if self.provider_routing:
+            body['provider'] = self.provider_routing
 
         url = f'{self.endpoint}/chat/completions'
         for attempt in range(MAX_RETRIES):
@@ -312,7 +321,9 @@ def get_llm_client(role: str) -> MemmanLLMClient:
     `MEMMAN_LLM_API_KEY`, and the role's model env var from the
     canonical env file. Raises `ConfigError` when a required value is
     missing. OpenRouter endpoints automatically receive memman's
-    attribution headers; other endpoints do not.
+    attribution headers and the operator's provider-routing block from
+    `MEMMAN_LLM_PROVIDER_ONLY`, `MEMMAN_LLM_DATA_COLLECTION` and
+    `MEMMAN_LLM_ZDR`; other endpoints receive neither.
     """
     if role not in VALID_ROLES:
         raise ValueError(
@@ -333,12 +344,35 @@ def get_llm_client(role: str) -> MemmanLLMClient:
             ' to resolve and persist the model id')
     api_key = config.get(config.LLM_API_KEY) or ''
     extra: dict[str, str] = {}
+    routing: dict = {}
     if config.is_openrouter_endpoint(endpoint):
         extra.update(_OR_ATTRIBUTION_HEADERS)
+        # Notes:
+        # - Retention and jurisdiction are the operator's call, so all
+        #   three values come from the env file rather than a literal.
+        # - An empty allowlist means no pin: OpenRouter then picks any
+        #   provider serving the model, which is the shipped default
+        #   only for an operator who clears the variable.
+        # - A pin that no provider satisfies fails the call outright.
+        #   That is the intended direction: a refusal is recoverable,
+        #   a silent route to an unapproved host is not.
+        only = [
+            name.strip()
+            for name in (config.get(config.LLM_PROVIDER_ONLY) or '').split(',')
+            if name.strip()]
+        if only:
+            routing['only'] = only
+        collection = (config.get(config.LLM_DATA_COLLECTION) or '').strip()
+        if collection:
+            routing['data_collection'] = collection.lower()
+        if (config.get(config.LLM_ZDR) or '').strip().lower() in {
+                '1', 'true', 'yes', 'on'}:
+            routing['zdr'] = True
     max_tokens, timeout = _ROLE_LIMITS[role]
     client = MemmanLLMClient(
         endpoint, api_key, model, max_tokens=max_tokens,
-        timeout=timeout, extra_headers=extra or None)
+        timeout=timeout, extra_headers=extra or None,
+        provider_routing=routing or None)
     _ROLE_CACHE[role] = client
     return client
 

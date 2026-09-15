@@ -49,9 +49,16 @@ def _version_sort_key(model_id: str) -> tuple:
     return (nums, 1 if has_suffix else 0, model_id)
 
 
+# Notes:
+# - The trailing `-\d` anchors on a dated snapshot, which excludes the
+#   `-thinking-` variant of the same line: a reasoning model bills
+#   reasoning tokens on every reconcile call and can return an empty
+#   body at the stage's token ceiling.
+# - Both roles name one line. The roles still resolve separately, so
+#   an operator splits them by setting the env vars directly.
 _ROLE_PATTERNS: dict[str, re.Pattern] = {
-    'fast': re.compile(r'^anthropic/claude-haiku-\d'),
-    'slow': re.compile(r'^anthropic/claude-sonnet-\d'),
+    'fast': re.compile(r'^qwen/qwen3-235b-a22b-\d'),
+    'slow': re.compile(r'^qwen/qwen3-235b-a22b-\d'),
     }
 
 

@@ -15,6 +15,9 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_LLM_MODEL_FAST',
     'MEMMAN_LLM_MODEL_SLOW_CANONICAL',
     'MEMMAN_LLM_MODEL_SLOW_METADATA',
+    'MEMMAN_LLM_PROVIDER_ONLY',
+    'MEMMAN_LLM_DATA_COLLECTION',
+    'MEMMAN_LLM_ZDR',
     'MEMMAN_EMBED_PROVIDER',
     'MEMMAN_OPENROUTER_ENDPOINT',
     'MEMMAN_RERANK_PROVIDER',
@@ -170,6 +173,9 @@ def test_constants_match_expected_names():
         config.LLM_MODEL_FAST,
         config.LLM_MODEL_SLOW_CANONICAL,
         config.LLM_MODEL_SLOW_METADATA,
+        config.LLM_PROVIDER_ONLY,
+        config.LLM_DATA_COLLECTION,
+        config.LLM_ZDR,
         config.EMBED_PROVIDER,
         config.OPENROUTER_ENDPOINT,
         config.RERANK_PROVIDER,
@@ -787,3 +793,19 @@ class TestConfigResolver:
         """Every secret is in INSTALLABLE_KEYS so install can write it."""
         for secret in config.SECRET_VARS:
             assert secret in config.INSTALLABLE_KEYS
+
+
+def test_install_defaults_name_one_llm_tier():
+    """The offline install fallback puts every LLM role on one tier.
+
+    Mutation: INSTALL_DEFAULTS keeps a pricier slow-role slug, so an
+    install whose resolver call fails still bills fact extraction and
+    enrichment at a rate the cost model never covered.
+    Oracle: the fast role's own INSTALL_DEFAULTS entry.
+    """
+    fast = config.INSTALL_DEFAULTS[config.LLM_MODEL_FAST]
+    slow = [
+        config.INSTALL_DEFAULTS[config.LLM_MODEL_SLOW_CANONICAL],
+        config.INSTALL_DEFAULTS[config.LLM_MODEL_SLOW_METADATA],
+        ]
+    assert slow == [fast, fast]
