@@ -48,3 +48,6 @@ tests/experiments/
 
 # Local planning / scratch documents (not for git)
 /*.plan.md
+
+# Release notes (not tracked)
+docs/RELEASE-*.md
