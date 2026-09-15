@@ -10,14 +10,14 @@ poetry run python run_ablation.py --store NAME --limit 10
 
 Flags:
 
-- `--store NAME` (default `search`) — target store; must already contain data.
-- `--data-dir PATH` (default `~/.memman`) — point at a sandbox copy to sweep without touching live stores.
-- `--limit N` (default `10`) — results per query.
-- `--queries PATH` — query set JSON; defaults to `queries.json` next to the script.
-- `--out PATH` — output CSV; defaults to `results.csv` next to the script.
-- `--configs a,b,c` — subset of config names to run (default: all).
+- `--store NAME` (default `search`) - target store; must already contain data.
+- `--data-dir PATH` (default `~/.memman`) - point at a sandbox copy to sweep without touching live stores.
+- `--limit N` (default `10`) - results per query.
+- `--queries PATH` - query set JSON; defaults to `queries.json` next to the script.
+- `--out PATH` - output CSV; defaults to `results.csv` next to the script.
+- `--configs a,b,c` - subset of config names to run (default: all).
 
-The configurations are hard-coded inside `run_ablation.py` (see the module docstring). To add a new config, edit the `CONFIGS` list. Each output row carries a `redundancy` column — the mean over returned rows of each row's max pairwise cosine against the rest — the quantity a diversity term exists to reduce. To compare runs against labeled relevance scores, feed the output CSV into `experiments/eval/`.
+The configurations are hard-coded inside `run_ablation.py` (see the module docstring). To add a new config, edit the `CONFIGS` list. Each output row carries a `redundancy` column - the mean over returned rows of each row's max pairwise cosine against the rest - the quantity a diversity term exists to reduce. To compare runs against labeled relevance scores, feed the output CSV into `experiments/eval/`.
 
 Rerank configs call the Voyage rerank endpoint directly and read `VOYAGE_API_KEY` from the environment (export it from `MEMMAN_VOYAGE_API_KEY` in `~/.memman/env`).
 
@@ -29,7 +29,7 @@ Why, in the order the evidence landed:
 
 - The term was fed only by Step 0's LLM expansion, which became opt-in on 2026-04-28. From that date it was identically 0.0 on the default path, so no harness ever measured it while live - every call site in this harness and in `experiments/quality_matrix/` passes an empty entity list.
 - Fed deliberately (by seeding the set from the query text), it measured indistinguishable from noise against 30 LLM-judged queries: the arm ordering was seeding-off 0.3484 vs seeding-on 0.3416 nDCG@5, but the paired SE is 0.0148, so the +0.02 acceptance bar sits inside the interval. A channel built with the same magnitude and sparsity but values shuffled at random scored 0.3415 +/- 0.0082 over 10 seeds, beating the best hand-designed replacement formula on 3 of 10 seeds.
-- Three replacement formulas were designed independently and each refuted by an independent re-measurement. The defect is amplitude, not shape: the mean of `w_ent *` the largest `ent_score` a query actually produced was 0.0596 against a mean rank-5-to-6 score margin of 0.0118 — 5x on the means, and 24x to 108x on individual queries at full scale — so the term overrode the blend instead of informing it. No numerator or denominator repair survives that.
+- Three replacement formulas were designed independently and each refuted by an independent re-measurement. The defect is amplitude, not shape: the mean of `w_ent *` the largest `ent_score` a query actually produced was 0.0596 against a mean rank-5-to-6 score margin of 0.0118 - 5x on the means, and 24x to 108x on individual queries at full scale - so the term overrode the blend instead of informing it. No numerator or denominator repair survives that.
 - With the cross-encoder on, which is the shipped CLI default, feeding the channel changed the top-5 on 3 of 30 queries and moved nothing at all on the six entity-named ones.
 
 Consequences for anyone reading older records here:
@@ -80,7 +80,7 @@ Sweep of `mmr_lambda` in {0.5, 0.7, 0.8, 0.9} x rerank {off, on} plus `baseline`
 
 | config         | mean redundancy | vs baseline | jaccard vs rerank_voyage |
 | -------------- | --------------- | ----------- | ------------------------ |
-| baseline       | 0.655           | —           |                          |
+| baseline       | 0.655           | -           |                          |
 | mmr_l50        | 0.504           | -0.151      |                          |
 | mmr_l70        | 0.571           | -0.085      |                          |
 | mmr_l80        | 0.599           | -0.057      |                          |
@@ -91,36 +91,36 @@ Sweep of `mmr_lambda` in {0.5, 0.7, 0.8, 0.9} x rerank {off, on} plus `baseline`
 | mmr_l80_rerank | 0.653           | -0.002      | 0.972 (top-3 same 11/12) |
 | mmr_l90_rerank | 0.657           | +0.001      | 1.000 (identical 12/12)  |
 
-Conclusion — `MMR_LAMBDA = 1.0` (term disabled) is the measured value:
+Conclusion - `MMR_LAMBDA = 1.0` (term disabled) is the measured value:
 
 - Under the production default (rerank on), MMR contributes ~nothing at any lambda: byte-identical output at 0.9, and at the most aggressive 0.5 the final redundancy moves 1.6 points while the cross-encoder re-picks the same head anyway.
-- Rerank-off gains are real (0.655 -> 0.504 at lambda 0.5) but rewrite most of the top-10 (jaccard 0.176 vs baseline) with no relevance labels to certify that the rewrite does not demote a fact's own decision rationale — exactly the pair memman's semantic edges link.
+- Rerank-off gains are real (0.655 -> 0.504 at lambda 0.5) but rewrite most of the top-10 (jaccard 0.176 vs baseline) with no relevance labels to certify that the rewrite does not demote a fact's own decision rationale - exactly the pair memman's semantic edges link.
 - The mechanism stays shipped and sweepable (`MMR_LAMBDA`/`MMR_POOL` in `search/recall.py`, `mmr_l*` configs here); revisit if a labeled-relevance eval lands or a rerank-off deployment materialises.
 
 ## MMR after-rerank placement sweep (2026-08-06, memman 0.20.0)
 
-The spec's alternative placement — rerank the full top-100 shortlist first, then one-shot MMR over the reranked list (reranker relevance as the score term), then the limit slice — measured with the `mmr_after_l{NN}_rerank` configs; same store sandbox, 12 queries, `--limit 10`. Raw rows in `results_after.csv` (untracked artifact).
+The spec's alternative placement - rerank the full top-100 shortlist first, then one-shot MMR over the reranked list (reranker relevance as the score term), then the limit slice - measured with the `mmr_after_l{NN}_rerank` configs; same store sandbox, 12 queries, `--limit 10`. Raw rows in `results_after.csv` (untracked artifact).
 
 | config               | mean redundancy | vs rerank_voyage | jaccard vs rerank_voyage |
 | -------------------- | --------------- | ---------------- | ------------------------ |
-| rerank_voyage        | 0.657           | —                | 1.000                    |
+| rerank_voyage        | 0.657           | -                | 1.000                    |
 | mmr_after_l50_rerank | 0.552           | -0.104           | 0.338 (top-3 same 0/12)  |
 | mmr_after_l70_rerank | 0.597           | -0.059           | 0.549 (top-3 same 2/12)  |
 | mmr_after_l80_rerank | 0.625           | -0.032           | 0.711 (top-3 same 4/12)  |
 | mmr_after_l90_rerank | 0.644           | -0.013           | 0.854 (top-3 same 5/12)  |
 
-Conclusion — the placement move does not change the shipped `MMR_LAMBDA = 1.0`:
+Conclusion - the placement move does not change the shipped `MMR_LAMBDA = 1.0`:
 
 - Downstream of the reranker the diversity term finally has leverage (unlike upstream, where the cross-encoder re-picks the same head regardless), but every redundancy point is bought by overriding the only relevance oracle in the pipeline: at lambda 0.5 the certified top-3 survives on 0/12 queries, and at lambda 0.9 the surviving 1.3-point gain is noise-level.
 - Same verdict shape as the rerank-off arm above: real diversity, uncertifiable relevance cost. Ship it only when a labeled-relevance eval can prove the trade.
 - The after-rerank arm also reranks all 100 shortlist docs instead of 10 and adds an O(n^2) cosine pass (~+200-400 ms observed on this store), a real hot-path cost for an unverifiable gain.
 
-## Sparse relevance rule — RETIRED (2026-09-02)
+## Sparse relevance rule - RETIRED (2026-09-02)
 
 `meta.sparse` and its calibration are GONE from memman, along with the
 `verify_sparse_rule.py` script that measured them. The rule this
 section once calibrated fired **0 times in 420 real queries** across
-all four rerank x limit cells, at AUC 0.500 — a boolean hard-wired to
+all four rerank x limit cells, at AUC 0.500 - a boolean hard-wired to
 one value, not a per-query signal.
 
 What replaced it is prose, not a field. Recall returns rows even when
@@ -129,6 +129,6 @@ per-channel `signals`, which a caller compares WITHIN one response.
 A threshold-derived boolean would freeze one reranker's score scale
 into the envelope, and that scale changes when the model does.
 
-The measured detail behind the retirement — the four candidate rules,
+The measured detail behind the retirement - the four candidate rules,
 the overlapping similarity populations that ruled out every floor, and
-the 420-query base rates — lives in memman, not here.
+the 420-query base rates - lives in memman, not here.

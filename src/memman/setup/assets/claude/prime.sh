@@ -1,5 +1,5 @@
 #!/bin/bash
-# memman SessionStart hook — thin shim that delegates to `memman prime`.
+# memman SessionStart hook - thin shim that delegates to `memman prime`.
 # The `memman prime` command reads SessionStart JSON on stdin, emits
 # the status line, compact-recall hint (when applicable), and the
 # shipped behavioral guide.

@@ -219,7 +219,7 @@ def enqueue(
     """Append a blob to the queue. Returns `(row_id, queue_uuid)`.
 
     `hint_replaced_id` carries the id of the insight to soft-delete
-    when the worker commits this row — used by the `replace` command.
+    when the worker commits this row - used by the `replace` command.
     `hint_no_reconcile` skips the LLM reconciliation pass for fast
     deterministic stores (`remember --no-reconcile`). `session_id`
     is the temporal chain key (`remember --session`); null means the

@@ -3,7 +3,7 @@
 These tests pin three properties:
 
 1. Recall must not call `reindex_auto_edges` on its own
-   (`reindex_on_open=False`) — the drainer's maintenance pass is the
+   (`reindex_on_open=False`) - the drainer's maintenance pass is the
    sole driver of reindex after this change.
 2. `reindex_auto_edges` runs in sub-second chunked transactions and
    is idempotent across retries (constants_hash stamped only after
@@ -11,7 +11,7 @@ These tests pin three properties:
 3. Maintenance reindexes every on-disk store on drift, including
    stores that received no queue traffic in the current drain.
 4. Recall's optional bookkeeping write (access_count + oplog) never
-   propagates `database is locked` to the caller — it skips quietly.
+   propagates `database is locked` to the caller - it skips quietly.
 """
 
 import sqlite3

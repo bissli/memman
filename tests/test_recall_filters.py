@@ -44,7 +44,7 @@ def test_filtered_recall_fills_to_limit(backend):
     """A category filter returns `limit` rows when enough rows match.
 
     Mutation: reverting to post-filtering (fetch an unfiltered
-        `limit * 3`, filter, truncate) — the 15 matching rows are old
+        `limit * 3`, filter, truncate) - the 15 matching rows are old
         and keyword-dark, so no unfiltered anchor scan surfaces them
         and the post-filter returns zero.
     Oracle: exactly `limit` results, every one in the filtered
@@ -68,7 +68,7 @@ def test_unfiltered_recall_anchor_k_unchanged(backend):
     ablation harness's `anchor_top_k` sweep on every unfiltered
     config; unfiltered recall must stay byte-identical to 0.17.3.
 
-    Mutation: applying the `max()` anchor bump unconditionally —
+    Mutation: applying the `max()` anchor bump unconditionally -
         `limit=50` would then produce 50 time anchors.
     Oracle: `meta['anchor_count'] == ANCHOR_TOP_K` with 60 rows, a
         keyword-dark query, and `limit` above `ANCHOR_TOP_K`.
@@ -83,7 +83,7 @@ def test_unfiltered_recall_anchor_k_unchanged(backend):
 def test_filtered_recall_above_anchor_top_k(backend):
     """`--limit 50` with 60 matching rows returns 50, not ANCHOR_TOP_K.
 
-    Mutation: leaving `anchor_k` at `ANCHOR_TOP_K` under a filter —
+    Mutation: leaving `anchor_k` at `ANCHOR_TOP_K` under a filter -
         time anchors then cap the candidate pool at 30 and only 30
         rows return.
     Oracle: exactly 50 results from 60 keyword-dark matching rows.
@@ -151,7 +151,7 @@ def test_session_vector_anchors_filter_before_topk(backend):
     the candidate rows, never to the returned hits.
 
     Mutation: dropping the `category`/`source` eligibility filter
-        from `vector_anchors` — the top-35 cut over all 70 vectors
+        from `vector_anchors` - the top-35 cut over all 70 vectors
         then keeps the 30 higher-similarity non-matching rows and
         only 5 matching vector hits survive.
     Oracle: all 35 results carry via='hybrid' (time + vector agree

@@ -70,7 +70,7 @@ class TestPrereqs:
         real `systemctl --user stop/disable memman-backup.timer`,
         unlinks the HOST'S real backup unit files under
         `~/.config/systemd/user/`, and clears the real
-        `~/.memman/backup.state` — silently disarming the nightly
+        `~/.memman/backup.state` - silently disarming the nightly
         backup on every full test run.
         """
         monkeypatch.setattr(setup_claude, 'detect_scheduler', lambda: '')

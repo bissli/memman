@@ -38,7 +38,7 @@ def _run_hook(script: str, input_json: dict, home: Path
 
 
 # ---------------------------------------------------------------------
-# prime.sh — SessionStart
+# prime.sh - SessionStart
 # ---------------------------------------------------------------------
 
 def test_prime_emits_memman_prefix(memman_home: tuple[Path, Path]):
@@ -65,7 +65,7 @@ def test_prime_handles_empty_stdin(memman_home: tuple[Path, Path]):
 
 
 # ---------------------------------------------------------------------
-# user_prompt.sh — UserPromptSubmit
+# user_prompt.sh - UserPromptSubmit
 # ---------------------------------------------------------------------
 
 def test_user_prompt_emits_recall_reminder(memman_home: tuple[Path, Path]):
@@ -95,7 +95,7 @@ def test_user_prompt_clears_stop_fired_flag(memman_home: tuple[Path, Path]):
 
 
 # ---------------------------------------------------------------------
-# stop.sh — Stop
+# stop.sh - Stop
 # ---------------------------------------------------------------------
 
 def test_stop_blocks_on_first_call(memman_home: tuple[Path, Path]):
@@ -146,7 +146,7 @@ def test_stop_no_session_id_falls_back_to_block(
 
 
 # ---------------------------------------------------------------------
-# compact.sh — PreCompact
+# compact.sh - PreCompact
 # ---------------------------------------------------------------------
 
 def test_compact_writes_flag_file(memman_home: tuple[Path, Path]):
@@ -172,7 +172,7 @@ def test_compact_no_session_id_no_op(memman_home: tuple[Path, Path]):
 
 
 # ---------------------------------------------------------------------
-# task_recall.sh — PreToolUse(Task)
+# task_recall.sh - PreToolUse(Task)
 # ---------------------------------------------------------------------
 
 def test_task_recall_emits_reminder(memman_home: tuple[Path, Path]):
@@ -184,7 +184,7 @@ def test_task_recall_emits_reminder(memman_home: tuple[Path, Path]):
 
 
 # ---------------------------------------------------------------------
-# exit_plan.sh — PreToolUse(ExitPlanMode)
+# exit_plan.sh - PreToolUse(ExitPlanMode)
 # ---------------------------------------------------------------------
 
 def test_exit_plan_emits_remember_reminder(memman_home: tuple[Path, Path]):
@@ -196,7 +196,7 @@ def test_exit_plan_emits_remember_reminder(memman_home: tuple[Path, Path]):
 
 
 # ---------------------------------------------------------------------
-# Nanoclaw shipped hooks — same files the SKILL.md references
+# Nanoclaw shipped hooks - same files the SKILL.md references
 # ---------------------------------------------------------------------
 
 def _nc_hook(name: str) -> str:

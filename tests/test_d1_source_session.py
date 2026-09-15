@@ -1,4 +1,4 @@
-"""D1: one field per job — source, session_id, queue_uuid.
+"""D1: one field per job - source, session_id, queue_uuid.
 
 `source` is provenance stored verbatim; `session_id` is the temporal
 chain key; idempotency rides on a uuid4 minted at enqueue. These
@@ -46,7 +46,7 @@ def test_plan_fact_propagates_session_and_queue_uuid(mm_runner):
     """The STORED insight carries the queue row's session and uuid.
 
     Mutation: dropping either field where `_plan_fact` mints fresh
-        Insights (`pipeline/remember.py`) — every other part of D1
+        Insights (`pipeline/remember.py`) - every other part of D1
         would still be correct and the feature a silent no-op.
     Oracle: the stored row's `session_id`/`queue_uuid` equal the
         queue row's, through the real pipeline.
@@ -69,7 +69,7 @@ def test_plan_fact_propagates_session_and_queue_uuid(mm_runner):
 def test_multi_fact_row_shares_one_queue_uuid(mm_runner):
     """Several facts from one remember call share the row's uuid.
 
-    Mutation: putting `unique` on the insights `queue_uuid` column —
+    Mutation: putting `unique` on the insights `queue_uuid` column -
         the second fact's insert would fail. Only the QUEUE table's
         column is unique.
     Oracle: two extracted facts, both stored, identical uuids.
@@ -124,7 +124,7 @@ def test_source_round_trips_verbatim(mm_runner):
 def test_source_defaults_to_user_for_programmatic_enqueue(mm_runner):
     """A bare `enqueue()` with no hint yields `source = 'user'`.
 
-    Mutation: dropping the `or 'user'` at the drain — a programmatic
+    Mutation: dropping the `or 'user'` at the drain - a programmatic
         enqueue (hint_source None) would write NULL into a column the
         recall filter compares with `=`.
     Oracle: direct enqueue, drained, stores `'user'`.
@@ -144,7 +144,7 @@ def test_source_defaults_to_user_for_programmatic_enqueue(mm_runner):
 def test_replace_inherits_source(mm_runner):
     """`replace` without `--source` keeps the old insight's source.
 
-    Mutation: dropping the replace-side fix — its own
+    Mutation: dropping the replace-side fix - its own
         `source_explicit` guard (independent of the remember-side
         mapping) discarded the inherited source as a None hint, and
         the drain then fell back to the default.
@@ -301,7 +301,7 @@ def test_idempotency_keyed_on_queue_uuid(mm_runner):
 def test_idempotency_check_runs_for_explicit_source(mm_runner):
     """The replay check fires even when a source hint is present.
 
-    Mutation: restoring the old `hint_source is None` precondition —
+    Mutation: restoring the old `hint_source is None` precondition -
         a replayed row with an explicit source would store twice.
     Oracle: re-queueing an `--source agent` row and re-draining
         leaves exactly one stored insight for its uuid.
@@ -356,7 +356,7 @@ def test_latest_by_session_tiebreak_matches_across_backends(backend):
     pinned textually: the source must carry the exact `order by`
     clause SQLite implements behaviorally here.
 
-    Mutation: dropping `id desc` from one backend — equal-timestamp
+    Mutation: dropping `id desc` from one backend - equal-timestamp
         rows would then chain nondeterministically on SQLite (rowid)
         and Postgres (heap order).
     Oracle: SQLite returns the higher id of two equal-created_at
@@ -393,7 +393,7 @@ def test_prime_substitutes_session_id_into_guide(mm_runner):
     makes D1's chain adoption real rather than
     documented-but-unexercised.
 
-    Mutation: dropping the substitution in `_emit_guide` — the
+    Mutation: dropping the substitution in `_emit_guide` - the
         template would keep the literal `$SESSION_ID` placeholder.
     Oracle: prime's output contains `--session <real id>` and no
         placeholder.
@@ -411,7 +411,7 @@ def test_insight_column_lists_are_identical_across_backends():
     """`_INSIGHT_COLUMNS` and `_INSIGHT_COLS` are byte-identical.
 
     A transposition of the two new columns between backends is
-    invisible to the type checker and to every single-backend test —
+    invisible to the type checker and to every single-backend test -
     each backend would round-trip its own transposed order happily.
 
     Mutation: transposing `session_id`/`queue_uuid` (or any pair) in
@@ -441,7 +441,7 @@ def test_insight_column_lists_are_identical_across_backends():
 def test_expected_insight_columns_covers_new_fields(backend):
     """`doctor.EXPECTED_INSIGHT_COLUMNS` matches the live schema.
 
-    Mutation: adding the columns to the schema but not to doctor —
+    Mutation: adding the columns to the schema but not to doctor -
         `check_schema_columns` would then pass on a store doctor
         cannot actually vouch for.
     Oracle: every expected column exists on a freshly created store.

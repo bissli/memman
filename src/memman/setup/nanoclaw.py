@@ -3,7 +3,7 @@
 NanoClaw is a containerised agent platform. Unlike Claude Code or
 OpenClaw, its memman integration is driven by an agentic skill
 (`/add-memman`) that the user invokes inside Claude Code while editing
-their NanoClaw project — the skill patches the Dockerfile, adds a
+their NanoClaw project - the skill patches the Dockerfile, adds a
 container skill, and sets up volume mounts. Our job here is to deliver
 the skill file into the Claude Code skills directory so `/add-memman`
 is invokable.

@@ -1,4 +1,4 @@
-"""Tests for memman.setup — settings, markdown, detection."""
+"""Tests for memman.setup - settings, markdown, detection."""
 
 import json
 import os

@@ -1,5 +1,5 @@
 #!/bin/bash
-# memman SessionStart hook — report memory stats on session init.
+# memman SessionStart hook - report memory stats on session init.
 STATS=$(memman status 2>/dev/null)
 if [ -n "$STATS" ]; then
   INSIGHTS=$(echo "$STATS" | sed -n 's/.*"total_insights": *\([0-9]*\).*/\1/p' | head -1)

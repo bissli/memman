@@ -59,7 +59,7 @@ def test_all_descriptors_returns_BackendDescriptor_instances():
 def test_descriptor_features_typed_dataclass():
     """`migrator_cls.snapshot_features` is a `BackendFeatures` dataclass.
 
-    Not a `frozenset[str]` — the v3 refactor explicitly replaced
+    Not a `frozenset[str]` - the v3 refactor explicitly replaced
     string capability sets with typed boolean fields so adding a
     feature flag is a typed change, not a stringly-typed drift.
     """

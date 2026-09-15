@@ -462,7 +462,7 @@ class TestReembed:
     @pytest.mark.no_autoseed_fingerprint
     def test_doctor_reports_fingerprint_fail_when_populated_and_unseeded(
             self, tmp_path):
-        """Populated store missing the fingerprint fails — schema regression.
+        """Populated store missing the fingerprint fails - schema regression.
         """
         from memman.doctor import check_embed_fingerprint
         from memman.store.db import store_dir

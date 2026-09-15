@@ -333,7 +333,7 @@ def env_file_path(data_dir: str | None = None) -> Path:
 
     When `data_dir` is omitted, falls back to `MEMMAN_DATA_DIR` from
     `os.environ`, then to `~/.memman`. The env-file location must not
-    flow through the resolver itself — that would be circular.
+    flow through the resolver itself - that would be circular.
     """
     if data_dir:
         return Path(data_dir) / ENV_FILENAME

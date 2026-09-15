@@ -29,7 +29,7 @@ const handler = async (event) => {
     });
     if (guide) parts.push(guide);
   } catch {
-    // memman not on PATH — skill-only mode, no guide injection
+    // memman not on PATH - skill-only mode, no guide injection
   }
 
   if (parts.length === 0) return;

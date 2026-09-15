@@ -265,7 +265,7 @@ class TestReconciliation:
 
         Uses `scheduler serve --once` (not `scheduler trigger`, which
         raises in serve mode). Asserts the *global* edge_count from
-        `memman status` — recall results carry no per-result edge_count.
+        `memman status` - recall results carry no per-result edge_count.
         Temporal backbone edges between two facts on the same source
         are guaranteed by graph/temporal.py.
         """

@@ -244,19 +244,19 @@ class TestNoFalsePositives:
     """Good entries from tradar DB produce zero warnings."""
 
     def test_ebsnvme_entry(self):
-        """ebsnvme-id /dev/ prefix entry — no warnings."""
+        """ebsnvme-id /dev/ prefix entry - no warnings."""
         w = check_content_quality(
             'ebsnvme-id outputs device paths with /dev/ prefix')
         assert w == []
 
     def test_rds_sa_entry(self):
-        """RDS sa not sysadmin entry — no warnings."""
+        """RDS sa not sysadmin entry - no warnings."""
         w = check_content_quality(
             'Cannot grant sysadmin to sa in RDS SQL Server')
         assert w == []
 
     def test_quicksetup_ssm(self):
-        """QuickSetup SSM entry — no warnings."""
+        """QuickSetup SSM entry - no warnings."""
         w = check_content_quality(
             'QuickSetup SSM duplicates via CloudFormation stacks')
         assert w == []

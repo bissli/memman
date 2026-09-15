@@ -43,14 +43,14 @@ memman insights review
 
 ## 5.3 Embedding support
 
-Embeddings power semantic search and graph connectivity. Vector dimensionality is provider-defined and recorded in a per-store `meta.embed_fingerprint` (provider, model, dim). Switching a store's embedder is explicit — online via `memman embed swap` (resumable shadow-column backfill) or offline via `memman embed reembed`.
+Embeddings power semantic search and graph connectivity. Vector dimensionality is provider-defined and recorded in a per-store `meta.embed_fingerprint` (provider, model, dim). Switching a store's embedder is explicit - online via `memman embed swap` (resumable shadow-column backfill) or offline via `memman embed reembed`.
 
-**Per-store embedder sovereignty.** Each store's stored fingerprint is the runtime authority over which embedder client serves that store. Every consumer — drain worker (`_StoreContext`), recall (`bound_embedder(backend)` → the query embedding), graph rebuild, `run_remember(ec=...)` — binds via `embed.fingerprint.bound_embedder(backend)`, which resolves `meta.embed_fingerprint` and dispatches to `embed.registry.get_for(provider, model)`. One process can sequentially open two stores fingerprinted to different providers without env mutation. The operator-facing worked example lives in [USAGE.md § Embedding Operations](../USAGE.md#embedding-operations).
+**Per-store embedder sovereignty.** Each store's stored fingerprint is the runtime authority over which embedder client serves that store. Every consumer - drain worker (`_StoreContext`), recall (`bound_embedder(backend)` → the query embedding), graph rebuild, `run_remember(ec=...)` - binds via `embed.fingerprint.bound_embedder(backend)`, which resolves `meta.embed_fingerprint` and dispatches to `embed.registry.get_for(provider, model)`. One process can sequentially open two stores fingerprinted to different providers without env mutation. The operator-facing worked example lives in [USAGE.md § Embedding Operations](../USAGE.md#embedding-operations).
 
 `MEMMAN_EMBED_PROVIDER`'s runtime role narrows to two cases:
 
-1. **Seeding a fresh store** — when a store has no stored fingerprint yet, `seed_if_fresh(backend, get_client())` writes the env-active client's fingerprint into `meta.embed_fingerprint`. After that write, the env var no longer drives runtime selection for that store.
-2. **Carrying credentials** — providers read `MEMMAN_VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`, etc. from the env file. A store fingerprinted to a provider whose credentials are absent fails at the embed call site (recall warns and degrades to keyword-only; drain marks the row failed via `EmbedCredentialError`).
+1. **Seeding a fresh store** - when a store has no stored fingerprint yet, `seed_if_fresh(backend, get_client())` writes the env-active client's fingerprint into `meta.embed_fingerprint`. After that write, the env var no longer drives runtime selection for that store.
+2. **Carrying credentials** - providers read `MEMMAN_VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`, etc. from the env file. A store fingerprinted to a provider whose credentials are absent fails at the embed call site (recall warns and degrades to keyword-only; drain marks the row failed via `EmbedCredentialError`).
 
 `memman embed status` reports the store's stored fingerprint and whether credentials for that fingerprint's provider are available. `memman doctor` (`check_embed_fingerprint`) follows the same shape: pass on stored + creds-available, fail on stored-but-missing-creds, fail on populated-store-without-fingerprint (corruption).
 
@@ -94,7 +94,7 @@ The shipped `_thresholds_generated.py` covers these `(provider, model)` pairs wi
 
 ### 5.3.1b Models not on the calibrated list
 
-A store fingerprinted to a `(provider, model)` triple outside the table above falls back to the **surface-wide median** of the calibrated values for that surface — empirically the lowest-error single-constant rule (mean nDCG@5 loss ~0.014 vs the calibrated optimum on the shipped triples, max ~0.08).
+A store fingerprinted to a `(provider, model)` triple outside the table above falls back to the **surface-wide median** of the calibrated values for that surface - empirically the lowest-error single-constant rule (mean nDCG@5 loss ~0.014 vs the calibrated optimum on the shipped triples, max ~0.08).
 
 | Surface | Fallback threshold |
 | ------- | ------------------: |
@@ -114,16 +114,16 @@ Operators with a quality-critical store can override the fallback by setting `ME
 
 Vector serialization depends on the active storage backend for the store (`MEMMAN_BACKEND_<store>`, falling back to `MEMMAN_DEFAULT_BACKEND`):
 
-- **SQLite** — little-endian float64 BLOB stored in `insights.embedding`; bytes per row = 8 × provider dim (e.g., a 512-dim model writes 4096 bytes).
-- **Postgres** — `pgvector` `vector(N)` typed column, persisted as float32 (HNSW-indexed). The migrate path (`PostgresMigrator` in `src/memman/store/postgres.py`) casts SQLite float64 BLOBs to `numpy.float32` before binding to avoid silent rounding by psycopg.
+- **SQLite** - little-endian float64 BLOB stored in `insights.embedding`; bytes per row = 8 × provider dim (e.g., a 512-dim model writes 4096 bytes).
+- **Postgres** - `pgvector` `vector(N)` typed column, persisted as float32 (HNSW-indexed). The migrate path (`PostgresMigrator` in `src/memman/store/postgres.py`) casts SQLite float64 BLOBs to `numpy.float32` before binding to avoid silent rounding by psycopg.
 
 > **Threshold resolution.** `AUTO_SEMANTIC_THRESHOLD` is resolved at runtime in this precedence order: (1) per-store env override `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>`; (2) calibrated table lookup `(provider, model, surface)` via `memman.embed.thresholds.resolve`; (3) surface-wide median fallback via `thresholds.resolve_with_fallback`. Surface is a closed set `{'code', 'claw'}` resolved per store via `MEMMAN_SURFACE_<store>` (default `'code'`). The fallback path always returns a usable float, so uncalibrated triples still produce semantic edges -- just at a bounded-but-not-optimal threshold; `memman doctor`'s `embed_threshold` check reports the `source` (`calibrated`, `surface_median`, `override`, or `override_skip`). **After upgrading memman, run `memman graph rebuild` for each store** to recompute semantic edges at the active per-surface threshold for its `meta.embed_fingerprint`. Without rebuild, only new insights flowing through `link_pending` get the corrected threshold; existing edges stay at their built-time value.
 
 ### 5.3.3 Embedding in the pipeline
 
-- **Initial (remember — sequential)**: each fact is embedded immediately after extraction.
-- **Merged (remember — sequential)**: if reconciliation merges facts, the merged text is re-embedded.
-- **Enriched (remember — parallel)**: after LLM enrichment extracts keywords, the insight is re-embedded with enriched text (content + keywords).
+- **Initial (remember - sequential)**: each fact is embedded immediately after extraction.
+- **Merged (remember - sequential)**: if reconciliation merges facts, the merged text is re-embedded.
+- **Enriched (remember - parallel)**: after LLM enrichment extracts keywords, the insight is re-embedded with enriched text (content + keywords).
 - **Recovery (`graph rebuild`)**: re-enriches all insights through the full LLM pipeline and updates embeddings.
 - **Recall**: expanded query is embedded for vector search anchors and reranking.
 
@@ -149,7 +149,7 @@ Vector serialization depends on the active storage backend for the store (`MEMMA
 | `cutover`     | Set immediately before the atomic cutover transaction. See "Cutover details" below.                                                                                                                                     |
 | (cleared)     | All `embed_swap_*` meta keys absent; `embed status` shows the new fingerprint.                                                                                                                                          |
 
-**Cutover details.** Postgres uses `CREATE INDEX CONCURRENTLY` (timeout `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT`, default unlimited). SQLite copies the shadow column over the live column. The new fingerprint is written and the swap meta keys are **deleted** — absence is the canonical "no swap in flight" signal, not zeroed sentinel values.
+**Cutover details.** Postgres uses `CREATE INDEX CONCURRENTLY` (timeout `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT`, default unlimited). SQLite copies the shadow column over the live column. The new fingerprint is written and the swap meta keys are **deleted** - absence is the canonical "no swap in flight" signal, not zeroed sentinel values.
 
 `--abort` drops `embedding_pending` (and any uncommitted side column) and clears the swap meta. `memman doctor`'s `no_stale_swap_meta` check warns if any `embed_swap_*` key remains on a store that is not actively swapping.
 

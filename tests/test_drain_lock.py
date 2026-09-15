@@ -48,7 +48,7 @@ def test_release_allows_reacquire(tmp_path):
 def test_lock_releases_on_subprocess_exit(tmp_path):
     """Subprocess holds lock; lock is released after the process exits.
 
-    Verifies kernel-level auto-release on process death — no manual
+    Verifies kernel-level auto-release on process death - no manual
     release call needed.
     """
     script = (

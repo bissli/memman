@@ -117,7 +117,7 @@ def test_serve_interval_zero_loops_until_signaled(runner, monkeypatch):
 
     Validates the bug fix at cli.py removing `or interval == 0` from the
     break condition. Patches `_drain_queue` to count iterations and
-    requests stop on the 5th call — proves the loop is iterating, not
+    requests stop on the 5th call - proves the loop is iterating, not
     exiting after the first drain.
     """
     from memman.setup import scheduler as sched_mod
@@ -142,7 +142,7 @@ def test_serve_interval_zero_loops_until_signaled(runner, monkeypatch):
     assert result.exit_code == 0, result.output
     assert drain_calls['count'] >= 5, (
         f'expected 5+ drain calls (continuous loop); got '
-        f'{drain_calls["count"]} — interval=0 exited too early')
+        f'{drain_calls["count"]} - interval=0 exited too early')
 
 
 def test_serve_interval_zero_idle_backoff(runner, monkeypatch):
@@ -178,7 +178,7 @@ def test_serve_interval_zero_idle_backoff(runner, monkeypatch):
     assert drain_calls['count'] >= 3
     assert elapsed >= 0.2, (
         f'expected >=200ms wall (2x100ms backoff between 3 drains);'
-        f' got {elapsed:.3f}s — backoff missing')
+        f' got {elapsed:.3f}s - backoff missing')
 
 
 def test_serve_default_interval_runs_one_drain(runner, monkeypatch):

@@ -2,7 +2,7 @@
 
 Keeping these in a dedicated module lets `memman.llm` and other
 internal packages raise user-facing errors without importing
-`click` — the CLI layer catches `ConfigError` and re-wraps it as
+`click` - the CLI layer catches `ConfigError` and re-wraps it as
 `click.ClickException` for clean exit behavior.
 """
 

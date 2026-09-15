@@ -1,4 +1,4 @@
-# memman — Design & Architecture
+# memman - Design & Architecture
 
 memman is an LLM-supervised persistent memory store for LLM agents. This document indexes the six chapters that cover its data model, retrieval, write pipeline, lifecycle, and integration surface.
 

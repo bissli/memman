@@ -281,7 +281,7 @@ def install(data_dir: str,
 def _install_serve(interval_seconds: int) -> dict:
     """Record the configured interval for serve-mode hosts.
 
-    Serve mode has no installable artifact — the user runs
+    Serve mode has no installable artifact - the user runs
     `memman scheduler serve` themselves (typically as PID 1 of a
     container). Install just records the interval so `status` and
     `doctor` can report it.
@@ -345,7 +345,7 @@ def _write_env_keys_with_flock(
 def uninstall(data_dir: str | None = None) -> dict:
     """Remove the scheduler trigger, clear state, strip secrets.
 
-    Removes systemd units, launchd plist, or serve marker — whichever
+    Removes systemd units, launchd plist, or serve marker - whichever
     is present. Clears scheduler.state and debug.state. Strips secret
     keys from the env file but keeps non-secret settings so a later
     re-install resurrects model/provider preferences without the user
@@ -1266,14 +1266,14 @@ def status() -> dict:
     """Return the scheduler's current status.
 
     Fields:
-      - platform — 'systemd' | 'launchd' | 'serve'
-      - installed — True iff the trigger file/marker exists
-      - active — True iff the trigger is currently active (timer
+      - platform - 'systemd' | 'launchd' | 'serve'
+      - installed - True iff the trigger file/marker exists
+      - active - True iff the trigger is currently active (timer
         running on systemd/launchd; STATE_STARTED for serve)
-      - next_run — best-effort next-fire timestamp (systemd/launchd only)
-      - interval_seconds — configured interval (read from
+      - next_run - best-effort next-fire timestamp (systemd/launchd only)
+      - interval_seconds - configured interval (read from
         ~/.memman/scheduler.serve_interval for serve mode)
-      - state — persisted user intent ('started' | 'stopped')
+      - state - persisted user intent ('started' | 'stopped')
 
     `state` is the pause/resume gate: `memman scheduler stop` flips it
     to STOPPED; the serve loop polls it every iteration and exits when

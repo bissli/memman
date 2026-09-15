@@ -19,7 +19,7 @@ A clear description of what you expected to happen.
 
 **Environment**
 - OS: [e.g. macOS 15.3, Ubuntu 24.04]
-- memman version: [e.g. 0.1.0 — run `memman --version`]
+- memman version: [e.g. 0.1.0 - run `memman --version`]
 - LLM CLI: [e.g. Claude Code 1.x, OpenClaw 0.x]
 - LLM endpoint: [value of MEMMAN_LLM_ENDPOINT, e.g. https://openrouter.ai/api/v1]
 - API keys configured: [MEMMAN_LLM_API_KEY, MEMMAN_VOYAGE_API_KEY, ...]

@@ -4,7 +4,7 @@ Each shipped asset under `src/memman/setup/assets/` is exposed via
 `importlib.resources`. `symlink_asset` replaces any existing file or
 symlink at `dest` with a fresh symlink pointing at the resolved
 package-relative path. This keeps deployed assets in lock-step with
-the installed package — wheel installs resolve into site-packages,
+the installed package - wheel installs resolve into site-packages,
 editable installs resolve into the source tree.
 """
 

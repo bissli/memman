@@ -1,5 +1,5 @@
 #!/bin/bash
-# memman Stop hook — prompt agent to evaluate remembering.
+# memman Stop hook - prompt agent to evaluate remembering.
 # Returns JSON decision:block so the agent sees the reason and gets
 # one more turn. Checks stop_hook_active to prevent infinite loops.
 

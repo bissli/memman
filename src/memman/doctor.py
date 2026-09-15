@@ -622,7 +622,7 @@ def check_env_permissions() -> dict[str, Any]:
     """Verify ~/.memman/env is 0600 and ~/.memman is 0700.
 
     Relaxed to a PASS when the files don't exist (fresh install, no
-    keys yet — that's a separate problem surfaced by other tools).
+    keys yet - that's a separate problem surfaced by other tools).
     """
     home = Path.home()
     mm_dir = home / '.memman'
@@ -702,7 +702,7 @@ def check_scheduler_heartbeat(data_dir: str) -> dict[str, Any]:
     installed AND active but no recent worker_runs row exists. Empty
     drains rate-limit the heartbeat write to once per 60s wall, so a
     floor of 180s (3 x 60s) avoids false fails at sub-minute intervals
-    (interval=0, 1, 10, etc. — serve mode only). At intervals >= 60s
+    (interval=0, 1, 10, etc. - serve mode only). At intervals >= 60s
     the 3x multiplier dominates: two consecutive misses indicate a
     real problem; one-miss tolerance handles transient delays.
     """
