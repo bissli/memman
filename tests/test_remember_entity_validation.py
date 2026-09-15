@@ -155,7 +155,11 @@ def test_replace_inherits_an_oversized_stored_entity_list(mm_runner):
         against -- or truncating it to 50 instead of passing it
         whole.
     Oracle: a hand-built 66-entity list, decoded off the enqueued
-        row and read back off the stored successor.
+        row exactly, and read back off the stored successor as a
+        subset. The successor carries the enrichment's own names
+        beside the inherited ones, so exact equality there would
+        pass only while something upstream was discarding the
+        enrichment - which is what the count cap used to do.
     """
     _, data_dir = mm_runner
     grown = [f'ent{i}' for i in range(66)]
@@ -178,5 +182,6 @@ def test_replace_inherits_an_oversized_stored_entity_list(mm_runner):
     rows = {r[0]: r for r in _queue_rows(data_dir)}
     assert json.loads(rows[queue_id][2]) == grown
     successor = parse_remember(result, mm_runner)
-    assert open_backend(name, data_dir).nodes.get(
-        successor['id']).entities == grown
+    stored = open_backend(name, data_dir).nodes.get(
+        successor['id']).entities
+    assert [e for e in stored if e in grown] == grown

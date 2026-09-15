@@ -23,11 +23,11 @@ ENRICHMENT_SYSTEM_PROMPT = (
     'Focus on precision -- only include entities and facts you are '
     'confident about from the text.')
 
-# Hard caps applied after parsing so an over-eager LLM (e.g. 80+
-# entities on a large multi-claim blob) cannot inflate the entity
-# graph or the keyword-enriched embedding. Enforced in post-processing
-# rather than the prompt so prompt_version (and stored-row provenance)
-# stays stable.
+# Hard caps on the MODEL's own contribution, so an over-eager LLM
+# (e.g. 80+ entities on a large multi-claim blob) cannot inflate the
+# entity graph or the keyword-enriched embedding. Enforced in
+# post-processing rather than the prompt so prompt_version (and
+# stored-row provenance) stays stable.
 MAX_ENRICH_ENTITIES = 20
 MAX_ENRICH_KEYWORDS = 12
 
@@ -86,15 +86,23 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
     llm_entities = drop_overlong_strings(
         llm_entities, kind='entity', owner=insight.id)
 
+    # Notes:
+    # - The count cap bounds what the MODEL adds, never the seed.
+    #   `merged` starts as the user's --entities, which the CLI has
+    #   already accepted and reported success for, so capping the
+    #   merged list discarded caller input and spent the model's own
+    #   budget on the seed.
     existing = {e.strip().lower() for e in insight.entities}
     merged = list(insight.entities)
+    added = 0
     for e in llm_entities:
+        if added >= MAX_ENRICH_ENTITIES:
+            break
         key = e.strip().lower()
         if key not in existing:
             merged.append(e)
             existing.add(key)
-
-    merged = merged[:MAX_ENRICH_ENTITIES]
+            added += 1
 
     keywords = parsed.get('keywords', [])
     if not isinstance(keywords, list):

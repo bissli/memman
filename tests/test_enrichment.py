@@ -450,3 +450,51 @@ class TestLengthCaps:
         assert long_user in result['entities']
         assert 'ok-entity' in result['entities']
         assert ('L' * 250) not in result['entities']
+
+    def test_user_supplied_entities_are_not_count_capped(self):
+        """A user list longer than the count cap survives whole.
+
+        `MAX_ENRICH_ENTITIES` exists to stop an over-eager model
+        inflating the entity graph, but `merged` is seeded from
+        `insight.entities`, which carries the user's `--entities`.
+        Capping the merged list therefore binds caller input the CLI
+        already accepted and reported success for.
+
+        Mutation: applying the count cap to `merged` instead of to
+            the LLM's own contribution -- the defect this test was
+            written against.
+        Oracle: the hand-built 50-name user list, every name of
+            which must survive.
+        """
+        user = [f'user-{i:02d}' for i in range(50)]
+        insight = make_insight(
+            id='cap-4', content='cap body', entities=list(user))
+        mock_client = MagicMock()
+        mock_client.complete.return_value = _make_enrichment_response(
+            entities=['Redis'])
+
+        result = enrich_with_llm(insight, mock_client)
+
+        assert [e for e in user if e in result['entities']] == user
+
+    def test_the_count_cap_still_bounds_the_llm_contribution(self):
+        """The model cannot add more than the cap beside a user list.
+
+        Mutation: deleting the count cap outright rather than
+            scoping it to the LLM's contribution, which is the
+            inflation the constant exists to prevent.
+        Oracle: the count of result entities absent from the user's
+            own list, against `MAX_ENRICH_ENTITIES`.
+        """
+        from memman.graph.enrichment import MAX_ENRICH_ENTITIES
+        user = ['user-a', 'user-b']
+        insight = make_insight(
+            id='cap-5', content='cap body', entities=list(user))
+        mock_client = MagicMock()
+        mock_client.complete.return_value = _make_enrichment_response(
+            entities=[f'llm-{i:02d}' for i in range(80)])
+
+        result = enrich_with_llm(insight, mock_client)
+
+        added = [e for e in result['entities'] if e not in user]
+        assert len(added) == MAX_ENRICH_ENTITIES
