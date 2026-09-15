@@ -227,6 +227,11 @@ def enqueue(
 
     Notes
     -----
+    - `hint_entities` is a JSON array of entity names, or NULL for
+      none. It is the only list-valued hint column, and JSON is what
+      lets a name carry a comma: an LDAP distinguished name always
+      does, and a delimited column cut one into a fragment per
+      component.
     - `queue_uuid` (the idempotency key) is minted here, never passed
       in: a uuid4 survives a `backup.restore` that rewinds the
       AUTOINCREMENT counter, where a fresh enqueue would otherwise

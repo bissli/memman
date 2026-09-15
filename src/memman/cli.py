@@ -237,37 +237,22 @@ def _parse_since(since: str) -> str:
     return format_timestamp(cutoff)
 
 
-def _parse_entities(entities: str) -> list[str]:
-    """Split a comma-separated entity string into a canonical list.
+def _entities_json(entity_list: list[str]) -> str | None:
+    """Encode an entity list for the queue's `hint_entities` column.
 
     Parameters
     ----------
-    entities : str
-        Comma-separated entity names. An empty or whitespace-only
-        segment is dropped.
+    entity_list : list[str]
+        Entity names, in the order they should reach the drain.
 
     Returns
     -------
-    list[str]
-        The names in input order, each stripped, none empty.
-
-    Notes
-    -----
-    - No cap fires here. The caps live in
-      `_validate_caller_entities` and govern CALLER INPUT alone.
-      Two callers read STORED data instead: the drain re-parses a
-      string the enqueue already canonicalized, and `replace`
-      inherits the list the enrichment path wrote. Neither is caller
-      input, so a caller cap refuses data that is already persisted.
+    str or None
+        A JSON array of the names, or None when the list is empty.
+        None is the column's own no-entities form, so an empty list
+        never reaches the drain as the literal `'[]'`.
     """
-    entity_list: list[str] = []
-    if not entities:
-        return entity_list
-    for e in entities.split(','):
-        e = e.strip()
-        if e:
-            entity_list.append(e)
-    return entity_list
+    return json.dumps(entity_list) if entity_list else None
 
 
 def _validate_caller_entities(entities: str) -> list[str]:
@@ -276,12 +261,13 @@ def _validate_caller_entities(entities: str) -> list[str]:
     Parameters
     ----------
     entities : str
-        The `--entities` value as the caller typed it.
+        The `--entities` value as the caller typed it. An empty or
+        whitespace-only segment is dropped.
 
     Returns
     -------
     list[str]
-        The parsed names, at most 50, each at most 200 chars.
+        The names in input order, at most 50, each at most 200 chars.
 
     Raises
     ------
@@ -290,29 +276,33 @@ def _validate_caller_entities(entities: str) -> list[str]:
 
     Notes
     -----
-    - Both caps are MEASURED against the population they see,
-      fleet-wide on 2026-09-03: 6,220 active rows carrying 116,057
-      entities across 24 stores.
-    - The 200-char per-entity cap is INERT. Longest observed entity
-      is 137 chars, p99 is 42, and zero of 116,057 exceed 200. It has
-      never fired and is kept only as a guard against a pathological
+    - The comma split is the `--entities` ARGUMENT grammar and
+      nothing else. The queue column is JSON (`queue.enqueue`), so a
+      STORED name may itself contain a comma and never passes
+      through here; both caps below govern CALLER INPUT alone.
+    - The 200-char per-entity cap has never fired against a real
+      name and is kept only as a guard against a pathological
       argument.
     - The 50-entity cap governs THIS path alone, and it does not
-      describe what the column holds: 74 rows (1.19%) already carry
-      more than 50 entities, up to 181. `pipeline/remember.py` sets
-      entities from the enrichment without passing through here, and
-      merges them as a monotonic union on every reconciliation, so
-      the machine path is deliberately unbounded while a caller is
-      refused at 51. Raising or removing this cap is a design
-      question, not a tuning one - see QUEUE-1 Q2.
+      describe what the column holds: stored rows already run past
+      it. `pipeline/remember.py` sets entities from the enrichment
+      without passing through here, and merges them as a monotonic
+      union on every reconciliation, so the machine path is
+      deliberately unbounded while a caller is refused at 51.
+      Raising or removing this cap is a design question, not a
+      tuning one - see QUEUE-1 Q2.
     - Neither cap is the binding constraint on usefulness.
       `graph/entity.py` caps entity edges at MAX_TOTAL_ENTITY_EDGES
       = 50 and counts two per target (forward and reverse) at
       MAX_ENTITY_LINKS = 5 targets each, so about FIVE entities
       exhaust the whole edge budget and later ones produce no edge
-      at all. Stored median is 20.
+      at all.
     """
-    entity_list = _parse_entities(entities)
+    entity_list: list[str] = []
+    for e in entities.split(',') if entities else []:
+        e = e.strip()
+        if e:
+            entity_list.append(e)
     for e in entity_list:
         if len(e) > 200:
             raise click.ClickException(
@@ -705,7 +695,9 @@ def config_show(ctx: click.Context) -> None:
 @click.option('--imp', default=3, type=int,
               help='Sort key for listings and tie-breaks (1-5, default 3)')
 @click.option('--source', default='user', help='Source')
-@click.option('--entities', default='', help='Comma-separated entities')
+@click.option('--entities', default='',
+              help='Comma-separated entities. A name containing a'
+                   ' comma cannot be expressed here.')
 @click.option('--no-reconcile', is_flag=True, default=False,
               help='Store the text verbatim: skip fact extraction and'
                    ' reconciliation, so the write cannot be dropped as'
@@ -750,13 +742,10 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
         raise click.ClickException(
             f'importance must be 1-5, got {imp}')
 
-    # Notes:
-    # - Canonicalize here rather than in the drain: the enqueue
-    #   reports success to the caller, so a list the worker would
-    #   reject has to fail now or the write is lost silently.
-    # - Storing the parsed form leaves the drain's own re-parse
-    #   idempotent, so it cannot fail on a row that got this far.
-    entities_clean = ','.join(_validate_caller_entities(entities))
+    # Validate here rather than in the drain: the enqueue reports
+    # success to the caller, so a list the worker would reject has to
+    # fail now or the write is lost silently.
+    entities_json = _entities_json(_validate_caller_entities(entities))
 
     from memman.search.quality import check_content_quality
     quality_warnings = check_content_quality(content_str)
@@ -781,7 +770,7 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
             conn, store=name, content=content_str,
             hint_cat=cat_hint, hint_imp=imp,
             hint_source=source,
-            hint_entities=entities_clean or None,
+            hint_entities=entities_json,
             hint_no_reconcile=no_reconcile,
             session_id=session or None,
             priority=0)
@@ -1445,7 +1434,8 @@ def _process_queue_row(
 
     ctx.assert_fingerprint_unchanged()
 
-    entity_list = _parse_entities(row.hint_entities or '')
+    entity_list = (
+        json.loads(row.hint_entities) if row.hint_entities else [])
     category = row.hint_cat or 'fact'
     importance = row.hint_imp if row.hint_imp is not None else 3
     source = row.hint_source or 'user'
@@ -1790,7 +1780,9 @@ def forget(ctx: click.Context, id: str) -> None:
 @click.option('--imp', default=3, type=int,
               help='Sort key for listings and tie-breaks (1-5, default 3)')
 @click.option('--source', default='user', help='Source')
-@click.option('--entities', default='', help='Comma-separated entities')
+@click.option('--entities', default='',
+              help='Comma-separated entities. A name containing a'
+                   ' comma cannot be expressed here.')
 @click.option('--reconcile/--no-reconcile', 'reconcile', default=False,
               help=('Run LLM reconciliation against existing insights.'
                     ' Default: skip — replace targets a specific id.'))
@@ -1876,10 +1868,14 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
     #   wrote uncapped, so only a caller-typed list is validated.
     #   Capping the inherited one makes any row grown past 50
     #   entities permanently unreplaceable.
+    # - A stored name may itself contain a comma - an LDAP
+    #   distinguished name always does - so the inherited list is
+    #   encoded rather than re-parsed. Splitting one on commas cut a
+    #   single name into a fragment per component.
     if entities_src == click.core.ParameterSource.COMMANDLINE:
-        entities_clean = ','.join(_validate_caller_entities(entities))
+        entities_json = _entities_json(_validate_caller_entities(entities))
     else:
-        entities_clean = ','.join(old.entities) if old.entities else ''
+        entities_json = _entities_json(old.entities)
 
     from memman.queue import enqueue, queue_db
     with queue_db(data_dir_val) as conn:
@@ -1887,7 +1883,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             conn, store=name, content=content_str,
             hint_cat=cat, hint_imp=imp,
             hint_source=source,
-            hint_entities=entities_clean or None,
+            hint_entities=entities_json,
             hint_replaced_id=id,
             hint_no_reconcile=not reconcile,
             session_id=session or None,

@@ -1,14 +1,16 @@
 """`remember` must reject an unusable `--entities` list at enqueue.
 
-The caps live in `_validate_caller_entities`. They once sat in
-`_parse_entities`, whose only caller was the DRAIN path, so an
-oversized list enqueued cleanly, reported `{"action": "queued"}` at
-exit 0, and then died in the worker after `MAX_ATTEMPTS` identical
-failures with the content never stored. The caps then reached a second
-population they do not govern: the entity list `replace` inherits from
-the row it replaces, which the enrichment path writes uncapped. These
-tests pin the placement, not the values: 50 entities and 200 chars are
-unmeasured and deliberately unchanged here.
+The caps live in `_validate_caller_entities`, which parses the
+`--entities` argument grammar. They were once applied where the DRAIN
+reads the queue instead, so an oversized list enqueued cleanly,
+reported `{"action": "queued"}` at exit 0, and then died in the worker
+after `MAX_ATTEMPTS` identical failures with the content never stored.
+They then reached a second population they do not govern: the entity
+list `replace` inherits from the row it replaces, which the enrichment
+path writes uncapped. These tests pin the placement, not the values:
+50 entities and 200 chars are unmeasured and deliberately unchanged
+here. The queue column's own JSON encoding is pinned by
+`test_queue_entity_encoding.py`.
 """
 
 import json
@@ -29,9 +31,9 @@ def _queue_rows(data_dir):
 def test_oversized_entity_list_is_rejected_before_enqueue(mm_runner):
     """Verify 51 entities fails the CLI and writes no queue row.
 
-    Mutation: checking the cap only where the worker reads
-        `row.hint_entities`, so the CLI reports success and the write
-        dies later -- the defect this test was written against.
+    Mutation: checking the cap only in the drain, where the worker
+        reads `row.hint_entities`, so the CLI reports success and the
+        write dies later -- the defect this test was written against.
     Oracle: the CLI exit code plus a direct count of queue rows,
         which must stay at zero.
     """
@@ -67,33 +69,57 @@ def test_overlong_single_entity_is_rejected_before_enqueue(mm_runner):
 
 
 def test_entity_list_at_the_cap_still_enqueues(mm_runner):
-    """Verify exactly 50 entities is accepted and reaches the queue.
+    """Verify 50 entities, one of them 200 chars, still enqueues.
 
-    Mutation: an off-by-one at the boundary (`>= 50` for the count, or
-        `> 200` read as `>= 200` for the length), which would start
-        rejecting writes that are legal today.
-    Oracle: the enqueued row's own `hint_entities`, split and counted
-        back to 50, against a hand-built list straddling the cap.
+    Both caps are straddled by the same input: the list is exactly 50
+    long and its last name is exactly 200 chars, so either boundary
+    moving inward rejects a write that is legal today.
+
+    Mutation: an off-by-one at either boundary - `>= 50` for the
+        count, or `> 200` read as `>= 200` for the length.
+    Oracle: the enqueued row's own `hint_entities`, DECODED, against
+        the hand-built list. Counting comma-separated chunks instead
+        would pass on either encoding: `json.dumps` of 50 comma-free
+        names splits into exactly 50 chunks too.
     """
     _, data_dir = mm_runner
-    entities = ','.join(f'e{i}' for i in range(50))
+    wanted = [f'e{i}' for i in range(49)] + ['x' * 200]
 
     result = invoke(mm_runner, [
         'remember', 'a note carrying exactly the cap',
-        '--entities', entities])
+        '--entities', ','.join(wanted)])
 
     assert result.exit_code == 0
     queue_id = json.loads(result.output)['queue_id']
     rows = {r[0]: r for r in _queue_rows(data_dir)}
-    assert len(rows[queue_id][2].split(',')) == 50
+    assert json.loads(rows[queue_id][2]) == wanted
+
+
+def test_a_write_with_no_entities_leaves_the_column_null(mm_runner):
+    """Verify an entity-free write stores NULL, not the string `[]`.
+
+    Mutation: `_entities_json` collapsed to a bare `json.dumps`, so
+        every entity-free write puts the literal `'[]'` in the column
+        where its documented no-entities form is NULL.
+    Oracle: the raw column value read straight off the queue row,
+        compared against None rather than against any parse of it.
+    """
+    _, data_dir = mm_runner
+
+    result = invoke(mm_runner, ['remember', 'a note carrying no entities'])
+
+    assert result.exit_code == 0
+    queue_id = json.loads(result.output)['queue_id']
+    rows = {r[0]: r for r in _queue_rows(data_dir)}
+    assert rows[queue_id][2] is None
 
 
 def test_replace_rejects_an_oversized_entity_list_too(mm_runner):
     """Verify `replace` shares the enqueue-time check, not just `remember`.
 
-    `replace` enqueues `hint_entities` through the same column and the
-    same drain-side re-parse, so a fix applied only to `remember`
-    leaves the identical silent loss reachable one command over.
+    `replace` enqueues `hint_entities` through the same column and
+    the same validator, so a fix applied only to `remember` leaves the
+    identical silent loss reachable one command over.
 
     Mutation: validating in `remember` alone and leaving `replace`
         enqueuing an unchecked list.
@@ -119,17 +145,17 @@ def test_replace_inherits_an_oversized_stored_entity_list(mm_runner):
     """Verify `replace` without `--entities` carries a 66-entity list through.
 
     The enrichment path writes `entities` without passing through
-    `_parse_entities` and merges as a monotonic union, so a stored
-    list grows past the caller cap on its own. Applying the
-    caller-input cap to that inherited list makes the row
-    permanently unreplaceable, whatever the replacement text says.
+    `_validate_caller_entities` and merges as a monotonic union, so a
+    stored list grows past the caller cap on its own. Applying the
+    caller-input cap to that inherited list makes the row permanently
+    unreplaceable, whatever the replacement text says.
 
     Mutation: validating the INHERITED entity list against the
         caller-input cap -- the defect this test was written
         against -- or truncating it to 50 instead of passing it
         whole.
-    Oracle: a hand-built 66-entity list, counted back off the
-        enqueued row and off the stored successor.
+    Oracle: a hand-built 66-entity list, decoded off the enqueued
+        row and read back off the stored successor.
     """
     _, data_dir = mm_runner
     grown = [f'ent{i}' for i in range(66)]
@@ -150,7 +176,7 @@ def test_replace_inherits_an_oversized_stored_entity_list(mm_runner):
     assert result.exit_code == 0, result.output
     queue_id = json.loads(result.output)['queue_id']
     rows = {r[0]: r for r in _queue_rows(data_dir)}
-    assert rows[queue_id][2].split(',') == grown
+    assert json.loads(rows[queue_id][2]) == grown
     successor = parse_remember(result, mm_runner)
     assert open_backend(name, data_dir).nodes.get(
         successor['id']).entities == grown
