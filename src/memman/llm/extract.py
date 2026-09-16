@@ -138,13 +138,13 @@ Output: {"facts": [{"text": "The pipeline uses Postgres as the system of record;
 ## Examples - Category 3: Skip as non-durable
 
 Input: "All tests passed in the latest CI run after the rebase."
-Output: {"facts": [], "skip_reason": "test_run_receipt"}
+Output: {"facts": [], "skip_reason": "status_update"}
 
 Input: "Currently processing the backlog at about 12 documents per second."
-Output: {"facts": [], "skip_reason": "ephemeral_throughput"}
+Output: {"facts": [], "skip_reason": "ephemeral_metric"}
 
 Input: "Just deployed v1.4 to staging via the release script."
-Output: {"facts": [], "skip_reason": "deployment_receipt"}
+Output: {"facts": [], "skip_reason": "action_confirmation"}
 
 Input: "Hi there"
 Output: {"facts": [], "skip_reason": "greeting"}
