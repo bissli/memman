@@ -69,7 +69,7 @@ Otherwise continue to Step 2.
 
 ## Step 2: Canonical-shape rewrite
 
-Rewrite into clean prose, claim-for-claim. The rewrite is strictly 1-to-1: same facts, reshaped surface form. Apply:
+Rewrite into clean prose, claim-for-claim, as ONE continuous passage. The rewrite is 1-to-1 in content, not in output count: every claim survives, reshaped surface form. Apply:
 
 - Strip all-caps section markers (REBUILD COST:, KEY FINDING:, ROOT CAUSE:, ARCHITECTURAL CONSTRAINT:)
 - Strip back-references (memory [N], see [0], "as mentioned earlier")
@@ -84,10 +84,10 @@ Rewrite into clean prose, claim-for-claim. The rewrite is strictly 1-to-1: same 
 
 Return EXACTLY ONE fact whose `text` is the cleaned content from Step 2. Do NOT split a coherent input into multiple facts. The user remembers in coherent chunks; recall synthesizes across chunks via the graph and similarity. Splitting at storage time loses context.
 
-CRITICAL: even if the input contains 3-5 distinct claims about a single coherent topic (e.g., a multi-section blob describing one system's behavior), return ONE fact whose text covers all the claims in canonical paragraph form. Splitting is not the curator's job.
+CRITICAL: `facts` carries exactly one object in every accepted response, whatever the input's length, its section count, or the number of unrelated subjects it mixes. A long multi-section input becomes one long fact: keep every claim, over as many sentences or paragraphs as that takes. Never emit one array item per section or per claim.
 
-Output JSON:
-{"facts": [{"text": "<cleaned content>", "category": "preference|decision|fact|insight|context", "entities": [...]}], "skip_reason": null}
+Output JSON (`facts` has length 1, or is empty when Step 1 skipped):
+{"facts": [{"text": "<all of the cleaned content from Step 2, however long>", "category": "preference|decision|fact|insight|context", "entities": [...]}], "skip_reason": null}
 
 ## Category mapping
 
