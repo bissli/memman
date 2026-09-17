@@ -227,14 +227,24 @@ def _scheduler_started(request, monkeypatch):
     `MemmanCliRunner` (default `runner` fixture) which auto-drains
     after `remember`/`replace`. Tests that intentionally inspect a
     pre-drain queue should use the `no_auto_drain` mark.
+
+    The `scheduler_stopped` mark forces STOPPED instead, for a command
+    such as `graph rebuild` that requires the drain to be down. It has
+    to patch rather than merely stand aside, because `read_state()`
+    otherwise reads the developer machine's own scheduler state and a
+    started timer there fails the test.
     """
     if 'tests/e2e/' in str(request.node.fspath):
         return
     if request.node.fspath.basename == 'test_scheduler_setup.py':
         return
+    from memman.setup import scheduler as sched_mod
+    if 'scheduler_stopped' in request.keywords:
+        monkeypatch.setattr(sched_mod, 'read_state',
+                            lambda: sched_mod.STATE_STOPPED)
+        return
     if 'no_scheduler_started_mock' in request.keywords:
         return
-    from memman.setup import scheduler as sched_mod
     monkeypatch.setattr(sched_mod, 'read_state',
                         lambda: sched_mod.STATE_STARTED)
 

@@ -37,11 +37,38 @@ MAX_ENRICH_ENTITIES = 20
 MAX_ENRICH_KEYWORDS = 12
 
 
-def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
+def enrich_with_llm(
+        insight: Insight, llm_client: object,
+        *, seed_entities: bool = True) -> dict:
     """Extract enrichment fields from an insight via LLM.
 
-    Returns a dict with keys: entities, keywords, summary, semantic_facts.
-    Pure function -- caller handles all DB writes.
+    Parameters
+    ----------
+    insight : Insight
+        The row to enrich. Its `entities` seed the returned list.
+    llm_client : object
+        Anything exposing `complete(system, user, stage=...)`.
+    seed_entities : bool, default True
+        True unions the model's entities onto the stored list. False
+        returns the model's entities alone, so the caller's write
+        REPLACES the row's vocabulary.
+
+    Returns
+    -------
+    dict
+        Keys `entities`, `keywords`, `summary`, `semantic_facts`, or
+        empty on an LLM or parse failure. Pure function -- the caller
+        handles every DB write.
+
+    Notes
+    -----
+    - A rebuild passes `seed_entities=False`. Stored order decides
+      which names reach `create_entity_edges` before
+      `MAX_TOTAL_ENTITY_EDGES` is spent, and the seed sits first, so
+      a seeded rebuild leaves the new names with no edge at all.
+    - `seed_entities=False` drops a caller-supplied `--entity` name
+      the model does not return. That is the stated cost of replacing
+      a vocabulary; no column, oplog row or queue hint recovers one.
     """
     prompt = f'INSIGHT (id={insight.id[:8]}):\n{insight.content}'
     trace.event(
@@ -99,8 +126,11 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
     #   already validated and accepted, so capping the merged list
     #   discarded caller input and spent the model's own budget on
     #   the seed.
-    existing = {e.strip().lower() for e in insight.entities}
-    merged = list(insight.entities)
+    # - An unseeded call caps the model at MAX_ENRICH_ENTITIES on its
+    #   own, since every name it returns is an addition.
+    seed = list(insight.entities) if seed_entities else []
+    existing = {e.strip().lower() for e in seed}
+    merged = list(seed)
     added = 0
     for e in llm_entities:
         if added >= MAX_ENRICH_ENTITIES:

@@ -128,11 +128,18 @@ class TestLinkPending:
             ).fetchone()[0]
         assert pending == 3
 
-    def test_llm_none_skips_inference(self, tmp_db, tmp_backend):
-        """llm_client=None processes insights without LLM calls."""
+    def test_unreachable_llm_still_links(
+            self, tmp_db, tmp_backend, monkeypatch):
+        """An unreachable LLM still links the insight."""
+        from memman.graph import engine as engine_mod
+
+        def _unavailable(role, *args, **kwargs):
+            raise RuntimeError(f'no credential for {role}')
+
+        monkeypatch.setattr(engine_mod, 'get_llm_client', _unavailable)
         _insert_pending(tmp_db, 'ln-1', 'content for llm none test')
 
-        processed = link_pending(tmp_backend, llm_client=None, store_name='test')
+        processed = link_pending(tmp_backend, store_name='test')
         assert processed == 1
 
         row = tmp_db._conn.execute(
@@ -165,7 +172,7 @@ class TestLinkPending:
                 return '[]'
 
         link_pending(
-            tmp_backend, llm_client=TxTrackingLLM(), store_name='test')
+            tmp_backend, metadata_llm_client=TxTrackingLLM(), store_name='test')
 
         llm_calls_in_tx = [c for c in call_log if c['in_tx']]
         assert llm_calls_in_tx == [], (

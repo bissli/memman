@@ -119,13 +119,27 @@ class TestEnrichWithLLM:
         assert result == {}
         assert any(r.levelno == logging.WARNING for r in caplog.records)
 
-    def test_llm_client_none_skips(self, tmp_db, tmp_backend):
-        """link_pending with llm_client=None skips enrichment."""
-        insight = make_insight(
-            id='nc-1', content='test content')
-        insert_insight(tmp_db, insight)
+    def test_unresolvable_metadata_role_still_links(
+            self, tmp_db, tmp_backend, monkeypatch):
+        """An unavailable metadata client links the row unenriched.
 
-        count = link_pending(tmp_backend, llm_client=None, max_batch=1, store_name='test')
+        Mutation: resolving `slow_metadata` before the loop instead of
+            at the row that needs it, which turns a missing credential
+            into a raise and leaves a store with nothing to enrich
+            unable to relink at all.
+        Oracle: the enrichment columns, which stay null, beside the
+            processed count, which does not.
+        """
+        from memman.graph import engine as engine_mod
+
+        def _unavailable(role, *args, **kwargs):
+            raise RuntimeError(f'no credential for {role}')
+
+        monkeypatch.setattr(engine_mod, 'get_llm_client', _unavailable)
+        insert_insight(tmp_db, make_insight(
+            id='nc-1', content='test content'))
+
+        count = link_pending(tmp_backend, max_batch=1, store_name='test')
         assert count == 1
 
         cols = _read_enrichment_columns(tmp_db, 'nc-1')
@@ -218,7 +232,7 @@ class TestReEmbed:
         embed_cache = dict(tmp_backend.nodes.iter_embeddings_as_vecs())
         link_pending(
             tmp_backend, embed_cache=embed_cache,
-            llm_client=mock_llm, embed_client=mock_embed,
+            metadata_llm_client=mock_llm, embed_client=mock_embed,
             max_batch=1, store_name='test')
 
         mock_embed.embed.assert_called_once()
@@ -236,7 +250,7 @@ class TestReEmbed:
         mock_llm.complete.return_value = _make_enrichment_response()
 
         link_pending(
-            tmp_backend, llm_client=mock_llm, embed_client=None,
+            tmp_backend, metadata_llm_client=mock_llm, embed_client=None,
             max_batch=1, store_name='test')
 
         cols = _read_enrichment_columns(tmp_db, 'rs-1')
@@ -256,7 +270,7 @@ class TestReEmbed:
         mock_embed.embed.side_effect = RuntimeError('embed crashed')
 
         link_pending(
-            tmp_backend, llm_client=mock_llm, embed_client=mock_embed,
+            tmp_backend, metadata_llm_client=mock_llm, embed_client=mock_embed,
             max_batch=1, store_name='test')
 
         row = tmp_db._conn.execute(
@@ -349,7 +363,7 @@ def test_link_pending_relink_only_skips_enrich(tmp_db, tmp_backend):
 
     mock_llm = MagicMock()
     link_pending(
-        tmp_backend, llm_client=mock_llm, embed_client=None, max_batch=5,
+        tmp_backend, metadata_llm_client=mock_llm, embed_client=None, max_batch=5,
         store_name='test')
 
     mock_llm.complete.assert_not_called()
@@ -500,3 +514,65 @@ class TestLengthCaps:
 
         added = [e for e in result['entities'] if e not in user]
         assert len(added) == MAX_ENRICH_ENTITIES
+
+
+class TestRebuildEntityClearing:
+    """The rebuild path replaces a row's entity vocabulary."""
+
+    def test_rebuild_reset_row_drops_the_old_vocabulary(
+            self, tmp_db, tmp_backend):
+        """Verify a rebuild-reset row stores only the new entities.
+
+        Mutation: seeding `merged` from `insight.entities` on the
+            rebuild path, so the previous vocabulary survives and sits
+            first in stored order, spending the entity edge budget on
+            names the rebuild exists to replace.
+        Oracle: hand-computed - the stub returns the verbatim spans of
+            the two stored coined labels, so a replaced list is exactly
+            those two spans and a seeded list is all four.
+        """
+        insight = make_insight(
+            id='clr-1',
+            content='bgodin deployed the stack into us-east-1 today.',
+            entities=['Person: bgodin', 'AWS Region: us-east-1'])
+        insert_insight(tmp_db, insight)
+
+        mock_client = MagicMock()
+        mock_client.complete.return_value = _make_enrichment_response(
+            entities=['bgodin', 'us-east-1'])
+
+        link_pending(
+            tmp_backend, metadata_llm_client=mock_client, max_batch=1,
+            store_name='test', replace_entity_ids={'clr-1'})
+
+        stored = _read_enrichment_columns(tmp_db, 'clr-1')['entities']
+        assert stored == ['bgodin', 'us-east-1']
+
+    def test_never_enriched_row_keeps_caller_entities(
+            self, tmp_db, tmp_backend):
+        """Verify a first enrichment still seeds from the stored list.
+
+        Mutation: dropping the seed unconditionally, which destroys the
+            caller's `--entity` names on a row whose enrichment never
+            ran - they are recoverable from no schema column, oplog row
+            or queue hint.
+        Oracle: hand-computed - a row absent from `replace_entity_ids`
+            keeps its stored name beside the model's contribution, so
+            the list is the seed followed by the two new spans.
+        """
+        insight = make_insight(
+            id='clr-2',
+            content='bgodin deployed the stack into us-east-1 today.',
+            entities=['OPAD.W.25'])
+        insert_insight(tmp_db, insight)
+
+        mock_client = MagicMock()
+        mock_client.complete.return_value = _make_enrichment_response(
+            entities=['bgodin', 'us-east-1'])
+
+        link_pending(
+            tmp_backend, metadata_llm_client=mock_client, max_batch=1,
+            store_name='test')
+
+        stored = _read_enrichment_columns(tmp_db, 'clr-2')['entities']
+        assert stored == ['OPAD.W.25', 'bgodin', 'us-east-1']

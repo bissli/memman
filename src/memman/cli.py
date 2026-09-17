@@ -4073,6 +4073,51 @@ def prime() -> None:
     _emit_guide(session_id)
 
 
+def _settle_rebuilt_edges(
+        backend: 'Backend', embed_cache: dict[str, list[float]],
+        metadata_llm_client: object, embed_client: object,
+        *, store_name: str) -> None:
+    """Re-derive a rebuilt store's auto edges and restore linked_at.
+
+    Parameters
+    ----------
+    backend : Backend
+        The store a rebuild loop has just walked.
+    embed_cache : dict[str, list[float]]
+        The loop's embedding cache, reused so the relink pass reads no
+        vector twice.
+    metadata_llm_client : object
+        The `slow_metadata` client. Every row is enriched by the time
+        this runs, so the relink pass makes no LLM call, but a row
+        whose enrichment failed mid-loop still reaches the right role.
+    embed_client : object
+        The store-bound embedder.
+    store_name : str
+        Selects the per-store semantic threshold surface.
+
+    Notes
+    -----
+    - A rebuild's per-row pass deletes each row's auto edges in BOTH
+      directions before recreating them, against a corpus whose
+      vocabulary is still converging, so it leaves edges a clean
+      derivation never writes. One global re-derive repairs the whole
+      store at no LLM cost, which is why no operator command is owed.
+    - `reindex_auto_edges` ends in `clear_linked_at`, so the relink
+      pass here re-stamps what it unstamped. Without it a rebuild
+      returns reporting its whole corpus as pending.
+    """
+    from memman.graph.engine import link_pending, reindex_auto_edges
+
+    reindex_auto_edges(backend, store_name=store_name)
+    while True:
+        if link_pending(
+                backend, embed_cache=embed_cache,
+                metadata_llm_client=metadata_llm_client,
+                embed_client=embed_client,
+                store_name=store_name) == 0:
+            break
+
+
 def _graph_rebuild_stale_only(
         ctx: click.Context, *, dry_run: bool,
         progress_jsonl: bool) -> None:
@@ -4093,7 +4138,7 @@ def _graph_rebuild_stale_only(
     from memman.pipeline.remember import compute_prompt_version
 
     if not dry_run:
-        _require_started('rebuild')
+        _require_stopped('rebuild')
 
     try:
         active_pv = compute_prompt_version()
@@ -4141,7 +4186,6 @@ def _graph_rebuild_stale_only(
                 _json_out(stats)
                 return
 
-            llm_client = _get_llm_client_or_fail('slow_canonical')
             metadata_llm_client = _get_llm_client_or_fail('slow_metadata')
             ec = bound_embedder(backend)
 
@@ -4175,21 +4219,26 @@ def _graph_rebuild_stale_only(
             for i in range(0, total_count, MAX_LINK_BATCH):
                 batch_ids = stale_ids[i:i + MAX_LINK_BATCH]
                 backend.nodes.reset_for_rebuild(batch_ids)
+                reset_ids = set(batch_ids)
 
                 while True:
                     count = link_pending(
                         backend, embed_cache=embed_cache,
-                        llm_client=llm_client,
                         metadata_llm_client=metadata_llm_client,
                         embed_client=ec,
                         on_progress=_on_progress,
-                        store_name=store_name)
+                        store_name=store_name,
+                        replace_entity_ids=reset_ids)
                     processed += count
                     if count == 0:
                         break
 
             bar.set_description('Done')
             bar.close()
+
+            _settle_rebuilt_edges(
+                backend, embed_cache, metadata_llm_client, ec,
+                store_name=store_name)
 
             remaining = backend.nodes.count_pending_links()
 
@@ -4229,7 +4278,7 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
         return
 
     if not dry_run:
-        _require_started('rebuild')
+        _require_stopped('rebuild')
     from memman.embed.fingerprint import bound_embedder
     from memman.graph.engine import MAX_LINK_BATCH, link_pending
 
@@ -4237,7 +4286,6 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
     store_name = _resolve_store_name(data_dir, ctx.obj['store'])
 
     with _active_backend(ctx) as backend:
-        llm_client = _get_llm_client_or_fail('slow_canonical')
         metadata_llm_client = _get_llm_client_or_fail('slow_metadata')
         ec = bound_embedder(backend)
 
@@ -4287,21 +4335,26 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
             for i in range(0, total_count, MAX_LINK_BATCH):
                 batch_ids = all_ids[i:i + MAX_LINK_BATCH]
                 backend.nodes.reset_for_rebuild(batch_ids)
+                reset_ids = set(batch_ids)
 
                 while True:
                     count = link_pending(
                         backend, embed_cache=embed_cache,
-                        llm_client=llm_client,
                         metadata_llm_client=metadata_llm_client,
                         embed_client=ec,
                         on_progress=_on_progress,
-                        store_name=store_name)
+                        store_name=store_name,
+                        replace_entity_ids=reset_ids)
                     processed += count
                     if count == 0:
                         break
 
             bar.set_description('Done')
             bar.close()
+
+            _settle_rebuilt_edges(
+                backend, embed_cache, metadata_llm_client, ec,
+                store_name=store_name)
 
             remaining = backend.nodes.count_pending_links()
 

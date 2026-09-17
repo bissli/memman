@@ -1478,6 +1478,7 @@ class TestSingleTierEnrichment:
         assert row[0] is not None
 
 
+@pytest.mark.scheduler_stopped
 class TestGraphRebuild:
     """Graph rebuild command tests - dry-run, live, edge preservation."""
 
@@ -1640,7 +1641,132 @@ class TestGraphRebuild:
             'should preserve created_by=claude')
         db.close()
 
+    def test_rebuild_replaces_the_stored_entity_vocabulary(
+            self, tmp_path, monkeypatch):
+        """Rebuild stores the new entity names, not both vocabularies.
 
+        Mutation: the rebuild loop omitting `replace_entity_ids`, so
+            `link_pending` seeds from the stored list and the old
+            coined labels survive ahead of the new names, where
+            `create_entity_edges` spends the edge budget before it
+            reaches one of them.
+        Oracle: the enrichment stub derives entities from capitalized
+            words in the body it is sent, so a `Database: Postgres`
+            label that body does not contain can only survive by being
+            seeded.
+        """
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
+        data_dir = str(tmp_path)
+        store_path = tmp_path / 'data' / 'default'
+        from memman.store.db import open_db
+        from memman.store.node import insert_insight
+        from tests.conftest import make_insight
+        db = open_db(str(store_path))
+        insert_insight(db, make_insight(
+            id='vocab-1',
+            content='Postgres replaced SQLite for the Warrant ledger.',
+            entities=['Database: Postgres', 'Library: SQLite']))
+        db._conn.execute(
+            "UPDATE insights"
+            " SET linked_at = '2024-01-01T00:00:00+00:00',"
+            "     enriched_at = '2024-01-01T00:00:00+00:00'"
+            " WHERE id = 'vocab-1'")
+        db.close()
+
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            '--data-dir', data_dir, 'graph', 'rebuild'])
+        assert result.exit_code == 0, result.output
+
+        db = open_db(str(store_path))
+        raw = db._conn.execute(
+            "SELECT entities FROM insights WHERE id = 'vocab-1'"
+            ).fetchone()[0]
+        db.close()
+        stored = json.loads(raw)
+        assert 'Database: Postgres' not in stored
+        assert 'Library: SQLite' not in stored
+        assert {'Postgres', 'SQLite', 'Warrant'} <= set(stored)
+
+
+@pytest.mark.scheduler_stopped
+class TestGraphRebuildAutoEdges:
+    """A rebuild re-derives the auto edges its own loop disturbed."""
+
+    def test_rebuild_leaves_the_clean_slate_entity_edge_set(
+            self, tmp_path, monkeypatch):
+        """Rebuild's edge set already equals a clean re-derivation.
+
+        Mutation: omitting the end-of-loop re-derive, so a later row's
+            both-direction `delete_auto_for_node` leaves an earlier
+            already-stamped row short of links it earned - eight rows
+            share one entity against `MAX_ENTITY_LINKS = 5`, so the
+            per-row order decides who keeps what. Here it shows as
+            edges an unfinished pass left behind: `Postgres` sits in
+            every row, so its IDF weight is zero and a clean pass
+            writes no edge for it at all.
+        Oracle: a differential re-implementation - `reindex_auto_edges`
+            deletes every auto edge in one pre-pass and rebuilds from
+            the converged vocabulary, so its output is the set a
+            finished rebuild owes.
+        """
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
+        data_dir = str(tmp_path)
+        store_path = tmp_path / 'data' / 'default'
+        from memman.graph.engine import reindex_auto_edges
+        from memman.store.db import open_db
+        from memman.store.edge import get_all_edges
+        from memman.store.factory import open_backend
+
+        db = open_db(str(store_path))
+        for n in range(8):
+            group = 'Redis' if n < 4 else 'Kafka'
+            insert_insight(db, make_insight(
+                id=f'ae-{n}',
+                content=f'Postgres carries the {group} ledger, note {n}.'))
+        db.close()
+
+        result = CliRunner().invoke(cli, [
+            '--data-dir', data_dir, 'graph', 'rebuild'])
+        assert result.exit_code == 0, result.output
+
+        def _entity_edges() -> set:
+            db = open_db(str(store_path))
+            edges = {(e.source_id, e.target_id) for e in get_all_edges(db)
+                     if e.edge_type == 'entity'}
+            db.close()
+            return edges
+
+        after_rebuild = _entity_edges()
+        reindex_auto_edges(
+            open_backend('default', data_dir), store_name='default')
+        assert after_rebuild == _entity_edges()
+        assert after_rebuild
+
+
+class TestGraphRebuildIsolation:
+    """A corpus rebuild refuses to race the scheduler drain."""
+
+    def test_rebuild_rejected_while_scheduler_started(self, tmp_path):
+        """A started scheduler blocks a rebuild, both modes.
+
+        Mutation: guarding the rebuild with `_require_started`, the
+            sense `embed reembed` and `embed swap` already take the
+            other way, so the drain's relink path keeps claiming rows
+            the rebuild just reset and re-enriches them on the wrong
+            model.
+        Oracle: the message `_require_stopped` raises, which names the
+            command that clears the way; the autouse fixture holds the
+            state at STARTED for this class.
+        """
+        for extra in ([], ['--stale-only']):
+            out = CliRunner().invoke(cli, [
+                '--data-dir', str(tmp_path), 'graph', 'rebuild'] + extra)
+            assert out.exit_code != 0, out.output
+            assert 'scheduler stop' in out.output
+
+
+@pytest.mark.scheduler_stopped
 class TestGraphRebuildStaleOnly:
     """Tests for `graph rebuild --stale-only` flag."""
 

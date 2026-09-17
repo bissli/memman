@@ -31,14 +31,21 @@ class TestEnrichedAtColumn:
 class TestEnrichedAtOnLinkPending:
     """link_pending sets enriched_at only when LLM enrichment succeeds."""
 
-    def test_no_llm_sets_linked_at_only(self, tmp_db, tmp_backend):
-        """Without LLM client, linked_at is set but enriched_at stays NULL."""
+    def test_no_llm_sets_linked_at_only(
+            self, tmp_db, tmp_backend, monkeypatch):
+        """An unreachable LLM sets linked_at but leaves enriched_at NULL."""
+        from memman.graph import engine as engine_mod
+
+        def _unavailable(role, *args, **kwargs):
+            raise RuntimeError(f'no credential for {role}')
+
+        monkeypatch.setattr(engine_mod, 'get_llm_client', _unavailable)
         _insert_pending(tmp_db, 'nl-1', 'test without llm')
         tmp_db._conn.execute(
             'UPDATE insights SET enriched_at = NULL'
             " WHERE id = 'nl-1'")
 
-        link_pending(tmp_backend, llm_client=None, store_name='test')
+        link_pending(tmp_backend, store_name='test')
 
         row = tmp_db._conn.execute(
             'SELECT linked_at, enriched_at FROM insights'
@@ -58,7 +65,7 @@ class TestEnrichedAtOnLinkPending:
             '{"keywords": ["test"], "summary": "test",'
             ' "semantic_facts": [], "entities": []}')
 
-        link_pending(tmp_backend, llm_client=mock_llm, store_name='test')
+        link_pending(tmp_backend, metadata_llm_client=mock_llm, store_name='test')
 
         row = tmp_db._conn.execute(
             'SELECT linked_at, enriched_at FROM insights'
@@ -96,7 +103,7 @@ class TestEnrichedAtOnLinkPending:
 
         with caplog.at_level(logging.WARNING, logger='memman'):
             link_pending(
-                tmp_backend, llm_client=mock_llm,
+                tmp_backend, metadata_llm_client=mock_llm,
                 embed_client=_FailingClient(), store_name='test')
 
         warned = [r for r in caplog.records

@@ -84,8 +84,7 @@ def run_maintenance(
 def _relink_pending_if_any(
         backend: Any, store_name: str,
         deadline_monotonic: float, *,
-        embed_client: Any = None,
-        llm_client: Any = None) -> None:
+        embed_client: Any = None) -> None:
     """Drain a bounded slice of a store's pending-link backlog.
 
     Quiet stores whose `linked_at` was cleared by a constants-hash
@@ -105,25 +104,15 @@ def _relink_pending_if_any(
         logger.exception(
             f'maintenance: count_pending_links failed for {store_name!r}')
         return
-    if embed_client is None or llm_client is None:
+    if embed_client is None:
         from memman.embed.fingerprint import bound_embedder
-        from memman.llm.client import get_llm_client
-        if embed_client is None:
-            try:
-                embed_client = bound_embedder(backend)
-            except Exception:
-                embed_client = None
-        if llm_client is None:
-            try:
-                llm_client = get_llm_client('slow_canonical')
-            except Exception:
-                logger.exception(
-                    f'maintenance: llm client unavailable for relink of'
-                    f' {store_name!r}')
-                return
+        try:
+            embed_client = bound_embedder(backend)
+        except Exception:
+            embed_client = None
     try:
         processed = link_pending(
-            backend, llm_client=llm_client, embed_client=embed_client,
+            backend, embed_client=embed_client,
             max_batch=MAX_LINK_BATCH, store_name=store_name)
         if processed:
             logger.debug(
@@ -168,7 +157,7 @@ def _reindex_all_stores_if_drift(
                     ctx.backend, store_name=store_name)
                 _relink_pending_if_any(
                     ctx.backend, store_name, deadline_monotonic,
-                    embed_client=ctx.ec, llm_client=ctx.llm_client)
+                    embed_client=ctx.ec)
             except Exception:
                 logger.exception(
                     f'maintenance: reindex_if_constants_changed failed'
@@ -233,7 +222,6 @@ def _run_per_store_maintenance(
         processed = link_pending(
             ctx.backend,
             embed_cache=ctx.embed_cache,
-            llm_client=ctx.llm_client,
             embed_client=ctx.ec,
             max_batch=MAINTENANCE_LINK_PENDING_MAX,
             store_name=store_name)

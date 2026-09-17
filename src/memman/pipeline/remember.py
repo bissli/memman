@@ -329,9 +329,7 @@ def run_remember(
 
     if llm_client is None:
         llm_client = get_llm_client('slow_canonical')
-        metadata_llm_client = get_llm_client('slow_metadata')
-    else:
-        metadata_llm_client = llm_client
+    metadata_llm_client = get_llm_client('slow_metadata')
     if stage_llm_client is None:
         stage_llm_client = get_llm_client('fast_worker')
     llm_calls = 0

@@ -14,7 +14,7 @@ from memman.graph.entity import create_entity_edges
 from memman.graph.semantic import create_semantic_edges
 from memman.graph.temporal import MAX_PROXIMITY_EDGES, MIN_PROXIMITY_WEIGHT
 from memman.graph.temporal import TEMPORAL_WINDOW_HOURS, create_temporal_edge
-from memman.llm.client import MemmanLLMClient
+from memman.llm.client import MemmanLLMClient, get_llm_client
 from memman.store.backend import Backend
 from memman.store.model import Insight, dedupe_entities
 
@@ -38,13 +38,13 @@ MAX_LINK_BATCH = 20
 def link_pending(
         backend: Backend,
         embed_cache: dict[str, list[float]] | None = None,
-        llm_client: MemmanLLMClient | None = None,
         metadata_llm_client: MemmanLLMClient | None = None,
         embed_client: EmbeddingProvider | None = None,
         max_batch: int = MAX_LINK_BATCH,
         on_progress: Callable[[str, Insight], None] | None = None,
         *,
         store_name: str,
+        replace_entity_ids: set[str] | None = None,
         ) -> int:
     """Process insights where linked_at IS NULL.
 
@@ -57,6 +57,20 @@ def link_pending(
     omitted store name silently resolves the code-surface row and
     drops any `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>` override, which
     is a wrong threshold rather than a missing one.
+
+    `metadata_llm_client` serves the enrichment call. An omitted one
+    is resolved from `slow_metadata` HERE rather than inherited from a
+    caller's canonical client: `compute_prompt_version` stamps the
+    metadata model on every row this pass writes, so a canonical
+    client enriching the row makes that stamp name a model that did
+    not run and prices the call at the wrong role.
+
+    `replace_entity_ids` names the rows whose stored entity vocabulary
+    this pass REPLACES rather than extends - the ids a rebuild just
+    passed to `reset_for_rebuild`. Every other row keeps its stored
+    names as the seed. It is a set rather than a flag because one
+    `link_pending` call drains whatever is pending, which mixes a
+    rebuild's reset rows with rows the drain left behind.
     """
     pending_ids = backend.nodes.get_pending_link_ids(limit=max_batch)
     if not pending_ids:
@@ -68,8 +82,8 @@ def link_pending(
     semantic_threshold = _resolve_semantic_threshold(
         backend, store_name=store_name)
 
-    if metadata_llm_client is None:
-        metadata_llm_client = llm_client
+    if replace_entity_ids is None:
+        replace_entity_ids = set()
 
     from memman.graph.enrichment import enrich_with_llm
     from memman.pipeline.remember import compute_prompt_version
@@ -101,8 +115,19 @@ def link_pending(
 
         enrichment: dict = {}
         if not relink_only:
+            # Notes:
+            # - Resolved here rather than before the loop so a store
+            #   with nothing to enrich still relinks without LLM
+            #   credentials. get_llm_client caches per role, so the
+            #   repeat costs nothing.
+            # - Inside the try, so an unresolvable role degrades to an
+            #   unenriched row exactly as a failed call does.
             try:
-                enrichment = enrich_with_llm(insight, metadata_llm_client)
+                if metadata_llm_client is None:
+                    metadata_llm_client = get_llm_client('slow_metadata')
+                enrichment = enrich_with_llm(
+                    insight, metadata_llm_client,
+                    seed_entities=insight_id not in replace_entity_ids)
             except Exception:
                 enrichment = {}
 
