@@ -229,13 +229,16 @@ def test_concurrent_stages_do_not_interleave_usage():
 
 
 def test_all_call_sites_use_closed_set_stages():
-    """Every production `complete()` call names a closed-set stage.
+    """Every production LLM call names a closed-set stage.
 
     Mutation: a typo'd stage string at a call site creating a
-        phantom bucket that never appears in any report.
+        phantom bucket that never appears in any report, or a stage
+        smuggled past the scan by routing the call through
+        `complete_parsed` instead of the client.
     Oracle: `record` raises on an unknown stage, and an ast scan of
         src/memman finds a `stage=usage.STAGE_*` keyword on every
-        `.complete(` call.
+        `.complete(` and `complete_parsed(` call, the one forwarder in
+        `shared.py` aside.
     """
     import ast
     from pathlib import Path
@@ -250,21 +253,37 @@ def test_all_call_sites_use_closed_set_stages():
     for py in src_root.rglob('*.py'):
         tree = ast.parse(py.read_text())
         for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == 'complete'):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            named = (
+                (isinstance(func, ast.Attribute) and func.attr == 'complete')
+                or (isinstance(func, ast.Name)
+                    and func.id == 'complete_parsed'))
+            if not named:
                 continue
             sites.append((py.name, node))
     assert len(sites) >= 6, 'expected the six documented call sites'
+    forwarded = 0
     for name, node in sites:
         stage_kw = [k for k in node.keywords if k.arg == 'stage']
-        assert stage_kw, f'{name}: complete() call missing stage='
+        assert stage_kw, f'{name}: LLM call missing stage='
         val = stage_kw[0].value
+        # `complete_parsed` forwards its own `stage` parameter to the
+        # client; the constant is named by whoever calls IT, and every
+        # such caller is scanned above.
+        if (name == 'shared.py' and isinstance(val, ast.Name)
+                and val.id == 'stage'):
+            forwarded += 1
+            continue
         assert isinstance(val, ast.Attribute), (
             f'{name}: stage must reference a usage.STAGE_* constant')
         assert val.attr.startswith('STAGE_'), (
             f'{name}: stage constant {val.attr!r} not a STAGE_* name')
         assert getattr(usage, val.attr) in usage.VALID_STAGES
+    assert forwarded == 2, (
+        'expected exactly the two forwarding calls of complete_parsed;'
+        f' found {forwarded}')
 
 
 @pytest.mark.no_auto_drain

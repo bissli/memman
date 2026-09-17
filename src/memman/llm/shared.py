@@ -8,8 +8,12 @@ shared between LLM and embed paths).
 import json
 import logging
 import re
+from typing import TYPE_CHECKING
 
 import httpx
+
+if TYPE_CHECKING:
+    from memman.llm.client import MemmanLLMClient
 
 logger = logging.getLogger('memman')
 
@@ -159,6 +163,59 @@ def parse_json_response(raw: str) -> dict | None:
             pass
     objects = [v for v in _top_level_json_values(raw, '{') if isinstance(v, dict)]
     return objects[-1] if objects else None
+
+
+def complete_parsed(
+        llm_client: 'MemmanLLMClient', system: str, user: str, *,
+        stage: str,
+        max_tokens: int | None = None) -> tuple[dict | None, str]:
+    """The object a completion carries, re-rolling once when none decodes.
+
+    Parameters
+    ----------
+    llm_client : MemmanLLMClient
+        The client for the stage; both attempts go through it.
+    system : str
+        System prompt.
+    user : str
+        User prompt.
+    stage : str
+        Pipeline stage both attempts are charged to.
+    max_tokens : int | None, default None
+        Output budget per attempt; None sends the role ceiling the
+        client was built with.
+
+    Returns
+    -------
+    tuple[dict | None, str]
+        The decoded object and the body it came from. On a re-roll
+        this is the SECOND attempt's pair, so a caller that traces a
+        failure records the body it gave up on.
+
+    Notes
+    -----
+    - The parse failure is the only signal that a response is
+      unusable. A provider reports `finish_reason` `stop` on a body it
+      cut mid-string, so no field of the response separates a complete
+      answer from a cut one.
+    - Exactly one re-roll, because the failures are sampling
+      accidents: an unescaped quote inside a string value, a stream
+      the provider cut. A second draw clears one or the shape is out
+      of the model's reach.
+    - An exception propagates on either attempt. The caller already
+      separates a transport failure from an unusable body, and the
+      two carry different oplog outcomes.
+    """
+    raw = llm_client.complete(
+        system, user, stage=stage, max_tokens=max_tokens)
+    parsed = parse_json_response(raw)
+    if parsed is not None:
+        return parsed, raw
+    logger.debug(
+        f'{stage} body of {len(raw)} chars did not decode; re-rolling')
+    raw = llm_client.complete(
+        system, user, stage=stage, max_tokens=max_tokens)
+    return parse_json_response(raw), raw
 
 
 def parse_json_list_response(raw: str) -> list | None:

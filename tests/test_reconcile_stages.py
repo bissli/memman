@@ -464,3 +464,82 @@ def test_screen_and_merge_stages_are_valid():
     llm_usage.record(llm_usage.STAGE_SCREEN, usage)
     llm_usage.record(llm_usage.STAGE_MERGE, usage)
     assert {llm_usage.STAGE_SCREEN, llm_usage.STAGE_MERGE} <= llm_usage.VALID_STAGES
+
+
+class _SequenceClient:
+    """Answer a scripted list of responses; raise once it is spent."""
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def complete(self, system, user, *, stage, max_tokens=None):
+        self.calls.append({'system': system, 'user': user,
+                           'stage': stage, 'max_tokens': max_tokens})
+        if not self.responses:
+            raise AssertionError(
+                f'complete called {len(self.calls)} times;'
+                ' the script is spent')
+        return self.responses.pop(0)
+
+
+# A complete object whose `merged_text` carries an unescaped quote,
+# the shape a retiring memory produces when it holds a literal SQL
+# pattern. The decoder stops at that quote, so the body never parses
+# however well the model answered.
+_UNESCAPED_QUOTE_BODY = (
+    '{"merged_text": "the error originated from LLM_CAUSAL_SQL using'
+    ' metadata patterns like %"created_by": "llm"%, which psycopg'
+    ' interprets as placeholders."}')
+
+
+def test_merge_rerolls_a_body_that_does_not_parse():
+    """Verify an unparsable merge body is re-rolled, not discarded.
+
+    Mutation: dropping the re-roll, so this body stores the fact
+        unmerged and the target's surviving clauses are lost.
+    Oracle: the second response's text, and two calls on the client.
+    """
+    client = _SequenceClient([
+        _UNESCAPED_QUOTE_BODY, json.dumps({'merged_text': 'the merged text'})])
+    assert merge_successor(client, 'f', ('m-1', 'c', [])) == 'the merged text'
+    assert len(client.calls) == 2
+
+
+def test_merge_rerolls_at_most_once():
+    """Verify a model that cannot produce the shape is billed twice, never more.
+
+    Mutation: an unbounded retry loop, which bills every attempt
+        against a body shape the model will not reach.
+    Oracle: two calls, and None from the second failure.
+    """
+    client = _SequenceClient(['not json', 'still not json', 'nor this'])
+    assert merge_successor(client, 'f', ('m-1', 'c', [])) is None
+    assert len(client.calls) == 2
+
+
+def test_merge_does_not_reroll_a_body_that_parses():
+    """Verify the ordinary merge is billed once.
+
+    Mutation: re-rolling unconditionally, which doubles the merge bill
+        on every write.
+    Oracle: one call; a second exhausts the scripted client and raises.
+    """
+    client = _SequenceClient([json.dumps({'merged_text': 't'})])
+    assert merge_successor(client, 'f', ('m-1', 'c', [])) == 't'
+    assert len(client.calls) == 1
+
+
+def test_merge_reroll_keeps_the_stage_and_the_ceiling():
+    """Verify the re-roll is charged to merge at the merge ceiling.
+
+    Mutation: a re-roll that omits `max_tokens`, sending the role
+        ceiling instead of `MERGE_MAX_TOKENS`, or one booked to another
+        stage so the merge bill reads low.
+    Oracle: both recorded calls carrying STAGE_MERGE and the constant.
+    """
+    client = _SequenceClient(['not json', 'nor this'])
+    merge_successor(client, 'f', ('m-1', 'c', []))
+    for call in client.calls:
+        assert call['stage'] == llm_usage.STAGE_MERGE
+        assert call['max_tokens'] == MERGE_MAX_TOKENS

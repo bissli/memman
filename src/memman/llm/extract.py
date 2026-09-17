@@ -7,7 +7,8 @@ import cachetools
 from memman import config, trace
 from memman.llm import usage as llm_usage
 from memman.llm.client import MemmanLLMClient
-from memman.llm.shared import drop_overlong_strings, parse_json_response
+from memman.llm.shared import complete_parsed, drop_overlong_strings
+from memman.llm.shared import parse_json_response
 
 logger = logging.getLogger('memman')
 
@@ -547,8 +548,8 @@ def merge_successor(
         'CONTRADICTED CLAUSES of [0]:\n' + '\n'.join(clause_lines)
         + f'\n\nNEW FACT:\n{fact_text}')
     try:
-        raw = llm_client.complete(
-            MERGE_SYSTEM, body,
+        parsed, raw = complete_parsed(
+            llm_client, MERGE_SYSTEM, body,
             stage=llm_usage.STAGE_MERGE,
             max_tokens=MERGE_MAX_TOKENS)
     except Exception as exc:
@@ -557,7 +558,6 @@ def merge_successor(
             clauses=len(filtered_clauses), suppressed=suppressed,
             outcome='error', error=f'{type(exc).__name__}: {exc}')
         return None
-    parsed = parse_json_response(raw)
     text = parsed.get('merged_text') if isinstance(parsed, dict) else None
     if not isinstance(text, str) or not text.strip():
         trace.event(

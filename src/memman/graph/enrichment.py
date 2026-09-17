@@ -4,7 +4,7 @@ import logging
 
 from memman import trace
 from memman.llm import usage as llm_usage
-from memman.llm.shared import drop_overlong_strings, parse_json_response
+from memman.llm.shared import complete_parsed, drop_overlong_strings
 from memman.store.model import Insight
 
 logger = logging.getLogger('memman')
@@ -78,8 +78,8 @@ def enrich_with_llm(
         existing_entity_count=len(insight.entities))
 
     try:
-        raw = llm_client.complete(
-            ENRICHMENT_SYSTEM_PROMPT, prompt,
+        parsed, raw = complete_parsed(
+            llm_client, ENRICHMENT_SYSTEM_PROMPT, prompt,
             stage=llm_usage.STAGE_ENRICHMENT)
     except Exception as exc:
         logger.warning(
@@ -94,11 +94,10 @@ def enrich_with_llm(
             error=f'{type(exc).__name__}: {exc}')
         return {}
 
-    parsed = parse_json_response(raw)
     if parsed is None:
         logger.warning(
-            'enrichment parse failed for %s (len=%d, raw_len=%d);'
-            ' output likely truncated, row stays unenriched',
+            'enrichment body did not decode for %s (len=%d, raw_len=%d)'
+            ' on either draw; row stays unenriched',
             insight.id, len(insight.content), len(raw))
         trace.event(
             'enrich_result',

@@ -576,3 +576,70 @@ class TestRebuildEntityClearing:
 
         stored = _read_enrichment_columns(tmp_db, 'clr-2')['entities']
         assert stored == ['OPAD.W.25', 'bgodin', 'us-east-1']
+
+
+class _SequenceClient:
+    """Answer a scripted list of responses; raise once it is spent."""
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def complete(self, system, user, *, stage, max_tokens=None):
+        self.calls.append({'stage': stage, 'max_tokens': max_tokens})
+        if not self.responses:
+            raise AssertionError(
+                f'complete called {len(self.calls)} times;'
+                ' the script is spent')
+        return self.responses.pop(0)
+
+
+# A body cut mid entity name while the provider reported a
+# finish_reason of `stop`, so nothing but the parse failure names it
+# as unusable.
+_CUT_MID_ENTITY_BODY = (
+    '{\n  "entities": [\n    "HANDOFF.md",\n'
+    '    "notes/environment-deployed-resources.')
+
+
+def test_enrichment_rerolls_a_body_that_does_not_parse():
+    """Verify an unparsable enrichment body is re-rolled, not dropped.
+
+    Mutation: dropping the re-roll, so a cut body leaves the row
+        unenriched while the drain stamps a prompt_version on it, and
+        no later stage retries.
+    Oracle: the entities of the second response, and two calls.
+    """
+    insight = make_insight()
+    client = _SequenceClient([
+        _CUT_MID_ENTITY_BODY,
+        _make_enrichment_response(entities=['Python'])])
+    result = enrich_with_llm(insight, client)
+    assert result['entities'] == ['Python']
+    assert len(client.calls) == 2
+
+
+def test_enrichment_does_not_reroll_a_body_that_parses():
+    """Verify the ordinary enrichment is billed once.
+
+    Mutation: re-rolling unconditionally, which doubles the enrichment
+        bill on every drained row.
+    Oracle: one call; a second exhausts the scripted client and raises.
+    """
+    insight = make_insight()
+    client = _SequenceClient([_make_enrichment_response()])
+    result = enrich_with_llm(insight, client)
+    assert result['entities'] == ['Python', 'FastAPI']
+    assert len(client.calls) == 1
+
+
+def test_enrichment_rerolls_at_most_once():
+    """Verify a model that cannot produce the shape is billed twice, never more.
+
+    Mutation: an unbounded retry loop on the drain's hottest stage.
+    Oracle: two calls, and the empty dict the caller reads as unenriched.
+    """
+    insight = make_insight()
+    client = _SequenceClient(['not json', 'still not json', 'nor this'])
+    assert enrich_with_llm(insight, client) == {}
+    assert len(client.calls) == 2
