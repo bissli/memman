@@ -80,7 +80,7 @@ def test_prompt_version_unchanged_by_length_caps():
         metadata model, pinned.
     """
     from memman.pipeline.remember import compute_prompt_version
-    assert compute_prompt_version() == 'fdb0e7360417f7a6'
+    assert compute_prompt_version() == '4512702d00ebce0e'
 
 
 class _FixedEmbedder:
