@@ -18,14 +18,6 @@ from memman.setup.settings import remove_memman_permission, strip_json5
 from memman.setup.settings import write_json_file
 
 
-def _stop_script():
-    """Return path to stop.sh asset."""
-    from importlib.resources import files as pkg_files
-    return str(
-        pkg_files('memman.setup.assets')
-        .joinpath('claude/stop.sh'))
-
-
 def _prompt_script():
     """Return path to user_prompt.sh asset."""
     from importlib.resources import files as pkg_files
@@ -181,7 +173,7 @@ class TestHookManagement:
     def test_add_claude_hooks_selective(self):
         """Add hooks idempotently with selective options."""
         data = {}
-        add_claude_hooks_selective(data, '/hooks/dir', remind=True, nudge=False)
+        add_claude_hooks_selective(data, '/hooks/dir', remind=True)
         hooks = data['hooks']
         assert 'SessionStart' in hooks
         assert 'UserPromptSubmit' in hooks
@@ -419,7 +411,7 @@ class TestPermissions:
         config_dir = str(tmp_path / '.claude')
         hooks_dir = os.path.join(config_dir, 'hooks', 'memman')
         pathlib.Path(hooks_dir).mkdir(parents=True)
-        claude_register_hooks(config_dir, remind=True, nudge=True,
+        claude_register_hooks(config_dir, remind=True,
                               task_recall=True)
         data = read_json_file(os.path.join(config_dir, 'settings.json'))
         allow = data.get('permissions', {}).get('allow', [])
@@ -540,13 +532,6 @@ class TestPrimeAndCompactHooks:
         flag_dir = tmp_path / '.memman' / 'exit_plan'
         assert not flag_dir.exists()
 
-    def _stop_script():
-        """Return path to stop.sh asset."""
-        from importlib.resources import files as pkg_files
-        return str(
-            pkg_files('memman.setup.assets')
-            .joinpath('claude/stop.sh'))
-
     def _prompt_script():
         """Return path to user_prompt.sh asset."""
         from importlib.resources import files as pkg_files
@@ -612,85 +597,8 @@ class TestPrimeAndCompactHooks:
         assert 'not on PATH' in result.stdout
 
 
-class TestStopHook:
-    """`stop.sh` exit/block behavior across session resets."""
-
-    def test_stop_hook_first_stop_blocks(self, tmp_path):
-        """First stop with session_id blocks for memory eval."""
-        result = _run_hook(
-            _stop_script(),
-            '{"stop_hook_active": false, "session_id": "sess-1"}',
-            tmp_path)
-        assert result.returncode == 0
-        output = json.loads(result.stdout.strip())
-        assert output['decision'] == 'block'
-        assert 'memman' in output['reason'].lower()
-
-    def test_stop_hook_second_stop_silent(self, tmp_path):
-        """Second stop in same turn is silent (flag dir exists)."""
-        _run_hook(
-            _stop_script(),
-            '{"stop_hook_active": false, "session_id": "sess-2"}',
-            tmp_path)
-        result = _run_hook(
-            _stop_script(),
-            '{"stop_hook_active": false, "session_id": "sess-2"}',
-            tmp_path)
-        assert result.returncode == 0
-        assert result.stdout.strip() == ''
-
-    def test_stop_hook_blocks_again_after_reset(self, tmp_path):
-        """After rmdir reset, stop blocks again."""
-        _run_hook(
-            _stop_script(),
-            '{"stop_hook_active": false, "session_id": "sess-3"}',
-            tmp_path)
-        flag_dir = tmp_path / '.memman' / 'stop_fired' / 'sess-3'
-        assert flag_dir.is_dir()
-        flag_dir.rmdir()
-
-        result = _run_hook(
-            _stop_script(),
-            '{"stop_hook_active": false, "session_id": "sess-3"}',
-            tmp_path)
-        output = json.loads(result.stdout.strip())
-        assert output['decision'] == 'block'
-
-    def test_stop_hook_active_silent(self, tmp_path):
-        """stop_hook_active=true bypasses gate entirely."""
-        result = _run_hook(
-            _stop_script(),
-            '{"stop_hook_active": true, "session_id": "sess-4"}',
-            tmp_path)
-        assert result.returncode == 0
-        assert result.stdout.strip() == ''
-
-    def test_stop_hook_no_session_id_blocks(self, tmp_path):
-        """Missing session_id falls back to always blocking."""
-        result = _run_hook(
-            _stop_script(),
-            '{"stop_hook_active": false}',
-            tmp_path)
-        assert result.returncode == 0
-        output = json.loads(result.stdout.strip())
-        assert output['decision'] == 'block'
-
-
 class TestUserPromptHook:
     """`user_prompt.sh` flag-clearing semantics."""
-
-    def test_user_prompt_clears_stop_flag(self, tmp_path):
-        """user_prompt.sh removes stop_fired flag dir."""
-        flag_dir = tmp_path / '.memman' / 'stop_fired' / 'sess-5'
-        flag_dir.mkdir(parents=True)
-
-        result = _run_hook(
-            _prompt_script(),
-            '{"session_id": "sess-5"}',
-            tmp_path)
-        assert result.returncode == 0
-        assert not flag_dir.exists()
-        assert 'recall' in result.stdout.lower()
 
     def test_user_prompt_no_flag_dir(self, tmp_path):
         """user_prompt.sh exits cleanly when no flag dir exists."""
@@ -709,6 +617,111 @@ class TestUserPromptHook:
             tmp_path)
         assert result.returncode == 0
         assert 'recall' in result.stdout.lower()
+
+
+class TestNoBlockingHook:
+    """No shipped hook re-invokes the model after a turn has ended."""
+
+    def test_no_shipped_hook_emits_a_block_decision(self, tmp_path):
+        """Verify every shipped hook emits plain text, never a block decision.
+
+        Mutation: a hook re-emitting {"decision": "block"}, which restarts
+            the model after the turn already ended.
+        Oracle: hand-written expectation that the shipped hook set emits
+            text only - stdout parsed as JSON carries no decision key.
+        """
+        from importlib.resources import files as pkg_files
+        assets = pkg_files('memman.setup.assets')
+        payload = json.dumps({
+            'stop_hook_active': False,
+            'session_id': 'sess-block-probe',
+            'trigger': 'auto',
+            })
+        trees = (
+            ('claude', assets.joinpath('claude')),
+            ('nanoclaw/hooks', assets.joinpath('nanoclaw').joinpath('hooks')),
+            )
+        offenders = []
+        checked = 0
+        for label, tree in trees:
+            for entry in tree.iterdir():
+                if not entry.name.endswith('.sh'):
+                    continue
+                checked += 1
+                result = subprocess.run(
+                    ['bash', str(entry)],
+                    check=False, input=payload,
+                    capture_output=True, text=True,
+                    env={'HOME': str(tmp_path), 'PATH': '/usr/bin:/bin'})
+                out = result.stdout.strip()
+                if not out.startswith('{'):
+                    continue
+                try:
+                    parsed = json.loads(out)
+                except ValueError:
+                    continue
+                if isinstance(parsed, dict) and 'decision' in parsed:
+                    offenders.append(f'{label}/{entry.name}')
+        assert checked > 0
+        assert offenders == []
+
+    def test_hook_wiring_offers_no_stop_switch(self):
+        """Verify no argument combination registers a Claude Code Stop hook.
+
+        Mutation: a resurrected nudge branch putting a script back under
+            the Stop event.
+        Oracle: hand-enumerated event set, with every boolean switch the
+            function offers turned on.
+        """
+        import inspect
+        switches = {
+            name: True
+            for name, param in
+            inspect.signature(add_claude_hooks_selective).parameters.items()
+            if isinstance(param.default, bool)
+            }
+        data: dict = {}
+        add_claude_hooks_selective(data, '/hooks/dir', **switches)
+        assert 'Stop' not in data['hooks']
+        assert set(data['hooks']) == {
+            'SessionStart',
+            'UserPromptSubmit',
+            'PreCompact',
+            'PreToolUse',
+            }
+
+    def test_shipped_assets_name_no_stop_fired_directory(self):
+        """Verify the stop_fired turn gate is absent from every shipped asset.
+
+        Mutation: a partial deletion leaving prime.sh's stale sweep or
+            user_prompt.sh's rmdir reading a directory no hook writes.
+        Oracle: hand-counted zero occurrences across the asset tree.
+        """
+        root = (pathlib.Path(__file__).resolve().parents[1]
+                / 'src' / 'memman' / 'setup' / 'assets')
+        hits = [
+            str(path.relative_to(root))
+            for path in root.rglob('*')
+            if path.is_file() and 'stop_fired' in path.read_text(errors='replace')
+            ]
+        assert hits == []
+
+    def test_nanoclaw_ships_no_stop_hook(self):
+        """Verify the nanoclaw surface ships no Stop hook and names none.
+
+        Mutation: a single-surface ship that deletes the Claude Code hook
+            and leaves nanoclaw's ungated block in place.
+        Oracle: hand-written two-part expectation - no stop.sh asset, and
+            no Stop registration in the integrator instructions.
+        """
+        from importlib.resources import files as pkg_files
+        nanoclaw = pkg_files('memman.setup.assets').joinpath('nanoclaw')
+        names = sorted(
+            entry.name for entry in nanoclaw.joinpath('hooks').iterdir())
+        assert 'stop.sh' not in names
+        skill = nanoclaw.joinpath('SKILL.md').read_text()
+        assert 'stop.sh' not in skill
+        assert 'Stop:' not in skill
 
 
 class TestSetupCli:

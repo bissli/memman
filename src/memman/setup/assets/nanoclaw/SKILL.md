@@ -139,7 +139,7 @@ Adapt the mount syntax to match the existing pattern in `container-runner.ts` (i
 
 ### 2d. Add lifecycle hook scripts
 
-memman ships the three lifecycle hook scripts as files inside the
+memman ships the two lifecycle hook scripts as files inside the
 installed package. Locate them and copy them into the container build
 context:
 
@@ -150,16 +150,17 @@ cp "$PKG/nanoclaw/hooks/"*.sh container/hooks/memman/
 chmod +x container/hooks/memman/*.sh
 ```
 
-The three scripts are:
+The two scripts are:
 
 - `prime.sh` (SessionStart): prints `[memman] Memory active (N insights, M edges).`
 - `user_prompt.sh` (UserPromptSubmit): prints a recall/remember reminder.
-- `stop.sh` (Stop): returns `{"decision":"block", ...}` JSON so the agent
-  gets one more turn to evaluate remembering. Honors `stop_hook_active`
-  to prevent loops.
 
 Read the scripts in the installed package to see the exact bytes the
 test suite verifies.
+
+The container receives the scripts by `COPY` at image build time, so the
+image needs a rebuild before any change to the shipped hook set reaches a
+running session.
 
 ### 2e. Copy hooks into container and register in settings.json
 
@@ -185,9 +186,6 @@ const memmanHooks = {
   }],
   UserPromptSubmit: [{
     hooks: [{ type: 'command', command: '/app/hooks/memman/user_prompt.sh' }]
-  }],
-  Stop: [{
-    hooks: [{ type: 'command', command: '/app/hooks/memman/stop.sh' }]
   }],
 };
 

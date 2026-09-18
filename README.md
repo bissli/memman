@@ -21,7 +21,7 @@ See [Design & Architecture](docs/DESIGN.md) for details.
 
 ## How it works
 
-Once installed, the agent runs memman, not the user. Claude Code [hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) (or, for OpenClaw, a `before_prompt_build` plugin) fire on session start, prompt submit, and stop; each reminds the agent to recall before responding and remember after.
+Once installed, the agent runs memman, not the user. Claude Code [hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) (or, for OpenClaw, a `before_prompt_build` plugin) fire on session start and prompt submit; each reminds the agent to recall before responding and remember after.
 
 Six hook scripts drive the Claude Code lifecycle:
 
@@ -29,7 +29,6 @@ Six hook scripts drive the Claude Code lifecycle:
 | ---------------- | --------------------------- | ------------------------------------------------------------- |
 | `prime.sh`       | `SessionStart`              | loads the behavioral guide; surfaces post-compact recall hint |
 | `user_prompt.sh` | `UserPromptSubmit`          | reminds the agent to recall before answering                  |
-| `stop.sh`        | `Stop`                      | reminds the agent to evaluate "remember?" after responding    |
 | `task_recall.sh` | `PreToolUse` (Task)         | reminds the agent to recall before sub-agent delegation       |
 | `compact.sh`     | `PreCompact`                | drops a flag so the next `SessionStart` re-recalls context    |
 | `exit_plan.sh`   | `PreToolUse` (ExitPlanMode) | prompts memory storage before plan-to-execute transitions     |
@@ -74,17 +73,17 @@ The hot-path/background split is universal across integrations. What changes is 
 
 | Integration | Trigger (inside)                                                          | Worker (outside)                                              | Data location                                                                                 |
 | ----------- | ------------------------------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Claude Code | six lifecycle hook scripts (`prime.sh`, `user_prompt.sh`, `stop.sh`, ...) | systemd timer (Linux) or launchd agent (macOS) on host        | `~/.memman/data/default/` on host                                                             |
+| Claude Code | five lifecycle hook scripts (`prime.sh`, `user_prompt.sh`, ...) | systemd timer (Linux) or launchd agent (macOS) on host        | `~/.memman/data/default/` on host                                                             |
 | OpenClaw    | `before_prompt_build` plugin injects recall/remember hints                | same host scheduler as Claude Code (shared)                   | `~/.memman/data/default/` on host                                                             |
-| NanoClaw    | three hook scripts inside the container                                   | `memman scheduler serve` as PID 1 inside the *same* container | host `~/.memman/data/{group}/` volume-mounted to container `/home/node/.memman/data/default/` |
+| NanoClaw    | two hook scripts inside the container                                   | `memman scheduler serve` as PID 1 inside the *same* container | host `~/.memman/data/{group}/` volume-mounted to container `/home/node/.memman/data/default/` |
 
-OpenClaw sits on the same host as Claude Code: install memman once on the host and the worker is shared. The agent invokes `memman` via the `exec` tool rather than Bash-hook nudges.
+OpenClaw sits on the same host as Claude Code: install memman once on the host and the worker is shared. The agent invokes `memman` via the `exec` tool rather than Bash-hook reminders.
 
 NanoClaw moves the hot-path boundary into the container. Agent and worker share one container; the SQLite data dir is volume-mounted from `~/.memman/data/{group}/` (rw) on the host so memory survives container restarts, and an optional `~/.memman/data/global/` is mounted read-only into every container for shared knowledge. Each WhatsApp group gets its own container and its own private store. `queue.db` sits outside the volume mount - pending writes are seconds old and re-driven on the next drain tick, so a restart loses at most one cycle of unprocessed items.
 
 ## Features
 
-- **Hook-driven** - six lifecycle hooks handle memory operations automatically.
+- **Hook-driven** - five lifecycle hooks handle memory operations automatically.
 - **LLM-supervised** - the host LLM decides what to remember and forget; a worker model handles fact extraction, reconciliation, enrichment, and query expansion.
 - **Multi-graph architecture** - temporal, entity, and semantic edges.
 - **Intent-aware recall** - graph beam search with RRF fusion. Query intent (WHY/WHEN/ENTITY/GENERAL) controls edge weights and traversal budget. Results always come back in relevance order.
@@ -193,7 +192,7 @@ Reranking skips itself on queries of two words or fewer, since there is little t
 | Path                                                   | What                                                               | Form                            |
 | ------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------- |
 | `~/.claude/skills/memman/SKILL.md`                     | command reference loaded by the agent                              | symlink into installed package  |
-| `~/.claude/hooks/memman/*.sh`                          | six lifecycle hook scripts                                         | symlinks into installed package |
+| `~/.claude/hooks/memman/*.sh`                          | five lifecycle hook scripts                                         | symlinks into installed package |
 | `~/.claude/settings.json`                              | hook registrations + curated `Bash(memman <verb>:*)` allow entries | JSON merge                      |
 | `~/.config/systemd/user/memman-enrich.{timer,service}` | scheduler unit (Linux)                                             | unit files                      |
 | `~/Library/LaunchAgents/com.memman.enrich.plist`       | scheduler agent (macOS)                                            | plist                           |

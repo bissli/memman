@@ -1,10 +1,8 @@
 #!/bin/bash
-# memman UserPromptSubmit hook - remind agent to recall/remember,
-# and reset the stop-hook once-per-turn flag.
+# memman UserPromptSubmit hook - remind agent to recall/remember.
 
 INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | sed -n 's/.*"session_id": *"\([^"]*\)".*/\1/p' | head -1)
-[ -n "$SESSION_ID" ] && rmdir "$HOME/.memman/stop_fired/$SESSION_ID" 2>/dev/null
 
 SESSION_HINT=''
 [ -n "$SESSION_ID" ] && SESSION_HINT=" Pass --session $SESSION_ID on every recall/remember/replace."

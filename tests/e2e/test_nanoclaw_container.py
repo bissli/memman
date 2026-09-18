@@ -216,30 +216,6 @@ class TestLifecycleHooks:
         out = _exec(cid, ['/app/hooks/memman/user_prompt.sh'])
         assert '[memman] Evaluate' in out.stdout
 
-    def test_stop_hook_blocks_when_inactive(self, nanoclaw_run):
-        cid, _ = nanoclaw_run()
-        out = subprocess.run(
-            ['docker', 'exec', '-i', cid,
-             'bash', '/app/hooks/memman/stop.sh'],
-            input='{"stop_hook_active": false}',
-            capture_output=True, text=True, check=True)
-        payload = json.loads(out.stdout)
-        assert payload['decision'] == 'block'
-        assert '[memman]' in payload['reason']
-
-    def test_stop_hook_silent_when_active(self, nanoclaw_run):
-        cid, _ = nanoclaw_run()
-        out = subprocess.run(
-            ['docker', 'exec', '-i', cid,
-             'bash', '/app/hooks/memman/stop.sh'],
-            input='{"stop_hook_active": true}',
-            capture_output=True, text=True, check=True)
-        assert out.stdout.strip() == ''
-
-
-# ---------------------------------------------------------------------
-# Container behavioral guide is present at the documented path
-# ---------------------------------------------------------------------
 
 class TestContainerSkill:
 

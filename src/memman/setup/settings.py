@@ -137,7 +137,7 @@ def remove_claude_hooks(data: dict) -> None:
 
 def add_claude_hooks_selective(
         data: dict, hooks_dir: str,
-        remind: bool = False, nudge: bool = False,
+        remind: bool = False,
         compact: bool = False,
         task_recall: bool = False,
         exit_plan: bool = False) -> None:
@@ -174,21 +174,6 @@ def add_claude_hooks_selective(
             arr = []
         arr.append(remind_entry)
         hooks['UserPromptSubmit'] = arr
-
-    if nudge:
-        nudge_entry = {
-            'hooks': [
-                {
-                    'type': 'command',
-                    'command': _unexpand_home(os.path.join(hooks_dir, 'stop.sh')),
-                    },
-                ],
-            }
-        arr = hooks.get('Stop', [])
-        if not isinstance(arr, list):
-            arr = []
-        arr.append(nudge_entry)
-        hooks['Stop'] = arr
 
     if compact:
         compact_entry = {

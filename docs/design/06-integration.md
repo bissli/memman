@@ -17,14 +17,13 @@ Lifecycle order within a session:
 3. The LLM responds; `SKILL.md` is auto-discovered for command syntax; `guide.md` rules apply.
 4. **Before sub-agent delegation** - `task_recall.sh` (PreToolUse on Task) reminds the agent to recall first.
 5. **Before plan exit** - `exit_plan.sh` (PreToolUse on ExitPlanMode) prompts memory storage before the transition.
-6. **Turn end** - `stop.sh` (Stop) reminds the agent to evaluate "remember?".
-7. **Context compacted** (asynchronous) - `compact.sh` (PreCompact) writes a flag file; the next `SessionStart` reads it for post-compact recall.
+6. **Context compacted** (asynchronous) - `compact.sh` (PreCompact) writes a flag file; the next `SessionStart` reads it for post-compact recall.
 
 Three assets, three jobs:
 
 | Layer     | What                                                               | Where                                       | Role                                                                                                                                                |
 | --------- | ------------------------------------------------------------------ | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Hooks** | Shell scripts triggered by Claude Code lifecycle events            | `.claude/hooks/memman/`                     | Prime (guide), Remind (recall & remember), Nudge (remember), Compact (pre-compact bridge), Recall (pre-delegation), ExitPlan (plan-mode transition) |
+| **Hooks** | Shell scripts triggered by Claude Code lifecycle events            | `.claude/hooks/memman/`                     | Prime (guide), Remind (recall & remember), Compact (pre-compact bridge), Recall (pre-delegation), ExitPlan (plan-mode transition) |
 | **Skill** | `SKILL.md` - command reference in Claude Code skill format         | `.claude/skills/memman/`                    | Teaches the LLM *how* to use memman commands                                                                                                        |
 | **Guide** | `guide.md` - execution manual for recall, remember, and delegation | Installed package (read via `memman guide`) | Teaches the LLM *when* to recall, *what* to remember, and *how* to delegate                                                                         |
 
@@ -34,24 +33,11 @@ Three assets, three jobs:
 | -------- | ------------------------- | --------------------- | --------------------------------------- |
 | Prime    | SessionStart              | prime.sh              | Inject guide + compact-recall hint      |
 | Remind   | UserPromptSubmit          | user_prompt.sh        | Recall reminder                         |
-| Nudge    | Stop                      | stop.sh               | Block-decision JSON; "remember?" prompt |
 | Compact  | PreCompact + SessionStart | compact.sh + prime.sh | Flag-file relay across compaction       |
 | Recall   | PreToolUse (Task)         | task_recall.sh        | Pre-delegation recall reminder          |
 | ExitPlan | PreToolUse (ExitPlanMode) | exit_plan.sh          | Pre-execute storage reminder            |
 
-Prime, Remind, Recall, and ExitPlan are plain `echo` shims to the agent; their bodies are visible in the package source. Two hooks need explanation:
-
-**Stop hook - block-decision JSON contract.** Returns `decision: block` so the agent gets one more turn to evaluate memory. Directive-aware: prompts the agent to store if a user preference, decision, or conclusion emerged. Fires once per user turn (gated by a `stop_fired/` directory lock) and stays silent when `stop_hook_active` is true (preventing infinite loops):
-
-```bash
-INPUT=$(cat)
-if echo "$INPUT" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
-  exit 0
-fi
-cat <<'EOF'
-{"decision": "block", "reason": "[memman] Memory check: did the user state a preference, make a decision, give a correction, or reach a conclusion? If yes, call `memman remember \"<self-contained text>\"` directly via Bash in your next turn (no sub-agent, no delegation). Dereference anaphora before storing. Only skip if the exchange was purely open-ended questions with no resolution."}
-EOF
-```
+Prime, Remind, Recall, and ExitPlan are plain `echo` shims to the agent; their bodies are visible in the package source. One hook needs explanation:
 
 **Compact hook - two-part flag-file relay.** PreCompact cannot inject context into the agent's conversation (stdout is verbose-mode only), so the solution uses a flag file:
 
@@ -73,8 +59,6 @@ if [ "$SOURCE" = "compact" ]; then
 fi
 ```
 
-Stale `stop_fired/` directories (older than 2 hours) are cleaned up by `prime.sh` at session start.
-
 ## 6.3 Automated setup
 
 `memman install` deploys everything via symlinks into the installed package, so `pipx upgrade memman` refreshes hook scripts and SKILL.md automatically:
@@ -93,7 +77,6 @@ Setting up Claude Code (~/.claude/)...
 [2/2] Hooks
   ✓ Hook: prime     ~/.claude/hooks/memman/prime.sh
   ✓ Hook: remind    ~/.claude/hooks/memman/user_prompt.sh
-  ✓ Hook: nudge     ~/.claude/hooks/memman/stop.sh
   ✓ Hook: compact   ~/.claude/hooks/memman/compact.sh
   ✓ Hook: recall    ~/.claude/hooks/memman/task_recall.sh
   ✓ Hook: exit_plan ~/.claude/hooks/memman/exit_plan.sh
@@ -101,7 +84,7 @@ Setting up Claude Code (~/.claude/)...
   ✓ Permissions      12 memman verbs added
 
 Setup complete!
-  Hooks   prime, remind, nudge, compact, recall, exit_plan
+  Hooks   prime, remind, compact, recall, exit_plan
 
 Start a new Claude Code session to activate.
 ```
@@ -122,7 +105,7 @@ See [USAGE.md § Install / Uninstall](../USAGE.md#install--uninstall) for the fu
 
 **Configure after install.** Conflicts between an `INSTALLABLE_KEYS` flag and an existing env-file value are rejected with the exact `memman config set ...` command to run - install never silently swallows a flag. `memman uninstall` strips secret keys (`MEMMAN_LLM_API_KEY`, `MEMMAN_OPENROUTER_API_KEY`, `MEMMAN_VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`, `MEMMAN_DEFAULT_POSTGRES_DSN`, and any `MEMMAN_POSTGRES_DSN_<store>`) while preserving non-secret settings, so a later `memman install` resurrects preferences without re-export. The memory store, queue, and scheduler logs under `~/.memman/` are untouched. To remove the binary: `pipx uninstall memman`.
 
-The Prime hook is always installed. Remind, Nudge, Compact, Recall, and ExitPlan hooks are optional (all enabled by default).
+The Prime hook is always installed. Remind, Compact, Recall, and ExitPlan hooks are optional (all enabled by default).
 
 ## 6.4 Direct-Bash invocation (no sub-agent)
 

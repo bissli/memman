@@ -10,9 +10,6 @@ else
   INPUT=$(cat)
 fi
 
-find "$HOME/.memman/stop_fired" -mindepth 1 -maxdepth 1 -type d -mmin +120 \
-    -exec rmdir {} \; 2>/dev/null
-
 if ! command -v memman >/dev/null 2>&1; then
   echo "[memman] Warning: memman not on PATH; hooks inactive."
   exit 0

@@ -69,7 +69,7 @@ def claude_write_hook(config_dir: str, filename: str) -> str:
 
 
 def claude_register_hooks(config_dir: str,
-                          remind: bool = True, nudge: bool = True,
+                          remind: bool = True,
                           compact: bool = True,
                           task_recall: bool = True,
                           exit_plan: bool = True) -> str:
@@ -79,7 +79,7 @@ def claude_register_hooks(config_dir: str,
     data = read_json_file(settings_path)
     add_claude_hooks_selective(
         data, hooks_dir,
-        remind=remind, nudge=nudge,
+        remind=remind,
         compact=compact, task_recall=task_recall,
         exit_plan=exit_plan)
     write_json_file(settings_path, data)
@@ -170,7 +170,6 @@ def _install_claude_code(env: dict, data_dir: str,
     hook_filenames = [
         ('prime.sh', 'prime'),
         ('user_prompt.sh', 'remind'),
-        ('stop.sh', 'nudge'),
         ('compact.sh', 'compact'),
         ('task_recall.sh', 'recall'),
         ('exit_plan.sh', 'exit_plan'),
@@ -184,7 +183,7 @@ def _install_claude_code(env: dict, data_dir: str,
     data = read_json_file(settings_path)
     add_claude_hooks_selective(
         data, hooks_dir,
-        remind=True, nudge=True, compact=True,
+        remind=True, compact=True,
         task_recall=True, exit_plan=True)
 
     permissions = list_claude_permissions()
@@ -212,7 +211,7 @@ def _install_claude_code(env: dict, data_dir: str,
 
     print()
     print('Setup complete!')
-    print('  Hooks   prime, remind, nudge, compact, recall, exit_plan')
+    print('  Hooks   prime, remind, compact, recall, exit_plan')
     print()
     print('Start a new Claude Code session to activate.')
 
