@@ -203,15 +203,20 @@ class TestHookManagement:
         assert remove_memory_block(str(p)) is False
 
     def test_add_claude_hooks_with_task_recall(self):
-        """task_recall=True produces PreToolUse entry with Task matcher."""
+        """Verify the pre-delegation matcher covers every delegation tool.
+
+        Mutation: a matcher naming only Task, which never fires on an
+            Agent launch, so the recall reminder goes silent.
+        Oracle: hand-written set of the tool names a delegation goes
+            through - Agent and Task - each required in the matcher.
+        """
         data = {}
         add_claude_hooks_selective(
             data, '/hooks/dir', task_recall=True)
-        hooks = data['hooks']
-        assert 'PreToolUse' in hooks
-        entries = hooks['PreToolUse']
+        entries = data['hooks']['PreToolUse']
         assert len(entries) == 1
-        assert entries[0]['matcher'] == 'Task'
+        matched = set(entries[0]['matcher'].split('|'))
+        assert matched == {'Agent', 'Task'}
         assert entries[0]['hooks'][0]['command'].endswith(
             'task_recall.sh')
 
@@ -281,7 +286,7 @@ class TestHookManagement:
         entries = data['hooks']['PreToolUse']
         assert len(entries) == 2
         matchers = {e['matcher'] for e in entries}
-        assert matchers == {'Bash', 'Task'}
+        assert matchers == {'Bash', 'Agent|Task'}
 
     def test_add_claude_hooks_with_compact(self):
         """compact=True produces PreCompact entry."""
@@ -324,7 +329,7 @@ class TestHookManagement:
         entries = hooks['PreToolUse']
         assert len(entries) == 2
         matchers = {e['matcher'] for e in entries}
-        assert matchers == {'Task', 'ExitPlanMode'}
+        assert matchers == {'Agent|Task', 'ExitPlanMode'}
 
 
 class TestPermissions:

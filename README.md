@@ -29,7 +29,7 @@ Six hook scripts drive the Claude Code lifecycle:
 | ---------------- | --------------------------- | ------------------------------------------------------------- |
 | `prime.sh`       | `SessionStart`              | loads the behavioral guide; surfaces post-compact recall hint |
 | `user_prompt.sh` | `UserPromptSubmit`          | reminds the agent to recall before answering                  |
-| `task_recall.sh` | `PreToolUse` (Task)         | reminds the agent to recall before sub-agent delegation       |
+| `task_recall.sh` | `PreToolUse` (Agent\|Task)         | reminds the agent to recall before sub-agent delegation       |
 | `compact.sh`     | `PreCompact`                | drops a flag so the next `SessionStart` re-recalls context    |
 | `exit_plan.sh`   | `PreToolUse` (ExitPlanMode) | prompts memory storage before plan-to-execute transitions     |
 

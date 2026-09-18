@@ -15,7 +15,7 @@ Lifecycle order within a session:
 1. **Session start** - `prime.sh` (SessionStart) loads `guide.md` (the memory execution manual).
 2. **Every user message** - `user_prompt.sh` (UserPromptSubmit) reminds the agent to recall and remember.
 3. The LLM responds; `SKILL.md` is auto-discovered for command syntax; `guide.md` rules apply.
-4. **Before sub-agent delegation** - `task_recall.sh` (PreToolUse on Task) reminds the agent to recall first.
+4. **Before sub-agent delegation** - `task_recall.sh` (PreToolUse on Agent or Task) reminds the agent to recall first.
 5. **Before plan exit** - `exit_plan.sh` (PreToolUse on ExitPlanMode) prompts memory storage before the transition.
 6. **Context compacted** (asynchronous) - `compact.sh` (PreCompact) writes a flag file; the next `SessionStart` reads it for post-compact recall.
 
@@ -34,7 +34,7 @@ Three assets, three jobs:
 | Prime    | SessionStart              | prime.sh              | Inject guide + compact-recall hint      |
 | Remind   | UserPromptSubmit          | user_prompt.sh        | Recall reminder                         |
 | Compact  | PreCompact + SessionStart | compact.sh + prime.sh | Flag-file relay across compaction       |
-| Recall   | PreToolUse (Task)         | task_recall.sh        | Pre-delegation recall reminder          |
+| Recall   | PreToolUse (Agent\|Task)   | task_recall.sh        | Pre-delegation recall reminder          |
 | ExitPlan | PreToolUse (ExitPlanMode) | exit_plan.sh          | Pre-execute storage reminder            |
 
 Prime, Remind, Recall, and ExitPlan are plain `echo` shims to the agent; their bodies are visible in the package source. One hook needs explanation:

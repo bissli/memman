@@ -199,7 +199,7 @@ def add_claude_hooks_selective(
                         hooks_dir, 'task_recall.sh')),
                     },
                 ],
-            'matcher': 'Task',
+            'matcher': 'Agent|Task',
             }
         arr = hooks.get('PreToolUse', [])
         if not isinstance(arr, list):
