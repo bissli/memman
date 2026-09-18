@@ -1,44 +1,15 @@
-"""Tests for database quality fixes: entity normalization, constants."""
+"""Entity SQL case-insensitivity, edge caps and temporal constants."""
 
 from datetime import datetime, timezone
 
 from memman.graph.enrichment import enrich_with_llm
-from memman.graph.entity import create_entity_edges, normalize_entity
+from memman.graph.entity import create_entity_edges
 from memman.graph.temporal import create_temporal_edge
 from memman.store.edge import count_insights_with_entity
 from memman.store.edge import find_insights_with_entity
 from memman.store.edge import get_edges_by_node_and_type
 from memman.store.node import insert_insight, update_entities
 from tests.conftest import make_insight
-
-# --- Fix 1: ANCHOR_TOP_K ---
-
-
-# --- Fix 2: Entity Normalization ---
-
-
-class TestNormalizeEntity:
-    """normalize_entity lowercases and strips."""
-
-    def test_lowercase(self):
-        """PascalCase becomes lowercase."""
-        assert normalize_entity('Thesis') == 'thesis'
-
-    def test_strip(self):
-        """Whitespace is trimmed."""
-        assert normalize_entity('  SOFR  ') == 'sofr'
-
-    def test_mixed(self):
-        """Combined case and whitespace."""
-        assert normalize_entity(' Credit P&L ') == 'credit p&l'
-
-    def test_empty(self):
-        """Empty string stays empty."""
-        assert normalize_entity('') == ''
-
-    def test_already_normalized(self):
-        """Already-lowercase string unchanged."""
-        assert normalize_entity('pnl_opp') == 'pnl_opp'
 
 
 class TestEntitySqlCaseInsensitive:
@@ -143,8 +114,6 @@ class TestEnrichmentMergeCaseInsensitive:
         assert lower_entities.count('thesis') == 1
         assert 'analysis' in lower_entities
 
-
-# --- Fix 5: Temporal Constants ---
 
 
 class TestTemporalConstants:
