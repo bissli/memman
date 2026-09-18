@@ -3,9 +3,9 @@
 Each shipped hook script under `src/memman/setup/assets/claude/` is
 exercised with realistic Claude Code input JSON, against an isolated
 HOME, in a subprocess. The contract checked is exactly what Claude
-Code's hook subsystem cares about: exit code, stdout shape (plain
-prefix string for SessionStart-style hooks, `{"decision":"block", ...}`
-JSON where a hook emits it), and any side-effect under `~/.memman/`.
+Code's hook subsystem cares about: exit code, stdout shape (every
+hook emits a plain prefix string; none returns a decision payload),
+and any side-effect under `~/.memman/`.
 
 No live LLM. No container. No Anthropic API key. Runs on every PR.
 """
@@ -104,7 +104,7 @@ def test_compact_no_session_id_no_op(memman_home: tuple[Path, Path]):
 
 
 # ---------------------------------------------------------------------
-# task_recall.sh - PreToolUse(Task)
+# task_recall.sh - PreToolUse(Agent|Task)
 # ---------------------------------------------------------------------
 
 def test_task_recall_emits_reminder(memman_home: tuple[Path, Path]):

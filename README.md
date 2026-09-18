@@ -23,13 +23,13 @@ See [Design & Architecture](docs/DESIGN.md) for details.
 
 Once installed, the agent runs memman, not the user. Claude Code [hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) (or, for OpenClaw, a `before_prompt_build` plugin) fire on session start and prompt submit; each reminds the agent to recall before responding and remember after.
 
-Six hook scripts drive the Claude Code lifecycle:
+Five hook scripts drive the Claude Code lifecycle:
 
 | Hook script      | Event                       | Role                                                          |
 | ---------------- | --------------------------- | ------------------------------------------------------------- |
 | `prime.sh`       | `SessionStart`              | loads the behavioral guide; surfaces post-compact recall hint |
 | `user_prompt.sh` | `UserPromptSubmit`          | reminds the agent to recall before answering                  |
-| `task_recall.sh` | `PreToolUse` (Agent\|Task)         | reminds the agent to recall before sub-agent delegation       |
+| `task_recall.sh` | `PreToolUse` (Agent\|Task)   | reminds the agent to recall before sub-agent delegation       |
 | `compact.sh`     | `PreCompact`                | drops a flag so the next `SessionStart` re-recalls context    |
 | `exit_plan.sh`   | `PreToolUse` (ExitPlanMode) | prompts memory storage before plan-to-execute transitions     |
 
@@ -262,9 +262,12 @@ The shipped `guide.md` (behavioral policy) and `SKILL.md` (command reference) li
 pipx upgrade memman
 ```
 
-Hook scripts and `SKILL.md` are symlinks into the installed package, so they refresh automatically. `guide.md` is read live from the package via `importlib.resources`. Asset-only changes propagate without re-running `memman install`.
+Hook scripts and `SKILL.md` are symlinks into the installed package, so they refresh automatically. `guide.md` is read live from the package via `importlib.resources`. A change confined to those assets propagates without re-running `memman install`.
 
-The scheduler unit is the exception: its `ExecStart` line points at the old package path until `memman install` runs again, so re-run it after every upgrade. `make e2e` and `memman doctor` catch unit-file drift.
+Two things an upgrade does not carry, so re-run `memman install` after every upgrade:
+
+- **Hook registrations.** `~/.claude/settings.json` names the events and tool matchers, and only `memman install` rewrites it. A release that adds, drops, or re-matches a hook leaves the old registration live until then - a dropped hook keeps a settings entry pointing at a symlink whose target the new package no longer ships.
+- **The scheduler unit.** Its `ExecStart` line points at the old package path until `memman install` runs again. `make e2e` and `memman doctor` catch unit-file drift.
 
 ## Uninstall
 

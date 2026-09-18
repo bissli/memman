@@ -95,7 +95,7 @@ Deployment model:
 - `~/.claude/hooks/memman/*.sh` → symlinks into the same package path. `prime.sh` is a thin shim that delegates to `memman prime` (status + compact hint + guide in one Python call).
 - Shipped `guide.md` is never deployed to disk - `memman guide` reads it from the package via `importlib.resources` every time `prime.sh` fires.
 
-`pipx upgrade memman` refreshes hook scripts and `SKILL.md` through the symlinks; `guide.md` reads live from the new package. Asset-only changes propagate without re-install.
+`pipx upgrade memman` refreshes hook scripts and `SKILL.md` through the symlinks; `guide.md` reads live from the new package. A change confined to those assets propagates without re-install. A change to the hook registrations themselves does not: `~/.claude/settings.json` holds the event and matcher set, and only `memman install` rewrites it.
 
 See [USAGE.md § Install / Uninstall](../USAGE.md#install--uninstall) for the full flag matrix.
 

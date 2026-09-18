@@ -1,8 +1,10 @@
 """Tests for memman.setup - settings, markdown, detection."""
 
+import html
 import json
 import os
 import pathlib
+import re
 import subprocess
 
 import click
@@ -203,12 +205,13 @@ class TestHookManagement:
         assert remove_memory_block(str(p)) is False
 
     def test_add_claude_hooks_with_task_recall(self):
-        """Verify the pre-delegation matcher covers every delegation tool.
+        """Verify the pre-delegation entry matches the delegation tool.
 
-        Mutation: a matcher naming only Task, which never fires on an
-            Agent launch, so the recall reminder goes silent.
-        Oracle: hand-written set of the tool names a delegation goes
-            through - Agent and Task - each required in the matcher.
+        Mutation: a matcher naming no delegation tool - left empty, or
+            pointed at a tool that spawns nothing - so the reminder
+            never reaches the agent before a sub-agent launch.
+        Oracle: the tool name Claude Code canonicalizes a delegation to,
+            Agent, required among the matcher's tokens.
         """
         data = {}
         add_claude_hooks_selective(
@@ -216,7 +219,7 @@ class TestHookManagement:
         entries = data['hooks']['PreToolUse']
         assert len(entries) == 1
         matched = set(entries[0]['matcher'].split('|'))
-        assert matched == {'Agent', 'Task'}
+        assert 'Agent' in matched
         assert entries[0]['hooks'][0]['command'].endswith(
             'task_recall.sh')
 
@@ -537,22 +540,6 @@ class TestPrimeAndCompactHooks:
         flag_dir = tmp_path / '.memman' / 'exit_plan'
         assert not flag_dir.exists()
 
-    def _prompt_script():
-        """Return path to user_prompt.sh asset."""
-        from importlib.resources import files as pkg_files
-        return str(
-            pkg_files('memman.setup.assets')
-            .joinpath('claude/user_prompt.sh'))
-
-    def _run_hook(self: str, input_json: str,
-                  tmp_home: pathlib.Path) -> subprocess.CompletedProcess:
-        """Run a hook script with HOME overridden."""
-        return subprocess.run(
-            ['bash', self],
-            check=False, input=input_json,
-            capture_output=True, text=True,
-            env={**os.environ, 'HOME': str(tmp_home)})
-
     def test_prime_hook_emits_guide_content(self, tmp_path):
         """prime.sh with memman on PATH emits guide content via `memman prime`.
         """
@@ -603,25 +590,32 @@ class TestPrimeAndCompactHooks:
 
 
 class TestUserPromptHook:
-    """`user_prompt.sh` flag-clearing semantics."""
+    """`user_prompt.sh` recall reminder and session-id hint."""
 
-    def test_user_prompt_no_flag_dir(self, tmp_path):
-        """user_prompt.sh exits cleanly when no flag dir exists."""
-        result = _run_hook(
+    def test_session_id_reaches_the_reminder(self, tmp_path):
+        """Verify the hook relays the session id it was handed.
+
+        Mutation: dropping the SESSION_HINT line, so the agent is never
+            told which --session to stamp its recalls and writes with.
+        Oracle: hand-written pair straddling the hook's one branch - the
+            exact id when the payload carries one, no --session at all
+            when it does not.
+        """
+        with_id = _run_hook(
             _prompt_script(),
             '{"session_id": "sess-6"}',
             tmp_path)
-        assert result.returncode == 0
-        assert 'recall' in result.stdout.lower()
+        assert with_id.returncode == 0
+        assert 'recall' in with_id.stdout.lower()
+        assert '--session sess-6' in with_id.stdout
 
-    def test_user_prompt_no_session_id(self, tmp_path):
-        """user_prompt.sh exits cleanly when session_id is missing."""
-        result = _run_hook(
+        without_id = _run_hook(
             _prompt_script(),
             '{}',
             tmp_path)
-        assert result.returncode == 0
-        assert 'recall' in result.stdout.lower()
+        assert without_id.returncode == 0
+        assert 'recall' in without_id.stdout.lower()
+        assert '--session' not in without_id.stdout
 
 
 class TestNoBlockingHook:
@@ -727,6 +721,62 @@ class TestNoBlockingHook:
         skill = nanoclaw.joinpath('SKILL.md').read_text()
         assert 'stop.sh' not in skill
         assert 'Stop:' not in skill
+
+
+class TestDocsMatchShippedHooks:
+    """Prose and diagram counts track the shipped hook set."""
+
+    def test_doc_hook_counts_match_the_asset_tree(self):
+        """Verify every doc site naming a hook count names the real one.
+
+        Mutation: a hook added or deleted on some doc sites only - the
+            deletion that corrected three README counts and left the
+            fourth reading six, and regenerated one diagram of two.
+        Oracle: the shipped asset tree counted directly - the .sh files
+            under assets/claude and under assets/nanoclaw/hooks.
+        """
+        assets = (pathlib.Path(__file__).resolve().parents[1]
+                  / 'src' / 'memman' / 'setup' / 'assets')
+        shipped = {
+            len(list(assets.glob('claude/*.sh'))),
+            len(list(assets.glob('nanoclaw/hooks/*.sh'))),
+            }
+        words = {
+            'two': 2, 'three': 3, 'four': 4, 'five': 5,
+            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9,
+            }
+        readme = (pathlib.Path(__file__).resolve().parents[1]
+                  / 'README.md').read_text()
+        counted = {
+            words[match.group(1).lower()]
+            for match in re.finditer(
+                r'\b(\w+)\s+(?:lifecycle\s+)?hooks?\b', readme, re.I)
+            if match.group(1).lower() in words
+            }
+        assert counted == shipped
+
+    def test_architecture_diagram_names_the_shipped_hooks(self):
+        """Verify the architecture diagram lists the shipped hook roles.
+
+        Mutation: a hook deleted from the installer and left standing in
+            the diagram, which is the PNG the design docs embed.
+        Oracle: the shipped asset tree - one role per .sh file under
+            assets/claude, counted independently of the diagram.
+        """
+        root = pathlib.Path(__file__).resolve().parents[1]
+        shipped = len(list(
+            (root / 'src' / 'memman' / 'setup' / 'assets')
+            .glob('claude/*.sh')))
+        diagram = (root / 'docs' / 'diagrams'
+                   / '01-system-architecture.drawio').read_text()
+        label = re.search(r'id="a_hooks" value="([^"]*)"', diagram)
+        assert label is not None
+        text = re.sub(r'<[^>]+>', '/', html.unescape(label.group(1)))
+        roles = [
+            token.strip() for token in text.split('/')
+            if token.strip() and token.strip().lower() != 'hooks'
+            ]
+        assert len(roles) == shipped
 
 
 class TestSetupCli:
