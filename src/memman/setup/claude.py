@@ -68,24 +68,6 @@ def claude_write_hook(config_dir: str, filename: str) -> str:
     return str(link)
 
 
-def claude_register_hooks(config_dir: str,
-                          remind: bool = True,
-                          compact: bool = True,
-                          task_recall: bool = True,
-                          exit_plan: bool = True) -> str:
-    """Register hooks in settings.json."""
-    hooks_dir = os.path.join(config_dir, 'hooks', 'memman')
-    settings_path = os.path.join(config_dir, 'settings.json')
-    data = read_json_file(settings_path)
-    add_claude_hooks_selective(
-        data, hooks_dir,
-        remind=remind,
-        compact=compact, task_recall=task_recall,
-        exit_plan=exit_plan)
-    write_json_file(settings_path, data)
-    return settings_path
-
-
 def claude_uninstall(config_dir: str) -> list[Exception]:
     """Remove memman integration from the given Claude Code config dir."""
     errs: list[Exception] = []

@@ -785,9 +785,6 @@ class TestSchedulerLogs:
         preexisting.mkdir(parents=True)
         preexisting.chmod(0o755)
         monkeypatch.setattr(
-            'memman.setup.claude.claude_register_hooks',
-            lambda cd, **kw: '/dev/null')
-        monkeypatch.setattr(
             'memman.setup.claude._init_default_store', lambda dd: None)
         from memman.setup.claude import _install_claude_code
         env = {'name': 'claude-code', 'config_dir': str(tmp_path / 'claude')}

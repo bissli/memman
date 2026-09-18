@@ -11,7 +11,6 @@ import click
 import pytest
 from click.testing import CliRunner
 from memman.cli import cli, list_claude_permissions
-from memman.setup.claude import claude_register_hooks
 from memman.setup.markdown import remove_memory_block
 from memman.setup.settings import add_claude_hooks_selective
 from memman.setup.settings import add_memman_permission, read_json_file
@@ -414,14 +413,19 @@ class TestPermissions:
         remove_memman_permission(data)
         assert data == before
 
-    def test_register_hooks_no_permission(self, tmp_path):
-        """claude_register_hooks() does not add memman permissions."""
-        config_dir = str(tmp_path / '.claude')
-        hooks_dir = os.path.join(config_dir, 'hooks', 'memman')
-        pathlib.Path(hooks_dir).mkdir(parents=True)
-        claude_register_hooks(config_dir, remind=True,
-                              task_recall=True)
-        data = read_json_file(os.path.join(config_dir, 'settings.json'))
+    def test_hook_wiring_adds_no_permission(self):
+        """Verify wiring hooks never grants a memman Bash permission.
+
+        Mutation: a permission write folded into the hook wiring, so a
+            caller asking only for hooks silently widens what memman
+            may run.
+        Oracle: the curated permission list, none of whose entries may
+            appear in allow after the call.
+        """
+        data: dict = {}
+        add_claude_hooks_selective(
+            data, '/hooks/dir', remind=True, compact=True,
+            task_recall=True, exit_plan=True)
         allow = data.get('permissions', {}).get('allow', [])
         for entry in list_claude_permissions():
             assert entry not in allow
@@ -721,6 +725,42 @@ class TestNoBlockingHook:
         skill = nanoclaw.joinpath('SKILL.md').read_text()
         assert 'stop.sh' not in skill
         assert 'Stop:' not in skill
+
+
+class TestPreToolUseHooksReachTheModel:
+    """PreToolUse reminders ride the one channel Claude Code reads."""
+
+    def test_pretooluse_hooks_emit_additional_context(self, tmp_path):
+        """Verify every PreToolUse hook speaks additionalContext.
+
+        Mutation: a PreToolUse hook echoing plain text, which Claude
+            Code discards for every event but SessionStart and
+            UserPromptSubmit, so the reminder never reaches the model.
+        Oracle: the registered event set - every script the installer
+            files under PreToolUse, each required to emit JSON naming
+            the event and carrying a memman line.
+        """
+        from importlib.resources import files as pkg_files
+        registered: dict = {}
+        add_claude_hooks_selective(
+            registered, '/hooks/dir', remind=True, compact=True,
+            task_recall=True, exit_plan=True)
+        scripts = [
+            pathlib.Path(hook['command']).name
+            for entry in registered['hooks']['PreToolUse']
+            for hook in entry['hooks']
+            ]
+        assert scripts
+        for name in scripts:
+            script = str(
+                pkg_files('memman.setup.assets')
+                .joinpath(f'claude/{name}'))
+            result = _run_hook(
+                script, '{"session_id": "sess-ctx"}', tmp_path)
+            assert result.returncode == 0, name
+            emitted = json.loads(result.stdout)['hookSpecificOutput']
+            assert emitted['hookEventName'] == 'PreToolUse', name
+            assert '[memman]' in emitted['additionalContext'], name
 
 
 class TestDocsMatchShippedHooks:
