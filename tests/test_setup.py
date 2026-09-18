@@ -621,6 +621,25 @@ class TestUserPromptHook:
         assert 'recall' in without_id.stdout.lower()
         assert '--session' not in without_id.stdout
 
+    def test_carries_no_write_instruction(self, tmp_path):
+        """Verify the reminder asks for a recall and never for a write.
+
+        Mutation: restoring the trailing "After responding, evaluate:
+            remember needed?" clause, which UserPromptSubmit delivers
+            before the turn whose end it asks about.
+        Oracle: the two phrases that made up the deleted clause, checked
+            against a payload that still carries a session id, so the
+            flag-stamping mention of remember in the hint stays allowed.
+        """
+        out = _run_hook(
+            _prompt_script(),
+            '{"session_id": "sess-7"}',
+            tmp_path)
+        assert out.returncode == 0
+        assert 'recall' in out.stdout.lower()
+        assert 'after responding' not in out.stdout.lower()
+        assert 'remember needed' not in out.stdout.lower()
+
 
 class TestNoBlockingHook:
     """No shipped hook re-invokes the model after a turn has ended."""
