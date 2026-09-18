@@ -131,3 +131,43 @@ class TestEntityExtraction:
             all_entities.extend(e.lower() for e in f['entities'])
         assert any('fastapi' in e for e in all_entities)
         assert any('flask' in e for e in all_entities)
+
+
+class TestReceiptFramedPayload:
+    """Step 1 judges durable payload, never the opening framing.
+
+    The test is PAIRED: the same payload is sent with receipt framing
+    and without it, and the unframed arm is the oracle, so a framed
+    skip is attributable to the framing alone.
+
+    Extraction pins no `temperature`, so the skip judgment varies run to
+    run. Only an input that reproduces the skip on every replicate
+    belongs here. A correction-shaped input was tried and dropped: the
+    shipped prompt accepted it on both replicates of a later round, so
+    it does not reproduce the defect and a test on it would flake.
+    """
+
+    def test_framing_does_not_lose_an_invocation(self, llm_client):
+        """Verify receipt framing does not decide a command line's fate.
+
+        Mutation: Step 1 classifying on the opening sentence, so a
+            deployment-shaped input is skipped whole and the invocation
+            it carries is lost.
+        Oracle: the same payload with the framing removed, extracted in
+            the same run - it is accepted and keeps the flags verbatim.
+        """
+        payload = ('The working invocation for the release check is '
+                   './scripts/verify.sh --stage --no-publish '
+                   '--max-retries 3.')
+        framed = ('Deployed v2.3.0 to staging and all 412 tests passed. '
+                  + payload + ' Earlier runs used binary 1.8 where the '
+                  'current one is 2.1.')
+
+        bare_facts = extract_facts(llm_client, payload)
+        assert len(bare_facts) == 1, 'oracle arm skipped; payload not durable'
+        assert '--no-publish' in bare_facts[0]['text']
+
+        framed_facts = extract_facts(llm_client, framed)
+        assert len(framed_facts) == 1, 'framing alone caused a skip'
+        assert '--no-publish' in framed_facts[0]['text']
+        assert '--max-retries 3' in framed_facts[0]['text']
