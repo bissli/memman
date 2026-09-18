@@ -153,7 +153,7 @@ chmod +x container/hooks/memman/*.sh
 The two scripts are:
 
 - `prime.sh` (SessionStart): prints `[memman] Memory active (N insights, M edges).`
-- `user_prompt.sh` (UserPromptSubmit): prints a recall/remember reminder.
+- `user_prompt.sh` (UserPromptSubmit): prints a recall reminder.
 
 Read the scripts in the installed package to see the exact bytes the
 test suite verifies.
