@@ -24,6 +24,11 @@ def _make_enrichment_response(
         })
 
 
+def _content_containing(*names) -> str:
+    """Body holding every name, so only the cap under test can drop one."""
+    return 'cap body ' + ' '.join(names)
+
+
 def _read_enrichment_columns(db, insight_id: str) -> dict:
     """Read enrichment columns directly from DB."""
     row = db._conn.execute(
@@ -179,10 +184,13 @@ class TestEnrichWithLLM:
         """Over-long LLM entity/keyword lists are capped to salience limits."""
         from memman.graph.enrichment import MAX_ENRICH_ENTITIES
         from memman.graph.enrichment import MAX_ENRICH_KEYWORDS
-        insight = make_insight(id='cap-1', content='content', entities=[])
+        llm_names = [f'e{i}' for i in range(80)]
+        insight = make_insight(
+            id='cap-1', entities=[],
+            content=_content_containing(*llm_names))
         mock_client = MagicMock()
         mock_client.complete.return_value = json.dumps({
-            'entities': [f'e{i}' for i in range(80)],
+            'entities': llm_names,
             'keywords': [f'k{i}' for i in range(40)],
             'summary': 'summary',
             'semantic_facts': ['fact'],
@@ -389,7 +397,9 @@ class TestLengthCaps:
         Oracle: neither the over-long value nor any prefix of it
             appears in the result; the valid siblings survive.
         """
-        insight = make_insight(id='cap-1', content='cap body', entities=[])
+        insight = make_insight(
+            id='cap-1', entities=[],
+            content=_content_containing('Redis', 'e' * 250, 'cache'))
         mock_client = MagicMock()
         mock_client.complete.return_value = _make_enrichment_response(
             entities=['Redis', 'e' * 250],
@@ -414,7 +424,9 @@ class TestLengthCaps:
         """
         at_cap = 'a' * 200
         over_cap = 'b' * 201
-        insight = make_insight(id='cap-4', content='cap body', entities=[])
+        insight = make_insight(
+            id='cap-4', entities=[],
+            content=_content_containing(at_cap, over_cap, 'Redis'))
         mock_client = MagicMock()
         mock_client.complete.return_value = _make_enrichment_response(
             entities=[at_cap, over_cap, 'Redis'],
@@ -437,7 +449,9 @@ class TestLengthCaps:
         from memman.graph.enrichment import MAX_ENRICH_ENTITIES
         overlong = [('x' * 250) + str(i) for i in range(3)]
         valid = [f'entity-{i}' for i in range(MAX_ENRICH_ENTITIES)]
-        insight = make_insight(id='cap-2', content='cap body', entities=[])
+        insight = make_insight(
+            id='cap-2', entities=[],
+            content=_content_containing(*(overlong + valid)))
         mock_client = MagicMock()
         mock_client.complete.return_value = _make_enrichment_response(
             entities=overlong + valid)
@@ -458,7 +472,8 @@ class TestLengthCaps:
         """
         long_user = 'u' * 250
         insight = make_insight(
-            id='cap-3', content='cap body', entities=[long_user])
+            id='cap-3', entities=[long_user],
+            content=_content_containing('ok-entity', 'L' * 250))
         mock_client = MagicMock()
         mock_client.complete.return_value = _make_enrichment_response(
             entities=['ok-entity', 'L' * 250])
@@ -504,11 +519,13 @@ class TestLengthCaps:
         """
         from memman.graph.enrichment import MAX_ENRICH_ENTITIES
         user = ['user-a', 'user-b']
+        llm_names = [f'llm-{i:02d}' for i in range(80)]
         insight = make_insight(
-            id='cap-5', content='cap body', entities=list(user))
+            id='cap-5', entities=list(user),
+            content=_content_containing(*llm_names))
         mock_client = MagicMock()
         mock_client.complete.return_value = _make_enrichment_response(
-            entities=[f'llm-{i:02d}' for i in range(80)])
+            entities=llm_names)
 
         result = enrich_with_llm(insight, mock_client)
 
@@ -610,7 +627,7 @@ def test_enrichment_rerolls_a_body_that_does_not_parse():
         no later stage retries.
     Oracle: the entities of the second response, and two calls.
     """
-    insight = make_insight()
+    insight = make_insight(content=_content_containing('Python'))
     client = _SequenceClient([
         _CUT_MID_ENTITY_BODY,
         _make_enrichment_response(entities=['Python'])])
@@ -626,7 +643,8 @@ def test_enrichment_does_not_reroll_a_body_that_parses():
         bill on every drained row.
     Oracle: one call; a second exhausts the scripted client and raises.
     """
-    insight = make_insight()
+    insight = make_insight(
+        content=_content_containing('Python', 'FastAPI'))
     client = _SequenceClient([_make_enrichment_response()])
     result = enrich_with_llm(insight, client)
     assert result['entities'] == ['Python', 'FastAPI']
@@ -643,3 +661,47 @@ def test_enrichment_rerolls_at_most_once():
     client = _SequenceClient(['not json', 'still not json', 'nor this'])
     assert enrich_with_llm(insight, client) == {}
     assert len(client.calls) == 2
+
+
+def test_enrich_drops_entities_absent_from_the_content():
+    """Only literal substrings of the row's own content survive.
+
+    Mutation: removing the verbatim filter, so a model-invented span
+    such as a CJK fragment spliced into an identifier is stored and
+    becomes an edge key no other row can ever match.
+    Oracle: hand-computed -- of the four returned names only the two
+    the content actually contains may remain.
+    """
+    insight = make_insight(
+        id='verbatim-1',
+        content='makedirs dedup runs before DriveS3 uploads')
+    client = MagicMock()
+    client.complete.return_value = _make_enrichment_response(
+        entities=['makedirs dedup', 'DriveS3',
+                  'makedirs dedup游戏副本lication',
+                  'CoinedThing'])
+
+    result = enrich_with_llm(insight, client)
+
+    assert result['entities'] == ['makedirs dedup', 'DriveS3']
+
+
+def test_enrich_keeps_a_caller_supplied_entity_absent_from_content():
+    """The verbatim filter bounds the MODEL, never the caller's seed.
+
+    Mutation: applying the verbatim filter to the merged list instead
+    of to the model's own names, which silently drops a --entity
+    value the CLI already validated and no re-enrichment restores.
+    Oracle: hand-computed -- the seed survives though it is no
+    substring of the content.
+    """
+    insight = make_insight(
+        id='verbatim-2', content='alpha beta',
+        entities=['operator-supplied-tag'])
+    client = MagicMock()
+    client.complete.return_value = _make_enrichment_response(
+        entities=['alpha'])
+
+    result = enrich_with_llm(insight, client)
+
+    assert result['entities'] == ['operator-supplied-tag', 'alpha']

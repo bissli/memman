@@ -4,7 +4,8 @@ import logging
 
 from memman import trace
 from memman.llm import usage as llm_usage
-from memman.llm.shared import complete_parsed, drop_overlong_strings
+from memman.llm.shared import complete_parsed, drop_non_verbatim_entities
+from memman.llm.shared import drop_overlong_strings
 from memman.store.model import Insight
 
 logger = logging.getLogger('memman')
@@ -118,6 +119,8 @@ def enrich_with_llm(
     # ones must yield 20, not 17.
     llm_entities = drop_overlong_strings(
         llm_entities, kind='entity', owner=insight.id)
+    llm_entities = drop_non_verbatim_entities(
+        llm_entities, content=insight.content, owner=insight.id)
 
     # Notes:
     # - The count cap bounds what the MODEL adds, never the seed.

@@ -69,6 +69,49 @@ def drop_overlong_strings(
     return kept
 
 
+def drop_non_verbatim_entities(
+        values: list[str], *, content: str, owner: str) -> list[str]:
+    """Drop entities that are no literal substring of `content`.
+
+    Parameters
+    ----------
+    values : list[str]
+        LLM-proposed entities. Never pass user-supplied values -- the
+        CLI validates those and no re-enrichment restores one dropped.
+    content : str
+        The row's own text, which every entity must appear inside.
+    owner : str
+        Insight id (or producer label) named in the drop log line.
+
+    Returns
+    -------
+    list[str]
+        The surviving values, order preserved.
+
+    Notes
+    -----
+    - Matching folds case and surrounding space, the same key
+      `store/edge.py` joins on, so a name kept here is a name that
+      can reach an edge.
+    - This enforces in code the rule the enrichment prompt already
+      states. A name absent from the text can only ever match
+      another row carrying the identical invention, so it is an edge
+      key with no reachable partner.
+    - Model-invariant by construction: it asks what the text
+      contains, never what a given model tends to emit, so it does
+      not weaken as models improve.
+    """
+    src = content.lower()
+    kept = []
+    for v in values:
+        if v.strip().lower() not in src:
+            logger.info(
+                f'dropped non-verbatim entity for {owner}: {v[:40]!r}')
+            continue
+        kept.append(v)
+    return kept
+
+
 def strip_code_fences(raw: str) -> str:
     """Strip markdown code fences from LLM output."""
     text = raw.strip()

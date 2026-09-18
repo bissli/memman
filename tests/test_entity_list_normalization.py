@@ -131,7 +131,8 @@ def test_a_whitespace_only_entity_from_the_model_is_dropped(tmp_backend):
     from memman.graph.enrichment import enrich_with_llm
     import json as _json
 
-    insight = make_insight(id='ws-1', content='body', entities=[])
+    insight = make_insight(
+        id='ws-1', content='body naming Redis', entities=[])
     client = MagicMock()
     client.complete.return_value = _json.dumps({
         'entities': ['   ', '\t', 'Redis'],
