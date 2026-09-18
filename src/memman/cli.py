@@ -1199,7 +1199,8 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                             skip_reason, row.session_id)
                         skipped_writes += 1
                     else:
-                        clear_skipped_write(conn, row.id)
+                        clear_skipped_write(
+                            conn, row.store, row.content)
                 except Exception:
                     logger.exception(
                         f'skipped-write ledger update failed for queue'

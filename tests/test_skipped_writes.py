@@ -339,7 +339,7 @@ def test_drain_clears_a_stale_ledger_row_when_the_retry_stores(
         queue_conn, queue_id=1, store='main', content='a',
         skip_reason='trivial content')
     assert len(list_skipped(queue_conn)) == 1
-    clear_skipped_write(queue_conn, 1)
+    clear_skipped_write(queue_conn, 'main', 'a')
     assert list_skipped(queue_conn) == []
 
 
@@ -478,10 +478,14 @@ def test_a_crash_recovery_redrain_files_nothing(mm_runner):
         conn.execute(
             "update queue set status = 'pending', claimed_at = null,"
             ' processed_at = null')
-        row_id = conn.execute('select id from queue').fetchone()[0]
+        row_id, row_store, row_content = conn.execute(
+            'select id, store, content from queue').fetchone()
+        # The stale entry carries the row's OWN store and content:
+        # that is what an earlier attempt filed, and retraction keys
+        # on the pair.
         record_skipped_write(
-            conn, queue_id=row_id, store='main',
-            content='stale entry from an earlier attempt',
+            conn, queue_id=row_id, store=row_store,
+            content=row_content,
             skip_reason='trivial content')
     res = r.invoke(cli, [
         '--data-dir', data_dir, 'scheduler', 'drain',

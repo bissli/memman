@@ -431,16 +431,38 @@ values (?, ?, ?, ?, ?, ?)
         session_id))
 
 
-def clear_skipped_write(conn: sqlite3.Connection, queue_id: int) -> None:
-    """Retract a queue row's ledger entry.
+def clear_skipped_write(
+        conn: sqlite3.Connection, store: str, content: str) -> int:
+    """Retract every ledger row claiming this content was discarded.
 
-    Called when a re-drain of a row that once skipped goes on to store
-    something. Without it the ledger reports a write as lost forever
-    and the documented recovery -- read it back and re-enter it --
-    creates a duplicate.
+    Parameters
+    ----------
+    store : str
+        Store the write was addressed to.
+    content : str
+        The write verbatim, matched against the ledger's own copy.
+
+    Returns
+    -------
+    int
+        Ledger rows retracted.
+
+    Notes
+    -----
+    - Keyed on `(store, content)`, never on `queue_id`. A replay
+      arrives on a fresh queue row, so retracting its own id leaves
+      the row filed against the original id standing and the ledger
+      reports the write lost forever, which is the loss this verb
+      exists to prevent.
+    - Every row sharing the key goes, not just one. A ledger row
+      asserts that this content is absent from this store; once a
+      drain stores it, each such row is false whatever queue row
+      filed it.
     """
-    conn.execute(
-        'delete from skipped_writes where queue_id = ?', (queue_id,))
+    cur = conn.execute(
+        'delete from skipped_writes where store = ? and content = ?',
+        (store, content))
+    return cur.rowcount
 
 
 def purge_skipped(conn: sqlite3.Connection) -> int:
