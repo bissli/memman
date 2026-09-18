@@ -196,6 +196,7 @@ def _run_per_store_maintenance(
     if time.monotonic() >= deadline_monotonic:
         return
 
+    stranded: list[str] = []
     try:
         stranded = ctx.backend.nodes.get_unenriched_linked_ids(
             limit=MAINTENANCE_REENRICH_MAX)
@@ -218,13 +219,19 @@ def _run_per_store_maintenance(
     if pending == 0:
         return
 
+    # A stranded row already carries the entities of the draw that
+    # failed to flip it. Seeding the retry onto them accretes one
+    # vocabulary per attempt, and the edge budget is spent in stored
+    # order, so the oldest names keep it and the new draw wins no
+    # edge. Replace instead, exactly as the rebuild path does.
     try:
         processed = link_pending(
             ctx.backend,
             embed_cache=ctx.embed_cache,
             embed_client=ctx.ec,
             max_batch=MAINTENANCE_LINK_PENDING_MAX,
-            store_name=store_name)
+            store_name=store_name,
+            replace_entity_ids=set(stranded))
         if processed:
             logger.debug(
                 f'maintenance: link_pending processed {processed} insights'

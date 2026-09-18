@@ -133,3 +133,42 @@ def test_idle_store_relinks_after_constants_drift():
         assert backend2.nodes.count_pending_links() == 0
     finally:
         backend2.close()
+
+
+def test_stranded_reenrich_replaces_entities_rather_than_accreting(
+            tmp_db, tmp_backend, monkeypatch):
+    """A re-enriched stranded row keeps only the new draw's entities.
+
+    Mutation: dropping `replace_entity_ids` from the `link_pending`
+    call in `_run_per_store_maintenance`, which lets `seed_entities`
+    default to True and union the draw onto the stored list.
+    Oracle: hand-computed list -- the stored row must equal exactly
+    what the stubbed enrichment returned, with the stale name gone.
+    """
+    insight = make_insight(
+        id='stranded-1', content='alpha beta',
+        entities=['stale-coinage'])
+    insert_insight(tmp_db, insight)
+    stamp_linked(
+        tmp_db, 'stranded-1',
+        format_timestamp(datetime.now(timezone.utc)))
+
+    import memman.graph.enrichment as enrichment_mod
+    monkeypatch.setattr(
+        enrichment_mod, 'enrich_with_llm',
+        lambda ins, client, *, seed_entities=True: {
+            'entities': (['alpha', 'beta'] if not seed_entities
+                         else list(ins.entities) + ['alpha', 'beta']),
+            'keywords': [], 'summary': '', 'semantic_facts': []})
+
+    ctx = MagicMock()
+    ctx.backend = tmp_backend
+    ctx.embed_cache = {}
+    ctx.llm_client = MagicMock()
+    ctx.ec = MagicMock()
+    ctx.ec.available.return_value = False
+
+    _run_per_store_maintenance(ctx, 'default', time.monotonic() + 60)
+
+    stored = tmp_backend.nodes.get('stranded-1')
+    assert stored.entities == ['alpha', 'beta']
