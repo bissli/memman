@@ -2,8 +2,8 @@
 
 `memman status` reports `stale_insights` from `count_stale_insights`,
 and the remedy it points at, `graph rebuild --stale`, routes through
-`link_pending` (`graph/engine.py`), which re-runs ENRICHMENT and CAUSAL
-inference on the `slow_metadata` client and nothing else.
+`link_pending` (`graph/engine.py`), which re-runs ENRICHMENT on the
+`slow_metadata` client and nothing else.
 
 The invariant these tests pin: `compute_prompt_version` hashes exactly
 the inputs `link_pending` replays, and nothing else. A key covering
