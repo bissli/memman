@@ -114,7 +114,13 @@ class TestInstallPaths:
 class TestRegisterPlugin:
 
     def test_register_plugin_writes_valid_json(self, tmp_path: Path):
-        """Default register call writes enabled+remind+nudge=True.
+        """Verify the default entry enables the plugin and remind alone.
+
+        Mutation: writing back the nudge config key, which the plugin
+            no longer reads, so openclaw.json would carry a setting
+            nothing honors.
+        Oracle: the config dict's exact key set, which a membership
+            check on remind alone would let a resurrected key pass.
         """
         config_dir = str(tmp_path / 'openclaw')
         Path(config_dir).mkdir(parents=True)
@@ -124,8 +130,7 @@ class TestRegisterPlugin:
 
         entry = cfg['plugins']['entries']['memman']
         assert entry['enabled'] is True
-        assert entry['config']['remind'] is True
-        assert entry['config']['nudge'] is True
+        assert entry['config'] == {'remind': True}
 
     def test_register_plugin_preserves_other_entries(self, tmp_path: Path):
         """Existing unrelated plugins survive the merge intact.
@@ -301,19 +306,47 @@ class TestHandlerJs:
 
 class TestPluginIndexJs:
 
-    def test_default_config_emits_skill_remind_nudge(
-            self, node_available):
-        """Default `{}` config: all three lines in prependContext."""
+    def test_default_config_emits_skill_and_recall(self, node_available):
+        """Verify the default config emits the skill and recall lines.
+
+        Mutation: dropping the remind branch, or registering the hook
+            on an event other than before_prompt_build.
+        Oracle: the two lines the branch emits, plus the registered
+            event name read back from the harness.
+        """
         out = _run_plugin({})
         assert out['registeredEvents'] == ['before_prompt_build']
         ctx = out['result']['prependContext']
         assert '[memman] load memman skill' in ctx
         assert 'recall needed' in ctx
-        assert 'memman remember' in ctx
 
-    def test_both_flags_off_emits_only_skill(self, node_available):
-        """remind=false, nudge=false: only the load-skill line."""
-        out = _run_plugin({'remind': False, 'nudge': False})
+    def test_prompt_context_carries_no_write_instruction(
+            self, node_available):
+        """Verify before_prompt_build injects no write instruction.
+
+        Mutation: restoring either per-turn write nudge - the "After
+            responding, evaluate: remember needed?" tail on remind, or
+            the nudge branch asking whether the exchange warrants a
+            remember call. Both fire before the exchange exists.
+        Oracle: the phrases those two branches emitted, read from a
+            default config, where remind is on and the recall line must
+            still be present.
+        """
+        ctx = _run_plugin({})['result']['prependContext']
+        assert 'recall needed' in ctx
+        assert 'after responding' not in ctx.lower()
+        assert 'remember needed' not in ctx.lower()
+        assert 'memman remember' not in ctx
+
+    def test_remind_off_emits_only_skill(self, node_available):
+        """Verify remind=false leaves only the load-skill line.
+
+        Mutation: reading the flag as `cfg.remind === true`, so an
+            absent key suppresses the hint, or ignoring the flag so the
+            hint always fires.
+        Oracle: exact equality against the single remaining line.
+        """
+        out = _run_plugin({'remind': False})
         ctx = out['result']['prependContext']
         assert ctx == '[memman] load memman skill'
 

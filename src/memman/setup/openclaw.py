@@ -46,8 +46,7 @@ def openclaw_write_plugin(config_dir: str) -> str:
 
 
 def openclaw_register_plugin(config_dir: str,
-                             remind: bool = True,
-                             nudge: bool = True) -> str:
+                             remind: bool = True) -> str:
     """Add the memman plugin entry to openclaw.json."""
     cfg_path = os.path.join(config_dir, 'openclaw.json')
 
@@ -68,7 +67,6 @@ def openclaw_register_plugin(config_dir: str,
         'enabled': True,
         'config': {
             'remind': remind,
-            'nudge': nudge,
             },
         }
     plugins['entries'] = entries
@@ -162,7 +160,7 @@ def install_openclaw(env: dict, data_dir: str) -> None:
     print(f'  Hook    {config_dir}/hooks/memman-prime/'
           ' (agent:bootstrap)')
     print(f'  Plugin  {config_dir}/extensions/memman/'
-          ' (hooks: remind, nudge)')
+          ' (hooks: remind)')
     print()
     print('Restart the OpenClaw gateway to activate.')
 

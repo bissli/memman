@@ -11,9 +11,6 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "nudge": {
-        "type": "boolean"
-      },
       "remind": {
         "type": "boolean"
       }

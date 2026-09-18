@@ -158,3 +158,24 @@ def test_nanoclaw_user_prompt_emits_evaluate(
              + str(Path.home() / '.local' / 'bin')})
     assert out.returncode == 0
     assert '[memman] Evaluate' in out.stdout
+
+
+def test_nanoclaw_user_prompt_carries_no_write_instruction(
+        memman_home: tuple[Path, Path]):
+    """Verify the nanoclaw reminder asks for a recall, never a write.
+
+    Mutation: restoring the trailing "After responding, evaluate:
+        remember needed?" clause, which UserPromptSubmit delivers
+        before the turn whose end it asks about.
+    Oracle: the two phrases that made up the deleted clause.
+    """
+    home, _ = memman_home
+    out = subprocess.run(
+        ['bash', _nc_hook('user_prompt.sh')],
+        capture_output=True, text=True,
+        env={'HOME': str(home), 'PATH': '/usr/bin:/bin:'
+             + str(Path.home() / '.local' / 'bin')})
+    assert out.returncode == 0
+    assert 'recall needed' in out.stdout
+    assert 'after responding' not in out.stdout.lower()
+    assert 'remember needed' not in out.stdout.lower()
