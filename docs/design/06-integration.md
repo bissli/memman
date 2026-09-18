@@ -12,9 +12,9 @@ memman ships three integration assets: lifecycle hooks, a skill file, and a beha
 
 Lifecycle order within a session:
 
-1. **Session start** - `prime.sh` (SessionStart) loads `guide.md` (the memory execution manual).
-2. **Every user message** - `user_prompt.sh` (UserPromptSubmit) reminds the agent to recall and remember.
-3. The LLM responds; `SKILL.md` is auto-discovered for command syntax; `guide.md` rules apply.
+1. **Session start** - `prime.sh` (SessionStart) loads `guide.md`, which carries the recall and remember commands and names the skill holding the rest.
+2. **Every user message** - `user_prompt.sh` (UserPromptSubmit) reminds the agent to recall.
+3. The LLM responds; `SKILL.md` is auto-discovered and holds the execution manual; `guide.md` rules apply.
 4. **Before sub-agent delegation** - `task_recall.sh` (PreToolUse on Agent or Task) reminds the agent to recall first.
 5. **Before plan exit** - `exit_plan.sh` (PreToolUse on ExitPlanMode) prompts memory storage before the transition.
 6. **Context compacted** (asynchronous) - `compact.sh` (PreCompact) writes a flag file; the next `SessionStart` reads it for post-compact recall.
@@ -23,9 +23,9 @@ Three assets, three jobs:
 
 | Layer     | What                                                               | Where                                       | Role                                                                                                                                                |
 | --------- | ------------------------------------------------------------------ | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Hooks** | Shell scripts triggered by Claude Code lifecycle events            | `.claude/hooks/memman/`                     | Prime (guide), Remind (recall & remember), Compact (pre-compact bridge), Recall (pre-delegation), ExitPlan (plan-mode transition) |
-| **Skill** | `SKILL.md` - command reference in Claude Code skill format         | `.claude/skills/memman/`                    | Teaches the LLM *how* to use memman commands                                                                                                        |
-| **Guide** | `guide.md` - execution manual for recall, remember, and delegation | Installed package (read via `memman guide`) | Teaches the LLM *when* to recall, *what* to remember, and *how* to delegate                                                                         |
+| **Hooks** | Shell scripts triggered by Claude Code lifecycle events            | `.claude/hooks/memman/`                     | Prime (guide), Remind (recall), Compact (pre-compact bridge), Recall (pre-delegation), ExitPlan (plan-mode transition) |
+| **Skill** | `SKILL.md` - execution manual in Claude Code skill format          | `.claude/skills/memman/`                    | Teaches the LLM *when* to recall, *what* to remember, and *how* to use memman commands                                                              |
+| **Guide** | `guide.md` - the recall and remember commands, and a pointer       | Installed package (read via `memman guide`) | Carries the two commands into every session and names the skill that holds the manual                                                               |
 
 ## 6.2 Hook details
 
@@ -94,6 +94,7 @@ Deployment model:
 - `~/.claude/skills/memman/SKILL.md` → symlink into the installed package's `memman/setup/assets/claude/SKILL.md`.
 - `~/.claude/hooks/memman/*.sh` → symlinks into the same package path. `prime.sh` is a thin shim that delegates to `memman prime` (status + compact hint + guide in one Python call).
 - Shipped `guide.md` is never deployed to disk - `memman guide` reads it from the package via `importlib.resources` every time `prime.sh` fires.
+- The host truncates hook stdout above 10,000 bytes, substituting a short preview and writing the rest to a file it never reads back. `guide.md` therefore stays small enough for the whole payload to arrive, and depth lives in `SKILL.md`, which loads on demand.
 
 `pipx upgrade memman` refreshes hook scripts and `SKILL.md` through the symlinks; `guide.md` reads live from the new package. A change confined to those assets propagates without re-install. A change to the hook registrations themselves does not: `~/.claude/settings.json` holds the event and matcher set, and only `memman install` rewrites it.
 
@@ -115,7 +116,7 @@ The host agent calls `memman remember` via Bash in the same turn. No sub-agent, 
 - **The host LLM already holds the context** needed to choose the right `--cat`, `--imp`, `--entity`, and to dereference anaphora before storing. A sub-agent would pay tokens to re-read context the host already has.
 - **One-way visibility** (writes are not recallable in the same turn) means there is no callback the sub-agent could provide that the host could not get itself. Recall remains a separate Bash call.
 
-The shipped `guide.md` enforces this explicitly: *"call `memman remember "<self-contained text>"` directly via Bash in your current turn. No sub-agent delegation."*
+The shipped `SKILL.md` enforces this explicitly: *"directly in the current turn, never through a sub-agent."*
 
 ## 6.5 Adapting to other LLM CLIs
 

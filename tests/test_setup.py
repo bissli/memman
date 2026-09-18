@@ -19,6 +19,11 @@ from memman.setup.settings import remove_memman_permission, strip_json5
 from memman.setup.settings import write_json_file
 
 
+# The host truncates hook stdout above this many bytes and persists the
+# remainder to a file it never reads back.
+HOOK_STDOUT_LIMIT = 10_000
+
+
 def _prompt_script():
     """Return path to user_prompt.sh asset."""
     from importlib.resources import files as pkg_files
@@ -591,6 +596,27 @@ class TestPrimeAndCompactHooks:
             env=env)
         assert result.returncode == 0
         assert 'not on PATH' in result.stdout
+
+
+    def test_prime_payload_reaches_the_model_whole(self, tmp_path):
+        """Verify the SessionStart payload fits the host's stdout limit.
+
+        Mutation: guide.md grown past the limit, or another line added
+            to prime, either of which truncates the payload to a
+            preview and drops the rest without erroring.
+        Oracle: HOOK_STDOUT_LIMIT, the byte count above which the host
+            replaces the payload with a preview, checked against the
+            emitted bytes; plus both halves of the contract, which sit
+            past the cut today.
+        """
+        result = CliRunner().invoke(
+            cli, ['prime'], input='{}',
+            env={'MEMMAN_DATA_DIR': str(tmp_path)})
+
+        assert result.exit_code == 0
+        assert len(result.output.encode()) < HOOK_STDOUT_LIMIT
+        assert 'memman recall' in result.output
+        assert 'memman remember' in result.output
 
 
 class TestUserPromptHook:

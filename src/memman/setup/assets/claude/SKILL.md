@@ -20,9 +20,104 @@ itself. Pass it only to pin a different id.
 memman remember "<fact>" --cat <category> --imp <1-5> --entity e1 --entity e2 --source agent
 ```
 
-Categories: `preference` · `decision` · `fact` · `insight` · `context`.
+Categories: `preference`, `decision`, `fact`, `insight`, `context`.
 `--imp` is a sort key for listings and tie-breaks (1-5, default 3),
 stored as passed. Pass 5 for a fact the whole system rests on.
+
+### When to write
+
+A user directive - a stated preference, a decision, a correction, or
+"remember this" - is stored at once, never deferred, even
+mid-conversation. Pure back-and-forth deliberation with no conclusion
+yet is deferred: an intermediate conclusion that will shift with
+further discussion wastes a write. The stability test for everything
+else: would this be worth storing as-is if the exchange stopped here?
+If yes, store it. If the next exchange might change it, defer.
+
+After each response, the agent runs this check, biased toward
+capturing: when in doubt, store.
+
+Always store:
+
+- a user directive: explicit preference, decision, correction, or
+  "remember this"
+- a reasoning conclusion: a non-trivial judgment from multi-source
+  synthesis
+- a durable system or architectural fact discovered this session
+- user-specific context no search engine can recover
+
+Store unless trivial:
+
+- a casual preference revealed in passing ("I usually...", "I
+  prefer...", "I don't like...")
+- a topic explored, with its conclusion or current understanding, not
+  just the questions
+- a useful framing or analogy the user offered
+- background context about the user's projects, tools, or setup
+
+None of the above: stop.
+
+Category mapping for `--cat`:
+
+- a user-stated preference: `preference`
+- an architectural or design decision with rationale: `decision`
+- a discovered fact about a system, tool, or domain: `fact`
+- a reasoning conclusion synthesized from several sources: `insight`
+- background context (project setup, user role, environment):
+  `context`
+
+Never stored, at any tier. The recoverability test: can this fact be
+recovered from the project's code, config, IaC state, or cloud
+account? If yes, do not store it.
+
+- a bug or issue discovery: store the resolution, not the problem
+- a state snapshot: line numbers, line counts, file sizes, resource
+  counts, instance IDs
+- a deployment or verification receipt ("all verified", "deployed
+  via", "state clean")
+- a temporal observation ("currently", "not yet", "TODO", "should be
+  changed to")
+- an intermediate finding that will shift once the task completes
+
+Mixed content: strip line numbers, counts, sizes, and other state
+snapshots; keep the file path or symbol that locates the claim, and
+keep the reasoning and conclusions.
+
+A correction of something already stored says so in its text: it
+names what is no longer true and what is true now, in one
+self-contained statement, and goes in with `memman remember` like any
+other fact. A settled open question is a correction of the row that
+left it open. The worker finds every stored row the fact contradicts
+and supersedes each with its own merge that keeps that row's
+still-true clauses.
+
+The text stores conclusions AND enough context to understand them. It
+is self-contained: every "that", "this", and "it" is dereferenced into
+its actual subject before the call. The agent runs `memman remember`
+directly in the current turn, never through a sub-agent.
+
+A behavioral rule - universal language such as "never", "always", or
+"mandatory", with no project-specific entity - goes to the project
+CLAUDE.md under a `## Directives` section instead of `memman
+remember`; the agent creates the section if absent. A directive needs
+guaranteed recall, which CLAUDE.md gets by loading every turn, not
+graph connectivity. The user prunes CLAUDE.md periodically, so no
+confirmation is needed.
+
+### The write pipeline
+
+`memman remember` is a fast queue-append. The full pipeline - fact
+extraction, reconciliation, enrichment, edge creation, re-embedding -
+runs out-of-band in a worker the scheduler fires on a timer (systemd
+on Linux, launchd on macOS, `memman scheduler serve` in containers).
+A newly stored memory is NOT visible to `memman recall` in the current
+session; it lands for later sessions.
+
+`memman graph rebuild` re-enriches every stored insight through the
+full LLM pipeline, after a model or prompt change or to repair partial
+enrichment. The three auto-created edge types (semantic, entity,
+temporal) are reindexed on DB open when edge constants change; there
+is no operator command for that.
 
 A write is not guaranteed to land. The worker drops content its
 extractor judges trivial, folds a fact that merely restates a stored
@@ -65,6 +160,21 @@ memman supersede <old_id> <new_id>
 
 ## Recalling what you know
 
+Recall runs on every new user message and before each new task or
+phase, unless all three hold: the message is a direct follow-up within
+a topic already in context, it refers to no past session, decision, or
+preference, and it depends on nothing outside the current
+conversation. Recall always runs before:
+
+- launching an explore, plan, or code agent - recall precedes
+  delegation
+- starting a new task or switching topics
+- a web search, since stored context sharpens the query
+- an architectural or design decision
+- writing code that touches a pattern discussed in a past session
+
+The query is focused and keyword-rich, never the raw user prompt.
+
 Recall: vector + graph traversal + cross-encoder reranker. Reranker
 runs by default on multi-token queries and auto-skips on 1-2 token
 queries.
@@ -76,6 +186,20 @@ memman recall "<query>" --brief --limit 20 --session <id>
 Add `--intent WHY|WHEN|ENTITY` to bias the ranking when intent is
 unambiguous (rationale, timeline, entity-centric). Add `--cat` or
 `--source` to filter.
+
+A brief page of 20 costs a fraction of a full page of 5 and carries
+several times the relevant material, so scan wide and open what earns
+it with `memman insights show <id>`. Any unambiguous prefix of the id
+works.
+
+On the scored path (no `--basic`) the response's `meta` object
+carries:
+
+- `hint`: intent-specific reasoning guidance, always present. It
+  frames the synthesis of the results.
+- `reranked`: true when the cross-encoder rerank stage fired; false
+  when the query was too short or rerank is disabled for this store
+  via `MEMMAN_RERANK_ENABLED_<store>=false`.
 
 Recall returns rows even when nothing matches: a recency channel
 seeds the newest insights as anchors regardless. An empty `results`
@@ -89,10 +213,24 @@ a fixed number, because the scale belongs to whichever reranker is
 configured. Report that nothing relevant is stored only when no row
 bears on the query.
 
+Rows assert; CLAUDE.md directs. A `decision` row is history with its
+rationale, not an instruction to follow now. A row that names a file
+path or a symbol is a claim about the code at the row's `created_at`.
+Before acting on it, check the path's history since that date with
+`git log --since=<created_at> -- <path>` from the project directory.
+An empty result means the path did not change OR the path is not in
+this repo, since a store can hold rows from several repos; `git log -1
+-- <path>` confirms the path exists here before silence is read as
+currency.
+
 `--basic` returns before ranking, so it carries no `score` and no
-`signals` to judge with at all. If a paraphrase returns nothing that
-bears on the query, re-ask in the store's own words before concluding
-it is empty.
+`signals` to judge with at all, and an empty `results` there says
+nothing about how well anything matched. Its envelope is
+`{basic: true}` plus `ignored`, a list of flag names present only when
+non-empty: `--intent` and `--expand` do nothing on this path and are
+named rather than obeyed. If a paraphrase returns nothing that bears on
+the query, re-ask in the store's own words before concluding it is
+empty.
 
 Rows come back in relevance order at every `--limit`, so the first `n`
 of a page of `m` are exactly a page of `n`.
@@ -187,6 +325,52 @@ memman graph related <id> --edge semantic
 memman status                         # insight count, store, scheduler state
 memman doctor                         # health check (sqlite, queue, keys, scheduler, env_completeness)
 ```
+
+## Scheduler controls
+
+memman has a single write path: every `remember` / `replace` enqueues,
+and a worker drains the queue. The trigger varies by environment: a
+systemd timer on Linux, a launchd agent on macOS, and a long-running
+`memman scheduler serve` process inside containers (set
+`MEMMAN_SCHEDULER_KIND=serve` and run the command as PID 1).
+
+When the scheduler is stopped, memman is recall-only: every write
+exits 1 with `Scheduler is stopped; cannot <verb>. Run 'memman
+scheduler start' to enable.` The serve loop polls the state file every
+iteration and mid-drain, so a pause takes effect within seconds even
+during a long drain.
+
+Drains never overlap: a lock on `~/.memman/drain.lock` gates entry to
+the drain. A manual `scheduler trigger` fired while a timer-driven
+drain is running logs `drain: another drain is in progress, skipping`
+and exits 0.
+
+- `memman scheduler serve [--interval N] [--once]` - long-running
+  drain loop (PID 1 in containers). `--interval 0` means continuous:
+  drains run back-to-back, with a 100 ms idle backoff when the queue
+  is empty.
+- `memman scheduler status` - platform, interval, next run, state,
+  last heartbeat, and the three worker-log paths.
+- `memman scheduler start` - flip state to STARTED (resume drains and
+  writes).
+- `memman scheduler stop` - flip state to STOPPED (pause drains and
+  reject writes).
+- `memman scheduler interval --seconds N` - change cadence (min 60 s
+  for systemd/launchd; serve mode accepts any value `>= 0`, with `0`
+  meaning continuous).
+- `memman scheduler trigger` - dispatch a drain on systemd/launchd and
+  return at once. It does not wait for the drain, so a `dispatched`
+  response means the run started, not that it finished; `memman log
+  worker` reports the outcome. Not applicable in serve mode.
+- `memman log worker [--errors|--stack]` - tail one worker log target;
+  the two flags are mutually exclusive. `--errors` reads `enrich.err`,
+  the worker's own ERROR-level tracebacks. `--stack` reads the rotated
+  `memman.log` and its backups, the only place a traceback survives
+  when the CLI error that reports it is one line. The `enrich` files
+  always sit under `~/.memman/logs`; `memman.log` follows `--data-dir`,
+  so under a non-default data dir they are in different directories
+  and the error message names the exact command to run. `memman
+  scheduler status` prints all three paths.
 
 ## Operator commands the agent rarely runs
 
