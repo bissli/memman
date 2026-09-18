@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from memman.llm import usage as llm_usage
+from memman.setup.settings import add_claude_hooks_selective, read_json_file
 from memman.store.backend import Backend
 
 logger = logging.getLogger('memman')
@@ -655,6 +656,110 @@ def check_env_permissions() -> dict[str, Any]:
     return {'name': 'env_permissions', 'status': status, 'detail': detail}
 
 
+def _memman_hook_pairs(data: dict) -> set[tuple[str, str, str]]:
+    """Collect one triple per memman-owned hook command.
+
+    Parameters
+    ----------
+    data : dict
+        Parsed Claude Code settings, or the dict
+        `add_claude_hooks_selective` has just filled.
+
+    Returns
+    -------
+    set[tuple[str, str, str]]
+        `(event, matcher, command)` per memman command, the matcher
+        empty where the event takes none.
+
+    Notes
+    -----
+    - Ownership is read off the command string alone: every memman
+      entry names a script under the memman hooks directory, and a
+      foreign entry in the same event must not be reported as drift.
+    """
+    pairs: set[tuple[str, str, str]] = set()
+    hooks = data.get('hooks')
+    if not isinstance(hooks, dict):
+        return pairs
+    for event, arr in hooks.items():
+        if not isinstance(arr, list):
+            continue
+        for entry in arr:
+            if not isinstance(entry, dict):
+                continue
+            matcher = str(entry.get('matcher', ''))
+            for hook in entry.get('hooks', []):
+                command = str(hook.get('command', ''))
+                if 'memman' in command:
+                    pairs.add((event, matcher, command))
+    return pairs
+
+
+def check_claude_hooks() -> dict[str, Any]:
+    """Compare registered Claude Code hooks against what install writes.
+
+    Returns
+    -------
+    dict[str, Any]
+        `name`, `status`, and a `detail` carrying the `missing`,
+        `extra`, and `dangling` command lists.
+
+    Notes
+    -----
+    - `pipx upgrade memman` refreshes the symlinked scripts but never
+      rewrites `settings.json`, so a release that adds, drops, or
+      re-matches a hook leaves the old registration live until
+      `memman install` runs again.
+    - A command path that no longer resolves fails: Claude Code runs a
+      missing script and the shell exits 127 at every matching event.
+      A registration that merely differs warns, since `memman install`
+      repairs it.
+    - No Claude Code settings at all passes; an OpenClaw-only or
+      container-only host registers nothing here.
+    """
+    config_dir = Path.home() / '.claude'
+    settings_path = config_dir / 'settings.json'
+    detail: dict[str, Any] = {'settings': str(settings_path)}
+
+    if not settings_path.is_file():
+        return {
+            'name': 'claude_hooks',
+            'status': 'pass',
+            'detail': {**detail, 'reason': 'no Claude Code settings'},
+            }
+
+    expected_data: dict = {}
+    add_claude_hooks_selective(
+        expected_data, str(config_dir / 'hooks' / 'memman'),
+        remind=True, compact=True, task_recall=True, exit_plan=True)
+    expected = _memman_hook_pairs(expected_data)
+    live = _memman_hook_pairs(read_json_file(str(settings_path)))
+
+    detail['missing'] = sorted(
+        ' '.join(part for part in triple if part)
+        for triple in expected - live)
+    detail['extra'] = sorted(
+        ' '.join(part for part in triple if part)
+        for triple in live - expected)
+    dangling = []
+    for _, _, command in live:
+        # A registration is stored home-relative, so resolve it against
+        # the same home the config dir came from rather than $HOME.
+        target = (Path.home() / command[2:] if command.startswith('~/')
+                  else Path(command))
+        if not target.exists():
+            dangling.append(command)
+    detail['dangling'] = sorted(dangling)
+
+    if detail['dangling']:
+        status = 'fail'
+    elif detail['missing'] or detail['extra']:
+        status = 'warn'
+    else:
+        status = 'pass'
+    return {'name': 'claude_hooks', 'status': status, 'detail': detail}
+
+
 def check_scheduler_state() -> dict[str, Any]:
     """Compare persisted scheduler state against OS install/active truth.
     """
@@ -1281,6 +1386,7 @@ def run_all_checks(
             check_per_store_keys(data_dir),
             check_stale_post_migrate_source(data_dir),
             check_env_permissions(),
+            check_claude_hooks(),
             check_scheduler_state(),
             check_llm_probe(),
             check_embed_probe(),

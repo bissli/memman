@@ -1338,3 +1338,135 @@ class TestSingleInsightStore:
         result = check_orphan_insights(tmp_backend)
 
         assert result['status'] == 'fail', result['detail']
+
+
+class TestClaudeHooksCheck:
+    """`check_claude_hooks` compares live registrations to the installer."""
+
+    def _install(self, home, *, matcher='Agent|Task', drop=None,
+                 extra_stop=False, dangle=False):
+        """Write a settings.json and hook files under a fake home."""
+        import json as _json
+        hooks_dir = home / '.claude' / 'hooks' / 'memman'
+        hooks_dir.mkdir(parents=True)
+        scripts = ['prime.sh', 'user_prompt.sh', 'compact.sh',
+                   'task_recall.sh', 'exit_plan.sh']
+        for name in scripts:
+            if dangle and name == 'task_recall.sh':
+                continue
+            (hooks_dir / name).write_text('#!/bin/bash\n')
+
+        def cmd(name):
+            return f'~/.claude/hooks/memman/{name}'
+
+        hooks = {
+            'SessionStart': [{'hooks': [
+                {'type': 'command', 'command': cmd('prime.sh')}]}],
+            'UserPromptSubmit': [{'hooks': [
+                {'type': 'command', 'command': cmd('user_prompt.sh')}]}],
+            'PreCompact': [{'hooks': [
+                {'type': 'command', 'command': cmd('compact.sh')}]}],
+            'PreToolUse': [
+                {'hooks': [{'type': 'command',
+                            'command': cmd('task_recall.sh')}],
+                 'matcher': matcher},
+                {'hooks': [{'type': 'command',
+                            'command': cmd('exit_plan.sh')}],
+                 'matcher': 'ExitPlanMode'},
+                ],
+            }
+        if extra_stop:
+            hooks['Stop'] = [{'hooks': [
+                {'type': 'command', 'command': cmd('stop.sh')}]}]
+            (hooks_dir / 'stop.sh').write_text('#!/bin/bash\n')
+        if drop:
+            hooks.pop(drop)
+        settings = home / '.claude' / 'settings.json'
+        settings.write_text(_json.dumps({'hooks': hooks}))
+
+    def test_clean_install_passes(self, tmp_path, monkeypatch):
+        """Verify a settings file the installer would write reports pass.
+
+        Mutation: a check that compares the wrong shape and flags every
+            healthy install, which would make the report unreadable.
+        Oracle: a settings.json built to match what
+            add_claude_hooks_selective emits.
+        """
+        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        self._install(tmp_path)
+        from memman.doctor import check_claude_hooks
+        assert check_claude_hooks()['status'] == 'pass'
+
+    def test_no_claude_config_passes(self, tmp_path, monkeypatch):
+        """Verify a machine with no Claude Code install is not a failure.
+
+        Mutation: treating a missing settings.json as drift, which
+            would fail doctor on every OpenClaw-only host.
+        Oracle: a home directory with no .claude at all.
+        """
+        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        from memman.doctor import check_claude_hooks
+        assert check_claude_hooks()['status'] == 'pass'
+
+    def test_dangling_command_fails(self, tmp_path, monkeypatch):
+        """Verify a registration whose script is gone reports fail.
+
+        Mutation: a check that compares registrations but never probes
+            the command path, so a pipx upgrade that removed a hook
+            script leaves Claude Code running exit 127 unreported.
+        Oracle: a settings entry naming a script absent from the hooks
+            directory.
+        """
+        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        self._install(tmp_path, dangle=True)
+        from memman.doctor import check_claude_hooks
+        result = check_claude_hooks()
+        assert result['status'] == 'fail'
+        assert any('task_recall.sh' in c
+                   for c in result['detail']['dangling'])
+
+    def test_retired_stop_entry_warns(self, tmp_path, monkeypatch):
+        """Verify a hook event memman no longer registers is reported.
+
+        Mutation: comparing only the events the installer writes, so a
+            retired registration left by an older install stays
+            invisible.
+        Oracle: a Stop entry, which no memman version at HEAD writes.
+        """
+        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        self._install(tmp_path, extra_stop=True)
+        from memman.doctor import check_claude_hooks
+        result = check_claude_hooks()
+        assert result['status'] == 'warn'
+        assert any('Stop' in e for e in result['detail']['extra'])
+
+    def test_stale_matcher_warns(self, tmp_path, monkeypatch):
+        """Verify a matcher the installer no longer writes is reported.
+
+        Mutation: comparing event and command but dropping the matcher,
+            so a pre-0.40.1 registration keeps a narrower matcher with
+            no warning.
+        Oracle: the superseded matcher value Task against the
+            installer's own current value.
+        """
+        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        self._install(tmp_path, matcher='Task')
+        from memman.doctor import check_claude_hooks
+        result = check_claude_hooks()
+        assert result['status'] == 'warn'
+        assert result['detail']['missing']
+        assert result['detail']['extra']
+
+    def test_missing_event_warns(self, tmp_path, monkeypatch):
+        """Verify a hook the installer writes but settings lacks is seen.
+
+        Mutation: comparing live against expected in one direction, so
+            a registration dropped by hand is never noticed.
+        Oracle: a settings.json with the PreCompact entry removed.
+        """
+        monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+        self._install(tmp_path, drop='PreCompact')
+        from memman.doctor import check_claude_hooks
+        result = check_claude_hooks()
+        assert result['status'] == 'warn'
+        assert any('compact.sh' in m for m in result['detail']['missing'])
