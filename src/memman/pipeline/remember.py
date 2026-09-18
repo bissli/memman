@@ -1280,12 +1280,17 @@ def _apply_plan(
     if linking:
         for target_id, carried_edges in carried:
             move_edges(backend, target_id, fi.id, carried_edges)
-        # Sweeps the edges this write just minted that name a target;
-        # `supersede` removed only the edges that existed before the
-        # plan ran, and a target already superseded must stay edgeless
-        # too.
+        # Notes:
+        # - Sweeps the edges this write just minted that name a
+        #   target; `supersede` removed only the edges that existed
+        #   before the plan ran, and a target already superseded must
+        #   stay edgeless too.
+        # - The target leaves the drain cache with its edges, or the
+        #   next row of the same drain finds it as a semantic
+        #   neighbor and mints the edge straight back.
         for target_id, _relation in plan.targets:
             backend.edges.delete_by_node(target_id)
+            embed_cache.pop(target_id, None)
 
     backend.nodes.stamp_linked(fi.id)
     if plan.enrichment:

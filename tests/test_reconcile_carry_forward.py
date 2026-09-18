@@ -372,3 +372,35 @@ def test_unmerged_update_is_marked_in_the_oplog(tmp_db, tmp_backend):
                if e.operation == 'reconcile-update'}
     assert details['old-a'] == 'replaced by new-a (unmerged)'
     assert details['old-b'] == 'replaced by new-b'
+
+
+def test_superseded_target_leaves_the_drain_cache(tmp_db, tmp_backend):
+    """Verify a superseded target stops being a semantic candidate.
+
+    Mutation: dropping `embed_cache.pop(target_id, None)` from the
+        apply phase's sweep, so the row it just superseded stays a
+        live neighbor and the next row of the same drain mints a
+        semantic edge onto a row that must be edgeless.
+    Oracle: the store's own dangling-edge count, whose definition is
+        that a superseded row owns no edges.
+    """
+    vec = [1.0, 0.0, 0.0]
+    insert_insight(tmp_db, make_insight(id='old-1', content='the target'))
+    # The drain snapshots every current row's vector once, before any
+    # plan runs, so the target stays a candidate until something evicts
+    # it from this dict.
+    embed_cache = {'old-1': list(vec)}
+
+    _apply_plan(
+        tmp_backend,
+        _merge_plan('new-1', 'old-1', action='supersede'),
+        embed_cache=embed_cache, store_name='test')
+
+    later = FactPlan(
+        action='add', fact_text='a later row',
+        fact_insight=make_insight(id='later-1', content='a later row'),
+        targets=[], embed_vec=list(vec), enrichment={})
+    _apply_plan(
+        tmp_backend, later, embed_cache=embed_cache, store_name='test')
+
+    assert tmp_backend.edges.count_dangling_by_type() == {}
