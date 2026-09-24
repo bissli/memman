@@ -46,6 +46,7 @@ logger = logging.getLogger('memman')
 _LOG_FORMAT = '%(asctime)s %(levelname)s %(name)s: %(message)s'
 _WORKER_LOG_MAX_BYTES = 5 * 1024 * 1024
 _WORKER_LOG_BACKUPS = 3
+_MAX_CONTENT_BYTES = 1000
 
 
 def _configure_logging(data_dir: str, verbose: bool, debug: bool) -> None:
@@ -731,10 +732,11 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     _require_started('write')
     content_str = ' '.join(content)
     content_bytes = len(content_str.encode('utf-8'))
-    if content_bytes > 8000:
+    if content_bytes > _MAX_CONTENT_BYTES:
         raise click.ClickException(
-            f'content too long ({content_bytes} bytes, max 8000);'
-            ' consider chunking into multiple remember calls')
+            f'content too long ({content_bytes} bytes, max'
+            f' {_MAX_CONTENT_BYTES}); split it into several remember'
+            ' calls, one claim each')
 
     if cat not in VALID_CATEGORIES:
         valid = ', '.join(sorted(VALID_CATEGORIES))
@@ -1826,10 +1828,11 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
 
     content_str = ' '.join(content)
     content_bytes = len(content_str.encode('utf-8'))
-    if content_bytes > 8000:
+    if content_bytes > _MAX_CONTENT_BYTES:
         raise click.ClickException(
-            f'content too long ({content_bytes} bytes, max 8000);'
-            ' consider chunking into multiple remember calls')
+            f'content too long ({content_bytes} bytes, max'
+            f' {_MAX_CONTENT_BYTES}); split it into several remember'
+            ' calls, one claim each')
 
     from memman.search.quality import check_content_quality
     quality_warnings = check_content_quality(content_str)

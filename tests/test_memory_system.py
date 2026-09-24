@@ -995,15 +995,22 @@ class TestEdgeCases:
     """Robustness under unusual input."""
 
     def test_long_content_survives(self, runner):
-        """5000-char insight stored and retrievable."""
+        """Verify a cap-sized insight is stored and recalled whole.
+
+        Mutation: `>=` in place of `>` in the size check, which refuses a
+            write sitting on the cap, or any storage path that keeps a
+            prefix of the text.
+        Oracle: the hand-built 1,000-byte input, compared whole against
+            the recalled content.
+        """
         filler = 'infrastructure automation deployment runbook procedures '
         long_content = (
             'ZeroMQ distributed messaging broker configuration. '
             + filler * 100)
-        long_content = long_content[:5000]
+        long_content = long_content[:1000]
         remember(runner, long_content, no_reconcile=True)
         hits = recall_basic(runner, 'ZeroMQ')
-        assert any('zeromq' in c.lower() for c in contents(hits))
+        assert long_content in contents(hits)
 
     def test_special_chars_in_content(self, runner):
         """Content with brackets, parens, quotes preserved."""

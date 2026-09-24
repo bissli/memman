@@ -25,8 +25,9 @@ no conclusion.
 
     memman remember "<self-contained text>" --cat <category> --session $SESSION_ID
 
-The text names its subject outright, with no "this" or "it". A
-behavioral rule ("always", "never") goes to the project CLAUDE.md
+The text names its subject outright, with no "this" or "it". One
+claim per call. memman refuses text over 1,000 bytes. A behavioral
+rule ("always", "never") goes to the project CLAUDE.md
 `## Directives` section instead.
 
 A literal `$SESSION_ID` means the host supplied no id: omit the flag.

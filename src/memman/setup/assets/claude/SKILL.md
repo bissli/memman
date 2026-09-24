@@ -11,10 +11,20 @@ queue and a background worker enriches it. Reads are intent-aware.
 
 ## Storing what you learn
 
-Store one self-contained fact per call. Pick the most accurate `--cat`.
-Writes link into one temporal chain by session, which is what WHEN
-recall walks. Omit `--session`: it reads `$CLAUDE_CODE_SESSION_ID` by
-itself. Pass it only to pin a different id.
+Store one self-contained fact per call: one thing that can go stale
+on its own. If half could become false while the rest stays true,
+that is two memories. Do not split what shares a fate: a decision and
+its reason, a rule and the value it constrains, a constraint and its
+rationale become false together, so they stay together. Several
+calls per turn is normal. Unrelated facts are not merged to look
+tidy, and one fact is not padded to look substantial. When unsure,
+go smaller. A too-small memory stays retrievable and supersedes
+cleanly. A too-large one forces a rewrite and drops clauses.
+
+Pick the most accurate `--cat`. Writes link into one temporal chain
+by session, which is what WHEN recall walks. Omit `--session`: it
+reads `$CLAUDE_CODE_SESSION_ID` by itself. Pass it only to pin a
+different id.
 
 ```bash
 memman remember "<fact>" --cat <category> --imp <1-5> --entity e1 --entity e2 --source agent
@@ -93,8 +103,11 @@ still-true clauses.
 
 The text stores conclusions AND enough context to understand them. It
 is self-contained: every "that", "this", and "it" is dereferenced into
-its actual subject before the call. The agent runs `memman remember`
-directly in the current turn, never through a sub-agent.
+its actual subject before the call. It never opens with who wrote it
+or when: `created_at` and `source` carry those. An event date, or the
+name of another person the fact is about, stays in the text. The
+agent runs `memman remember` directly in the current turn, never
+through a sub-agent.
 
 A behavioral rule - universal language such as "never", "always", or
 "mandatory", with no project-specific entity - goes to the project
@@ -385,7 +398,9 @@ and exits 0.
 ## Guardrails
 
 - Never store secrets, passwords, or tokens.
-- Max 8,000 characters per insight; chunk longer content.
+- `remember` and `replace` refuse text over 1,000 bytes, counted as
+  UTF-8 bytes, and never truncate it. Split the text into several
+  calls, one claim each.
 - One self-contained fact per `remember` call. The worker extracts one
   fact from each call and folds every claim in the text into it, so a
   second unrelated subject rides along and goes stale with the first;
