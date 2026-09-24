@@ -59,11 +59,11 @@ def link_pending(
     is a wrong threshold rather than a missing one.
 
     `metadata_llm_client` serves the enrichment call. An omitted one
-    is resolved from `slow_metadata` HERE rather than inherited from a
-    caller's canonical client: `compute_prompt_version` stamps the
-    metadata model on every row this pass writes, so a canonical
-    client enriching the row makes that stamp name a model that did
-    not run and prices the call at the wrong role.
+    is resolved from `slow` HERE rather than inherited from a
+    caller's other client: `compute_prompt_version` stamps the slow
+    model on every row this pass writes, so any other client
+    enriching the row makes that stamp name a model that did not run
+    and prices the call at the wrong role.
 
     `replace_entity_ids` names the rows whose stored entity vocabulary
     this pass REPLACES rather than extends - the ids a rebuild just
@@ -124,7 +124,7 @@ def link_pending(
             #   unenriched row exactly as a failed call does.
             try:
                 if metadata_llm_client is None:
-                    metadata_llm_client = get_llm_client('slow_metadata')
+                    metadata_llm_client = get_llm_client('slow')
                 enrichment = enrich_with_llm(
                     insight, metadata_llm_client,
                     seed_entities=insight_id not in replace_entity_ids)

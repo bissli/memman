@@ -15,8 +15,8 @@ Three roles exist:
 - `fast_worker` -- the fast model on the worker's token budget and
   timeout: the three reconcile stages (screen, verdict, merge). Reads
   `MEMMAN_LLM_MODEL_FAST`.
-- `slow_metadata` -- derived-metadata path (enrichment). Reads
-  `MEMMAN_LLM_MODEL_SLOW_METADATA`.
+- `slow` -- derived-metadata path (enrichment). Reads
+  `MEMMAN_LLM_MODEL_SLOW`.
 
 Routing the recall path to a small/fast model and enrichment to a
 larger/slow/reasoning model means switching the enrichment model never
@@ -40,14 +40,14 @@ logger = logging.getLogger('memman')
 
 ROLE_FAST = 'fast'
 ROLE_FAST_WORKER = 'fast_worker'
-ROLE_SLOW_METADATA = 'slow_metadata'
+ROLE_SLOW = 'slow'
 VALID_ROLES = frozenset({
-    ROLE_FAST, ROLE_FAST_WORKER, ROLE_SLOW_METADATA})
+    ROLE_FAST, ROLE_FAST_WORKER, ROLE_SLOW})
 
 _ROLE_ENV_VARS = {
     ROLE_FAST: config.LLM_MODEL_FAST,
     ROLE_FAST_WORKER: config.LLM_MODEL_FAST,
-    ROLE_SLOW_METADATA: config.LLM_MODEL_SLOW_METADATA,
+    ROLE_SLOW: config.LLM_MODEL_SLOW,
     }
 
 FAST_MAX_TOKENS = 1024
@@ -67,7 +67,7 @@ EMPTY_RETRY_DELAY = 0.1
 _ROLE_LIMITS = {
     ROLE_FAST: (FAST_MAX_TOKENS, ENRICHMENT_TIMEOUT),
     ROLE_FAST_WORKER: (WORKER_MAX_TOKENS, WORKER_TIMEOUT),
-    ROLE_SLOW_METADATA: (WORKER_MAX_TOKENS, WORKER_TIMEOUT),
+    ROLE_SLOW: (WORKER_MAX_TOKENS, WORKER_TIMEOUT),
     }
 
 _OR_ATTRIBUTION_HEADERS = {
@@ -309,7 +309,7 @@ def get_llm_client(role: str) -> MemmanLLMClient:
     """Return a cached `MemmanLLMClient` for the given role.
 
     `role` must be one of `'fast'`, `'fast_worker'`, or
-    `'slow_metadata'`. Reads `MEMMAN_LLM_ENDPOINT`,
+    `'slow'`. Reads `MEMMAN_LLM_ENDPOINT`,
     `MEMMAN_LLM_API_KEY`, and the role's model env var from the
     canonical env file. Raises `ConfigError` when a required value is
     missing. OpenRouter endpoints automatically receive memman's

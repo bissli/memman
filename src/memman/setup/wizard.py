@@ -51,7 +51,7 @@ ENDPOINT_MAX_ATTEMPTS = 3
 API_KEY_MAX_ATTEMPTS = 3
 MODEL_SLUG_PROMPTS: tuple[tuple[str, str], ...] = (
     ('fast', 'MEMMAN_LLM_MODEL_FAST'),
-    ('slow metadata', 'MEMMAN_LLM_MODEL_SLOW_METADATA'),
+    ('slow', 'MEMMAN_LLM_MODEL_SLOW'),
     )
 
 

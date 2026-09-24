@@ -913,7 +913,7 @@ def iter_stale_insight_ids(
       rows pre-date provenance tracking and need a backfill, not a
       rebuild.
     - There is no `model_id` branch. `active_pv` already folds in the
-      `slow_metadata` model, which is the only model
+      `slow` model, which is the only model
       `link_pending` re-runs; comparing `model_id` as well would fire
       on the CONTENT model, which no rebuild rewrites, so the row
       would report stale forever.

@@ -1263,7 +1263,7 @@ def _is_provenance_stale(row_pv: str | None, active_pv: str) -> bool:
     - NULL is deliberately not stale: those rows pre-date provenance
       tracking and need a backfill, not a rebuild.
     - `model_id` is NOT compared. `active_pv` folds in the
-      `slow_metadata` model, the only model `link_pending` re-runs;
+      `slow` model, the only model `link_pending` re-runs;
       `model_id` records the CONTENT model, which no rebuild
       rewrites, so comparing it would report a row stale forever.
     - The same predicate is encoded in SQL by `count_stale_insights`
@@ -1298,10 +1298,10 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
             'detail': detail}
     from memman.exceptions import ConfigError
     try:
-        detail['active_model_slow_metadata'] = config.require(
-            config.LLM_MODEL_SLOW_METADATA)
+        detail['active_model_slow'] = config.require(
+            config.LLM_MODEL_SLOW)
     except ConfigError:
-        detail['active_model_slow_metadata'] = None
+        detail['active_model_slow'] = None
 
     provenance = backend.nodes.provenance_distribution()
 

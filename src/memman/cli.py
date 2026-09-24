@@ -264,7 +264,7 @@ def _get_llm_client_or_fail(role: str) -> 'MemmanLLMClient':
 
     Keeps `memman.llm` free of `click` - the CLI boundary is the only
     place that should know how to surface a user-facing config error.
-    `role` is `'fast'`, `'fast_worker'`, or `'slow_metadata'`
+    `role` is `'fast'`, `'fast_worker'`, or `'slow'`
     (worker pipeline, operator rebuilds).
     """
     from memman.exceptions import ConfigError
@@ -4141,7 +4141,7 @@ def _settle_rebuilt_edges(
         The loop's embedding cache, reused so the relink pass reads no
         vector twice.
     metadata_llm_client : object
-        The `slow_metadata` client. Every row is enriched by the time
+        The `slow` client. Every row is enriched by the time
         this runs, so the relink pass makes no LLM call, but a row
         whose enrichment failed mid-loop still reaches the right role.
     embed_client : object
@@ -4179,7 +4179,7 @@ def _graph_rebuild_stale_only(
 
     Filters work to rows whose persisted `prompt_version` no longer
     matches `compute_prompt_version()` -- the enrichment prompt plus
-    the `slow_metadata` model, which is exactly the set this command
+    the `slow` model, which is exactly the set this command
     replays. Works on SQLite and Postgres
     (the wholesale rebuild's SQLite-only guard does not apply here:
     the per-row writes through `link_pending` are the same traffic
@@ -4204,7 +4204,7 @@ def _graph_rebuild_stale_only(
     # input drifted without un-folding the hash.
     try:
         enrich_model: str | None = config.require(
-            config.LLM_MODEL_SLOW_METADATA)
+            config.LLM_MODEL_SLOW)
     except Exception:
         enrich_model = None
 
@@ -4240,7 +4240,7 @@ def _graph_rebuild_stale_only(
                 _json_out(stats)
                 return
 
-            metadata_llm_client = _get_llm_client_or_fail('slow_metadata')
+            metadata_llm_client = _get_llm_client_or_fail('slow')
             ec = bound_embedder(backend)
 
             embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
@@ -4318,7 +4318,7 @@ def _graph_rebuild_stale_only(
 @click.option('--stale-only', is_flag=True, default=False,
               help='Re-enrich only rows whose prompt_version no longer'
                    ' matches the active config -- the enrichment prompt'
-                   ' plus the slow_metadata model, which is exactly what'
+                   ' plus the slow model, which is exactly what'
                    ' this command replays. Cross-backend'
                    ' (works on Postgres). NULL provenance rows are not'
                    ' swept; they need a separate backfill.')
@@ -4340,7 +4340,7 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
     store_name = _resolve_store_name(data_dir, ctx.obj['store'])
 
     with _active_backend(ctx) as backend:
-        metadata_llm_client = _get_llm_client_or_fail('slow_metadata')
+        metadata_llm_client = _get_llm_client_or_fail('slow')
         ec = bound_embedder(backend)
 
         all_ids = backend.nodes.get_active_ids()

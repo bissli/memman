@@ -3,7 +3,7 @@
 `memman status` reports `stale_insights` from `count_stale_insights`,
 and the remedy it points at, `graph rebuild --stale`, routes through
 `link_pending` (`graph/engine.py`), which re-runs ENRICHMENT on the
-`slow_metadata` client and nothing else.
+`slow` client and nothing else.
 
 The invariant these tests pin: `compute_prompt_version` hashes exactly
 the inputs `link_pending` replays, and nothing else. A key covering
@@ -80,13 +80,13 @@ def test_key_ignores_a_prompt_the_rebuild_cannot_replay(
 def test_key_moves_for_the_metadata_model(env_file):
     """The key tracks the metadata model, which link_pending replays on.
 
-    Mutation: leaving `MEMMAN_LLM_MODEL_SLOW_METADATA` out of the key,
+    Mutation: leaving `MEMMAN_LLM_MODEL_SLOW` out of the key,
         which would report a rebuild's own model change as nothing --
         the one drift the remedy CAN fix would then go unreported.
     Oracle: the key recomputed across a swap of the metadata model.
     """
     base = _key()
-    env_file(config.LLM_MODEL_SLOW_METADATA, 'anthropic/claude-other-9.9')
+    env_file(config.LLM_MODEL_SLOW, 'anthropic/claude-other-9.9')
     assert _key() != base, (
         'the metadata model produces exactly what a rebuild replays,'
         ' so swapping it must move the key')

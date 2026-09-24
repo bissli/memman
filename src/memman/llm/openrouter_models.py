@@ -11,7 +11,7 @@ The wire-format ids returned here keep OR's `vendor/slug` prefix
 unchanged -- non-OR endpoints handle their own slugs via the wizard's
 interactive prompt rather than this resolver.
 
-The TTL cache exists only to dedupe the three intra-install calls
+The TTL cache exists only to dedupe the two intra-install calls
 (one per LLM role) and to absorb a trivial retry during a single
 install command.
 """

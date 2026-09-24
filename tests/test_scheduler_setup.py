@@ -955,7 +955,7 @@ def _install_env_full(data_dir):
             config.LLM_ENDPOINT: 'https://openrouter.ai/api/v1',
             config.LLM_API_KEY: 'sk-llm-installed',
             config.LLM_MODEL_FAST: 'anthropic/claude-haiku-4.5',
-            config.LLM_MODEL_SLOW_METADATA: 'anthropic/claude-sonnet-4.6',
+            config.LLM_MODEL_SLOW: 'anthropic/claude-sonnet-4.6',
             config.EMBED_PROVIDER: 'voyage',
             config.OPENROUTER_API_KEY: 'sk-or-installed',
             config.VOYAGE_API_KEY: 'pa-installed',

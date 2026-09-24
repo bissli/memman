@@ -1811,7 +1811,7 @@ class TestGraphRebuildStaleOnly:
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW_METADATA)
+        active_model = config.require(config.LLM_MODEL_SLOW)
 
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
@@ -1837,7 +1837,7 @@ class TestGraphRebuildStaleOnly:
         from memman.store.sqlite import SqliteBackend
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW_METADATA)
+        active_model = config.require(config.LLM_MODEL_SLOW)
 
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
@@ -1871,7 +1871,7 @@ class TestGraphRebuildStaleOnly:
         from memman.store.db import open_db
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW_METADATA)
+        active_model = config.require(config.LLM_MODEL_SLOW)
 
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)

@@ -75,19 +75,19 @@ class TestCollectInstallKnobs:
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(
             f'{config.LLM_MODEL_FAST}=file/haiku-pinned\n'
-            f'{config.LLM_MODEL_SLOW_METADATA}=file/sonnet-pinned\n'
+            f'{config.LLM_MODEL_SLOW}=file/sonnet-pinned\n'
             f'{config.OPENROUTER_API_KEY}=file-or-key\n'
             f'{config.VOYAGE_API_KEY}=file-vy-key\n'
             f'{config.LLM_ENDPOINT}=https://openrouter.ai/api/v1\n')
         monkeypatch.setenv(config.DATA_DIR, str(data_dir))
         monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
-        monkeypatch.delenv(config.LLM_MODEL_SLOW_METADATA, raising=False)
+        monkeypatch.delenv(config.LLM_MODEL_SLOW, raising=False)
         monkeypatch.delenv(config.OPENROUTER_API_KEY, raising=False)
         monkeypatch.delenv(config.VOYAGE_API_KEY, raising=False)
         config.reset_file_cache()
         knobs = config.collect_install_knobs(str(data_dir))
         assert knobs[config.LLM_MODEL_FAST] == 'file/haiku-pinned'
-        assert knobs[config.LLM_MODEL_SLOW_METADATA] == 'file/sonnet-pinned'
+        assert knobs[config.LLM_MODEL_SLOW] == 'file/sonnet-pinned'
         assert knobs[config.OPENROUTER_API_KEY] == 'file-or-key'
         assert stub_resolver == [], 'resolver should NOT fire when file has value'
 
@@ -114,7 +114,7 @@ class TestCollectInstallKnobs:
         assert 'fast' in roles
         assert 'slow' in roles
         assert knobs[config.LLM_MODEL_FAST] == 'anthropic/claude-haiku-4.5'
-        assert knobs[config.LLM_MODEL_SLOW_METADATA] == 'anthropic/claude-sonnet-4.5'
+        assert knobs[config.LLM_MODEL_SLOW] == 'anthropic/claude-sonnet-4.5'
 
     def test_resolver_none_falls_back_to_install_defaults(
             self, tmp_path, monkeypatch):

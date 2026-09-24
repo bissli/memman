@@ -61,7 +61,7 @@ def compute_prompt_version() -> str:
     -------
     str
         First 16 hex chars of a SHA-256 over the enrichment prompt
-        and the resolved `MEMMAN_LLM_MODEL_SLOW_METADATA` id.
+        and the resolved `MEMMAN_LLM_MODEL_SLOW` id.
 
     Notes
     -----
@@ -77,9 +77,9 @@ def compute_prompt_version() -> str:
       re-reconciled: the source blob leaves the queue about a minute
       after its drain, so there is nothing to replay and nothing to
       report.
-    - The metadata model id IS folded in, because `link_pending`
-      runs the enrichment call on `slow_metadata`.
-    - An unresolvable metadata model hashes as the empty string, so a
+    - The slow model id IS folded in, because `link_pending` runs
+      the enrichment call on `slow`.
+    - An unresolvable slow model hashes as the empty string, so a
       store with no model configured still yields a stable key rather
       than raising on the `status` path.
     - Cached for the life of the process. Every consumer - `status`,
@@ -95,7 +95,7 @@ def compute_prompt_version() -> str:
     from memman.graph.enrichment import ENRICHMENT_SYSTEM_PROMPT
 
     try:
-        metadata_model = config.require(config.LLM_MODEL_SLOW_METADATA)
+        metadata_model = config.require(config.LLM_MODEL_SLOW)
     except ConfigError:
         metadata_model = ''
     blob = f'{ENRICHMENT_SYSTEM_PROMPT}\x00{metadata_model}'
@@ -325,7 +325,7 @@ def run_remember(
     """
     quality_warnings = check_content_quality(content)
 
-    metadata_llm_client = get_llm_client('slow_metadata')
+    metadata_llm_client = get_llm_client('slow')
     if stage_llm_client is None:
         stage_llm_client = get_llm_client('fast_worker')
 
@@ -526,7 +526,7 @@ def _plan_fact(
     stage_llm_client : Any
         The fast-worker client for the three reconcile stages.
     metadata_llm_client : Any
-        The slow metadata client for enrichment.
+        The slow client for enrichment.
     ec : Any
         The store's bound embed provider.
     backend : Backend

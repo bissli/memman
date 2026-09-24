@@ -19,23 +19,23 @@ class TestSlowRole:
     def test_unset_metadata_var_raises(self, env_file):
         """Verify an unset slow model fails loudly instead of borrowing one.
 
-        Mutation: a fallback from `MEMMAN_LLM_MODEL_SLOW_METADATA` to the
+        Mutation: a fallback from `MEMMAN_LLM_MODEL_SLOW` to the
             fast model's var, which bills enrichment on a model the
             operator never chose for it.
         Oracle: `ConfigError` raised with the fast var set and the slow
             var cleared.
         """
         from memman.config import LLM_API_KEY, LLM_ENDPOINT, LLM_MODEL_FAST
-        from memman.config import LLM_MODEL_SLOW_METADATA
+        from memman.config import LLM_MODEL_SLOW
         from memman.exceptions import ConfigError
         from memman.llm.client import get_llm_client, reset_role_cache
         env_file(LLM_ENDPOINT, 'https://openrouter.ai/api/v1')
         env_file(LLM_API_KEY, 'k')
         env_file(LLM_MODEL_FAST, 'anthropic/haiku')
-        env_file(LLM_MODEL_SLOW_METADATA, None)
+        env_file(LLM_MODEL_SLOW, None)
         reset_role_cache()
         with pytest.raises(ConfigError):
-            get_llm_client('slow_metadata')
+            get_llm_client('slow')
 
 
 class FakeLLMClient:

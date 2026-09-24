@@ -13,7 +13,7 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_LLM_ENDPOINT',
     'MEMMAN_LLM_API_KEY',
     'MEMMAN_LLM_MODEL_FAST',
-    'MEMMAN_LLM_MODEL_SLOW_METADATA',
+    'MEMMAN_LLM_MODEL_SLOW',
     'MEMMAN_LLM_PROVIDER_ONLY',
     'MEMMAN_LLM_DATA_COLLECTION',
     'MEMMAN_LLM_ZDR',
@@ -171,7 +171,7 @@ def test_constants_match_expected_names():
         config.DATA_DIR, config.STORE,
         config.LLM_ENDPOINT, config.LLM_API_KEY,
         config.LLM_MODEL_FAST,
-        config.LLM_MODEL_SLOW_METADATA,
+        config.LLM_MODEL_SLOW,
         config.LLM_PROVIDER_ONLY,
         config.LLM_DATA_COLLECTION,
         config.LLM_ZDR,
@@ -345,11 +345,11 @@ def test_enumerate_reflects_current_env(env_file):
     """
     env_file(config.LLM_ENDPOINT, 'https://openrouter.ai/api/v1')
     env_file(config.LLM_MODEL_FAST, 'anthropic/claude-haiku-4.5')
-    env_file(config.LLM_MODEL_SLOW_METADATA, 'anthropic/claude-sonnet-4.6')
+    env_file(config.LLM_MODEL_SLOW, 'anthropic/claude-sonnet-4.6')
     out = config.enumerate_effective_config()
     assert out[config.LLM_ENDPOINT] == 'https://openrouter.ai/api/v1'
     assert out[config.LLM_MODEL_FAST] == 'anthropic/claude-haiku-4.5'
-    assert out[config.LLM_MODEL_SLOW_METADATA] == 'anthropic/claude-sonnet-4.6'
+    assert out[config.LLM_MODEL_SLOW] == 'anthropic/claude-sonnet-4.6'
 
 
 def test_enumerate_redacts_secrets_by_default(env_file):
@@ -675,21 +675,21 @@ class TestConfigResolver:
             f'{config.LLM_MODEL_FAST}=fast',
             '   ',
             '# Another comment',
-            f'{config.LLM_MODEL_SLOW_METADATA}=slow',
+            f'{config.LLM_MODEL_SLOW}=slow',
             ])
         _write_env(env_path, contents + '\n')
         assert config.get(config.LLM_MODEL_FAST) == 'fast'
-        assert config.get(config.LLM_MODEL_SLOW_METADATA) == 'slow'
+        assert config.get(config.LLM_MODEL_SLOW) == 'slow'
 
     def test_parser_strips_quoted_values(self, env_path):
         """Parser strips single and double quotes from values."""
         contents = '\n'.join([
             f'{config.LLM_MODEL_FAST}="quoted-fast"',
-            f"{config.LLM_MODEL_SLOW_METADATA}='quoted-slow'",
+            f"{config.LLM_MODEL_SLOW}='quoted-slow'",
             ])
         _write_env(env_path, contents + '\n')
         assert config.get(config.LLM_MODEL_FAST) == 'quoted-fast'
-        assert config.get(config.LLM_MODEL_SLOW_METADATA) == 'quoted-slow'
+        assert config.get(config.LLM_MODEL_SLOW) == 'quoted-slow'
 
     def test_parser_does_not_expand_variables(self, env_path):
         """Parser does not expand shell variable syntax."""
@@ -804,4 +804,4 @@ def test_install_defaults_name_one_llm_tier():
     Oracle: the fast role's own INSTALL_DEFAULTS entry.
     """
     fast = config.INSTALL_DEFAULTS[config.LLM_MODEL_FAST]
-    assert config.INSTALL_DEFAULTS[config.LLM_MODEL_SLOW_METADATA] == fast
+    assert config.INSTALL_DEFAULTS[config.LLM_MODEL_SLOW] == fast

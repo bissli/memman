@@ -1,12 +1,13 @@
 """Per-role LLM client output-token and timeout budgets.
 
-The recall hot path (`fast`) stays tight; the `slow_metadata` worker
+The recall hot path (`fast`) stays tight; the `slow` worker
 role emits JSON that scales with input size and must not truncate
 large insights, so it gets a larger token budget and a longer read
 timeout.
 """
 
 import pytest
+from memman import config
 from memman.llm import usage as llm_usage
 from memman.llm.client import MemmanLLMClient, get_llm_client, reset_role_cache
 
@@ -20,29 +21,31 @@ def test_fast_role_keeps_tight_budget():
     assert client.timeout == 10.0
 
 
-def test_slow_metadata_role_gets_large_budget():
+def test_slow_role_gets_large_budget():
     """Enrichment role gets headroom so big inputs are not truncated.
     """
     reset_role_cache()
-    client = get_llm_client('slow_metadata')
+    client = get_llm_client('slow')
     assert client.max_tokens >= 4096
     assert client.timeout >= 60.0
 
 
-def test_fast_worker_role_reads_the_fast_model_at_worker_limits():
+def test_fast_worker_role_reads_the_fast_model_at_worker_limits(env_file):
     """Verify the reconcile stages' role pairs the fast model with the worker budget.
 
-    Mutation: the role reading the slow-metadata model, or keeping the
+    Mutation: the role reading the slow model, or keeping the
         fast role's 1024-token, 10-second limits (a haiku merge runs to
         8,192 tokens and tens of seconds).
-    Oracle: the fast role's own model string beside the worker roles'
-        limits, both read from the same process.
+    Oracle: distinct fast and slow slugs written to the env file, beside
+        the worker roles' limits read from the same process.
     """
+    env_file(config.LLM_MODEL_FAST, 'vendor/fast-model')
+    env_file(config.LLM_MODEL_SLOW, 'vendor/slow-model')
     reset_role_cache()
     client = get_llm_client('fast_worker')
-    assert client.model == get_llm_client('fast').model
-    assert client.max_tokens == get_llm_client('slow_metadata').max_tokens
-    assert client.timeout == get_llm_client('slow_metadata').timeout
+    assert client.model == 'vendor/fast-model'
+    assert client.max_tokens == get_llm_client('slow').max_tokens
+    assert client.timeout == get_llm_client('slow').timeout
     assert client.timeout > get_llm_client('fast').timeout
 
 

@@ -128,7 +128,7 @@ class TestEnrichWithLLM:
             self, tmp_db, tmp_backend, monkeypatch):
         """An unavailable metadata client links the row unenriched.
 
-        Mutation: resolving `slow_metadata` before the loop instead of
+        Mutation: resolving `slow` before the loop instead of
             at the row that needs it, which turns a missing credential
             into a raise and leaves a store with nothing to enrich
             unable to relink at all.
