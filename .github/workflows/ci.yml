@@ -33,27 +33,6 @@ jobs:
       - name: Run unit tests
         run: make test
 
-  test-live:
-    runs-on: ubuntu-latest
-    needs: test
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install poetry && poetry install
-
-      - name: Run prompt-quality tests against live providers
-        env:
-          MEMMAN_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          MEMMAN_VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
-        run: poetry run pytest tests/test_prompt_live.py --live -n 4
-
   e2e-cli:
     runs-on: ubuntu-latest
     needs: test

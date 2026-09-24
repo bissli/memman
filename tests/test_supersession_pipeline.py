@@ -45,52 +45,6 @@ def _contradict(monkeypatch, target_ids, when=lambda fact_text: True, merged=lam
         lambda client, fact_text, target: merged(target[0]))
 
 
-def test_two_facts_on_one_predecessor_supersede_once_and_add_once(
-        tmp_backend, monkeypatch):
-    """Verify a second fact contradicting a taken predecessor lands as an add.
-
-    Mutation: dropping the batch exclusion from the shortlist, so the
-        second fact is shown the row the first fact retired, supersedes
-        it again and forks the chain; or degrading it to a skip, which
-        drops the second fact with no row.
-    Oracle: exactly one row carries a pointer, it names the first
-        successor, the second fact's text is stored as a clean add with
-        no `target_id`, and no result is `skipped`.
-    """
-    tmp_backend.nodes.insert(make_insight(
-        id='old-1', content='the broker is kombu'))
-
-    def _two_facts(llm_client, content):
-        return [
-            {'text': 'the broker is redis now', 'category': 'fact',
-             'importance': 3, 'entities': []},
-            {'text': 'the broker moved to rabbitmq later', 'category': 'fact',
-             'importance': 3, 'entities': []},
-            ]
-
-    monkeypatch.setattr('memman.llm.extract.extract_facts', _two_facts)
-    _contradict(monkeypatch, {'old-1'})
-
-    res = run_remember(
-        tmp_backend, _parent('the broker changed'), 'the broker changed',
-        ec=bound_embedder(tmp_backend), store_name='test')
-
-    actions = [f['action'] for f in res['facts']]
-    assert actions == ['supersede', 'add']
-    assert 'skipped' not in actions
-    assert 'target_id' not in res['facts'][1]
-    assert 'replaced_ids' not in res['facts'][1]
-    old = tmp_backend.nodes.get_include_deleted('old-1')
-    assert old.superseded_by == res['facts'][0]['id']
-    stored = {i.content for i in tmp_backend.nodes.get_all_active()}
-    assert stored == {'the broker is redis now',
-                      'the broker moved to rabbitmq later'}
-    pointers = [i for i in (
-        tmp_backend.nodes.get_include_deleted(f['id']) for f in res['facts'])
-        if i.superseded_by]
-    assert pointers == []
-
-
 def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
     """Verify a replace whose target is already superseded says so.
 
@@ -185,45 +139,6 @@ def test_drain_redirects_a_replace_to_the_chain_head(mm_runner):
         assert middle.deleted_at is None
 
 
-def test_sibling_edge_into_a_superseded_row_is_swept(
-        tmp_backend, monkeypatch):
-    """Verify no fact in a write leaves an edge into a row the write superseded.
-
-    Each fact mints its edges at its own apply, when a row an EARLIER
-    fact superseded is already retired, so a later fact can still name
-    it.
-
-    Mutation: sweeping only each plan's own target after its upsert,
-        so the second fact's edge into the first fact's target lands
-        after that target's sweep ran.
-    Oracle: the predecessor read back edgeless and the integrity
-        population `superseded_with_edges` empty after the write.
-    """
-    tmp_backend.nodes.insert(make_insight(
-        id='old-1', content='the broker is kombu'))
-
-    def _two_facts(llm_client, content):
-        return [
-            {'text': 'the broker is redis now', 'category': 'fact',
-             'importance': 3, 'entities': []},
-            {'text': 'the dashboard reads the broker', 'category': 'fact',
-             'importance': 3, 'entities': []},
-            ]
-
-    monkeypatch.setattr('memman.llm.extract.extract_facts', _two_facts)
-    _contradict(monkeypatch, {'old-1'}, when=lambda fact_text: 'redis' in fact_text)
-    mint_edge_into(monkeypatch, 'old-1')
-
-    res = run_remember(
-        tmp_backend, _parent('the broker changed'), 'the broker changed',
-        ec=bound_embedder(tmp_backend), store_name='test')
-
-    assert [f['action'] for f in res['facts']] == ['supersede', 'add']
-    assert tmp_backend.edges.by_node('old-1') == []
-    assert tmp_backend.nodes.supersession_integrity()[
-        'superseded_with_edges'] == []
-
-
 def test_degraded_replace_leaves_no_edge_into_its_dead_target(
         tmp_db, tmp_backend, monkeypatch):
     """Verify a degraded add still sweeps its own edges into the target.
@@ -290,10 +205,6 @@ def test_one_fact_supersedes_every_contradicted_row(tmp_backend, monkeypatch):
         tmp_backend.edges.upsert(Edge(source_id=far, target_id=old,
                                       edge_type='semantic', weight=0.8))
 
-    def _one_fact(llm_client, content):
-        return [{'text': content, 'category': 'fact', 'entities': []}]
-
-    monkeypatch.setattr('memman.llm.extract.extract_facts', _one_fact)
     _contradict(monkeypatch, {'old-1', 'old-2'},
                 merged=lambda target_id: f'X is no longer so at {target_id}; Y holds')
 
@@ -315,51 +226,6 @@ def test_one_fact_supersedes_every_contradicted_row(tmp_backend, monkeypatch):
         carried_far = {e.source_id for e in tmp_backend.edges.by_node(fact['id'])
                        if e.edge_type == 'semantic'}
         assert carried_far == {far}
-
-
-def test_batch_drops_only_the_taken_target(tmp_backend, monkeypatch):
-    """Verify a later fact retires its free target when another is already taken.
-
-    Mutation: dropping the batch exclusion from the shortlist, so the
-        taken row is screened again and the second fact forks its
-        chain; or skipping the second fact whenever a row it would
-        have contradicted is taken, which leaves the free row current.
-    Oracle: the free row's `superseded_by` naming the second successor,
-        and the second fact's action `supersede` with `replaced_ids`
-        listing the free row alone.
-    """
-    tmp_backend.nodes.insert(make_insight(id='old-1', content='the broker is kombu'))
-    tmp_backend.nodes.insert(make_insight(id='old-2', content='the queue is durable'))
-
-    def _two_facts(llm_client, content):
-        return [
-            {'text': 'the broker is redis now', 'category': 'fact', 'entities': []},
-            {'text': 'nothing is durable and the broker is redis', 'category': 'fact',
-             'entities': []},
-            ]
-
-    def _screen(client, fact_text, memory):
-        if memory[0] == 'old-1' or (
-                memory[0] == 'old-2' and fact_text.startswith('nothing')):
-            return 'CONTRADICTS', []
-        return 'UNRELATED', []
-
-    monkeypatch.setattr('memman.llm.extract.extract_facts', _two_facts)
-    monkeypatch.setattr('memman.llm.extract.screen_memory', _screen)
-    monkeypatch.setattr(
-        'memman.llm.extract.judge_memory', lambda client, fact_text, memory: 'supersede')
-    monkeypatch.setattr(
-        'memman.llm.extract.merge_successor', lambda client, fact_text, target: None)
-
-    res = run_remember(
-        tmp_backend, _parent('the broker changed'), 'the broker changed',
-        ec=bound_embedder(tmp_backend), store_name='test')
-
-    first, second = res['facts']
-    assert (first['action'], first['replaced_ids']) == ('supersede', ['old-1'])
-    assert (second['action'], second['replaced_ids']) == ('supersede', ['old-2'])
-    assert tmp_backend.nodes.get_include_deleted('old-1').superseded_by == first['id']
-    assert tmp_backend.nodes.get_include_deleted('old-2').superseded_by == second['id']
 
 
 @pytest.mark.no_auto_drain

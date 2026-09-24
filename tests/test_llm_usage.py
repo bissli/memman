@@ -110,10 +110,10 @@ def test_exhausted_retries_still_charge_every_attempt(monkeypatch):
         }
     _install_fake_post(monkeypatch, [empty])
     with pytest.raises(RuntimeError):
-        _client().complete('sys', 'user', stage=usage.STAGE_EXTRACTION)
+        _client().complete('sys', 'user', stage=usage.STAGE_SCREEN)
     d = usage.delta(before, usage.snapshot())
-    assert d[usage.STAGE_EXTRACTION]['calls'] == MAX_RETRIES
-    assert d[usage.STAGE_EXTRACTION]['prompt_tokens'] == 5 * MAX_RETRIES
+    assert d[usage.STAGE_SCREEN]['calls'] == MAX_RETRIES
+    assert d[usage.STAGE_SCREEN]['prompt_tokens'] == 5 * MAX_RETRIES
 
 
 @pytest.mark.no_mock_llm
@@ -296,7 +296,7 @@ def test_drain_json_carries_llm_usage_delta(mm_runner, monkeypatch):
 
     Mutation: taking `drain_usage_snap` after the loop, or dropping
         the `llm_usage` key from `_json_out`.
-    Oracle: a stub row-processor records one extraction attempt of
+    Oracle: a stub row-processor records one screen attempt of
         11 prompt tokens; the drain JSON must carry exactly that
         per-stage delta.
     """
@@ -306,7 +306,7 @@ def test_drain_json_carries_llm_usage_delta(mm_runner, monkeypatch):
 
     def _stub_row(row, ctx):
         usage.record(
-            usage.STAGE_EXTRACTION,
+            usage.STAGE_SCREEN,
             {'prompt_tokens': 11, 'completion_tokens': 2,
              'total_tokens': 13})
         return {'facts': [{'id': 'a', 'action': 'add'}], 'llm_calls': 1}
@@ -322,7 +322,7 @@ def test_drain_json_carries_llm_usage_delta(mm_runner, monkeypatch):
     assert res.exit_code == 0, res.output
     data = _json.loads(res.output)
     assert data['processed'] == 1
-    stage = data['llm_usage'][usage.STAGE_EXTRACTION]
+    stage = data['llm_usage'][usage.STAGE_SCREEN]
     assert stage['calls'] == 1
     assert stage['prompt_tokens'] == 11
 

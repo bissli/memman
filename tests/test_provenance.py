@@ -8,7 +8,6 @@ hashes the write-path system prompts and is stable across calls; the
 
 import json
 from pathlib import Path
-from unittest.mock import patch
 
 from memman.cli import cli
 from memman.pipeline.remember import compute_prompt_version
@@ -106,18 +105,25 @@ def test_compute_prompt_version_changes_with_prompt(monkeypatch):
 
 
 def test_remember_stamps_provenance(mm_runner):
-    """`remember` stores rows with all three provenance columns set."""
+    """`remember` stamps prompt_version and embedding_model on every row.
+
+    `--no-reconcile` stores the agent's text verbatim, so no model
+    touches it and `model_id` stays null; `prompt_version` and
+    `embedding_model` are stamped regardless.
+
+    Mutation: leaving `prompt_version` or `embedding_model` unset on
+        an unreconciled write, which the read path would then treat
+        as never enriched or embedded.
+    Oracle: the row read back by its queue_uuid, against
+        `compute_prompt_version()` and the store's configured embed
+        model.
+    """
     r, data_dir = mm_runner
 
-    def _one_fact(client, content):
-        return [{'text': content, 'category': 'fact',
-                 'importance': 3, 'entities': []}]
-
-    with patch('memman.llm.extract.extract_facts', _one_fact):
-        result = r.invoke(cli, [
-            '--data-dir', data_dir,
-            'remember', '--no-reconcile',
-            'provenance stamping end-to-end'])
+    result = r.invoke(cli, [
+        '--data-dir', data_dir,
+        'remember', '--no-reconcile',
+        'provenance stamping end-to-end'])
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
     queue_id = data['queue_id']
@@ -141,4 +147,4 @@ def test_remember_stamps_provenance(mm_runner):
 
     assert prompt_v == compute_prompt_version()
     assert embed_model == 'voyage-3-lite'
-    assert model_id is not None
+    assert model_id is None

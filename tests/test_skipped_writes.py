@@ -136,21 +136,6 @@ def test_purge_store_drops_its_skipped_writes(queue_conn):
     assert [r['store'] for r in rows] == ['kept']
 
 
-def test_skip_reason_reads_the_top_level_extractor_skip():
-    """A result-level skip yields its skip_reason verbatim.
-
-    Mutation: reading the `reason` key (the fact-level spelling) at
-        the top level, where the key is `skip_reason`.
-    Oracle: the literal reason string run_remember returns when
-        extract_facts comes back empty.
-    """
-    result = {
-        'id': 'abc', 'content': 'hi', 'action': 'skipped',
-        'skip_reason': 'trivial content', 'llm_calls': 1,
-        }
-    assert skip_reason_for_result(result) == 'trivial content'
-
-
 def test_skip_reason_reads_an_all_facts_skipped_result():
     """Every fact reconciling away is a skip, and names its reasons.
 
@@ -208,29 +193,29 @@ def test_skip_reason_tolerates_a_non_dict_result():
 
 
 @pytest.mark.no_auto_drain
-def test_drain_records_a_skipped_row_and_still_marks_it_done(
-        mm_runner, monkeypatch):
-    """The drain files the skip and completes the row.
+def test_drain_records_a_skipped_row_and_still_marks_it_done(mm_runner):
+    """The drain files a reconcile skip and completes the row.
 
     Mutation: the drain discarding `_process_queue_row`'s return
-        value, or the top-level skip return spelling its reason under
+        value, or the per-fact skip return spelling its reason under
         a key the drain never reads.
-    Oracle: the REAL pipeline, with only `extract_facts` stubbed
-        empty, must drive one processed row whose content and reason
-        come back from `queue skipped`, with the row left `done`.
+    Oracle: the REAL pipeline, the same note remembered and drained
+        twice. The stub embedder hashes content, so the second write
+        hits cosine 1.0, fires the exact-match rung with no LLM call,
+        and the second drain's own JSON must show it processed and
+        skipped, with the row left `done`.
     """
     from memman.cli import cli
-    from memman.llm import extract as llm_extract
 
-    monkeypatch.setattr(llm_extract, 'extract_facts', lambda *a, **kw: [])
     r, data_dir = mm_runner
-    res = r.invoke(cli, [
-        '--data-dir', data_dir, 'remember', 'a note the extractor drops'])
-    assert res.exit_code == 0, res.output
-    res = r.invoke(cli, [
-        '--data-dir', data_dir, 'scheduler', 'drain',
-        '--limit', '5', '--timeout', '10'])
-    assert res.exit_code == 0, res.output
+    note = 'a note the reconciler folds'
+    for _ in range(2):
+        res = r.invoke(cli, ['--data-dir', data_dir, 'remember', note])
+        assert res.exit_code == 0, res.output
+        res = r.invoke(cli, [
+            '--data-dir', data_dir, 'scheduler', 'drain',
+            '--limit', '5', '--timeout', '10'])
+        assert res.exit_code == 0, res.output
     drain = _last_json(res.output)
     assert drain['processed'] == 1
     assert drain['skipped_writes'] == 1
@@ -240,11 +225,11 @@ def test_drain_records_a_skipped_row_and_still_marks_it_done(
     assert res.exit_code == 0, res.output
     data = json.loads(res.output)
     assert data['stats']['skipped'] == 1
-    assert data['stats']['done'] == 1
+    assert data['stats']['done'] == 2
     assert data['stats']['pending'] == 0
     assert len(data['rows']) == 1
-    assert data['rows'][0]['content'] == 'a note the extractor drops'
-    assert data['rows'][0]['skip_reason'] == 'trivial content'
+    assert data['rows'][0]['content'] == note
+    assert data['rows'][0]['skip_reason'] == 'exact duplicate'
 
 
 @pytest.mark.no_auto_drain

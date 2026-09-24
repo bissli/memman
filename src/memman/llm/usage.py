@@ -30,7 +30,6 @@ Notes
 
 import threading
 
-STAGE_EXTRACTION = 'extraction'
 STAGE_SCREEN = 'screen'
 STAGE_RECONCILIATION = 'reconciliation'
 STAGE_MERGE = 'merge'
@@ -38,11 +37,11 @@ STAGE_QUERY_EXPANSION = 'query_expansion'
 STAGE_ENRICHMENT = 'enrichment'
 STAGE_PROBE = 'probe'
 # Off-pipeline measurement tooling (experiments/ harnesses, eval
-# judges) -- keeps their traffic out of the seven pipeline buckets.
+# judges) -- keeps their traffic out of the six pipeline buckets.
 STAGE_HARNESS = 'harness'
 
 VALID_STAGES = frozenset({
-    STAGE_EXTRACTION, STAGE_SCREEN, STAGE_RECONCILIATION, STAGE_MERGE,
+    STAGE_SCREEN, STAGE_RECONCILIATION, STAGE_MERGE,
     STAGE_QUERY_EXPANSION, STAGE_ENRICHMENT, STAGE_PROBE,
     STAGE_HARNESS,
     })

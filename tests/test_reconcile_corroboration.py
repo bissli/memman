@@ -89,30 +89,6 @@ def test_none_verdict_corroborates_the_named_memory(
     assert [r[0] for r in logged] == [tid]
 
 
-def test_none_verdict_counts_a_repeated_fact_once(
-        tmp_backend, monkeypatch):
-    """Two occurrences of one fact bump the target once.
-
-    Mutation: dropping the `corroborated_ids` dedup argument, or
-        seeding it after the bump rather than before -- an extractor
-        emitting the same fact twice inflates one row's count to 2.
-    Oracle: the counter read back, against the two facts the stubbed
-        extractor emitted.
-    """
-    tid = _store(tmp_backend, STORED)
-    monkeypatch.setattr(
-        'memman.llm.extract.extract_facts',
-        lambda *a, **kw: [
-            {'text': RESTATEMENT, 'category': 'fact',
-             'importance': 3, 'entities': []}
-            for _ in range(2)])
-    calls = _stub_none(monkeypatch, tid)
-    res = _run(tmp_backend, RESTATEMENT)
-    assert calls, 'reconcile never ran: the shortlist was empty'
-    assert len(res['facts']) == 2
-    assert tmp_backend.nodes.get(tid).corroboration_count == 1
-
-
 def test_none_target_dead_at_apply_degrades_to_an_embedded_add(
         tmp_backend, monkeypatch):
     """A dead NONE target degrades to an add that keeps its vector.

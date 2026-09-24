@@ -26,18 +26,8 @@ from tests.test_supersession_pipeline import _parent
 OWN = ['redis', 'kombu']
 
 
-def _fact_naming(entities):
-    """Stub the extractor to return one fact carrying `entities`."""
-    def _extract(llm_client, content):
-        return [{'text': 'the broker is redis now', 'category': 'fact',
-                 'importance': 3, 'entities': list(entities)}]
-    return _extract
-
-
-def _stub_supersede(monkeypatch, entities):
-    """Arrange a write whose one fact supersedes the seeded row."""
-    monkeypatch.setattr(
-        'memman.llm.extract.extract_facts', _fact_naming(entities))
+def _stub_supersede(monkeypatch):
+    """Arrange a write whose fact supersedes the seeded row."""
     monkeypatch.setattr(
         'memman.llm.extract.screen_memory',
         lambda client, fact_text, memory: (
@@ -67,10 +57,12 @@ def test_the_union_is_capped_at_max_row_entities(tmp_backend, monkeypatch):
     inherited = [f'inh{i}' for i in range(MAX_ROW_ENTITIES + 20)]
     tmp_backend.nodes.insert(make_insight(
         id='old-1', content='the broker is kombu', entities=inherited))
-    _stub_supersede(monkeypatch, OWN)
+    _stub_supersede(monkeypatch)
 
+    parent = _parent('the broker is redis now')
+    parent.entities = list(OWN)
     res = run_remember(
-        tmp_backend, _parent('the broker changed'), 'the broker changed',
+        tmp_backend, parent, 'the broker is redis now',
         ec=bound_embedder(tmp_backend), store_name='test')
 
     stored = tmp_backend.nodes.get(res['facts'][0]['id']).entities
@@ -94,10 +86,12 @@ def test_the_cut_falls_on_the_oldest_inherited_names(
     inherited = [f'inh{i}' for i in range(MAX_ROW_ENTITIES + 20)]
     tmp_backend.nodes.insert(make_insight(
         id='old-1', content='the broker is kombu', entities=inherited))
-    _stub_supersede(monkeypatch, OWN)
+    _stub_supersede(monkeypatch)
 
+    parent = _parent('the broker is redis now')
+    parent.entities = list(OWN)
     res = run_remember(
-        tmp_backend, _parent('the broker changed'), 'the broker changed',
+        tmp_backend, parent, 'the broker is redis now',
         ec=bound_embedder(tmp_backend), store_name='test')
 
     stored = tmp_backend.nodes.get(res['facts'][0]['id']).entities
@@ -123,10 +117,12 @@ def test_a_short_union_is_left_whole(tmp_backend, monkeypatch):
     inherited = ['kombu', 'celery', 'amqp']
     tmp_backend.nodes.insert(make_insight(
         id='old-1', content='the broker is kombu', entities=inherited))
-    _stub_supersede(monkeypatch, OWN)
+    _stub_supersede(monkeypatch)
 
+    parent = _parent('the broker is redis now')
+    parent.entities = list(OWN)
     res = run_remember(
-        tmp_backend, _parent('the broker changed'), 'the broker changed',
+        tmp_backend, parent, 'the broker is redis now',
         ec=bound_embedder(tmp_backend), store_name='test')
 
     stored = tmp_backend.nodes.get(res['facts'][0]['id']).entities

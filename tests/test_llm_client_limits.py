@@ -1,9 +1,9 @@
 """Per-role LLM client output-token and timeout budgets.
 
-The recall hot path (`fast`) stays tight; the worker roles
-(`slow_canonical`, `slow_metadata`) emit JSON that scales with input
-size and must not truncate large insights, so they get a larger token
-budget and a longer read timeout.
+The recall hot path (`fast`) stays tight; the `slow_metadata` worker
+role emits JSON that scales with input size and must not truncate
+large insights, so it gets a larger token budget and a longer read
+timeout.
 """
 
 import pytest
@@ -20,15 +20,6 @@ def test_fast_role_keeps_tight_budget():
     assert client.timeout == 10.0
 
 
-def test_slow_canonical_role_gets_large_budget():
-    """Canonical-rewrite role gets headroom so big inputs are not truncated.
-    """
-    reset_role_cache()
-    client = get_llm_client('slow_canonical')
-    assert client.max_tokens >= 4096
-    assert client.timeout >= 60.0
-
-
 def test_slow_metadata_role_gets_large_budget():
     """Enrichment role gets headroom so big inputs are not truncated.
     """
@@ -41,7 +32,7 @@ def test_slow_metadata_role_gets_large_budget():
 def test_fast_worker_role_reads_the_fast_model_at_worker_limits():
     """Verify the reconcile stages' role pairs the fast model with the worker budget.
 
-    Mutation: the role reading the slow-canonical model, or keeping the
+    Mutation: the role reading the slow-metadata model, or keeping the
         fast role's 1024-token, 10-second limits (a haiku merge runs to
         8,192 tokens and tens of seconds).
     Oracle: the fast role's own model string beside the worker roles'
@@ -50,8 +41,8 @@ def test_fast_worker_role_reads_the_fast_model_at_worker_limits():
     reset_role_cache()
     client = get_llm_client('fast_worker')
     assert client.model == get_llm_client('fast').model
-    assert client.max_tokens == get_llm_client('slow_canonical').max_tokens
-    assert client.timeout == get_llm_client('slow_canonical').timeout
+    assert client.max_tokens == get_llm_client('slow_metadata').max_tokens
+    assert client.timeout == get_llm_client('slow_metadata').timeout
     assert client.timeout > get_llm_client('fast').timeout
 
 

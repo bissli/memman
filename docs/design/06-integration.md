@@ -29,13 +29,13 @@ Three assets, three jobs:
 
 ## 6.2 Hook details
 
-| Hook     | Event                     | Script                | Role                               |
-| -------- | ------------------------- | --------------------- | ---------------------------------- |
-| Prime    | SessionStart              | prime.sh              | Inject guide + compact-recall hint |
-| Remind   | UserPromptSubmit          | user_prompt.sh        | Recall reminder                    |
-| Compact  | PreCompact + SessionStart | compact.sh + prime.sh | Flag-file relay across compaction  |
-| Recall   | PreToolUse (Agent or Task) | task_recall.sh                     | Pre-delegation recall reminder |
-| ExitPlan | PreToolUse (ExitPlanMode) | exit_plan.sh          | Pre-execute storage reminder       |
+| Hook     | Event                      | Script                | Role                               |
+| -------- | -------------------------- | --------------------- | ---------------------------------- |
+| Prime    | SessionStart               | prime.sh              | Inject guide + compact-recall hint |
+| Remind   | UserPromptSubmit           | user_prompt.sh        | Recall reminder                    |
+| Compact  | PreCompact + SessionStart  | compact.sh + prime.sh | Flag-file relay across compaction  |
+| Recall   | PreToolUse (Agent or Task) | task_recall.sh        | Pre-delegation recall reminder     |
+| ExitPlan | PreToolUse (ExitPlanMode)  | exit_plan.sh          | Pre-execute storage reminder       |
 
 Prime, Remind, Recall, and ExitPlan are plain `echo` shims to the agent; their bodies are visible in the package source. One hook needs explanation:
 
@@ -112,7 +112,7 @@ The Prime hook is always installed. Remind, Compact, Recall, and ExitPlan hooks 
 
 The host agent calls `memman remember` via Bash in the same turn. No sub-agent, no Task delegation, no context isolation. Three reasons:
 
-- **The binary is a fast queue-append** (~50 ms). The cost that would justify offloading to a sub-agent (LLM extraction, embedding, edge inference) does not run in-band - it runs in the scheduler worker out of band. The host turn pays only the queue-append latency.
+- **The binary is a fast queue-append** (~50 ms). The cost that would justify offloading to a sub-agent (LLM reconciliation, embedding, edge inference) does not run in-band - it runs in the scheduler worker out of band. The host turn pays only the queue-append latency.
 - **The host LLM already holds the context** needed to choose the right `--cat`, `--imp`, `--entity`, and to dereference anaphora before storing. A sub-agent would pay tokens to re-read context the host already has.
 - **One-way visibility** (writes are not recallable in the same turn) means there is no callback the sub-agent could provide that the host could not get itself. Recall remains a separate Bash call.
 

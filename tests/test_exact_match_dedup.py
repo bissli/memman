@@ -344,63 +344,6 @@ def test_degrade_repairs_the_stale_drain_caches(
     assert live[0].corroboration_count == 2
 
 
-def test_same_row_duplicate_against_dead_target_adds_once(
-        tmp_backend, monkeypatch):
-    """A row whose extraction repeats the fact adds ONE copy.
-
-    Mutation: guarding only the bump with `corroborated_ids`, not
-        the degrade -- the second identical fact inserts a second
-        copy in the same transaction.
-    Oracle: extraction emitting the same fact twice against a dead
-        target leaves exactly one live row with that content.
-    """
-    tid = _store(tmp_backend, 'Redis caches session tokens')
-    stale_cache = {
-        i.id: i for i in tmp_backend.nodes.get_all_active()}
-    tmp_backend.nodes.soft_delete(tid)
-    _spy_reconcile(monkeypatch)
-    fact = {'text': 'Redis caches session tokens', 'category': 'fact',
-            'importance': 3, 'entities': []}
-    monkeypatch.setattr(
-        'memman.llm.extract.extract_facts',
-        lambda client, content: [dict(fact), dict(fact)])
-    run_remember(
-        tmp_backend, _new_insight('Redis caches session tokens'),
-        'Redis caches session tokens',
-        ec=bound_embedder(tmp_backend), store_name='test',
-        insights_by_id=stale_cache)
-    live = [i for i in tmp_backend.nodes.get_all_active()
-            if i.content == 'Redis caches session tokens']
-    assert len(live) == 1
-
-
-def test_same_fact_twice_in_one_row_bumps_once(
-        tmp_backend, monkeypatch):
-    """One queue row restating a fact twice bumps its target once.
-
-    The counter's semantics are per-restatement across writes, not
-    per-extracted-fact: an over-eager extractor emitting a duplicate
-    pair must not double-count.
-
-    Mutation: dropping the per-invocation `corroborated_ids` set.
-    Oracle: corroboration_count == 1 and exactly one oplog row after
-        a single run whose extraction yields the same fact twice.
-    """
-    tid = _store(tmp_backend, 'Redis caches session tokens')
-    _spy_reconcile(monkeypatch)
-    fact = {'text': 'Redis caches session tokens', 'category': 'fact',
-            'importance': 3, 'entities': []}
-    monkeypatch.setattr(
-        'memman.llm.extract.extract_facts',
-        lambda client, content: [dict(fact), dict(fact)])
-    _run(tmp_backend, 'Redis caches session tokens')
-    assert tmp_backend.nodes.get(tid).corroboration_count == 1
-    count = tmp_backend._db._query(
-        'select count(*) from oplog'
-        " where operation = 'reconcile-corroborate'").fetchone()[0]
-    assert count == 1
-
-
 def test_skip_result_carries_target_id(tmp_backend, monkeypatch):
     """The skip result names the row that absorbed the restatement.
 

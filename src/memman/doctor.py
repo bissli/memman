@@ -1298,11 +1298,6 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
             'detail': detail}
     from memman.exceptions import ConfigError
     try:
-        detail['active_model_slow_canonical'] = config.require(
-            config.LLM_MODEL_SLOW_CANONICAL)
-    except ConfigError:
-        detail['active_model_slow_canonical'] = None
-    try:
         detail['active_model_slow_metadata'] = config.require(
             config.LLM_MODEL_SLOW_METADATA)
     except ConfigError:

@@ -185,7 +185,7 @@ class TestProvenanceDrift:
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
+        active_model = config.require(config.LLM_MODEL_SLOW_METADATA)
 
         _insert_healthy_insight(tmp_db, 'p-1')
         tmp_db._exec(
@@ -211,7 +211,7 @@ class TestProvenanceDrift:
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
+        active_model = config.require(config.LLM_MODEL_SLOW_METADATA)
 
         for i in range(2):
             _insert_healthy_insight(tmp_db, f'p-stale-{i}')
@@ -300,7 +300,7 @@ class TestStaleHelpers:
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
+        active_model = config.require(config.LLM_MODEL_SLOW_METADATA)
         expected = self._seed_six_row_matrix(
             backend, active_pv, active_model)
 
@@ -313,7 +313,7 @@ class TestStaleHelpers:
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
+        active_model = config.require(config.LLM_MODEL_SLOW_METADATA)
         self._seed_six_row_matrix(backend, active_pv, active_model)
 
         n = backend.nodes.count_stale_insights(active_pv)
@@ -328,7 +328,7 @@ class TestStaleHelpers:
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
+        active_model = config.require(config.LLM_MODEL_SLOW_METADATA)
         self._seed_six_row_matrix(backend, active_pv, active_model)
 
         helper_count = backend.nodes.count_stale_insights(active_pv)

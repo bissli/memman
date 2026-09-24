@@ -66,38 +66,6 @@ def test_plan_fact_propagates_session_and_queue_uuid(mm_runner):
     assert rows[0][3] == queue_uuid
 
 
-def test_multi_fact_row_shares_one_queue_uuid(mm_runner):
-    """Several facts from one remember call share the row's uuid.
-
-    Mutation: putting `unique` on the insights `queue_uuid` column -
-        the second fact's insert would fail. Only the QUEUE table's
-        column is unique.
-    Oracle: two extracted facts, both stored, identical uuids.
-    """
-    from unittest.mock import patch
-
-    def _two_facts(llm_client, content):
-        return [
-            {'text': 'Switched from Flask to FastAPI',
-             'category': 'decision', 'importance': 4,
-             'entities': ['FastAPI']},
-            {'text': 'Redis cache configured with 4GB max memory',
-             'category': 'fact', 'importance': 3,
-             'entities': ['Redis']},
-            ]
-
-    with patch('memman.llm.extract.extract_facts', _two_facts):
-        result = invoke(mm_runner, [
-            'remember', 'Switched to FastAPI and configured Redis'])
-    assert result.exit_code == 0, result.output
-    raw = json.loads(result.output)
-    _, data_dir = mm_runner
-    _sess, queue_uuid = _queue_row(data_dir, raw['queue_id'])
-    rows = _stored(data_dir, raw['store'],
-                   'queue_uuid = ?', (queue_uuid,))
-    assert len(rows) == 2
-
-
 def test_source_round_trips_verbatim(mm_runner):
     """The default `user` source is stored as `'user'`, not `queue:N`.
 

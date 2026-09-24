@@ -27,7 +27,6 @@ REPLAYED_PROMPTS = [
     ('memman.graph.enrichment', 'ENRICHMENT_SYSTEM_PROMPT'),
     ]
 WRITE_ONLY_PROMPTS = [
-    ('memman.llm.extract', 'FACT_EXTRACTION_SYSTEM'),
     ('memman.llm.extract', 'RECONCILIATION_SYSTEM'),
     ]
 
@@ -62,12 +61,12 @@ def test_key_ignores_a_prompt_the_rebuild_cannot_replay(
         module, attr, monkeypatch):
     """Editing a write-path-only prompt marks nothing stale.
 
-    Mutation: folding FACT_EXTRACTION_SYSTEM or RECONCILIATION_SYSTEM
-        into the key -- its shipped form. Editing either then reports
-        every row in every store stale, and the rebuild silences it by
-        re-enriching, which addresses nothing. Shipping the D2
-        reconcile-prompt change did exactly this: 675 of 675 rows on
-        the live memman store.
+    Mutation: folding RECONCILIATION_SYSTEM into the key -- its
+        shipped form. Editing it then reports every row in every
+        store stale, and the rebuild silences it by re-enriching,
+        which addresses nothing. Shipping the D2 reconcile-prompt
+        change did exactly this: 675 of 675 rows on the live memman
+        store.
     Oracle: the key recomputed with that single prompt perturbed,
         which must equal the unperturbed key.
     """
@@ -78,25 +77,15 @@ def test_key_ignores_a_prompt_the_rebuild_cannot_replay(
         ' move the key')
 
 
-def test_key_follows_the_model_that_does_the_enriching(env_file):
-    """The key tracks the metadata model, not the canonical one.
+def test_key_moves_for_the_metadata_model(env_file):
+    """The key tracks the metadata model, which link_pending replays on.
 
-    Mutation: keying staleness on `MEMMAN_LLM_MODEL_SLOW_CANONICAL`,
-        which `link_pending` stamps today while running every piece of
-        work it replays on `metadata_llm_client`. That is wrong in both
-        directions: a canonical swap marks the fleet stale with no
-        remedy, and a metadata swap -- which genuinely changes what a
-        rebuild produces -- marks nothing at all.
-    Oracle: the key recomputed across a swap of each role in turn; only
-        the metadata role may move it.
+    Mutation: leaving `MEMMAN_LLM_MODEL_SLOW_METADATA` out of the key,
+        which would report a rebuild's own model change as nothing --
+        the one drift the remedy CAN fix would then go unreported.
+    Oracle: the key recomputed across a swap of the metadata model.
     """
     base = _key()
-    env_file(config.LLM_MODEL_SLOW_CANONICAL, 'anthropic/claude-other-9.9')
-    assert _key() == base, (
-        'the canonical model produces content no rebuild can replay,'
-        ' so swapping it must not move the key')
-    env_file(config.LLM_MODEL_SLOW_CANONICAL,
-             config.INSTALL_DEFAULTS[config.LLM_MODEL_SLOW_CANONICAL])
     env_file(config.LLM_MODEL_SLOW_METADATA, 'anthropic/claude-other-9.9')
     assert _key() != base, (
         'the metadata model produces exactly what a rebuild replays,'
@@ -145,18 +134,17 @@ def test_stale_predicate_ignores_model_drift(backend):
     Mutation: restoring a `model_id` comparison to
         `count_stale_insights` / `iter_stale_insight_ids`, resolved
         from config rather than passed in -- the plausible shape of a
-        well-meant re-fix. A store whose canonical model was swapped
+        well-meant re-fix. A store whose content model was swapped
         then reports those rows stale forever, because nothing
         rewrites `model_id` any more.
     Oracle: two rows carrying the active key and differing only in
-        `model_id`, one of them matching the configured canonical
-        model and one not, counted against zero.
+        `model_id`, one of them naming the model that wrote the row's
+        content and one not, counted against zero.
     """
     active = _key()
-    configured = config.require(config.LLM_MODEL_SLOW_CANONICAL)
     backend.nodes.insert(make_insight(
         id='drift-same', content='content written by the active model',
-        prompt_version=active, model_id=configured))
+        prompt_version=active, model_id='anthropic/claude-writer-1.0'))
     backend.nodes.insert(make_insight(
         id='drift-other', content='content written by an older model',
         prompt_version=active, model_id='anthropic/claude-older-1.0'))

@@ -143,8 +143,8 @@ def dedupe_entities(entities: list[str]) -> list[str]:
     Parameters
     ----------
     entities : list[str]
-        Entity names as written by a caller, the extractor or the
-        enrichment, in priority order.
+        Entity names as written by a caller or the enrichment, in
+        priority order.
 
     Returns
     -------

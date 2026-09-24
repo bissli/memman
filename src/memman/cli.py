@@ -47,6 +47,47 @@ _LOG_FORMAT = '%(asctime)s %(levelname)s %(name)s: %(message)s'
 _WORKER_LOG_MAX_BYTES = 5 * 1024 * 1024
 _WORKER_LOG_BACKUPS = 3
 _MAX_CONTENT_BYTES = 1000
+_LINE_WORD_RE = re.compile(r'\bline \d+\b', re.IGNORECASE)
+# Notes:
+# - Only a source, config or doc extension marks a locator: a bare
+#   dot-letter run would also match a dotted host such as
+#   `db.example.com:5432` and refuse its port.
+# - `localhost:8080`, `192.0.2.1:8000`, `14:18`, `python:3.11` and
+#   `code:404` carry no such extension before the colon.
+_FILE_LINE_RE = re.compile(
+    r'\b[\w./-]+\.(?:py|pyi|js|jsx|ts|tsx|md|rst|txt|html|htm|css|scss'
+    r'|json|jsonl|yaml|yml|toml|ini|cfg|conf|sql|sh|bash|zsh|ps1|rs|go'
+    r'|java|kt|c|h|cc|cpp|hpp|cs|rb|php|swift|lua|xml|csv|tsv|ipynb'
+    r'|drawio|tf|vue|svelte|proto|mk|cmake):\d{1,5}\b', re.IGNORECASE)
+
+
+def _line_locator_refusal_message(content: str) -> str | None:
+    """Return the refusal for text that names a line number, or None.
+
+    Parameters
+    ----------
+    content : str
+        The write text, as `remember` or `replace` received it.
+
+    Returns
+    -------
+    str or None
+        The refusal quoting the first `path.ext:N` locator, else the
+        first `line N` phrase; None when `content` holds neither.
+
+    Notes
+    -----
+    - A line number is a snapshot of the file at write time and goes
+      stale on the next edit. The text is refused, never rewritten,
+      so the stored row is always the agent's own words.
+    """
+    match = _FILE_LINE_RE.search(content) or _LINE_WORD_RE.search(content)
+    if match is None:
+        return None
+    return (
+        f'content names a line number ({match.group(0)!r}), which goes'
+        ' stale on the next edit; name the file and the function or'
+        ' symbol instead')
 
 
 def _author_refusal_message(content: str) -> str | None:
@@ -223,8 +264,8 @@ def _get_llm_client_or_fail(role: str) -> 'MemmanLLMClient':
 
     Keeps `memman.llm` free of `click` - the CLI boundary is the only
     place that should know how to surface a user-facing config error.
-    `role` is `'fast'`, `'fast_worker'`, `'slow_canonical'`, or
-    `'slow_metadata'` (worker pipeline, operator rebuilds).
+    `role` is `'fast'`, `'fast_worker'`, or `'slow_metadata'`
+    (worker pipeline, operator rebuilds).
     """
     from memman.exceptions import ConfigError
     from memman.llm.client import get_llm_client
@@ -736,9 +777,9 @@ def config_show(ctx: click.Context) -> None:
                    ' value is never split, so a name may contain a'
                    ' comma.')
 @click.option('--no-reconcile', is_flag=True, default=False,
-              help='Store the text verbatim: skip fact extraction and'
-                   ' reconciliation, so the write cannot be dropped as'
-                   ' trivial or folded into an existing insight')
+              help='Skip reconciliation, so the write is never folded'
+                   ' into, deduplicated against, or used to retire an'
+                   ' existing insight')
 @click.option('--session', default='',
               envvar=[config.SESSION_ID, config.CLAUDE_SESSION_ID],
               help='Session id for the temporal chain (defaults to'
@@ -773,7 +814,8 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
             ' calls, one claim each')
 
     author = config.resolve_author()
-    refusal = _author_refusal_message(content_str)
+    refusal = (_line_locator_refusal_message(content_str)
+               or _author_refusal_message(content_str))
     if refusal:
         raise click.ClickException(refusal)
 
@@ -801,20 +843,9 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
 
     from memman.queue import enqueue, queue_db
     with queue_db(data_dir_val) as conn:
-        # Notes:
-        # - Explicitness decides whether `_plan_fact` keeps the caller's
-        #   category or defers to the extractor's per-fact guess, so a
-        #   caller who types the default must not read as one who typed
-        #   nothing.
-        # - Importance has no extractor value to defer to and is stored
-        #   as passed.
-        from_cmdline = click.core.ParameterSource.COMMANDLINE
-        cat_hint = (
-            cat if ctx.get_parameter_source('cat') == from_cmdline
-            else None)
         row_id, queue_uuid = enqueue(
             conn, store=name, content=content_str,
-            hint_cat=cat_hint, hint_imp=imp,
+            hint_cat=cat, hint_imp=imp,
             hint_source=source,
             hint_entities=entities_json,
             hint_no_reconcile=no_reconcile,
@@ -1226,8 +1257,8 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 # Notes:
                 # - The ledger is observability, so its own failure
                 #   must not fail a row whose pipeline already ran:
-                #   that would re-run extraction on every retry and
-                #   burn the attempt budget.
+                #   that would re-run the reconcile stages on every
+                #   retry and burn the attempt budget.
                 # - It is written before mark_done so a crash between
                 #   the two leaves a retryable row, never a done row
                 #   with no record.
@@ -1363,7 +1394,6 @@ class _StoreContext:
                 " contains data; run 'memman embed reembed' to converge.")
         self.ec = _fp_mod.bound_embedder(self.backend)
         self._stored_fp = stored
-        self.llm_client = get_llm_client('slow_canonical')
         self.stage_llm_client = get_llm_client('fast_worker')
         self.embed_cache: dict[str, list[float]] = dict(
             self.backend.nodes.iter_embeddings_as_vecs())
@@ -1460,8 +1490,8 @@ def _process_queue_row(
     enforced unconditionally via `row.queue_uuid`; `row.session_id`
     carries the temporal chain key onto the stored insight.
 
-    Hoisted state (db, embed_cache, insights_by_id, llm_client, ec)
-    comes from `ctx`. The drain loop snapshots and restores `ctx`'s
+    Hoisted state (db, embed_cache, insights_by_id, stage_llm_client,
+    ec) comes from `ctx`. The drain loop snapshots and restores `ctx`'s
     caches around this call so a transaction failure can't pollute
     the next row's planning.
 
@@ -1550,10 +1580,8 @@ def _process_queue_row(
         backend, insight, row.content,
         no_reconcile=row.hint_no_reconcile,
         replaced_id=replaced_id,
-        cat_explicit=row.hint_cat is not None,
         embed_cache=ctx.embed_cache,
         insights_by_id=ctx.insights_by_id,
-        llm_client=ctx.llm_client,
         stage_llm_client=ctx.stage_llm_client,
         ec=ctx.ec,
         store_name=ctx.store_name)
@@ -1855,10 +1883,9 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
       Each of the four overrides when typed, `--entity ''` included,
       which clears the list; enrichment then rebuilds it from the new
       content.
-    - A replace never reconciles. It targets one id, so no fact
-      extraction runs and the content lands as a single row exactly
-      as typed; enrichment still runs and rebuilds keywords, summary
-      and entities.
+    - A replace never reconciles. It targets one id, so the content
+      lands as a single row exactly as typed; enrichment still runs
+      and rebuilds keywords, summary and entities.
     - `--session` does not inherit: the successor carries the session
       that wrote it, so it enters that session's backbone chain.
       It also inherits the replaced insight's edges, including that
@@ -1876,7 +1903,8 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             ' calls, one claim each')
 
     author = config.resolve_author()
-    refusal = _author_refusal_message(content_str)
+    refusal = (_line_locator_refusal_message(content_str)
+               or _author_refusal_message(content_str))
     if refusal:
         raise click.ClickException(refusal)
 
@@ -2329,14 +2357,13 @@ def queue_failed(ctx: click.Context, limit: int) -> None:
 def queue_skipped(ctx: click.Context, limit: int) -> None:
     """List writes that stored no insight.
 
-    A write whose extraction came back empty, or whose every fact
-    reconciled onto an existing insight, completes as `done` and is
-    purged from the queue a minute later. A write that exhausted its
-    retries usually stored nothing either, and `queue purge --failed`
-    files it here before deleting the row, naming its `queue_uuid` so
-    `insights by-queue` can settle whether anything was in fact
-    stored. This ledger keeps the full content and the reason nothing
-    was stored.
+    A write that reconciled onto an existing insight completes as
+    `done` and is purged from the queue a minute later. A write that
+    exhausted its retries usually stored nothing either, and `queue
+    purge --failed` files it here before deleting the row, naming its
+    `queue_uuid` so `insights by-queue` can settle whether anything was
+    in fact stored. This ledger keeps the full content and the reason
+    nothing was stored.
 
     Parameters
     ----------

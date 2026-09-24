@@ -123,10 +123,10 @@ confirmation is needed.
 
 ### The write pipeline
 
-`memman remember` is a fast queue-append. The full pipeline - fact
-extraction, reconciliation, enrichment, edge creation, re-embedding -
-runs out-of-band in a worker the scheduler fires on a timer (systemd
-on Linux, launchd on macOS, `memman scheduler serve` in containers).
+`memman remember` is a fast queue-append. The full pipeline -
+reconciliation, enrichment, edge creation, re-embedding - runs
+out-of-band in a worker the scheduler fires on a timer (systemd on
+Linux, launchd on macOS, `memman scheduler serve` in containers).
 A newly stored memory is NOT visible to `memman recall` in the current
 session; it lands for later sessions.
 
@@ -136,18 +136,19 @@ enrichment. The three auto-created edge types (semantic, entity,
 temporal) are reindexed on DB open when edge constants change; there
 is no operator command for that.
 
-A write is not guaranteed to land. The worker drops content its
-extractor judges trivial, folds a fact that merely restates a stored
-insight into that insight, and supersedes a stored insight the new text
-contradicts (the old row keeps its content behind `superseded_by` and
-leaves recall). A fact that contradicts several stored insights
-supersedes each of them. All three complete as `done`, so the queue
-reports success either way. When nothing at all was stored, the write is
-filed in the skipped ledger: read it back with `memman scheduler queue
-skipped`, which keeps the full content and the reason. A write that
-stored even one fact is not filed, so a single folded fact in a
-multi-fact write leaves no ledger row. To store text verbatim and bypass
-all three, pass `--no-reconcile`.
+The worker stores the text as written, as one memory; no model
+rewords or splits it. Reconciliation alone can keep it from landing
+as its own row: the worker folds a write that merely restates a stored
+insight into that insight, skips an exact duplicate, merges a
+refinement into its successor, and supersedes a stored insight the new
+text contradicts (the old row keeps its content behind `superseded_by`
+and leaves recall). A write that contradicts several stored insights
+supersedes each. All complete as `done`, so the queue reports success
+either way. A folded or duplicate write is filed in the skipped
+ledger: read it back with `memman scheduler queue skipped`, which
+keeps the full content and the reason. `--no-reconcile` skips
+reconciliation: the write is never folded, deduplicated, or used to
+retire a row.
 
 To correct a stored insight by ID and keep its `access_count` and
 edges:
@@ -407,11 +408,12 @@ and exits 0.
 - `remember` and `replace` refuse text over 1,000 bytes, counted as
   UTF-8 bytes, and never truncate it. Split the text into several
   calls, one claim each. They also refuse text whose first word is
-  the author's name: `author` carries that.
-- One self-contained fact per `remember` call. The worker extracts one
-  fact from each call and folds every claim in the text into it, so a
-  second unrelated subject rides along and goes stale with the first;
-  give it its own call.
+  the author's name (`author` carries that) or that names a line
+  number (`auth.py:88`, `line 88`), which goes stale on the next
+  edit: name the file and symbol instead.
+- One self-contained fact per `remember` call. The worker stores each
+  call as one memory, so a second unrelated subject rides along and
+  goes stale with the first; give it its own call.
 - `--source agent` for the agent's own conclusion, a locator (URL,
   script, dataset pull) for imported material; `user`, the default, is
   for the user's words. Recall's `--source` filter is an exact match on

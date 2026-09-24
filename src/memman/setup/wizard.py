@@ -8,7 +8,7 @@ features today:
    (`MEMMAN_LLM_ENDPOINT`); OpenRouter is the default, and any other
    OpenAI-compat endpoint (Anthropic at `/v1`, OpenAI, Gemini's
    OpenAI shim, Ollama, vLLM, LiteLLM, ...) is accepted. For non-OR
-   endpoints the wizard also prompts for the three role-specific model
+   endpoints the wizard also prompts for the two role-specific model
    slugs (no shared model catalog exists for non-OR vendors).
 
 2. Mandatory-secret prompting. The embed provider's API key (when one
@@ -51,7 +51,6 @@ ENDPOINT_MAX_ATTEMPTS = 3
 API_KEY_MAX_ATTEMPTS = 3
 MODEL_SLUG_PROMPTS: tuple[tuple[str, str], ...] = (
     ('fast', 'MEMMAN_LLM_MODEL_FAST'),
-    ('slow canonical', 'MEMMAN_LLM_MODEL_SLOW_CANONICAL'),
     ('slow metadata', 'MEMMAN_LLM_MODEL_SLOW_METADATA'),
     )
 
@@ -339,7 +338,7 @@ def _collect_llm_model_slugs(
         *,
         endpoint: str,
         interactive: bool) -> dict[str, str]:
-    """Prompt for the three role-model slugs when the endpoint is non-OR.
+    """Prompt for the two role-model slugs when the endpoint is non-OR.
 
     OpenRouter endpoints rely on `collect_install_knobs` plus the
     `openrouter_models` resolver to fill role slugs from OR's catalog.
@@ -355,7 +354,7 @@ def _collect_llm_model_slugs(
         return out
     click.echo('')
     click.echo(click.style(
-        'Non-OpenRouter endpoint: enter the three model slugs to use.',
+        'Non-OpenRouter endpoint: enter the two model slugs to use.',
         bold=True))
     click.echo(click.style(
         '  These pass through verbatim to /chat/completions; consult the'

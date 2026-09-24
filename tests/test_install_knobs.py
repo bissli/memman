@@ -63,33 +63,44 @@ class TestCollectInstallKnobs:
 
     def test_file_value_wins_over_resolver_and_default(
             self, tmp_path, monkeypatch, stub_resolver):
-        """Existing env-file value is preserved across re-installs."""
+        """Existing env-file value is preserved across re-installs.
+
+        Mutation: reading the resolver or `INSTALL_DEFAULTS` ahead of
+            an env-file value already on disk, which would overwrite
+            a pinned model slug on every reinstall.
+        Oracle: the pinned file values, read back from
+            `collect_install_knobs` with the resolver spy empty.
+        """
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(
             f'{config.LLM_MODEL_FAST}=file/haiku-pinned\n'
-            f'{config.LLM_MODEL_SLOW_CANONICAL}=file/sonnet-pinned\n'
             f'{config.LLM_MODEL_SLOW_METADATA}=file/sonnet-pinned\n'
             f'{config.OPENROUTER_API_KEY}=file-or-key\n'
             f'{config.VOYAGE_API_KEY}=file-vy-key\n'
             f'{config.LLM_ENDPOINT}=https://openrouter.ai/api/v1\n')
         monkeypatch.setenv(config.DATA_DIR, str(data_dir))
         monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
-        monkeypatch.delenv(config.LLM_MODEL_SLOW_CANONICAL, raising=False)
         monkeypatch.delenv(config.LLM_MODEL_SLOW_METADATA, raising=False)
         monkeypatch.delenv(config.OPENROUTER_API_KEY, raising=False)
         monkeypatch.delenv(config.VOYAGE_API_KEY, raising=False)
         config.reset_file_cache()
         knobs = config.collect_install_knobs(str(data_dir))
         assert knobs[config.LLM_MODEL_FAST] == 'file/haiku-pinned'
-        assert knobs[config.LLM_MODEL_SLOW_CANONICAL] == 'file/sonnet-pinned'
         assert knobs[config.LLM_MODEL_SLOW_METADATA] == 'file/sonnet-pinned'
         assert knobs[config.OPENROUTER_API_KEY] == 'file-or-key'
         assert stub_resolver == [], 'resolver should NOT fire when file has value'
 
     def test_resolver_fires_when_file_lacks_model_keys(
             self, tmp_path, monkeypatch, stub_resolver):
-        """Resolver runs only when the env file has no value for a model key."""
+        """Resolver runs only when the env file has no value for a model key.
+
+        Mutation: firing the resolver unconditionally, or skipping a
+            role the file leaves blank, either of which would seed a
+            role with the wrong model.
+        Oracle: the stub resolver's own recorded roles, against the
+            resolved slug it returns for each.
+        """
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(
@@ -103,7 +114,7 @@ class TestCollectInstallKnobs:
         assert 'fast' in roles
         assert 'slow' in roles
         assert knobs[config.LLM_MODEL_FAST] == 'anthropic/claude-haiku-4.5'
-        assert knobs[config.LLM_MODEL_SLOW_CANONICAL] == 'anthropic/claude-sonnet-4.5'
+        assert knobs[config.LLM_MODEL_SLOW_METADATA] == 'anthropic/claude-sonnet-4.5'
 
     def test_resolver_none_falls_back_to_install_defaults(
             self, tmp_path, monkeypatch):

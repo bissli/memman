@@ -53,7 +53,6 @@ STORE = 'MEMMAN_STORE'
 LLM_ENDPOINT = 'MEMMAN_LLM_ENDPOINT'
 LLM_API_KEY = 'MEMMAN_LLM_API_KEY'
 LLM_MODEL_FAST = 'MEMMAN_LLM_MODEL_FAST'
-LLM_MODEL_SLOW_CANONICAL = 'MEMMAN_LLM_MODEL_SLOW_CANONICAL'
 LLM_MODEL_SLOW_METADATA = 'MEMMAN_LLM_MODEL_SLOW_METADATA'
 LLM_PROVIDER_ONLY = 'MEMMAN_LLM_PROVIDER_ONLY'
 LLM_DATA_COLLECTION = 'MEMMAN_LLM_DATA_COLLECTION'
@@ -219,7 +218,6 @@ INSTALLABLE_KEYS = (
     LLM_ENDPOINT,
     LLM_API_KEY,
     LLM_MODEL_FAST,
-    LLM_MODEL_SLOW_CANONICAL,
     LLM_MODEL_SLOW_METADATA,
     LLM_PROVIDER_ONLY,
     LLM_DATA_COLLECTION,
@@ -320,7 +318,6 @@ def is_loopback_endpoint(url: str) -> bool:
 INSTALL_DEFAULTS: dict[str, str] = {
     LLM_ENDPOINT: 'https://openrouter.ai/api/v1',
     LLM_MODEL_FAST: 'qwen/qwen3-235b-a22b-2507',
-    LLM_MODEL_SLOW_CANONICAL: 'qwen/qwen3-235b-a22b-2507',
     LLM_MODEL_SLOW_METADATA: 'qwen/qwen3-235b-a22b-2507',
     LLM_PROVIDER_ONLY: 'amazon-bedrock,azure,google-vertex',
     LLM_DATA_COLLECTION: 'deny',
@@ -665,7 +662,6 @@ def effective_source(name: str) -> str:
 
 _LLM_ROLE_KEYS: tuple[tuple[str, str], ...] = (
     (LLM_MODEL_FAST, 'fast'),
-    (LLM_MODEL_SLOW_CANONICAL, 'slow'),
     (LLM_MODEL_SLOW_METADATA, 'slow'),
     )
 
@@ -674,7 +670,7 @@ def _resolve_llm_role_slugs(
         knobs: dict[str, str],
         needs_resolve: set[str],
         endpoint: str) -> None:
-    """Populate the three LLM role slugs from OpenRouter's public catalog.
+    """Populate the two LLM role slugs from OpenRouter's public catalog.
 
     Fires only when `endpoint` points at OpenRouter; each role is
     resolved against OR's `/v1/models` endpoint (no auth required).

@@ -6,28 +6,23 @@ natively, Anthropic at `/v1`, Google at `/v1beta/openai`, OpenAI of
 course, plus Groq / DeepSeek / Mistral / Cerebras / Ollama / vLLM /
 LiteLLM / HuggingFace which speak it natively. Users switch vendors
 by editing `MEMMAN_LLM_ENDPOINT` (and `MEMMAN_LLM_API_KEY` plus the
-three role-model slugs).
+two role-model slugs).
 
-Four roles exist:
+Three roles exist:
 
 - `fast` -- synchronous CLI hot path (recall query expansion, doctor's
   connectivity probe). Reads `MEMMAN_LLM_MODEL_FAST`.
 - `fast_worker` -- the fast model on the worker's token budget and
   timeout: the three reconcile stages (screen, verdict, merge). Reads
   `MEMMAN_LLM_MODEL_FAST`.
-- `slow_canonical` -- canonical-content path (fact extraction). Reads
-  `MEMMAN_LLM_MODEL_SLOW_CANONICAL`.
 - `slow_metadata` -- derived-metadata path (enrichment). Reads
   `MEMMAN_LLM_MODEL_SLOW_METADATA`.
 
-Routing the recall path to a small/fast model and the worker to a
-larger/slow/reasoning model means switching the worker model never
-adds latency to interactive commands. Splitting the slow worker into
-canonical vs metadata leaves a knob for tuning enrichment cost
-separately from the load-bearing extraction prompt. The reconcile
-stages run on the fast model too, at the worker's limits: the fast
-role's own ten-second timeout is for interactive latency and would cut
-a merge short.
+Routing the recall path to a small/fast model and enrichment to a
+larger/slow/reasoning model means switching the enrichment model never
+adds latency to interactive commands. The reconcile stages run on the
+fast model too, at the worker's limits: the fast role's own ten-second
+timeout is for interactive latency and would cut a merge short.
 """
 
 import logging
@@ -45,15 +40,13 @@ logger = logging.getLogger('memman')
 
 ROLE_FAST = 'fast'
 ROLE_FAST_WORKER = 'fast_worker'
-ROLE_SLOW_CANONICAL = 'slow_canonical'
 ROLE_SLOW_METADATA = 'slow_metadata'
 VALID_ROLES = frozenset({
-    ROLE_FAST, ROLE_FAST_WORKER, ROLE_SLOW_CANONICAL, ROLE_SLOW_METADATA})
+    ROLE_FAST, ROLE_FAST_WORKER, ROLE_SLOW_METADATA})
 
 _ROLE_ENV_VARS = {
     ROLE_FAST: config.LLM_MODEL_FAST,
     ROLE_FAST_WORKER: config.LLM_MODEL_FAST,
-    ROLE_SLOW_CANONICAL: config.LLM_MODEL_SLOW_CANONICAL,
     ROLE_SLOW_METADATA: config.LLM_MODEL_SLOW_METADATA,
     }
 
@@ -64,7 +57,7 @@ EMPTY_RETRY_DELAY = 0.1
 
 # Per-role output budget + read timeout. `fast` is the recall hot
 # path and stays tight. The worker roles emit JSON that scales with
-# input size (canonical rewrite, enrichment entity/keyword lists);
+# input size (merge text, enrichment entity/keyword lists);
 # a small cap truncates large insights mid-JSON and the parse fails,
 # so they get a larger token budget and a longer timeout. A caller
 # raises the budget for one call through `complete(max_tokens=)`; the
@@ -74,7 +67,6 @@ EMPTY_RETRY_DELAY = 0.1
 _ROLE_LIMITS = {
     ROLE_FAST: (FAST_MAX_TOKENS, ENRICHMENT_TIMEOUT),
     ROLE_FAST_WORKER: (WORKER_MAX_TOKENS, WORKER_TIMEOUT),
-    ROLE_SLOW_CANONICAL: (WORKER_MAX_TOKENS, WORKER_TIMEOUT),
     ROLE_SLOW_METADATA: (WORKER_MAX_TOKENS, WORKER_TIMEOUT),
     }
 
@@ -316,8 +308,8 @@ _ROLE_CACHE: dict[str, MemmanLLMClient] = {}
 def get_llm_client(role: str) -> MemmanLLMClient:
     """Return a cached `MemmanLLMClient` for the given role.
 
-    `role` must be one of `'fast'`, `'fast_worker'`, `'slow_canonical'`,
-    or `'slow_metadata'`. Reads `MEMMAN_LLM_ENDPOINT`,
+    `role` must be one of `'fast'`, `'fast_worker'`, or
+    `'slow_metadata'`. Reads `MEMMAN_LLM_ENDPOINT`,
     `MEMMAN_LLM_API_KEY`, and the role's model env var from the
     canonical env file. Raises `ConfigError` when a required value is
     missing. OpenRouter endpoints automatically receive memman's

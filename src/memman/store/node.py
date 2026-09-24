@@ -448,8 +448,8 @@ def get_by_queue_uuid(db: 'DB', queue_uuid: str) -> list[Insight]:
       successor off `superseded_by`. A forgotten row is not returned.
       SQL `= ?` never matches the NULL `queue_uuid` of a pre-0.18.0
       row.
-    - Empty is a real answer, not an error: a write whose extraction
-      returned nothing is recorded in `skipped_writes`, and a write
+    - Empty is a real answer, not an error: a write that stored
+      nothing is recorded in `skipped_writes`, and a write
       that only corroborated an existing insight stamps its key on
       that target only when the target carried none.
     """

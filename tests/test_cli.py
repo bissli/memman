@@ -1811,7 +1811,7 @@ class TestGraphRebuildStaleOnly:
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
+        active_model = config.require(config.LLM_MODEL_SLOW_METADATA)
 
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
@@ -1837,7 +1837,7 @@ class TestGraphRebuildStaleOnly:
         from memman.store.sqlite import SqliteBackend
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
+        active_model = config.require(config.LLM_MODEL_SLOW_METADATA)
 
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
@@ -1871,7 +1871,7 @@ class TestGraphRebuildStaleOnly:
         from memman.store.db import open_db
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW_CANONICAL)
+        active_model = config.require(config.LLM_MODEL_SLOW_METADATA)
 
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
@@ -1944,361 +1944,63 @@ def _rows_for_queue_id(data_dir, store, queue_id):
         db.close()
 
 
-class TestIntraBatchDedup:
-    """How two facts of one remember call may and may not collapse."""
+def test_update_reconciliation_no_dangling_edges(runner):
+    """A retired row leaves no semantic edge behind it.
 
-    def test_similar_sibling_facts_deduplicated(self, runner):
-        """Two paraphrases of one write collapse through the NONE skip.
+    A stored row is seeded first so the write actually retires
+    something. Without it the write lands as a plain add, nothing is
+    superseded, and the dangling-edge sweep runs over a store with no
+    supersession in it.
 
-        The only lossless route left: a sibling may not be retired,
-        so collapse happens where the screen has said the target
-        already carries every claim the fact makes. This is the one
-        test pinning that the collapse still HAPPENS.
+    Mutation: dropping the edge cleanup on supersede, so the
+        retired row keeps semantic edges pointing at it.
+    Oracle: `check_dangling_edges`, an independent sweep that
+        counts edges whose endpoint is soft-deleted or
+        superseded.
+    """
+    _r, data_dir = runner
+    invoke(runner, [
+        'remember', 'Delta mode dropdown defaults to incremental_sync',
+        '--no-reconcile'])
 
-        Mutation: narrowing the NONE skip so a RESTATES sibling
-            stores its own row, which would leave every paraphrase of
-            a write as a separate row; or barring the skip against a
-            sibling the way supersede and update are barred.
-        Oracle: the two hand-written paraphrases, which the mock
-            screen calls RESTATES and the mock verdict answers NONE,
-            against a single stored row.
-        """
-        def _two_similar_facts(llm_client, content):
-            return [
-                {
-                    'text': 'Do not rename loop variables to avoid '
-                            'shadowing opts attributes',
-                    'category': 'preference',
-                    'importance': 3,
-                    'entities': ['loop variables', 'opts'],
-                    },
-                {
-                    'text': 'Avoid renaming loop variables to prevent '
-                            'shadowing of opts attributes',
-                    'category': 'preference',
-                    'importance': 3,
-                    'entities': ['loop variables', 'opts'],
-                    },
-                ]
+    def _screen_restates(llm_client, fact_text, memory):
+        return 'RESTATES', []
 
-        with patch('memman.llm.extract.extract_facts',
-                   _two_similar_facts):
-            result = invoke(runner, [
-                'remember', ('Do not rename loop variables to avoid shadowing '
-                             'opts attributes')])
-        assert result.exit_code == 0, result.output
-        raw = json.loads(result.output)
-        queue_id = raw['queue_id']
-        _, data_dir = runner
-        rows = _rows_for_queue_id(data_dir, raw['store'], queue_id)
-        assert len(rows) == 1, (
-            f'expected 1 stored fact, got {len(rows)}: '
-            f'queue_id={queue_id}')
+    def _judge_update(llm_client, fact_text, memory):
+        return 'update'
 
-    def test_distinct_facts_both_stored(self, runner):
-        """Genuinely different facts from one input are both stored."""
-        def _two_distinct_facts(llm_client, content):
-            return [
-                {
-                    'text': 'Switched from Flask to FastAPI',
-                    'category': 'decision',
-                    'importance': 4,
-                    'entities': ['Flask', 'FastAPI'],
-                    },
-                {
-                    'text': 'Redis cache configured with 4GB max memory',
-                    'category': 'fact',
-                    'importance': 3,
-                    'entities': ['Redis'],
-                    },
-                ]
+    def _merge_fact(llm_client, fact_text, target):
+        return fact_text
 
-        with patch('memman.llm.extract.extract_facts',
-                   _two_distinct_facts):
-            result = invoke(runner, [
-                'remember', 'Switched to FastAPI and configured Redis cache'])
-        assert result.exit_code == 0, result.output
-        raw = json.loads(result.output)
-        queue_id = raw['queue_id']
-        _, data_dir = runner
-        rows = _rows_for_queue_id(data_dir, raw['store'], queue_id)
-        assert len(rows) == 2, (
-            f'expected 2 stored facts, got {len(rows)}: '
-            f'queue_id={queue_id}')
+    fixed_vec = [1.0] + [0.0] * 511
 
-    @pytest.mark.skipif(
-        'not config.getoption("--live")',
-        reason='requires --live for real LLM calls')
-    def test_single_thought_not_duplicated_live(self, runner):
-        """A single coherent preference should produce at most 1 stored fact."""
+    def _fixed_embed(self, text):
+        return list(fixed_vec)
+
+    with patch('memman.llm.extract.screen_memory', _screen_restates), \
+    patch('memman.llm.extract.judge_memory', _judge_update), \
+    patch('memman.llm.extract.merge_successor', _merge_fact), \
+    patch('memman.embed.voyage.Client.embed', _fixed_embed):
         result = invoke(runner, [
-            'remember', ('Loop variable naming: do not rename loop variables '
-                         'to avoid shadowing opts attributes. Maintain existing '
-                         'variable names to prevent unintended shadowing of '
-                         'options object properties.')])
-        assert result.exit_code == 0, result.output
-        raw = json.loads(result.output)
-        queue_id = raw['queue_id']
-        _, data_dir = runner
-        rows = _rows_for_queue_id(data_dir, raw['store'], queue_id)
-        assert len(rows) == 1, (
-            f'expected 1 stored fact from single thought, got '
-            f'{len(rows)}: queue_id={queue_id}')
+            'remember', ('Delta mode dropdown defaults'
+                        ' to incremental_sync with no empty option')])
+    assert result.exit_code == 0, result.output
 
-    def test_sibling_update_keeps_both_facts_and_retires_the_stored_row(
-            self, runner):
-        """An UPDATE verdict retires a stored row but never a sibling.
+    store_path = pathlib.Path(data_dir) / 'data' / 'default'
+    from memman.doctor import check_dangling_edges
+    from memman.store.db import open_db
+    from memman.store.sqlite import SqliteBackend
+    db = open_db(str(store_path))
+    retired = db._query(
+        'select count(*) from insights'
+        ' where superseded_by is not null').fetchone()[0]
+    doctor_result = check_dangling_edges(SqliteBackend(db))
+    db.close()
 
-        Two facts of one write both answer UPDATE. The first targets
-        the pre-existing row and retires it; the second targets the
-        first, which the same write authored, and stores as its own
-        row instead. Collapsing there would drop whatever the first
-        fact said and the second did not.
-
-        Mutation: filtering the sibling targets on `supersede` alone,
-            which lets the second fact retire the first; or barring
-            every update target, which strands the pre-existing row
-            live.
-        Oracle: the three hand-written texts. Both sibling texts must
-            be active and the seeded text must not be, which no
-            single-count assertion can distinguish.
-        """
-        invoke(runner, [
-            'remember', 'PostgreSQL chosen for ACID compliance and JSON support',
-            '--no-reconcile'])
-
-        def _two_update_facts(llm_client, content):
-            return [
-                {
-                    'text': 'PostgreSQL chosen for ACID compliance'
-                            ' and JSON support plus extensions',
-                    'category': 'decision',
-                    'importance': 4,
-                    'entities': ['PostgreSQL'],
-                    },
-                {
-                    'text': 'PostgreSQL chosen for ACID compliance'
-                            ' and JSON support with replication',
-                    'category': 'decision',
-                    'importance': 4,
-                    'entities': ['PostgreSQL'],
-                    },
-                ]
-
-        with patch('memman.llm.extract.extract_facts',
-                   _two_update_facts):
-            result = invoke(runner, [
-                'remember', 'PostgreSQL chosen for ACID compliance'])
-        assert result.exit_code == 0, result.output
-
-        search_result = invoke(runner, ['recall', '--basic', 'PostgreSQL'])
-        active = [r['content']
-                  for r in json.loads(search_result.output)['results']]
-        assert len(active) == 2, active
-        tails = ' | '.join(active)
-        assert 'plus extensions' in tails
-        assert 'with replication' in tails
-
-    def test_a_forced_update_verdict_still_spares_the_sibling(self, runner):
-        """Every memory screening RESTATES does not license retiring a sibling.
-
-        The screen answers RESTATES for every memory and the verdict
-        is UPDATE for every one, which is the strongest push toward
-        collapse the stages can produce. Intra-write collapse runs
-        through the NONE skip alone, so an UPDATE verdict on a sibling
-        stores its own row however close the two texts are.
-
-        Mutation: filtering the sibling targets on `supersede` alone,
-            so the second fact retires the first and its added clause
-            is dropped.
-        Oracle: the two hand-written tail clauses, which differ only
-            in that tail, so both must be readable back.
-        """
-        invoke(runner, [
-            'remember', 'Kafka uses topic partitioning for message ordering',
-            '--no-reconcile'])
-
-        def _two_facts(llm_client, content):
-            return [
-                {
-                    'text': 'Kafka uses topic partitioning for'
-                            ' message ordering and consumer groups',
-                    'category': 'fact',
-                    'importance': 3,
-                    'entities': ['Kafka'],
-                    },
-                {
-                    'text': 'Kafka uses topic partitioning for'
-                            ' message ordering and replication',
-                    'category': 'fact',
-                    'importance': 3,
-                    'entities': ['Kafka'],
-                    },
-                ]
-
-        def _screen_restates(llm_client, fact_text, memory):
-            return 'RESTATES', []
-
-        def _judge_update(llm_client, fact_text, memory):
-            return 'update'
-
-        def _merge_fact(llm_client, fact_text, target):
-            return fact_text
-
-        with patch('memman.llm.extract.extract_facts', _two_facts), \
-        patch('memman.llm.extract.screen_memory', _screen_restates), \
-        patch('memman.llm.extract.judge_memory', _judge_update), \
-        patch('memman.llm.extract.merge_successor', _merge_fact):
-            result = invoke(runner, [
-                'remember', 'Kafka topic partitioning'])
-        assert result.exit_code == 0, result.output
-
-        search_result = invoke(runner, ['recall', '--basic', 'Kafka'])
-        active = [r['content']
-                  for r in json.loads(search_result.output)['results']]
-        assert len(active) == 2, active
-        tails = ' | '.join(active)
-        assert 'consumer groups' in tails
-        assert 'and replication' in tails
-
-    @pytest.mark.skipif(
-        'not config.getoption("--live")',
-        reason='requires --live for real LLM calls')
-    def test_near_identical_updates_no_duplicate_live(self, runner):
-        """A real model collapses near-identical siblings, losing nothing.
-
-        The mocked tests pin the rule; this one asks whether a real
-        screen and verdict reach the lossless route for texts this
-        close. A sibling can no longer be retired, so the collapse
-        has to arrive as a skip rather than as a supersession.
-
-        Mutation: a screen or verdict change that sends a paraphrase
-            sibling down the retiring path, which the filter then
-            bars, leaving two rows where one was intended.
-        Oracle: the seeded text and the two near-identical facts. One
-            active row means the skip fired; two mean the verdict
-            asked to retire a sibling and was barred.
-        """
-        invoke(runner, [
-            'remember', 'Redis cache uses 4GB max memory for session storage',
-            '--no-reconcile'])
-
-        def _near_identical_facts(llm_client, content):
-            return [
-                {
-                    'text': 'Redis cache uses 4GB maximum memory'
-                            ' for session storage',
-                    'category': 'fact',
-                    'importance': 3,
-                    'entities': ['Redis'],
-                    },
-                {
-                    'text': 'Redis cache uses 4GB max memory'
-                            ' for session storage',
-                    'category': 'fact',
-                    'importance': 3,
-                    'entities': ['Redis'],
-                    },
-                ]
-
-        with patch('memman.llm.extract.extract_facts',
-                   _near_identical_facts):
-            result = invoke(runner, [
-                'remember', 'Redis cache memory configuration'])
-        assert result.exit_code == 0, result.output
-
-        search_result = invoke(runner, ['recall', '--basic', 'Redis'])
-        active = [r['content']
-                  for r in json.loads(search_result.output)['results']]
-        assert len(active) == 1, (
-            f'expected the skip to collapse these, got {active}')
-        assert 'session storage' in active[0]
-
-    def test_update_reconciliation_no_dangling_edges(self, runner):
-        """A retired row leaves no semantic edge behind it.
-
-        A stored row is seeded first so the write actually retires
-        something. Without it the three sibling facts all land as
-        plain adds, nothing is superseded, and the dangling-edge
-        sweep runs over a store with no supersession in it.
-
-        Mutation: dropping the edge cleanup on supersede, so the
-            retired row keeps semantic edges pointing at it.
-        Oracle: `check_dangling_edges`, an independent sweep that
-            counts edges whose endpoint is soft-deleted or
-            superseded.
-        """
-        _r, data_dir = runner
-        invoke(runner, [
-            'remember', 'Delta mode dropdown defaults to incremental_sync',
-            '--no-reconcile'])
-
-        def _three_paraphrase_facts(llm_client, content):
-            return [
-                {
-                    'text': 'Delta mode dropdown defaults'
-                            ' to incremental_sync with no empty option',
-                    'category': 'decision',
-                    'importance': 3,
-                    'entities': [],
-                    },
-                {
-                    'text': 'Delta mode dropdown defaults'
-                            ' to incremental_sync with no empty option'
-                            ' unlike filter dropdowns',
-                    'category': 'decision',
-                    'importance': 3,
-                    'entities': [],
-                    },
-                {
-                    'text': 'Delta mode dropdown defaults'
-                            ' to incremental_sync with no empty option'
-                            ' unlike filter dropdowns which have one',
-                    'category': 'decision',
-                    'importance': 3,
-                    'entities': [],
-                    },
-                ]
-
-        def _screen_restates(llm_client, fact_text, memory):
-            return 'RESTATES', []
-
-        def _judge_update(llm_client, fact_text, memory):
-            return 'update'
-
-        def _merge_fact(llm_client, fact_text, target):
-            return fact_text
-
-        fixed_vec = [1.0] + [0.0] * 511
-
-        def _fixed_embed(self, text):
-            return list(fixed_vec)
-
-        with patch('memman.llm.extract.extract_facts',
-                   _three_paraphrase_facts), \
-        patch('memman.llm.extract.screen_memory', _screen_restates), \
-        patch('memman.llm.extract.judge_memory', _judge_update), \
-        patch('memman.llm.extract.merge_successor', _merge_fact), \
-        patch('memman.embed.voyage.Client.embed', _fixed_embed):
-            result = invoke(runner, [
-                'remember', 'Delta mode dropdown defaults to incremental_sync'])
-        assert result.exit_code == 0, result.output
-
-        store_path = pathlib.Path(data_dir) / 'data' / 'default'
-        from memman.doctor import check_dangling_edges
-        from memman.store.db import open_db
-        from memman.store.sqlite import SqliteBackend
-        db = open_db(str(store_path))
-        retired = db._query(
-            'select count(*) from insights'
-            ' where superseded_by is not null').fetchone()[0]
-        doctor_result = check_dangling_edges(SqliteBackend(db))
-        db.close()
-
-        assert retired > 0, 'nothing was retired; the sweep proves nothing'
-        assert doctor_result['status'] == 'pass', (
-            f'dangling edges found: {doctor_result["detail"]}')
-        assert doctor_result['detail']['count'] == 0
+    assert retired > 0, 'nothing was retired; the sweep proves nothing'
+    assert doctor_result['status'] == 'pass', (
+        f'dangling edges found: {doctor_result["detail"]}')
+    assert doctor_result['detail']['count'] == 0
 
 
 class TestHotPathPurity:
@@ -2492,22 +2194,18 @@ class TestCorruptStoreErrorHygiene:
 
 
 def test_drain_routes_the_reconcile_stages_to_the_fast_worker_client(runner):
-    """Verify the drain hands the three stages the fast-worker client and extraction the canonical one.
+    """Verify the drain hands the three reconcile stages the fast-worker client.
 
-    Mutation: `_StoreContext` hoisting one canonical client and passing
-        it for every stage, the shape the tier gate did not select.
+    Mutation: `_StoreContext` hoisting a different cached client and
+        passing it for a reconcile stage, the shape the tier gate did
+        not select.
     Oracle: the stage stubs record the client they receive; identity
-        against the process's cached role clients.
+        against the process's cached fast_worker role client.
     """
     from memman.llm.client import get_llm_client
 
-    seen = {'extract': [], 'screen': [], 'judge': [], 'merge': []}
+    seen = {'screen': [], 'judge': [], 'merge': []}
     invoke(runner, ['remember', 'the broker is kombu', '--no-reconcile'])
-
-    def _one_fact(llm_client, content):
-        seen['extract'].append(llm_client)
-        return [{'text': 'the broker is redis', 'category': 'fact',
-                 'importance': 3, 'entities': []}]
 
     def _screen(llm_client, fact_text, memory):
         seen['screen'].append(llm_client)
@@ -2521,8 +2219,7 @@ def test_drain_routes_the_reconcile_stages_to_the_fast_worker_client(runner):
         seen['merge'].append(llm_client)
         return 'the broker is redis'
 
-    with patch('memman.llm.extract.extract_facts', _one_fact), \
-    patch('memman.llm.extract.screen_memory', _screen), \
+    with patch('memman.llm.extract.screen_memory', _screen), \
     patch('memman.llm.extract.judge_memory', _judge), \
     patch('memman.llm.extract.merge_successor', _merge):
         result = invoke(runner, ['remember', 'the broker is redis'])
@@ -2530,6 +2227,4 @@ def test_drain_routes_the_reconcile_stages_to_the_fast_worker_client(runner):
 
     stage_clients = seen['screen'] + seen['judge'] + seen['merge']
     assert len(stage_clients) == 3
-    assert seen['extract'] == [get_llm_client('slow_canonical')]
-    assert stage_clients[0] is not get_llm_client('slow_canonical')
     assert all(client is get_llm_client('fast_worker') for client in stage_clients)

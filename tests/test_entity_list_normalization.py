@@ -25,9 +25,7 @@ from tests.test_supersession_pipeline import _parent
 
 def _stored_entity_edges(backend, source_id):
     """Return `(target_id, entity_label)` per entity edge on a row."""
-    rows = []
-    for edge in backend.edges.by_source_and_type(source_id, 'entity'):
-        rows.append((edge.target_id, (edge.metadata or {}).get('entity')))
+    rows = [(edge.target_id, (edge.metadata or {}).get('entity')) for edge in backend.edges.by_source_and_type(source_id, 'entity')]
     return sorted(rows)
 
 
@@ -96,18 +94,13 @@ def test_the_stored_and_reported_entity_lists_agree(tmp_backend,
         entity list the result dict reports.
     """
     monkeypatch.setattr(
-        'memman.llm.extract.extract_facts',
-        lambda client, content: [
-            {'text': 'the broker is kombu', 'category': 'fact',
-             'importance': 3, 'entities': ['kombu']}])
-    monkeypatch.setattr(
         'memman.llm.extract.screen_memory',
         lambda client, fact_text, memory: ('UNRELATED', []))
 
-    parent = _parent('the broker')
-    parent.entities = ['Kombu']
+    parent = _parent('the broker is kombu')
+    parent.entities = ['Kombu', 'kombu']
     res = run_remember(
-        tmp_backend, parent, 'the broker',
+        tmp_backend, parent, 'the broker is kombu',
         ec=bound_embedder(tmp_backend), store_name='test')
 
     stored = tmp_backend.nodes.get(res['facts'][0]['id']).entities
@@ -126,10 +119,10 @@ def test_a_whitespace_only_entity_from_the_model_is_dropped(tmp_backend):
     Oracle: the stored entity list, which must hold no name that is
         empty after stripping.
     """
+    import json as _json
     from unittest.mock import MagicMock
 
     from memman.graph.enrichment import enrich_with_llm
-    import json as _json
 
     insight = make_insight(
         id='ws-1', content='body naming Redis', entities=[])
