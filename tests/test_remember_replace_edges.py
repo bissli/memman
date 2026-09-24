@@ -20,7 +20,6 @@ def _make_plan(new_id, target_id):
         id=new_id, content='replacement content', importance=3)
     return FactPlan(
         action='replace',
-        fact_text='replacement content',
         fact_insight=new_insight,
         targets=[(target_id, 'replace')],
         embed_vec=None,

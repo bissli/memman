@@ -214,6 +214,7 @@ _FIDELITY_ROW = {
     'session_id': 'sess-dddd',
     'queue_uuid': 'quuid-eeee',
     'superseded_by': 'rb-fid-successor',
+    'author': 'author-ffff',
     }
 
 
@@ -233,9 +234,10 @@ def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
             ' access_count, keywords, summary, semantic_facts,'
             ' last_accessed_at, linked_at, enriched_at, created_at,'
             ' updated_at, deleted_at, prompt_version,'
-            ' embedding_model, session_id, queue_uuid, superseded_by)'
+            ' embedding_model, session_id, queue_uuid, superseded_by,'
+            ' author)'
             ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
-            ' ?, ?, ?, ?, ?, ?)',
+            ' ?, ?, ?, ?, ?, ?, ?)',
             (r['id'], r['content'], r['category'], r['importance'],
              json.dumps(r['entities']), r['source'], r['access_count'],
              json.dumps(r['keywords']), r['summary'],
@@ -246,7 +248,8 @@ def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
              format_timestamp(r['created_at']),
              format_timestamp(r['updated_at']), None,
              r['prompt_version'], r['embedding_model'],
-             r['session_id'], r['queue_uuid'], r['superseded_by']))
+             r['session_id'], r['queue_uuid'], r['superseded_by'],
+             r['author']))
         db.conn.commit()
         set_meta(db, 'embed_fingerprint',
                  '{"provider":"voyage","model":"voyage-3-lite","dim":512}')
@@ -312,8 +315,8 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
                 'select category, importance, access_count, summary,'
                 ' last_accessed_at, linked_at, enriched_at, created_at,'
                 ' updated_at, deleted_at, prompt_version,'
-                ' embedding_model, session_id, queue_uuid, superseded_by'
-                ' from insights where id = ?',
+                ' embedding_model, session_id, queue_uuid, superseded_by,'
+                ' author from insights where id = ?',
                 (_FIDELITY_ROW['id'],)).fetchone()
         finally:
             db.close()
@@ -324,7 +327,8 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
             '2026-02-03T04:05:06Z', '2026-03-04T05:06:07Z',
             '2026-04-05T06:07:08Z', '2026-05-06T07:08:09Z', None,
             r['prompt_version'], r['embedding_model'],
-            r['session_id'], r['queue_uuid'], r['superseded_by'])
+            r['session_id'], r['queue_uuid'], r['superseded_by'],
+            r['author'])
     finally:
         _drop_schema(pg_dsn, store)
 

@@ -44,8 +44,8 @@ memman splits along a hot-path boundary. The agent's turn does only fast local w
 │                   embed + rerank)   │    │  flock on ~/.memman/drain.lock  │
 │  memman remember (queue append)     │ →  │                                 │
 │                                     │    │                                 │
-│  No dedup check, no graph writes    │    │  Dedup check → enrich →         │
-│                                     │    │  embed → edges → DB             │
+│  No graph writes                    │    │  enrich → embed → edges → DB    │
+│                                     │    │                                 │
 └─────────────────────────────────────┘    └─────────────────────────────────┘
               │                                          ▲
               └──── queue.db (handoff; not recallable) ──┘
@@ -74,7 +74,7 @@ Two invariants follow from this split:
 - **LLM-supervised** - the host LLM decides what to remember and forget; a worker model handles enrichment and query expansion. No LLM judges a write.
 - **Multi-graph architecture** - temporal, entity, and semantic edges.
 - **Intent-aware recall** - graph beam search with RRF fusion. Query intent (WHY/WHEN/ENTITY/GENERAL) controls edge weights and traversal budget. Results always come back in relevance order.
-- **Write once, retire deliberately** - a write adds a row, or replaces the row `replace <id>` names; nothing else retires a row. A replaced or superseded memory is never deleted: it keeps its content behind `superseded_by`, leaves recall by default, and `memman insights show <id> --history` walks the chain.
+- **Write once, retire deliberately** - a write adds a row, or replaces the row `replace <id>` names; only `replace` and `supersede` retire a row. A replaced or superseded memory is never deleted: it keeps its content behind `superseded_by`, leaves recall by default, and `memman insights show <id> --history` walks the chain.
 - **Operator-only deletion** - a store is uncapped and nothing expires or is pruned on its own. `memman forget <id>` is the only thing that removes a memory; `memman insights review` surfaces transient content for that decision.
 - **Pluggable embeddings, per-store sovereignty** - registered providers include `voyage`, `openai` (any OpenAI-compatible endpoint: OpenAI, vLLM, LiteLLM, ...), `openrouter`, and `ollama`. Each store's `meta.embed_fingerprint` is the runtime authority over its embedder, so one process can serve multiple stores with different embedders. Switch online via `memman embed swap` or offline via `memman embed reembed`.
 - **Pluggable storage backend** - SQLite by default; Postgres + pgvector via the `memman[postgres]` extra. `memman migrate` copies a store between backends in a single command (idempotent, drain-lock-guarded, dry-run support).

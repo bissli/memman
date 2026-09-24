@@ -94,8 +94,6 @@ class FactPlan:
     ----------
     action : str
         `add` or `replace`.
-    fact_text : str
-        The write's text as the agent wrote it.
     fact_insight : Insight
         The row the apply phase inserts.
     targets : list[tuple[str, str]]
@@ -104,7 +102,6 @@ class FactPlan:
     """
 
     action: str
-    fact_text: str
     fact_insight: Insight
     targets: list[tuple[str, str]] = field(default_factory=list)
     embed_vec: list[float] | None = None
@@ -236,7 +233,6 @@ def _plan_fact(
 
     return FactPlan(
         action='replace' if replaced_id else 'add',
-        fact_text=fact_text,
         fact_insight=fact_insight,
         targets=[(replaced_id, 'replace')] if replaced_id else [],
         embed_vec=fact_vec,

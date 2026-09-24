@@ -53,8 +53,8 @@ def _columns_under(ddl: str, table: str) -> set[str]:
 def test_migrate_insight_fields_cover_pg_baseline_schema_columns():
     """Every postgres `insights` DDL column has a `MigrateInsight` field.
 
-    Two columns are excluded, for the same reason, and no exclusion
-    weakens the pin for a third.
+    Two columns are excluded, each for the reason below, and no
+    exclusion weakens the pin for a third.
 
     `embedding_pending` is added on demand by the swap path and is
     not a payload-time field - the gather path probes the column
@@ -129,8 +129,9 @@ def test_payload_version_pinned():
 def test_insight_baselines_name_no_dropped_column():
     """Verify neither insights baseline names a column the live DDL drops.
 
-    Mutation: a column line or its index line left in either baseline,
-        which fails at open on a store whose column the DDL dropped.
+    Mutation: an index line left in either baseline, which fails at
+        open on a store whose column the DDL dropped, or a column line
+        left, which recreates the column on every new store.
     Oracle: the dropped names searched for in the raw DDL text.
     """
     dropped = ('content_hash', 'corroboration_count', 'model_id')

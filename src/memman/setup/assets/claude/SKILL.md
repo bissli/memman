@@ -125,8 +125,9 @@ confirmation is needed.
 ### The write pipeline
 
 `memman remember` is a fast queue-append. The full pipeline -
-enrichment, edge creation, re-embedding - runs out-of-band in a worker the scheduler fires on a timer (systemd on
-Linux, launchd on macOS, `memman scheduler serve` in containers).
+enrichment, edge creation, re-embedding - runs out-of-band in a
+worker the scheduler fires on a timer (systemd on Linux, launchd
+on macOS, `memman scheduler serve` in containers).
 A newly stored memory is NOT visible to `memman recall` in the current
 session; it lands for later sessions.
 

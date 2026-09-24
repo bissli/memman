@@ -116,7 +116,7 @@ def test_stats_reports_current_superseded_and_deleted_separately(backend):
     assert sum(stats.by_category.values()) == 3
 
 
-def test_increment_counters_ignore_a_superseded_row(backend):
+def test_access_counter_ignores_a_superseded_row(backend):
     """Verify the access counter does not move on a superseded row.
 
     Mutation: no `superseded_by is null` guard on

@@ -1707,7 +1707,7 @@ class TestGraphRebuildStaleOnly:
     """Tests for `graph rebuild --stale-only` flag."""
 
     def _seed_drift(self, store_path, active_pv):
-        """Insert one drifted row and one current row. Return ids.
+        """Insert one drifted row and one current row.
 
         Also primes the per-store constants_hash so that opening via
         `_active_backend` does not trigger a wholesale reindex that
@@ -1748,9 +1748,13 @@ class TestGraphRebuildStaleOnly:
             predicate, or skipping the `dry_run` branch so a real
             rebuild runs instead of only counting.
         Oracle: the one row seeded with a drifted `prompt_version`
-            against the one seeded current.
+            against the two seeded current, so the flipped predicate
+            counts 2.
         """
         from memman.pipeline.remember import compute_prompt_version
+        from memman.store.db import open_db
+        from memman.store.node import insert_insight
+        from tests.conftest import make_insight
 
         active_pv = compute_prompt_version()
 
@@ -1758,6 +1762,11 @@ class TestGraphRebuildStaleOnly:
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
         self._seed_drift(store_path, active_pv)
+        db = open_db(str(store_path))
+        insert_insight(db, make_insight(
+            id='fresh-2', content='Second insight already on active config',
+            prompt_version=active_pv))
+        db.close()
 
         runner = CliRunner()
         result = runner.invoke(cli, [

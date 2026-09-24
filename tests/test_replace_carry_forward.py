@@ -15,7 +15,7 @@ from memman.store.node import get_insight_by_id, insert_insight
 from tests.conftest import make_edge, make_insight
 
 
-def _replace_plan(new_id, target_id, *, fact_text=None, **insight_overrides):
+def _replace_plan(new_id, target_id, **insight_overrides):
     """Build a replace FactPlan targeting `target_id`."""
     overrides = {
         'id': new_id,
@@ -25,7 +25,6 @@ def _replace_plan(new_id, target_id, *, fact_text=None, **insight_overrides):
     overrides.update(insight_overrides)
     return FactPlan(
         action='replace',
-        fact_text=fact_text or 'merged content',
         fact_insight=make_insight(**overrides),
         targets=[(target_id, 'replace')],
         embed_vec=None,
@@ -114,8 +113,7 @@ def test_replace_plan_links_the_predecessor_and_keeps_it(tmp_db, tmp_backend):
         id='old-1', content='the broker is kombu'))
 
     plan = _replace_plan(
-        'new-1', 'old-1', fact_text='the broker is redis now',
-        content='the broker is redis now')
+        'new-1', 'old-1', content='the broker is redis now')
     result = _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
 
     old = tmp_backend.nodes.get_include_deleted('old-1')
@@ -151,7 +149,7 @@ def test_a_gone_target_is_recorded_in_the_oplog(tmp_db, tmp_backend):
     assert tmp_backend.nodes.soft_delete('gone-1') is True
 
     plan = FactPlan(
-        action='replace', fact_text='the correction',
+        action='replace',
         fact_insight=make_insight(id='new-1', content='the correction'),
         targets=[('gone-1', 'replace')],
         embed_vec=None, enrichment={})
@@ -188,7 +186,7 @@ def test_superseded_target_leaves_the_drain_cache(tmp_db, tmp_backend):
         embed_cache=embed_cache, store_name='test')
 
     later = FactPlan(
-        action='add', fact_text='a later row',
+        action='add',
         fact_insight=make_insight(id='later-1', content='a later row'),
         targets=[], embed_vec=list(vec), enrichment={})
     _apply_plan(

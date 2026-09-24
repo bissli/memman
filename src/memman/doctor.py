@@ -1273,8 +1273,8 @@ def _is_provenance_stale(row_pv: str | None, active_pv: str) -> bool:
 def check_provenance_drift(backend: Backend) -> dict[str, Any]:
     """Surface rows whose prompt_version no longer matches active.
 
-    Reads per-row provenance columns directly. No meta-key fingerprint
-    is maintained; the data already lives on each insight.
+    Reads each row's `prompt_version` directly. No meta-key
+    fingerprint is maintained; the data already lives on each insight.
     """
     from memman import config
     from memman.pipeline.remember import compute_prompt_version

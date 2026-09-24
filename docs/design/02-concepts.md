@@ -20,7 +20,7 @@
 │ source     : "user"     (provenance)         │
 │ session_id : "s-1f2e…"  (temporal chain key) │
 │ queue_uuid : "9b0c…"    (idempotency key)    │
-│ access_count        : 3                      │
+│ access_count : 3                             │
 │ author     : "bob"      (who wrote it)       │
 │ created_at : 2026-02-18T10:00:00Z            │
 └──────────────────────────────────────────────┘
@@ -82,7 +82,7 @@ insights (
   prompt_version, embedding_model,              -- Provenance for re-enrichment
   created_at, updated_at, deleted_at,
   session_id,                                   -- Temporal chain key (nullable; no session, no backbone edge)
-  queue_uuid,                                   -- Idempotency key from the queue row (shared by sibling facts)
+  queue_uuid,                                   -- Idempotency key from the queue row (one write stores one row)
   superseded_by,                                -- Successor id once a later write corrected this row (nullable, no FK)
   author                                        -- Who wrote it (nullable; resolved from MEMMAN_AUTHOR or getpass.getuser())
 )

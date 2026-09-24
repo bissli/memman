@@ -1422,7 +1422,7 @@ class _StoreContext:
 
 def _process_queue_row(
         row: 'memman.queue.QueueRow',
-        ctx: _StoreContext) -> dict[str, Any]:
+        ctx: _StoreContext) -> None:
     """Run the full remember pipeline on a claimed queue row.
 
     The insight's `source` is `row.hint_source` verbatim (provenance
@@ -1434,12 +1434,6 @@ def _process_queue_row(
     Hoisted state (db, embed_cache, ec) comes from `ctx`. The drain
     loop snapshots and restores `ctx.embed_cache` around this call so
     a transaction failure can't pollute the next row's edges.
-
-    Returns
-    -------
-    dict[str, Any]
-        The `run_remember` result, or `{'action': 'already_committed'}`
-        when the idempotency guard fired.
     """
     from memman import trace as _trace
 
@@ -1475,7 +1469,7 @@ def _process_queue_row(
             'process_row_skipped',
             row_id=row.id,
             reason='already_committed')
-        return {'action': 'already_committed'}
+        return
 
     now = datetime.now(timezone.utc)
     access_count = 0
@@ -1523,7 +1517,6 @@ def _process_queue_row(
     if redirected_from:
         result['redirected_from'] = redirected_from
     _json_out(result)
-    return result
 
 
 @claude_callable
@@ -1818,9 +1811,8 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
       Each of the four overrides when typed, `--entity ''` included,
       which clears the list; enrichment then rebuilds it from the new
       content.
-    - A replace targets one id, so the content lands as a single row
-      exactly as typed, even when it matches the target; enrichment
-      still runs and rebuilds keywords, summary and entities.
+    - The content lands as one row exactly as typed; enrichment still
+      runs and rebuilds keywords, summary and entities.
     - `--session` does not inherit: the successor carries the session
       that wrote it, so it enters that session's backbone chain.
       It also inherits the replaced insight's edges, including that
@@ -3400,11 +3392,12 @@ def insights_by_queue(ctx: click.Context, queue_uuid: str) -> None:
     \b
     Notes
     -----
-    - `count: 0` is a real answer, not an error, and has two causes:
-      the write is still queued, or it went to a different store. The
-      queue is process-global while this command reads one store, so
-      a uuid from `remember --store shop` resolves to nothing under
-      any other store.
+    - `count: 0` is a real answer, not an error, and has three
+      causes: the write is still queued, it went to a different
+      store, or its row was since forgotten. The queue is
+      process-global while this command reads one store, so a uuid
+      from `remember --store shop` resolves to nothing under any
+      other store.
     - After the drain, one write resolves to one row.
     - A malformed uuid is rejected rather than answered `count: 0`,
       so grabbing `queue_id` instead of `queue_uuid` fails loudly.

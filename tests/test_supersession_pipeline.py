@@ -36,7 +36,7 @@ def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
 
     def _replace(new_id, target_id):
         return FactPlan(
-            action='replace', fact_text='third',
+            action='replace',
             fact_insight=make_insight(
                 id=new_id, content='third', entities=['own']),
             targets=[(target_id, 'replace')], embed_vec=None,
@@ -122,7 +122,7 @@ def test_degraded_replace_leaves_no_edge_into_its_dead_target(
 
     mint_edge_into(monkeypatch, 'old-1')
     plan = FactPlan(
-        action='replace', fact_text='third',
+        action='replace',
         fact_insight=make_insight(id='late-1', content='third'),
         targets=[('old-1', 'replace')], embed_vec=None, enrichment={})
 
@@ -144,7 +144,7 @@ def test_a_plain_add_plan_with_a_target_reports_no_replaced_id(
     """
     tmp_backend.nodes.insert(make_insight(id='old-1', content='first'))
     plan = FactPlan(
-        action='add', fact_text='second',
+        action='add',
         fact_insight=make_insight(id='new-1', content='second'),
         targets=[('old-1', 'replace')], embed_vec=None, enrichment={})
 

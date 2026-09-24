@@ -236,7 +236,7 @@ class TestStaleHelpers:
     """Cross-backend tests for iter_stale_insight_ids and count_stale_insights.
     """
 
-    def _seed_six_row_matrix(self, backend, active_pv):
+    def _seed_stale_matrix(self, backend, active_pv):
         """Seed the canonical predicate rows; return expected stale ids.
 
         Mapping, by prompt_version: A=NULL not stale, B=current not
@@ -258,18 +258,18 @@ class TestStaleHelpers:
     def test_iter_returns_only_drifted_rows(self, backend):
         """iter_stale_insight_ids excludes NULL provenance and current rows.
 
-        Mutation: dropping `prompt_version is not null` from the SQL
-            predicate, which would report the NULL row as stale, or
-            dropping the `!= active_pv` term, which would report the
-            current row as stale too.
+        Mutation: the two-term predicate rewritten as the null-safe
+            `prompt_version is not ?`, which reports the NULL row as
+            stale, or the `!= active_pv` term dropped, which reports
+            the current row as stale too.
         Oracle: the hand-built four-row matrix from
-            `_seed_six_row_matrix`, whose only stale ids are the two
+            `_seed_stale_matrix`, whose only stale ids are the two
             seeded on `OLD_PV`.
         """
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        expected = self._seed_six_row_matrix(backend, active_pv)
+        expected = self._seed_stale_matrix(backend, active_pv)
 
         ids = backend.nodes.iter_stale_insight_ids(active_pv)
         assert sorted(ids) == sorted(expected)
@@ -278,16 +278,16 @@ class TestStaleHelpers:
         """count_stale_insights agrees with len(iter_stale_insight_ids).
 
         Mutation: `count_stale_insights`'s SQL predicate drifting from
-            `iter_stale_insight_ids`'s (e.g. dropping its own
-            `prompt_version is not null` term), so the two disagree
-            on the seeded matrix.
+            `iter_stale_insight_ids`'s (e.g. rewritten as the null-safe
+            `prompt_version is not ?`, which counts the NULL row), so
+            the two disagree on the seeded matrix.
         Oracle: the hand-counted stale total of 2 from
-            `_seed_six_row_matrix`.
+            `_seed_stale_matrix`.
         """
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        self._seed_six_row_matrix(backend, active_pv)
+        self._seed_stale_matrix(backend, active_pv)
 
         n = backend.nodes.count_stale_insights(active_pv)
         ids = backend.nodes.iter_stale_insight_ids(active_pv)
@@ -308,7 +308,7 @@ class TestStaleHelpers:
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        self._seed_six_row_matrix(backend, active_pv)
+        self._seed_stale_matrix(backend, active_pv)
 
         helper_count = backend.nodes.count_stale_insights(active_pv)
         doctor_result = check_provenance_drift(backend)
@@ -798,9 +798,10 @@ class TestHardening:
 
         Mutation: computing `missing` as
             `present - EXPECTED_INSIGHT_COLUMNS` instead of the
-            reverse, or dropping `prompt_version`/`embedding_model`
-            from `EXPECTED_INSIGHT_COLUMNS`, either of which leaves
-            `status` at `pass` despite the missing columns.
+            reverse, which leaves `status` at `pass`, or dropping
+            `prompt_version`/`embedding_model` from
+            `EXPECTED_INSIGHT_COLUMNS`, which drops them from
+            `missing`.
         Oracle: an `insights` table rebuilt with only an `id` column,
             checked for `prompt_version` and `embedding_model` by
             name in `result['detail']['missing']`.
