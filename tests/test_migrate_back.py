@@ -210,11 +210,9 @@ _FIDELITY_ROW = {
     'updated_at': datetime(2026, 5, 6, 7, 8, 9, tzinfo=timezone.utc),
     'deleted_at': None,
     'prompt_version': 'pv-aaaa',
-    'model_id': 'mid-bbbb',
     'embedding_model': 'em-cccc',
     'session_id': 'sess-dddd',
     'queue_uuid': 'quuid-eeee',
-    'corroboration_count': 7,
     'superseded_by': 'rb-fid-successor',
     }
 
@@ -234,11 +232,10 @@ def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
             ' id, content, category, importance, entities, source,'
             ' access_count, keywords, summary, semantic_facts,'
             ' last_accessed_at, linked_at, enriched_at, created_at,'
-            ' updated_at, deleted_at, prompt_version, model_id,'
-            ' embedding_model, session_id, queue_uuid,'
-            ' corroboration_count, superseded_by)'
+            ' updated_at, deleted_at, prompt_version,'
+            ' embedding_model, session_id, queue_uuid, superseded_by)'
             ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
-            ' ?, ?, ?, ?, ?, ?, ?, ?)',
+            ' ?, ?, ?, ?, ?, ?)',
             (r['id'], r['content'], r['category'], r['importance'],
              json.dumps(r['entities']), r['source'], r['access_count'],
              json.dumps(r['keywords']), r['summary'],
@@ -248,9 +245,8 @@ def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
              format_timestamp(r['enriched_at']),
              format_timestamp(r['created_at']),
              format_timestamp(r['updated_at']), None,
-             r['prompt_version'], r['model_id'], r['embedding_model'],
-             r['session_id'], r['queue_uuid'], r['corroboration_count'],
-             r['superseded_by']))
+             r['prompt_version'], r['embedding_model'],
+             r['session_id'], r['queue_uuid'], r['superseded_by']))
         db.conn.commit()
         set_meta(db, 'embed_fingerprint',
                  '{"provider":"voyage","model":"voyage-3-lite","dim":512}')
@@ -315,9 +311,8 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
             row = db.conn.execute(
                 'select category, importance, access_count, summary,'
                 ' last_accessed_at, linked_at, enriched_at, created_at,'
-                ' updated_at, deleted_at, prompt_version, model_id,'
-                ' embedding_model, session_id, queue_uuid,'
-                ' corroboration_count, superseded_by'
+                ' updated_at, deleted_at, prompt_version,'
+                ' embedding_model, session_id, queue_uuid, superseded_by'
                 ' from insights where id = ?',
                 (_FIDELITY_ROW['id'],)).fetchone()
         finally:
@@ -328,9 +323,8 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
             r['summary'], '2026-01-02T03:04:05Z',
             '2026-02-03T04:05:06Z', '2026-03-04T05:06:07Z',
             '2026-04-05T06:07:08Z', '2026-05-06T07:08:09Z', None,
-            r['prompt_version'], r['model_id'], r['embedding_model'],
-            r['session_id'], r['queue_uuid'], r['corroboration_count'],
-            r['superseded_by'])
+            r['prompt_version'], r['embedding_model'],
+            r['session_id'], r['queue_uuid'], r['superseded_by'])
     finally:
         _drop_schema(pg_dsn, store)
 

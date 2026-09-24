@@ -1706,7 +1706,7 @@ class TestGraphRebuildIsolation:
 class TestGraphRebuildStaleOnly:
     """Tests for `graph rebuild --stale-only` flag."""
 
-    def _seed_drift(self, store_path, active_pv, active_model):
+    def _seed_drift(self, store_path, active_pv):
         """Insert one drifted row and one current row. Return ids.
 
         Also primes the per-store constants_hash so that opening via
@@ -1728,10 +1728,10 @@ class TestGraphRebuildStaleOnly:
             provider='voyage', model='voyage-3-lite', dim=512))
         insert_insight(db, make_insight(
             id='drift-1', content='Drifted insight needing re-enrichment',
-            prompt_version=OLD_PV, model_id=active_model))
+            prompt_version=OLD_PV))
         insert_insight(db, make_insight(
             id='fresh-1', content='Fresh insight already on active config',
-            prompt_version=active_pv, model_id=active_model))
+            prompt_version=active_pv))
         for iid in ('drift-1', 'fresh-1'):
             update_enrichment(db, iid, ['kw'], 'sum', ['fact'])
             db._conn.execute(
@@ -1742,17 +1742,22 @@ class TestGraphRebuildStaleOnly:
         db.close()
 
     def test_dry_run_reports_stale_count(self, tmp_path, monkeypatch):
-        """`--stale-only --dry-run` reports stale count without modifying."""
-        from memman import config
+        """`--stale-only --dry-run` reports stale count without modifying.
+
+        Mutation: flipping `!=` to `==` in `count_stale_insights`'s
+            predicate, or skipping the `dry_run` branch so a real
+            rebuild runs instead of only counting.
+        Oracle: the one row seeded with a drifted `prompt_version`
+            against the one seeded current.
+        """
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW)
 
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
-        self._seed_drift(store_path, active_pv, active_model)
+        self._seed_drift(store_path, active_pv)
 
         runner = CliRunner()
         result = runner.invoke(cli, [
@@ -1765,15 +1770,21 @@ class TestGraphRebuildStaleOnly:
         assert data['dry_run'] == 1
 
     def test_empty_stale_fast_path(self, tmp_path, monkeypatch):
-        """Zero-stale store returns processed=0 without doing work."""
-        from memman import config
+        """Zero-stale store returns processed=0 without doing work.
+
+        Mutation: dropping the `total_count == 0` fast-path guard, or
+            widening the stale predicate to count a current row,
+            which drives the pipeline into a rebuild that needs an
+            LLM client this test never wires up.
+        Oracle: the literal `'skipped': 'no_stale_rows'` key against
+            the single row seeded on the active `prompt_version`.
+        """
         from memman.embed.fingerprint import Fingerprint, write_fingerprint
         from memman.graph.engine import compute_constants_hash
         from memman.pipeline.remember import compute_prompt_version
         from memman.store.sqlite import SqliteBackend
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW)
 
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
@@ -1788,7 +1799,7 @@ class TestGraphRebuildStaleOnly:
             provider='voyage', model='voyage-3-lite', dim=512))
         insert_insight(db, make_insight(
             id='ok-1', content='Already on active config',
-            prompt_version=active_pv, model_id=active_model))
+            prompt_version=active_pv))
         db.close()
 
         runner = CliRunner()
@@ -1801,18 +1812,23 @@ class TestGraphRebuildStaleOnly:
         assert data['skipped'] == 'no_stale_rows'
 
     def test_stale_only_re_enriches_drifted_rows(self, tmp_path, monkeypatch):
-        """`--stale-only` clears enriched_at on drifted rows only."""
-        from memman import config
+        """`--stale-only` clears enriched_at on drifted rows only.
+
+        Mutation: passing every row's id to `reset_for_rebuild`
+            instead of only the stale batch, which would also touch
+            `fresh-1`'s `enriched_at`.
+        Oracle: `enriched_at` and `prompt_version` read back per row,
+            before and after, for both the drifted and the fresh id.
+        """
         from memman.pipeline.remember import compute_prompt_version
         from memman.store.db import open_db
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW)
 
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
-        self._seed_drift(store_path, active_pv, active_model)
+        self._seed_drift(store_path, active_pv)
 
         db = open_db(str(store_path))
         before = {

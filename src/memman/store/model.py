@@ -13,10 +13,8 @@ a value yields `None`; backends fill them in on insert and reads
 return them populated.
 """
 
-import hashlib
 import json
 import logging
-import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -50,14 +48,12 @@ class Insight:
     deleted_at: datetime | None = None
     last_accessed_at: datetime | None = None
     prompt_version: str | None = None
-    model_id: str | None = None
     embedding_model: str | None = None
     summary: str = ''
     linked_at: datetime | None = None
     enriched_at: datetime | None = None
     session_id: str | None = None
     queue_uuid: str | None = None
-    corroboration_count: int = 0
     superseded_by: str | None = None
     author: str | None = None
 
@@ -172,36 +168,6 @@ def dedupe_entities(entities: list[str]) -> list[str]:
     return deduped
 
 
-_WS_COLLAPSE_RE = re.compile(r'\s+')
-
-
-def content_hash(content: str) -> str:
-    """The exact-duplicate key stored in `insights.content_hash`.
-
-    Parameters
-    ----------
-    content : str
-        A row's content as stored.
-
-    Returns
-    -------
-    str
-        The sha256 hex digest of the UTF-8 content with each whitespace
-        run collapsed to one space, the ends stripped, and the text
-        lowercased.
-
-    Notes
-    -----
-    - Every insert path stores this value and the drain looks it up,
-      so the two can never fold differently. Content is write-once,
-      so a stored hash never goes stale.
-    - Folding is equality modulo case and spacing, never containment:
-      a superset of a stored row hashes differently and is added.
-    """
-    folded = _WS_COLLAPSE_RE.sub(' ', content).strip().lower()
-    return hashlib.sha256(folded.encode()).hexdigest()
-
-
 def insight_to_delta_dict(ins: 'Insight') -> dict[str, Any]:
     """Return the content fields of an insight for oplog deltas.
 
@@ -296,7 +262,6 @@ def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
         'entities': list(ins.entities or []),
         'source': ins.source,
         'access_count': ins.access_count,
-        'corroboration_count': ins.corroboration_count,
         'created_at': format_timestamp(ins.created_at),
         'updated_at': format_timestamp(ins.updated_at or ins.created_at),
         }
@@ -350,11 +315,10 @@ class NodeStats:
 
 @dataclass
 class ProvenanceCount:
-    """One (prompt_version, model_id, count) tuple from provenance distribution.
+    """One (prompt_version, count) tuple from provenance distribution.
     """
 
     prompt_version: str | None
-    model_id: str | None
     count: int
 
 

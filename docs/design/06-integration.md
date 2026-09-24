@@ -112,7 +112,7 @@ The Prime hook is always installed. Remind, Compact, Recall, and ExitPlan hooks 
 
 The host agent calls `memman remember` via Bash in the same turn. No sub-agent, no Task delegation, no context isolation. Three reasons:
 
-- **The binary is a fast queue-append** (~50 ms). The cost that would justify offloading to a sub-agent (the content-hash lookup, enrichment, embedding, edge inference) does not run in-band - it runs in the scheduler worker out of band. The host turn pays only the queue-append latency.
+- **The binary is a fast queue-append** (~50 ms). The cost that would justify offloading to a sub-agent (enrichment, embedding, edge inference) does not run in-band - it runs in the scheduler worker out of band. The host turn pays only the queue-append latency.
 - **The host LLM already holds the context** needed to choose the right `--cat`, `--imp`, `--entity`, and to dereference anaphora before storing. A sub-agent would pay tokens to re-read context the host already has.
 - **One-way visibility** (writes are not recallable in the same turn) means there is no callback the sub-agent could provide that the host could not get itself. Recall remains a separate Bash call.
 

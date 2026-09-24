@@ -125,8 +125,7 @@ confirmation is needed.
 ### The write pipeline
 
 `memman remember` is a fast queue-append. The full pipeline -
-exact-duplicate check, enrichment, edge creation, re-embedding - runs
-out-of-band in a worker the scheduler fires on a timer (systemd on
+enrichment, edge creation, re-embedding - runs out-of-band in a worker the scheduler fires on a timer (systemd on
 Linux, launchd on macOS, `memman scheduler serve` in containers).
 A newly stored memory is NOT visible to `memman recall` in the current
 session; it lands for later sessions.
@@ -138,25 +137,17 @@ temporal) are reindexed on DB open when edge constants change; there
 is no operator command for that.
 
 The worker stores the text as written, as one memory; no model
-rewords, splits, or judges it. One thing keeps it from landing as its
-own row: a current memory already holds the same text, modulo case
-and whitespace. A superset of a stored memory is stored. The skip
-bumps that memory's `corroboration_count` (the oldest, if several
-match), completes as `done`, so the queue reports success, and is
-filed in the skipped ledger: `memman scheduler queue skipped` reads
-it back with the full content and the reason. Nothing a `remember`
+rewords, splits, or judges it. Every write lands as its own row: a
+second write of the same text is a second row. Nothing a `remember`
 does retires a stored memory; only `replace` and `supersede` do.
 
-To correct a stored insight by ID and keep its `access_count`,
-`corroboration_count`, and edges:
+To correct a stored insight by ID and keep its `access_count` and
+edges:
 
 ```bash
 memman replace <id> "<new content>"
 ```
 
-`replace` never skips as a duplicate. `corroboration_count` (exact
-restatements seen, modulo case and whitespace; shown in recall/get
-JSON but not under `--brief`) carries over like `access_count`.
 `replace` inherits the original's category, importance, entities, and
 source unless a flag overrides one. `--session` does not inherit:
 the successor is written into today's chain. It also keeps the
@@ -298,9 +289,11 @@ once the scheduler has drained:
 memman insights by-queue <queue_uuid>
 ```
 
-`count: 0` has three causes: the write is still queued, it stored
-nothing (see `memman scheduler queue skipped`), or it went to a
-different store -- the queue is global while this reads one store.
+`count: 0` has two causes: the write is still queued, or it went to a
+different store -- the queue is global while this reads one store. A
+row that fails every drain attempt stays queued with its text;
+`memman doctor` warns on it, and `memman scheduler queue retry <id>`
+requeues it.
 
 ## Forgetting
 

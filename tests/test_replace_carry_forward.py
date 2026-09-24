@@ -82,24 +82,6 @@ def test_replace_repoint_drops_target_self_edge(tmp_db, tmp_backend):
         if e.source_id == 'new-1' and e.target_id == 'new-1']
 
 
-def test_replace_carries_target_corroboration_count(tmp_db, tmp_backend):
-    """Verify corroboration earned by the target survives the replace.
-
-    Mutation: dropping the carry so the successor resets the count to
-        the incoming write's zero.
-    Oracle: hand-computed 4, the target's stored count.
-    """
-    insert_insight(tmp_db, make_insight(
-        id='old-1', content='original', corroboration_count=4))
-
-    plan = _replace_plan('new-1', 'old-1')
-    _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
-
-    successor = get_insight_by_id(tmp_db, 'new-1')
-    assert successor is not None
-    assert successor.corroboration_count == 4
-
-
 def test_replace_carries_target_access_count(tmp_db, tmp_backend):
     """Verify recall history on the target survives the replace.
 
@@ -181,37 +163,6 @@ def test_a_gone_target_is_recorded_in_the_oplog(tmp_db, tmp_backend):
     assert ('target-gone', 'new-1') in ops
     assert 'gone-1' in ops[('target-gone', 'new-1')]
     assert ('replace', 'gone-1') not in ops
-
-
-def test_degraded_skip_still_builds_its_semantic_edges(tmp_db, tmp_backend):
-    """Verify a skip that degrades to an add gets semantic edges like any add.
-
-    The planning loop registers a vector in the drain cache for
-    non-skipped plans only, and the repair for a degraded skip runs after
-    the apply, so the edge builder saw no vector for the new row.
-
-    Mutation: leaving the degraded add's vector out of `embed_cache`
-        until after `_apply_plan` returns, which yields zero semantic
-        edges for that row alone.
-    Oracle: a semantic edge between the degraded add and a stored row
-        carrying the identical vector, read back off the store.
-    """
-    insert_insight(tmp_db, make_insight(id='near-1', content='a near neighbor'))
-    insert_insight(tmp_db, make_insight(id='gone-1', content='the exact twin'))
-    assert tmp_backend.nodes.soft_delete('gone-1') is True
-    vec = [1.0, 0.0, 0.0]
-    embed_cache = {'near-1': list(vec)}
-
-    plan = FactPlan(
-        action='skipped', fact_text='the exact twin',
-        fact_insight=make_insight(id='new-1', content='the exact twin'),
-        targets=[('gone-1', 'none')], embed_vec=list(vec),
-        skip_reason='exact duplicate')
-    result = _apply_plan(tmp_backend, plan, embed_cache=embed_cache, store_name='test')
-
-    assert result['action'] == 'add'
-    semantic = [e for e in get_edges_by_node(tmp_db, 'new-1') if e.edge_type == 'semantic']
-    assert {e.source_id for e in semantic} | {e.target_id for e in semantic} >= {'new-1', 'near-1'}
 
 
 def test_superseded_target_leaves_the_drain_cache(tmp_db, tmp_backend):

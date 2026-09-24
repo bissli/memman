@@ -201,33 +201,6 @@ class NodeStore(Protocol):
         """Bump access_count and refresh last_accessed_at."""
         ...
 
-    def increment_corroboration(
-            self, id: Id, *, queue_uuid: str | None = None) -> bool:
-        """Bump corroboration_count for a live insight.
-
-        Observational counter only: no ranking, retention or
-        reporting path reads it -- "the agent said it twice" must
-        not promote a row.
-
-        Parameters
-        ----------
-        id : Id
-            The corroborated (stored) insight.
-        queue_uuid : str | None, default None
-            The restating queue row's idempotency key; adopted onto
-            the target ONLY when the target carries none, so an
-            all-skips queue row (nothing inserted carries the uuid)
-            still trips the replay guard -- without clobbering the
-            key of the queue row that created the target.
-
-        Returns
-        -------
-        bool
-            True when a live row was bumped; False when the target
-            is missing or soft-deleted.
-        """
-        ...
-
     def count_active(self) -> int:
         """Count current insights: neither deleted nor superseded."""
         ...
@@ -243,28 +216,6 @@ class NodeStore(Protocol):
         for every drained row and answers "did this write land", so a
         superseded row counts. Backends implement it in SQL so a null
         `queue_uuid` on legacy rows can never match.
-        """
-        ...
-
-    def oldest_active_by_content_hash(self, digest: str) -> Id | None:
-        """Return the oldest current row whose `content_hash` is `digest`.
-
-        Parameters
-        ----------
-        digest : str
-            A `model.content_hash` value.
-
-        Returns
-        -------
-        Id | None
-            The current row (not deleted, not superseded) with that
-            hash and the earliest `created_at`, tiebroken on `id`, or
-            None when no current row matches.
-
-        Notes
-        -----
-        - The drain's exact-duplicate check: one indexed lookup over
-          the whole store, never a shortlist.
         """
         ...
 
@@ -293,7 +244,7 @@ class NodeStore(Protocol):
         ...
 
     def provenance_distribution(self) -> list[ProvenanceCount]:
-        """Return (prompt_version, model_id, count) for active rows."""
+        """Return (prompt_version, count) for active rows."""
         ...
 
     def get_recent_in_window(
@@ -412,12 +363,6 @@ class NodeStore(Protocol):
             config (the link/rebuild path) so the re-enrichment
             clears the row's staleness, not just its timestamp. The
             write path omits it, having set it at insert.
-
-        Notes
-        -----
-        - It must not touch `model_id`: that column records the model
-          behind the row's CONTENT, which re-enrichment never
-          rewrites.
         """
         ...
 

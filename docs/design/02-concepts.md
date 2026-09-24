@@ -20,7 +20,6 @@
 │ source     : "user"     (provenance)         │
 │ session_id : "s-1f2e…"  (temporal chain key) │
 │ queue_uuid : "9b0c…"    (idempotency key)    │
-│ corroboration_count : 2 (restatements seen)  │
 │ access_count        : 3                      │
 │ author     : "bob"      (who wrote it)       │
 │ created_at : 2026-02-18T10:00:00Z            │
@@ -80,11 +79,10 @@ insights (
   access_count,                                 -- Retrievals; read by `never_accessed` in `memman log list --stats`
   last_accessed_at,                             -- Last retrieval; no runtime reader, read by the stale-serve measurement
   linked_at, enriched_at,                       -- Pipeline progress timestamps
-  prompt_version, model_id, embedding_model,    -- Provenance for re-enrichment
+  prompt_version, embedding_model,              -- Provenance for re-enrichment
   created_at, updated_at, deleted_at,
   session_id,                                   -- Temporal chain key (nullable; no session, no backbone edge)
-  queue_uuid,                                   -- Idempotency key from the queue row (shared by sibling facts; a corroborated row missing one adopts the restating row's)
-  corroboration_count,                          -- Restatements observed, exact modulo case and whitespace (integer not null default 0)
+  queue_uuid,                                   -- Idempotency key from the queue row (shared by sibling facts)
   superseded_by,                                -- Successor id once a later write corrected this row (nullable, no FK)
   author                                        -- Who wrote it (nullable; resolved from MEMMAN_AUTHOR or getpass.getuser())
 )
@@ -122,9 +120,7 @@ meta (
 )
 ```
 
-Provenance columns (`prompt_version`, `model_id`, `embedding_model`) record what produced each insight, and they are read for two different jobs. `model_id` and `embedding_model` are write provenance: the models behind the row's content and its vector; a new row's `model_id` stays `None`, since no LLM judges what to store. `prompt_version` is the STALENESS KEY, and it hashes exactly what `graph rebuild --stale-only` can replay -- the enrichment prompt and the `slow` model. `embedding_model` powers `memman embed reembed` the same way.
-
-**Corroboration semantics.** `corroboration_count` counts restatements, and one route reaches it: an exact duplicate, found by an indexed `content_hash` lookup over the whole store rather than a shortlist. Content hashes to the same digest when it is identical modulo case and whitespace (`store/model.py::content_hash`). One or more current rows can share a digest; the write skips onto the oldest of them (by `created_at`, then `id`), bumps its counter, and records a `reconcile-corroborate` oplog row. A `replace` never skips, since its caller already named the row it retires. The counter is observational only - no ranking, retention or reporting path reads it, so "the agent said it twice" cannot promote a row. It is per-row-identity, and a `replace` carries it onto the successor unconditionally, as the max over the corroborated target and the incoming write; the superseded row keeps its own count behind `superseded_by`. Bump mechanics: the restating queue row's `queue_uuid` is adopted only when the target carries none - the creating row's replay guard outranks the restating row's, so a populated key is never clobbered (the cost is that a crash-reclaimed all-skips restating row may re-bump once); a target soft-deleted between planning and apply degrades the skip to a plain add, carrying the vector already computed, rather than dropping the write; and one queue row bumps a given target at most once.
+Provenance columns (`prompt_version`, `embedding_model`) record what produced each insight, and they are read for two different jobs. `embedding_model` is write provenance: the model behind the row's vector. `prompt_version` is the STALENESS KEY, and it hashes exactly what `graph rebuild --stale-only` can replay -- the enrichment prompt and the `slow` model. `embedding_model` powers `memman embed reembed` the same way.
 
 ---
 

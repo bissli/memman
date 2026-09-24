@@ -31,7 +31,7 @@ from typing import Any, ClassVar, Literal
 
 from memman.embed.fingerprint import Fingerprint
 
-PAYLOAD_VERSION = 4
+PAYLOAD_VERSION = 5
 
 EmbeddingDtype = Literal[
     'float64', 'float32', 'float16', 'int8', 'binary']
@@ -108,11 +108,9 @@ class MigrateInsight:
     updated_at: datetime
     deleted_at: datetime | None
     prompt_version: str | None
-    model_id: str | None
     embedding_model: str | None
     session_id: str | None
     queue_uuid: str | None
-    corroboration_count: int
     superseded_by: str | None
     author: str | None = None
 

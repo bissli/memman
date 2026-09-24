@@ -92,16 +92,16 @@ def test_queue_purge_requires_flag(runner):
 
 
 def test_queue_purge_rejects_conflicting_flags(runner):
-    """`queue purge` takes exactly one of its three target flags.
+    """`queue purge` takes exactly one of its two target flags.
 
     Mutation: dropping the mutual-exclusion guard, so a pair of flags
         silently purges only whichever branch happens to run first.
-    Oracle: a conflicting pair exits non-zero naming all three flags.
+    Oracle: a conflicting pair exits non-zero naming both flags.
     """
     result = invoke(
         runner, ['scheduler', 'queue', 'purge', '--done', '--stale'])
     assert result.exit_code != 0
-    assert 'exactly one of --done, --stale, --skipped' in result.output
+    assert 'exactly one of --done, --stale' in result.output
 
 
 def test_queue_retry_noop_on_unknown(runner):

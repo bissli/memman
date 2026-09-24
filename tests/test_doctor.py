@@ -179,19 +179,22 @@ class TestProvenanceDrift:
         assert result['detail']['stale_rows'] == 0
 
     def test_all_current_pass(self, tmp_db, tmp_backend):
-        """All rows stamped with active prompt_version + slow model: pass."""
-        from memman import config
+        """All rows stamped with the active prompt_version: pass.
+
+        Mutation: `_is_provenance_stale` reporting a row stale even
+            when its `prompt_version` equals `active_pv`.
+        Oracle: the row's `prompt_version` set to the freshly
+            computed `active_pv` before the check runs.
+        """
         from memman.doctor import check_provenance_drift
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW)
 
         _insert_healthy_insight(tmp_db, 'p-1')
         tmp_db._exec(
-            'UPDATE insights SET prompt_version = ?, model_id = ?'
-            ' WHERE id = ?',
-            (active_pv, active_model, 'p-1'))
+            'UPDATE insights SET prompt_version = ? WHERE id = ?',
+            (active_pv, 'p-1'))
 
         result = check_provenance_drift(tmp_backend)
         assert result['status'] == 'pass'
@@ -206,115 +209,85 @@ class TestProvenanceDrift:
         Oracle: two drifted rows against one carrying the active key,
             counted.
         """
-        from memman import config
         from memman.doctor import check_provenance_drift
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW)
 
         for i in range(2):
             _insert_healthy_insight(tmp_db, f'p-stale-{i}')
         _insert_healthy_insight(tmp_db, 'p-fresh')
         tmp_db._exec(
-            'UPDATE insights SET prompt_version = ?, model_id = ?'
+            'UPDATE insights SET prompt_version = ?'
             " WHERE id IN ('p-stale-0', 'p-stale-1')",
-            ('deadbeefdeadbeef', active_model))
+            ('deadbeefdeadbeef',))
         tmp_db._exec(
-            'UPDATE insights SET prompt_version = ?, model_id = ?'
+            'UPDATE insights SET prompt_version = ?'
             " WHERE id = 'p-fresh'",
-            (active_pv, active_model))
+            (active_pv,))
 
         result = check_provenance_drift(tmp_backend)
         assert result['status'] == 'warn'
         assert result['detail']['stale_rows'] == 2
         assert 'remediation' in result['detail']
 
-    def test_model_only_drift_does_not_warn(self, tmp_db, tmp_backend):
-        """A row whose only difference is `model_id` is not stale.
-
-        `model_id` names the model behind the row's CONTENT, and no
-        rebuild rewrites it, so warning on it would nag forever with
-        no remedy. The replayable model is folded into
-        `prompt_version` instead.
-
-        Mutation: restoring the `model_id` comparison to
-            `_is_provenance_stale` -- every store whose canonical
-            model was ever swapped warns permanently, and the offered
-            `graph rebuild --stale-only` provably changes nothing.
-        Oracle: one row carrying the active key with a foreign
-            `model_id`, against a pass verdict and zero stale rows.
-        """
-        from memman.doctor import check_provenance_drift
-        from memman.pipeline.remember import compute_prompt_version
-
-        _insert_healthy_insight(tmp_db, 'p-other-model')
-        tmp_db._exec(
-            'UPDATE insights SET prompt_version = ?, model_id = ?'
-            " WHERE id = 'p-other-model'",
-            (compute_prompt_version(), 'anthropic/claude-haiku-1.0'))
-
-        result = check_provenance_drift(tmp_backend)
-        assert result['status'] == 'pass'
-        assert result['detail']['stale_rows'] == 0
-
 
 class TestStaleHelpers:
     """Cross-backend tests for iter_stale_insight_ids and count_stale_insights.
     """
 
-    def _seed_six_row_matrix(self, backend, active_pv, active_model):
-        """Seed the 6 canonical predicate rows; return expected stale ids.
+    def _seed_six_row_matrix(self, backend, active_pv):
+        """Seed the canonical predicate rows; return expected stale ids.
 
-        Mapping, by (prompt_version / model_id): A=NULL/NULL not
-        stale, B=current/current not stale, C=OLD/current STALE,
-        D=current/OLD not stale, E=OLD/OLD STALE, F=NULL/OLD not
-        stale.
-
-        Only the `prompt_version` column decides. D and F carry a
-        drifted `model_id` and are deliberately NOT stale: that
-        column names the model behind the row's content, which no
-        rebuild rewrites. F is also NULL on the deciding column, and
-        NULL is never stale.
+        Mapping, by prompt_version: A=NULL not stale, B=current not
+        stale, C=OLD STALE, E=OLD STALE.
         """
         OLD_PV = 'old-prompt-version-deadbeef'
-        OLD_MODEL = 'anthropic/claude-old-1.0'
         rows = [
-            ('row-a', None, None),
-            ('row-b', active_pv, active_model),
-            ('row-c', OLD_PV, active_model),
-            ('row-d', active_pv, OLD_MODEL),
-            ('row-e', OLD_PV, OLD_MODEL),
-            ('row-f', None, OLD_MODEL),
+            ('row-a', None),
+            ('row-b', active_pv),
+            ('row-c', OLD_PV),
+            ('row-e', OLD_PV),
             ]
-        for rid, pv, mid in rows:
+        for rid, pv in rows:
             backend.nodes.insert(make_insight(
                 id=rid, content=f'content for {rid} long enough',
-                prompt_version=pv, model_id=mid))
+                prompt_version=pv))
         return ['row-c', 'row-e']
 
     def test_iter_returns_only_drifted_rows(self, backend):
         """iter_stale_insight_ids excludes NULL provenance and current rows.
+
+        Mutation: dropping `prompt_version is not null` from the SQL
+            predicate, which would report the NULL row as stale, or
+            dropping the `!= active_pv` term, which would report the
+            current row as stale too.
+        Oracle: the hand-built four-row matrix from
+            `_seed_six_row_matrix`, whose only stale ids are the two
+            seeded on `OLD_PV`.
         """
-        from memman import config
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW)
-        expected = self._seed_six_row_matrix(
-            backend, active_pv, active_model)
+        expected = self._seed_six_row_matrix(backend, active_pv)
 
         ids = backend.nodes.iter_stale_insight_ids(active_pv)
         assert sorted(ids) == sorted(expected)
 
     def test_count_matches_iter(self, backend):
-        """count_stale_insights agrees with len(iter_stale_insight_ids)."""
-        from memman import config
+        """count_stale_insights agrees with len(iter_stale_insight_ids).
+
+        Mutation: `count_stale_insights`'s SQL predicate drifting from
+            `iter_stale_insight_ids`'s (e.g. dropping its own
+            `prompt_version is not null` term), so the two disagree
+            on the seeded matrix.
+        Oracle: the hand-counted stale total of 2 from
+            `_seed_six_row_matrix`.
+        """
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW)
-        self._seed_six_row_matrix(backend, active_pv, active_model)
+        self._seed_six_row_matrix(backend, active_pv)
 
         n = backend.nodes.count_stale_insights(active_pv)
         ids = backend.nodes.iter_stale_insight_ids(active_pv)
@@ -322,14 +295,20 @@ class TestStaleHelpers:
 
     def test_count_matches_doctor_stale_rows(self, backend):
         """count_stale_insights agrees with check_provenance_drift's stale_rows.
+
+        Mutation: `check_provenance_drift`'s per-row
+            `_is_provenance_stale` predicate diverging from
+            `count_stale_insights`'s SQL predicate (e.g. treating a
+            NULL `prompt_version` as stale), so the two disagree on
+            the same seeded matrix.
+        Oracle: the store helper's own count, cross-checked against
+            the doctor check's `stale_rows` on the identical rows.
         """
-        from memman import config
         from memman.doctor import check_provenance_drift
         from memman.pipeline.remember import compute_prompt_version
 
         active_pv = compute_prompt_version()
-        active_model = config.require(config.LLM_MODEL_SLOW)
-        self._seed_six_row_matrix(backend, active_pv, active_model)
+        self._seed_six_row_matrix(backend, active_pv)
 
         helper_count = backend.nodes.count_stale_insights(active_pv)
         doctor_result = check_provenance_drift(backend)
@@ -816,6 +795,15 @@ class TestHardening:
 
     def test_schema_columns_fails_when_column_missing(self, tmp_path):
         """A DB without provenance columns should fail the schema check.
+
+        Mutation: computing `missing` as
+            `present - EXPECTED_INSIGHT_COLUMNS` instead of the
+            reverse, or dropping `prompt_version`/`embedding_model`
+            from `EXPECTED_INSIGHT_COLUMNS`, either of which leaves
+            `status` at `pass` despite the missing columns.
+        Oracle: an `insights` table rebuilt with only an `id` column,
+            checked for `prompt_version` and `embedding_model` by
+            name in `result['detail']['missing']`.
         """
         db = open_db(str(tmp_path))
         try:
@@ -827,7 +815,6 @@ class TestHardening:
             result = check_schema_columns(SqliteBackend(db))
             assert result['status'] == 'fail'
             assert 'prompt_version' in result['detail']['missing']
-            assert 'model_id' in result['detail']['missing']
             assert 'embedding_model' in result['detail']['missing']
         finally:
             db.close()

@@ -79,7 +79,7 @@
         <mxCell id="i_skill_title" value="&lt;b&gt;Skill&lt;/b&gt; - .claude/skills/memman/SKILL.md (auto-discovered by Claude Code)" style="text;html=1;align=left;fontSize=12;fillColor=none;strokeColor=none;" vertex="1" parent="1">
           <mxGeometry x="60" y="565" width="500" height="25" as="geometry" />
         </mxCell>
-        <mxCell id="i_s1" value="&lt;font style=&quot;font-family:monospace;font-size:9px&quot;&gt;memman remember &quot;fact&quot;&lt;br&gt;  --cat decision --imp 5&lt;br&gt;  --entity A --entity B&lt;br&gt;  (exact-duplicate skip built-in)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=9;align=left;spacingLeft=8;" vertex="1" parent="1">
+        <mxCell id="i_s1" value="&lt;font style=&quot;font-family:monospace;font-size:9px&quot;&gt;memman remember &quot;fact&quot;&lt;br&gt;  --cat decision --imp 5&lt;br&gt;  --entity A --entity B&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=9;align=left;spacingLeft=8;" vertex="1" parent="1">
           <mxGeometry x="60" y="600" width="210" height="70" as="geometry" />
         </mxCell>
         <mxCell id="i_s2" value="&lt;font style=&quot;font-family:monospace;font-size:9px&quot;&gt;memman recall &quot;topic&quot;&lt;br&gt;  --limit 10&lt;br&gt;memman recall &quot;keyword&quot;&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=9;align=left;spacingLeft=8;" vertex="1" parent="1">

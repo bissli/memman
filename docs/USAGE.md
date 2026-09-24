@@ -50,7 +50,7 @@ One live-read command (called by the SessionStart hook, not by hand):
 ### Core
 
 ```bash
-# Remember - store a new insight (an exact duplicate skips onto the oldest match)
+# Remember - store a new insight
 memman remember "Chose Qdrant over Milvus for vector search" \
   --cat decision --imp 5 --entity Qdrant --entity Milvus --source agent
 
@@ -175,7 +175,7 @@ Auto-reindex of computed edges (semantic, entity, temporal) fires on `open_db()`
 
 `graph rebuild` re-enriches all insights through the full LLM pipeline (enrichment, re-embedding, edge recreation). Processes in batches of 20. Returns `{"processed": N, "remaining": 0}`. Rejected when the scheduler is stopped.
 
-`--stale-only` is the targeted variant: it only touches rows whose persisted `prompt_version` no longer matches `compute_prompt_version()` -- the enrichment prompt and the `slow` model, which is exactly the set this command replays. A `model_id` difference is deliberately NOT staleness: that column records the model behind the row's content, which no rebuild rewrites, so reporting it would nag forever with no remedy. Cross-backend (works on Postgres, unlike wholesale `graph rebuild` which remains SQLite-only). Shares the `'rebuild'` advisory lock so it cannot race a wholesale rebuild. NULL-provenance rows are not swept; they need a separate backfill.
+`--stale-only` is the targeted variant: it only touches rows whose persisted `prompt_version` no longer matches `compute_prompt_version()` -- the enrichment prompt and the `slow` model, which is exactly the set this command replays. Cross-backend (works on Postgres, unlike wholesale `graph rebuild` which remains SQLite-only). Shares the `'rebuild'` advisory lock so it cannot race a wholesale rebuild. NULL-provenance rows are not swept; they need a separate backfill.
 
 ### Insights lifecycle
 
@@ -345,19 +345,14 @@ memman scheduler debug on|off|status     # toggle the verbose worker trace log
 
 memman scheduler queue list [--limit N]  # peek pending rows
 memman scheduler queue failed [--limit N]# rows in 'failed' state
-memman scheduler queue skipped [--limit N]# drained writes that stored no insight
 memman scheduler queue show <row_id>     # full payload + trace events for one row
 memman scheduler queue retry <row_id>    # requeue a single failed row
 memman scheduler queue retry --all-stale # requeue every row currently in status='stale'
 memman scheduler queue purge --done      # delete rows where status='done'
 memman scheduler queue purge --stale     # delete rows where status='stale'
-memman scheduler queue purge --skipped   # empty the skipped-write ledger
-memman scheduler queue purge --failed    # file then delete rows where status='failed'
 ```
 
-A skipped write is a row that stored no insight. Usually the pipeline completed and stored nothing: the planner matched the write to an existing insight by exact content hash and corroborated it instead of storing a copy. This marks the row `done`, and `purge_done` deletes it a minute later, so the `skipped_writes` ledger is what survives. A row that exhausted its retries and parked at `status='failed'` usually stored nothing either, and `queue purge --failed` files it here before deleting it, with a reason naming the failure and the row's `queue_uuid`. That last part matters: the drain's error handling extends past the store commit, so a row can reach `failed` with its insight already written. Resolve the uuid with `memman insights by-queue <uuid>` before re-entering such an entry, or the re-entry duplicates a stored write. The ledger keeps the full content, the reason, the store, and the session id, and `stats` reports its size under `skipped` (alongside `stale`, which it also reports).
-
-Nothing prunes the ledger on a timer: `purge_done` never reaches it. `queue purge --skipped` empties it, `store remove` drops one store's entries, and a `backup restore` replaces it wholesale with the archive's copy. The listing spans every store, and it holds raw content, so treat it as sensitive.
+A row that exhausts its retries parks at `status='failed'` with its text intact. `memman scheduler queue retry <row_id>` requeues it; nothing deletes it automatically.
 
 A stale row is a pending entry claimed more than `STALE_CLAIM_SECONDS` ago (default 600 s), usually from a mid-drain worker crash. The post-drain maintenance pass auto-recovers via `queue.retry_stale` alongside `purge_done` and `purge_worker_runs`; the explicit verbs exist for incident response.
 
@@ -467,7 +462,7 @@ The variables below are not installable - they are read from the env file on dem
 `memman remember` appends one row to the queue in ~50 ms on the host session - no LLM calls, no embeddings, no edges. The full pipeline runs out of band:
 
 1. **Tier 1 (host)** - append a row to `~/.memman/queue.db` with `status='pending'`, the raw text, and any `--cat`/`--imp`/`--entity` hints. Returns `{action: queued, queue_id, queue_uuid, store}`. The `queue_uuid` is the join key: it is stamped on every insight this write produces and outlives the queue row, which `purge_done` drops about a minute after the drain.
-2. **Tier 2 (worker)** - systemd timer (Linux), launchd agent (macOS), or `memman scheduler serve` PID 1 (containers) invokes `memman scheduler drain --timeout 60` every 60 s under an `flock` on `~/.memman/drain.lock`. Per row: quality gate → embed → exact-content-hash lookup over the whole store (a match corroborates the oldest current row and skips the rest of the pipeline) → otherwise add, or replace the row `replace <id>` names → fast edges (temporal + entity + semantic) → enrichment → re-embed → rebuild auto edges → mark done.
+2. **Tier 2 (worker)** - systemd timer (Linux), launchd agent (macOS), or `memman scheduler serve` PID 1 (containers) invokes `memman scheduler drain --timeout 60` every 60 s under an `flock` on `~/.memman/drain.lock`. Per row: quality gate → embed → add, or replace the row `replace <id>` names → fast edges (temporal + entity + semantic) → enrichment → re-embed → rebuild auto edges → mark done.
 
 The host session never blocks on the network. Newly stored memories become recallable on the next drain tick (default 60 s).
 

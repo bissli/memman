@@ -43,7 +43,7 @@ from memman.store.db import DB
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
 from memman.store.model import NodeStats, OpLogEntry, OpLogStats
 from memman.store.model import ProvenanceCount, ReembedRow, WorkerRun
-from memman.store.model import content_hash, format_timestamp, parse_timestamp
+from memman.store.model import format_timestamp, parse_timestamp
 
 logger = logging.getLogger('memman')
 
@@ -128,10 +128,6 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
     def increment_access_count(self, id: Id) -> None:
         _node.increment_access_count(self._db, id)
 
-    def increment_corroboration(
-            self, id: Id, *, queue_uuid: str | None = None) -> bool:
-        return _node.increment_corroboration(self._db, id, queue_uuid)
-
     def count_active(self) -> int:
         return _node.count_active_insights(self._db)
 
@@ -140,9 +136,6 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
 
     def has_active_with_queue_uuid(self, queue_uuid: str) -> bool:
         return _node.has_active_with_queue_uuid(self._db, queue_uuid)
-
-    def oldest_active_by_content_hash(self, digest: str) -> Id | None:
-        return _node.oldest_active_by_content_hash(self._db, digest)
 
     def get_by_queue_uuid(self, queue_uuid: str) -> list[Insight]:
         return _node.get_by_queue_uuid(self._db, queue_uuid)
@@ -163,8 +156,7 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
     def provenance_distribution(self) -> list[ProvenanceCount]:
         rows = _node.provenance_distribution(self._db)
         return [
-            ProvenanceCount(
-                prompt_version=r[0], model_id=r[1], count=r[2])
+            ProvenanceCount(prompt_version=r[0], count=r[1])
             for r in rows
             ]
 
@@ -1085,9 +1077,9 @@ select id, content, category, importance, entities,
        source, access_count, keywords, summary, semantic_facts,
        last_accessed_at, embedding,
        linked_at, enriched_at, created_at, updated_at,
-       deleted_at, prompt_version, model_id, embedding_model,
+       deleted_at, prompt_version, embedding_model,
        embedding_pending, session_id, queue_uuid,
-       corroboration_count, superseded_by, author
+       superseded_by, author
 from insights
 order by id
 """).fetchall()
@@ -1115,14 +1107,13 @@ order by id
                     updated_at=parse_timestamp(r[15]),
                     deleted_at=(
                         parse_timestamp(r[16]) if r[16] else None),
-                    prompt_version=r[17], model_id=r[18],
-                    embedding_model=r[19],
-                    session_id=r[21], queue_uuid=r[22],
-                    corroboration_count=int(r[23]),
-                    superseded_by=r[24],
-                    author=r[25]))
-                if r[20] is not None:
-                    pv = deserialize_vector(r[20])
+                    prompt_version=r[17],
+                    embedding_model=r[18],
+                    session_id=r[20], queue_uuid=r[21],
+                    superseded_by=r[22],
+                    author=r[23]))
+                if r[19] is not None:
+                    pv = deserialize_vector(r[19])
                     if pv is not None:
                         pending.append(PendingReembed(
                             insight_id=r[0], vector=pv))
@@ -1239,11 +1230,11 @@ order by id
                         format_timestamp(ins.updated_at),
                         format_timestamp(ins.deleted_at)
                         if ins.deleted_at else None,
-                        ins.prompt_version, ins.model_id,
+                        ins.prompt_version,
                         ins.embedding_model,
                         ins.session_id, ins.queue_uuid,
-                        ins.corroboration_count, ins.superseded_by,
-                        ins.author, content_hash(ins.content)))
+                        ins.superseded_by,
+                        ins.author))
                 if insight_rows:
                     conn.executemany(
                         'insert into insights ('
@@ -1253,12 +1244,11 @@ order by id
                         ' last_accessed_at, embedding,'
                         ' linked_at, enriched_at, created_at,'
                         ' updated_at, deleted_at, prompt_version,'
-                        ' model_id, embedding_model, session_id,'
-                        ' queue_uuid, corroboration_count,'
-                        ' superseded_by, author, content_hash)'
+                        ' embedding_model, session_id,'
+                        ' queue_uuid,'
+                        ' superseded_by, author)'
                         ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
-                        ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
-                        ' ?)',
+                        ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         insight_rows)
 
                 edge_rows = [(

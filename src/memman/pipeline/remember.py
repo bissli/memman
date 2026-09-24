@@ -4,15 +4,13 @@ Structure:
 
 1. Quality check - advisory warnings only.
 2. Planning phase - the write's text, as the agent wrote it, is the
-   one row: embed it, look its content hash up among the store's
-   current rows (a match skips as an exact duplicate), then enrich the
-   row and re-embed it if the enrichment carries keywords. **No DB
-   writes.**
+   one row: embed it, then enrich the row and re-embed it if the
+   enrichment carries keywords. **No DB writes.**
 3. Apply phase - one transaction commits the replace link, insert,
    edges, enrichment update, and stamp.
 
-A write adds one row, replaces the row `replace <id>` names, or skips
-onto an exact duplicate. Nothing else retires a row.
+A write adds one row, or replaces the row `replace <id>` names.
+Nothing else retires a row.
 
 The apply phase runs only after all LLM + embed work has returned.
 Crashes during planning leave the DB untouched; the retry path
@@ -37,7 +35,7 @@ from memman.graph.semantic import create_semantic_edges
 from memman.llm.client import get_llm_client
 from memman.search.quality import check_content_quality
 from memman.store.backend import Backend
-from memman.store.model import Edge, Insight, content_hash, dedupe_entities
+from memman.store.model import Edge, Insight, dedupe_entities
 from memman.store.model import format_timestamp, insight_to_delta_dict
 
 logger = logging.getLogger('memman')
@@ -95,15 +93,14 @@ class FactPlan:
     Attributes
     ----------
     action : str
-        `add`, `replace` or `skipped`.
+        `add` or `replace`.
     fact_text : str
         The write's text as the agent wrote it.
     fact_insight : Insight
-        The row the apply phase inserts; a skip inserts it only when
-        its target died before apply.
+        The row the apply phase inserts.
     targets : list[tuple[str, str]]
-        `(insight_id, relation)`: the `replace` target, or the exact
-        duplicate a skip corroborates under `none`; empty for an add.
+        `(insight_id, relation)`: the `replace` target; empty for an
+        add.
     """
 
     action: str
@@ -113,7 +110,6 @@ class FactPlan:
     embed_vec: list[float] | None = None
     enrichment: dict[str, Any] = field(default_factory=dict)
     enriched_vec: list[float] | None = None
-    skip_reason: str = ''
 
 
 def run_remember(
@@ -154,7 +150,7 @@ def run_remember(
         embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
 
     plan, llm_calls = _plan_fact(
-        content, insight, replaced_id, metadata_llm_client, ec, backend)
+        content, insight, replaced_id, metadata_llm_client, ec)
     plan.fact_insight.prompt_version = compute_prompt_version()
     plan.fact_insight.embedding_model = ec.model
     if plan.action == 'replace':
@@ -173,10 +169,6 @@ def run_remember(
     with backend.transaction():
         result = _apply_plan(
             backend, plan, embed_cache, store_name=store_name)
-    if plan.action == 'skipped' and result.get('action') == 'add':
-        # The duplicate died between planning and apply; a later row
-        # of this drain must not mint a semantic edge onto it.
-        embed_cache.pop(plan.targets[0][0], None)
 
     return {
         'facts': [result],
@@ -185,51 +177,12 @@ def run_remember(
         }
 
 
-def skip_reason_for_result(result: Any) -> str:
-    """Return why a `run_remember` result stored nothing, or `''`.
-
-    Parameters
-    ----------
-    result : Any
-        A `run_remember` return value: a `facts` list whose entries
-        each carry `action` and, when skipped, `reason`. Typed `Any`
-        rather than `dict` because the sole caller is the drain loop,
-        where anything else must read as "stored something" instead
-        of raising.
-
-    Returns
-    -------
-    str
-        The reason nothing was stored -- the reasons joined by
-        `'; '` when several plans each skipped for their own -- or
-        the empty string when the write stored something.
-
-    Notes
-    -----
-    - A write is lost only when NOTHING landed. A result mixing an
-      add with a skip stored the add, so it returns `''`.
-    - A result of any other type reads as "stored something". The
-      caller is the drain loop, where raising would send a row that
-      actually succeeded to `mark_failed` and a retry.
-    """
-    if not isinstance(result, dict):
-        return ''
-    facts = result.get('facts') or []
-    if not facts:
-        return ''
-    if any(f.get('action') != 'skipped' for f in facts):
-        return ''
-    reasons = sorted({f.get('reason', '') for f in facts if f.get('reason')})
-    return '; '.join(reasons) or 'skipped'
-
-
 def _plan_fact(
         fact_text: str,
         parent: Insight,
         replaced_id: str,
         metadata_llm_client: Any,
         ec: Any,
-        backend: Backend,
         ) -> tuple[FactPlan, int]:
     """Plan one write without touching the DB.
 
@@ -246,25 +199,12 @@ def _plan_fact(
         The slow client for enrichment.
     ec : Any
         The store's bound embed provider.
-    backend : Backend
-        Open store, read only here.
 
     Returns
     -------
     tuple[FactPlan, int]
-        The plan - an add, a replace of `replaced_id`, or a skip onto
-        an exact duplicate - and the LLM calls made, 0 or 1.
-
-    Notes
-    -----
-    - An exact duplicate is a current row with the write's
-      `content_hash`, found by one indexed lookup over the whole
-      store, never a shortlist. Several matches skip onto the oldest.
-    - A replace never skips: its caller named the row it retires, so
-      identical content still replaces.
-    - A skip carries the vector computed before the lookup, so a
-      target soft-deleted between planning and apply degrades to an
-      embedded add at no extra cost.
+        The plan - an add, or a replace of `replaced_id` - and the
+        LLM calls made, 0 or 1.
     """
     fact_insight = Insight(
         id=str(uuid.uuid4()), content=fact_text,
@@ -283,19 +223,6 @@ def _plan_fact(
     except (httpx.HTTPError, RuntimeError) as exc:
         logger.warning(
             f'fact embed failed; row stored without vector: {exc}')
-
-    if not replaced_id:
-        duplicate_id = backend.nodes.oldest_active_by_content_hash(
-            content_hash(fact_text))
-        if duplicate_id is not None:
-            return FactPlan(
-                action='skipped',
-                fact_text=fact_text,
-                fact_insight=fact_insight,
-                targets=[(duplicate_id, 'none')],
-                embed_vec=fact_vec,
-                skip_reason='exact duplicate',
-                ), 0
 
     calls = 0
     try:
@@ -375,39 +302,11 @@ def _apply_plan(
     -----
     - A `replace` supersedes its target (never deletes it), moves the
       target's edges to the successor, and carries the target's recall
-      history and corroboration count onto it. The entity list is the
-      caller's as given.
+      history onto it. The entity list is the caller's as given.
     - A target that is not current (forgotten, or superseded by an
       earlier write) is dropped into `targets_gone`, and the plan
       degrades to a plain add.
     """
-    skip_target = plan.targets[0][0] if plan.targets else None
-    corroborate_degraded = False
-    if plan.action == 'skipped':
-        skip_fi = plan.fact_insight
-        corroborated = backend.nodes.increment_corroboration(
-            skip_target, queue_uuid=skip_fi.queue_uuid)
-        if corroborated:
-            backend.oplog.log(
-                operation='reconcile-corroborate',
-                insight_id=skip_target,
-                detail=f'restated by: {plan.fact_text[:200]}')
-            return {
-                'id': skip_fi.id,
-                'content': skip_fi.content,
-                'action': 'skipped',
-                'reason': plan.skip_reason,
-                'target_id': skip_target,
-                }
-        # The exact-match target was soft-deleted between planning
-        # and apply (an external forget); a skip here
-        # would store the fact nowhere, so fall through to a plain
-        # add carrying the vector computed before the rung.
-        corroborate_degraded = True
-        logger.warning(
-            f'corroborate target {skip_target} already deleted;'
-            ' degrading to add')
-
     fi = plan.fact_insight
 
     linking = plan.action == 'replace' and bool(plan.targets)
@@ -443,15 +342,12 @@ def _apply_plan(
             predecessors.append((target_id, relation, before_target))
         # Every predecessor keeps its content behind `superseded_by`;
         # the successor copies what the CURRENT view keeps: recall
-        # history and corroboration as the max over the linked
-        # targets. The CLI already seeded the caller's entity list from
-        # the target when the flag was omitted, so that list stands.
+        # history as the max over the linked targets. The CLI already
+        # seeded the caller's entity list from the target when the
+        # flag was omitted, so that list stands.
         for _target_id, _relation, before_target in predecessors:
             fi.access_count = max(
                 fi.access_count, before_target.access_count)
-            fi.corroboration_count = max(
-                fi.corroboration_count,
-                before_target.corroboration_count)
         for target_id, _relation, before_target in predecessors:
             backend.oplog.log(
                 operation='replace', insight_id=target_id,
@@ -465,9 +361,6 @@ def _apply_plan(
         # - The row is filed against the SUCCESSOR, which is readable;
         #   the requested target may be gone from the table entirely,
         #   and it is named in the detail instead.
-        # - Not the `skipped_writes` ledger: that table's rule is that
-        #   a write storing even one fact is never filed, and this one
-        #   stored its fact.
         for gone in targets_gone:
             backend.oplog.log(
                 operation='target-gone', insight_id=fi.id,
@@ -535,7 +428,7 @@ def _apply_plan(
             semantic_facts=plan.enrichment.get('semantic_facts', []))
         backend.nodes.stamp_enriched(fi.id)
 
-    if corroborate_degraded or (linking and not linked_targets):
+    if linking and not linked_targets:
         reported_action = 'add'
     else:
         reported_action = plan.action
@@ -558,12 +451,7 @@ def _apply_plan(
             },
         'embedded': embedded,
         }
-    if corroborate_degraded:
-        # The degraded add supersedes nothing -- naming the dead
-        # target as replaced would claim a replace that never
-        # happened; `target_id` still names the row that vanished.
-        result['target_id'] = skip_target
-    elif linking:
+    if linking:
         # `replaced_ids` names what this write linked; `targets_gone`
         # names the rows that now hold the topic, one read away, so a
         # degraded add cannot hide them.

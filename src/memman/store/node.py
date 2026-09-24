@@ -5,8 +5,8 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from memman.store.model import Insight, content_hash, dedupe_entities
-from memman.store.model import format_timestamp, parse_timestamp
+from memman.store.model import Insight, dedupe_entities, format_timestamp
+from memman.store.model import parse_timestamp
 
 if TYPE_CHECKING:
     from memman.store.db import DB
@@ -28,28 +28,27 @@ def insert_insight(db: 'DB', i: Insight) -> None:
 insert into insights
     (id, content, category, importance, entities,
      source, access_count, created_at, updated_at,
-     prompt_version, model_id, embedding_model,
-     session_id, queue_uuid, corroboration_count, author, content_hash)
-values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     prompt_version, embedding_model,
+     session_id, queue_uuid, author)
+values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
     db._exec(sql, (
         i.id, i.content, i.category, i.importance,
         i.entities_json(), i.source, i.access_count,
         now, now,
-        i.prompt_version, i.model_id, i.embedding_model,
-        i.session_id, i.queue_uuid, i.corroboration_count,
-        i.author, content_hash(i.content)))
+        i.prompt_version, i.embedding_model,
+        i.session_id, i.queue_uuid,
+        i.author))
 
 
-# `session_id`, `queue_uuid`, `corroboration_count`, then
-# `superseded_by`, then `author`, appended last -- must stay
-# byte-identical to postgres.py's _INSIGHT_COLS (see
-# test_insight_column_lists_are_identical_across_backends).
+# `session_id`, `queue_uuid`, then `superseded_by`, then `author`,
+# appended last -- must stay byte-identical to postgres.py's
+# _INSIGHT_COLS (see test_insight_column_lists_are_identical_across_backends).
 _INSIGHT_COLUMNS = (
     'id, content, category, importance, entities,'
     ' source, access_count, created_at, updated_at, deleted_at,'
     ' summary, linked_at, enriched_at, last_accessed_at,'
-    ' session_id, queue_uuid, corroboration_count, superseded_by,'
+    ' session_id, queue_uuid, superseded_by,'
     ' author')
 
 
@@ -331,53 +330,6 @@ where id = ? and deleted_at is null and superseded_by is null
     db._exec(sql, (now, id))
 
 
-def increment_corroboration(
-        db: 'DB', id: str, queue_uuid: str | None = None) -> bool:
-    """Bump corroboration_count on a LIVE insight.
-
-    Never touches `access_count` or `last_accessed_at`: those
-    record what recall RETURNED, and a restated fact was not
-    returned.
-
-    Parameters
-    ----------
-    id : str
-        The corroborated (stored) insight.
-    queue_uuid : str | None, default None
-        The restating queue row's idempotency key; adopted onto the
-        target ONLY when the target carries none.
-
-    Returns
-    -------
-    bool
-        True when a live row was bumped; False when the target is
-        missing or soft-deleted, so the caller can degrade instead
-        of silently dropping the restated fact.
-
-    Notes
-    -----
-    - `coalesce(queue_uuid, ?)` never clobbers a populated key: the
-      creating queue row's replay guard outranks the restating
-      row's. The cost is that a crash-reclaimed all-skips restating
-      row may re-bump once (observational only); the alternative --
-      adopting over the creator's key -- un-guards the creating row
-      and can replay it into a duplicate insert.
-    - Adoption is per-target, not per-row: one queue row restating
-      several key-less stored facts stamps its uuid onto each
-      (`idx_insights_queue_uuid` is non-unique). The replay guard
-      only asks "does ANY live row carry it", so this is forensic
-      ambiguity, not a correctness hole.
-    """
-    sql = """
-update insights
-set corroboration_count = corroboration_count + 1,
-    queue_uuid = coalesce(queue_uuid, ?)
-where id = ? and deleted_at is null and superseded_by is null
-"""
-    cursor = db._exec(sql, (queue_uuid, id))
-    return cursor.rowcount == 1
-
-
 def count_active_insights(db: 'DB') -> int:
     """Return the number of current insights, neither deleted nor superseded."""
     row = db._query(
@@ -416,17 +368,6 @@ def has_active_with_queue_uuid(db: 'DB', queue_uuid: str) -> bool:
     return row is not None
 
 
-def oldest_active_by_content_hash(db: 'DB', digest: str) -> str | None:
-    """Return the oldest active row whose `content_hash` is `digest`.
-    """
-    row = db._query(
-        'select id from insights where content_hash = ?'
-        ' and deleted_at is null and superseded_by is null'
-        ' order by created_at, id limit 1',
-        (digest,)).fetchone()
-    return row[0] if row else None
-
-
 def get_by_queue_uuid(db: 'DB', queue_uuid: str) -> list[Insight]:
     """Return the non-deleted insights one queued write produced.
 
@@ -460,9 +401,7 @@ def get_by_queue_uuid(db: 'DB', queue_uuid: str) -> list[Insight]:
       SQL `= ?` never matches the NULL `queue_uuid` of a pre-0.18.0
       row.
     - Empty is a real answer, not an error: a write that stored
-      nothing is recorded in `skipped_writes`, and a write
-      that only corroborated an existing insight stamps its key on
-      that target only when the target carried none.
+      nothing produces no rows here.
     """
     sql = f"""
 select {_INSIGHT_COLUMNS}
@@ -522,21 +461,21 @@ where i.deleted_at is null and i.superseded_by is null
 
 
 def provenance_distribution(
-        db: 'DB') -> list[tuple[str | None, str | None, int]]:
-    """Return (prompt_version, model_id, count) groups for active rows.
+        db: 'DB') -> list[tuple[str | None, int]]:
+    """Return (prompt_version, count) groups for active rows.
 
     Used by `doctor.check_provenance_drift` to detect rows enriched
-    by older prompt versions or models. Sorted by count descending.
+    by older prompt versions. Sorted by count descending.
     """
     sql = """
-select prompt_version, model_id, count(*) as n
+select prompt_version, count(*) as n
 from insights
 where deleted_at is null and superseded_by is null
-group by prompt_version, model_id
+group by prompt_version
 order by n desc
 """
     rows = db._query(sql).fetchall()
-    return [(r[0], r[1], r[2]) for r in rows]
+    return [(r[0], r[1]) for r in rows]
 
 
 def review_content_quality(
@@ -833,14 +772,6 @@ def stamp_enriched(
     prompt_version : str or None, default None
         The `compute_prompt_version()` key this enrichment ran under.
         Omitted by the write path, which already set it at insert.
-
-    Notes
-    -----
-    - It deliberately does NOT touch `model_id`. That column records
-      the model that produced the row's CONTENT, which re-enrichment
-      never rewrites; stamping it here attributed every rebuilt row
-      to whatever model happened to be configured at rebuild time and
-      corrupted `provenance_distribution`.
     """
     if prompt_version is None:
         db._exec(
@@ -923,11 +854,6 @@ def iter_stale_insight_ids(
       `active_pv`. NULL provenance is deliberately not stale: those
       rows pre-date provenance tracking and need a backfill, not a
       rebuild.
-    - There is no `model_id` branch. `active_pv` already folds in the
-      `slow` model, which is the only model
-      `link_pending` re-runs; comparing `model_id` as well would fire
-      on the CONTENT model, which no rebuild rewrites, so the row
-      would report stale forever.
     - Keep this predicate aligned with
       `doctor._is_provenance_stale` and the Postgres copy.
     """
@@ -1004,10 +930,8 @@ def _scan_insight(row: tuple[Any, ...]) -> Insight:
         i.session_id = row[14]
     if len(row) > 15 and row[15]:
         i.queue_uuid = row[15]
-    if len(row) > 16 and row[16] is not None:
-        i.corroboration_count = int(row[16])
+    if len(row) > 16 and row[16]:
+        i.superseded_by = row[16]
     if len(row) > 17 and row[17]:
-        i.superseded_by = row[17]
-    if len(row) > 18 and row[18]:
-        i.author = row[18]
+        i.author = row[17]
     return i

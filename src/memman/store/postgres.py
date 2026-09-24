@@ -46,7 +46,7 @@ from memman.store.errors import BackendError, ConfigError
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
 from memman.store.model import NodeStats, OpLogEntry, OpLogStats
 from memman.store.model import ProvenanceCount, ReembedRow, WorkerRun
-from memman.store.model import content_hash, format_timestamp, parse_timestamp
+from memman.store.model import format_timestamp, parse_timestamp
 from memman.store.node import unterminated_chains
 
 if TYPE_CHECKING:
@@ -135,15 +135,12 @@ create table if not exists {schema}.insights (
     updated_at  timestamptz not null default now(),
     deleted_at  timestamptz,
     prompt_version text,
-    model_id    text,
     embedding_model text,
     session_id  text,
     queue_uuid  text,
-    corroboration_count integer not null default 0,
     kw_tokens   text[] not null,
     superseded_by text,
-    author      text,
-    content_hash text
+    author      text
 );
 
 create table if not exists {schema}.edges (
@@ -200,10 +197,6 @@ create index if not exists idx_insights_session_{schema}
     on {schema}.insights(session_id);
 create index if not exists idx_insights_queue_uuid_{schema}
     on {schema}.insights(queue_uuid);
-create index if not exists idx_insights_content_hash_{schema}
-    on {schema}.insights(content_hash);
-create index if not exists idx_insights_corroboration_{schema}
-    on {schema}.insights(corroboration_count);
 create index if not exists idx_insights_pending_link_{schema}
     on {schema}.insights(linked_at, created_at)
     where linked_at is null and deleted_at is null and superseded_by is null;
@@ -383,12 +376,10 @@ def _row_to_insight(row: tuple[Any, ...]) -> Insight:
         i.session_id = row[14]
     if len(row) > 15 and row[15]:
         i.queue_uuid = row[15]
-    if len(row) > 16 and row[16] is not None:
-        i.corroboration_count = int(row[16])
+    if len(row) > 16 and row[16]:
+        i.superseded_by = row[16]
     if len(row) > 17 and row[17]:
-        i.superseded_by = row[17]
-    if len(row) > 18 and row[18]:
-        i.author = row[18]
+        i.author = row[17]
     return i
 
 
@@ -410,15 +401,14 @@ def _row_to_edge(row: tuple[Any, ...]) -> Edge:
     return e
 
 
-# `session_id`, `queue_uuid`, `corroboration_count`, then
-# `superseded_by`, then `author`, appended last -- must stay
-# byte-identical to node.py's _INSIGHT_COLUMNS (see
-# test_insight_column_lists_are_identical_across_backends).
+# `session_id`, `queue_uuid`, then `superseded_by`, then `author`,
+# appended last -- must stay byte-identical to node.py's
+# _INSIGHT_COLUMNS (see test_insight_column_lists_are_identical_across_backends).
 _INSIGHT_COLS = (
     'id, content, category, importance, entities,'
     ' source, access_count, created_at, updated_at, deleted_at,'
     ' summary, linked_at, enriched_at, last_accessed_at,'
-    ' session_id, queue_uuid, corroboration_count, superseded_by,'
+    ' session_id, queue_uuid, superseded_by,'
     ' author')
 
 
@@ -483,10 +473,9 @@ where attrelid = (%s || '.insights')::regclass
 insert into {s}.insights
     (id, content, category, importance, entities,
      source, access_count, created_at, updated_at,
-     prompt_version, model_id, embedding_model,
-     session_id, queue_uuid, corroboration_count, kw_tokens, author,
-     content_hash)
-values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+     prompt_version, embedding_model,
+     session_id, queue_uuid, kw_tokens, author)
+values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s,
         %s)
 """)
         with self._conn.cursor() as cur:
@@ -494,11 +483,10 @@ values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %
                 ins.id, ins.content, ins.category, ins.importance,
                 ins.entities_json(), ins.source, ins.access_count,
                 now, now,
-                ins.prompt_version, ins.model_id, ins.embedding_model,
+                ins.prompt_version, ins.embedding_model,
                 ins.session_id, ins.queue_uuid,
-                ins.corroboration_count,
                 sorted(insight_tokens(ins)),
-                ins.author, content_hash(ins.content)))
+                ins.author))
 
     def get(self, id: Id) -> Insight | None:
         sql = self._q(f"""
@@ -742,18 +730,6 @@ where id = %s and deleted_at is null and superseded_by is null
         with self._conn.cursor() as cur:
             cur.execute(sql, (id,))
 
-    def increment_corroboration(
-            self, id: Id, *, queue_uuid: str | None = None) -> bool:
-        sql = self._q("""
-update {s}.insights
-set corroboration_count = corroboration_count + 1,
-    queue_uuid = coalesce(queue_uuid, %s)
-where id = %s and deleted_at is null and superseded_by is null
-""")
-        with self._conn.cursor() as cur:
-            cur.execute(sql, (queue_uuid, id))
-            return bool(cur.rowcount == 1)
-
     def count_active(self) -> int:
         sql = self._q("""
 select count(*) from {s}.insights where deleted_at is null and superseded_by is null
@@ -778,19 +754,6 @@ limit 1
         with self._conn.cursor() as cur:
             cur.execute(sql, (queue_uuid,))
             return cur.fetchone() is not None
-
-    def oldest_active_by_content_hash(self, digest: str) -> Id | None:
-        sql = self._q("""
-select id from {s}.insights
-where content_hash = %s
-  and deleted_at is null and superseded_by is null
-order by created_at, id
-limit 1
-""")
-        with self._conn.cursor() as cur:
-            cur.execute(sql, (digest,))
-            row = cur.fetchone()
-            return row[0] if row else None
 
     def get_by_queue_uuid(self, queue_uuid: str) -> list[Insight]:
         sql = self._q(f"""
@@ -845,17 +808,16 @@ where i.deleted_at is null and i.superseded_by is null
 
     def provenance_distribution(self) -> list[ProvenanceCount]:
         sql = self._q("""
-select prompt_version, model_id, count(*)
+select prompt_version, count(*)
 from {s}.insights
 where deleted_at is null and superseded_by is null
-group by prompt_version, model_id
+group by prompt_version
 order by count(*) desc
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql)
             return [
-                ProvenanceCount(
-                    prompt_version=r[0], model_id=r[1], count=int(r[2]))
+                ProvenanceCount(prompt_version=r[0], count=int(r[1]))
                 for r in cur.fetchall()
                 ]
 
@@ -2752,8 +2714,8 @@ select id, content, category, importance, entities,
        source, access_count, keywords, summary, semantic_facts,
        last_accessed_at, embedding,
        linked_at, enriched_at, created_at, updated_at,
-       deleted_at, prompt_version, model_id, embedding_model,
-       session_id, queue_uuid, corroboration_count, superseded_by,
+       deleted_at, prompt_version, embedding_model,
+       session_id, queue_uuid, superseded_by,
        author
        {pending_select}
 from {schema}.insights
@@ -2781,15 +2743,14 @@ order by id
                     created_at=r[14],
                     updated_at=r[15],
                     deleted_at=r[16],
-                    prompt_version=r[17], model_id=r[18],
-                    embedding_model=r[19],
-                    session_id=r[20], queue_uuid=r[21],
-                    corroboration_count=int(r[22]),
-                    superseded_by=r[23],
-                    author=r[24]))
-                if has_pending and r[25] is not None:
+                    prompt_version=r[17],
+                    embedding_model=r[18],
+                    session_id=r[19], queue_uuid=r[20],
+                    superseded_by=r[21],
+                    author=r[22]))
+                if has_pending and r[23] is not None:
                     pending.append(PendingReembed(
-                        insight_id=r[0], vector=list(r[25])))
+                        insight_id=r[0], vector=list(r[23])))
 
             cur.execute(f"""
 select source_id, target_id, edge_type, weight,
@@ -2895,15 +2856,14 @@ order by sqlite_id
                             ins.linked_at, ins.enriched_at,
                             ins.created_at, ins.updated_at,
                             ins.deleted_at, ins.prompt_version,
-                            ins.model_id, ins.embedding_model,
+                            ins.embedding_model,
                             ins.session_id, ins.queue_uuid,
-                            ins.corroboration_count,
                             [] if ins.deleted_at else sorted(
                                 insight_tokens(Insight(
                                     content=ins.content,
                                     entities=list(ins.entities)))),
                             ins.superseded_by,
-                            ins.author, content_hash(ins.content)))
+                            ins.author))
                     with conn.cursor() as cur:
                         cur.executemany(
                             f'insert into {schema}.insights ('
@@ -2913,15 +2873,14 @@ order by sqlite_id
                             ' last_accessed_at, embedding,'
                             ' linked_at, enriched_at, created_at,'
                             ' updated_at, deleted_at,'
-                            ' prompt_version, model_id,'
+                            ' prompt_version,'
                             ' embedding_model, session_id,'
-                            ' queue_uuid, corroboration_count,'
-                            ' kw_tokens, superseded_by, author,'
-                            ' content_hash)'
+                            ' queue_uuid,'
+                            ' kw_tokens, superseded_by, author)'
                             ' values (%s, %s, %s, %s, %s::jsonb,'
                             ' %s, %s, %s::jsonb, %s, %s::jsonb,'
                             ' %s, %s, %s, %s, %s, %s, %s, %s,'
-                            ' %s, %s, %s, %s, %s, %s, %s, %s, %s)'
+                            ' %s, %s, %s, %s, %s, %s)'
                             ' on conflict (id) do nothing',
                             insight_rows)
 

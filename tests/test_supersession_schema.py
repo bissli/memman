@@ -52,8 +52,8 @@ def _seed_store(data_dir, store):
         id='p-2', content='second statement', session_id='sess-p2',
         queue_uuid='queue-p2'))
     db._exec(
-        'update insights set superseded_by = ?, corroboration_count = 5'
-        ' where id = ?', ('p-2', 'p-1'))
+        'update insights set superseded_by = ? where id = ?',
+        ('p-2', 'p-1'))
     db.close()
     return Path(sdir) / 'memman.db'
 
@@ -81,8 +81,8 @@ def test_superseded_by_round_trips_through_migration(tmp_path):
         silently drops every pointer, and the fleet's 9,2xx
         supersessions with it.
     Oracle: the payload row carries `p-2` in between, the applied
-        store returns it, and the adjacent `corroboration_count`,
-        `queue_uuid` and `session_id` keep their distinct values.
+        store returns it, and the adjacent `queue_uuid` and
+        `session_id` keep their distinct values.
     """
     data_dir = str(tmp_path)
     _seed_store(data_dir, 'src')
@@ -94,7 +94,6 @@ def test_superseded_by_round_trips_through_migration(tmp_path):
     m.apply('dst', payload)
     again = {i.id: i for i in m.gather('dst').insights}
     assert again['p-1'].superseded_by == 'p-2'
-    assert again['p-1'].corroboration_count == 5
     assert again['p-1'].queue_uuid == 'queue-p1'
     assert again['p-1'].session_id == 'sess-p1'
     assert again['p-2'].superseded_by is None
@@ -126,7 +125,7 @@ def test_open_db_refuses_a_store_missing_superseded_by(tmp_path):
 
     `create table if not exists` no-ops on an existing table, so the
     ONLY statement that raises for a store already carrying
-    `corroboration_count` is the baseline index on the newest column.
+    `queue_uuid` is the baseline index on the newest column.
 
     Mutation: dropping `idx_insights_current_listing` from
         `_BASELINE_SCHEMA`, or declaring it without `superseded_by`

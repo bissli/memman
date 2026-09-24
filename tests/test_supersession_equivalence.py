@@ -86,7 +86,7 @@ def _build(backend, *, supersede):
     for n, (rid, content, entities) in enumerate(_ROWS):
         backend.nodes.insert(make_insight(
             id=rid, content=content, entities=entities,
-            prompt_version='pv-1', model_id='m-1'))
+            prompt_version='pv-1'))
         set_created_at(backend, rid,
                        datetime(2026, 3, 1, tzinfo=timezone.utc)
                        + timedelta(hours=n))

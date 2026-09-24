@@ -1107,13 +1107,6 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
     dict or None
         `{claimed, processed, failed}`, so a caller can detect an
         empty drain. None when another drain already holds the lock.
-
-    Notes
-    -----
-    - The emitted JSON carries one count the return value does not:
-      `skipped_writes`, the rows that completed without storing an
-      insight. Each is filed in the `skipped_writes` ledger and still
-      counts toward `processed`.
     """
     import socket
     import sys as _sys
@@ -1124,10 +1117,8 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
     from memman import trace
     from memman.drain_lock import DrainLockBusy, acquire, release
     from memman.llm import usage as llm_usage
-    from memman.pipeline.remember import skip_reason_for_result
-    from memman.queue import claim, clear_skipped_write, finish_worker_run
-    from memman.queue import mark_done, mark_failed, queue_db, queue_db_path
-    from memman.queue import record_skipped_write, start_worker_run, stats
+    from memman.queue import claim, finish_worker_run, mark_done, mark_failed
+    from memman.queue import queue_db, queue_db_path, start_worker_run, stats
     from memman.setup.scheduler import STATE_STOPPED, read_state
 
     data_dir_val = ctx.obj['data_dir']
@@ -1173,7 +1164,6 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         processed = 0
         failed = 0
         claimed = 0
-        skipped_writes = 0
         touched_stores: set[str] = set()
         store_contexts: dict[str, _StoreContext] = {}
         run_error: str | None = None
@@ -1244,33 +1234,8 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
             row_usage_snap = llm_usage.snapshot()
             try:
                 row_t0 = _time.monotonic()
-                row_result = _process_queue_row(row, ctx)
+                _process_queue_row(row, ctx)
                 row_elapsed_ms = int((_time.monotonic() - row_t0) * 1000)
-                # Notes:
-                # - The ledger is observability, so its own failure
-                #   must not fail a row whose pipeline already ran:
-                #   that would re-run enrichment on every retry and
-                #   burn the attempt budget.
-                # - It is written before mark_done so a crash between
-                #   the two leaves a retryable row, never a done row
-                #   with no record.
-                # - A retry that goes on to store retracts the
-                #   earlier entry, or the ledger reports a stored
-                #   write as lost forever.
-                skip_reason = skip_reason_for_result(row_result)
-                try:
-                    if skip_reason:
-                        record_skipped_write(
-                            conn, row.id, row.store, row.content,
-                            skip_reason, row.session_id)
-                        skipped_writes += 1
-                    else:
-                        clear_skipped_write(
-                            conn, row.store, row.content)
-                except Exception:
-                    logger.exception(
-                        f'skipped-write ledger update failed for queue'
-                        f' row {row.id}')
                 mark_done(conn, row.id)
                 processed += 1
                 touched_stores.add(row.store)
@@ -1346,12 +1311,10 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         'drain_end',
         processed=processed,
         failed=failed,
-        skipped_writes=skipped_writes,
         remaining=s)
     _json_out({
         'processed': processed,
         'failed': failed,
-        'skipped_writes': skipped_writes,
         'remaining': s,
         'llm_usage': drain_usage,
         })
@@ -1476,9 +1439,7 @@ def _process_queue_row(
     -------
     dict[str, Any]
         The `run_remember` result, or `{'action': 'already_committed'}`
-        when the idempotency guard fired. The drain reads it through
-        `skip_reason_for_result` to tell a write that stored an
-        insight from one that stored nothing.
+        when the idempotency guard fired.
     """
     from memman import trace as _trace
 
@@ -1857,10 +1818,9 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
       Each of the four overrides when typed, `--entity ''` included,
       which clears the list; enrichment then rebuilds it from the new
       content.
-    - A replace never skips as an exact duplicate. It targets one id,
-      so the content lands as a single row exactly as typed, even when
-      it matches the target; enrichment still runs and rebuilds
-      keywords, summary and entities.
+    - A replace targets one id, so the content lands as a single row
+      exactly as typed, even when it matches the target; enrichment
+      still runs and rebuilds keywords, summary and entities.
     - `--session` does not inherit: the successor carries the session
       that wrote it, so it enters that session's backbone chain.
       It also inherits the replaced insight's edges, including that
@@ -2324,37 +2284,6 @@ def queue_failed(ctx: click.Context, limit: int) -> None:
             })
 
 
-@queue.command('skipped')
-@click.option('--limit', default=50, type=int, help='Max results')
-@click.pass_context
-def queue_skipped(ctx: click.Context, limit: int) -> None:
-    """List writes that stored no insight.
-
-    A write that skipped as an exact duplicate of a current insight
-    completes as `done` and is purged from the queue a minute later. A write that
-    exhausted its retries usually stored nothing either, and `queue
-    purge --failed` files it here before deleting the row, naming its
-    `queue_uuid` so `insights by-queue` can settle whether anything was
-    in fact stored. This ledger keeps the full content and the reason
-    nothing was stored.
-
-    Parameters
-    ----------
-    limit : int, default 50
-        Maximum ledger rows to return, newest first.
-
-    Examples
-    --------
-    memman scheduler queue skipped --limit 20
-    """
-    from memman.queue import list_skipped, queue_db, stats
-    with queue_db(ctx.obj['data_dir']) as conn:
-        _json_out({
-            'stats': stats(conn),
-            'rows': list_skipped(conn, limit=limit),
-            })
-
-
 @queue.command('show')
 @click.argument('row_id', type=int)
 @click.pass_context
@@ -2401,15 +2330,9 @@ def queue_retry(
               help='Delete all rows with status=done')
 @click.option('--stale', 'stale', is_flag=True, default=False,
               help='Delete all rows with status=stale')
-@click.option('--skipped', 'skipped', is_flag=True, default=False,
-              help='Empty the skipped-write ledger')
-@click.option('--failed', 'failed', is_flag=True, default=False,
-              help='Delete all rows with status=failed, filing each'
-                   ' row content into the skipped-write ledger first')
 @click.pass_context
-def queue_purge(ctx: click.Context, done: bool, stale: bool,
-                skipped: bool, failed: bool) -> None:
-    """Remove completed, stale or failed queue rows, or empty the ledger.
+def queue_purge(ctx: click.Context, done: bool, stale: bool) -> None:
+    """Remove completed or stale queue rows.
 
     Parameters
     ----------
@@ -2417,39 +2340,22 @@ def queue_purge(ctx: click.Context, done: bool, stale: bool,
         Delete every row in status `done`.
     stale : bool
         Delete every row in status `stale`.
-    skipped : bool
-        Empty the `skipped_writes` ledger. Nothing else prunes it:
-        `purge_done` never reaches it and `purge_store` clears only
-        one store, so the full content of every skipped write is kept
-        until this runs.
-    failed : bool
-        Delete every row in status `failed`, filing its content into
-        the ledger on the way out. `queue retry` only re-pends such a
-        row, which replays whatever broke it, so this is the one verb
-        that retires a row a retry cannot fix.
 
     Examples
     --------
     memman scheduler queue purge --done
-    memman scheduler queue purge --failed
     """
-    chosen = [f for f in (done, stale, skipped, failed) if f]
+    chosen = [f for f in (done, stale) if f]
     if len(chosen) > 1:
         raise click.ClickException(
-            'pass exactly one of --done, --stale, --skipped, --failed')
+            'pass exactly one of --done, --stale')
     if not chosen:
         raise click.ClickException(
-            'pass --done, --stale, --skipped, or --failed'
-            ' to confirm deletion')
-    from memman.queue import purge_done, purge_failed, purge_skipped
-    from memman.queue import purge_stale, queue_db
+            'pass --done or --stale to confirm deletion')
+    from memman.queue import purge_done, purge_stale, queue_db
     with queue_db(ctx.obj['data_dir']) as conn:
-        if skipped:
-            deleted = purge_skipped(conn)
-        elif done:
+        if done:
             deleted = purge_done(conn)
-        elif failed:
-            deleted = purge_failed(conn)
         else:
             deleted = purge_stale(conn)
         _json_out({'deleted': deleted})
@@ -3494,14 +3400,12 @@ def insights_by_queue(ctx: click.Context, queue_uuid: str) -> None:
     \b
     Notes
     -----
-    - `count: 0` is a real answer, not an error, and has three
-      causes: the write is still queued, it stored nothing (see
-      `memman scheduler queue skipped`), or it went to a different
-      store. The queue is process-global while this command reads
-      one store, so a uuid from `remember --store shop` resolves to
-      nothing under any other store.
-    - After the drain, one write resolves to one row, or to none when
-      it skipped as an exact duplicate.
+    - `count: 0` is a real answer, not an error, and has two causes:
+      the write is still queued, or it went to a different store. The
+      queue is process-global while this command reads one store, so
+      a uuid from `remember --store shop` resolves to nothing under
+      any other store.
+    - After the drain, one write resolves to one row.
     - A malformed uuid is rejected rather than answered `count: 0`,
       so grabbing `queue_id` instead of `queue_uuid` fails loudly.
 

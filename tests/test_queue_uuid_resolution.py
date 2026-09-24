@@ -246,8 +246,7 @@ def test_by_queue_shows_a_superseded_landing_row(mm_runner):
 
     Mutation: adding `superseded_by is null` to `get_by_queue_uuid`,
         which would answer `count: 0` for a write that landed and was
-        then corrected, sending the caller to `queue skipped` for a
-        write that stored something.
+        then corrected, hiding a row that in fact stored something.
     Oracle: the same uuid resolving to the original row before and
         after a replace, with the pointer visible afterwards.
     """

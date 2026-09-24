@@ -349,7 +349,7 @@ class TestRestore:
         """A pre-0.19.0 v2 bundle is refused, not silently restored.
 
         A v2 bundle restored onto this build would yield a store
-        missing `corroboration_count` that fails at `open_db`.
+        missing `superseded_by` that fails at `open_db`.
 
         Mutation: forgetting the `BACKUP_FORMAT_VERSION` bump (v2
             would then round-trip as current).

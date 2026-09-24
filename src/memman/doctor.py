@@ -368,13 +368,13 @@ def check_queue_backlog(data_dir: str) -> dict[str, Any]:
 
 
 EXPECTED_INSIGHT_COLUMNS = {
-    'prompt_version', 'model_id', 'embedding_model',
+    'prompt_version', 'embedding_model',
     'linked_at', 'enriched_at', 'last_accessed_at',
     'summary', 'keywords', 'semantic_facts',
-    'session_id', 'queue_uuid', 'corroboration_count',
-    'superseded_by', 'author', 'content_hash',
+    'session_id', 'queue_uuid',
+    'superseded_by', 'author',
     }
-EXPECTED_QUEUE_TABLES = {'queue', 'skipped_writes', 'worker_runs'}
+EXPECTED_QUEUE_TABLES = {'queue', 'worker_runs'}
 
 
 def check_schema_columns(backend: Backend) -> dict[str, Any]:
@@ -1262,10 +1262,6 @@ def _is_provenance_stale(row_pv: str | None, active_pv: str) -> bool:
     -----
     - NULL is deliberately not stale: those rows pre-date provenance
       tracking and need a backfill, not a rebuild.
-    - `model_id` is NOT compared. `active_pv` folds in the
-      `slow` model, the only model `link_pending` re-runs;
-      `model_id` records the CONTENT model, which no rebuild
-      rewrites, so comparing it would report a row stale forever.
     - The same predicate is encoded in SQL by `count_stale_insights`
       and `iter_stale_insight_ids` (`store/node.py`,
       `store/postgres.py`); keep those WHERE clauses aligned with
@@ -1275,7 +1271,7 @@ def _is_provenance_stale(row_pv: str | None, active_pv: str) -> bool:
 
 
 def check_provenance_drift(backend: Backend) -> dict[str, Any]:
-    """Surface rows whose prompt_version or model_id no longer matches active.
+    """Surface rows whose prompt_version no longer matches active.
 
     Reads per-row provenance columns directly. No meta-key fingerprint
     is maintained; the data already lives on each insight.
@@ -1312,7 +1308,6 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
         is_stale = _is_provenance_stale(pc.prompt_version, active_pv)
         breakdown.append({
             'prompt_version': pc.prompt_version,
-            'model_id': pc.model_id,
             'count': pc.count,
             'stale': is_stale,
             })

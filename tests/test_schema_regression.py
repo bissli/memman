@@ -53,8 +53,8 @@ def _columns_under(ddl: str, table: str) -> set[str]:
 def test_migrate_insight_fields_cover_pg_baseline_schema_columns():
     """Every postgres `insights` DDL column has a `MigrateInsight` field.
 
-    Three columns are excluded, for two reasons, and no exclusion
-    weakens the pin for a fourth.
+    Two columns are excluded, for the same reason, and no exclusion
+    weakens the pin for a third.
 
     `embedding_pending` is added on demand by the swap path and is
     not a payload-time field - the gather path probes the column
@@ -74,9 +74,6 @@ def test_migrate_insight_fields_cover_pg_baseline_schema_columns():
     `test_migrate_verify.py` and `test_migrate_dim_resolution.py`
     with it.
 
-    `content_hash` is derived from `content` the same way, and both
-    migrators recompute it through `model.content_hash` at apply.
-
     Mutation: adding a column to `PG_BASELINE_SCHEMA` without a
         matching `MigrateInsight` field, which drops it silently on
         every store-to-store migration.
@@ -86,7 +83,7 @@ def test_migrate_insight_fields_cover_pg_baseline_schema_columns():
     cols = _columns_under(
         PG_BASELINE_SCHEMA.replace('{schema}', 'store_x')
         .replace('{dim}', '512'), 'insights')
-    cols -= {'embedding_pending', 'kw_tokens', 'content_hash'}
+    cols -= {'embedding_pending', 'kw_tokens'}
     missing = cols - _MIGRATE_INSIGHT_FIELDS
     assert not missing, (
         f'Postgres baseline insights columns missing from'
@@ -98,13 +95,17 @@ def test_migrate_insight_fields_cover_pg_baseline_schema_columns():
 def test_migrate_insight_fields_cover_sqlite_baseline_schema_columns():
     """Every sqlite `insights` DDL column has a `MigrateInsight` field.
 
-    Excludes `embedding_pending` (carried as a separate
-    `PendingReembed` list in the payload) and `content_hash` (derived
-    from `content` and recomputed at apply, as the Postgres test
-    explains for `kw_tokens`).
+    Excludes `embedding_pending`, carried as a separate
+    `PendingReembed` list in the payload.
+
+    Mutation: adding a column to `_BASELINE_SCHEMA` without a
+        matching `MigrateInsight` field, which drops it silently on
+        every store-to-store migration.
+    Oracle: the DDL text itself, parsed, against the dataclass
+        fields.
     """
     cols = _columns_under(_BASELINE_SCHEMA, 'insights')
-    cols -= {'embedding_pending', 'content_hash'}
+    cols -= {'embedding_pending'}
     missing = cols - _MIGRATE_INSIGHT_FIELDS
     assert not missing, (
         f'SQLite baseline insights columns missing from'
@@ -123,3 +124,17 @@ def test_payload_version_pinned():
     assert isinstance(PAYLOAD_VERSION, int)
     assert PAYLOAD_VERSION >= 1
     assert 'payload_version' in _MIGRATION_PAYLOAD_FIELDS
+
+
+def test_insight_baselines_name_no_dropped_column():
+    """Verify neither insights baseline names a column the live DDL drops.
+
+    Mutation: a column line or its index line left in either baseline,
+        which fails at open on a store whose column the DDL dropped.
+    Oracle: the dropped names searched for in the raw DDL text.
+    """
+    dropped = ('content_hash', 'corroboration_count', 'model_id')
+    for name, ddl in (
+            ('sqlite', _BASELINE_SCHEMA), ('postgres', PG_BASELINE_SCHEMA)):
+        found = [column for column in dropped if column in ddl]
+        assert not found, f'{name} baseline still names {found}'

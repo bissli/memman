@@ -117,26 +117,23 @@ def test_stats_reports_current_superseded_and_deleted_separately(backend):
 
 
 def test_increment_counters_ignore_a_superseded_row(backend):
-    """Verify neither counter moves on a superseded row.
+    """Verify the access counter does not move on a superseded row.
 
     Mutation: no `superseded_by is null` guard on
-        `increment_access_count` or `increment_corroboration`.
-    Oracle: both counters read back unchanged on the predecessor,
-        `increment_corroboration` returns False, and the same calls
-        still move the successor's counters.
+        `increment_access_count`.
+    Oracle: the counter reads back unchanged on the predecessor, and
+        the same call still moves the successor's counter.
     """
     _seed_pair(backend)
     assert backend.nodes.supersede('p-1', 'p-2') is True
 
     backend.nodes.increment_access_count('p-1')
-    assert backend.nodes.increment_corroboration('p-1', queue_uuid='q-1') is False
     old = backend.nodes.get_include_deleted('p-1')
-    assert (old.access_count, old.corroboration_count) == (0, 0)
+    assert old.access_count == 0
 
     backend.nodes.increment_access_count('p-2')
-    assert backend.nodes.increment_corroboration('p-2', queue_uuid='q-2') is True
     new = backend.nodes.get('p-2')
-    assert (new.access_count, new.corroboration_count) == (1, 1)
+    assert new.access_count == 1
 
 
 def test_pending_link_count_matches_its_id_list_after_supersession(backend):

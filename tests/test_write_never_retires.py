@@ -1,4 +1,4 @@
-"""A `remember` write adds a row or skips an exact duplicate; it never retires.
+"""A `remember` write always adds a row; it never retires or skips.
 
 Only `replace <id>` and `supersede` retire a stored row. A write whose
 nearest stored row contradicts it lands beside that row, and both stay
@@ -68,3 +68,30 @@ def test_a_contradicting_write_is_added_and_retires_nothing(
     old = tmp_backend.nodes.get_include_deleted('old-broker')
     assert old.superseded_by is None
     assert tmp_backend.nodes.get('old-broker') is not None
+
+
+def test_an_identical_write_adds_a_second_row(tmp_backend):
+    """Verify a write identical to a current row lands as its own row.
+
+    Mutation: the exact-duplicate lookup kept - the write reports
+        `skipped` onto the stored row and adds nothing.
+    Oracle: two current rows carrying the text, the stored one and
+        the write's own.
+    """
+    content = 'Redis caches session tokens'
+    tmp_backend.nodes.insert(make_insight(id='stored', content=content))
+    now = datetime.now(timezone.utc)
+    parent = Insight(
+        id=str(uuid.uuid4()), content=content, category='fact',
+        importance=3, entities=[], source='test', access_count=0,
+        created_at=now, updated_at=now)
+
+    res = run_remember(
+        tmp_backend, parent, content,
+        ec=bound_embedder(tmp_backend), store_name='test')
+
+    assert [f['action'] for f in res['facts']] == ['add']
+    current = [
+        ins for ins in tmp_backend.nodes.get_all_active()
+        if ins.content == content]
+    assert len(current) == 2

@@ -259,24 +259,23 @@ class TestReplaceAtomicity:
 
 
 class TestDeduplication:
-    """No silent duplicates, no false positive dedup."""
+    """No false positive merge onto an unrelated row."""
 
-    def test_identical_content_skips_and_bumps_corroboration(self, runner):
-        """A `remember` of identical content skips onto the stored row.
+    def test_identical_content_adds_a_second_row(self, runner):
+        """A `remember` of identical content lands as its own row.
 
-        Mutation: the content-hash skip rung dropped or gated behind a
-            removed flag, so the second write lands as its own row
-            instead of corroborating the first.
-        Oracle: `insights show` on the first write's id reads
-            `corroboration_count == 1` after the second write, and no
-            second row exists to have absorbed it instead.
+        Mutation: merging the second write onto the first row instead
+            of storing it, losing the second call's id.
+        Oracle: the two ids returned by the two writes, both distinct
+            and both readable through `insights show`.
         """
         text = 'Go error handling with sentinel values and wrapping'
         first = remember(runner, text)
-        remember(runner, text)
-        shown = invoke(runner, ['insights', 'show', first['id']])
-        assert shown.exit_code == 0, shown.output
-        assert json.loads(shown.output)['corroboration_count'] == 1
+        second = remember(runner, text)
+        assert first['id'] != second['id']
+        for insight_id in (first['id'], second['id']):
+            shown = invoke(runner, ['insights', 'show', insight_id])
+            assert shown.exit_code == 0, shown.output
 
     def test_reconcile_runs_when_similar_exists(self, runner):
         """A write whose nearest stored row is similar, not identical, adds.
