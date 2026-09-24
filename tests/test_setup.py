@@ -6,6 +6,7 @@ import os
 import pathlib
 import re
 import subprocess
+from importlib.resources import files
 
 import click
 import pytest
@@ -17,7 +18,6 @@ from memman.setup.settings import add_memman_permission, read_json_file
 from memman.setup.settings import remove_claude_hooks, remove_if_empty
 from memman.setup.settings import remove_memman_permission, strip_json5
 from memman.setup.settings import write_json_file
-
 
 # The host truncates hook stdout above this many bytes and persists the
 # remainder to a file it never reads back.
@@ -597,7 +597,6 @@ class TestPrimeAndCompactHooks:
         assert result.returncode == 0
         assert 'not on PATH' in result.stdout
 
-
     def test_prime_payload_reaches_the_model_whole(self, tmp_path):
         """Verify the SessionStart payload fits the host's stdout limit.
 
@@ -687,7 +686,6 @@ class TestNoBlockingHook:
             })
         trees = (
             ('claude', assets.joinpath('claude')),
-            ('nanoclaw/hooks', assets.joinpath('nanoclaw').joinpath('hooks')),
             )
         offenders = []
         checked = 0
@@ -754,23 +752,6 @@ class TestNoBlockingHook:
             ]
         assert hits == []
 
-    def test_nanoclaw_ships_no_stop_hook(self):
-        """Verify the nanoclaw surface ships no Stop hook and names none.
-
-        Mutation: a single-surface ship that deletes the Claude Code hook
-            and leaves nanoclaw's ungated block in place.
-        Oracle: hand-written two-part expectation - no stop.sh asset, and
-            no Stop registration in the integrator instructions.
-        """
-        from importlib.resources import files as pkg_files
-        nanoclaw = pkg_files('memman.setup.assets').joinpath('nanoclaw')
-        names = sorted(
-            entry.name for entry in nanoclaw.joinpath('hooks').iterdir())
-        assert 'stop.sh' not in names
-        skill = nanoclaw.joinpath('SKILL.md').read_text()
-        assert 'stop.sh' not in skill
-        assert 'Stop:' not in skill
-
 
 class TestPreToolUseHooksReachTheModel:
     """PreToolUse reminders ride the one channel Claude Code reads."""
@@ -818,14 +799,11 @@ class TestDocsMatchShippedHooks:
             deletion that corrected three README counts and left the
             fourth reading six, and regenerated one diagram of two.
         Oracle: the shipped asset tree counted directly - the .sh files
-            under assets/claude and under assets/nanoclaw/hooks.
+            under assets/claude.
         """
         assets = (pathlib.Path(__file__).resolve().parents[1]
                   / 'src' / 'memman' / 'setup' / 'assets')
-        shipped = {
-            len(list(assets.glob('claude/*.sh'))),
-            len(list(assets.glob('nanoclaw/hooks/*.sh'))),
-            }
+        shipped = len(list(assets.glob('claude/*.sh')))
         words = {
             'two': 2, 'three': 3, 'four': 4, 'five': 5,
             'six': 6, 'seven': 7, 'eight': 8, 'nine': 9,
@@ -838,7 +816,7 @@ class TestDocsMatchShippedHooks:
                 r'\b(\w+)\s+(?:lifecycle\s+)?hooks?\b', readme, re.I)
             if match.group(1).lower() in words
             }
-        assert counted == shipped
+        assert counted == {shipped}
 
     def test_architecture_diagram_names_the_shipped_hooks(self):
         """Verify the architecture diagram lists the shipped hook roles.
@@ -865,56 +843,7 @@ class TestDocsMatchShippedHooks:
 
 
 class TestSetupCli:
-    """`memman guide` and `memman prime` CLI commands."""
-
-    def test_guide_command_prints_shipped_content(self):
-        """`memman guide` prints the shipped guide.md from the package."""
-        from importlib.resources import files as pkg_files
-        shipped = (pkg_files('memman.setup.assets')
-                   .joinpath('claude/guide.md').read_text())
-        runner = CliRunner()
-        result = runner.invoke(cli, ['guide'])
-        assert result.exit_code == 0
-        assert shipped.strip() in result.output
-
-    def test_guide_names_no_host_tool(self):
-        """Verify the shared guide.md names no host-specific tool.
-
-        Mutation: the shared guide naming Bash, so the OpenClaw
-            bootstrap names a tool that host does not expose.
-        Oracle: the exact tokens 'via Bash' and 'the `exec` tool' read
-            from the two SKILL files confirm they disagree, so the shared
-            text must name neither; the emitted guide carries no 'Bash'
-            and no 'exec' at all.
-        """
-        from importlib.resources import files as pkg_files
-        assets = pkg_files('memman.setup.assets')
-        claude_skill = assets.joinpath('claude/SKILL.md').read_text()
-        openclaw_skill = assets.joinpath('openclaw/SKILL.md').read_text()
-        assert 'via Bash' in claude_skill
-        assert 'the `exec` tool' in openclaw_skill
-        runner = CliRunner()
-        result = runner.invoke(cli, ['guide'])
-        assert result.exit_code == 0
-        assert 'Bash' not in result.output
-        assert 'exec' not in result.output
-
-    def test_guide_command_ignores_any_local_override_file(self, tmp_path, monkeypatch):
-        """`memman guide` must NOT read ~/.memman/prompt/guide.local.md.
-
-        Confirms the override mechanism is gone; any leftover file at the
-        old path has zero effect on output.
-        """
-        monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
-        prompt_dir = tmp_path / '.memman' / 'prompt'
-        prompt_dir.mkdir(parents=True)
-        override = prompt_dir / 'guide.local.md'
-        override.write_text('USER-OVERRIDE-MARKER-SHOULD-NOT-APPEAR\n')
-        runner = CliRunner()
-        result = runner.invoke(cli, ['guide'])
-        assert result.exit_code == 0
-        assert 'USER-OVERRIDE-MARKER-SHOULD-NOT-APPEAR' not in result.output
-        assert '<!-- user overrides -->' not in result.output
+    """`memman prime` CLI command."""
 
     def test_prime_command_emits_status_and_guide(self, tmp_path, monkeypatch):
         """`memman prime` emits a status line and the guide content."""
@@ -1045,47 +974,6 @@ class TestSymlinks:
         assert target.read_bytes() == target_bytes
 
 
-class TestInstallLoopErrorSurfacing:
-    """Per-env install errors are surfaced with detail (F.4)."""
-
-    def test_install_loop_surfaces_per_env_errors(
-            self, tmp_path, monkeypatch):
-        """A failing `_install_env` is logged and rolled into the
-        ClickException detail string.
-
-        Pre-F.4 the loop counted errors and raised an opaque
-        '%d error(s)' message. The new shape includes per-env name +
-        exception text.
-        """
-        from memman.setup import claude as claude_setup
-
-        def _boom(env, data_dir, no_wizard=False):
-            raise RuntimeError(f'boom-{env["name"]}')
-
-        monkeypatch.setattr(claude_setup, '_install_env', _boom)
-        monkeypatch.setattr(
-            claude_setup, 'install_scheduler',
-            lambda data_dir, knobs: {
-                'platform': 'noop', 'env_actions': [], 'actions': []})
-
-        envs = [
-            {'name': 'envA', 'detected': True, 'display': 'envA',
-             'version': '1.0', 'config_dir': '/tmp/a'},
-            {'name': 'envB', 'detected': True, 'display': 'envB',
-             'version': '1.0', 'config_dir': '/tmp/b'},
-            ]
-
-        with pytest.raises(click.ClickException) as exc:
-            claude_setup._run_install_flow(
-                envs, target='', data_dir=str(tmp_path / 'memman'),
-                knobs={})
-        msg = str(exc.value.message)
-        assert 'envA' in msg
-        assert 'envB' in msg
-        assert 'boom-envA' in msg
-        assert 'boom-envB' in msg
-
-
 class TestInstallConsent:
     """`_install_claude_code` TTY consent flow for permissions."""
 
@@ -1168,3 +1056,52 @@ class TestInstallConsent:
         allow = self._allow(env['config_dir'])
         for entry in list_claude_permissions():
             assert entry in allow
+
+
+def test_shipped_package_names_no_claw_host():
+    """Verify no shipped file contains an openclaw or nanoclaw reference.
+
+    Mutation: leaving an openclaw or nanoclaw branch, asset, or docstring
+        behind in the shipped package.
+    Oracle: the text of every shipped file.
+    """
+    pattern = re.compile(r'openclaw|nanoclaw', re.I)
+    root = pathlib.Path(str(files('memman')))
+    offenders = [
+        str(item.relative_to(root))
+        for item in sorted(root.rglob('*'))
+        if item.is_file()
+        and item.suffix in {'.py', '.md', '.sh', '.js', '.json'}
+        and pattern.search(item.read_text(errors='replace'))
+        ]
+    assert offenders == [], (
+        'Shipped files still contain openclaw/nanoclaw references:\n'
+        + '\n'.join(offenders))
+
+
+def test_uninstall_raises_when_claude_code_cleanup_fails(
+        monkeypatch, tmp_path):
+    """Verify a failed Claude Code cleanup fails the uninstall first.
+
+    Mutation: discarding `_uninstall_env`'s error result, so uninstall
+        exits 0, removes the scheduler, and prints success.
+    Oracle: a stubbed cleanup returning one error, and a spy proving
+        the scheduler removal never ran.
+    """
+    from memman.setup import claude as claude_setup
+    monkeypatch.setattr(
+        claude_setup, 'claude_uninstall',
+        lambda config_dir: [RuntimeError('settings rewrite failed')])
+    monkeypatch.setattr(claude_setup, '_uninstall_markdown', lambda path: None)
+    scheduler_calls = []
+    monkeypatch.setattr(
+        claude_setup, 'uninstall_scheduler',
+        lambda data_dir: scheduler_calls.append(data_dir) or {})
+    env = {
+        'name': 'claude-code', 'display': 'Claude Code', 'detected': True,
+        'version': '', 'config_dir': str(tmp_path / '.claude'),
+        }
+    with pytest.raises(click.ClickException):
+        claude_setup._run_uninstall_flow(
+            env, target='', data_dir=str(tmp_path))
+    assert scheduler_calls == []

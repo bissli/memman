@@ -393,7 +393,7 @@ def test_prime_substitutes_session_id_into_guide(mm_runner):
     makes D1's chain adoption real rather than
     documented-but-unexercised.
 
-    Mutation: dropping the substitution in `_emit_guide` - the
+    Mutation: dropping the substitution in `prime` - the
         template would keep the literal `$SESSION_ID` placeholder.
     Oracle: prime's output contains `--session <real id>` and no
         placeholder.

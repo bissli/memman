@@ -1,6 +1,6 @@
 # memman
 
-**LLM-supervised persistent memory for AI agents.**
+**LLM-supervised persistent memory for coding agents.**
 
 [![CI](https://github.com/bissli/memman/actions/workflows/ci.yml/badge.svg)](https://github.com/bissli/memman/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -21,7 +21,7 @@ See [Design & Architecture](docs/DESIGN.md) for details.
 
 ## How it works
 
-Once installed, the agent runs memman, not the user. Claude Code [hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) (or, for OpenClaw, a `before_prompt_build` plugin) fire on session start and prompt submit; each reminds the agent to recall before responding and remember after.
+Once installed, the coding agent runs memman, not the user. Claude Code [hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) fire on session start and prompt submit; each reminds the agent to recall before responding and remember after.
 
 Five hook scripts drive the Claude Code lifecycle:
 
@@ -29,7 +29,7 @@ Five hook scripts drive the Claude Code lifecycle:
 | ---------------- | --------------------------- | ------------------------------------------------------------- |
 | `prime.sh`       | `SessionStart`              | loads the behavioral guide; surfaces post-compact recall hint |
 | `user_prompt.sh` | `UserPromptSubmit`          | reminds the agent to recall before answering                  |
-| `task_recall.sh` | `PreToolUse` (Agent\|Task)   | reminds the agent to recall before sub-agent delegation       |
+| `task_recall.sh` | `PreToolUse` (Agent or Task) | reminds the agent to recall before sub-agent delegation |
 | `compact.sh`     | `PreCompact`                | drops a flag so the next `SessionStart` re-recalls context    |
 | `exit_plan.sh`   | `PreToolUse` (ExitPlanMode) | prompts memory storage before plan-to-execute transitions     |
 
@@ -67,22 +67,9 @@ Two invariants follow from this split:
 - **Hot-path discipline.** The agent's turn never extracts facts, reconciles them, or writes to the graph. `remember` appends to a queue file and reaches no network. `recall` reads the local database and, on its default path, calls the embedding provider to encode the query and the reranker to reorder the top results; `--basic` makes neither call. Opening the store needs the embedding provider's key on every path, `--basic` included - see [Where keys are needed](#where-keys-are-needed).
 - **One-way visibility.** A memory written this turn is **not** recallable later in the same turn - it lands for future sessions only.
 
-### OpenClaw and NanoClaw - same split, different topology
-
-The hot-path/background split is universal across integrations. What changes is **what triggers the recall/remember reminders** and **where the worker runs**:
-
-| Integration | Trigger (inside)                                                          | Worker (outside)                                              | Data location                                                                                 |
-| ----------- | ------------------------------------------------------------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Claude Code | five lifecycle hook scripts (`prime.sh`, `user_prompt.sh`, ...) | systemd timer (Linux) or launchd agent (macOS) on host        | `~/.memman/data/default/` on host                                                             |
-| OpenClaw    | `before_prompt_build` plugin injects recall/remember hints                | same host scheduler as Claude Code (shared)                   | `~/.memman/data/default/` on host                                                             |
-| NanoClaw    | two hook scripts inside the container                                   | `memman scheduler serve` as PID 1 inside the *same* container | host `~/.memman/data/{group}/` volume-mounted to container `/home/node/.memman/data/default/` |
-
-OpenClaw sits on the same host as Claude Code: install memman once on the host and the worker is shared. The agent invokes `memman` via the `exec` tool rather than Bash-hook reminders.
-
-NanoClaw moves the hot-path boundary into the container. Agent and worker share one container; the SQLite data dir is volume-mounted from `~/.memman/data/{group}/` (rw) on the host so memory survives container restarts, and an optional `~/.memman/data/global/` is mounted read-only into every container for shared knowledge. Each WhatsApp group gets its own container and its own private store. `queue.db` sits outside the volume mount - pending writes are seconds old and re-driven on the next drain tick, so a restart loses at most one cycle of unprocessed items.
-
 ## Features
 
+- **Built for coding agents** - memory for Claude Code: the decisions, preferences, and facts a coding session settles, recalled in the next one.
 - **Hook-driven** - five lifecycle hooks handle memory operations automatically.
 - **LLM-supervised** - the host LLM decides what to remember and forget; a worker model handles fact extraction, reconciliation, enrichment, and query expansion.
 - **Multi-graph architecture** - temporal, entity, and semantic edges.
@@ -187,30 +174,25 @@ One reranker ships, and it is on by default. It scores the top recall results ag
 
 Reranking skips itself on queries of two words or fewer, since there is little to reorder.
 
-`pipx install` puts the `memman` binary on the PATH. `memman install` wires integration into Claude Code, [OpenClaw](https://github.com/openclaw/openclaw), and/or [NanoClaw](https://github.com/qwibitai/nanoclaw). The paths it writes:
+`pipx install` puts the `memman` binary on the PATH. `memman install` wires integration into Claude Code. The paths it writes:
 
 | Path                                                   | What                                                               | Form                            |
 | ------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------- |
 | `~/.claude/skills/memman/SKILL.md`                     | command reference loaded by the agent                              | symlink into installed package  |
-| `~/.claude/hooks/memman/*.sh`                          | five lifecycle hook scripts                                         | symlinks into installed package |
+| `~/.claude/hooks/memman/*.sh`                          | five lifecycle hook scripts                                        | symlinks into installed package |
 | `~/.claude/settings.json`                              | hook registrations + curated `Bash(memman <verb>:*)` allow entries | JSON merge                      |
 | `~/.config/systemd/user/memman-enrich.{timer,service}` | scheduler unit (Linux)                                             | unit files                      |
 | `~/Library/LaunchAgents/com.memman.enrich.plist`       | scheduler agent (macOS)                                            | plist                           |
 | `~/.memman/env` (mode 0600)                            | canonical config file (API keys + installable knobs)               | created or updated in place     |
 | `~/.memman/logs/`                                      | scheduler enrichment worker stdout/stderr                          | directory                       |
 
-OpenClaw installs swap `~/.claude/` for `~/.openclaw/`. NanoClaw runs the same paths inside the container (see [OpenClaw and NanoClaw](#openclaw-and-nanoclaw--same-split-different-topology) above).
-
 Target a specific environment:
 
 ```bash
-memman install --target openclaw
 memman install --target claude-code
 ```
 
-For NanoClaw (agents inside Linux containers), install memman on the host as above, then run the `/add-memman` skill in the NanoClaw project - it modifies the Dockerfile, adds a container skill, and wires volume mounts. Each WhatsApp group gets its own isolated store, with optional global shared memory (read-only).
-
-Start a new Claude Code session (or restart the OpenClaw gateway) to activate.
+Start a new Claude Code session to activate.
 
 For editable installs and the test suite, see [Development](#development).
 

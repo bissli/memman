@@ -3,7 +3,6 @@
 
 # Local LLM CLI integration (use meman setup --global for user-wide install)
 .claude/
-.openclaw/
 
 # IDE
 .idea/

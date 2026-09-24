@@ -9,8 +9,7 @@ Caveats:
   process actually dies. This is the kernel's behavior, not ours.
 - Assumes a local filesystem. The lock lives at `<data_dir>/`, which
   is the base data dir (typically `~/.memman/`), not the per-store
-  directory under `data/`. In nanoclaw containers this sits on the
-  container-local writable layer, not on the bind-mounted store volume.
+  directory under `data/`.
 """
 import fcntl
 import os

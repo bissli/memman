@@ -49,7 +49,7 @@ def home_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
     (dot / 'scheduler.state').write_text('started\n')
     (dot / 'scheduler.state').chmod(0o600)
     (dot / 'cache').mkdir(exist_ok=True)
-    (dot / 'env').write_text(build_e2e_env_body(use_real_secrets=True))
+    (dot / 'env').write_text(build_e2e_env_body())
     return home
 
 

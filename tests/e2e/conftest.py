@@ -15,7 +15,6 @@ short-circuit. We re-emphasize the contract here:
 """
 
 import os
-import shutil
 import sqlite3
 from pathlib import Path
 
@@ -46,29 +45,20 @@ def resolve_e2e_secret(name: str) -> str:
     return val or _PLACEHOLDER
 
 
-def build_e2e_env_body(overrides: dict[str, str] | None = None,
-                       use_real_secrets: bool = False) -> str:
+def build_e2e_env_body() -> str:
     """Render a `KEY=VALUE`-per-line env-file body for e2e tests.
 
     Starts from `config.INSTALL_DEFAULTS` so model/provider/endpoint
     constants stay in sync with what `memman install` writes, then
-    overlays e2e-specific secrets and any caller `overrides`. When
-    `use_real_secrets=True`, `MEMMAN_*_API_KEY` values resolve via
-    `resolve_e2e_secret` (shell env then `~/.memman/env`); when False
-    (the default), secrets stay as a stable placeholder so container
-    tests don't silently inherit the host's credentials. Live-key
-    container tests must overlay real keys via the `overrides` dict
-    so the leak path is explicit.
+    overlays e2e-specific secrets resolved from shell env or
+    `~/.memman/env`.
     """
     rows: dict[str, str] = dict(config.INSTALL_DEFAULTS)
     rows[config.DEFAULT_BACKEND] = 'sqlite'
     for name in _SECRET_KEYS:
-        rows[name] = (resolve_e2e_secret(name)
-                      if use_real_secrets else _PLACEHOLDER)
+        rows[name] = resolve_e2e_secret(name)
     if rows['MEMMAN_LLM_API_KEY'] == _PLACEHOLDER:
         rows['MEMMAN_LLM_API_KEY'] = rows['MEMMAN_OPENROUTER_API_KEY']
-    if overrides:
-        rows.update(overrides)
     return ''.join(f'{k}={v}\n' for k, v in rows.items())
 
 
@@ -124,23 +114,18 @@ def memman_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.fixture(scope='session')
-def live_keys() -> dict[str, str]:
+def live_keys() -> None:
     """Gate live-key tests; fail-loud under MEMMAN_E2E_REQUIRE_LIVE=1.
 
-    Tests that exercise enrichment, intent
-    expansion, or any path that hits OpenRouter / Voyage take this
-    fixture as a dependency. Returns the actual key values for
-    callers that need to pass them through into containers. With
+    Tests that exercise enrichment, intent expansion, or any path that
+    hits OpenRouter / Voyage take this fixture as a dependency. With
     `MEMMAN_E2E_REQUIRE_LIVE=1` set, missing keys raise instead of
-    skipping silently, so CI lanes that should run live tests fail
-    visibly when secrets are misconfigured.
+    skipping silently.
 
-    Resolution order matches the unit conftest's `_isolate_env`:
-    `os.environ` first (CI path: secrets exported via workflow),
-    then the developer's canonical `~/.memman/env` (local dev path).
+    Resolution order: `os.environ` first (CI path: secrets exported
+    via workflow), then the developer's canonical `~/.memman/env`.
     """
     require = os.environ.get('MEMMAN_E2E_REQUIRE_LIVE') == '1'
-    keys = {}
     for name in ('MEMMAN_OPENROUTER_API_KEY', 'MEMMAN_VOYAGE_API_KEY'):
         val = resolve_e2e_secret(name)
         if val in {_PLACEHOLDER, 'mock-key-for-testing'}:
@@ -148,66 +133,6 @@ def live_keys() -> dict[str, str]:
             if require:
                 pytest.fail(msg)
             pytest.skip(msg)
-        keys[name] = val
-    return keys
-
-
-@pytest.fixture(scope='session')
-def node_available() -> None:
-    """Skip when `node` is not on PATH.
-
-    Used by tests that drive `assets/openclaw/hooks/.../handler.js`
-    via `node -e`. Skipping cleanly here keeps developer machines
-    without Node.js (and forked CI lanes) green.
-    """
-    if shutil.which('node') is None:
-        pytest.skip('node CLI not on PATH; skipping handler.js test')
-
-
-@pytest.fixture(scope='session')
-def docker_available() -> None:
-    """Skip when the Docker daemon is unreachable.
-
-    Used by container-level tests. Importing `docker` and pinging the
-    daemon catches both 'no daemon' and 'permission denied' before
-    testcontainers raises a less-descriptive error.
-    """
-    if shutil.which('docker') is None:
-        pytest.skip('docker CLI not on PATH; skipping container test')
-    try:
-        import docker as _docker
-        client = _docker.from_env()
-        client.ping()
-    except Exception as exc:
-        pytest.skip(f'Docker daemon unreachable: {exc}')
-
-
-@pytest.fixture(scope='session')
-def repo_root() -> Path:
-    """Absolute path to the memman repository root.
-    """
-    return Path(__file__).resolve().parent.parent.parent
-
-
-@pytest.fixture(scope='session')
-def nanoclaw_image(docker_available: None, repo_root: Path) -> str:
-    """Build (or reuse) the nanoclaw test image once per session.
-
-    The image is tagged `memman-e2e-nanoclaw:dev` and kept across
-    sessions so Docker's layer cache makes subsequent builds fast.
-    Cleanup is deliberate: we do *not* remove the image on session
-    exit. testcontainers' Ryuk reaper handles container cleanup.
-    """
-    from testcontainers.core.image import DockerImage
-
-    tag = 'memman-e2e-nanoclaw:dev'
-    DockerImage(
-        path=str(repo_root),
-        dockerfile_path='tests/e2e/Dockerfile.nanoclaw',
-        tag=tag,
-        clean_up=False,
-    ).build()
-    return tag
 
 
 from tests.conftest import _safe_store_name as _safe  # noqa: E402,F401

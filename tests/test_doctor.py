@@ -1401,7 +1401,7 @@ class TestClaudeHooksCheck:
         """Verify a machine with no Claude Code install is not a failure.
 
         Mutation: treating a missing settings.json as drift, which
-            would fail doctor on every OpenClaw-only host.
+            would fail doctor on a machine with no Claude Code install.
         Oracle: a home directory with no .claude at all.
         """
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)

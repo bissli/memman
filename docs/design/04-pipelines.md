@@ -26,7 +26,7 @@ Every write goes through the queue. When the scheduler is **stopped**, memman is
 
 - **Linux host**: `systemctl --user` timer at `~/.config/systemd/user/memman-enrich.timer`, `Persistent=true` so sleep/off catch-up is automatic.
 - **macOS host**: launchd agent at `~/Library/LaunchAgents/com.memman.enrich.plist` with `StartInterval=60`.
-- **nanoclaw container** (no systemd / launchd): `memman scheduler serve --interval 60` runs as PID 1. Set `MEMMAN_SCHEDULER_KIND=serve`. The drain loop polls the state file every iteration so `scheduler stop` is observed within seconds; the loop then exits - in a PID-1 container that exits the container.
+- **host without systemd / launchd** (e.g. a container): `memman scheduler serve --interval 60` runs in the foreground (as PID 1 in a container, where the loop exiting ends the container). Set `MEMMAN_SCHEDULER_KIND=serve`. The drain loop polls the state file every iteration so `scheduler stop` is observed within seconds; the loop then exits.
 
 Per-blob processing inside `_process_queue_row`:
 

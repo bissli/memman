@@ -268,18 +268,18 @@ def remove_memman_permission(data: dict) -> None:
 
 
 _REMOVE_IF_EMPTY_ROOTS = frozenset({
-    '.claude', '.openclaw', '.nanoclaw',
-    'claude', 'openclaw', 'nanoclaw',
+    '.claude',
+    'claude',
     })
 _REMOVE_IF_EMPTY_LEAVES = frozenset({
-    'hooks', 'skills', 'extensions', 'memman',
+    'hooks', 'skills', 'memman',
     })
 
 
 def remove_if_empty(dir_path: str) -> None:
     """Remove a directory only if it exists, is empty, AND either is a
-    known agent-config root (`.claude`, `.openclaw`, `.nanoclaw`) or a
-    known leaf inside one (`hooks`, `skills`, `extensions`, `memman`).
+    known agent-config root (`.claude`) or a known leaf inside one
+    (`hooks`, `skills`, `memman`).
 
     Raises ValueError on a path outside the allowlist; defensive
     against a future caller passing a surprising path like `/tmp/x`

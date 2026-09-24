@@ -714,8 +714,8 @@ def check_claude_hooks() -> dict[str, Any]:
       missing script and the shell exits 127 at every matching event.
       A registration that merely differs warns, since `memman install`
       repairs it.
-    - No Claude Code settings at all passes; an OpenClaw-only or
-      container-only host registers nothing here.
+    - No Claude Code settings at all passes; a machine without Claude
+      Code installed registers nothing here.
     """
     config_dir = Path.home() / '.claude'
     settings_path = config_dir / 'settings.json'

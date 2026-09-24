@@ -24,7 +24,6 @@ memman install
 
 # Non-interactive: specific target only
 memman install --target claude-code
-memman install --target openclaw
 
 # Remove memman integrations
 memman uninstall
@@ -34,18 +33,15 @@ memman uninstall --target claude-code
 | Command            | `--target <name>` | Effect                                                                                                                                                                                                                                                                                      |
 | ------------------ | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `memman install`   | (auto-detect)     | Deploy hook and skill symlinks, register in settings.json, install the scheduler unit, create `~/.memman/logs/` for scheduler output                                                                                                                                                        |
-| `memman install`   | `claude-code`     | Install into `~/.claude/` only                                                                                                                                                                                                                                                              |
-| `memman install`   | `openclaw`        | Install into `~/.openclaw/` only                                                                                                                                                                                                                                                            |
-| `memman install`   | `nanoclaw`        | Install into `~/.nanoclaw/` only                                                                                                                                                                                                                                                            |
+| `memman install`   | `claude-code`     | Install into `~/.claude/` even when Claude Code is not detected                                                                                                                                                                                                                                                              |
 | `memman uninstall` | (auto-detect)     | Remove hooks, skill, settings.json entries, and scheduler unit. Strips secret keys (`MEMMAN_LLM_API_KEY`, `MEMMAN_OPENROUTER_API_KEY`, `MEMMAN_VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`) from `~/.memman/env` but keeps non-secret settings; memory store, queue, and logs untouched. |
-| `memman uninstall` | `<name>`          | Remove memman from that environment only                                                                                                                                                                                                                                                    |
+| `memman uninstall` | `claude-code`     | Remove the Claude Code integration even when Claude Code is not detected                                                                                                                                                                                                                                                    |
 
-Two live-read commands (called by hooks, not by hand):
+One live-read command (called by the SessionStart hook, not by hand):
 
-| Command        | What it prints                                                                                     |
-| -------------- | -------------------------------------------------------------------------------------------------- |
-| `memman guide` | Shipped `guide.md` (hidden, called by openclaw bootstrap; humans read `guide.md` from the package) |
-| `memman prime` | Reads SessionStart JSON on stdin; emits status + compact-recall hint + guide (called by prime.sh)  |
+| Command        | What it prints                                                                                    |
+| -------------- | ------------------------------------------------------------------------------------------------- |
+| `memman prime` | Reads SessionStart JSON on stdin; emits status + compact-recall hint + guide (called by prime.sh) |
 
 ---
 

@@ -17,6 +17,7 @@ import sys
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from importlib.resources import files as pkg_files
 from typing import Any, Self
 from urllib.parse import quote
 
@@ -3480,7 +3481,7 @@ def insights_by_queue(ctx: click.Context, queue_uuid: str) -> None:
 
 @cli.command()
 @click.option('--target', default='',
-              help='Target environment (claude-code | openclaw | nanoclaw)')
+              help='Target environment (claude-code)')
 @click.option('--backend', type=click.Choice(_BACKEND_CHOICES),
               default=None,
               help='Storage backend; bypasses the wizard prompt when set.')
@@ -3513,7 +3514,7 @@ def install(ctx: click.Context, target: str, backend: str | None,
 
 @cli.command()
 @click.option('--target', default='',
-              help='Target environment (claude-code | openclaw | nanoclaw)')
+              help='Target environment (claude-code)')
 @click.pass_context
 def uninstall(ctx: click.Context, target: str) -> None:
     """Remove memman integration (reverse of `memman install`)."""
@@ -3981,35 +3982,6 @@ def migrate(
     click.echo('  memman doctor    # verify the sqlite backend health')
 
 
-def _emit_guide(session_id: str = '') -> None:
-    """Write shipped guide.md to stdout.
-
-    Parameters
-    ----------
-    session_id : str, default ''
-        Substituted for the guide's literal `$SESSION_ID`; empty
-        leaves the placeholder in place.
-
-    Notes
-    -----
-    - Only `memman prime` passes an id. `memman guide`, the openclaw
-      bootstrap entry, does not, so that host reads the placeholder
-      verbatim.
-    """
-    from importlib.resources import files as pkg_files
-    shipped = (pkg_files('memman.setup.assets')
-               .joinpath('claude/guide.md').read_text())
-    if session_id:
-        shipped = shipped.replace('$SESSION_ID', session_id)
-    click.echo(shipped, nl=False)
-
-
-@cli.command(hidden=True)
-def guide() -> None:
-    """Print the memman behavioral guide. Hidden - called by openclaw bootstrap."""
-    _emit_guide()
-
-
 @cli.command(hidden=True)
 def prime() -> None:
     """Hook shim: emit status + optional compact hint + guide. Invoked by
@@ -4071,7 +4043,11 @@ def prime() -> None:
                    f'Recall critical context now: '
                    f'memman recall "<topic>" --limit 5')
 
-    _emit_guide(session_id)
+    shipped = (pkg_files('memman.setup.assets')
+               .joinpath('claude/guide.md').read_text())
+    if session_id:
+        shipped = shipped.replace('$SESSION_ID', session_id)
+    click.echo(shipped, nl=False)
 
 
 def _settle_rebuilt_edges(

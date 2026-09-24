@@ -1,10 +1,9 @@
 """Atomic secure-write helper for setup files holding sensitive data.
 
-Used by scheduler state, env, and openclaw config writers. Creates the
-.tmp at mode 0o600 from the start (no race window where another
-process could observe a more permissive mode), enforces the mode
-against the open descriptor with fchmod, then atomically renames into
-place.
+Used by scheduler state and env writers. Creates the .tmp at mode
+0o600 from the start (no race window where another process could
+observe a more permissive mode), enforces the mode against the open
+descriptor with fchmod, then atomically renames into place.
 """
 
 import os

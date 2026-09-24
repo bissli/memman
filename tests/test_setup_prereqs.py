@@ -74,7 +74,13 @@ class TestPrereqs:
         backup on every full test run.
         """
         monkeypatch.setattr(setup_claude, 'detect_scheduler', lambda: '')
-        monkeypatch.setattr(setup_claude, 'detect_environments', list)
+        monkeypatch.setattr(
+            setup_claude, 'detect_claude_code',
+            lambda: {
+                'name': 'claude-code', 'display': 'Claude Code',
+                'detected': False, 'bin_path': '', 'installed': False,
+                'version': '', 'config_dir': str(tmp_path / '.claude'),
+                })
         monkeypatch.setattr(
             setup_claude, 'uninstall_scheduler',
             lambda data_dir=None: {'platform': 'unknown', 'actions': []})

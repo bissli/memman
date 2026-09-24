@@ -1,6 +1,5 @@
 """Claude Code integration: install and uninstall orchestration."""
 
-import logging
 import os
 import platform
 import shutil
@@ -8,12 +7,10 @@ import sys
 from pathlib import Path
 
 import click
-
-logger = logging.getLogger('memman')
 from memman import config
 from memman.cli import list_claude_permissions
 from memman.setup.deploy import symlink_asset
-from memman.setup.detect import detect_environments
+from memman.setup.detect import detect_claude_code
 from memman.setup.markdown import remove_memory_block
 from memman.setup.prompt import detection_line, status_error, status_ok
 from memman.setup.prompt import status_updated
@@ -207,32 +204,18 @@ def _uninstall_markdown(file_path: str) -> None:
 
 
 def _uninstall_env(env: dict) -> bool:
-    """Uninstall memman from a single environment."""
-    if env['name'] == 'claude-code':
-        errs = claude_uninstall(env['config_dir'])
-        _uninstall_markdown('CLAUDE.md')
-        return len(errs) > 0
-
-    if env['name'] == 'openclaw':
-        from memman.setup.openclaw import openclaw_uninstall
-        errs = openclaw_uninstall(env['config_dir'])
-        _uninstall_markdown('AGENTS.md')
-        return len(errs) > 0
-
-    if env['name'] == 'nanoclaw':
-        from memman.setup.nanoclaw import uninstall_nanoclaw
-        errs = uninstall_nanoclaw()
-        return len(errs) > 0
-
-    return False
+    """Remove memman from Claude Code; True when cleanup reported an error.
+    """
+    errs = claude_uninstall(env['config_dir'])
+    _uninstall_markdown('CLAUDE.md')
+    return len(errs) > 0
 
 
 def _validate_target(target: str) -> None:
-    """Raise if target is set and not one of the known environments."""
-    if target and target not in {'claude-code', 'openclaw', 'nanoclaw'}:
+    """Raise if target is set and not the known environment."""
+    if target and target != 'claude-code':
         raise click.ClickException(
-            f'invalid target {target!r}'
-            ' (must be claude-code, openclaw, or nanoclaw)')
+            f'invalid target {target!r} (must be claude-code)')
 
 
 def run_install(data_dir: str, target: str = '',
@@ -259,7 +242,7 @@ def run_install(data_dir: str, target: str = '',
     _reject_flag_file_conflicts(
         data_dir=data_dir, backend=backend, pg_dsn=pg_dsn,
         llm_endpoint=llm_endpoint, embed_provider=embed_provider)
-    envs = detect_environments()
+    env = detect_claude_code()
     from memman.setup import wizard as _wizard_mod
     from memman.setup.scheduler import _write_env_keys
     wizard_out = _wizard_mod.run_wizard(
@@ -270,7 +253,7 @@ def run_install(data_dir: str, target: str = '',
         _write_env_keys(wizard_out, data_dir=data_dir)
         config.reset_file_cache()
     knobs = check_prereqs(data_dir)
-    _run_install_flow(envs, target=target, data_dir=data_dir, knobs=knobs,
+    _run_install_flow(env, target=target, data_dir=data_dir, knobs=knobs,
                       no_wizard=no_wizard)
 
 
@@ -310,7 +293,7 @@ def _reject_flag_file_conflicts(
 def run_uninstall(data_dir: str, target: str = '') -> None:
     """Remove memman integration. Called by the `memman uninstall` command."""
     _validate_target(target)
-    envs = detect_environments()
+    env = detect_claude_code()
     print('\n[backup]')
     try:
         backup_result = uninstall_backup(data_dir=data_dir)
@@ -318,51 +301,29 @@ def run_uninstall(data_dir: str, target: str = '') -> None:
             status_ok(backup_result['platform'], action)
     except RuntimeError:
         pass
-    _run_uninstall_flow(envs, target=target, data_dir=data_dir)
+    _run_uninstall_flow(env, target=target, data_dir=data_dir)
 
 
-def _run_install_flow(envs: list[dict], target: str,
+def _run_install_flow(env: dict, target: str,
                       data_dir: str,
                       knobs: dict[str, str],
                       no_wizard: bool = False) -> None:
-    """Install CLI integrations and the scheduler unit."""
+    """Install Claude Code integration and the scheduler unit."""
     if target:
-        matched = next((e for e in envs if e['name'] == target), None)
-        if matched is None:
-            raise click.ClickException(f'unknown target {target!r}')
-        _install_env(matched, data_dir=data_dir, no_wizard=no_wizard)
+        _install_claude_code(env, data_dir=data_dir, no_wizard=no_wizard)
     else:
         print('Detecting LLM CLI environments...')
         print()
-
-        detected = []
-        for env in envs:
-            detection_line(
-                env['detected'], env['display'],
-                env['version'], env['config_dir'])
-            if env['detected']:
-                detected.append(env)
-
-        if not detected:
+        detection_line(
+            env['detected'], env['display'],
+            env['version'], env['config_dir'])
+        if env['detected']:
+            _install_claude_code(env, data_dir=data_dir, no_wizard=no_wizard)
+        else:
             print('\nNo CLI integration installed'
-                  ' (no Claude Code or OpenClaw detected).')
+                  ' (no Claude Code detected).')
             print('Installing scheduler only; manual'
                   ' `memman remember` calls will still work.')
-        else:
-            errors: list[tuple[str, str]] = []
-            for env in detected:
-                try:
-                    _install_env(env, data_dir=data_dir,
-                                 no_wizard=no_wizard)
-                except Exception as exc:
-                    logger.exception(
-                        'install failed for %s', env['name'])
-                    errors.append((env['name'], str(exc)))
-            if errors:
-                detail = '; '.join(f'{n}: {e}' for n, e in errors)
-                raise click.ClickException(
-                    f'{len(errors)} error(s) during'
-                    f' CLI integration install: {detail}')
 
     print('\n[scheduler]')
     result = install_scheduler(data_dir, knobs)
@@ -370,49 +331,26 @@ def _run_install_flow(envs: list[dict], target: str,
         status_ok(result['platform'], action)
 
 
-def _install_env(env: dict, data_dir: str,
-                 no_wizard: bool = False) -> None:
-    """Install memman into a single environment."""
-    if env['name'] == 'claude-code':
-        _install_claude_code(env, data_dir=data_dir, no_wizard=no_wizard)
-    elif env['name'] == 'openclaw':
-        from memman.setup.openclaw import install_openclaw
-        install_openclaw(env, data_dir=data_dir)
-    elif env['name'] == 'nanoclaw':
-        from memman.setup.nanoclaw import install_nanoclaw
-        install_nanoclaw()
-
-
-def _run_uninstall_flow(envs: list[dict], target: str,
+def _run_uninstall_flow(env: dict, target: str,
                         data_dir: str) -> None:
-    """Uninstall CLI integrations and remove the scheduler unit."""
+    """Uninstall Claude Code integration and remove the scheduler unit."""
+    failed = False
     if target:
-        matched = next((e for e in envs if e['name'] == target), None)
-        if matched is None:
-            raise click.ClickException(f'unknown target {target!r}')
-        _uninstall_env(matched)
+        failed = _uninstall_env(env)
     else:
         print('Detecting LLM CLI environments...')
         print()
-
-        installed = []
-        for env in envs:
-            detection_line(
-                env['detected'], env['display'],
-                env['version'], env['config_dir'])
-            if env['detected']:
-                installed.append(env)
-
-        if not installed:
-            print('\nNo CLI integration detected.')
+        detection_line(
+            env['detected'], env['display'],
+            env['version'], env['config_dir'])
+        if env['detected']:
+            failed = _uninstall_env(env)
         else:
-            err_count = 0
-            for env in installed:
-                if _uninstall_env(env):
-                    err_count += 1
-            if err_count > 0:
-                raise click.ClickException(
-                    f'{err_count} error(s) during CLI integration uninstall')
+            print('\nNo CLI integration detected.')
+    if failed:
+        raise click.ClickException(
+            'error during Claude Code integration uninstall;'
+            ' scheduler left in place')
 
     print('\n[scheduler]')
     result = uninstall_scheduler(data_dir=data_dir)
