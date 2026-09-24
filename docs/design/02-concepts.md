@@ -22,6 +22,7 @@
 │ queue_uuid : "9b0c…"    (idempotency key)    │
 │ corroboration_count : 2 (restatements seen)  │
 │ access_count        : 3                      │
+│ author     : "bob"      (who wrote it)       │
 │ created_at : 2026-02-18T10:00:00Z            │
 └──────────────────────────────────────────────┘
 ```
@@ -84,7 +85,8 @@ insights (
   session_id,                                   -- Temporal chain key (nullable; no session, no backbone edge)
   queue_uuid,                                   -- Idempotency key from the queue row (shared by sibling facts; a corroborated row missing one adopts the restating row's)
   corroboration_count,                          -- Restatements observed, byte-identical or reworded (integer not null default 0)
-  superseded_by                                 -- Successor id once a later write corrected this row (nullable, no FK)
+  superseded_by,                                -- Successor id once a later write corrected this row (nullable, no FK)
+  author                                        -- Who wrote it (nullable; resolved from MEMMAN_AUTHOR or getpass.getuser())
 )
 
 -- A current row is `deleted_at is null and superseded_by is null`;

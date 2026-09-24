@@ -114,6 +114,7 @@ class MigrateInsight:
     queue_uuid: str | None
     corroboration_count: int
     superseded_by: str | None
+    author: str | None = None
 
 
 @dataclass

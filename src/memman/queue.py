@@ -38,7 +38,7 @@ class QueueRow:
 
     `session_id` and `queue_uuid` sit last so no pre-existing
     positional index shifts; keep that order (`session_id` then
-    `queue_uuid`) in every column list.
+    `queue_uuid`, then `author`) in every column list.
     """
 
     id: int
@@ -55,6 +55,7 @@ class QueueRow:
     attempts: int
     session_id: str | None
     queue_uuid: str
+    author: str | None
 
 
 def queue_db_path(base_dir: str) -> str:
@@ -152,7 +153,8 @@ create table if not exists queue (
     status        text not null default 'pending'
                   check(status in ('pending','done','failed','stale')),
     last_error    text,
-    processed_at  integer
+    processed_at  integer,
+    author        text
 );
 
 create index if not exists idx_queue_ready
@@ -215,6 +217,7 @@ def enqueue(
         hint_no_reconcile: bool = False,
         session_id: str | None = None,
         priority: int = 0,
+        author: str | None = None,
         ) -> tuple[int, str]:
     """Append a blob to the queue. Returns `(row_id, queue_uuid)`.
 
@@ -223,7 +226,9 @@ def enqueue(
     `hint_no_reconcile` skips the LLM reconciliation pass for fast
     deterministic stores (`remember --no-reconcile`). `session_id`
     is the temporal chain key (`remember --session`); null means the
-    resulting insights join no backbone chain.
+    resulting insights join no backbone chain. `author` is resolved
+    from the agent's shell at enqueue time and carried to the drain;
+    the drain never re-resolves it from the environment.
 
     Notes
     -----
@@ -250,15 +255,15 @@ insert into queue (
     store, content, hint_cat, hint_imp,
     hint_source, hint_entities, hint_replaced_id,
     hint_no_reconcile, session_id, queue_uuid,
-    priority, queued_at
+    priority, queued_at, author
 )
-values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
     cur = conn.execute(sql, (
         store, content, hint_cat, hint_imp, hint_source,
         hint_entities, hint_replaced_id,
         1 if hint_no_reconcile else 0, session_id,
-        queue_uuid, priority, now))
+        queue_uuid, priority, now, author))
     row_id = cur.lastrowid
     logger.debug(f'queued blob {row_id} for store {store}')
     return row_id, queue_uuid
@@ -299,7 +304,7 @@ where id = (
 returning id, store, content, hint_cat, hint_imp,
           hint_source, hint_entities, hint_replaced_id,
           hint_no_reconcile, priority, queued_at, attempts,
-          session_id, queue_uuid
+          session_id, queue_uuid, author
 """
     params = [now, worker_pid, now, stale_after_seconds, *store_params]
     row = conn.execute(sql, params).fetchone()
@@ -312,7 +317,8 @@ returning id, store, content, hint_cat, hint_imp,
         hint_replaced_id=row[7],
         hint_no_reconcile=bool(row[8]),
         priority=row[9], queued_at=row[10], attempts=row[11],
-        session_id=row[12], queue_uuid=row[13])
+        session_id=row[12], queue_uuid=row[13],
+        author=row[14])
 
 
 def mark_done(conn: sqlite3.Connection, row_id: int) -> None:
@@ -605,7 +611,7 @@ def get_row(
 select id, store, content, hint_cat, hint_imp,
        hint_source, hint_entities, priority, queued_at, claimed_at,
        worker_pid, attempts, status, last_error, processed_at,
-       session_id, queue_uuid
+       session_id, queue_uuid, author
 from queue
 where id = ?
 """
@@ -621,6 +627,7 @@ where id = ?
         'attempts': row[11], 'status': row[12],
         'last_error': row[13], 'processed_at': row[14],
         'session_id': row[15], 'queue_uuid': row[16],
+        'author': row[17],
         }
 
 

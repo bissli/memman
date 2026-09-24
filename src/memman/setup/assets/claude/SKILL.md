@@ -104,10 +104,14 @@ still-true clauses.
 The text stores conclusions AND enough context to understand them. It
 is self-contained: every "that", "this", and "it" is dereferenced into
 its actual subject before the call. It never opens with who wrote it
-or when: `created_at` and `source` carry those. An event date, or the
-name of another person the fact is about, stays in the text. The
-agent runs `memman remember` directly in the current turn, never
-through a sub-agent.
+or when: `author`, `created_at`, and `source` carry those.
+
+    BAD   alice decided on 2026-09-24 that the retry cap stays at three.
+    GOOD  The retry cap stays at three.
+
+An event date, or the name of another person the fact is about, stays
+in the text. The agent runs `memman remember` directly in the current
+turn, never through a sub-agent.
 
 A behavioral rule - universal language such as "never", "always", or
 "mandatory", with no project-specific entity - goes to the project
@@ -265,7 +269,9 @@ memman recall "<keyword>" --basic
 ```
 
 Add `--brief` to cut each insight to `id`, `category`, `importance`,
-`created_at`, and `summary`. Use it to scan for which insight to open
+`author`, `created_at`, and `summary`. `author` is who wrote the row:
+`MEMMAN_AUTHOR` from the directory's `.envrc`, else the OS username.
+Use it to scan for which insight to open
 rather than to read the insights themselves. It works on both paths;
 the ranked path keeps the `score`, `intent`, and `signals` keys around
 each insight. A row with no summary falls back to its content, so no
@@ -400,7 +406,8 @@ and exits 0.
 - Never store secrets, passwords, or tokens.
 - `remember` and `replace` refuse text over 1,000 bytes, counted as
   UTF-8 bytes, and never truncate it. Split the text into several
-  calls, one claim each.
+  calls, one claim each. They also refuse text whose first word is
+  the author's name: `author` carries that.
 - One self-contained fact per `remember` call. The worker extracts one
   fact from each call and folds every claim in the text into it, so a
   second unrelated subject rides along and goes stale with the first;

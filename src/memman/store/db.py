@@ -370,7 +370,8 @@ create table if not exists insights (
     session_id  text,
     queue_uuid  text,
     corroboration_count integer not null default 0,
-    superseded_by text
+    superseded_by text,
+    author      text
 );
 
 create table if not exists edges (

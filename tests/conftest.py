@@ -98,6 +98,7 @@ def _isolate_env(tmp_path, monkeypatch, request):
     monkeypatch.delenv('MEMMAN_WORKER', raising=False)
     monkeypatch.delenv('MEMMAN_SCHEDULER_KIND', raising=False)
     monkeypatch.delenv('MEMMAN_SESSION_ID', raising=False)
+    monkeypatch.delenv('MEMMAN_AUTHOR', raising=False)
     # The harness running the suite may itself be a Claude Code
     # session, and `--session` falls back to this variable. Leaving it
     # set would stamp the real session on every unsessioned test write

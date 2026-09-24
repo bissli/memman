@@ -141,7 +141,8 @@ create table if not exists {schema}.insights (
     queue_uuid  text,
     corroboration_count integer not null default 0,
     kw_tokens   text[] not null,
-    superseded_by text
+    superseded_by text,
+    author      text
 );
 
 create table if not exists {schema}.edges (
@@ -383,6 +384,8 @@ def _row_to_insight(row: tuple[Any, ...]) -> Insight:
         i.corroboration_count = int(row[16])
     if len(row) > 17 and row[17]:
         i.superseded_by = row[17]
+    if len(row) > 18 and row[18]:
+        i.author = row[18]
     return i
 
 
@@ -405,14 +408,15 @@ def _row_to_edge(row: tuple[Any, ...]) -> Edge:
 
 
 # `session_id`, `queue_uuid`, `corroboration_count`, then
-# `superseded_by`, appended last -- must stay byte-identical to
-# node.py's _INSIGHT_COLUMNS (see
+# `superseded_by`, then `author`, appended last -- must stay
+# byte-identical to node.py's _INSIGHT_COLUMNS (see
 # test_insight_column_lists_are_identical_across_backends).
 _INSIGHT_COLS = (
     'id, content, category, importance, entities,'
     ' source, access_count, created_at, updated_at, deleted_at,'
     ' summary, linked_at, enriched_at, last_accessed_at,'
-    ' session_id, queue_uuid, corroboration_count, superseded_by')
+    ' session_id, queue_uuid, corroboration_count, superseded_by,'
+    ' author')
 
 
 class PostgresNodeStore(BaseNodeStore, NodeStore):
@@ -477,8 +481,8 @@ insert into {s}.insights
     (id, content, category, importance, entities,
      source, access_count, created_at, updated_at,
      prompt_version, model_id, embedding_model,
-     session_id, queue_uuid, corroboration_count, kw_tokens)
-values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+     session_id, queue_uuid, corroboration_count, kw_tokens, author)
+values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (
@@ -488,7 +492,8 @@ values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ins.prompt_version, ins.model_id, ins.embedding_model,
                 ins.session_id, ins.queue_uuid,
                 ins.corroboration_count,
-                sorted(insight_tokens(ins))))
+                sorted(insight_tokens(ins)),
+                ins.author))
 
     def get(self, id: Id) -> Insight | None:
         sql = self._q(f"""
@@ -2730,7 +2735,8 @@ select id, content, category, importance, entities,
        last_accessed_at, embedding,
        linked_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, model_id, embedding_model,
-       session_id, queue_uuid, corroboration_count, superseded_by
+       session_id, queue_uuid, corroboration_count, superseded_by,
+       author
        {pending_select}
 from {schema}.insights
 order by id
@@ -2761,10 +2767,11 @@ order by id
                     embedding_model=r[19],
                     session_id=r[20], queue_uuid=r[21],
                     corroboration_count=int(r[22]),
-                    superseded_by=r[23]))
-                if has_pending and r[24] is not None:
+                    superseded_by=r[23],
+                    author=r[24]))
+                if has_pending and r[25] is not None:
                     pending.append(PendingReembed(
-                        insight_id=r[0], vector=list(r[24])))
+                        insight_id=r[0], vector=list(r[25])))
 
             cur.execute(f"""
 select source_id, target_id, edge_type, weight,
@@ -2877,7 +2884,8 @@ order by sqlite_id
                                 insight_tokens(Insight(
                                     content=ins.content,
                                     entities=list(ins.entities)))),
-                            ins.superseded_by))
+                            ins.superseded_by,
+                            ins.author))
                     with conn.cursor() as cur:
                         cur.executemany(
                             f'insert into {schema}.insights ('
@@ -2890,11 +2898,11 @@ order by sqlite_id
                             ' prompt_version, model_id,'
                             ' embedding_model, session_id,'
                             ' queue_uuid, corroboration_count,'
-                            ' kw_tokens, superseded_by)'
+                            ' kw_tokens, superseded_by, author)'
                             ' values (%s, %s, %s, %s, %s::jsonb,'
                             ' %s, %s, %s::jsonb, %s, %s::jsonb,'
                             ' %s, %s, %s, %s, %s, %s, %s, %s,'
-                            ' %s, %s, %s, %s, %s, %s, %s)'
+                            ' %s, %s, %s, %s, %s, %s, %s, %s)'
                             ' on conflict (id) do nothing',
                             insight_rows)
 

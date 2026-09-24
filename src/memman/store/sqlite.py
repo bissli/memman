@@ -1084,7 +1084,7 @@ select id, content, category, importance, entities,
        linked_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, model_id, embedding_model,
        embedding_pending, session_id, queue_uuid,
-       corroboration_count, superseded_by
+       corroboration_count, superseded_by, author
 from insights
 order by id
 """).fetchall()
@@ -1116,7 +1116,8 @@ order by id
                     embedding_model=r[19],
                     session_id=r[21], queue_uuid=r[22],
                     corroboration_count=int(r[23]),
-                    superseded_by=r[24]))
+                    superseded_by=r[24],
+                    author=r[25]))
                 if r[20] is not None:
                     pv = deserialize_vector(r[20])
                     if pv is not None:
@@ -1238,7 +1239,8 @@ order by id
                         ins.prompt_version, ins.model_id,
                         ins.embedding_model,
                         ins.session_id, ins.queue_uuid,
-                        ins.corroboration_count, ins.superseded_by))
+                        ins.corroboration_count, ins.superseded_by,
+                        ins.author))
                 if insight_rows:
                     conn.executemany(
                         'insert into insights ('
@@ -1250,9 +1252,9 @@ order by id
                         ' updated_at, deleted_at, prompt_version,'
                         ' model_id, embedding_model, session_id,'
                         ' queue_uuid, corroboration_count,'
-                        ' superseded_by)'
+                        ' superseded_by, author)'
                         ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
-                        ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         insight_rows)
 
                 edge_rows = [(

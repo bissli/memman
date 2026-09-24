@@ -522,7 +522,7 @@ class TestRecall:
         assert data['results'], 'expected --brief to return the same row'
         brief_keys = set(data['results'][0]['insight'])
         assert brief_keys - {'truncated'} == {
-            'id', 'category', 'importance', 'created_at', 'summary'}
+            'id', 'category', 'importance', 'created_at', 'summary', 'author'}
         assert 'content' in full_keys - brief_keys
 
     def test_recall_brief_carries_the_stored_created_at(self, runner):
@@ -632,7 +632,7 @@ class TestRecall:
         row = json.loads(result.output)['results'][0]
         assert {'insight', 'score', 'intent', 'signals'} <= set(row)
         assert set(row['insight']) - {'truncated'} == {
-            'id', 'category', 'importance', 'created_at', 'summary'}
+            'id', 'category', 'importance', 'created_at', 'summary', 'author'}
 
     def test_recall_brief_basic_path_projects_rows(self, runner):
         """--brief projects the --basic branch's rows and drops none.

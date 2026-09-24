@@ -25,10 +25,11 @@ keys missing from the file -- existing file values are sticky and
 never overridden by a later shell export.
 
 Process-control vars (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`,
-`MEMMAN_WORKER`, `MEMMAN_SCHEDULER_KIND`, `MEMMAN_DEBUG`) are NOT
-installable, never written to the env file, and are read directly
-from `os.environ` by their owners (`is_worker`, `trace.is_enabled`,
-etc.). They do not flow through `get()`.
+`MEMMAN_WORKER`, `MEMMAN_SCHEDULER_KIND`, `MEMMAN_DEBUG`,
+`MEMMAN_AUTHOR`) are NOT installable, never written to the env file,
+and are read directly from `os.environ` by their owners (`is_worker`,
+`trace.is_enabled`, `resolve_author`, etc.). They do not flow through
+`get()`.
 
 Tuning vars (`MEMMAN_EMBED_SWAP_BATCH_SIZE`,
 `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT`, `MEMMAN_REINDEX_TIMEOUT`) are
@@ -42,6 +43,7 @@ install` persists to `~/.memman/env`. Adding a new global knob is
 one tuple entry plus an `INSTALL_DEFAULTS` row when a default exists.
 """
 
+import getpass
 import os
 from pathlib import Path
 from typing import Any
@@ -80,6 +82,8 @@ REINDEX_TIMEOUT = 'MEMMAN_REINDEX_TIMEOUT'
 # would fuse every later write into one false backbone chain.
 SESSION_ID = 'MEMMAN_SESSION_ID'
 
+AUTHOR = 'MEMMAN_AUTHOR'
+
 # Notes:
 # - Not memman's variable: Claude Code exports it into every Bash tool
 #   subprocess, subagents included, and owns its lifetime. memman only
@@ -88,6 +92,26 @@ SESSION_ID = 'MEMMAN_SESSION_ID'
 #   installable nor ours to report, and the never-persisted rule above
 #   binds it for the same reason.
 CLAUDE_SESSION_ID = 'CLAUDE_CODE_SESSION_ID'
+
+
+def resolve_author() -> str:
+    """Return the author for the current write.
+
+    Returns
+    -------
+    str
+        `MEMMAN_AUTHOR` from `os.environ` when set and non-empty;
+        `getpass.getuser()` otherwise.
+
+    Notes
+    -----
+    - Called at `remember` and `replace` time in the agent's shell,
+      where direnv has exported `MEMMAN_AUTHOR`.
+    - Never called at drain time: the scheduler subprocess runs under
+      systemd without the directory's environment, so the author must
+      be read from the queue row, not resolved again.
+    """
+    return os.environ.get(AUTHOR) or getpass.getuser()
 
 
 def BACKEND_FOR(store: str) -> str:
@@ -320,7 +344,7 @@ INSTALL_DEFAULTS: dict[str, str] = {
     }
 
 _PROCESS_CONTROL_VARS = (
-    DATA_DIR, STORE, WORKER, DEBUG, SCHEDULER_KIND, SESSION_ID)
+    DATA_DIR, STORE, WORKER, DEBUG, SCHEDULER_KIND, SESSION_ID, AUTHOR)
 
 _TUNING_VARS = (
     EMBED_SWAP_BATCH_SIZE,

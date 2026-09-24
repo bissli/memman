@@ -17,7 +17,7 @@ The project uses Poetry; run commands via `poetry run <cmd>` or inside `poetry s
 The operator-facing model (env file location, install precedence, override path) lives in [USAGE.md § Configuration](docs/USAGE.md#configuration). The contributor-side facts:
 
 - Defaults live in `config.INSTALL_DEFAULTS` and are written to `<MEMMAN_DATA_DIR>/env` by `memman install` only - there is no code-default fallback at runtime. If a key is missing from the env file, the resolver returns `None` and the caller raises `ConfigError` with `run memman install` guidance.
-- Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`, `MEMMAN_SESSION_ID`) are read directly from `os.environ` and excluded from the env-file model. `CLAUDE_CODE_SESSION_ID` is read the same way, but it is not memman's variable, so it sits outside `_ALL_VARS` and `memman config show` never reports it.
+- Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`, `MEMMAN_SESSION_ID`, `MEMMAN_AUTHOR`) are read directly from `os.environ` and excluded from the env-file model. `CLAUDE_CODE_SESSION_ID` is read the same way, but it is not memman's variable, so it sits outside `_ALL_VARS` and `memman config show` never reports it.
 - `memman doctor` has an `env_completeness` check that warns when a new `INSTALLABLE_KEYS` entry is missing, and an `optional_extras` check that reports which `memman[extras]` install groups resolve at runtime.
 
 ### Variable reference
@@ -37,7 +37,7 @@ The `Type` column distinguishes how each variable is sourced:
 | `MEMMAN_LLM_API_KEY`              | installed | Bearer token for the configured LLM endpoint. Required for any non-loopback endpoint; loopback endpoints (Ollama, local vLLM/LiteLLM) may leave it blank.                                                                           |
 | `MEMMAN_LLM_MODEL_FAST`           | installed | Hot-path model id. OpenRouter endpoints resolve the latest at install time; other endpoints are prompted interactively.                                                                                                             |
 | `MEMMAN_LLM_MODEL_SLOW_CANONICAL` | installed | Worker model for canonical content (fact extraction, reconciliation). OpenRouter endpoints resolve the latest at install time; other endpoints are prompted interactively.                                                          |
-| `MEMMAN_LLM_MODEL_SLOW_METADATA`  | installed | Worker model for derived metadata (enrichment summaries/keywords). OpenRouter endpoints resolve the latest at install time; other endpoints are prompted interactively.                                      |
+| `MEMMAN_LLM_MODEL_SLOW_METADATA`  | installed | Worker model for derived metadata (enrichment summaries/keywords). OpenRouter endpoints resolve the latest at install time; other endpoints are prompted interactively.                                                             |
 | `MEMMAN_EMBED_PROVIDER`           | installed | `voyage` (default), `openai`, `openrouter`, or `ollama`.                                                                                                                                                                            |
 | `MEMMAN_OPENROUTER_ENDPOINT`      | installed | OpenRouter base URL (default `https://openrouter.ai/api/v1`).                                                                                                                                                                       |
 | `MEMMAN_LOG_LEVEL`                | installed | Logger level when neither `--verbose` nor `--debug` is passed (default `WARNING`).                                                                                                                                                  |
@@ -62,6 +62,7 @@ The `Type` column distinguishes how each variable is sourced:
 | `MEMMAN_DEBUG`                    | process   | Runtime toggle; persistent state lives in `~/.memman/debug.state` instead.                                                                                                                                                          |
 | `MEMMAN_SESSION_ID`               | process   | Default for `remember`/`replace` `--session` (the temporal chain key). Deliberately never persisted to the env file - a stale persisted id would fuse every later write into one false backbone chain.                              |
 | `CLAUDE_CODE_SESSION_ID`          | foreign   | Second fallback for `--session`, behind `MEMMAN_SESSION_ID`. Claude Code exports it into every Bash call, a subagent's included, with the parent id. Never persisted, never reported by `memman config show`.                       |
+| `MEMMAN_AUTHOR`                   | process   | Resolved by `remember`/`replace` at write time from the agent's shell (direnv exports it alongside `MEMMAN_STORE`); carried through the queue row so the drain never re-resolves it. Falls back to `getpass.getuser()` when unset.  |
 
 ## Conventions
 

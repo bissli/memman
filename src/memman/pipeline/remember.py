@@ -660,7 +660,8 @@ def _plan_fact(
             entities=list(fact_entities), source=parent.source,
             access_count=parent.access_count,
             created_at=parent.created_at, updated_at=parent.updated_at,
-            session_id=parent.session_id, queue_uuid=parent.queue_uuid)
+            session_id=parent.session_id, queue_uuid=parent.queue_uuid,
+            author=parent.author)
 
     fact_vec = None
     try:

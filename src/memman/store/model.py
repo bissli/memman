@@ -57,6 +57,7 @@ class Insight:
     queue_uuid: str | None = None
     corroboration_count: int = 0
     superseded_by: str | None = None
+    author: str | None = None
 
     def entities_json(self) -> str:
         """Return entities as a JSON string for storage."""
@@ -233,6 +234,8 @@ def insight_to_brief_dict(ins: 'Insight') -> dict[str, Any]:
         'importance': ins.importance,
         'created_at': format_timestamp(ins.created_at),
         }
+    if ins.author:
+        out['author'] = ins.author
     if ins.summary.strip():
         out['summary'] = ins.summary
     else:
@@ -275,6 +278,8 @@ def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
         out['linked_at'] = format_timestamp(ins.linked_at)
     if ins.enriched_at:
         out['enriched_at'] = format_timestamp(ins.enriched_at)
+    if ins.author:
+        out['author'] = ins.author
     return out
 
 

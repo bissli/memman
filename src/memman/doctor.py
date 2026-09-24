@@ -372,7 +372,7 @@ EXPECTED_INSIGHT_COLUMNS = {
     'linked_at', 'enriched_at', 'last_accessed_at',
     'summary', 'keywords', 'semantic_facts',
     'session_id', 'queue_uuid', 'corroboration_count',
-    'superseded_by',
+    'superseded_by', 'author',
     }
 EXPECTED_QUEUE_TABLES = {'queue', 'skipped_writes', 'worker_runs'}
 

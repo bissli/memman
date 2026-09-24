@@ -49,6 +49,40 @@ _WORKER_LOG_BACKUPS = 3
 _MAX_CONTENT_BYTES = 1000
 
 
+def _author_refusal_message(content: str) -> str | None:
+    """Return the refusal for text that opens with its author, or None.
+
+    Parameters
+    ----------
+    content : str
+        The write text, as `remember` or `replace` received it.
+
+    Returns
+    -------
+    str or None
+        The refusal message when the first word of `content`, past any
+        leading whitespace or punctuation, is the explicitly set
+        `MEMMAN_AUTHOR`, compared case-insensitively; None otherwise.
+
+    Notes
+    -----
+    - Only an explicit `MEMMAN_AUTHOR` refuses. The `getpass.getuser()`
+      fallback never does, so an OS login such as `ubuntu` cannot
+      refuse text about that system.
+    """
+    author = os.environ.get(config.AUTHOR, '')
+    if not author:
+        return None
+    pattern = re.compile(
+        r'^\W*' + re.escape(author) + r'(?:\W|$)', re.IGNORECASE)
+    if not pattern.match(content):
+        return None
+    return (
+        f'content starts with the author name {author!r};'
+        ' the author field already records who wrote this --'
+        ' start with the subject instead')
+
+
 def _configure_logging(data_dir: str, verbose: bool, debug: bool) -> None:
     """Configure the memman logger once per process.
 
@@ -738,6 +772,11 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
             f' {_MAX_CONTENT_BYTES}); split it into several remember'
             ' calls, one claim each')
 
+    author = config.resolve_author()
+    refusal = _author_refusal_message(content_str)
+    if refusal:
+        raise click.ClickException(refusal)
+
     if cat not in VALID_CATEGORIES:
         valid = ', '.join(sorted(VALID_CATEGORIES))
         raise click.ClickException(
@@ -780,7 +819,8 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
             hint_entities=entities_json,
             hint_no_reconcile=no_reconcile,
             session_id=session or None,
-            priority=0)
+            priority=0,
+            author=author)
     _json_out({
         'action': 'queued',
         'queue_id': row_id,
@@ -1502,7 +1542,8 @@ def _process_queue_row(
         entities=entity_list, source=source,
         access_count=access_count,
         created_at=now, updated_at=now,
-        session_id=row.session_id, queue_uuid=row.queue_uuid)
+        session_id=row.session_id, queue_uuid=row.queue_uuid,
+        author=row.author)
 
     from memman.pipeline.remember import run_remember
     result = run_remember(
@@ -1834,6 +1875,11 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             f' {_MAX_CONTENT_BYTES}); split it into several remember'
             ' calls, one claim each')
 
+    author = config.resolve_author()
+    refusal = _author_refusal_message(content_str)
+    if refusal:
+        raise click.ClickException(refusal)
+
     from memman.search.quality import check_content_quality
     quality_warnings = check_content_quality(content_str)
 
@@ -1901,7 +1947,8 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             hint_replaced_id=id,
             hint_no_reconcile=True,
             session_id=session or None,
-            priority=0)
+            priority=0,
+            author=author)
     _json_out({
         'action': 'queued',
         'queue_id': row_id,
