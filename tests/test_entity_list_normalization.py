@@ -16,11 +16,22 @@ Three defects shared the list `create_entity_edges` walks.
   because a blank string is truthy, and merged under the key `''`.
 """
 
+import uuid
+from datetime import datetime, timezone
+
 from memman.embed.fingerprint import bound_embedder
 from memman.graph.entity import MAX_TOTAL_ENTITY_EDGES, create_entity_edges
 from memman.pipeline.remember import run_remember
+from memman.store.model import Insight
 from tests.conftest import make_insight
-from tests.test_supersession_pipeline import _parent
+
+
+def _parent(content):
+    now = datetime.now(timezone.utc)
+    return Insight(
+        id=str(uuid.uuid4()), content=content, category='fact',
+        importance=3, entities=[], source='test', access_count=0,
+        created_at=now, updated_at=now)
 
 
 def _stored_entity_edges(backend, source_id):
@@ -83,8 +94,7 @@ def test_a_rare_entity_is_not_starved_by_a_repeated_neighbor(tmp_backend):
     assert 'rare-holder' in targets
 
 
-def test_the_stored_and_reported_entity_lists_agree(tmp_backend,
-                                                    monkeypatch):
+def test_the_stored_and_reported_entity_lists_agree(tmp_backend):
     """Verify one name in two cases yields one entity everywhere.
 
     Mutation: deduping only inside `update_entities`, so the column
@@ -93,10 +103,6 @@ def test_the_stored_and_reported_entity_lists_agree(tmp_backend,
     Oracle: the stored column read back off the store, against the
         entity list the result dict reports.
     """
-    monkeypatch.setattr(
-        'memman.llm.extract.screen_memory',
-        lambda client, fact_text, memory: ('UNRELATED', []))
-
     parent = _parent('the broker is kombu')
     parent.entities = ['Kombu', 'kombu']
     res = run_remember(

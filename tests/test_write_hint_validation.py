@@ -57,7 +57,7 @@ def test_replace_refuses_an_empty_source(mm_runner):
     """
     _, data_dir = mm_runner
     first = invoke(mm_runner, [
-        'remember', 'a note that will be replaced', '--no-reconcile'])
+        'remember', 'a note that will be replaced'])
     old = parse_remember(first, mm_runner)
 
     result = invoke(mm_runner, [
@@ -100,7 +100,7 @@ def test_replace_validates_the_category_it_inherits(mm_runner):
     """
     _, data_dir = mm_runner
     first = invoke(mm_runner, [
-        'remember', 'a note to be replaced', '--no-reconcile'])
+        'remember', 'a note to be replaced'])
     old = parse_remember(first, mm_runner)
 
     from memman.store.db import read_active

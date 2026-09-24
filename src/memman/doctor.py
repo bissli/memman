@@ -132,8 +132,8 @@ def check_supersession_integrity(backend: Backend) -> dict[str, Any]:
     forgotten target is NOT dangling), a superseded row that still has
     edges, a self-pointer, and a chain that never reaches a row without
     a pointer (a cycle, which hides every member from the active view).
-    A successor with two predecessors is a join (a merge plus a curated
-    sibling), not a defect. The detail carries every count and up to 20
+    A successor with two predecessors is a join (`supersede` can point
+    several rows at one successor), not a defect. The detail carries every count and up to 20
     ids per population.
     """
     populations = backend.nodes.supersession_integrity()
@@ -372,7 +372,7 @@ EXPECTED_INSIGHT_COLUMNS = {
     'linked_at', 'enriched_at', 'last_accessed_at',
     'summary', 'keywords', 'semantic_facts',
     'session_id', 'queue_uuid', 'corroboration_count',
-    'superseded_by', 'author',
+    'superseded_by', 'author', 'content_hash',
     }
 EXPECTED_QUEUE_TABLES = {'queue', 'skipped_writes', 'worker_runs'}
 

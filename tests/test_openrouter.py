@@ -210,7 +210,7 @@ def test_openrouter_request_carries_the_operator_provider_routing(monkeypatch):
     client = MemmanLLMClient(
         'https://openrouter.ai/api/v1', 'sk-or-test',
         model='anthropic/claude-haiku-4.5', provider_routing=routing)
-    client.complete('sys', 'user', stage='screen')
+    client.complete('sys', 'user', stage='enrichment')
     assert captured['body']['provider'] == routing
 
 
@@ -226,5 +226,5 @@ def test_client_without_routing_sends_no_provider_key(monkeypatch):
     captured = _capture_post(monkeypatch)
     client = MemmanLLMClient(
         'http://localhost:11434/v1', '', model='llama3')
-    client.complete('sys', 'user', stage='screen')
+    client.complete('sys', 'user', stage='enrichment')
     assert 'provider' not in captured['body']

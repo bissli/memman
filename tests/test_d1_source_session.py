@@ -53,7 +53,7 @@ def test_plan_fact_propagates_session_and_queue_uuid(mm_runner):
     """
     result = invoke(mm_runner, [
         'remember', 'session propagation end to end',
-        '--session', 'sess-prop', '--no-reconcile'])
+        '--session', 'sess-prop'])
     assert result.exit_code == 0, result.output
     raw = json.loads(result.output)
     _, data_dir = mm_runner
@@ -75,10 +75,10 @@ def test_source_round_trips_verbatim(mm_runner):
     """
     _, data_dir = mm_runner
     r1 = invoke(mm_runner, [
-        'remember', 'a default sourced note', '--no-reconcile'])
+        'remember', 'a default sourced note'])
     raw1 = json.loads(r1.output)
     r2 = invoke(mm_runner, [
-        'remember', 'an agent sourced note', '--no-reconcile',
+        'remember', 'an agent sourced note',
         '--source', 'agent'])
     raw2 = json.loads(r2.output)
     _s1, u1 = _queue_row(data_dir, raw1['queue_id'])
@@ -120,7 +120,7 @@ def test_replace_inherits_source(mm_runner):
     """
     _, data_dir = mm_runner
     r1 = invoke(mm_runner, [
-        'remember', 'original agent note', '--no-reconcile',
+        'remember', 'original agent note',
         '--source', 'agent'])
     old = parse_remember(r1, mm_runner)
     r2 = invoke(mm_runner, [
@@ -145,10 +145,10 @@ def test_session_flag_and_env_default(mm_runner, monkeypatch):
     _, data_dir = mm_runner
     monkeypatch.setenv('MEMMAN_SESSION_ID', 'env-sess')
     r1 = invoke(mm_runner, [
-        'remember', 'env session note', '--no-reconcile'])
+        'remember', 'env session note'])
     raw1 = json.loads(r1.output)
     r2 = invoke(mm_runner, [
-        'remember', 'flag session note', '--no-reconcile',
+        'remember', 'flag session note',
         '--session', 'cli-sess'])
     raw2 = json.loads(r2.output)
     _s1, u1 = _queue_row(data_dir, raw1['queue_id'])
@@ -174,12 +174,12 @@ def test_session_env_precedence_ladder(mm_runner, monkeypatch):
     _, data_dir = mm_runner
     monkeypatch.setenv('CLAUDE_CODE_SESSION_ID', 'claude-sess')
     claude_only = invoke(mm_runner, [
-        'remember', 'claude env session note', '--no-reconcile'])
+        'remember', 'claude env session note'])
     monkeypatch.setenv('MEMMAN_SESSION_ID', 'memman-sess')
     memman_over_claude = invoke(mm_runner, [
-        'remember', 'memman env session note', '--no-reconcile'])
+        'remember', 'memman env session note'])
     flag_over_both = invoke(mm_runner, [
-        'remember', 'flag session note', '--no-reconcile',
+        'remember', 'flag session note',
         '--session', 'flag-sess'])
     stored = []
     for result in (claude_only, memman_over_claude, flag_over_both):
@@ -203,7 +203,7 @@ def test_replace_reads_claude_code_session_env(mm_runner, monkeypatch):
     """
     _, data_dir = mm_runner
     r1 = invoke(mm_runner, [
-        'remember', 'note awaiting replacement', '--no-reconcile',
+        'remember', 'note awaiting replacement',
         '--session', 'sess-original'])
     old = parse_remember(r1, mm_runner)
     monkeypatch.setenv('CLAUDE_CODE_SESSION_ID', 'claude-replace')
@@ -247,11 +247,11 @@ def test_idempotency_keyed_on_queue_uuid(mm_runner):
     """
     _, data_dir = mm_runner
     r1 = invoke(mm_runner, [
-        'remember', 'first same-session note', '--no-reconcile',
+        'remember', 'first same-session note',
         '--session', 'sess-i'])
     raw1 = json.loads(r1.output)
     r2 = invoke(mm_runner, [
-        'remember', 'second same-session note', '--no-reconcile',
+        'remember', 'second same-session note',
         '--session', 'sess-i'])
     raw2 = json.loads(r2.output)
     assert raw1['store'] == raw2['store']
@@ -276,7 +276,7 @@ def test_idempotency_check_runs_for_explicit_source(mm_runner):
     """
     _, data_dir = mm_runner
     r1 = invoke(mm_runner, [
-        'remember', 'explicit source replay note', '--no-reconcile',
+        'remember', 'explicit source replay note',
         '--source', 'agent'])
     raw = json.loads(r1.output)
     _sess, queue_uuid = _queue_row(data_dir, raw['queue_id'])
@@ -301,7 +301,7 @@ def test_queue_uuid_survives_counter_rewind(mm_runner):
     import os
     _, data_dir = mm_runner
     r1 = invoke(mm_runner, [
-        'remember', 'note before rewind', '--no-reconcile'])
+        'remember', 'note before rewind'])
     raw1 = json.loads(r1.output)
     for suffix in ('', '-wal', '-shm'):
         try:
@@ -309,7 +309,7 @@ def test_queue_uuid_survives_counter_rewind(mm_runner):
         except FileNotFoundError:
             pass
     r2 = invoke(mm_runner, [
-        'remember', 'note after rewind', '--no-reconcile'])
+        'remember', 'note after rewind'])
     raw2 = json.loads(r2.output)
     assert raw2['queue_id'] == raw1['queue_id'], (
         'fixture failed to rewind the AUTOINCREMENT counter')

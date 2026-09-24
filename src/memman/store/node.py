@@ -5,8 +5,8 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from memman.store.model import Insight, dedupe_entities, format_timestamp
-from memman.store.model import parse_timestamp
+from memman.store.model import Insight, content_hash, dedupe_entities
+from memman.store.model import format_timestamp, parse_timestamp
 
 if TYPE_CHECKING:
     from memman.store.db import DB
@@ -29,8 +29,8 @@ insert into insights
     (id, content, category, importance, entities,
      source, access_count, created_at, updated_at,
      prompt_version, model_id, embedding_model,
-     session_id, queue_uuid, corroboration_count, author)
-values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     session_id, queue_uuid, corroboration_count, author, content_hash)
+values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
     db._exec(sql, (
         i.id, i.content, i.category, i.importance,
@@ -38,7 +38,7 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         now, now,
         i.prompt_version, i.model_id, i.embedding_model,
         i.session_id, i.queue_uuid, i.corroboration_count,
-        i.author))
+        i.author, content_hash(i.content)))
 
 
 # `session_id`, `queue_uuid`, `corroboration_count`, then
@@ -251,8 +251,8 @@ def supersession_integrity(db: 'DB') -> dict[str, list[str]]:
         `unterminated`: rows whose chain never reaches a row without a
         pointer (a cycle), which no other population sees and which
         removes every member from the active view. A successor with two
-        predecessors is a join (a merge plus a curated sibling), not a
-        defect. Each list is sorted by id.
+        predecessors is a join (`supersede` can point several rows at
+        one successor), not a defect. Each list is sorted by id.
     """
     dangling = db._query("""
 select p.id
@@ -403,9 +403,9 @@ def has_active_with_queue_uuid(db: 'DB', queue_uuid: str) -> bool:
     """Return True if a non-deleted insight carries the given queue uuid.
 
     The idempotency check for queue replays answers "did this write
-    land", so a superseded row counts: the successor of a merge
-    carries the CURRENT write's uuid, and excluding superseded rows
-    would re-insert a fact the store already corrected. SQL `= ?`
+    land", so a superseded row counts: a row a later `replace`
+    retired still carries this write's uuid, and excluding superseded
+    rows would re-insert a fact the store already corrected. SQL `= ?`
     never matches NULL, so legacy rows with a null `queue_uuid` can
     never satisfy it -- do not add a Python-side default that would.
     """
@@ -414,6 +414,17 @@ def has_active_with_queue_uuid(db: 'DB', queue_uuid: str) -> bool:
         ' and deleted_at is null limit 1',
         (queue_uuid,)).fetchone()
     return row is not None
+
+
+def oldest_active_by_content_hash(db: 'DB', digest: str) -> str | None:
+    """Return the oldest active row whose `content_hash` is `digest`.
+    """
+    row = db._query(
+        'select id from insights where content_hash = ?'
+        ' and deleted_at is null and superseded_by is null'
+        ' order by created_at, id limit 1',
+        (digest,)).fetchone()
+    return row[0] if row else None
 
 
 def get_by_queue_uuid(db: 'DB', queue_uuid: str) -> list[Insight]:

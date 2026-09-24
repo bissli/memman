@@ -13,8 +13,10 @@ a value yields `None`; backends fill them in on insert and reads
 return them populated.
 """
 
+import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -120,8 +122,8 @@ class OpLogEntry:
     """One row from the oplog table.
 
     `before` and `after` capture the insight content before and
-    after the logged operation. Populated by reconcile, replace,
-    and forget so forensic questions can be answered
+    after the logged operation. Populated by replace, supersede,
+    unsupersede and forget so forensic questions can be answered
     from the oplog alone. Older rows may have both as None.
     """
 
@@ -168,6 +170,36 @@ def dedupe_entities(entities: list[str]) -> list[str]:
             seen.add(key)
             deduped.append(name)
     return deduped
+
+
+_WS_COLLAPSE_RE = re.compile(r'\s+')
+
+
+def content_hash(content: str) -> str:
+    """The exact-duplicate key stored in `insights.content_hash`.
+
+    Parameters
+    ----------
+    content : str
+        A row's content as stored.
+
+    Returns
+    -------
+    str
+        The sha256 hex digest of the UTF-8 content with each whitespace
+        run collapsed to one space, the ends stripped, and the text
+        lowercased.
+
+    Notes
+    -----
+    - Every insert path stores this value and the drain looks it up,
+      so the two can never fold differently. Content is write-once,
+      so a stored hash never goes stale.
+    - Folding is equality modulo case and spacing, never containment:
+      a superset of a stored row hashes differently and is added.
+    """
+    folded = _WS_COLLAPSE_RE.sub(' ', content).strip().lower()
+    return hashlib.sha256(folded.encode()).hexdigest()
 
 
 def insight_to_delta_dict(ins: 'Insight') -> dict[str, Any]:

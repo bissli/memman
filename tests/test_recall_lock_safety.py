@@ -58,8 +58,7 @@ class TestRecallSkipsReindex:
         """A stale constants_hash on the recall path must not fire reindex."""
         r, data_dir = mm_runner
         invoke(mm_runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
         from memman.embed.fingerprint import Fingerprint, write_fingerprint
         sdir = store_dir(data_dir, 'default')
         db = open_db(str(sdir))
@@ -171,8 +170,7 @@ class TestRecallBookkeepingLockSafety:
 
         r, data_dir = mm_runner
         invoke(mm_runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
 
         from memman.store import sqlite as sqlite_mod
 
@@ -252,12 +250,10 @@ class TestMaintenanceReindexesAllStores:
         """A store with no queue traffic still has its hash repaired."""
         r, data_dir = mm_runner
         invoke(mm_runner, [
-            'remember', 'first store insight',
-            '--no-reconcile'])
+            'remember', 'first store insight'])
         invoke(mm_runner, [
             '--store', 'quiet',
-            'remember', 'quiet store insight',
-            '--no-reconcile'])
+            'remember', 'quiet store insight'])
 
         for store_name in ('default', 'quiet'):
             sdir = store_dir(data_dir, store_name)

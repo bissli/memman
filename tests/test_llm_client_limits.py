@@ -7,7 +7,6 @@ timeout.
 """
 
 import pytest
-from memman import config
 from memman.llm import usage as llm_usage
 from memman.llm.client import MemmanLLMClient, get_llm_client, reset_role_cache
 
@@ -28,25 +27,6 @@ def test_slow_role_gets_large_budget():
     client = get_llm_client('slow')
     assert client.max_tokens >= 4096
     assert client.timeout >= 60.0
-
-
-def test_fast_worker_role_reads_the_fast_model_at_worker_limits(env_file):
-    """Verify the reconcile stages' role pairs the fast model with the worker budget.
-
-    Mutation: the role reading the slow model, or keeping the
-        fast role's 1024-token, 10-second limits (a haiku merge runs to
-        8,192 tokens and tens of seconds).
-    Oracle: distinct fast and slow slugs written to the env file, beside
-        the worker roles' limits read from the same process.
-    """
-    env_file(config.LLM_MODEL_FAST, 'vendor/fast-model')
-    env_file(config.LLM_MODEL_SLOW, 'vendor/slow-model')
-    reset_role_cache()
-    client = get_llm_client('fast_worker')
-    assert client.model == 'vendor/fast-model'
-    assert client.max_tokens == get_llm_client('slow').max_tokens
-    assert client.timeout == get_llm_client('slow').timeout
-    assert client.timeout > get_llm_client('fast').timeout
 
 
 class _RecordingSession:
@@ -84,7 +64,7 @@ def test_complete_honors_a_per_call_max_tokens(monkeypatch):
     monkeypatch.setattr('memman.llm.client.get_session', lambda name: session)
     client = MemmanLLMClient('https://llm.example', 'key', 'model', max_tokens=4096)
 
-    client.complete('s', 'u', stage=llm_usage.STAGE_RECONCILIATION)
-    client.complete('s', 'u', stage=llm_usage.STAGE_RECONCILIATION, max_tokens=8192)
+    client.complete('s', 'u', stage=llm_usage.STAGE_ENRICHMENT)
+    client.complete('s', 'u', stage=llm_usage.STAGE_ENRICHMENT, max_tokens=8192)
 
     assert [b['max_tokens'] for b in session.bodies] == [4096, 8192]

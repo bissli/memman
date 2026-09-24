@@ -26,9 +26,6 @@ from tests.conftest import make_insight
 REPLAYED_PROMPTS = [
     ('memman.graph.enrichment', 'ENRICHMENT_SYSTEM_PROMPT'),
     ]
-WRITE_ONLY_PROMPTS = [
-    ('memman.llm.extract', 'RECONCILIATION_SYSTEM'),
-    ]
 
 
 def _key():
@@ -54,27 +51,6 @@ def test_key_moves_for_a_prompt_the_rebuild_replays(
     monkeypatch.setattr(f'{module}.{attr}', 'PERTURBED FOR TEST')
     assert _key() != base, (
         f'{attr} is replayed by link_pending, so it must move the key')
-
-
-@pytest.mark.parametrize(('module', 'attr'), WRITE_ONLY_PROMPTS)
-def test_key_ignores_a_prompt_the_rebuild_cannot_replay(
-        module, attr, monkeypatch):
-    """Editing a write-path-only prompt marks nothing stale.
-
-    Mutation: folding RECONCILIATION_SYSTEM into the key -- its
-        shipped form. Editing it then reports every row in every
-        store stale, and the rebuild silences it by re-enriching,
-        which addresses nothing. Shipping the D2 reconcile-prompt
-        change did exactly this: 675 of 675 rows on the live memman
-        store.
-    Oracle: the key recomputed with that single prompt perturbed,
-        which must equal the unperturbed key.
-    """
-    base = _key()
-    monkeypatch.setattr(f'{module}.{attr}', 'PERTURBED FOR TEST')
-    assert _key() == base, (
-        f'{attr} is never replayed by link_pending, so it must not'
-        ' move the key')
 
 
 def test_key_moves_for_the_metadata_model(env_file):

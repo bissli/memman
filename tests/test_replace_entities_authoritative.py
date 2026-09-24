@@ -21,7 +21,7 @@ from tests.conftest import invoke, parse_remember
 def _seed(mm_runner, data_dir, entities):
     """Store one row carrying `entities` and return its id and store."""
     first = invoke(mm_runner, [
-        'remember', 'the broker is kombu', '--no-reconcile'])
+        'remember', 'the broker is kombu'])
     old = parse_remember(first, mm_runner)
     name = read_active(data_dir) or 'default'
     open_backend(name, data_dir).nodes.update_entities(old['id'], entities)
@@ -100,14 +100,12 @@ def test_an_unflagged_replace_still_inherits_every_name(mm_runner):
 def test_replace_offers_no_reconcile_flag(mm_runner):
     """Verify `replace` carries no `--reconcile` option.
 
-    The drain forced `no_reconcile` for every row carrying a
-    `hint_replaced_id`, and `replace` is its only producer, so the
-    option it advertised could never take effect. A documented flag
-    with no effect is worse than none: it tells a caller the command
-    can do something it cannot.
+    A replace names its target id directly and never runs the
+    extractor or the exact-match lookup, so a reconcile mode has
+    nothing to switch: no such option exists to advertise.
 
-    Mutation: re-adding a `--reconcile` option while the drain still
-        decides for itself, so the flag reads as live and is not.
+    Mutation: adding a `--reconcile` option that the command silently
+        ignores, so the flag reads as live and is not.
     Oracle: the CLI's own exit code and usage error for an unknown
         option.
     """

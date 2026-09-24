@@ -52,8 +52,8 @@ def _version_sort_key(model_id: str) -> tuple:
 # Notes:
 # - The trailing `-\d` anchors on a dated snapshot, which excludes the
 #   `-thinking-` variant of the same line: a reasoning model bills
-#   reasoning tokens on every reconcile call and can return an empty
-#   body at the stage's token ceiling.
+#   reasoning tokens on every enrichment and query-expansion call and
+#   can return an empty body at the role's token ceiling.
 # - Both roles name one line. The roles still resolve separately, so
 #   an operator splits them by setting the env vars directly.
 _ROLE_PATTERNS: dict[str, re.Pattern] = {

@@ -246,6 +246,28 @@ class NodeStore(Protocol):
         """
         ...
 
+    def oldest_active_by_content_hash(self, digest: str) -> Id | None:
+        """Return the oldest current row whose `content_hash` is `digest`.
+
+        Parameters
+        ----------
+        digest : str
+            A `model.content_hash` value.
+
+        Returns
+        -------
+        Id | None
+            The current row (not deleted, not superseded) with that
+            hash and the earliest `created_at`, tiebroken on `id`, or
+            None when no current row matches.
+
+        Notes
+        -----
+        - The drain's exact-duplicate check: one indexed lookup over
+          the whole store, never a shortlist.
+        """
+        ...
+
     def get_by_queue_uuid(self, queue_uuid: str) -> list[Insight]:
         """Return the non-deleted insights one queued write produced.
 
@@ -628,8 +650,8 @@ class Oplog(Protocol):
 
         Insert-only on both backends; trimming is performed by
         `maintenance_step`. `before` / `after` carry pre/post
-        insight content for reconcile / replace / forget /
-        replace so the oplog alone is forensic-complete.
+        insight content for replace / supersede / unsupersede /
+        forget so the oplog alone is forensic-complete.
         """
         ...
 
@@ -780,9 +802,8 @@ class RecallSession(Protocol):
           matches Python exactly, and by construction rather than by
           agreement: it stores the set `insight_tokens` built at
           write time. Closing the gap means changing
-          `_WORD_RE`, which moves the drain's reconciliation
-          candidates, so it is its own change with its own sweep --
-          not this one.
+          `_WORD_RE`, which restales every stored `kw_tokens` set, so
+          it is its own change with its own sweep -- not this one.
         - Counted where the text already lives -- k index probes on
           SQLite, one indexed query on Postgres -- so the pipeline
           never tokenizes the whole store to score one query, and

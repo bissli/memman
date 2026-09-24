@@ -173,7 +173,7 @@ class TestM1CRUD:
                             live_keys):
         unique = uuid.uuid4().hex[:8]
         run_cli(
-            ['remember', '--no-reconcile',
+            ['remember',
              f'User prefers Qdrant for vector DB recall-keyword-{unique}',
              '--cat', 'preference', '--imp', '4'],
             home_dir, m1_dir)
@@ -211,7 +211,7 @@ class TestM1CRUD:
         """
         unique = uuid.uuid4().hex[:8]
         run_cli(
-            ['remember', '--no-reconcile',
+            ['remember',
              f'User prefers Redis for cache-probe-{unique}',
              '--cat', 'preference', '--imp', '3'],
             home_dir, m1_dir)
@@ -241,7 +241,7 @@ class TestM1CRUD:
                                 live_keys):
         unique = uuid.uuid4().hex[:8]
         run_cli(
-            ['remember', '--no-reconcile',
+            ['remember',
              f'User prefers PostgreSQL for forget-test-{unique}',
              '--cat', 'preference', '--imp', '3'],
             home_dir, m1_dir)
@@ -265,7 +265,7 @@ class TestM3Search:
                                      live_keys):
         unique = uuid.uuid4().hex[:8]
         run_cli(
-            ['remember', '--no-reconcile',
+            ['remember',
              f'Chose Qdrant because of Rust performance basic-{unique}',
              '--cat', 'decision', '--imp', '5'],
             home_dir, m3_dir)

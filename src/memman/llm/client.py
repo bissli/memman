@@ -8,21 +8,16 @@ LiteLLM / HuggingFace which speak it natively. Users switch vendors
 by editing `MEMMAN_LLM_ENDPOINT` (and `MEMMAN_LLM_API_KEY` plus the
 two role-model slugs).
 
-Three roles exist:
+Two roles exist:
 
 - `fast` -- synchronous CLI hot path (recall query expansion, doctor's
   connectivity probe). Reads `MEMMAN_LLM_MODEL_FAST`.
-- `fast_worker` -- the fast model on the worker's token budget and
-  timeout: the three reconcile stages (screen, verdict, merge). Reads
-  `MEMMAN_LLM_MODEL_FAST`.
 - `slow` -- derived-metadata path (enrichment). Reads
   `MEMMAN_LLM_MODEL_SLOW`.
 
 Routing the recall path to a small/fast model and enrichment to a
 larger/slow/reasoning model means switching the enrichment model never
-adds latency to interactive commands. The reconcile stages run on the
-fast model too, at the worker's limits: the fast role's own ten-second
-timeout is for interactive latency and would cut a merge short.
+adds latency to interactive commands.
 """
 
 import logging
@@ -39,14 +34,11 @@ from memman.llm.shared import safe_json
 logger = logging.getLogger('memman')
 
 ROLE_FAST = 'fast'
-ROLE_FAST_WORKER = 'fast_worker'
 ROLE_SLOW = 'slow'
-VALID_ROLES = frozenset({
-    ROLE_FAST, ROLE_FAST_WORKER, ROLE_SLOW})
+VALID_ROLES = frozenset({ROLE_FAST, ROLE_SLOW})
 
 _ROLE_ENV_VARS = {
     ROLE_FAST: config.LLM_MODEL_FAST,
-    ROLE_FAST_WORKER: config.LLM_MODEL_FAST,
     ROLE_SLOW: config.LLM_MODEL_SLOW,
     }
 
@@ -56,17 +48,13 @@ WORKER_MAX_TOKENS = 4096
 EMPTY_RETRY_DELAY = 0.1
 
 # Per-role output budget + read timeout. `fast` is the recall hot
-# path and stays tight. The worker roles emit JSON that scales with
-# input size (merge text, enrichment entity/keyword lists);
-# a small cap truncates large insights mid-JSON and the parse fails,
-# so they get a larger token budget and a longer timeout. A caller
-# raises the budget for one call through `complete(max_tokens=)`; the
-# reconcile stages do, with `SCREEN_MAX_TOKENS`, `VERDICT_MAX_TOKENS`
-# and `MERGE_MAX_TOKENS`, on `fast_worker`: the fast model with the
-# worker's budget and timeout, since a merge runs tens of seconds.
+# path and stays tight. `slow` emits JSON that scales with input size
+# (enrichment entity/keyword lists); a small cap truncates large
+# insights mid-JSON and the parse fails, so it gets a larger token
+# budget and a longer timeout. A caller raises the budget for one call
+# through `complete(max_tokens=)`.
 _ROLE_LIMITS = {
     ROLE_FAST: (FAST_MAX_TOKENS, ENRICHMENT_TIMEOUT),
-    ROLE_FAST_WORKER: (WORKER_MAX_TOKENS, WORKER_TIMEOUT),
     ROLE_SLOW: (WORKER_MAX_TOKENS, WORKER_TIMEOUT),
     }
 
@@ -308,8 +296,7 @@ _ROLE_CACHE: dict[str, MemmanLLMClient] = {}
 def get_llm_client(role: str) -> MemmanLLMClient:
     """Return a cached `MemmanLLMClient` for the given role.
 
-    `role` must be one of `'fast'`, `'fast_worker'`, or
-    `'slow'`. Reads `MEMMAN_LLM_ENDPOINT`,
+    `role` must be `'fast'` or `'slow'`. Reads `MEMMAN_LLM_ENDPOINT`,
     `MEMMAN_LLM_API_KEY`, and the role's model env var from the
     canonical env file. Raises `ConfigError` when a required value is
     missing. OpenRouter endpoints automatically receive memman's

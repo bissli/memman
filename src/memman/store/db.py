@@ -371,7 +371,8 @@ create table if not exists insights (
     queue_uuid  text,
     corroboration_count integer not null default 0,
     superseded_by text,
-    author      text
+    author      text,
+    content_hash text
 );
 
 create table if not exists edges (
@@ -393,6 +394,7 @@ create index if not exists idx_insights_deleted on insights(deleted_at);
 create index if not exists idx_insights_source on insights(source);
 create index if not exists idx_insights_session on insights(session_id);
 create index if not exists idx_insights_queue_uuid on insights(queue_uuid);
+create index if not exists idx_insights_content_hash on insights(content_hash);
 -- Load-bearing as the schema canary, not as a query index: this is
 -- the statement that makes a 0.18.x store fail at open (see _migrate).
 create index if not exists idx_insights_corroboration on insights(corroboration_count);

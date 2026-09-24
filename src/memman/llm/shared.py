@@ -148,7 +148,7 @@ def _top_level_json_values(raw: str, opener: str) -> list:
         pair is never touched.
     """
     # strict=False keeps a raw newline or tab inside a string value:
-    # a model that copies a memory's paragraph breaks into merged_text
+    # a model that copies a memory's paragraph breaks into a summary
     # emits them unescaped, and the strict default refuses the object.
     decoder = json.JSONDecoder(strict=False)
     repaired = _ESCAPE_RUN_RE.sub(

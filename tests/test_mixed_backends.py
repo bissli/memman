@@ -289,10 +289,10 @@ def test_default_sqlite_with_work_postgres(
         r = CliRunner()
         r.invoke(
             cli, ['--data-dir', data_dir, '--store', 'default',
-                  'remember', 'sqlite-side fact', '--no-reconcile'])
+                  'remember', 'sqlite-side fact'])
         r.invoke(
             cli, ['--data-dir', data_dir, '--store', 'work',
-                  'remember', 'postgres-side fact', '--no-reconcile'])
+                  'remember', 'postgres-side fact'])
 
         sqlite_db = pathlib.Path(data_dir) / 'data' / 'default' / 'memman.db'
         assert sqlite_db.exists(), (

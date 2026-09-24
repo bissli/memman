@@ -25,8 +25,8 @@ def log_op(db: 'DB', operation: str, insight_id: str,
     Bounded growth is enforced by `maintenance_step` once per drain,
     not on every write. This keeps the hot path insert-only so
     Postgres `oplog.log` can be a single statement with no delete.
-    `before` / `after` carry pre/post insight content for reconcile,
-    replace, and forget.
+    `before` / `after` carry pre/post insight content for replace,
+    supersede, unsupersede and forget.
     """
     now = format_timestamp(datetime.now(timezone.utc))
     before_s = json.dumps(before) if before is not None else None

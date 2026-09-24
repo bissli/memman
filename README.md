@@ -44,7 +44,7 @@ memman splits along a hot-path boundary. The agent's turn does only fast local w
 │                   embed + rerank)   │    │  flock on ~/.memman/drain.lock  │
 │  memman remember (queue append)     │ →  │                                 │
 │                                     │    │                                 │
-│  No reconciliation, no graph writes │    │  Reconcile → enrich →           │
+│  No dedup check, no graph writes    │    │  Dedup check → enrich →         │
 │                                     │    │  embed → edges → DB             │
 └─────────────────────────────────────┘    └─────────────────────────────────┘
               │                                          ▲
@@ -58,23 +58,24 @@ memman splits along a hot-path boundary. The agent's turn does only fast local w
 | agent reasoning         | inside  | -             | uses recall results as context                                           |
 | `memman remember`       | inside  | ~50 ms        | enqueue only - no LLM, no embed, no edges, no network                    |
 | drain trigger           | outside | every 60 s+   | systemd/launchd timer or serve loop                                      |
-| LLM reconciliation      | outside | network-bound | external LLM provider call                                               |
+| exact-duplicate check   | outside | ms            | content-hash lookup over the whole store                                 |
+| enrichment              | outside | network-bound | external LLM provider call                                               |
 | embedding               | outside | network-bound | external embedding provider call                                         |
 | edge inference + DB     | outside | ms            | makes insight visible to *future* turns                                  |
 
 Two invariants follow from this split:
 
-- **Hot-path discipline.** The agent's turn never reconciles a write or writes to the graph. `remember` appends to a queue file and reaches no network. `recall` reads the local database and, on its default path, calls the embedding provider to encode the query and the reranker to reorder the top results; `--basic` makes neither call. Opening the store needs the embedding provider's key on every path, `--basic` included - see [Where keys are needed](#where-keys-are-needed).
+- **Hot-path discipline.** The agent's turn never checks a write for duplicates or writes to the graph. `remember` appends to a queue file and reaches no network. `recall` reads the local database and, on its default path, calls the embedding provider to encode the query and the reranker to reorder the top results; `--basic` makes neither call. Opening the store needs the embedding provider's key on every path, `--basic` included - see [Where keys are needed](#where-keys-are-needed).
 - **One-way visibility.** A memory written this turn is **not** recallable later in the same turn - it lands for future sessions only.
 
 ## Features
 
 - **Built for coding agents** - memory for Claude Code: the decisions, preferences, and facts a coding session settles, recalled in the next one.
 - **Hook-driven** - five lifecycle hooks handle memory operations automatically.
-- **LLM-supervised** - the host LLM decides what to remember and forget; a worker model handles reconciliation, enrichment, and query expansion.
+- **LLM-supervised** - the host LLM decides what to remember and forget; a worker model handles enrichment and query expansion. No LLM judges a write.
 - **Multi-graph architecture** - temporal, entity, and semantic edges.
 - **Intent-aware recall** - graph beam search with RRF fusion. Query intent (WHY/WHEN/ENTITY/GENERAL) controls edge weights and traversal budget. Results always come back in relevance order.
-- **LLM reconciliation** - each fact screened against every shortlisted memory one pair per call, then judged ADD/UPDATE/SUPERSEDE/NONE per kept row, then merged into one successor per retired row. A contradicted or refined memory is superseded, never deleted: it keeps its content behind `superseded_by`, leaves recall by default, and `memman insights show <id> --history` walks the chain. A byte-identical restatement skips the LLM entirely; a reworded one comes back as `NONE` naming the memory that already covers it. Either way the stored row's `corroboration_count` is bumped and no copy is written.
+- **Write once, retire deliberately** - a write adds a row, replaces the row `replace <id>` names, or skips as an exact duplicate; nothing else retires a row. A replaced or superseded memory is never deleted: it keeps its content behind `superseded_by`, leaves recall by default, and `memman insights show <id> --history` walks the chain. An exact duplicate - the same text modulo case and whitespace - is found by an indexed content-hash lookup over the whole store and corroborates the oldest current match instead of storing a copy, bumping its `corroboration_count`.
 - **Operator-only deletion** - a store is uncapped and nothing expires or is pruned on its own. `memman forget <id>` is the only thing that removes a memory; `memman insights review` surfaces transient content for that decision.
 - **Pluggable embeddings, per-store sovereignty** - registered providers include `voyage`, `openai` (any OpenAI-compatible endpoint: OpenAI, vLLM, LiteLLM, ...), `openrouter`, and `ollama`. Each store's `meta.embed_fingerprint` is the runtime authority over its embedder, so one process can serve multiple stores with different embedders. Switch online via `memman embed swap` or offline via `memman embed reembed`.
 - **Pluggable storage backend** - SQLite by default; Postgres + pgvector via the `memman[postgres]` extra. `memman migrate` copies a store between backends in a single command (idempotent, drain-lock-guarded, dry-run support).
@@ -83,7 +84,7 @@ Two invariants follow from this split:
 ## Install
 
 > [!IMPORTANT]
-> **The API keys belong to memman, not to the agent.** The agent authenticates as it always has - Claude Code runs on its own Claude login, which memman neither reads nor bills against. The keys below pay for the calls memman makes on its own behalf: the background worker that reconciles and embeds each memory, and the two calls recall makes to rank results. A Claude Pro / Max or ChatGPT Plus subscription does **not** cover them, since a chat subscription and the developer APIs are billed separately. Any registered provider works (OpenRouter, OpenAI-compatible endpoints, Voyage, Ollama, ...), and an install running Ollama on both sides needs no key at all. [Where keys are needed](#where-keys-are-needed) breaks this down per command.
+> **The API keys belong to memman, not to the agent.** The agent authenticates as it always has - Claude Code runs on its own Claude login, which memman neither reads nor bills against. The keys below pay for the calls memman makes on its own behalf: the background worker that enriches and embeds each memory, and the two calls recall makes to rank results. A Claude Pro / Max or ChatGPT Plus subscription does **not** cover them, since a chat subscription and the developer APIs are billed separately. Any registered provider works (OpenRouter, OpenAI-compatible endpoints, Voyage, Ollama, ...), and an install running Ollama on both sides needs no key at all. [Where keys are needed](#where-keys-are-needed) breaks this down per command.
 
 ```bash
 pipx install memman
@@ -96,7 +97,7 @@ In a TTY, the install wizard prompts for an LLM endpoint URL and an embedding pr
 
 ### Provider setup
 
-memman talks to three external services: an **LLM** (reconciliation, enrichment, query expansion), an **embedding provider** (vector search, graph connectivity), and a **reranker** (final ordering of recall results). All three are pluggable; the embed side is also per-store via `meta.embed_fingerprint`.
+memman talks to three external services: an **LLM** (enrichment, query expansion), an **embedding provider** (vector search, graph connectivity), and a **reranker** (final ordering of recall results). All three are pluggable; the embed side is also per-store via `meta.embed_fingerprint`.
 
 #### Where keys are needed
 
@@ -108,7 +109,7 @@ The agent's own login is never involved. These are the calls memman makes on its
 | every verb that opens a store, `recall --basic` included | inside the turn | the active embedding provider's key (none for Ollama) | the command stops: `MEMMAN_VOYAGE_API_KEY is not set in <dir>/env` |
 | `recall` - reorder the top results                       | inside the turn | `MEMMAN_VOYAGE_API_KEY`                               | recall keeps its earlier order, and logs why                       |
 | `recall --expand`                                        | inside the turn | `MEMMAN_LLM_API_KEY` (blank for a local LLM)          | the LLM rejects the call and the command stops                     |
-| reconciliation, enrichment                               | worker          | `MEMMAN_LLM_API_KEY` (blank for a local LLM)          | no memory is ever stored                                           |
+| enrichment                                               | worker          | `MEMMAN_LLM_API_KEY` (blank for a local LLM)          | the row still stores, unenriched                                   |
 | embedding, edge inference                                | worker          | the active embedding provider's key                   | no memory is ever stored                                           |
 | `embed reembed`, `embed swap`, `migrate`                 | on demand       | the active embedding provider's key                   | the command stops with an error                                    |
 

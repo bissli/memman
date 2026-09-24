@@ -2,8 +2,7 @@
 
 These tests use FakeLLMClient to test parsing, validation, and error
 handling that can't be exercised through the CLI. Normal-path behavior
-with real/mocked LLM is covered by test_cli.py and test_memory_system.py;
-the three reconcile stages are covered by test_reconcile_stages.py.
+with real/mocked LLM is covered by test_cli.py and test_memory_system.py.
 """
 
 import json

@@ -86,7 +86,7 @@ def test_a_comma_in_a_replace_entity_survives_too(mm_runner):
     """
     _, data_dir = mm_runner
     first = invoke(mm_runner, [
-        'remember', 'a note about a container', '--no-reconcile'])
+        'remember', 'a note about a container'])
     old = parse_remember(first, mm_runner)
 
     result = invoke(mm_runner, [
@@ -113,7 +113,7 @@ def test_replace_without_the_option_still_inherits(mm_runner):
     """
     _, data_dir = mm_runner
     first = invoke(mm_runner, [
-        'remember', 'the broker is kombu', '--no-reconcile',
+        'remember', 'the broker is kombu',
         '--entity', 'kombu'])
     old = parse_remember(first, mm_runner)
 
@@ -140,7 +140,7 @@ def test_an_empty_typed_entity_clears_the_inherited_list(mm_runner):
     """
     _, data_dir = mm_runner
     first = invoke(mm_runner, [
-        'remember', 'the broker is kombu', '--no-reconcile',
+        'remember', 'the broker is kombu',
         '--entity', 'kombu'])
     old = parse_remember(first, mm_runner)
 

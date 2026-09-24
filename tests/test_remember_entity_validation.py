@@ -129,7 +129,7 @@ def test_replace_rejects_an_oversized_entity_list_too(mm_runner):
     """
     _, data_dir = mm_runner
     first = invoke(mm_runner, [
-        'remember', 'a note that will be replaced', '--no-reconcile'])
+        'remember', 'a note that will be replaced'])
     old = parse_remember(first, mm_runner)
     before = len(_queue_rows(data_dir))
 
@@ -167,8 +167,7 @@ def test_replace_inherits_an_oversized_stored_entity_list(mm_runner):
     grown = [f'ent{i}' for i in range(66)]
 
     first = invoke(mm_runner, [
-        'remember', 'a note whose entity list outgrows the cap',
-        '--no-reconcile'])
+        'remember', 'a note whose entity list outgrows the cap'])
     old = parse_remember(first, mm_runner)
 
     name = read_active(data_dir) or 'default'

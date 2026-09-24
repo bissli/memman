@@ -22,26 +22,20 @@ Notes
 - The ledger is never reset. Consumers take a `snapshot()` before a
   unit of work and diff with `delta()` after, so row-level and
   drain-level readings coexist without clobbering each other.
-- The lock is required, not defensive: the screen and merge stages
-  each fan out over their own pool in `pipeline.remember`, so their
-  attempts interleave and attribution by event order is
-  unrecoverable.
+- `record` and `snapshot` hold the lock, so a caller running
+  completions on several threads still books each attempt whole.
 """
 
 import threading
 
-STAGE_SCREEN = 'screen'
-STAGE_RECONCILIATION = 'reconciliation'
-STAGE_MERGE = 'merge'
 STAGE_QUERY_EXPANSION = 'query_expansion'
 STAGE_ENRICHMENT = 'enrichment'
 STAGE_PROBE = 'probe'
 # Off-pipeline measurement tooling (experiments/ harnesses, eval
-# judges) -- keeps their traffic out of the six pipeline buckets.
+# judges) -- keeps their traffic out of the pipeline buckets.
 STAGE_HARNESS = 'harness'
 
 VALID_STAGES = frozenset({
-    STAGE_SCREEN, STAGE_RECONCILIATION, STAGE_MERGE,
     STAGE_QUERY_EXPANSION, STAGE_ENRICHMENT, STAGE_PROBE,
     STAGE_HARNESS,
     })

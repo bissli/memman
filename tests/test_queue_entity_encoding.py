@@ -49,14 +49,13 @@ def test_replace_keeps_a_comma_bearing_inherited_entity_whole(mm_runner):
     Oracle: the target's own stored entity list, the single name
         `OU=Servers,DC=example,DC=com`, against the successor's. The
         teeth are on the ABSENCE of fragments: the DN itself is
-        present on the broken code too, re-added by the predecessor
-        entity union in `_apply_plan`, so asserting only that the DN
-        survives passes on the defect.
+        present on the broken code too, inherited verbatim from the
+        target when `--entity` is omitted, so asserting only that the
+        DN survives passes on the defect.
     """
     _, data_dir = mm_runner
     first = invoke(mm_runner, [
-        'remember', 'a note about a directory container',
-        '--no-reconcile'])
+        'remember', 'a note about a directory container'])
     old = parse_remember(first, mm_runner)
     name = read_active(data_dir) or 'default'
     open_backend(name, data_dir).nodes.update_entities(old['id'], [DN])
@@ -89,16 +88,14 @@ def test_drain_decodes_the_queue_entity_list_verbatim(mm_runner):
     """
     _, data_dir = mm_runner
     wanted = [DN, 'plain entity']
-    invoke(mm_runner, ['remember', 'seed so the store exists',
-                       '--no-reconcile'])
+    invoke(mm_runner, ['remember', 'seed so the store exists'])
     name = read_active(data_dir) or 'default'
 
     from memman.queue import enqueue, queue_db
     with queue_db(data_dir) as conn:
         _row_id, queue_uuid = enqueue(
             conn, store=name, content='a note enqueued by hand',
-            hint_entities=_entities_json(wanted),
-            hint_no_reconcile=True)
+            hint_entities=_entities_json(wanted))
     force_drain(data_dir)
 
     stored = _stored_entities(data_dir, name, queue_uuid)
@@ -124,16 +121,14 @@ def test_a_delimited_entity_value_fails_the_row_instead_of_splitting(
         one would store the two fragments `a` and `b`.
     """
     _, data_dir = mm_runner
-    invoke(mm_runner, ['remember', 'seed so the store exists',
-                       '--no-reconcile'])
+    invoke(mm_runner, ['remember', 'seed so the store exists'])
     name = read_active(data_dir) or 'default'
 
     from memman.queue import enqueue, queue_db
     with queue_db(data_dir) as conn:
         row_id, queue_uuid = enqueue(
             conn, store=name, content='a row carrying a legacy value',
-            hint_entities='a,b',
-            hint_no_reconcile=True)
+            hint_entities='a,b')
     force_drain(data_dir)
 
     assert _stored_entities(data_dir, name, queue_uuid) == []

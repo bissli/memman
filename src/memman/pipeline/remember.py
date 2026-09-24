@@ -3,15 +3,16 @@
 Structure:
 
 1. Quality check - advisory warnings only.
-2. Read-only snapshot of embeddings + active insights.
-3. Planning phase - the write's text, as the agent wrote it, is the
-   one fact: embed, shortlist, screen every shortlisted row (one LLM
-   call per row, in parallel), show the kept rows to the verdict call
-   one per row, assemble the verdicts, write one merge text per
-   retiring target (one call each), then enrich per planned row and
-   re-embed if keywords. **No DB writes.**
-4. Apply phase - one transaction commits every planned supersession,
-   insert, edge, enrichment update, and stamp.
+2. Planning phase - the write's text, as the agent wrote it, is the
+   one row: embed it, look its content hash up among the store's
+   current rows (a match skips as an exact duplicate), then enrich the
+   row and re-embed it if the enrichment carries keywords. **No DB
+   writes.**
+3. Apply phase - one transaction commits the replace link, insert,
+   edges, enrichment update, and stamp.
+
+A write adds one row, replaces the row `replace <id>` names, or skips
+onto an exact duplicate. Nothing else retires a row.
 
 The apply phase runs only after all LLM + embed work has returned.
 Crashes during planning leave the DB untouched; the retry path
@@ -21,34 +22,23 @@ fact-loss gap for a single queue row.
 
 import functools
 import hashlib
-import json
 import logging
-import time
 import uuid
-from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-from memman import config, trace
 from memman.embed import EmbeddingProvider
-from memman.embed.vector import cosine_similarity
 from memman.exceptions import EmbedCredentialError
 from memman.graph.engine import _resolve_semantic_threshold, fast_edges
 from memman.graph.enrichment import build_enriched_text, enrich_with_llm
 from memman.graph.entity import create_entity_edges
 from memman.graph.semantic import create_semantic_edges
-from memman.llm import extract as llm_extract
-from memman.llm.client import MemmanLLMClient, get_llm_client
-from memman.llm.extract import _WS_COLLAPSE_RE, UNJUDGED
-from memman.rerank import get_client as get_rerank_client
-from memman.search.keyword import keyword_search
+from memman.llm.client import get_llm_client
 from memman.search.quality import check_content_quality
 from memman.store.backend import Backend
-from memman.store.model import MAX_ROW_ENTITIES, Edge, Insight
-from memman.store.model import dedupe_entities, format_timestamp
-from memman.store.model import insight_to_delta_dict
+from memman.store.model import Edge, Insight, content_hash, dedupe_entities
+from memman.store.model import format_timestamp, insight_to_delta_dict
 
 logger = logging.getLogger('memman')
 
@@ -73,10 +63,6 @@ def compute_prompt_version() -> str:
       re-enrichment cannot address - and `graph rebuild --stale`
       then clears the report by doing unrelated work, which is worse
       than having no remedy at all.
-    - Reconciliation prompts are EXCLUDED. A stored row cannot be
-      re-reconciled: the source blob leaves the queue about a minute
-      after its drain, so there is nothing to replay and nothing to
-      report.
     - The slow model id IS folded in, because `link_pending` runs
       the enrichment call on `slow`.
     - An unresolvable slow model hashes as the empty string, so a
@@ -102,185 +88,28 @@ def compute_prompt_version() -> str:
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
-# Notes:
-# - The reconcile shortlist is the keyword rung, then
-#   RECONCILE_COSINE_SLOTS rows by cosine, then the cross-encoder's
-#   order over the top RERANK_POOL rows by cosine until the cap. No
-#   absolute cosine anywhere: a fixed value means a different thing
-#   under every embedding model. The one boundary kept is the sign,
-#   as `vector_anchors` keeps it on the read path: an orthogonal row
-#   is orthogonal under every model.
-# - RERANK_POOL mirrors the read path's RERANK_SHORTLIST: one call
-#   over at most 100 documents, the shape every recall already pays.
-# - RECONCILE_COSINE_SLOTS is a quota, not a score. Measured over 64
-#   frozen cases with 67 supersede targets (2026-09-10): every split
-#   from 6 to 12 cosine slots reaches 65 of the 67 with none lost,
-#   against the floored 15-slot cosine rung's 62; 9 is the middle of
-#   that plateau. Both edges move with the embedding and rerank
-#   models, so a model swap re-measures the plateau, not this
-#   constant.
-# - RERANK_SCREEN_SLOTS is the cut between the shortlist and the
-#   screen: the screen sees the reranker's top ten scored rows and
-#   every row the reranker did not score. A rank quota, not a score.
-#   Measured over 534 case-reps on two model tiers (2026-09-11): no
-#   confirmed target sat below rerank rank 10, and the cut held every
-#   gate line at the uncut value at 10.7 screen calls per fact
-#   against 20. A swap of the rerank model re-measures the rank.
-MAX_SIMILAR_FOR_RECONCILE = 20
-KEYWORD_HITS_LIMIT = 5
-RECONCILE_COSINE_SLOTS = 9
-RERANK_POOL = 100
-RERANK_SCREEN_SLOTS = 10
-
-
-# Notes:
-# - The write path's disposition of every screen relation: a kept row
-#   is shown to the verdict call; `fallback` rows are shown only when
-#   nothing is kept, the first alone; a dropped row is never shown.
-# - REFINES rows are half of all candidates and carried the batch's
-#   volume; an UNJUDGED row is kept because a screen the model could
-#   not answer must not hide a contradiction.
-SCREEN_DISPOSITION = {
-    'CONTRADICTS': 'keep',
-    'RESTATES': 'keep',
-    UNJUDGED: 'keep',
-    'REFINES': 'fallback',
-    'UNRELATED': 'drop',
-    }
-
-
-@dataclass
-class Candidate:
-    """One reconcile shortlist row and what each stage saw and decided.
-
-    Attributes
-    ----------
-    id : str
-        The stored row.
-    rung : str
-        `keyword`, `cosine` or `rerank`, the rung that shortlisted it.
-    score : float
-        The rung's score: a keyword score, a cosine, or the reranker's
-        relevance.
-    relation : str | None
-        The screen's relation, one of `SCREEN_DISPOSITION`; None when
-        the exact-match rung answered before the screen ran, or when
-        the cut (`RERANK_SCREEN_SLOTS`) left the row unscreened.
-    screened : bool
-        True when the row reached the verdict call.
-    verdict : str | None
-        The verdict call's answer, `supersede | update | none | keep`;
-        None when the row was not screened in.
-    """
-
-    id: str
-    rung: str
-    score: float
-    relation: str | None = None
-    screened: bool = False
-    verdict: str | None = None
-
-
-def screened_rows(
-        similar: list[tuple[str, str]],
-        relation_by_id: dict[str, str]) -> list[tuple[str, str]]:
-    """The shortlisted rows the verdict call is shown, in shortlist order.
-
-    Parameters
-    ----------
-    similar : list[tuple[str, str]]
-        The shortlist as `(insight_id, content)`.
-    relation_by_id : dict[str, str]
-        The screen's relation per shortlisted id.
-
-    Returns
-    -------
-    list[tuple[str, str]]
-        Every row whose relation is `keep` in `SCREEN_DISPOSITION`;
-        when there is none, the first `fallback` row alone; else empty.
-    """
-    kept = [row for row in similar
-            if SCREEN_DISPOSITION[relation_by_id[row[0]]] == 'keep']
-    if kept:
-        return kept
-    return [row for row in similar
-            if SCREEN_DISPOSITION[relation_by_id[row[0]]] == 'fallback'][:1]
-
-
-def assemble_verdicts(
-        kept: list[tuple[str, str]],
-        verdict_by_id: dict[str, str]) -> tuple[str, list[tuple[str, str]]]:
-    """One fact's action and targets from its per-row verdicts.
-
-    Parameters
-    ----------
-    kept : list[tuple[str, str]]
-        The screened rows as `(insight_id, content)`, in shortlist order.
-    verdict_by_id : dict[str, str]
-        The verdict call's answer per kept id.
-
-    Returns
-    -------
-    tuple[str, list[tuple[str, str]]]
-        The action, `SUPERSEDE | UPDATE | NONE | ADD`, and the targets
-        as `(insight_id, relation)`.
-
-    Notes
-    -----
-    - Every `supersede` row is a target. A `none` row folds to `update`
-      when another row supersedes: the verdict text's own rule that a
-      restating memory is folded into the successor beside a
-      contradicted one. The update slot takes the first `update` or
-      folded row in shortlist order, alone.
-    - With no linking row, the first `none` row is the answer; with
-      none of those, ADD.
-    """
-    kept_ids = [row_id for row_id, _content in kept]
-    supersedes = [rid for rid in kept_ids if verdict_by_id[rid] == 'supersede']
-    updates = [rid for rid in kept_ids
-               if verdict_by_id[rid] == 'update'
-               or (verdict_by_id[rid] == 'none' and supersedes)][:1]
-    nones = [rid for rid in kept_ids if verdict_by_id[rid] == 'none']
-    if supersedes or updates:
-        targets = ([(rid, 'supersede') for rid in supersedes]
-                   + [(rid, 'update') for rid in updates])
-        return ('SUPERSEDE' if supersedes else 'UPDATE'), targets
-    if nones:
-        return 'NONE', [(nones[0], 'none')]
-    return 'ADD', []
-
-
 @dataclass
 class FactPlan:
-    """Planned write for one queued write, or one of its successors.
+    """Planned write for one queued write.
 
     Attributes
     ----------
     action : str
-        `add`, `update`, `supersede`, `replace` or `skipped`.
+        `add`, `replace` or `skipped`.
     fact_text : str
-        The write's text as the agent wrote it; a retiring plan's row
-        stores the merge text written for its target when one came
-        back.
-    fact_insight : Insight | None
-        The row the apply phase inserts; None only on a skip that
-        carries nothing to degrade into.
+        The write's text as the agent wrote it.
+    fact_insight : Insight
+        The row the apply phase inserts; a skip inserts it only when
+        its target died before apply.
     targets : list[tuple[str, str]]
-        `(insight_id, relation)` per affected row, relation in
-        `update | supersede | replace | none`. A fact that retires
-        several rows plans one successor per row, so a retiring plan
-        carries one target.
-    candidates : list[Candidate]
-        The reconcile shortlist with each stage's reading, logged by
-        the apply phase for replay; carried by the first plan of a fact
-        alone, so the row is logged once per fact.
+        `(insight_id, relation)`: the `replace` target, or the exact
+        duplicate a skip corroborates under `none`; empty for an add.
     """
 
     action: str
     fact_text: str
-    fact_insight: Insight | None = None
+    fact_insight: Insight
     targets: list[tuple[str, str]] = field(default_factory=list)
-    candidates: list[Candidate] = field(default_factory=list)
     embed_vec: list[float] | None = None
     enrichment: dict[str, Any] = field(default_factory=dict)
     enriched_vec: list[float] | None = None
@@ -292,11 +121,8 @@ def run_remember(
         insight: Insight,
         content: str,
         ec: EmbeddingProvider,
-        no_reconcile: bool = False,
         replaced_id: str = '',
         embed_cache: dict[str, list[float]] | None = None,
-        insights_by_id: dict[str, Insight] | None = None,
-        stage_llm_client: MemmanLLMClient | None = None,
         *,
         store_name: str,
         ) -> dict[str, Any]:
@@ -306,12 +132,10 @@ def run_remember(
 
     `ec` is the store-bound embed client (resolved from the store's
     `meta.embed_fingerprint` via `bound_embedder`); production callers
-    pass `_StoreContext.ec`. `embed_cache`, `insights_by_id` and
-    `stage_llm_client` are optional drain-scope state hoisted by
-    `_drain_queue` to amortize setup across rows in one drain pass.
-    When omitted (e.g., direct test use), the function builds them
-    from the backend itself. `stage_llm_client` is the `fast_worker`
-    role, for the three reconcile stages.
+    pass `_StoreContext.ec`. `embed_cache` is optional drain-scope
+    state hoisted by `_drain_queue` to amortize setup across rows in
+    one drain pass. When omitted (e.g., direct test use), the function
+    builds it from the backend itself.
 
     `content` is stored as written: no model judges it, rewords it,
     or picks its category, which is `insight.category`.
@@ -326,85 +150,36 @@ def run_remember(
     quality_warnings = check_content_quality(content)
 
     metadata_llm_client = get_llm_client('slow')
-    if stage_llm_client is None:
-        stage_llm_client = get_llm_client('fast_worker')
-
     if embed_cache is None:
         embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
-    if insights_by_id is None:
-        all_insights = backend.nodes.get_all_active()
-        insights_by_id = {i.id: i for i in all_insights}
 
-    superseded_in_batch: set[str] = set()
-    prompt_version = compute_prompt_version()
-    stage_model_id = stage_llm_client.model
-    embed_model = ec.model
-    plans, llm_calls = _plan_fact(
-        content, insight, replaced_id, no_reconcile, insights_by_id,
-        embed_cache, stage_llm_client, metadata_llm_client, ec,
-        backend, store_name)
+    plan, llm_calls = _plan_fact(
+        content, insight, replaced_id, metadata_llm_client, ec, backend)
+    plan.fact_insight.prompt_version = compute_prompt_version()
+    plan.fact_insight.embedding_model = ec.model
+    if plan.action == 'replace':
+        embed_cache.pop(replaced_id, None)
 
-    for plan in plans:
-        if plan.fact_insight is not None:
-            plan.fact_insight.prompt_version = prompt_version
-            # `model_id` names the model behind the row's content: a
-            # merge text is the stage model's, and the agent's own
-            # text (or a failed merge's fallback to it) is no model's.
-            plan.fact_insight.model_id = (
-                stage_model_id
-                if plan.fact_insight.content != plan.fact_text
-                else None)
-            plan.fact_insight.embedding_model = embed_model
-
-        if plan.targets and plan.action in {
-                'update', 'replace', 'supersede'}:
-            for target_id, _relation in plan.targets:
-                superseded_in_batch.add(target_id)
-                insights_by_id.pop(target_id, None)
-                embed_cache.pop(target_id, None)
-
-        # The apply phase registers each inserted row's vector; the
-        # row enters the snapshot here, so the drain's next row can
-        # shortlist it.
-        if plan.fact_insight and plan.action != 'skipped':
-            insights_by_id[plan.fact_insight.id] = plan.fact_insight
-
-    _batch_enriched_embeds(plans, ec)
-
-    fact_results: list[dict[str, Any]] = []
-
-    def apply_all() -> None:
-        for plan in plans:
-            result = _apply_plan(
-                backend, plan, embed_cache, store_name=store_name)
-            fact_results.append(result)
-            if (plan.action == 'skipped'
-                    and result.get('action') == 'add'
-                    and plan.fact_insight is not None):
-                # Repair the drain-scoped caches the planning
-                # loop never touched for a skipped plan: evict
-                # the dead target and register the inserted
-                # copy, or every later row exact-matches the
-                # same stale entry and inserts another copy.
-                if plan.targets:
-                    insights_by_id.pop(plan.targets[0][0], None)
-                    embed_cache.pop(plan.targets[0][0], None)
-                insights_by_id[plan.fact_insight.id] = (
-                    plan.fact_insight)
-                if plan.embed_vec is not None:
-                    embed_cache[plan.fact_insight.id] = (
-                        plan.embed_vec)
+    keywords = plan.enrichment.get('keywords', [])
+    if keywords and ec is not None and ec.available():
+        try:
+            plan.enriched_vec = ec.embed(
+                build_enriched_text(plan.fact_insight.content, keywords))
+        except EmbedCredentialError:
+            raise
+        except Exception as exc:
+            logger.warning(f'enriched-text embed failed: {exc}')
 
     with backend.transaction():
-        apply_all()
-        # A later plan's edges are minted while an earlier plan's
-        # target is still current and may name it; every row this
-        # write superseded ends the write edgeless.
-        for target_id in superseded_in_batch:
-            backend.edges.delete_by_node(target_id)
+        result = _apply_plan(
+            backend, plan, embed_cache, store_name=store_name)
+    if plan.action == 'skipped' and result.get('action') == 'add':
+        # The duplicate died between planning and apply; a later row
+        # of this drain must not mint a semantic edge onto it.
+        embed_cache.pop(plan.targets[0][0], None)
 
     return {
-        'facts': fact_results,
+        'facts': [result],
         'quality_warnings': quality_warnings,
         'llm_calls': llm_calls,
         }
@@ -448,64 +223,14 @@ def skip_reason_for_result(result: Any) -> str:
     return '; '.join(reasons) or 'skipped'
 
 
-def _batch_enriched_embeds(
-        plans: list[FactPlan], ec: Any) -> None:
-    """Embed every plan's enriched text in one HTTP round-trip.
-
-    Called once per row after planning completes. Plans whose
-    enrichment yielded keywords get an enriched-text embedding
-    written back into `enriched_vec`. Plans without keywords are
-    untouched.
-    """
-    if ec is None or not ec.available():
-        return
-    pending: list[tuple[FactPlan, str]] = []
-    for plan in plans:
-        if plan.fact_insight is None:
-            continue
-        if plan.enriched_vec is not None:
-            continue
-        keywords = plan.enrichment.get('keywords', [])
-        if not keywords:
-            continue
-        enriched_text = build_enriched_text(
-            plan.fact_insight.content, keywords)
-        pending.append((plan, enriched_text))
-
-    if not pending:
-        return
-
-    texts = [t for _p, t in pending]
-    try:
-        vectors = ec.embed_batch(texts)
-    except EmbedCredentialError:
-        raise
-    except Exception as exc:
-        logger.warning(f'enriched-text embed_batch failed: {exc}')
-        return
-
-    if len(vectors) != len(pending):
-        logger.warning(
-            f'embed_batch returned {len(vectors)} for {len(pending)} inputs')
-        return
-
-    for (plan, _t), vec in zip(pending, vectors):
-        plan.enriched_vec = vec
-
-
 def _plan_fact(
         fact_text: str,
         parent: Insight,
         replaced_id: str,
-        no_reconcile: bool,
-        insights_by_id: dict[str, Insight],
-        embed_cache: dict[str, list[float]],
-        stage_llm_client: Any,
         metadata_llm_client: Any,
         ec: Any,
         backend: Backend,
-        store_name: str,
-        ) -> tuple[list[FactPlan], int]:
+        ) -> tuple[FactPlan, int]:
     """Plan one write without touching the DB.
 
     Parameters
@@ -514,71 +239,41 @@ def _plan_fact(
         The write's text, as the agent wrote it.
     parent : Insight
         The queued write; its category, entities and other metadata
-        are inherited by every planned row.
+        are inherited by the planned row.
     replaced_id : str
         A `replace` target, or `''`.
-    no_reconcile : bool
-        True skips every reconcile stage.
-    insights_by_id : dict[str, Insight]
-        The drain-scope snapshot of current rows.
-    embed_cache : dict[str, list[float]]
-        The drain-scope vectors of those rows.
-    stage_llm_client : Any
-        The fast-worker client for the three reconcile stages.
     metadata_llm_client : Any
         The slow client for enrichment.
     ec : Any
         The store's bound embed provider.
     backend : Backend
         Open store, read only here.
-    store_name : str
-        The store being written; its per-store rerank toggle governs
-        the shortlist's rerank rung.
 
     Returns
     -------
-    tuple[list[FactPlan], int]
-        The plans and the LLM calls made. One plan for an add, a
-        replace or a skip; one plan per retiring target when the
-        verdicts link several rows, each with its own merge text.
+    tuple[FactPlan, int]
+        The plan - an add, a replace of `replaced_id`, or a skip onto
+        an exact duplicate - and the LLM calls made, 0 or 1.
 
     Notes
     -----
-    - The shortlist holds at most `MAX_SIMILAR_FOR_RECONCILE` rows: up
-      to `KEYWORD_HITS_LIMIT` keyword hits, then up to
-      `RECONCILE_COSINE_SLOTS` rows by cosine, then the reranker's
-      order over the top `RERANK_POOL` rows by cosine until the cap,
-      each rung skipping rows already taken. A slot the keyword rung
-      leaves empty goes to the rerank rung; the cosine order fills
-      what a failed, disabled or exhausted rerank cannot.
-    - The rerank call honors `MEMMAN_RERANK_ENABLED_<store>` and the
-      global `MEMMAN_RERANK_ENABLED` as recall does; a failure is
-      logged and traced and never loses the fact.
-    - The screen sees the reranker's top `RERANK_SCREEN_SLOTS` scored
-      rows plus every shortlisted row the reranker did not score (a
-      keyword hit outside the pool; every row when the rerank failed
-      or was disabled). A row the cut leaves unscreened keeps
-      `relation` None and `screened` False on its candidate.
-    - Stage 1 screens the kept rows on a pool sized to them; stage
-      2 shows each kept row alone; stage 3 writes one
-      merge text per retiring target. The stage functions are
-      `llm.extract.screen_memory`, `judge_memory` and
-      `merge_successor`, on `stage_llm_client`.
-    - Enriched-text re-embeds are deferred to a row-level batch pass
-      (`_batch_enriched_embeds`) so multiple plans in one row collapse
-      into one HTTP round-trip.
+    - An exact duplicate is a current row with the write's
+      `content_hash`, found by one indexed lookup over the whole
+      store, never a shortlist. Several matches skip onto the oldest.
+    - A replace never skips: its caller named the row it retires, so
+      identical content still replaces.
+    - A skip carries the vector computed before the lookup, so a
+      target soft-deleted between planning and apply degrades to an
+      embedded add at no extra cost.
     """
-    calls = 0
-
-    def new_row(content: str) -> Insight:
-        return Insight(
-            id=str(uuid.uuid4()), content=content,
-            category=parent.category, importance=parent.importance,
-            entities=list(parent.entities), source=parent.source,
-            access_count=parent.access_count,
-            created_at=parent.created_at, updated_at=parent.updated_at,
-            session_id=parent.session_id, queue_uuid=parent.queue_uuid,
-            author=parent.author)
+    fact_insight = Insight(
+        id=str(uuid.uuid4()), content=fact_text,
+        category=parent.category, importance=parent.importance,
+        entities=list(parent.entities), source=parent.source,
+        access_count=parent.access_count,
+        created_at=parent.created_at, updated_at=parent.updated_at,
+        session_id=parent.session_id, queue_uuid=parent.queue_uuid,
+        author=parent.author)
 
     fact_vec = None
     try:
@@ -589,279 +284,37 @@ def _plan_fact(
         logger.warning(
             f'fact embed failed; row stored without vector: {exc}')
 
-    action = 'ADD'
-    targets: list[tuple[str, str]] = []
-    candidates: list[Candidate] = []
-    similar: list[tuple[str, str]] = []
-    clauses_by_id: dict[str, list[str]] = {}
-    rerank_score_by_id: dict[str, float] = {}
-
-    if replaced_id:
-        action = 'REPLACE'
-        targets = [(replaced_id, 'replace')]
-    elif not no_reconcile:
-        snapshot = list(insights_by_id.values())
-        keyword_hits = keyword_search(
-            snapshot, fact_text, limit=KEYWORD_HITS_LIMIT)
-        seen: set[str] = set()
-
-        for hit_ins, score in keyword_hits:
-            if hit_ins.id in seen:
-                continue
-            similar.append((hit_ins.id, hit_ins.content))
-            candidates.append(Candidate(hit_ins.id, 'keyword', float(score)))
-            seen.add(hit_ins.id)
-
-        if fact_vec is not None:
-            # Notes:
-            # - Positive cosines only: the sign is the one boundary
-            #   that means the same thing under every embedding model,
-            #   and a zero-norm or mismatched-dimension vector scores
-            #   0.0 and must not enter the pool as a tie.
-            # - Keyword rows stay in the pool so the call is the
-            #   measured one; the union skips rows already taken, so
-            #   their rerank ranks consume no slot.
-            # - Ties by id descending here and in the rerank order, so
-            #   two equal scores place the same way on every run.
-            scored_rows = (
-                (cosine_similarity(fact_vec, evec), eid)
-                for eid, evec in embed_cache.items()
-                if eid in insights_by_id)
-            pool = sorted(
-                (row for row in scored_rows if row[0] > 0.0),
-                reverse=True)[:RERANK_POOL]
-            cosine_taken = 0
-            for sim, cid in pool:
-                if (cosine_taken >= RECONCILE_COSINE_SLOTS
-                        or len(similar) >= MAX_SIMILAR_FOR_RECONCILE):
-                    break
-                if cid in seen:
-                    continue
-                similar.append((cid, insights_by_id[cid].content))
-                candidates.append(Candidate(cid, 'cosine', float(sim)))
-                seen.add(cid)
-                cosine_taken += 1
-
-            rerank_order: list[tuple[str, float]] = []
-            rerank_event: dict[str, Any] = {'pool': len(pool), 'status': 'skipped'}
-            pool_open = [cid for _sim, cid in pool if cid not in seen]
-            if pool_open and len(similar) < MAX_SIMILAR_FOR_RECONCILE:
-                per_store_rerank = config.get_store_rerank_enabled(store_name)
-                rerank_enabled = (
-                    per_store_rerank if per_store_rerank is not None
-                    else config.get_bool(config.RERANK_ENABLED, default=True))
-                if not rerank_enabled:
-                    rerank_event['status'] = 'disabled'
-                else:
-                    rerank_t0 = time.monotonic()
-                    try:
-                        scored = get_rerank_client().rerank(
-                            fact_text,
-                            [insights_by_id[cid].content for _sim, cid in pool])
-                        rerank_order = sorted(
-                            ((pool[index][1], float(score)) for index, score in scored),
-                            key=lambda row: (row[1], row[0]), reverse=True)
-                        rerank_score_by_id = dict(rerank_order)
-                        rerank_event['status'] = 'ok'
-                    except Exception as exc:
-                        logger.warning(
-                            f'reconcile rerank failed; the cosine order fills'
-                            f' the shortlist: {exc}')
-                        rerank_event['status'] = 'failed'
-                        rerank_event['error'] = f'{type(exc).__name__}: {exc}'[:500]
-                    rerank_event['elapsed_ms'] = int(
-                        (time.monotonic() - rerank_t0) * 1000)
-            rerank_taken = 0
-            for cid, score in rerank_order:
-                if len(similar) >= MAX_SIMILAR_FOR_RECONCILE:
-                    break
-                if cid in seen:
-                    continue
-                similar.append((cid, insights_by_id[cid].content))
-                candidates.append(Candidate(cid, 'rerank', score))
-                seen.add(cid)
-                rerank_taken += 1
-            trace.event('reconcile_rerank', taken=rerank_taken, **rerank_event)
-            for sim, cid in pool:
-                if len(similar) >= MAX_SIMILAR_FOR_RECONCILE:
-                    break
-                if cid in seen:
-                    continue
-                similar.append((cid, insights_by_id[cid].content))
-                candidates.append(Candidate(cid, 'cosine', float(sim)))
-                seen.add(cid)
-
-        # Notes:
-        # - The reranker's order predicts which rows the screen needs:
-        #   the top RERANK_SCREEN_SLOTS scored rows and every unscored
-        #   row are screened, the rest of the shortlist is not.
-        # - An unscored row (a keyword hit outside the pool, or every
-        #   row when the rerank failed or was disabled) is always
-        #   screened: the cut never acts on a score it does not have.
-        scored_ids = sorted(
-            (cid for cid, _content in similar if cid in rerank_score_by_id),
-            key=lambda cid: (rerank_score_by_id[cid], cid), reverse=True)
-        screen_ids = (
-            {cid for cid, _content in similar if cid not in rerank_score_by_id}
-            | set(scored_ids[:RERANK_SCREEN_SLOTS]))
-        to_screen = [row for row in similar if row[0] in screen_ids]
-
-        if similar:
-            # Exact-match rung: byte-identical content (modulo case
-            # and whitespace) needs no LLM judgment when exactly ONE
-            # stored row matches. Two identical stored rows mean the
-            # store is already inconsistent, and which one to merge
-            # into is exactly the judgment worth an LLM call. Full
-            # normalized equality only -- `in` would swallow every
-            # superset fact.
-            normalized = _WS_COLLAPSE_RE.sub(
-                ' ', fact_text).strip().lower()
-            exact_ids = [
-                sid for sid, scontent in similar
-                if _WS_COLLAPSE_RE.sub(' ', scontent).strip().lower()
-                == normalized]
-            if len(exact_ids) == 1:
-                return [FactPlan(
-                    action='skipped',
-                    fact_text=fact_text,
-                    fact_insight=new_row(fact_text),
-                    targets=[(exact_ids[0], 'none')],
-                    candidates=candidates,
-                    # Carry the already-computed vector so a target
-                    # soft-deleted between planning and apply can
-                    # degrade to an embedded add at no extra cost.
-                    embed_vec=fact_vec,
-                    skip_reason='exact duplicate',
-                    )], calls
-
-            # Notes:
-            # - One worker per screened row: a screen call ends in
-            #   seconds, and a dozen of them run one after another
-            #   would take a minute per fact.
-            # - The same pool serves stage 2, whose rows are a subset.
-            with ThreadPoolExecutor(max_workers=len(to_screen)) as stage_pool:
-                screened = list(stage_pool.map(
-                    lambda row: llm_extract.screen_memory(
-                        stage_llm_client, fact_text, row),
-                    to_screen))
-                calls += len(to_screen)
-                relation_by_id = {
-                    row[0]: relation
-                    for row, (relation, _clauses) in zip(to_screen, screened)}
-                clauses_by_id = {
-                    row[0]: clauses
-                    for row, (_relation, clauses) in zip(to_screen, screened)}
-                kept = screened_rows(to_screen, relation_by_id)
-                kept_ids = {row_id for row_id, _content in kept}
-                for candidate in candidates:
-                    candidate.relation = relation_by_id.get(candidate.id)
-                    candidate.screened = candidate.id in kept_ids
-                trace.event(
-                    'reconcile_screen', shortlist=len(similar),
-                    rows=len(to_screen), cut=len(similar) - len(to_screen),
-                    kept=len(kept),
-                    relations=dict(Counter(relation_by_id.values())))
-
-                if kept:
-                    verdicts = list(stage_pool.map(
-                        lambda row: llm_extract.judge_memory(
-                            stage_llm_client, fact_text, row),
-                        kept))
-                    calls += len(kept)
-                    verdict_by_id = {
-                        row[0]: verdict for row, verdict in zip(kept, verdicts)}
-                    for candidate in candidates:
-                        candidate.verdict = verdict_by_id.get(candidate.id)
-                    action, targets = assemble_verdicts(kept, verdict_by_id)
-
-    if action == 'NONE':
-        # Notes:
-        # - RESTATES is the one screen relation whose own text says
-        #   the target carries every claim the fact makes; a NONE
-        #   verdict on a REFINES or unjudged target would discard
-        #   clauses no stored row holds.
-        # - The screen already ran, so its answer rides
-        #   `Candidate.relation` and this costs no LLM call.
-        covered = {candidate.id for candidate in candidates
-                   if candidate.relation == 'RESTATES'}
-        if targets and targets[0][0] in covered:
-            # Carry the target the model named, and the vector
-            # alongside it for the same reason the exact-match rung
-            # does: a target soft-deleted between planning and apply
-            # degrades to an add, which reads `plan.embed_vec`.
-            return [FactPlan(
+    if not replaced_id:
+        duplicate_id = backend.nodes.oldest_active_by_content_hash(
+            content_hash(fact_text))
+        if duplicate_id is not None:
+            return FactPlan(
                 action='skipped',
                 fact_text=fact_text,
-                fact_insight=new_row(fact_text),
-                targets=targets,
-                candidates=candidates,
+                fact_insight=fact_insight,
+                targets=[(duplicate_id, 'none')],
                 embed_vec=fact_vec,
-                skip_reason='already captured',
-                )], calls
-        action = 'ADD'
-        targets = []
+                skip_reason='exact duplicate',
+                ), 0
 
-    if action in {'UPDATE', 'SUPERSEDE'}:
-        # Notes:
-        # - Stage 3, one call per retiring target, in parallel: the
-        #   body lists that target alone with the clauses the screen
-        #   quoted for it, or `(none)` for an update target, and each
-        #   successor stores the text written for its own predecessor.
-        # - A merge that returns no text falls back to the fact, which
-        #   the apply phase marks `(unmerged)` for that target alone.
-        content_by_id = dict(similar)
-        merge_targets = [
-            (target_id,
-             content_by_id[target_id],
-             clauses_by_id.get(target_id, []) if relation == 'supersede' else [])
-            for target_id, relation in targets]
-        with ThreadPoolExecutor(max_workers=len(targets)) as merge_pool:
-            merged = list(merge_pool.map(
-                lambda target: llm_extract.merge_successor(
-                    stage_llm_client, fact_text, target),
-                merge_targets))
-        calls += len(targets)
-        plan_specs = [([target], merged_text or fact_text)
-                      for target, merged_text in zip(targets, merged)]
-    else:
-        plan_specs = [(targets, fact_text)]
+    calls = 0
+    try:
+        enrichment = enrich_with_llm(fact_insight, metadata_llm_client)
+        calls += 1
+    except Exception:
+        enrichment = {}
 
-    plans: list[FactPlan] = []
-    for idx, (plan_targets, content) in enumerate(plan_specs):
-        fact_insight = new_row(content)
+    if enrichment:
+        fact_insight.entities = enrichment.get('entities', [])
 
-        embed_vec = fact_vec
-        if content != fact_text:
-            try:
-                embed_vec = ec.embed(content)
-            except EmbedCredentialError:
-                raise
-            except (httpx.HTTPError, RuntimeError) as exc:
-                logger.warning(
-                    f'merged embed failed; falling back to fact vector:'
-                    f' {exc}')
-
-        try:
-            enrichment = enrich_with_llm(
-                fact_insight, metadata_llm_client)
-            calls += 1
-        except Exception:
-            enrichment = {}
-
-        if enrichment:
-            fact_insight.entities = enrichment.get('entities', [])
-
-        plans.append(FactPlan(
-            action=action.lower(),
-            fact_text=fact_text,
-            fact_insight=fact_insight,
-            targets=plan_targets,
-            candidates=candidates if idx == 0 else [],
-            embed_vec=embed_vec,
-            enrichment=enrichment,
-            enriched_vec=None,
-            ))
-    return plans, calls
+    return FactPlan(
+        action='replace' if replaced_id else 'add',
+        fact_text=fact_text,
+        fact_insight=fact_insight,
+        targets=[(replaced_id, 'replace')] if replaced_id else [],
+        embed_vec=fact_vec,
+        enrichment=enrichment,
+        ), calls
 
 
 def move_edges(
@@ -910,7 +363,7 @@ def _apply_plan(
         *,
         store_name: str,
         ) -> dict[str, Any]:
-    """Apply one planned fact. Must be invoked inside a transaction.
+    """Apply one planned write. Must be invoked inside a transaction.
 
     `store_name` selects the per-store surface for the calibrated
     semantic-edge threshold lookup. It is keyword-only and required
@@ -920,67 +373,28 @@ def _apply_plan(
 
     Notes
     -----
-    - `update`, `replace` and `supersede` share one path over the
-      plan's target list: each target is superseded (never deleted),
-      its edges move to the successor, and the successor inherits the
-      entity union and recall history of the linked targets. They
-      differ only in the oplog operation name and in whether the
-      corroboration count carries, which `supersede` withholds. The
-      planner hands one target per plan, so the successor is the row a
-      query about that one predecessor's subject would have hit.
+    - A `replace` supersedes its target (never deletes it), moves the
+      target's edges to the successor, and carries the target's recall
+      history and corroboration count onto it. The entity list is the
+      caller's as given.
     - A target that is not current (forgotten, or superseded by an
-      earlier write) is dropped into `targets_gone`; the plan degrades
-      to a plain add only when every target is gone.
-    - Every plan that carried a reconcile shortlist logs it first, as
-      a `reconcile-candidates` oplog row with each row's screen
-      relation, whether it was shown to the verdict call and the
-      verdict, so the decision can be replayed against exactly what
-      each stage saw.
+      earlier write) is dropped into `targets_gone`, and the plan
+      degrades to a plain add.
     """
-    fact_id = plan.fact_insight.id if plan.fact_insight is not None else None
     skip_target = plan.targets[0][0] if plan.targets else None
-    if plan.candidates:
-        # Notes:
-        # - Keyed on the row that will exist: the NONE or exact-match
-        #   memory for a skip (no successor is inserted), the new row
-        #   otherwise, ADD included. `fact_id` in the detail ties a skip
-        #   that later degrades to an add back to the inserted row.
-        # - The oplog has no foreign key on `insight_id`, so a row
-        #   logged before `nodes.insert` cannot fail.
-        key = skip_target if plan.action == 'skipped' else fact_id
-        if key is not None:
-            backend.oplog.log(
-                operation='reconcile-candidates', insight_id=key,
-                detail=json.dumps({
-                    'fact_id': fact_id,
-                    'fact': plan.fact_text[:200],
-                    'candidates': [
-                        {**asdict(candidate),
-                         'score': round(candidate.score, 4)}
-                        for candidate in plan.candidates],
-                    }))
-
     corroborate_degraded = False
     if plan.action == 'skipped':
         skip_fi = plan.fact_insight
-        # The exact-match rung and the reconciler's NONE verdict both
-        # name a target; the dedup-sibling and target-deleted skips
-        # carry none.
-        corroborated = False
-        if skip_target:
-            corroborated = backend.nodes.increment_corroboration(
-                skip_target,
-                queue_uuid=skip_fi.queue_uuid if skip_fi else None)
-            if corroborated:
-                backend.oplog.log(
-                    operation='reconcile-corroborate',
-                    insight_id=skip_target,
-                    detail=f'restated by: {plan.fact_text[:200]}')
-        if not skip_target or corroborated:
+        corroborated = backend.nodes.increment_corroboration(
+            skip_target, queue_uuid=skip_fi.queue_uuid)
+        if corroborated:
+            backend.oplog.log(
+                operation='reconcile-corroborate',
+                insight_id=skip_target,
+                detail=f'restated by: {plan.fact_text[:200]}')
             return {
-                'id': skip_fi.id if skip_fi else str(uuid.uuid4()),
-                'content': (skip_fi.content if skip_fi
-                            else plan.fact_text),
+                'id': skip_fi.id,
+                'content': skip_fi.content,
                 'action': 'skipped',
                 'reason': plan.skip_reason,
                 'target_id': skip_target,
@@ -994,11 +408,9 @@ def _apply_plan(
             f'corroborate target {skip_target} already deleted;'
             ' degrading to add')
 
-    assert plan.fact_insight is not None, (
-        'non-skipped FactPlan must carry a fact_insight')
     fi = plan.fact_insight
 
-    linking = plan.action in {'update', 'replace', 'supersede'} and bool(plan.targets)
+    linking = plan.action == 'replace' and bool(plan.targets)
     linked_targets: list[tuple[str, str]] = []
     targets_gone: list[dict[str, str | None]] = []
     carried: list[tuple[str, list[Edge]]] = []
@@ -1029,68 +441,21 @@ def _apply_plan(
             linked_targets.append((target_id, relation))
             carried.append((target_id, carried_edges))
             predecessors.append((target_id, relation, before_target))
-        # Notes:
-        # - Every predecessor keeps its content behind `superseded_by`;
-        #   what the successor copies is what the CURRENT view keeps.
-        #   Entities union rather than overwrite because the incoming
-        #   write names only its own entities and would narrow the
-        #   merged row's entity set on every pass; recall history
-        #   carries as the max over every linked target. A replace is
-        #   the exception: the caller named the list, so it stands as
-        #   given.
-        # - Corroboration carries on a refinement, not on a
-        #   contradiction: it counts restatements of the claim the
-        #   supersede just falsified.
-        for _target_id, relation, before_target in predecessors:
-            # Notes:
-            # - A replace carries the caller's own entity list, which
-            #   the CLI already seeded from the target when the flag
-            #   was omitted. Unioning the target's names back in would
-            #   make a typed list additive and an empty one inert.
-            # - The union is monotonic, so the cap is what keeps a
-            #   repeatedly superseded row from carrying every name any
-            #   predecessor ever held. An inherited name whose carrier
-            #   is superseded matches no active row, so it costs a
-            #   `find_with_entity` query and takes no edge budget, and
-            #   the edge loop never breaks.
-            # - The row's own list leads, so the cut normally takes
-            #   the oldest inherited names, which is the same order
-            #   the edge budget is spent in. Where that own list
-            #   already fills the cap the cut lands inside it, on the
-            #   enrichment's names, which sit at its tail.
-            if relation != 'replace':
-                fi.entities = list(dict.fromkeys(
-                    list(fi.entities)
-                    + list(before_target.entities)))[:MAX_ROW_ENTITIES]
+        # Every predecessor keeps its content behind `superseded_by`;
+        # the successor copies what the CURRENT view keeps: recall
+        # history and corroboration as the max over the linked
+        # targets. The CLI already seeded the caller's entity list from
+        # the target when the flag was omitted, so that list stands.
+        for _target_id, _relation, before_target in predecessors:
             fi.access_count = max(
                 fi.access_count, before_target.access_count)
-            if relation != 'supersede':
-                fi.corroboration_count = max(
-                    fi.corroboration_count,
-                    before_target.corroboration_count)
-        # One oplog row per linked target, each recording the finished
-        # successor rather than the partial union at its own turn.
-        for target_id, relation, before_target in predecessors:
-            op_name = {
-                'replace': 'replace',
-                'update': 'reconcile-update',
-                'supersede': 'reconcile-supersede',
-                }[relation]
-            detail = f'replaced by {fi.id}'
-            if relation != 'replace' and fi.content == plan.fact_text:
-                # Notes:
-                # - No merge text was stored, so the successor may have
-                #   dropped clauses of the predecessor that are still
-                #   true; the marker makes that rate measurable.
-                # - Every reconcile relation retires its target the
-                #   same way, so the marker fires on update as on
-                #   supersede; a replace stores the caller's text by
-                #   contract and is never a fallback.
-                detail += ' (unmerged)'
-                trace.event('supersede_unmerged', target_id=target_id)
+            fi.corroboration_count = max(
+                fi.corroboration_count,
+                before_target.corroboration_count)
+        for target_id, _relation, before_target in predecessors:
             backend.oplog.log(
-                operation=op_name, insight_id=target_id,
-                detail=detail,
+                operation='replace', insight_id=target_id,
+                detail=f'replaced by {fi.id}',
                 before=insight_to_delta_dict(before_target),
                 after=insight_to_delta_dict(fi))
         # Notes:
@@ -1122,10 +487,9 @@ def _apply_plan(
     final_vec = plan.enriched_vec or plan.embed_vec
     embedded = final_vec is not None
     if final_vec is not None:
-        # The caller evicts every planned row from the cache before the
-        # apply phase and the semantic-edge builder reads the new row's
-        # vector from it, so the inserted row registers itself here
-        # with the vector it stores.
+        # The new row is not in the cache yet, and the semantic-edge
+        # builder reads its vector from there, so the inserted row
+        # registers itself here with the vector it stores.
         embed_cache[fi.id] = final_vec
         backend.nodes.update_embedding(
             fi.id, final_vec, fi.embedding_model or '')
@@ -1173,10 +537,6 @@ def _apply_plan(
 
     if corroborate_degraded or (linking and not linked_targets):
         reported_action = 'add'
-    elif linking:
-        relations = {relation for _target, relation in linked_targets}
-        reported_action = ('supersede' if 'supersede' in relations
-                           else relations.pop())
     else:
         reported_action = plan.action
     result: dict[str, Any] = {

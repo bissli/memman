@@ -8,41 +8,10 @@ fact or link the wrong row.
 """
 
 import json
-import uuid
-from datetime import datetime, timezone
 
 import pytest
-from memman.embed.fingerprint import bound_embedder
-from memman.pipeline.remember import FactPlan, _apply_plan, run_remember
-from memman.store.model import Insight
+from memman.pipeline.remember import FactPlan, _apply_plan
 from tests.conftest import invoke, make_insight, mint_edge_into
-
-
-def _parent(content):
-    now = datetime.now(timezone.utc)
-    return Insight(
-        id=str(uuid.uuid4()), content=content, category='fact',
-        importance=3, entities=[], source='test', access_count=0,
-        created_at=now, updated_at=now)
-
-
-def _contradict(monkeypatch, target_ids, when=lambda fact_text: True, merged=lambda tid: None):
-    """Stub the three stages: `target_ids` are contradicted and superseded.
-
-    `when` gates the contradiction on the fact text; `merged` is the
-    stage-3 text per target id, None for the fact-text fallback.
-    """
-    def _screen(client, fact_text, memory):
-        if memory[0] in target_ids and when(fact_text):
-            return 'CONTRADICTS', []
-        return 'UNRELATED', []
-
-    monkeypatch.setattr('memman.llm.extract.screen_memory', _screen)
-    monkeypatch.setattr(
-        'memman.llm.extract.judge_memory', lambda client, fact_text, memory: 'supersede')
-    monkeypatch.setattr(
-        'memman.llm.extract.merge_successor',
-        lambda client, fact_text, target: merged(target[0]))
 
 
 def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
@@ -107,8 +76,7 @@ def test_drain_redirects_a_replace_to_the_chain_head(mm_runner):
     from memman.store.factory import open_backend
 
     _, data_dir = mm_runner
-    res = invoke(mm_runner, ['remember', 'the broker is kombu',
-                             '--no-reconcile'])
+    res = invoke(mm_runner, ['remember', 'the broker is kombu'])
     assert res.exit_code == 0, res.output
     res = invoke(mm_runner, ['scheduler', 'drain'])
     assert res.exit_code == 0, res.output
@@ -186,48 +154,6 @@ def test_a_plain_add_plan_with_a_target_reports_no_replaced_id(
     assert tmp_backend.nodes.get('old-1') is not None
 
 
-def test_one_fact_supersedes_every_contradicted_row(tmp_backend, monkeypatch):
-    """Verify a fact that contradicts two rows supersedes both in one write.
-
-    Mutation: acting on the first target only, which leaves the second
-        contradicted row current beside the fact; or one successor for
-        both, which moves every predecessor's edges onto one row.
-    Oracle: each predecessor read back with `superseded_by` naming its
-        own successor, one `reconcile-supersede` oplog row each, and the
-        far endpoint of each predecessor's edge on its own successor.
-    """
-    from memman.store.model import Edge
-
-    for old, far in (('old-1', 'ctx-1'), ('old-2', 'ctx-2')):
-        tmp_backend.nodes.insert(make_insight(
-            id=old, content=f'the broker at {old} is kombu and X holds'))
-        tmp_backend.nodes.insert(make_insight(id=far, content=f'{far} context'))
-        tmp_backend.edges.upsert(Edge(source_id=far, target_id=old,
-                                      edge_type='semantic', weight=0.8))
-
-    _contradict(monkeypatch, {'old-1', 'old-2'},
-                merged=lambda target_id: f'X is no longer so at {target_id}; Y holds')
-
-    res = run_remember(
-        tmp_backend, _parent('the broker is redis and X no longer holds'),
-        'the broker is redis and X no longer holds',
-        ec=bound_embedder(tmp_backend), store_name='test')
-
-    by_target = {f['replaced_ids'][0]: f for f in res['facts']}
-    assert set(by_target) == {'old-1', 'old-2'}
-    ops = [(e.operation, e.insight_id) for e in tmp_backend.oplog.recent(limit=20)]
-    for old, far in (('old-1', 'ctx-1'), ('old-2', 'ctx-2')):
-        fact = by_target[old]
-        assert fact['action'] == 'supersede'
-        assert fact['content'] == f'X is no longer so at {old}; Y holds'
-        assert tmp_backend.nodes.get_include_deleted(old).superseded_by == fact['id']
-        assert tmp_backend.edges.by_node(old) == []
-        assert ops.count(('reconcile-supersede', old)) == 1
-        carried_far = {e.source_id for e in tmp_backend.edges.by_node(fact['id'])
-                       if e.edge_type == 'semantic'}
-        assert carried_far == {far}
-
-
 @pytest.mark.no_auto_drain
 def test_drain_passes_a_forgotten_head_through_as_a_named_add(mm_runner):
     """Verify a replace whose chain head was forgotten degrades, not redirects.
@@ -241,8 +167,7 @@ def test_drain_passes_a_forgotten_head_through_as_a_named_add(mm_runner):
     from memman.store.factory import open_backend
 
     r, data_dir = mm_runner
-    res = invoke(mm_runner, ['remember', 'the broker is kombu',
-                             '--no-reconcile'])
+    res = invoke(mm_runner, ['remember', 'the broker is kombu'])
     assert res.exit_code == 0, res.output
     assert invoke(mm_runner, ['scheduler', 'drain']).exit_code == 0
     with open_backend('default', data_dir, read_only=True) as backend:

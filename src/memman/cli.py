@@ -264,8 +264,8 @@ def _get_llm_client_or_fail(role: str) -> 'MemmanLLMClient':
 
     Keeps `memman.llm` free of `click` - the CLI boundary is the only
     place that should know how to surface a user-facing config error.
-    `role` is `'fast'`, `'fast_worker'`, or `'slow'`
-    (worker pipeline, operator rebuilds).
+    `role` is `'fast'` or `'slow'` (worker pipeline, operator
+    rebuilds).
     """
     from memman.exceptions import ConfigError
     from memman.llm.client import get_llm_client
@@ -363,14 +363,11 @@ def _validate_caller_entities(entities: tuple[str, ...]) -> list[str]:
       shredding.
     - The 200-char per-entity cap guards against a pathological
       argument rather than a real name.
-    - MAX_ROW_ENTITIES is the same bound the predecessor union
-      applies in `pipeline/remember.py`, so one constant governs both
-      the typed list and the union. It does NOT bound what a row
-      holds: the enrichment adds up to MAX_ENRICH_ENTITIES names on
-      top of whatever seeds it, and the list a `replace` inherits
+    - MAX_ROW_ENTITIES bounds the typed list. It does NOT bound what
+      a row holds: the enrichment adds up to MAX_ENRICH_ENTITIES names
+      on top of whatever seeds it, and the list a `replace` inherits
       passes whole however long it is, so a stored row can carry more
-      than the cap either way. The next reconciliation trims the
-      inherited case.
+      than the cap either way.
     - Neither cap is the binding constraint on usefulness.
       `graph/entity.py` caps entity edges at MAX_TOTAL_ENTITY_EDGES
       = 50 and counts two per target (forward and reverse) at
@@ -776,10 +773,6 @@ def config_show(ctx: click.Context) -> None:
               help='Entity name. Repeat the option per name; the'
                    ' value is never split, so a name may contain a'
                    ' comma.')
-@click.option('--no-reconcile', is_flag=True, default=False,
-              help='Skip reconciliation, so the write is never folded'
-                   ' into, deduplicated against, or used to retire an'
-                   ' existing insight')
 @click.option('--session', default='',
               envvar=[config.SESSION_ID, config.CLAUDE_SESSION_ID],
               help='Session id for the temporal chain (defaults to'
@@ -787,7 +780,7 @@ def config_show(ctx: click.Context) -> None:
 @click.pass_context
 def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
              imp: int, source: str, entities: tuple[str, ...],
-             no_reconcile: bool, session: str) -> None:
+             session: str) -> None:
     """Store a new insight via the queue.
 
     Always enqueues. The worker drains the queue (under systemd/launchd
@@ -848,7 +841,6 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
             hint_cat=cat, hint_imp=imp,
             hint_source=source,
             hint_entities=entities_json,
-            hint_no_reconcile=no_reconcile,
             session_id=session or None,
             priority=0,
             author=author)
@@ -1248,7 +1240,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 if record_run:
                     ctx.begin_drain_run()
 
-            embed_snap, insights_snap = ctx.snapshot_caches()
+            embed_snap = dict(ctx.embed_cache)
             row_usage_snap = llm_usage.snapshot()
             try:
                 row_t0 = _time.monotonic()
@@ -1257,8 +1249,8 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 # Notes:
                 # - The ledger is observability, so its own failure
                 #   must not fail a row whose pipeline already ran:
-                #   that would re-run the reconcile stages on every
-                #   retry and burn the attempt budget.
+                #   that would re-run enrichment on every retry and
+                #   burn the attempt budget.
                 # - It is written before mark_done so a crash between
                 #   the two leaves a retryable row, never a done row
                 #   with no record.
@@ -1295,7 +1287,8 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                         f'[enrich] done id={row.id} store={row.store}',
                         err=True)
             except Exception as exc:
-                ctx.restore_caches(embed_snap, insights_snap)
+                ctx.embed_cache.clear()
+                ctx.embed_cache.update(embed_snap)
                 mark_failed(conn, row.id, f'{type(exc).__name__}: {exc}')
                 failed += 1
                 trace.event(
@@ -1378,7 +1371,6 @@ class _StoreContext:
     def __init__(self, store_name: str, data_dir: str) -> None:
         from memman.embed import fingerprint as _fp_mod
         from memman.exceptions import EmbedFingerprintError
-        from memman.llm.client import get_llm_client
         from memman.store.factory import open_backend
 
         self.store_name = store_name
@@ -1394,11 +1386,8 @@ class _StoreContext:
                 " contains data; run 'memman embed reembed' to converge.")
         self.ec = _fp_mod.bound_embedder(self.backend)
         self._stored_fp = stored
-        self.stage_llm_client = get_llm_client('fast_worker')
         self.embed_cache: dict[str, list[float]] = dict(
             self.backend.nodes.iter_embeddings_as_vecs())
-        self.insights_by_id = {
-            i.id: i for i in self.backend.nodes.get_all_active()}
         self._run_id: int | None = None
 
     def begin_drain_run(self) -> None:
@@ -1446,17 +1435,6 @@ class _StoreContext:
                 f'{current.dim if current else None};'
                 ' row released for retry.')
 
-    def snapshot_caches(self) -> tuple[dict, dict]:
-        """Return shallow copies of the caches for rollback."""
-        return dict(self.embed_cache), dict(self.insights_by_id)
-
-    def restore_caches(self, embed: dict, insights: dict) -> None:
-        """Restore caches to a prior snapshot after a failed row."""
-        self.embed_cache.clear()
-        self.embed_cache.update(embed)
-        self.insights_by_id.clear()
-        self.insights_by_id.update(insights)
-
     def close(self) -> None:
         """Close the active Backend's underlying connection."""
         if self._run_id is not None:
@@ -1490,10 +1468,9 @@ def _process_queue_row(
     enforced unconditionally via `row.queue_uuid`; `row.session_id`
     carries the temporal chain key onto the stored insight.
 
-    Hoisted state (db, embed_cache, insights_by_id, stage_llm_client,
-    ec) comes from `ctx`. The drain loop snapshots and restores `ctx`'s
-    caches around this call so a transaction failure can't pollute
-    the next row's planning.
+    Hoisted state (db, embed_cache, ec) comes from `ctx`. The drain
+    loop snapshots and restores `ctx.embed_cache` around this call so
+    a transaction failure can't pollute the next row's edges.
 
     Returns
     -------
@@ -1578,11 +1555,8 @@ def _process_queue_row(
     from memman.pipeline.remember import run_remember
     result = run_remember(
         backend, insight, row.content,
-        no_reconcile=row.hint_no_reconcile,
         replaced_id=replaced_id,
         embed_cache=ctx.embed_cache,
-        insights_by_id=ctx.insights_by_id,
-        stage_llm_client=ctx.stage_llm_client,
         ec=ctx.ec,
         store_name=ctx.store_name)
     if redirected_from:
@@ -1883,9 +1857,10 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
       Each of the four overrides when typed, `--entity ''` included,
       which clears the list; enrichment then rebuilds it from the new
       content.
-    - A replace never reconciles. It targets one id, so the content
-      lands as a single row exactly as typed; enrichment still runs
-      and rebuilds keywords, summary and entities.
+    - A replace never skips as an exact duplicate. It targets one id,
+      so the content lands as a single row exactly as typed, even when
+      it matches the target; enrichment still runs and rebuilds
+      keywords, summary and entities.
     - `--session` does not inherit: the successor carries the session
       that wrote it, so it enters that session's backbone chain.
       It also inherits the replaced insight's edges, including that
@@ -1973,7 +1948,6 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             hint_source=source,
             hint_entities=entities_json,
             hint_replaced_id=id,
-            hint_no_reconcile=True,
             session_id=session or None,
             priority=0,
             author=author)
@@ -1998,9 +1972,8 @@ def supersede(ctx: click.Context, predecessor_id: str,
 
     Ids are full insight ids or any unambiguous prefix of one.
 
-    The manual counterpart of the reconciler's SUPERSEDE, and the only
-    way to link two rows that BOTH already exist: `replace` always
-    inserts a new row. Neither row's content changes. The predecessor
+    The only way to link two rows that BOTH already exist: `replace`
+    always inserts a new row. Neither row's content changes. The predecessor
     leaves every recall and listing, keeps its content behind
     `superseded_by`, and hands its edges to the successor.
 
@@ -2024,9 +1997,9 @@ def supersede(ctx: click.Context, predecessor_id: str,
     -----
     - Refused, naming the reason, when either id is missing, forgotten
       or already superseded, or when both name the same row. A
-      successor may take a second predecessor: a correction the
-      reconciler wrote as a merge already has one, and curating a
-      sibling claim onto it joins the two chains.
+      successor may take a second predecessor: curating a sibling
+      claim onto a row that already replaced one joins the two
+      chains.
     - `insights show <predecessor_id> --history` reads the link back;
       `unsupersede <predecessor_id>` reverses it once the successor is
       forgotten.
@@ -2357,8 +2330,8 @@ def queue_failed(ctx: click.Context, limit: int) -> None:
 def queue_skipped(ctx: click.Context, limit: int) -> None:
     """List writes that stored no insight.
 
-    A write that reconciled onto an existing insight completes as
-    `done` and is purged from the queue a minute later. A write that
+    A write that skipped as an exact duplicate of a current insight
+    completes as `done` and is purged from the queue a minute later. A write that
     exhausted its retries usually stored nothing either, and `queue
     purge --failed` files it here before deleting the row, naming its
     `queue_uuid` so `insights by-queue` can settle whether anything was
@@ -3421,7 +3394,7 @@ def insights_show(ctx: click.Context, id: str, history: bool) -> None:
     -----
     - The walk follows `superseded_by` forward and every row pointing
       at a chain member backward, so a successor with two predecessors
-      (a merge joined by a curated sibling) lists both.
+      (a replace joined by a curated sibling) lists both.
     - Order is chain order, not timestamp order: rows written within
       one second still list predecessor first.
 
@@ -3527,16 +3500,15 @@ def insights_by_queue(ctx: click.Context, queue_uuid: str) -> None:
       store. The queue is process-global while this command reads
       one store, so a uuid from `remember --store shop` resolves to
       nothing under any other store.
-    - After the drain, one write resolves to one row only under
-      `--no-reconcile`, which bypasses extraction; otherwise it can
-      split into several.
+    - After the drain, one write resolves to one row, or to none when
+      it skipped as an exact duplicate.
     - A malformed uuid is rejected rather than answered `count: 0`,
       so grabbing `queue_id` instead of `queue_uuid` fails loudly.
 
     \b
     Examples
     --------
-    memman remember "a durable fact" --no-reconcile
+    memman remember "a durable fact"
     memman insights by-queue 7f3c1e00-0d1a-4f7e-9c2b-2a1d5b8e4c60
     """  # noqa: D301, D410, D411
     try:

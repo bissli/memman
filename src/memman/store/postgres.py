@@ -46,7 +46,7 @@ from memman.store.errors import BackendError, ConfigError
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
 from memman.store.model import NodeStats, OpLogEntry, OpLogStats
 from memman.store.model import ProvenanceCount, ReembedRow, WorkerRun
-from memman.store.model import format_timestamp, parse_timestamp
+from memman.store.model import content_hash, format_timestamp, parse_timestamp
 from memman.store.node import unterminated_chains
 
 if TYPE_CHECKING:
@@ -142,7 +142,8 @@ create table if not exists {schema}.insights (
     corroboration_count integer not null default 0,
     kw_tokens   text[] not null,
     superseded_by text,
-    author      text
+    author      text,
+    content_hash text
 );
 
 create table if not exists {schema}.edges (
@@ -199,6 +200,8 @@ create index if not exists idx_insights_session_{schema}
     on {schema}.insights(session_id);
 create index if not exists idx_insights_queue_uuid_{schema}
     on {schema}.insights(queue_uuid);
+create index if not exists idx_insights_content_hash_{schema}
+    on {schema}.insights(content_hash);
 create index if not exists idx_insights_corroboration_{schema}
     on {schema}.insights(corroboration_count);
 create index if not exists idx_insights_pending_link_{schema}
@@ -481,8 +484,10 @@ insert into {s}.insights
     (id, content, category, importance, entities,
      source, access_count, created_at, updated_at,
      prompt_version, model_id, embedding_model,
-     session_id, queue_uuid, corroboration_count, kw_tokens, author)
-values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+     session_id, queue_uuid, corroboration_count, kw_tokens, author,
+     content_hash)
+values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+        %s)
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (
@@ -493,7 +498,7 @@ values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %
                 ins.session_id, ins.queue_uuid,
                 ins.corroboration_count,
                 sorted(insight_tokens(ins)),
-                ins.author))
+                ins.author, content_hash(ins.content)))
 
     def get(self, id: Id) -> Insight | None:
         sql = self._q(f"""
@@ -773,6 +778,19 @@ limit 1
         with self._conn.cursor() as cur:
             cur.execute(sql, (queue_uuid,))
             return cur.fetchone() is not None
+
+    def oldest_active_by_content_hash(self, digest: str) -> Id | None:
+        sql = self._q("""
+select id from {s}.insights
+where content_hash = %s
+  and deleted_at is null and superseded_by is null
+order by created_at, id
+limit 1
+""")
+        with self._conn.cursor() as cur:
+            cur.execute(sql, (digest,))
+            row = cur.fetchone()
+            return row[0] if row else None
 
     def get_by_queue_uuid(self, queue_uuid: str) -> list[Insight]:
         sql = self._q(f"""
@@ -2885,7 +2903,7 @@ order by sqlite_id
                                     content=ins.content,
                                     entities=list(ins.entities)))),
                             ins.superseded_by,
-                            ins.author))
+                            ins.author, content_hash(ins.content)))
                     with conn.cursor() as cur:
                         cur.executemany(
                             f'insert into {schema}.insights ('
@@ -2898,11 +2916,12 @@ order by sqlite_id
                             ' prompt_version, model_id,'
                             ' embedding_model, session_id,'
                             ' queue_uuid, corroboration_count,'
-                            ' kw_tokens, superseded_by, author)'
+                            ' kw_tokens, superseded_by, author,'
+                            ' content_hash)'
                             ' values (%s, %s, %s, %s, %s::jsonb,'
                             ' %s, %s, %s::jsonb, %s, %s::jsonb,'
                             ' %s, %s, %s, %s, %s, %s, %s, %s,'
-                            ' %s, %s, %s, %s, %s, %s, %s, %s)'
+                            ' %s, %s, %s, %s, %s, %s, %s, %s, %s)'
                             ' on conflict (id) do nothing',
                             insight_rows)
 

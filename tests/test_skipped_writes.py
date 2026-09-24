@@ -405,35 +405,6 @@ def test_a_reconciled_duplicate_is_filed_by_the_real_pipeline(mm_runner):
 
 
 @pytest.mark.no_auto_drain
-def test_no_reconcile_write_is_never_filed(mm_runner):
-    """The documented escape hatch leaves no ledger row.
-
-    Mutation: `--no-reconcile` failing to bypass either drop path, so
-        the flag every skill recommends as the fix for silent loss
-        loses writes itself.
-    Oracle: the same note stored twice verbatim; neither is filed and
-        both reach the store.
-    """
-    from memman.cli import cli
-
-    r, data_dir = mm_runner
-    note = 'Postgres DSN lives in the env file, never in git'
-    for _ in range(2):
-        res = r.invoke(cli, [
-            '--data-dir', data_dir, 'remember', note, '--no-reconcile'])
-        assert res.exit_code == 0, res.output
-        res = r.invoke(cli, [
-            '--data-dir', data_dir, 'scheduler', 'drain',
-            '--limit', '5', '--timeout', '10'])
-        assert res.exit_code == 0, res.output
-
-    res = r.invoke(cli, [
-        '--data-dir', data_dir, 'scheduler', 'queue', 'skipped'])
-    assert res.exit_code == 0, res.output
-    assert json.loads(res.output)['rows'] == []
-
-
-@pytest.mark.no_auto_drain
 def test_a_crash_recovery_redrain_files_nothing(mm_runner):
     """Re-draining a committed row must not report it lost.
 

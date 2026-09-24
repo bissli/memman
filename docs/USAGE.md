@@ -50,12 +50,9 @@ One live-read command (called by the SessionStart hook, not by hand):
 ### Core
 
 ```bash
-# Remember - store a new insight (LLM reconciliation: duplicates skipped, conflicts resolved)
+# Remember - store a new insight (an exact duplicate skips onto the oldest match)
 memman remember "Chose Qdrant over Milvus for vector search" \
   --cat decision --imp 5 --entity Qdrant --entity Milvus --source agent
-
-# Skip LLM reconciliation (direct insert)
-memman remember "Raw note" --no-reconcile
 
 # Recall - intent-aware graph-enhanced retrieval (default)
 memman recall "vector database" --limit 10
@@ -90,14 +87,13 @@ ambiguous prefix is refused with the number of rows it matches.
 
 **Remember flags:**
 
-| Flag             | Default | Description                                                                                                                       |
-| ---------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `--cat`          | `fact`  | Category: `preference`, `decision`, `fact`, `insight`, `context`                                                                  |
-| `--imp`          | `3`     | Importance 1-5, a sort key stored as passed                                                                                       |
-| `--entity`       |         | Entity name (repeatable; merged with enrichment's)                                                                                |
-| `--source`       | `user`  | Source: `user` (default), `agent`, or a locator for imported material; stored verbatim; recall filters by exact match             |
-| `--session`      | (env)   | Session id for the temporal chain; defaults to `$MEMMAN_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID`. No session, no backbone edge |
-| `--no-reconcile` | `false` | Skip reconciliation, so the write is never folded into, deduplicated against, or used to retire an existing insight               |
+| Flag        | Default | Description                                                                                                                       |
+| ----------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `--cat`     | `fact`  | Category: `preference`, `decision`, `fact`, `insight`, `context`                                                                  |
+| `--imp`     | `3`     | Importance 1-5, a sort key stored as passed                                                                                       |
+| `--entity`  |         | Entity name (repeatable; merged with enrichment's)                                                                                |
+| `--source`  | `user`  | Source: `user` (default), `agent`, or a locator for imported material; stored verbatim; recall filters by exact match             |
+| `--session` | (env)   | Session id for the temporal chain; defaults to `$MEMMAN_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID`. No session, no backbone edge |
 
 **Recall flags:**
 
@@ -198,10 +194,10 @@ memman insights by-queue <queue_uuid>
 memman insights review
 ```
 
-To delete an insight, use `memman forget <id>`. A `replace`, a
-reconcile merge, or `memman supersede` never deletes: the corrected
-row is superseded, keeps its content, and leaves recall and every
-listing. Nothing deletes on its own: the store is uncapped and carries
+To delete an insight, use `memman forget <id>`. A `replace` or
+`memman supersede` never deletes: the corrected row is superseded,
+keeps its content, and leaves recall and every listing. Nothing
+deletes on its own: the store is uncapped and carries
 no retention score, so a stored insight persists until an operator
 removes it.
 
@@ -359,9 +355,9 @@ memman scheduler queue purge --skipped   # empty the skipped-write ledger
 memman scheduler queue purge --failed    # file then delete rows where status='failed'
 ```
 
-A skipped write is a row that stored no insight. Usually the pipeline completed and stored nothing: reconciliation matched the write to an existing insight - an exact duplicate, or a `NONE` verdict on a restating row - and folded it in as a corroboration instead of storing a copy. This marks the row `done`, and `purge_done` deletes it a minute later, so the `skipped_writes` ledger is what survives. A row that exhausted its retries and parked at `status='failed'` usually stored nothing either, and `queue purge --failed` files it here before deleting it, with a reason naming the failure and the row's `queue_uuid`. That last part matters: the drain's error handling extends past the store commit, so a row can reach `failed` with its insight already written. Resolve the uuid with `memman insights by-queue <uuid>` before re-entering such an entry, or the re-entry duplicates a stored write. The ledger keeps the full content, the reason, the store, and the session id, and `stats` reports its size under `skipped` (alongside `stale`, which it also reports).
+A skipped write is a row that stored no insight. Usually the pipeline completed and stored nothing: the planner matched the write to an existing insight by exact content hash and corroborated it instead of storing a copy. This marks the row `done`, and `purge_done` deletes it a minute later, so the `skipped_writes` ledger is what survives. A row that exhausted its retries and parked at `status='failed'` usually stored nothing either, and `queue purge --failed` files it here before deleting it, with a reason naming the failure and the row's `queue_uuid`. That last part matters: the drain's error handling extends past the store commit, so a row can reach `failed` with its insight already written. Resolve the uuid with `memman insights by-queue <uuid>` before re-entering such an entry, or the re-entry duplicates a stored write. The ledger keeps the full content, the reason, the store, and the session id, and `stats` reports its size under `skipped` (alongside `stale`, which it also reports).
 
-Nothing prunes the ledger on a timer: `purge_done` never reaches it. `queue purge --skipped` empties it, `store remove` drops one store's entries, and a `backup restore` replaces it wholesale with the archive's copy. The listing spans every store, and it holds raw content, so treat it as sensitive. Pass `--no-reconcile` on `remember` to bypass every drop and store the text verbatim.
+Nothing prunes the ledger on a timer: `purge_done` never reaches it. `queue purge --skipped` empties it, `store remove` drops one store's entries, and a `backup restore` replaces it wholesale with the archive's copy. The listing spans every store, and it holds raw content, so treat it as sensitive.
 
 A stale row is a pending entry claimed more than `STALE_CLAIM_SECONDS` ago (default 600 s), usually from a mid-drain worker crash. The post-drain maintenance pass auto-recovers via `queue.retry_stale` alongside `purge_done` and `purge_worker_runs`; the explicit verbs exist for incident response.
 
@@ -471,7 +467,7 @@ The variables below are not installable - they are read from the env file on dem
 `memman remember` appends one row to the queue in ~50 ms on the host session - no LLM calls, no embeddings, no edges. The full pipeline runs out of band:
 
 1. **Tier 1 (host)** - append a row to `~/.memman/queue.db` with `status='pending'`, the raw text, and any `--cat`/`--imp`/`--entity` hints. Returns `{action: queued, queue_id, queue_uuid, store}`. The `queue_uuid` is the join key: it is stamped on every insight this write produces and outlives the queue row, which `purge_done` drops about a minute after the drain.
-2. **Tier 2 (worker)** - systemd timer (Linux), launchd agent (macOS), or `memman scheduler serve` PID 1 (containers) invokes `memman scheduler drain --timeout 60` every 60 s under an `flock` on `~/.memman/drain.lock`. Per row: quality gate → embed + similarity scan → exact-match dedup (the write byte-identical to exactly one stored row skips the LLM and bumps that row's `corroboration_count`) or LLM reconciliation (ADD/UPDATE/SUPERSEDE/NONE, where `NONE <id>` names the memory that already covers a reworded write and bumps it the same way, and UPDATE and SUPERSEDE supersede their target rather than delete it) → insert/supersede → fast edges (temporal + entity + semantic) → enrichment → re-embed → rebuild auto edges → mark done.
+2. **Tier 2 (worker)** - systemd timer (Linux), launchd agent (macOS), or `memman scheduler serve` PID 1 (containers) invokes `memman scheduler drain --timeout 60` every 60 s under an `flock` on `~/.memman/drain.lock`. Per row: quality gate → embed → exact-content-hash lookup over the whole store (a match corroborates the oldest current row and skips the rest of the pipeline) → otherwise add, or replace the row `replace <id>` names → fast edges (temporal + entity + semantic) → enrichment → re-embed → rebuild auto edges → mark done.
 
 The host session never blocks on the network. Newly stored memories become recallable on the next drain tick (default 60 s).
 

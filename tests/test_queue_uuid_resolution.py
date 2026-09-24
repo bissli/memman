@@ -50,7 +50,7 @@ def test_remember_returns_the_uuid_its_insight_carries(mm_runner):
     """
     _, data_dir = mm_runner
     r = invoke(mm_runner, [
-        'remember', 'sqlite pages are 4096 bytes', '--no-reconcile'])
+        'remember', 'sqlite pages are 4096 bytes'])
     assert r.exit_code == 0, r.output
     raw = json.loads(r.output)
 
@@ -78,7 +78,7 @@ def test_replace_returns_its_own_uuid_not_the_originals(mm_runner):
     """
     _, data_dir = mm_runner
     first = json.loads(invoke(mm_runner, [
-        'remember', 'redis evicts on maxmemory', '--no-reconcile']).output)
+        'remember', 'redis evicts on maxmemory']).output)
     old_id = _stored_ids(data_dir, first['store'], first['queue_uuid'])[0]
 
     r = invoke(mm_runner, ['replace', old_id, 'redis evicts lru first'])
@@ -107,11 +107,9 @@ def test_by_queue_returns_exactly_the_rows_that_write_stored(mm_runner):
     """
     _, data_dir = mm_runner
     mine = json.loads(invoke(mm_runner, [
-        'remember', 'postgres toasts values over 2kb',
-        '--no-reconcile']).output)
+        'remember', 'postgres toasts values over 2kb']).output)
     other = json.loads(invoke(mm_runner, [
-        'remember', 'kafka retains by segment age',
-        '--no-reconcile']).output)
+        'remember', 'kafka retains by segment age']).output)
 
     expected = _stored_ids(data_dir, mine['store'], mine['queue_uuid'])
     other_ids = _stored_ids(data_dir, other['store'], other['queue_uuid'])
@@ -139,7 +137,7 @@ def test_by_queue_omits_a_soft_deleted_row(mm_runner):
     """
     _, data_dir = mm_runner
     raw = json.loads(invoke(mm_runner, [
-        'remember', 'etcd compacts revisions', '--no-reconcile']).output)
+        'remember', 'etcd compacts revisions']).output)
     stored_id = _stored_ids(data_dir, raw['store'], raw['queue_uuid'])[0]
 
     before = json.loads(invoke(
@@ -255,7 +253,7 @@ def test_by_queue_shows_a_superseded_landing_row(mm_runner):
     """
     _, data_dir = mm_runner
     raw = json.loads(invoke(mm_runner, [
-        'remember', 'etcd compacts revisions', '--no-reconcile']).output)
+        'remember', 'etcd compacts revisions']).output)
     stored_id = _stored_ids(data_dir, raw['store'], raw['queue_uuid'])[0]
     replaced = invoke(mm_runner, [
         'replace', stored_id, 'etcd compacts revisions hourly'])

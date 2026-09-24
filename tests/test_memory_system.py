@@ -23,7 +23,7 @@ def runner(cross_backend_runner):
     return cross_backend_runner
 
 
-def remember(runner_tuple, content, no_reconcile=False, **flags):
+def remember(runner_tuple, content, **flags):
     """Store an insight, return first fact dict from output.
 
     `remember` queues + auto-drains via the CliRunner wrapper, then
@@ -35,8 +35,6 @@ def remember(runner_tuple, content, no_reconcile=False, **flags):
     item, which is how `--entity` supplies several names.
     """
     args = ['remember', content]
-    if no_reconcile:
-        args.append('--no-reconcile')
     for k, v in flags.items():
         values = v if isinstance(v, (list, tuple)) else [v]
         for value in values:
@@ -90,8 +88,7 @@ class TestPersistence:
     def test_store_then_recall_finds_it(self, runner):
         """Single insight retrievable by keyword from its content."""
         data = remember(runner,
-                        'I configured Redis with allkeys-lru eviction and 4GB maxmemory limit',
-                        no_reconcile=True)
+                        'I configured Redis with allkeys-lru eviction and 4GB maxmemory limit')
         hits = recall_basic(runner, 'Redis')
         assert data['id'] in result_ids(hits)
 
@@ -111,7 +108,7 @@ class TestPersistence:
             ]
         ids = []
         for content, _ in topics:
-            data = remember(runner, content, no_reconcile=True)
+            data = remember(runner, content)
             ids.append(data['id'])
 
         for i, (content, keyword) in enumerate(topics):
@@ -123,23 +120,21 @@ class TestPersistence:
     def test_partial_keyword_match(self, runner):
         """Partial keyword from content is enough to find insight."""
         remember(runner,
-                 'Kubernetes pod scheduling affinity rules and taints',
-                 no_reconcile=True)
+                 'Kubernetes pod scheduling affinity rules and taints')
         hits = recall_basic(runner, 'scheduling')
         assert any('scheduling' in c for c in contents(hits))
 
     def test_word_order_irrelevant(self, runner):
         """Search finds content regardless of query word order."""
         remember(runner,
-                 'SQLite WAL mode write-ahead logging benefits',
-                 no_reconcile=True)
+                 'SQLite WAL mode write-ahead logging benefits')
         hits = search_cmd(runner, 'benefits write-ahead SQLite')
         assert any('SQLite' in c for c in contents(hits))
 
     def test_no_false_positives_on_unrelated_query(self, runner):
         """Completely unrelated query returns no results."""
-        remember(runner, 'Python web framework comparison', no_reconcile=True)
-        remember(runner, 'Docker container networking', no_reconcile=True)
+        remember(runner, 'Python web framework comparison')
+        remember(runner, 'Docker container networking')
         hits = recall_basic(runner, 'chromodynamics')
         assert len(hits) == 0
 
@@ -149,16 +144,14 @@ class TestDeletionCompleteness:
 
     def test_forget_removes_from_recall(self, runner):
         """Forgotten insight absent from recall results."""
-        data = remember(runner, 'Python GIL prevents true parallelism',
-                        no_reconcile=True)
+        data = remember(runner, 'Python GIL prevents true parallelism')
         invoke(runner, ['forget', data['id']])
         hits = recall_basic(runner, 'GIL')
         assert data['id'] not in result_ids(hits)
 
     def test_forget_removes_from_search(self, runner):
         """Forgotten insight absent from search results."""
-        data = remember(runner, 'Nginx reverse proxy configuration',
-                        no_reconcile=True)
+        data = remember(runner, 'Nginx reverse proxy configuration')
         invoke(runner, ['forget', data['id']])
         hits = search_cmd(runner, 'Nginx reverse proxy')
         assert data['id'] not in [h['id'] for h in hits]
@@ -166,11 +159,9 @@ class TestDeletionCompleteness:
     def test_forget_does_not_collateral_damage_peers(self, runner):
         """Forgetting A does not affect B."""
         a = remember(runner,
-                     'Celery task queue uses exponential backoff retry with max 5 attempts',
-                     no_reconcile=True)
+                     'Celery task queue uses exponential backoff retry with max 5 attempts')
         b = remember(runner,
-                     'PgBouncer connection pooling reduces PostgreSQL connection overhead by 90 percent',
-                     no_reconcile=True)
+                     'PgBouncer connection pooling reduces PostgreSQL connection overhead by 90 percent')
         invoke(runner, ['forget', a['id']])
 
         hits_b = recall_basic(runner, 'PgBouncer')
@@ -181,17 +172,16 @@ class TestDeletionCompleteness:
     def test_forget_then_re_store_same_content(self, runner):
         """Content can be re-stored after being forgotten."""
         text = 'Python GIL behavior under multiprocessing'
-        data = remember(runner, text, no_reconcile=True)
+        data = remember(runner, text)
         invoke(runner, ['forget', data['id']])
-        new_data = remember(runner, text, no_reconcile=True)
+        new_data = remember(runner, text)
         hits = recall_basic(runner, 'GIL')
         assert new_data['id'] in result_ids(hits)
 
     def test_double_forget_fails(self, runner):
         """Second forget on same ID returns error."""
         data = remember(runner,
-                        'Nginx configured with 4096 worker connections for load balancing',
-                        no_reconcile=True)
+                        'Nginx configured with 4096 worker connections for load balancing')
         invoke(runner, ['forget', data['id']])
         result = invoke(runner, ['forget', data['id']])
         assert result.exit_code != 0
@@ -202,8 +192,7 @@ class TestReplaceAtomicity:
 
     def test_replace_swaps_content(self, runner):
         """Old content absent, new content present after replace."""
-        data = remember(runner, 'team uses Flask for API layer',
-                        no_reconcile=True)
+        data = remember(runner, 'team uses Flask for API layer')
         invoke(runner, ['replace', data['id'],
                         'team migrated to FastAPI for API layer'])
 
@@ -214,8 +203,7 @@ class TestReplaceAtomicity:
 
     def test_replace_inherits_metadata(self, runner):
         """Replace without flags inherits cat/imp from original."""
-        data = remember(runner, 'chose event sourcing for audit trail',
-                        no_reconcile=True, cat='decision', imp='5')
+        data = remember(runner, 'chose event sourcing for audit trail', cat='decision', imp='5')
         result = invoke(runner, ['replace', data['id'],
                                  'chose CQRS with event sourcing for audit'])
         new = parse_remember(result, runner)
@@ -229,8 +217,7 @@ class TestReplaceAtomicity:
 
     def test_replace_override_metadata(self, runner):
         """Replace with explicit flags overrides original metadata."""
-        data = remember(runner, 'Varnish HTTP cache configured with 2GB memory for static assets',
-                        no_reconcile=True, cat='fact', imp='2')
+        data = remember(runner, 'Varnish HTTP cache configured with 2GB memory for static assets', cat='fact', imp='2')
         result = invoke(runner, ['replace', data['id'],
                                  'Switched from Varnish to CloudFront CDN for global edge caching',
                                  '--cat', 'decision', '--imp', '5'])
@@ -246,8 +233,7 @@ class TestReplaceAtomicity:
     def test_replace_preserves_access_count(self, runner):
         """Replace carries forward accumulated access count."""
         data = remember(runner,
-                        'PostgreSQL migration from version 14 to 16 completed successfully',
-                        no_reconcile=True)
+                        'PostgreSQL migration from version 14 to 16 completed successfully')
         recall_basic(runner, 'PostgreSQL')
         recall_basic(runner, 'PostgreSQL')
         result = invoke(runner, ['replace', data['id'],
@@ -266,8 +252,7 @@ class TestReplaceAtomicity:
     def test_replace_deleted_id_errors(self, runner):
         """Replace on already-forgotten insight fails."""
         data = remember(runner,
-                        'RabbitMQ queue mirroring configured for high availability',
-                        no_reconcile=True)
+                        'RabbitMQ queue mirroring configured for high availability')
         invoke(runner, ['forget', data['id']])
         result = invoke(runner, ['replace', data['id'], 'too late'])
         assert result.exit_code != 0
@@ -276,39 +261,46 @@ class TestReplaceAtomicity:
 class TestDeduplication:
     """No silent duplicates, no false positive dedup."""
 
-    def test_reconcile_with_no_reconcile_always_adds(self, runner):
-        """With --no-reconcile, identical content is added."""
-        text = 'Go error handling with sentinel values and wrapping'
-        remember(runner, text, no_reconcile=True)
-        second = remember(runner, text, no_reconcile=True)
-        assert second['action'] == 'add'
+    def test_identical_content_skips_and_bumps_corroboration(self, runner):
+        """A `remember` of identical content skips onto the stored row.
 
-    def test_reconcile_runs_when_similar_exists(self, runner):
-        """Without --no-reconcile, similar content triggers reconciliation.
-
-        Real LLM decides action - may be add/update/none/delete/skipped.
-        Under the queue+drain architecture, the user-facing return is
-        always 'queued'; `parse_remember` looks up the post-drain row
-        by the queue row's `queue_uuid` and returns action='add' when
-        a fresh row was inserted. When the LLM reconciles as
-        UPDATE/DELETE/NONE/SKIPPED, no row with that uuid exists and
-        `parse_remember` falls through to the raw
-        `{action: 'queued', ...}` payload - which is a valid
-        reconciliation outcome, not a failure.
+        Mutation: the content-hash skip rung dropped or gated behind a
+            removed flag, so the second write lands as its own row
+            instead of corroborating the first.
+        Oracle: `insights show` on the first write's id reads
+            `corroboration_count == 1` after the second write, and no
+            second row exists to have absorbed it instead.
         """
         text = 'Go error handling with sentinel values and wrapping'
-        remember(runner, text, no_reconcile=True)
-        second = remember(runner, text)
-        assert second['action'] in {
-            'add', 'update', 'none', 'delete', 'skipped', 'queued'}
+        first = remember(runner, text)
+        remember(runner, text)
+        shown = invoke(runner, ['insights', 'show', first['id']])
+        assert shown.exit_code == 0, shown.output
+        assert json.loads(shown.output)['corroboration_count'] == 1
+
+    def test_reconcile_runs_when_similar_exists(self, runner):
+        """A write whose nearest stored row is similar, not identical, adds.
+
+        Mutation: the write path retiring or merging the earlier row
+            instead of leaving it current and adding the new one.
+        Oracle: the second write reports `action == 'add'`.
+        """
+        text = 'Go error handling with sentinel values and wrapping'
+        remember(runner, text)
+        second = remember(runner, text + ' in a long-running service')
+        assert second['action'] == 'add'
 
     def test_different_content_added(self, runner):
-        """Genuinely different content is added via reconciliation."""
-        remember(runner, 'I use mypy strict mode for all Python projects',
-                 no_reconcile=True)
+        """Genuinely different content is added, never merged.
+
+        Mutation: an `update` or `merge` disposition surviving for
+            content that shares no fact with the stored row.
+        Oracle: the second write reports `action == 'add'`.
+        """
+        remember(runner, 'I use mypy strict mode for all Python projects')
         second = remember(runner,
                           'I switched to Podman from Docker for rootless containers')
-        assert second['action'] in {'add', 'update'}
+        assert second['action'] == 'add'
 
 
 class TestGraphTraversal:
@@ -316,10 +308,8 @@ class TestGraphTraversal:
 
     def test_link_makes_insight_reachable_via_related(self, runner):
         """Linked insight appears in related output."""
-        a = remember(runner, 'authentication design with JWT tokens',
-                     no_reconcile=True)
-        b = remember(runner, 'token rotation schedule every 24 hours',
-                     no_reconcile=True)
+        a = remember(runner, 'authentication design with JWT tokens')
+        b = remember(runner, 'token rotation schedule every 24 hours')
         invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'entity'])
 
         result = invoke(runner, ['graph', 'related', a['id']])
@@ -333,10 +323,8 @@ class TestGraphTraversal:
         threshold - otherwise the explicit edge we add would be
         shadowed by an automatic one between the same pair.
         """
-        a = remember(runner, 'chose SQLite because embedded serverless',
-                     no_reconcile=True)
-        b = remember(runner, 'preferred color is emerald green',
-                     no_reconcile=True)
+        a = remember(runner, 'chose SQLite because embedded serverless')
+        b = remember(runner, 'preferred color is emerald green')
         invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'entity'])
 
         result_entity = invoke(runner, ['graph', 'related', a['id'],
@@ -348,13 +336,11 @@ class TestGraphTraversal:
 
     def test_link_persists_after_other_operations(self, runner):
         """New inserts don't clobber existing edges."""
-        a = remember(runner, 'microservice communication via gRPC',
-                     no_reconcile=True)
-        b = remember(runner, 'protobuf schema evolution rules',
-                     no_reconcile=True)
+        a = remember(runner, 'microservice communication via gRPC')
+        b = remember(runner, 'protobuf schema evolution rules')
         invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'entity'])
 
-        remember(runner, 'Kafka topic partitioning strategy uses key-based routing for ordering guarantees', no_reconcile=True)
+        remember(runner, 'Kafka topic partitioning strategy uses key-based routing for ordering guarantees')
 
         result = invoke(runner, ['graph', 'related', a['id']])
         assert b['id'] in result.output
@@ -368,12 +354,9 @@ class TestGraphTraversal:
         auto-semantic generator does not fire at this distance, so the
         semantic graph holds exactly the two links this test writes.
         """
-        a = remember(runner, 'chose SQLite because embedded serverless',
-                     no_reconcile=True)
-        b = remember(runner, 'preferred color is emerald green',
-                     no_reconcile=True)
-        c = remember(runner, 'the office plant is a fiddle leaf fig',
-                     no_reconcile=True)
+        a = remember(runner, 'chose SQLite because embedded serverless')
+        b = remember(runner, 'preferred color is emerald green')
+        c = remember(runner, 'the office plant is a fiddle leaf fig')
         invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'semantic'])
         invoke(runner, ['graph', 'link', b['id'], c['id'], '--type', 'semantic'])
 
@@ -397,12 +380,9 @@ class TestComposition:
 
     def test_forget_target_does_not_break_related(self, runner):
         """Forgetting a linked target does not crash related or leak."""
-        a = remember(runner, 'API design principles REST vs GraphQL',
-                     no_reconcile=True)
-        b = remember(runner, 'GraphQL schema stitching federation',
-                     no_reconcile=True)
-        c = remember(runner, 'REST pagination cursor-based approach',
-                     no_reconcile=True)
+        a = remember(runner, 'API design principles REST vs GraphQL')
+        b = remember(runner, 'GraphQL schema stitching federation')
+        c = remember(runner, 'REST pagination cursor-based approach')
         link_ab = invoke(runner, ['graph', 'link', a['id'], b['id'],
                                   '--type', 'entity'])
         assert link_ab.exit_code == 0
@@ -419,8 +399,7 @@ class TestComposition:
 
     def test_store_replace_recall_sequence(self, runner):
         """Replace + subsequent inserts don't interfere with each other."""
-        x = remember(runner, 'Flask API for internal tooling',
-                     no_reconcile=True)
+        x = remember(runner, 'Flask API for internal tooling')
         hits = recall_basic(runner, 'Flask')
         assert any('Flask' in c for c in contents(hits))
 
@@ -431,8 +410,7 @@ class TestComposition:
         hits_new = recall_basic(runner, 'FastAPI')
         assert any('FastAPI' in c for c in contents(hits_new))
 
-        remember(runner, 'Django admin for backoffice portal',
-                 no_reconcile=True)
+        remember(runner, 'Django admin for backoffice portal')
         hits_fast = recall_basic(runner, 'FastAPI')
         assert any('FastAPI' in c for c in contents(hits_fast))
         hits_django = recall_basic(runner, 'Django')
@@ -446,8 +424,7 @@ class TestComposition:
             ]
         stored = [remember(
                 runner,
-                f'I deployed {kw} version 3.2 on our production cluster',
-                no_reconcile=True) for kw in keywords]
+                f'I deployed {kw} version 3.2 on our production cluster') for kw in keywords]
 
         delete_indices = [1, 4, 7]
         for i in delete_indices:
@@ -494,23 +471,24 @@ class TestRanking:
     def test_exact_keyword_match_outranks_partial(self, runner):
         """Exact keyword match ranks above partial overlap."""
         a = remember(runner,
-                     'I tuned Redis cache eviction to allkeys-lru',
-                     no_reconcile=True, imp='3')
+                     'I tuned Redis cache eviction to allkeys-lru', imp='3')
         b = remember(runner,
-                     'I automated Redis deployment with Ansible',
-                     no_reconcile=True, imp='3')
+                     'I automated Redis deployment with Ansible', imp='3')
         hits = search_cmd(runner, 'Redis cache eviction')
         assert hits, 'Expected at least one result'
         assert hits[0]['id'] == a['id']
 
     def test_importance_breaks_ties(self, runner):
-        """Higher importance ranks first among similar content."""
+        """Higher importance ranks first among similar content.
+
+        Mutation: `order by` dropping `importance desc` from the basic
+            query, or comparing on `created_at` alone.
+        Oracle: the two rows' index positions in the returned list.
+        """
         low = remember(runner,
-                       'I set up Grafana dashboards for API latency monitoring',
-                       no_reconcile=True, imp='2')
+                       'I set up Grafana dashboards for API latency monitoring', imp='2')
         high = remember(runner,
-                        'I set up Grafana dashboards for API latency monitoring',
-                        no_reconcile=True, imp='5')
+                        'I set up Grafana dashboards for request throughput monitoring', imp='5')
         hits = search_cmd(runner, 'Grafana')
         assert len(hits) >= 2
         hit_ids = result_ids(hits)
@@ -520,12 +498,9 @@ class TestRanking:
 
     def test_category_filter_restricts_results(self, runner):
         """Recall --cat returns only matching category."""
-        remember(runner, 'chose Postgres for relational data',
-                 no_reconcile=True, cat='decision')
-        remember(runner, 'prefer dark mode for IDEs',
-                 no_reconcile=True, cat='preference')
-        remember(runner, 'SQLite is an embedded database',
-                 no_reconcile=True, cat='fact')
+        remember(runner, 'chose Postgres for relational data', cat='decision')
+        remember(runner, 'prefer dark mode for IDEs', cat='preference')
+        remember(runner, 'SQLite is an embedded database', cat='fact')
         hits = recall_smart(runner, 'database', cat='decision')
         categories = [h['category'] for h in hits]
         assert all(c == 'decision' for c in categories), (
@@ -541,8 +516,7 @@ class TestOplogChronology:
         techs = ['Redis', 'Kafka', 'Consul', 'Vault', 'Envoy']
         for tech in techs:
             remember(runner,
-                     f'{tech} cluster deployed across three availability zones for resilience',
-                     no_reconcile=True)
+                     f'{tech} cluster deployed across three availability zones for resilience')
         result = invoke(runner, ['log', 'list', '--limit', '5'])
         assert result.exit_code == 0
         lines = [l for l in result.output.strip().split('\n')
@@ -564,8 +538,7 @@ class TestStatusAfterMutations:
         techs = ['Grafana', 'Jaeger', 'ArgoCD', 'Istio']
         stored = [remember(
                 runner,
-                f'{tech} service mesh component configured for production monitoring',
-                no_reconcile=True) for tech in techs]
+                f'{tech} service mesh component configured for production monitoring') for tech in techs]
         invoke(runner, ['forget', stored[0]['id']])
         invoke(runner, ['replace', stored[1]['id'],
                         'Jaeger distributed tracing upgraded to OpenTelemetry collector'])
@@ -584,8 +557,7 @@ class TestRecallFindsContentByEntities:
         no mention of Kubernetes, but the entity field has it.
         """
         remember(runner,
-                 'Kubernetes pod scheduling uses affinity rules and taints for node placement',
-                 no_reconcile=True, entity='Kubernetes')
+                 'Kubernetes pod scheduling uses affinity rules and taints for node placement', entity='Kubernetes')
         hits = recall_basic(runner, 'Kubernetes')
         assert len(hits) > 0
 
@@ -598,38 +570,38 @@ class TestMultiWordRecall:
 
         Words appear in content but not adjacently.
         """
-        remember(runner, 'Python is slow for CPU-bound tasks', no_reconcile=True)
+        remember(runner, 'Python is slow for CPU-bound tasks')
         hits = recall_basic(runner, 'Python slow')
         assert len(hits) > 0
 
     def test_search_handles_non_adjacent_words(self, runner):
         """Search tokenizes independently, finds non-adjacent matches."""
-        remember(runner, 'Python is slow for CPU-bound tasks', no_reconcile=True)
+        remember(runner, 'Python is slow for CPU-bound tasks')
         hits = search_cmd(runner, 'Python slow')
         assert any('Python' in c for c in contents(hits))
 
     def test_smart_recall_handles_multi_word(self, runner):
         """Smart recall finds content by multi-word query."""
-        remember(runner, 'PostgreSQL JSONB indexing for document queries',
-                 no_reconcile=True)
+        remember(runner, 'PostgreSQL JSONB indexing for document queries')
         hits = recall_smart(runner, 'PostgreSQL JSONB indexing')
         assert any('JSONB' in c for c in contents(hits))
 
 
 class TestContradictionDetection:
-    """Contradicting facts should trigger LLM reconciliation."""
+    """A write that contradicts a stored row lands beside it, not over it."""
 
     def test_contradiction_triggers_reconciliation(self, runner):
-        """Storing contradictory content triggers LLM reconciliation.
+        """Storing contradictory content adds a row; nothing retires.
 
-        Real LLM handles contradiction - we verify valid action.
+        Mutation: a contradiction disposition surviving that supersedes
+            or merges the earlier row instead of adding beside it.
+        Oracle: the second write reports `action == 'add'`.
         """
         remember(runner,
-                 'Redis is single-threaded and cannot use multiple cores',
-                 no_reconcile=True)
+                 'Redis is single-threaded and cannot use multiple cores')
         result = remember(runner,
                           'Redis 6.0 supports multi-threaded IO')
-        assert result['action'] in {'add', 'update', 'none', 'delete'}
+        assert result['action'] == 'add'
 
 
 class TestAccessCountAccuracy:
@@ -638,8 +610,7 @@ class TestAccessCountAccuracy:
     def test_access_count_matches_recall_count(self, runner):
         """After N recalls, access_count should be N."""
         remember(runner,
-                 'Wireguard VPN tunnel configured with 256-bit encryption between datacenters',
-                 no_reconcile=True)
+                 'Wireguard VPN tunnel configured with 256-bit encryption between datacenters')
         for _ in range(5):
             recall_basic(runner, 'Wireguard')
         hits = recall_basic(runner, 'Wireguard')
@@ -654,11 +625,9 @@ class TestRecallPrecisionUnderNoise:
         """One specific insight findable among 50 generic ones."""
         for i in range(50):
             remember(runner,
-                     f'PostgreSQL query optimization uses index scan on column_{i} with btree',
-                     no_reconcile=True)
+                     f'PostgreSQL query optimization uses index scan on column_{i} with btree')
         remember(runner,
-                 'alertmanager silencing rules for oncall rotation',
-                 no_reconcile=True)
+                 'alertmanager silencing rules for oncall rotation')
         hits = recall_basic(runner, 'alertmanager')
         assert any('alertmanager' in c.lower() for c in contents(hits))
 
@@ -666,23 +635,24 @@ class TestRecallPrecisionUnderNoise:
         """imp=5 insight ranks first among 20 imp=1 with same keywords."""
         for i in range(20):
             remember(runner,
-                     f'Memcached slab allocation class {i} configured for session storage',
-                     no_reconcile=True, imp='1')
+                     f'Memcached slab allocation class {i} configured for session storage', imp='1')
         remember(runner,
-                 'Memcached critical production outage caused by thundering herd on cache expiry',
-                 no_reconcile=True, imp='5')
+                 'Memcached critical production outage caused by thundering herd on cache expiry', imp='5')
         hits = recall_basic(runner, 'Memcached')
         assert hits[0]['importance'] == 5, (
             f'Expected imp=5 first, got imp={hits[0]["importance"]}')
 
     def test_search_ranks_by_importance(self, runner):
-        """Search (token-based) does rank by importance tiebreak."""
+        """Search (token-based) does rank by importance tiebreak.
+
+        Mutation: `order by` dropping `importance desc` from the basic
+            query, or comparing on `created_at` alone.
+        Oracle: the two rows' index positions in the returned list.
+        """
         low = remember(runner,
-                       'I deployed Fluentd for log aggregation to Elasticsearch',
-                       no_reconcile=True, imp='2')
+                       'I deployed Fluentd for log aggregation to Elasticsearch', imp='2')
         high = remember(runner,
-                        'I deployed Fluentd for log aggregation to Elasticsearch',
-                        no_reconcile=True, imp='5')
+                        'I deployed Fluentd for log aggregation and shipping', imp='5')
         hits = search_cmd(runner, 'Fluentd')
         assert len(hits) >= 2
         hit_ids = result_ids(hits)
@@ -697,8 +667,7 @@ class TestStoreIsolation:
     def test_insight_invisible_across_stores(self, runner):
         """Insight stored in 'work' is invisible from default store."""
         invoke(runner, ['store', 'create', 'work'])
-        result = invoke(runner, ['--store', 'work', 'remember', 'secret project alpha roadmap details',
-                                 '--no-reconcile'])
+        result = invoke(runner, ['--store', 'work', 'remember', 'secret project alpha roadmap details'])
         assert result.exit_code == 0
 
         hits = recall_basic(runner, 'secret')
@@ -715,9 +684,9 @@ class TestStoreIsolation:
         invoke(runner, ['store', 'create', 'beta'])
         text = 'Terraform infrastructure deployment checklist for AWS regions'
 
-        result_a = invoke(runner, ['--store', 'alpha', 'remember', text, '--no-reconcile'])
+        result_a = invoke(runner, ['--store', 'alpha', 'remember', text])
         data_a = parse_remember(result_a, runner)
-        invoke(runner, ['--store', 'beta', 'remember', text, '--no-reconcile'])
+        invoke(runner, ['--store', 'beta', 'remember', text])
 
         invoke(runner, ['--store', 'alpha', 'forget', data_a['id']])
 
@@ -737,8 +706,7 @@ class TestRecallCompleteness:
         to use - they should all find the same insights.
         """
         remember(runner,
-                 'AWS Lambda serverless functions with DynamoDB backend',
-                 no_reconcile=True, entity=('Lambda', 'DynamoDB'))
+                 'AWS Lambda serverless functions with DynamoDB backend', entity=('Lambda', 'DynamoDB'))
 
         search_hits = search_cmd(runner, 'Lambda')
         basic_hits = recall_basic(runner, 'Lambda')
@@ -753,11 +721,9 @@ class TestContentReview:
     def test_review_flags_transient_not_durable(self, runner):
         """A stored instance id is flagged; a durable decision is not."""
         remember(runner,
-                 'Production outage traced to instance i-0c220c2402a5245bc running out of memory causing cascading failure',
-                 no_reconcile=True)
+                 'Production outage traced to instance i-0c220c2402a5245bc running out of memory causing cascading failure')
         remember(runner,
-                 'Chose SQLite for single-node simplicity and embedded operation',
-                 no_reconcile=True, imp='5')
+                 'Chose SQLite for single-node simplicity and embedded operation', imp='5')
         result = invoke(runner, ['insights', 'review'])
         data = json.loads(result.output)
         assert data['total_flagged'] >= 1
@@ -771,12 +737,10 @@ class TestOperationLog:
     def test_oplog_records_all_mutation_types(self, runner):
         """Remember, forget, and replace all appear in log."""
         data = remember(runner,
-                        'Elasticsearch index sharding strategy uses 5 primary shards',
-                        no_reconcile=True)
+                        'Elasticsearch index sharding strategy uses 5 primary shards')
         invoke(runner, ['forget', data['id']])
         data2 = remember(runner,
-                         'Kibana dashboard configured for APM monitoring',
-                         no_reconcile=True)
+                         'Kibana dashboard configured for APM monitoring')
         invoke(runner, ['replace', data2['id'],
                         'Kibana dashboard upgraded to Lens visualization for APM'])
 
@@ -793,8 +757,7 @@ class TestInsightsShow:
         """Show roundtrips a remember-d insight by id across both backends."""
         fact = remember(
             runner,
-            'Loki log aggregator runs in single-binary monolithic mode',
-            no_reconcile=True)
+            'Loki log aggregator runs in single-binary monolithic mode')
         result = invoke(runner, ['insights', 'show', fact['id']])
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
@@ -816,8 +779,7 @@ class TestInsightsShow:
         Oracle: the superseded row's JSON carries its pointer; the
             forgotten row gets its own refusal; both backends.
         """
-        old = remember(runner, 'Loki retention is seven days',
-                       no_reconcile=True)
+        old = remember(runner, 'Loki retention is seven days')
         result = invoke(runner, ['replace', old['id'],
                                  'Loki retention is thirty days'])
         new = parse_remember(result, runner)
@@ -829,8 +791,7 @@ class TestInsightsShow:
         assert data['superseded_by'] == new['id']
         assert 'deleted_at' not in data
 
-        gone = remember(runner, 'Tempo traces are sampled at one percent',
-                        no_reconcile=True)
+        gone = remember(runner, 'Tempo traces are sampled at one percent')
         invoke(runner, ['forget', gone['id']])
         refused = invoke(runner, ['insights', 'show', gone['id']])
         assert refused.exit_code != 0
@@ -904,8 +865,7 @@ class TestResolveId:
         Oracle: exit non-zero naming the same-insight refusal; the row
             stays current.
         """
-        fact = remember(runner, 'Grafana dashboards refresh every minute',
-                        no_reconcile=True)
+        fact = remember(runner, 'Grafana dashboards refresh every minute')
         result = invoke(runner, ['supersede', fact['id'][:8], fact['id']])
         assert result.exit_code != 0
         assert 'same insight' in result.output
@@ -920,8 +880,7 @@ class TestResolveId:
             lets a prefix and the full id of one row store a self-edge.
         Oracle: exit non-zero naming the self-link refusal.
         """
-        fact = remember(runner, 'Prometheus scrapes every fifteen seconds',
-                        no_reconcile=True)
+        fact = remember(runner, 'Prometheus scrapes every fifteen seconds')
         result = invoke(runner, ['graph', 'link', fact['id'][:8], fact['id']])
         assert result.exit_code != 0
         assert 'itself' in result.output
@@ -933,8 +892,7 @@ class TestResolveId:
             prefix reaches the exact-id lookup and reads as not found.
         Oracle: the JSON id returned equals the full stored id.
         """
-        fact = remember(runner, 'Tempo keeps traces for three days',
-                        no_reconcile=True)
+        fact = remember(runner, 'Tempo keeps traces for three days')
         result = invoke(runner, ['insights', 'show', fact['id'][:8]])
         assert result.exit_code == 0, result.output
         assert json.loads(result.output)['id'] == fact['id']
@@ -947,9 +905,8 @@ class TestResolveId:
         Oracle: the common prefix of two stored ids exits non-zero and
             the output names the two matches.
         """
-        first = remember(runner, 'Loki indexes labels only', no_reconcile=True)
-        second = remember(runner, 'Mimir stores metrics long term',
-                          no_reconcile=True)
+        first = remember(runner, 'Loki indexes labels only')
+        second = remember(runner, 'Mimir stores metrics long term')
         prefix = os.path.commonprefix([first['id'], second['id']])
         result = invoke(runner, ['insights', 'show', prefix])
         assert result.exit_code != 0
@@ -982,8 +939,7 @@ class TestStatusConsistency:
         techs = ['Prometheus', 'Thanos', 'Cortex', 'Mimir']
         stored = [remember(
                 runner,
-                f'{tech} metrics backend configured for long-term storage retention',
-                no_reconcile=True) for tech in techs]
+                f'{tech} metrics backend configured for long-term storage retention') for tech in techs]
         invoke(runner, ['forget', stored[0]['id']])
 
         result = invoke(runner, ['status'])
@@ -1008,14 +964,14 @@ class TestEdgeCases:
             'ZeroMQ distributed messaging broker configuration. '
             + filler * 100)
         long_content = long_content[:1000]
-        remember(runner, long_content, no_reconcile=True)
+        remember(runner, long_content)
         hits = recall_basic(runner, 'ZeroMQ')
         assert long_content in contents(hits)
 
     def test_special_chars_in_content(self, runner):
         """Content with brackets, parens, quotes preserved."""
         content = 'zephyr config["key"] = (value & 0xFF) | flags'
-        remember(runner, content, no_reconcile=True)
+        remember(runner, content)
         hits = recall_basic(runner, 'zephyr')
         assert any('0xFF' in c for c in contents(hits))
 
@@ -1046,10 +1002,8 @@ class TestRecallFreshness:
         import sqlite3
         from pathlib import Path
 
-        kept = remember(mm_runner, 'Kombu message serialization uses JSON',
-                        no_reconcile=True)
-        doomed = remember(mm_runner, 'Supervisord manages worker processes',
-                          no_reconcile=True)
+        kept = remember(mm_runner, 'Kombu message serialization uses JSON')
+        doomed = remember(mm_runner, 'Supervisord manages worker processes')
         invoke(mm_runner, ['forget', doomed['id']])
 
         _cli, data_dir = mm_runner
@@ -1085,15 +1039,11 @@ class TestRecallFreshness:
             recall pipeline, plus the ids of the rows kept.
         """
         kept = [
-            remember(runner, 'Traefik ingress terminates TLS at the edge',
-                     no_reconcile=True)['id'],
-            remember(runner, 'Kombu serializes celery task payloads',
-                     no_reconcile=True)['id'],
-            remember(runner, 'Havelock proxy rotates its upstream keys',
-                     no_reconcile=True)['id'],
+            remember(runner, 'Traefik ingress terminates TLS at the edge')['id'],
+            remember(runner, 'Kombu serializes celery task payloads')['id'],
+            remember(runner, 'Havelock proxy rotates its upstream keys')['id'],
             ]
-        doomed = remember(runner, 'Vagrant provisions local dev boxes',
-                          no_reconcile=True)
+        doomed = remember(runner, 'Vagrant provisions local dev boxes')
         invoke(runner, ['forget', doomed['id']])
 
         result = invoke(runner, ['status'])
@@ -1118,11 +1068,9 @@ class TestRecallFreshness:
             returned, so an empty result set cannot satisfy the
             absence assertion.
         """
-        data = remember(runner, 'Redis Cluster resharding moves hash slots',
-                        no_reconcile=True)
+        data = remember(runner, 'Redis Cluster resharding moves hash slots')
         survivor = remember(
-            runner, 'Redis Sentinel promotes a replica on failover',
-            no_reconcile=True)
+            runner, 'Redis Sentinel promotes a replica on failover')
         invoke(runner, ['forget', data['id']])
         hits = recall_smart(runner, 'Redis Cluster resharding hash slots')
         returned = {h['id'] for h in hits}

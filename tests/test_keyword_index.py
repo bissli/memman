@@ -177,11 +177,10 @@ def test_edits_reindex_and_unrelated_writes_do_not(backend):
 def test_recall_stops_tokenizing_every_row(backend, monkeypatch):
     """Verify no active row is tokenized to answer one recall.
 
-    Mutation: reinstating the per-row `insight_tokens` scan - passing
-        `None` for the counts, re-importing `insight_tokens` into
-        `recall.py` for the scoring loop, or weakening
-        `keyword_search`'s `counts is None` test to `not counts` so
-        an empty index falls back to the scan.
+    Mutation: reinstating the per-row `insight_tokens` scan -
+        re-importing `insight_tokens` into `recall.py` for the scoring
+        loop, or tokenizing each row in `keyword_search` when the
+        index probe comes back empty.
     Oracle: a spy on `insight_tokens`, bound in BOTH modules that
         can hold a reference, against a store with rows to tokenize.
 
@@ -436,11 +435,11 @@ def test_non_ascii_divergence_stays_where_it_is(backend, backend_kind):
     Notes
     -----
     - This asserts a DIVERGENCE, on purpose. SQLite cannot reproduce
-      `_WORD_RE` without changing `_WORD_RE` itself, which would move
-      the drain's reconciliation and needs
-      its own sweep. The gap is documented on
-      `RecallSession.keyword_counts` with its measured cost; this
-      test is what stops it growing unnoticed.
+      `_WORD_RE` without changing `_WORD_RE` itself, which would
+      reshape `signals.keyword` recall scoring and needs its own
+      sweep. The gap is documented on `RecallSession.keyword_counts`
+      with its measured cost; this test is what stops it growing
+      unnoticed.
     - Postgres is the faithful side and is asserted as such, so a
       regression there fails even though the value differs by
       backend.

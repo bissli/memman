@@ -43,7 +43,7 @@ from memman.store.db import DB
 from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
 from memman.store.model import NodeStats, OpLogEntry, OpLogStats
 from memman.store.model import ProvenanceCount, ReembedRow, WorkerRun
-from memman.store.model import format_timestamp, parse_timestamp
+from memman.store.model import content_hash, format_timestamp, parse_timestamp
 
 logger = logging.getLogger('memman')
 
@@ -140,6 +140,9 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
 
     def has_active_with_queue_uuid(self, queue_uuid: str) -> bool:
         return _node.has_active_with_queue_uuid(self._db, queue_uuid)
+
+    def oldest_active_by_content_hash(self, digest: str) -> Id | None:
+        return _node.oldest_active_by_content_hash(self._db, digest)
 
     def get_by_queue_uuid(self, queue_uuid: str) -> list[Insight]:
         return _node.get_by_queue_uuid(self._db, queue_uuid)
@@ -1240,7 +1243,7 @@ order by id
                         ins.embedding_model,
                         ins.session_id, ins.queue_uuid,
                         ins.corroboration_count, ins.superseded_by,
-                        ins.author))
+                        ins.author, content_hash(ins.content)))
                 if insight_rows:
                     conn.executemany(
                         'insert into insights ('
@@ -1252,9 +1255,10 @@ order by id
                         ' updated_at, deleted_at, prompt_version,'
                         ' model_id, embedding_model, session_id,'
                         ' queue_uuid, corroboration_count,'
-                        ' superseded_by, author)'
+                        ' superseded_by, author, content_hash)'
                         ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
-                        ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
+                        ' ?)',
                         insight_rows)
 
                 edge_rows = [(

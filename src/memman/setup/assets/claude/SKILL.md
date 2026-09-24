@@ -93,13 +93,14 @@ Mixed content: strip line numbers, counts, sizes, and other state
 snapshots; keep the file path or symbol that locates the claim, and
 keep the reasoning and conclusions.
 
-A correction of something already stored says so in its text: it
-names what is no longer true and what is true now, in one
-self-contained statement, and goes in with `memman remember` like any
-other fact. A settled open question is a correction of the row that
-left it open. The worker finds every stored row the fact contradicts
-and supersedes each with its own merge that keeps that row's
-still-true clauses.
+A correction of a memory the agent recalled goes through `memman
+insights show <id>`, then `memman replace <id> "<new text>"`. Any
+other correction names what is no longer true and what is true now,
+and goes in with `memman remember`: the stale memory stays in recall
+beside it. A settled open question is a correction of the row that
+left it open. A memory recording a change names what it replaces. A
+later write in the same session carries only the new claim, never an
+earlier write restated plus the change.
 
 The text stores conclusions AND enough context to understand them. It
 is self-contained: every "that", "this", and "it" is dereferenced into
@@ -124,7 +125,7 @@ confirmation is needed.
 ### The write pipeline
 
 `memman remember` is a fast queue-append. The full pipeline -
-reconciliation, enrichment, edge creation, re-embedding - runs
+exact-duplicate check, enrichment, edge creation, re-embedding - runs
 out-of-band in a worker the scheduler fires on a timer (systemd on
 Linux, launchd on macOS, `memman scheduler serve` in containers).
 A newly stored memory is NOT visible to `memman recall` in the current
@@ -137,31 +138,27 @@ temporal) are reindexed on DB open when edge constants change; there
 is no operator command for that.
 
 The worker stores the text as written, as one memory; no model
-rewords or splits it. Reconciliation alone can keep it from landing
-as its own row: the worker folds a write that merely restates a stored
-insight into that insight, skips an exact duplicate, merges a
-refinement into its successor, and supersedes a stored insight the new
-text contradicts (the old row keeps its content behind `superseded_by`
-and leaves recall). A write that contradicts several stored insights
-supersedes each. All complete as `done`, so the queue reports success
-either way. A folded or duplicate write is filed in the skipped
-ledger: read it back with `memman scheduler queue skipped`, which
-keeps the full content and the reason. `--no-reconcile` skips
-reconciliation: the write is never folded, deduplicated, or used to
-retire a row.
+rewords, splits, or judges it. One thing keeps it from landing as its
+own row: a current memory already holds the same text, modulo case
+and whitespace. A superset of a stored memory is stored. The skip
+bumps that memory's `corroboration_count` (the oldest, if several
+match), completes as `done`, so the queue reports success, and is
+filed in the skipped ledger: `memman scheduler queue skipped` reads
+it back with the full content and the reason. Nothing a `remember`
+does retires a stored memory; only `replace` and `supersede` do.
 
-To correct a stored insight by ID and keep its `access_count` and
-edges:
+To correct a stored insight by ID and keep its `access_count`,
+`corroboration_count`, and edges:
 
 ```bash
 memman replace <id> "<new content>"
 ```
 
-`corroboration_count` (restatements seen, byte-identical or reworded;
-shown in recall/get JSON but not under `--brief`) resets, since the
-successor is a new row identity. `replace` inherits the original's
-category, importance, entities, and source unless a flag overrides
-one. `--session` does not inherit:
+`replace` never skips as a duplicate. `corroboration_count` (exact
+restatements seen, modulo case and whitespace; shown in recall/get
+JSON but not under `--brief`) carries over like `access_count`.
+`replace` inherits the original's category, importance, entities, and
+source unless a flag overrides one. `--session` does not inherit:
 the successor is written into today's chain. It also keeps the
 replaced row's edges, so it stays linked to the original's chain as
 well, bridging the two.
@@ -315,7 +312,7 @@ memman insights review                # scan for content quality issues
 `insights review` only surfaces rows. It deletes nothing. Use
 `forget <id>` to remove. Nothing else deletes: the store is
 uncapped and a stored insight persists until someone forgets it.
-Supersession (`replace`, `supersede`, a reconcile merge) hides without
+Supersession (`replace`, `supersede`) hides without
 deleting; `memman unsupersede <id>` brings a superseded row back once
 its successor has been forgotten.
 
@@ -407,7 +404,8 @@ and exits 0.
 - Never store secrets, passwords, or tokens.
 - `remember` and `replace` refuse text over 1,000 bytes, counted as
   UTF-8 bytes, and never truncate it. Split the text into several
-  calls, one claim each. They also refuse text whose first word is
+  calls, one claim each. A long literal goes in a repo file, and the
+  memory names the path. They also refuse text whose first word is
   the author's name (`author` carries that) or that names a line
   number (`auth.py:88`, `line 88`), which goes stale on the next
   edit: name the file and symbol instead.

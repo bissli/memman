@@ -31,8 +31,7 @@ class TestRemember:
     def test_remember_basic(self, runner):
         """Store a basic insight."""
         result = invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
         assert result.exit_code == 0
         data = parse_remember(result, runner)
         assert data['action'] in {'add', 'added', 'update', 'updated'}
@@ -42,7 +41,6 @@ class TestRemember:
         """Store with category and importance."""
         result = invoke(runner, [
             'remember', 'Chose Docker for container orchestration in production',
-            '--no-reconcile',
             '--cat', 'decision', '--imp', '4'])
         assert result.exit_code == 0
         data = parse_remember(result, runner)
@@ -81,24 +79,21 @@ class TestRemember:
     def test_remember_does_not_link_old_pending_insights(self, runner, monkeypatch):
         """Remember does inline enrichment, never calls link_pending."""
         invoke(runner, [
-            'remember', 'Redis cache eviction uses LRU algorithm',
-            '--no-reconcile'])
+            'remember', 'Redis cache eviction uses LRU algorithm'])
 
         from unittest.mock import patch
         with patch('memman.graph.engine.link_pending',
                    side_effect=AssertionError(
                        'link_pending called from remember')) as mock_lp:
             result = invoke(runner, [
-                'remember', 'PostgreSQL MVCC provides snapshot isolation',
-                '--no-reconcile'])
+                'remember', 'PostgreSQL MVCC provides snapshot isolation'])
             assert result.exit_code == 0
             mock_lp.assert_not_called()
 
     def test_remember_quality_warnings(self, runner):
         """Content with quality warnings is queued; warnings populated as hints."""
         result = invoke(runner, [
-            'remember', 'i-0c220c2402a5245bc deployed via Terraform',
-            '--no-reconcile'])
+            'remember', 'i-0c220c2402a5245bc deployed via Terraform'])
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data['action'] == 'queued'
@@ -108,8 +103,7 @@ class TestRemember:
     def test_remember_no_quality_warnings(self, runner):
         """Durable content produces empty quality_warnings."""
         result = invoke(runner, [
-            'remember', 'SQLite chosen for single-node simplicity and embedded operation',
-            '--no-reconcile'])
+            'remember', 'SQLite chosen for single-node simplicity and embedded operation'])
         assert result.exit_code == 0
         raw = json.loads(result.output)
         assert raw['quality_warnings'] == []
@@ -117,15 +111,13 @@ class TestRemember:
     def test_remember_quality_warnings_populate(self, runner):
         """Quality warnings populate as hints but never block the write."""
         result = invoke(runner, [
-            'remember', 'Stack deployed via Terraform. 32 resources total.',
-            '--no-reconcile'])
+            'remember', 'Stack deployed via Terraform. 32 resources total.'])
         data = json.loads(result.output)
         assert data['action'] == 'queued'
         assert len(data['quality_warnings']) >= 2
 
         result = invoke(runner, [
-            'remember', 'Production outage traced to instance i-0c220c2402a5245bc running out of memory causing cascading failure',
-            '--no-reconcile'])
+            'remember', 'Production outage traced to instance i-0c220c2402a5245bc running out of memory causing cascading failure'])
         data = parse_remember(result, runner)
         assert data['action'] == 'add'
         raw = json.loads(result.output)
@@ -136,11 +128,9 @@ class TestRemember:
         from memman.store.db import open_read_only, store_dir
 
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
         invoke(runner, [
-            'remember', 'SQLite WAL mode improves write throughput',
-            '--no-reconcile'])
+            'remember', 'SQLite WAL mode improves write throughput'])
 
         _, data_dir = runner
         db = open_read_only(store_dir(data_dir, 'default'))
@@ -161,16 +151,14 @@ class TestRecall:
     def test_recall_basic(self, runner):
         """Recall after remembering."""
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
         result = invoke(runner, ['recall', 'Go SQLite storage'])
         assert result.exit_code == 0
 
     def test_recall_does_not_call_link_pending(self, runner, monkeypatch):
         """Recall path must not call link_pending (performance regression guard)."""
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
 
         from unittest.mock import patch
         with patch('memman.graph.engine.link_pending',
@@ -188,8 +176,7 @@ class TestRecall:
         import logging
 
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
 
         from memman import embed as embed_mod
         real_ec = embed_mod.get_client()
@@ -208,8 +195,7 @@ class TestRecall:
     def test_recall_default_does_not_call_expand_query(self, runner):
         """Default recall must not run LLM query expansion."""
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
 
         from unittest.mock import patch
         with patch('memman.llm.extract.expand_query',
@@ -221,8 +207,7 @@ class TestRecall:
     def test_recall_expand_flag_calls_expand_query(self, runner):
         """Recall --expand re-enables the LLM query expansion path."""
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
 
         from unittest.mock import patch
         fake = {'expanded_query': 'Go SQLite storage', 'intent': '', 'entities': []}
@@ -238,7 +223,7 @@ class TestRecall:
                 'Go uses SQLite for persistent storage',
                 'Go modules manage dependency versions',
                 'SQLite uses WAL mode for concurrent writes']:
-            invoke(runner, ['remember', fact, '--no-reconcile'])
+            invoke(runner, ['remember', fact])
 
         from unittest.mock import patch
         with patch('memman.rerank.voyage.Client.rerank',
@@ -252,8 +237,7 @@ class TestRecall:
     def test_recall_global_disable_skips_rerank(self, runner, env_file):
         """MEMMAN_RERANK_ENABLED=false disables rerank globally."""
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
         env_file('MEMMAN_RERANK_ENABLED', 'false')
 
         from unittest.mock import patch
@@ -268,8 +252,7 @@ class TestRecall:
     def test_recall_per_store_disable_overrides_global(self, runner, env_file):
         """MEMMAN_RERANK_ENABLED_<store>=false wins over the global default."""
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
         env_file('MEMMAN_RERANK_ENABLED_default', 'false')
 
         from unittest.mock import patch
@@ -288,7 +271,7 @@ class TestRecall:
                 'Go uses SQLite for persistent storage',
                 'Go modules manage dependency versions',
                 'SQLite uses WAL mode for concurrent writes']:
-            invoke(runner, ['remember', fact, '--no-reconcile'])
+            invoke(runner, ['remember', fact])
         env_file('MEMMAN_RERANK_ENABLED', 'false')
         env_file('MEMMAN_RERANK_ENABLED_default', 'true')
 
@@ -304,8 +287,7 @@ class TestRecall:
     def test_recall_rerank_skipped_on_short_query(self, runner):
         """Rerank auto-skips when the query has <=2 tokens, even with default on."""
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
 
         from unittest.mock import patch
         with patch('memman.rerank.voyage.Client.rerank',
@@ -322,7 +304,7 @@ class TestRecall:
         for fact in [
                 'Go uses SQLite for persistent storage',
                 'Go modules manage dependency versions']:
-            invoke(runner, ['remember', fact, '--no-reconcile'])
+            invoke(runner, ['remember', fact])
 
         from unittest.mock import patch
         with patch('memman.rerank.voyage.Client.rerank',
@@ -341,8 +323,7 @@ class TestRecall:
             default.
         """
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
 
         empty = {'results': [], 'meta': {'intent': 'GENERAL'}}
         with patch('memman.search.recall.intent_aware_recall',
@@ -364,8 +345,7 @@ class TestRecall:
             the same command with the floor left at its default.
         """
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
         rejected = invoke(runner, ['recall', 'Go SQLite', '--basic',
                                    '--min-score', '0.5'])
         assert rejected.exit_code != 0
@@ -387,8 +367,7 @@ class TestRecall:
             absent key and an empty list are distinguishable.
         """
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
 
         def meta(*flags):
             r = invoke(runner, ['recall', 'Go SQLite', '--basic', *flags])
@@ -422,8 +401,7 @@ class TestRecall:
             every row) against an in-range value that is accepted.
         """
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
         for bad in ('-1', '3.0', 'nan'):
             rejected = invoke(runner, ['recall', 'Go SQLite',
                                        '--min-score', bad])
@@ -435,8 +413,7 @@ class TestRecall:
     def test_recall_basic_mode(self, runner):
         """Basic recall returns {results: [...], meta: {basic: True}}."""
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
         result = invoke(runner, ['recall', 'Go SQLite', '--basic'])
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -446,8 +423,7 @@ class TestRecall:
     def test_recall_basic_returns_envelope(self, runner):
         """Recall --basic returns insights wrapped in {results: [...]}."""
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
         result = invoke(runner, ['recall', '--basic', 'Go SQLite'])
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -476,7 +452,7 @@ class TestRecall:
     def test_recall_omits_summary_when_unenriched(self, runner):
         """When summary is empty/null, the field is not emitted at all."""
         invoke(runner, [
-            'remember', 'Q', '--cat', 'fact', '--no-reconcile'])
+            'remember', 'Q', '--cat', 'fact'])
         result = invoke(runner, ['recall', '--basic', 'Q'])
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -508,8 +484,7 @@ class TestRecall:
             query, differenced against the flagged one.
         """
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
         full = json.loads(
             invoke(runner, ['recall', 'Go SQLite storage']).output)
         assert full['results'], 'expected the ranked path to return a row'
@@ -538,8 +513,7 @@ class TestRecall:
             `insight_to_full_dict`.
         """
         invoke(runner, [
-            'remember', 'Kafka retains partitions by time and size',
-            '--no-reconcile'])
+            'remember', 'Kafka retains partitions by time and size'])
         full = json.loads(
             invoke(runner, ['recall', 'Kafka partitions retention']).output)
         brief = json.loads(
@@ -569,8 +543,7 @@ class TestRecall:
             returned count differ.
         """
         invoke(runner, [
-            'remember', 'Envoy routes gRPC traffic by header match',
-            '--no-reconcile'])
+            'remember', 'Envoy routes gRPC traffic by header match'])
         invoke(runner, [
             'recall', 'Envoy gRPC header routing',
             '--limit', '17', '--session', 'sess-abc'])
@@ -603,8 +576,7 @@ class TestRecall:
         """
         monkeypatch.setenv('MEMMAN_SESSION_ID', 'env-session-9')
         invoke(runner, [
-            'remember', 'Redis evicts keys by LRU under maxmemory',
-            '--no-reconcile'])
+            'remember', 'Redis evicts keys by LRU under maxmemory'])
         invoke(runner, ['recall', 'Redis LRU maxmemory eviction'])
 
         entries = json.loads(
@@ -625,8 +597,7 @@ class TestRecall:
             asserted on the same row, so neither half can pass alone.
         """
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
         result = invoke(runner, ['recall', 'Go SQLite storage', '--brief'])
         assert result.exit_code == 0, result.output
         row = json.loads(result.output)['results'][0]
@@ -721,11 +692,9 @@ class TestRecall:
     def test_recall_source_filter_smart(self, runner):
         """Smart recall respects --source filter."""
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile', '--source', 'agent'])
+            'remember', 'Go uses SQLite for persistent storage', '--source', 'agent'])
         invoke(runner, [
-            'remember', 'Python uses PostgreSQL for web application storage',
-            '--no-reconcile', '--source', 'human'])
+            'remember', 'Python uses PostgreSQL for web application storage', '--source', 'human'])
 
         result = invoke(runner, [
             'recall', 'database storage', '--source', 'agent'])
@@ -758,10 +727,9 @@ class TestRecall:
             ]
         for topic in topics:
             invoke(runner, [
-                'remember', topic, '--no-reconcile', '--source', 'user'])
+                'remember', topic, '--source', 'user'])
         invoke(runner, [
-            'remember', 'PostgreSQL JSONB operators for document queries',
-            '--no-reconcile', '--source', 'agent'])
+            'remember', 'PostgreSQL JSONB operators for document queries', '--source', 'agent'])
 
         result = invoke(runner, [
             'recall', 'PostgreSQL database',
@@ -779,8 +747,7 @@ class TestForget:
     def test_forget_basic(self, runner):
         """Forget an insight by ID."""
         result = invoke(runner, [
-            'remember', 'Redis cache eviction policy uses LRU by default',
-            '--no-reconcile'])
+            'remember', 'Redis cache eviction policy uses LRU by default'])
         data = parse_remember(result, runner)
         iid = data['id']
         result = invoke(runner, ['forget', iid])
@@ -791,8 +758,7 @@ class TestForget:
     def test_forget_writes_oplog(self, runner):
         """Forget command writes an oplog entry atomically."""
         result = invoke(runner, [
-            'remember', 'PostgreSQL uses MVCC for transaction isolation',
-            '--no-reconcile'])
+            'remember', 'PostgreSQL uses MVCC for transaction isolation'])
         data = parse_remember(result, runner)
         iid = data['id']
         invoke(runner, ['forget', iid])
@@ -990,8 +956,7 @@ class TestStatus:
     def test_status_basic(self, runner):
         """Status returns JSON."""
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
         result = invoke(runner, ['status'])
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -1003,8 +968,7 @@ class TestStatus:
         Exit code may be 0 (pass/warn) or 1 (fail) depending on environment.
         """
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
         result = invoke(runner, ['doctor'])
         assert result.exit_code in {0, 1}
         data = json.loads(result.output)
@@ -1019,8 +983,7 @@ class TestLog:
     def test_log_basic(self, runner):
         """Log shows recent operations."""
         invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage',
-            '--no-reconcile'])
+            'remember', 'Go uses SQLite for persistent storage'])
         result = invoke(runner, ['log', 'list'])
         assert result.exit_code == 0
 
@@ -1031,11 +994,9 @@ class TestInsightsReview:
     def test_review_flags_transient_content(self, runner):
         """A stored instance id is flagged; a durable decision is not."""
         invoke(runner, [
-            'remember', 'Production outage traced to instance i-0c220c2402a5245bc running out of memory causing cascading failure',
-            '--no-reconcile'])
+            'remember', 'Production outage traced to instance i-0c220c2402a5245bc running out of memory causing cascading failure'])
         invoke(runner, [
-            'remember', 'SQLite chosen for simplicity and embedded operation',
-            '--no-reconcile', '--imp', '5'])
+            'remember', 'SQLite chosen for simplicity and embedded operation', '--imp', '5'])
         result = invoke(runner, ['insights', 'review'])
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -1046,8 +1007,7 @@ class TestInsightsReview:
     def test_review_clean_store_flags_nothing(self, runner):
         """A store of durable content returns zero flagged."""
         invoke(runner, [
-            'remember', 'SQLite chosen for simplicity and embedded operation',
-            '--no-reconcile'])
+            'remember', 'SQLite chosen for simplicity and embedded operation'])
         result = invoke(runner, ['insights', 'review'])
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -1060,8 +1020,7 @@ class TestReplace:
     def test_replace_basic(self, runner):
         """Replace an insight, verify old soft-deleted, new exists."""
         result = invoke(runner, [
-            'remember', 'Redis cache configured with 512MB memory limit',
-            '--no-reconcile', '--cat', 'fact', '--imp', '3'])
+            'remember', 'Redis cache configured with 512MB memory limit', '--cat', 'fact', '--imp', '3'])
         old_id = parse_remember(result, runner)['id']
 
         result = invoke(runner, [
@@ -1077,7 +1036,6 @@ class TestReplace:
         """Replace without flags inherits cat/imp from original."""
         result = invoke(runner, [
             'remember', 'Chose PostgreSQL over MySQL for JSONB support',
-            '--no-reconcile',
             '--cat', 'decision', '--imp', '5'])
         old_id = parse_remember(result, runner)['id']
 
@@ -1097,8 +1055,7 @@ class TestReplace:
     def test_replace_overrides_metadata(self, runner):
         """Replace with explicit flags uses new values."""
         result = invoke(runner, [
-            'remember', 'Nginx configured as reverse proxy for API gateway',
-            '--no-reconcile', '--cat', 'fact', '--imp', '2'])
+            'remember', 'Nginx configured as reverse proxy for API gateway', '--cat', 'fact', '--imp', '2'])
         old_id = parse_remember(result, runner)['id']
 
         result = invoke(runner, [
@@ -1118,8 +1075,7 @@ class TestReplace:
     def test_replace_preserves_access_count(self, runner):
         """Replace carries over access_count from original."""
         result = invoke(runner, [
-            'remember', 'Terraform modules organized by environment and region',
-            '--no-reconcile'])
+            'remember', 'Terraform modules organized by environment and region'])
         old_id = parse_remember(result, runner)['id']
         invoke(runner, ['recall', 'Terraform modules', '--basic'])
         invoke(runner, ['recall', 'Terraform modules', '--basic'])
@@ -1152,8 +1108,7 @@ class TestReplace:
         Oracle: the error text says the row was forgotten.
         """
         result = invoke(runner, [
-            'remember', 'Kafka consumer group rebalance strategy uses cooperative',
-            '--no-reconcile'])
+            'remember', 'Kafka consumer group rebalance strategy uses cooperative'])
         old_id = parse_remember(result, runner)['id']
         invoke(runner, ['forget', old_id])
 
@@ -1173,7 +1128,7 @@ class TestReplace:
             history command; the successor stays the one current row.
         """
         result = invoke(runner, [
-            'remember', 'Kafka retention is seven days', '--no-reconcile'])
+            'remember', 'Kafka retention is seven days'])
         old_id = parse_remember(result, runner)['id']
         result = invoke(runner, [
             'replace', old_id, 'Kafka retention is thirty days'])
@@ -1191,8 +1146,7 @@ class TestReplace:
     def test_replace_oplog_entries(self, runner):
         """Replace logs both replace and remember ops."""
         result = invoke(runner, [
-            'remember', 'Prometheus alerting rules configured for SLO monitoring',
-            '--no-reconcile'])
+            'remember', 'Prometheus alerting rules configured for SLO monitoring'])
         old_id = parse_remember(result, runner)['id']
 
         result = invoke(runner, [
@@ -1208,8 +1162,7 @@ class TestReplace:
     def test_replace_quality_warnings_populate(self, runner):
         """Replace path also passes quality warnings as hints, never blocks."""
         result = invoke(runner, [
-            'remember', 'Kafka chosen for event streaming due to partition tolerance',
-            '--no-reconcile'])
+            'remember', 'Kafka chosen for event streaming due to partition tolerance'])
         old_id = parse_remember(result, runner)['id']
 
         result = invoke(runner, [
@@ -1222,8 +1175,7 @@ class TestReplace:
     def test_replace_creates_background_edges(self, runner):
         """Replace passes store context so background edges are created."""
         r1 = invoke(runner, [
-            'remember', 'Celery task queue configured for async job processing',
-            '--no-reconcile'])
+            'remember', 'Celery task queue configured for async job processing'])
         orig_id = parse_remember(r1, runner)['id']
 
         r2 = invoke(runner, [
@@ -1254,12 +1206,10 @@ class TestLink:
         from memman.store.db import open_read_only, store_dir
 
         r1 = invoke(runner, [
-            'remember', 'chose SQLite because embedded serverless',
-            '--no-reconcile'])
+            'remember', 'chose SQLite because embedded serverless'])
         id1 = parse_remember(r1, runner)['id']
         r2 = invoke(runner, [
-            'remember', 'preferred color is emerald green',
-            '--no-reconcile'])
+            'remember', 'preferred color is emerald green'])
         id2 = parse_remember(r2, runner)['id']
 
         result = invoke(
@@ -1285,12 +1235,10 @@ class TestLink:
         """
         import sqlite3
         r1 = invoke(runner, [
-            'remember', 'Nginx is configured as the reverse proxy',
-            '--no-reconcile'])
+            'remember', 'Nginx is configured as the reverse proxy'])
         id1 = parse_remember(r1, runner)['id']
         r2 = invoke(runner, [
-            'remember', "Let's Encrypt auto-renews TLS certificates",
-            '--no-reconcile'])
+            'remember', "Let's Encrypt auto-renews TLS certificates"])
         id2 = parse_remember(r2, runner)['id']
 
         result = invoke(runner, ['graph', 'link', id1, id2, '--type', 'semantic',
@@ -1315,12 +1263,10 @@ class TestLink:
     def test_link_meta_non_dict_fails(self, runner):
         """Non-dict JSON metadata is rejected."""
         r1 = invoke(runner, [
-            'remember', 'Elasticsearch configured for full-text search',
-            '--no-reconcile'])
+            'remember', 'Elasticsearch configured for full-text search'])
         id1 = parse_remember(r1, runner)['id']
         r2 = invoke(runner, [
-            'remember', 'Kibana dashboards visualize Elasticsearch data',
-            '--no-reconcile'])
+            'remember', 'Kibana dashboards visualize Elasticsearch data'])
         id2 = parse_remember(r2, runner)['id']
 
         result = invoke(runner, ['graph', 'link', id1, id2, '--type', 'semantic',
@@ -1331,8 +1277,7 @@ class TestLink:
     def test_link_self_edge_rejected(self, runner):
         """Linking an insight to itself is rejected."""
         r1 = invoke(runner, [
-            'remember', 'GraphQL schema stitching combines microservice APIs',
-            '--no-reconcile'])
+            'remember', 'GraphQL schema stitching combines microservice APIs'])
         id1 = parse_remember(r1, runner)['id']
 
         result = invoke(runner, ['graph', 'link', id1, id1, '--type', 'semantic'])
@@ -1342,12 +1287,10 @@ class TestLink:
     def test_link_warns_when_lower_weight(self, runner):
         """Link output includes warning when requested weight < existing."""
         r1 = invoke(runner, [
-            'remember', 'Consul service discovery enables dynamic routing',
-            '--no-reconcile'])
+            'remember', 'Consul service discovery enables dynamic routing'])
         id1 = parse_remember(r1, runner)['id']
         r2 = invoke(runner, [
-            'remember', 'Vault secrets management integrates with Consul',
-            '--no-reconcile'])
+            'remember', 'Vault secrets management integrates with Consul'])
         id2 = parse_remember(r2, runner)['id']
 
         invoke(runner, ['graph', 'link', id1, id2, '--weight', '0.9'])
@@ -1369,12 +1312,10 @@ class TestLink:
             any two insights, which would satisfy `>= 0.9` on its own.
         """
         r1 = invoke(runner, [
-            'remember', 'chose SQLite because embedded serverless',
-            '--no-reconcile'])
+            'remember', 'chose SQLite because embedded serverless'])
         id1 = parse_remember(r1, runner)['id']
         r2 = invoke(runner, [
-            'remember', 'preferred color is emerald green',
-            '--no-reconcile'])
+            'remember', 'preferred color is emerald green'])
         id2 = parse_remember(r2, runner)['id']
 
         invoke(runner, [
@@ -1398,8 +1339,7 @@ class TestSingleTierEnrichment:
         from memman.store.db import open_read_only, store_dir
 
         result = invoke(runner, [
-            'remember', 'Redis cache configured with LRU eviction policy',
-            '--no-reconcile'])
+            'remember', 'Redis cache configured with LRU eviction policy'])
         assert result.exit_code == 0
         data = parse_remember(result, runner)
         iid = data['id']
@@ -1423,8 +1363,7 @@ class TestSingleTierEnrichment:
     def test_no_link_pending_in_output(self, runner):
         """Output no longer includes link_pending field."""
         result = invoke(runner, [
-            'remember', 'Docker containers orchestrated via Kubernetes',
-            '--no-reconcile'])
+            'remember', 'Docker containers orchestrated via Kubernetes'])
         assert result.exit_code == 0
         raw = json.loads(result.output)
         assert 'link_pending' not in raw
@@ -1434,8 +1373,7 @@ class TestSingleTierEnrichment:
         from memman.store.db import open_read_only
 
         result = invoke(runner, [
-            'remember', 'Consul service mesh enables secure service communication',
-            '--no-reconcile'])
+            'remember', 'Consul service mesh enables secure service communication'])
         assert result.exit_code == 0
         data = parse_remember(result, runner)
         iid = data['id']
@@ -1452,8 +1390,7 @@ class TestSingleTierEnrichment:
     def test_graph_rebuild_zero_pending_after_remember(self, runner):
         """Graph rebuild processes already-linked insights after remember."""
         invoke(runner, [
-            'remember', 'Kafka event streaming configured for microservices',
-            '--no-reconcile'])
+            'remember', 'Kafka event streaming configured for microservices'])
         result = invoke(runner, ['graph', 'rebuild', '--dry-run'])
         assert result.exit_code == 0
 
@@ -1462,8 +1399,7 @@ class TestSingleTierEnrichment:
         from memman.store.db import open_read_only
 
         result = invoke(runner, [
-            'remember', 'Elasticsearch full-text search with custom analyzers',
-            '--no-reconcile'])
+            'remember', 'Elasticsearch full-text search with custom analyzers'])
         assert result.exit_code == 0
         data = parse_remember(result, runner)
         iid = data['id']
@@ -1947,48 +1883,42 @@ def _rows_for_queue_id(data_dir, store, queue_id):
 def test_update_reconciliation_no_dangling_edges(runner):
     """A retired row leaves no semantic edge behind it.
 
-    A stored row is seeded first so the write actually retires
-    something. Without it the write lands as a plain add, nothing is
-    superseded, and the dangling-edge sweep runs over a store with no
-    supersession in it.
+    A companion row is seeded first so the target picks up a
+    temporal proximity edge before it is retired; `replace <id>`
+    then supersedes it, and the sweep runs over a store that holds a
+    real edge to lose, not an empty one.
 
-    Mutation: dropping the edge cleanup on supersede, so the
-        retired row keeps semantic edges pointing at it.
+    Mutation: dropping the edge cleanup `_apply_plan` runs on the
+        target after `supersede_insight`'s own cleanup, so a
+        predecessor that picked up an edge before the write keeps it.
     Oracle: `check_dangling_edges`, an independent sweep that
         counts edges whose endpoint is soft-deleted or
         superseded.
     """
     _r, data_dir = runner
     invoke(runner, [
-        'remember', 'Delta mode dropdown defaults to incremental_sync',
-        '--no-reconcile'])
-
-    def _screen_restates(llm_client, fact_text, memory):
-        return 'RESTATES', []
-
-    def _judge_update(llm_client, fact_text, memory):
-        return 'update'
-
-    def _merge_fact(llm_client, fact_text, target):
-        return fact_text
-
-    fixed_vec = [1.0] + [0.0] * 511
-
-    def _fixed_embed(self, text):
-        return list(fixed_vec)
-
-    with patch('memman.llm.extract.screen_memory', _screen_restates), \
-    patch('memman.llm.extract.judge_memory', _judge_update), \
-    patch('memman.llm.extract.merge_successor', _merge_fact), \
-    patch('memman.embed.voyage.Client.embed', _fixed_embed):
-        result = invoke(runner, [
-            'remember', ('Delta mode dropdown defaults'
-                        ' to incremental_sync with no empty option')])
-    assert result.exit_code == 0, result.output
+        'remember', 'Onboarding doc lists the required VPN client'])
+    seeded = invoke(runner, [
+        'remember', 'Delta mode dropdown defaults to incremental_sync'])
+    old_id = parse_remember(seeded, runner)['id']
 
     store_path = pathlib.Path(data_dir) / 'data' / 'default'
-    from memman.doctor import check_dangling_edges
     from memman.store.db import open_db
+    db = open_db(str(store_path))
+    edges_before = db._query(
+        'select count(*) from edges'
+        ' where source_id = ? or target_id = ?',
+        (old_id, old_id)).fetchone()[0]
+    db.close()
+    assert edges_before > 0, 'seeded row has no edge for the sweep to lose'
+
+    result = invoke(runner, [
+        'replace', old_id,
+        ('Delta mode dropdown defaults'
+         ' to incremental_sync with no empty option')])
+    assert result.exit_code == 0, result.output
+
+    from memman.doctor import check_dangling_edges
     from memman.store.sqlite import SqliteBackend
     db = open_db(str(store_path))
     retired = db._query(
@@ -2191,40 +2121,3 @@ class TestCorruptStoreErrorHygiene:
         assert seam, [r.getMessage() for r in caplog.records]
         assert seam[0].exc_info is not None
         assert 'BackendError' in logging.Formatter().format(seam[0])
-
-
-def test_drain_routes_the_reconcile_stages_to_the_fast_worker_client(runner):
-    """Verify the drain hands the three reconcile stages the fast-worker client.
-
-    Mutation: `_StoreContext` hoisting a different cached client and
-        passing it for a reconcile stage, the shape the tier gate did
-        not select.
-    Oracle: the stage stubs record the client they receive; identity
-        against the process's cached fast_worker role client.
-    """
-    from memman.llm.client import get_llm_client
-
-    seen = {'screen': [], 'judge': [], 'merge': []}
-    invoke(runner, ['remember', 'the broker is kombu', '--no-reconcile'])
-
-    def _screen(llm_client, fact_text, memory):
-        seen['screen'].append(llm_client)
-        return 'CONTRADICTS', ['kombu']
-
-    def _judge(llm_client, fact_text, memory):
-        seen['judge'].append(llm_client)
-        return 'supersede'
-
-    def _merge(llm_client, fact_text, target):
-        seen['merge'].append(llm_client)
-        return 'the broker is redis'
-
-    with patch('memman.llm.extract.screen_memory', _screen), \
-    patch('memman.llm.extract.judge_memory', _judge), \
-    patch('memman.llm.extract.merge_successor', _merge):
-        result = invoke(runner, ['remember', 'the broker is redis'])
-    assert result.exit_code == 0, result.output
-
-    stage_clients = seen['screen'] + seen['judge'] + seen['merge']
-    assert len(stage_clients) == 3
-    assert all(client is get_llm_client('fast_worker') for client in stage_clients)

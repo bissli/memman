@@ -1,9 +1,9 @@
 """Tests for memman.llm.shared -- reading the JSON object out of a response.
 
-The reconciler and the extractor both read their verdict through
+Query expansion and enrichment both read their result through
 `parse_json_response`. A response the model wraps in reasoning, corrects
 after a first attempt, or mis-escapes must still yield its final object,
-or the write path lands the fact as ADD and the verdict is lost.
+or the caller falls back to its unparsed default.
 """
 
 import json
@@ -86,7 +86,7 @@ def test_parse_json_response_keeps_a_literal_newline_inside_a_string():
 
     Mutation: decoding with `json`'s strict default, which refuses a
         control character inside a string and returns None here (the
-        merge stage then stores the fact unmerged).
+        caller then falls back to its unparsed default).
     Oracle: the hand-written two-paragraph text, newline kept.
     """
     raw = '{"merged_text": "First paragraph.\n\nSecond paragraph."}'

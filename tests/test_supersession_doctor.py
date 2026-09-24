@@ -98,10 +98,10 @@ def test_integrity_fails_on_a_superseded_row_with_edges(backend):
 def test_integrity_fails_on_a_self_pointer_and_passes_a_join(backend):
     """Verify a self-pointer fails while two predecessors on one successor pass.
 
-    Mutation: treating a join (a merge's predecessor plus a curated
+    Mutation: treating a join (a replace's predecessor plus a curated
         sibling converging on one successor) as a failure, which the
-        live fleet's own reconcile history trips on; or dropping the
-        self-pointer population.
+        live fleet's own supersession history trips on; or dropping
+        the self-pointer population.
     Oracle: `m-1` and `m-2` both superseded by `m-3` pass every
         population; `s-1` pointing at itself, set by raw SQL, fails
         naming the row.

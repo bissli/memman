@@ -2,12 +2,26 @@
 
 import pytest
 from memman.search.intent import detect_intent, get_weights, intent_from_string
-from memman.search.keyword import keyword_search, tokenize
+from memman.search.keyword import insight_tokens, keyword_search, tokenize
 from memman.search.recall import _RERANK_WEIGHTS_RAW, RERANK_WEIGHTS
 from memman.search.recall import get_traversal_params, intent_aware_recall
 from memman.store.model import Insight
 from tests.conftest import _vec as _vec_512
 from tests.conftest import make_insight
+
+
+def _counts_for(insights: list[Insight], query: str) -> dict[str, int]:
+    """Distinct query-token overlap per insight id, computed in Python.
+
+    Stands in for the index probe `keyword_search` now requires,
+    since these tests exercise ranking over an in-memory pool with no
+    index behind it.
+    """
+    query_tokens = tokenize(query)
+    return {
+        ins.id: sum(1 for t in query_tokens if t in insight_tokens(ins))
+        for ins in insights
+        }
 
 
 class TestKeywordSearch:
@@ -47,7 +61,8 @@ class TestKeywordSearch:
             Insight(id='2', content='SQLite database for Go applications', importance=3),
             Insight(id='3', content='Python machine learning framework', importance=3),
             ]
-        results = keyword_search(insights, 'Go CLI tools', 10)
+        results = keyword_search(
+            insights, 'Go CLI tools', 10, _counts_for(insights, 'Go CLI tools'))
         assert len(results) >= 2
         assert results[0][0].id == '1'
         for i in range(1, len(results)):
@@ -63,7 +78,9 @@ class TestKeywordSearch:
                     importance=i + 1)
             for i in range(20)
             ]
-        results = keyword_search(insights, 'common shared words', 5)
+        results = keyword_search(
+            insights, 'common shared words', 5,
+            _counts_for(insights, 'common shared words'))
         assert len(results) <= 5
 
     def test_keyword_search_importance_tiebreak(self):
@@ -72,14 +89,16 @@ class TestKeywordSearch:
             Insight(id='low', content='Go memory graph', importance=1),
             Insight(id='high', content='Go memory graph', importance=5),
             ]
-        results = keyword_search(insights, 'Go memory graph', 10)
+        results = keyword_search(
+            insights, 'Go memory graph', 10,
+            _counts_for(insights, 'Go memory graph'))
         assert len(results) >= 2
         assert results[0][0].id == 'high'
 
     def test_keyword_search_empty_query(self):
         """Empty query returns empty results."""
         insights = [Insight(id='1', content='some content')]
-        results = keyword_search(insights, '', 10)
+        results = keyword_search(insights, '', 10, {})
         assert len(results) == 0
 
     def test_keyword_search_entities(self):
@@ -88,7 +107,8 @@ class TestKeywordSearch:
             Insight(id='1', content='something unrelated',
                     entities=['SQLite']),
             ]
-        results = keyword_search(insights, 'SQLite', 10)
+        results = keyword_search(
+            insights, 'SQLite', 10, _counts_for(insights, 'SQLite'))
         assert len(results) > 0
 
 

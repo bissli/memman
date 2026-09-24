@@ -12,7 +12,7 @@
           <mxGeometry x="40" y="60" width="1020" height="240" as="geometry" />
         </mxCell>
 
-        <mxCell id="r_start" value="memman remember &amp;lt;content&amp;gt;&lt;br&gt;[--cat --imp --entity --source --session --no-reconcile]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+        <mxCell id="r_start" value="memman remember &amp;lt;content&amp;gt;&lt;br&gt;[--cat --imp --entity --source --session]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="80" y="100" width="280" height="50" as="geometry" />
         </mxCell>
 
@@ -28,7 +28,7 @@
           <mxGeometry x="830" y="100" width="200" height="50" as="geometry" />
         </mxCell>
 
-        <mxCell id="r_enqueue" value="Append row to ~/.memman/queue.db (SQLite WAL, always)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;status='pending', priority, queued_at,&lt;br&gt;hint_cat / hint_imp / hint_entities / hint_source / hint_replaced_id / hint_no_reconcile / session_id / queue_uuid / author&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_enqueue" value="Append row to ~/.memman/queue.db (SQLite WAL, always)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;status='pending', priority, queued_at,&lt;br&gt;hint_cat / hint_imp / hint_entities / hint_source / hint_replaced_id / session_id / queue_uuid / author&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="120" y="180" width="500" height="60" as="geometry" />
         </mxCell>
 
@@ -94,22 +94,15 @@
           <mxGeometry x="100" y="700" width="200" height="80" as="geometry" />
         </mxCell>
 
-        <mxCell id="r_sim" value="Find similar&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;keyword search (top 5)&lt;br&gt;+ cosine scan (≥ 0.5)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="320" y="700" width="180" height="80" as="geometry" />
+        <mxCell id="r_recon" value="Exact-duplicate check&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;content_hash(text) lookup over the whole store, no shortlist&lt;br&gt;current match(es): skip + corroborate the oldest&lt;br&gt;else: add, or replace &amp;lt;id&amp;gt; when the caller names one&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="320" y="700" width="380" height="80" as="geometry" />
         </mxCell>
 
-        <mxCell id="r_recon" value="LLM reconcile&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;exact match (1 hit): skip + corroborate, no LLM&lt;br&gt;else ADD / UPDATE / DELETE / NONE &amp;lt;id&amp;gt;&lt;br&gt;NONE: skip + corroborate the row it names&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="520" y="700" width="180" height="80" as="geometry" />
-        </mxCell>
-
-        <mxCell id="r_apply" value="Apply action&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;INSERT new / UPDATE existing /&lt;br&gt;soft-DELETE / SKIP&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_apply" value="Apply action&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;INSERT (add) / supersede + INSERT (replace) /&lt;br&gt;SKIP (exact duplicate)&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="720" y="700" width="180" height="80" as="geometry" />
         </mxCell>
 
-        <mxCell id="r_e_pf1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_embed" target="r_sim">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <mxCell id="r_e_pf2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_sim" target="r_recon">
+        <mxCell id="r_e_pf1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_embed" target="r_recon">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="r_e_pf3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="r_recon" target="r_apply">

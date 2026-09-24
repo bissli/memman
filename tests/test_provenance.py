@@ -107,13 +107,13 @@ def test_compute_prompt_version_changes_with_prompt(monkeypatch):
 def test_remember_stamps_provenance(mm_runner):
     """`remember` stamps prompt_version and embedding_model on every row.
 
-    `--no-reconcile` stores the agent's text verbatim, so no model
-    touches it and `model_id` stays null; `prompt_version` and
-    `embedding_model` are stamped regardless.
+    No model writes or judges a fact's content, so `model_id` stays
+    null on every row; `prompt_version` and `embedding_model` are
+    stamped regardless.
 
     Mutation: leaving `prompt_version` or `embedding_model` unset on
-        an unreconciled write, which the read path would then treat
-        as never enriched or embedded.
+        a write, which the read path would then treat as never
+        enriched or embedded.
     Oracle: the row read back by its queue_uuid, against
         `compute_prompt_version()` and the store's configured embed
         model.
@@ -122,7 +122,7 @@ def test_remember_stamps_provenance(mm_runner):
 
     result = r.invoke(cli, [
         '--data-dir', data_dir,
-        'remember', '--no-reconcile',
+        'remember',
         'provenance stamping end-to-end'])
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)

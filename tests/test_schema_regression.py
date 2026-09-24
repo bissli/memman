@@ -53,8 +53,8 @@ def _columns_under(ddl: str, table: str) -> set[str]:
 def test_migrate_insight_fields_cover_pg_baseline_schema_columns():
     """Every postgres `insights` DDL column has a `MigrateInsight` field.
 
-    Two columns are excluded, for different reasons, and neither
-    exclusion weakens the pin for a third.
+    Three columns are excluded, for two reasons, and no exclusion
+    weakens the pin for a fourth.
 
     `embedding_pending` is added on demand by the swap path and is
     not a payload-time field - the gather path probes the column
@@ -74,6 +74,9 @@ def test_migrate_insight_fields_cover_pg_baseline_schema_columns():
     `test_migrate_verify.py` and `test_migrate_dim_resolution.py`
     with it.
 
+    `content_hash` is derived from `content` the same way, and both
+    migrators recompute it through `model.content_hash` at apply.
+
     Mutation: adding a column to `PG_BASELINE_SCHEMA` without a
         matching `MigrateInsight` field, which drops it silently on
         every store-to-store migration.
@@ -83,7 +86,7 @@ def test_migrate_insight_fields_cover_pg_baseline_schema_columns():
     cols = _columns_under(
         PG_BASELINE_SCHEMA.replace('{schema}', 'store_x')
         .replace('{dim}', '512'), 'insights')
-    cols -= {'embedding_pending', 'kw_tokens'}
+    cols -= {'embedding_pending', 'kw_tokens', 'content_hash'}
     missing = cols - _MIGRATE_INSIGHT_FIELDS
     assert not missing, (
         f'Postgres baseline insights columns missing from'
@@ -96,10 +99,12 @@ def test_migrate_insight_fields_cover_sqlite_baseline_schema_columns():
     """Every sqlite `insights` DDL column has a `MigrateInsight` field.
 
     Excludes `embedding_pending` (carried as a separate
-    `PendingReembed` list in the payload).
+    `PendingReembed` list in the payload) and `content_hash` (derived
+    from `content` and recomputed at apply, as the Postgres test
+    explains for `kw_tokens`).
     """
     cols = _columns_under(_BASELINE_SCHEMA, 'insights')
-    cols -= {'embedding_pending'}
+    cols -= {'embedding_pending', 'content_hash'}
     missing = cols - _MIGRATE_INSIGHT_FIELDS
     assert not missing, (
         f'SQLite baseline insights columns missing from'

@@ -68,7 +68,7 @@ def test_usage_attributed_to_originating_stage(monkeypatch):
         the success site (dropping retry accumulation).
     Oracle: an [empty-with-usage, valid] sequence on 'enrichment'
         records 2 calls / 15 prompt tokens there; a single valid call
-        on 'merge' records 1 call / 7 -- exact per-stage sums.
+        on 'query_expansion' records 1 call / 7 -- exact per-stage sums.
     """
     monkeypatch.setattr(llm_client_mod.time, 'sleep', lambda s: None)
     before = usage.snapshot()
@@ -82,13 +82,13 @@ def test_usage_attributed_to_originating_stage(monkeypatch):
         'sys', 'user', stage=usage.STAGE_ENRICHMENT) == 'ok'
     _install_fake_post(monkeypatch, [_valid()])
     assert _client().complete(
-        'sys', 'user', stage=usage.STAGE_MERGE) == 'ok'
+        'sys', 'user', stage=usage.STAGE_QUERY_EXPANSION) == 'ok'
     d = usage.delta(before, usage.snapshot())
     assert d[usage.STAGE_ENRICHMENT]['calls'] == 2
     assert d[usage.STAGE_ENRICHMENT]['prompt_tokens'] == 15
     assert d[usage.STAGE_ENRICHMENT]['completion_tokens'] == 3
-    assert d[usage.STAGE_MERGE]['calls'] == 1
-    assert d[usage.STAGE_MERGE]['prompt_tokens'] == 7
+    assert d[usage.STAGE_QUERY_EXPANSION]['calls'] == 1
+    assert d[usage.STAGE_QUERY_EXPANSION]['prompt_tokens'] == 7
 
 
 @pytest.mark.no_mock_llm
@@ -110,10 +110,10 @@ def test_exhausted_retries_still_charge_every_attempt(monkeypatch):
         }
     _install_fake_post(monkeypatch, [empty])
     with pytest.raises(RuntimeError):
-        _client().complete('sys', 'user', stage=usage.STAGE_SCREEN)
+        _client().complete('sys', 'user', stage=usage.STAGE_PROBE)
     d = usage.delta(before, usage.snapshot())
-    assert d[usage.STAGE_SCREEN]['calls'] == MAX_RETRIES
-    assert d[usage.STAGE_SCREEN]['prompt_tokens'] == 5 * MAX_RETRIES
+    assert d[usage.STAGE_PROBE]['calls'] == MAX_RETRIES
+    assert d[usage.STAGE_PROBE]['prompt_tokens'] == 5 * MAX_RETRIES
 
 
 @pytest.mark.no_mock_llm
@@ -160,11 +160,11 @@ def test_unparseable_200_body_is_booked_and_retried(monkeypatch):
     _install_fake_post(monkeypatch, [
         (200, '<html>bad gateway page</html>'), _valid()])
     assert _client().complete(
-        'sys', 'user', stage=usage.STAGE_MERGE) == 'ok'
+        'sys', 'user', stage=usage.STAGE_QUERY_EXPANSION) == 'ok'
     d = usage.delta(before, usage.snapshot())
-    assert d[usage.STAGE_MERGE]['calls'] == 2
-    assert d[usage.STAGE_MERGE]['missing_usage'] == 1
-    assert d[usage.STAGE_MERGE]['prompt_tokens'] == 7
+    assert d[usage.STAGE_QUERY_EXPANSION]['calls'] == 2
+    assert d[usage.STAGE_QUERY_EXPANSION]['missing_usage'] == 1
+    assert d[usage.STAGE_QUERY_EXPANSION]['prompt_tokens'] == 7
 
 
 @pytest.mark.no_mock_llm
@@ -214,7 +214,7 @@ def test_concurrent_stages_do_not_interleave_usage():
         def _hammer():
             for _ in range(n):
                 usage.record(
-                    usage.STAGE_RECONCILIATION, {'prompt_tokens': 7})
+                    usage.STAGE_HARNESS, {'prompt_tokens': 7})
 
         threads = [threading.Thread(target=_hammer) for _ in range(2)]
         for t in threads:
@@ -224,8 +224,8 @@ def test_concurrent_stages_do_not_interleave_usage():
     finally:
         sys.setswitchinterval(old_interval)
     d = usage.delta(before, usage.snapshot())
-    assert d[usage.STAGE_RECONCILIATION]['calls'] == 2 * n
-    assert d[usage.STAGE_RECONCILIATION]['prompt_tokens'] == 2 * n * 7
+    assert d[usage.STAGE_HARNESS]['calls'] == 2 * n
+    assert d[usage.STAGE_HARNESS]['prompt_tokens'] == 2 * n * 7
 
 
 def test_all_call_sites_use_closed_set_stages():
@@ -237,7 +237,7 @@ def test_all_call_sites_use_closed_set_stages():
         `complete_parsed` instead of the client.
     Oracle: `record` raises on an unknown stage, and an ast scan of
         src/memman finds a `stage=usage.STAGE_*` keyword on every
-        `.complete(` and `complete_parsed(` call, the one forwarder in
+        `.complete(` and `complete_parsed(` call, the two forwarders in
         `shared.py` aside.
     """
     import ast
@@ -263,7 +263,7 @@ def test_all_call_sites_use_closed_set_stages():
             if not named:
                 continue
             sites.append((py.name, node))
-    assert len(sites) >= 6, 'expected the six documented call sites'
+    assert len(sites) == 5, 'expected the five documented call sites'
     forwarded = 0
     for name, node in sites:
         stage_kw = [k for k in node.keywords if k.arg == 'stage']
@@ -296,7 +296,7 @@ def test_drain_json_carries_llm_usage_delta(mm_runner, monkeypatch):
 
     Mutation: taking `drain_usage_snap` after the loop, or dropping
         the `llm_usage` key from `_json_out`.
-    Oracle: a stub row-processor records one screen attempt of
+    Oracle: a stub row-processor records one enrichment attempt of
         11 prompt tokens; the drain JSON must carry exactly that
         per-stage delta.
     """
@@ -306,7 +306,7 @@ def test_drain_json_carries_llm_usage_delta(mm_runner, monkeypatch):
 
     def _stub_row(row, ctx):
         usage.record(
-            usage.STAGE_SCREEN,
+            usage.STAGE_ENRICHMENT,
             {'prompt_tokens': 11, 'completion_tokens': 2,
              'total_tokens': 13})
         return {'facts': [{'id': 'a', 'action': 'add'}], 'llm_calls': 1}
@@ -322,7 +322,7 @@ def test_drain_json_carries_llm_usage_delta(mm_runner, monkeypatch):
     assert res.exit_code == 0, res.output
     data = _json.loads(res.output)
     assert data['processed'] == 1
-    stage = data['llm_usage'][usage.STAGE_SCREEN]
+    stage = data['llm_usage'][usage.STAGE_ENRICHMENT]
     assert stage['calls'] == 1
     assert stage['prompt_tokens'] == 11
 

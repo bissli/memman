@@ -1,19 +1,19 @@
 """Exact-match dedup rung (F3) and corroboration count (F4).
 
-The rung sits inside `_plan_fact`'s reconcile branch: when exactly
-one shortlist row matches the fact byte-for-byte (modulo case and
-whitespace), the plan skips without an LLM call and carries the
-target id; `_apply_plan` then bumps the target's
+The rung sits inside `_plan_fact`: a fact's content_hash is looked up
+against the store's current rows with one indexed query, no
+shortlist and no LLM call. A match skips, corroborating the oldest
+match if several exist; `_apply_plan` then bumps the target's
 `corroboration_count` and writes a `reconcile-corroborate` oplog row.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from memman.embed.fingerprint import bound_embedder
 from memman.pipeline.remember import run_remember
 from memman.store.model import Insight
-from tests.conftest import make_insight
+from tests.conftest import make_insight, set_created_at
 
 
 def _new_insight(content):
@@ -30,25 +30,6 @@ def _store(backend, content):
     return iid
 
 
-def _spy_reconcile(monkeypatch):
-    """Replace the screen with a recording UNRELATED stub.
-
-    The screen is the first LLM call the rung skips, one per
-    shortlisted row. Isolating it from the conftest mock's overlap
-    heuristic (which would screen identical content in) means a
-    deleted rung shows up as action 'add' plus a recorded call, never
-    as a coincidentally-identical outcome.
-    """
-    calls = []
-
-    def _fake(llm_client, fact_text, memory):
-        calls.append((fact_text, memory))
-        return 'UNRELATED', []
-
-    monkeypatch.setattr('memman.llm.extract.screen_memory', _fake)
-    return calls
-
-
 def _run(backend, content, **kwargs):
     kwargs.setdefault('store_name', 'test')
     return run_remember(
@@ -56,110 +37,113 @@ def _run(backend, content, **kwargs):
         ec=bound_embedder(backend), **kwargs)
 
 
-def test_exact_match_single_hit_skips_llm(tmp_backend, monkeypatch):
+def test_exact_match_single_hit_skips_llm(tmp_backend):
     """One byte-identical stored row skips reconcile entirely.
 
-    Mutation: deleting the rung -- identical content reaches the
-        reconcile LLM call.
-    Oracle: the spy records zero reconcile calls and the fact lands
-        as 'skipped'.
+    Mutation: deleting the rung -- identical content reaches
+        enrichment instead of skipping.
+    Oracle: the fact lands as 'skipped' with zero LLM calls.
     """
     _store(tmp_backend, 'Redis caches session tokens')
-    calls = _spy_reconcile(monkeypatch)
     res = _run(tmp_backend, 'Redis caches session tokens')
     assert res['facts'][0]['action'] == 'skipped'
-    assert calls == []
+    assert res['llm_calls'] == 0
 
 
-def test_exact_match_two_hits_escalates_to_llm(
-        tmp_backend, monkeypatch):
-    """Two identical stored rows fall through to the LLM.
+def test_two_identical_rows_skip_onto_the_oldest(tmp_backend):
+    """Two identical stored rows still make an exact-duplicate skip.
 
-    With two identical rows the store is already inconsistent, and
-    which one to merge into is exactly the judgement worth an LLM
-    call.
-
-    Mutation: flipping `== 1` to `>= 1`.
-    Oracle: the spy records one screen call per identical row, two.
+    Mutation: the exactly-one guard kept, so a store already holding
+        two copies takes a third.
+    Oracle: the write skips as `exact duplicate`, naming the older
+        row, whose count alone moves to 1.
     """
-    _store(tmp_backend, 'Redis caches session tokens')
-    _store(tmp_backend, 'Redis caches session tokens')
-    calls = _spy_reconcile(monkeypatch)
+    older = _store(tmp_backend, 'Redis caches session tokens')
+    set_created_at(
+        tmp_backend, older, datetime.now(timezone.utc) - timedelta(days=1))
+    newer = _store(tmp_backend, 'Redis caches session tokens')
     res = _run(tmp_backend, 'Redis caches session tokens')
-    assert len(calls) == 2
-    assert res['facts'][0]['action'] == 'add'
+    fact = res['facts'][0]
+    assert (fact['action'], fact.get('reason'), fact.get('target_id')) == (
+        'skipped', 'exact duplicate', older)
+    assert tmp_backend.nodes.get(older).corroboration_count == 1
+    assert tmp_backend.nodes.get(newer).corroboration_count == 0
 
 
-def test_exact_match_is_not_substring_match(tmp_backend, monkeypatch):
+def test_an_identical_row_outside_any_shortlist_is_caught(tmp_backend):
+    """An identical row five better keyword hits outrank still skips.
+
+    No stored row carries a vector, so the keyword rung is the only
+    shortlist, and five importance-5 rows holding every query token
+    fill its five slots ahead of the identical importance-3 row.
+
+    Mutation: the check scoped to a shortlist (mem0's shape: the hash
+        compared against the top-k hits alone).
+    Oracle: the write skips as `exact duplicate` naming the identical
+        row.
+    """
+    for n in range(5):
+        tmp_backend.nodes.insert(make_insight(
+            id=f'superset-{n}', importance=5,
+            content=f'Redis caches session tokens alongside rate limit'
+            f' counters, queue offsets and feature flags for service {n}'))
+    identical = _store(tmp_backend, 'Redis caches session tokens')
+    res = _run(tmp_backend, 'Redis caches session tokens')
+    fact = res['facts'][0]
+    assert (fact['action'], fact.get('reason'), fact.get('target_id')) == (
+        'skipped', 'exact duplicate', identical)
+
+
+def test_exact_match_is_not_substring_match(tmp_backend):
     """A superset fact is not swallowed by its stored subset.
 
     Mutation: replacing the equality with `in` -- every superset fact
         would silently skip against its stored prefix.
-    Oracle: the spy records one screen call and the fact is added.
+    Oracle: the write reaches enrichment (one LLM call) and lands as
+        'add'.
     """
     _store(tmp_backend, 'Redis caches session tokens')
-    calls = _spy_reconcile(monkeypatch)
     res = _run(
         tmp_backend, 'Redis caches session tokens for the api gateway')
-    assert len(calls) == 1
+    assert res['llm_calls'] == 1
     assert res['facts'][0]['action'] == 'add'
 
 
-def test_exact_match_is_whitespace_and_case_insensitive(
-        tmp_backend, monkeypatch):
+def test_exact_match_is_whitespace_and_case_insensitive(tmp_backend):
     """Case and whitespace differences still count as exact.
 
     Mutation: dropping `.lower()` or the whitespace collapse from the
         normalisation.
     Oracle: differently-cased, differently-spaced content skips with
-        zero reconcile calls.
+        zero LLM calls.
     """
     _store(tmp_backend, 'Redis  Caches \t Session Tokens')
-    calls = _spy_reconcile(monkeypatch)
     res = _run(tmp_backend, 'redis caches session tokens')
     assert res['facts'][0]['action'] == 'skipped'
-    assert calls == []
+    assert res['llm_calls'] == 0
 
 
-def test_no_reconcile_bypasses_the_rung(tmp_backend, monkeypatch):
-    """`--no-reconcile` stores verbatim even for identical content.
-
-    The documented contract is "store verbatim, no judgement", and
-    many CLI tests write identical content under the flag.
-
-    Mutation: hoisting the rung above the `not no_reconcile` guard.
-    Oracle: identical content lands as 'add' under the flag.
-    """
-    _store(tmp_backend, 'Redis caches session tokens')
-    _spy_reconcile(monkeypatch)
-    res = _run(
-        tmp_backend, 'Redis caches session tokens', no_reconcile=True)
-    assert res['facts'][0]['action'] == 'add'
-
-
-def test_replace_of_identical_content_still_replaces(
-        tmp_backend, monkeypatch):
+def test_replace_of_identical_content_still_replaces(tmp_backend):
     """`replace` with identical content must still replace.
 
-    `replace` always enqueues `hint_no_reconcile`, so the rung must
-    never intercept it.
+    A replace names its target directly and never reaches the
+    exact-match lookup, so identical content cannot be intercepted
+    into a skip.
 
-    Mutation: the same hoist, reached via the replace route.
+    Mutation: routing a replace through the exact-match rung before
+        the replace branch.
     Oracle: action is 'replace', the target row is gone, and the new
         row exists.
     """
     tid = _store(tmp_backend, 'Redis caches session tokens')
-    _spy_reconcile(monkeypatch)
     res = _run(
-        tmp_backend, 'Redis caches session tokens',
-        no_reconcile=True, replaced_id=tid)
+        tmp_backend, 'Redis caches session tokens', replaced_id=tid)
     assert res['facts'][0]['action'] == 'replace'
     assert tmp_backend.nodes.get(tid) is None
     assert tmp_backend.nodes.get(res['facts'][0]['id']) is not None
 
 
-def test_exact_match_skip_bumps_corroboration_on_target(
-        tmp_backend, monkeypatch):
+def test_exact_match_skip_bumps_corroboration_on_target(tmp_backend):
     """Each exact-match skip bumps the TARGET's corroboration_count.
 
     Mutation: dropping the increment, or bumping the new fact's id
@@ -169,14 +153,13 @@ def test_exact_match_skip_bumps_corroboration_on_target(
         misdirected bump.
     """
     tid = _store(tmp_backend, 'Redis caches session tokens')
-    _spy_reconcile(monkeypatch)
     _run(tmp_backend, 'Redis caches session tokens')
     _run(tmp_backend, 'Redis caches session tokens')
     stored = tmp_backend.nodes.get(tid)
     assert stored.corroboration_count == 2
 
 
-def test_corroborate_writes_oplog_row(tmp_backend, monkeypatch):
+def test_corroborate_writes_oplog_row(tmp_backend):
     """The skip leaves a `reconcile-corroborate` oplog row.
 
     Mutation: dropping the `backend.oplog.log` call.
@@ -184,7 +167,6 @@ def test_corroborate_writes_oplog_row(tmp_backend, monkeypatch):
         target id.
     """
     tid = _store(tmp_backend, 'Redis caches session tokens')
-    _spy_reconcile(monkeypatch)
     _run(tmp_backend, 'Redis caches session tokens')
     rows = tmp_backend._db._query(
         'select insight_id from oplog'
@@ -192,8 +174,7 @@ def test_corroborate_writes_oplog_row(tmp_backend, monkeypatch):
     assert [r[0] for r in rows] == [tid]
 
 
-def test_corroboration_does_not_inflate_access_count(
-        tmp_backend, monkeypatch):
+def test_corroboration_does_not_inflate_access_count(tmp_backend):
     """Corroboration never touches `access_count`.
 
     `access_count` means "times this row was returned" and nothing
@@ -206,7 +187,6 @@ def test_corroboration_does_not_inflate_access_count(
         is still 0 while corroboration_count reads 3.
     """
     tid = _store(tmp_backend, 'Redis caches session tokens')
-    _spy_reconcile(monkeypatch)
     for _ in range(3):
         _run(tmp_backend, 'Redis caches session tokens')
     stored = tmp_backend.nodes.get(tid)
@@ -214,8 +194,7 @@ def test_corroboration_does_not_inflate_access_count(
     assert stored.access_count == 0
 
 
-def test_corroborate_adopts_restating_queue_uuid(
-        tmp_backend, monkeypatch):
+def test_corroborate_adopts_restating_queue_uuid(tmp_backend):
     """The corroborated target adopts the restating row's queue_uuid.
 
     An all-skips queue row inserts nothing carrying its uuid, so a
@@ -228,7 +207,6 @@ def test_corroborate_adopts_restating_queue_uuid(
         and the replay guard fires for it.
     """
     tid = _store(tmp_backend, 'Redis caches session tokens')
-    _spy_reconcile(monkeypatch)
     parent = _new_insight('Redis caches session tokens')
     parent.queue_uuid = 'q-restate-1'
     run_remember(
@@ -239,8 +217,7 @@ def test_corroborate_adopts_restating_queue_uuid(
         'q-restate-1') is True
 
 
-def test_corroborate_preserves_creating_rows_queue_uuid(
-        tmp_backend, monkeypatch):
+def test_corroborate_preserves_creating_rows_queue_uuid(tmp_backend):
     """A populated queue_uuid survives corroboration.
 
     The creating row's replay guard outranks the restating row's:
@@ -257,7 +234,6 @@ def test_corroborate_preserves_creating_rows_queue_uuid(
     tmp_backend.nodes.insert(make_insight(
         id=tid, content='Redis caches session tokens',
         queue_uuid='q-create-1'))
-    _spy_reconcile(monkeypatch)
     parent = _new_insight('Redis caches session tokens')
     parent.queue_uuid = 'q-restate-2'
     run_remember(
@@ -268,14 +244,12 @@ def test_corroborate_preserves_creating_rows_queue_uuid(
         'q-create-1') is True
 
 
-def test_corroborate_dead_target_degrades_to_add(
-        tmp_backend, monkeypatch):
-    """A target soft-deleted after planning degrades to an add.
+def test_corroborate_dead_target_degrades_to_add(tmp_backend, monkeypatch):
+    """A target soft-deleted before apply degrades to an add.
 
-    `_drain_queue` builds `insights_by_id` once per store per drain;
-    an external forget soft-deletes rows without evicting them, so an
-    exact match against a stale entry must not drop the incoming
-    fact.
+    The exact-match lookup runs at planning time; an external forget
+    can soft-delete the matched row before `_apply_plan`'s
+    corroborate call reaches it, in the same synchronous write.
 
     Mutation: returning the skip on a zero-row bump (the 0.19.0
         form) -- the restated fact is stored nowhere and a phantom
@@ -284,15 +258,11 @@ def test_corroborate_dead_target_degrades_to_add(
         counter stays 0, and no corroborate oplog row is written.
     """
     tid = _store(tmp_backend, 'Redis caches session tokens')
-    stale_cache = {
-        i.id: i for i in tmp_backend.nodes.get_all_active()}
     tmp_backend.nodes.soft_delete(tid)
-    _spy_reconcile(monkeypatch)
-    res = run_remember(
-        tmp_backend, _new_insight('Redis caches session tokens'),
-        'Redis caches session tokens',
-        ec=bound_embedder(tmp_backend), store_name='test',
-        insights_by_id=stale_cache)
+    monkeypatch.setattr(
+        tmp_backend.nodes, 'oldest_active_by_content_hash',
+        lambda digest: tid)
+    res = _run(tmp_backend, 'Redis caches session tokens')
     assert res['facts'][0]['action'] == 'add'
     assert tmp_backend.nodes.get(res['facts'][0]['id']) is not None
     # The degraded add supersedes nothing: it must name the vanished
@@ -307,44 +277,34 @@ def test_corroborate_dead_target_degrades_to_add(
     assert count == 0
 
 
-def test_degrade_repairs_the_stale_drain_caches(
+def test_degrade_evicts_the_dead_target_from_the_embed_cache(
         tmp_backend, monkeypatch):
-    """One dead target yields ONE live copy across later rows.
+    """A degraded add evicts the dead target from the shared embed cache.
 
-    The drain builds `insights_by_id`/`embed_cache` once per store;
-    without apply-time repair every later row exact-matches the
-    same stale dead entry and inserts another copy -- recreating
-    exactly the two-identical-rows state the rung refuses to
-    auto-resolve.
+    `_drain_queue` shares one `embed_cache` across every row of a
+    drain pass; without eviction a later row in the same pass would
+    read the dead target's stale vector out of the cache and mint a
+    semantic edge onto a row that no longer exists.
 
-    Mutation: dropping the cache eviction/registration in
-        `apply_all`'s degrade handling.
-    Oracle: three restatements sharing one stale cache leave exactly
-        one live row; calls 2 and 3 skip against the surviving copy,
-        whose counter reads 2.
+    Mutation: dropping the `embed_cache.pop` after a degraded add.
+    Oracle: the shared cache, checked for the dead target's id before
+        and after the degraded write.
     """
-    tid = _store(tmp_backend, 'Redis caches session tokens')
-    stale_cache = {
-        i.id: i for i in tmp_backend.nodes.get_all_active()}
-    shared_embeds = dict(tmp_backend.nodes.iter_embeddings_as_vecs())
+    first = _run(tmp_backend, 'Redis caches session tokens')
+    tid = first['facts'][0]['id']
+    shared_cache = dict(tmp_backend.nodes.iter_embeddings_as_vecs())
     tmp_backend.nodes.soft_delete(tid)
-    _spy_reconcile(monkeypatch)
-    actions = []
-    for _ in range(3):
-        res = run_remember(
-            tmp_backend, _new_insight('Redis caches session tokens'),
-            'Redis caches session tokens',
-            ec=bound_embedder(tmp_backend), store_name='test',
-            insights_by_id=stale_cache, embed_cache=shared_embeds)
-        actions.append(res['facts'][0]['action'])
-    live = [i for i in tmp_backend.nodes.get_all_active()
-            if i.content == 'Redis caches session tokens']
-    assert len(live) == 1
-    assert actions == ['add', 'skipped', 'skipped']
-    assert live[0].corroboration_count == 2
+    monkeypatch.setattr(
+        tmp_backend.nodes, 'oldest_active_by_content_hash',
+        lambda digest: tid)
+    assert tid in shared_cache
+    res = _run(
+        tmp_backend, 'Redis caches session tokens', embed_cache=shared_cache)
+    assert res['facts'][0]['action'] == 'add'
+    assert tid not in shared_cache
 
 
-def test_skip_result_carries_target_id(tmp_backend, monkeypatch):
+def test_skip_result_carries_target_id(tmp_backend):
     """The skip result names the row that absorbed the restatement.
 
     The result's 'id' is a never-inserted uuid; without 'target_id'
@@ -354,14 +314,12 @@ def test_skip_result_carries_target_id(tmp_backend, monkeypatch):
     Oracle: the result's target_id equals the stored row's id.
     """
     tid = _store(tmp_backend, 'Redis caches session tokens')
-    _spy_reconcile(monkeypatch)
     res = _run(tmp_backend, 'Redis caches session tokens')
     assert res['facts'][0]['action'] == 'skipped'
     assert res['facts'][0]['target_id'] == tid
 
 
-def test_corroboration_count_reaches_the_json_read_path(
-        tmp_backend, monkeypatch):
+def test_corroboration_count_reaches_the_json_read_path(tmp_backend):
     """The counter is visible through the full-dict serializer.
 
     `insight_to_full_dict` is the consumer-facing read path that
@@ -376,7 +334,6 @@ def test_corroboration_count_reaches_the_json_read_path(
     """
     from memman.store.model import insight_to_full_dict
     tid = _store(tmp_backend, 'Redis caches session tokens')
-    _spy_reconcile(monkeypatch)
     _run(tmp_backend, 'Redis caches session tokens')
     assert insight_to_full_dict(
         tmp_backend.nodes.get(tid))['corroboration_count'] == 1

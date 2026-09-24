@@ -117,7 +117,7 @@ def test_replace_refuses_a_line_locator(mm_runner):
     """
     _, data_dir = mm_runner
     first = invoke(mm_runner, [
-        'remember', 'a note that will be replaced', '--no-reconcile'])
+        'remember', 'a note that will be replaced'])
     old = parse_remember(first, mm_runner)
     before = _queued_contents(data_dir)
 

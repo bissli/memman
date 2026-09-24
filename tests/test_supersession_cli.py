@@ -14,7 +14,7 @@ from tests.conftest import invoke, parse_remember
 
 def _remember(runner, text, *flags):
     """Store `text` verbatim and return its id."""
-    res = invoke(runner, ['remember', text, '--no-reconcile', *flags])
+    res = invoke(runner, ['remember', text, *flags])
     assert res.exit_code == 0, res.output
     return parse_remember(res, runner)['id']
 
@@ -191,9 +191,9 @@ def test_unsupersede_relinks_reembeds_and_writes_its_oplog_row(mm_runner):
 def test_supersede_command_joins_a_second_predecessor(mm_runner):
     """Verify a successor may take a second predecessor: a join, not a fork.
 
-    A correction the reconciler wrote as a merge already has one
-    predecessor; curating a sibling claim onto it is the common case
-    on the live fleet (measured 2026-09-04 on both verified pairs).
+    A correction written as a replace already has one predecessor;
+    curating a sibling claim onto it is the common case on the live
+    fleet.
 
     Mutation: refusing a successor that already has a predecessor, so
         the sibling claim stays current beside its correction.
