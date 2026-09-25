@@ -69,7 +69,7 @@ Both the scheduler's enrichment path and `doctor`'s connectivity probe go throug
 
 One role slot keys off the configured endpoint:
 
-- `MEMMAN_LLM_MODEL_SLOW` - the `slow` role: worker's derived-metadata path (enrichment summaries/keywords) and `doctor`'s connectivity probe.
+- `MEMMAN_LLM_MODEL` - the `slow` role: worker's derived-metadata path (enrichment summaries/keywords) and `doctor`'s connectivity probe.
 
 For OpenRouter endpoints, `memman install` queries `/v1/models` once and writes the resolved id to `~/.memman/env`. For any non-OpenRouter endpoint the install wizard prompts for the slug interactively (vendor-native model ids like `gpt-4o-mini` or `qwen2.5:7b` don't share OpenRouter's `provider/model` slug shape and cannot be auto-resolved). Runtime never queries the model inventory; it reads the persisted id and sends it through unchanged. Re-run `memman install` to bump to a current version when a new model family ships.
 

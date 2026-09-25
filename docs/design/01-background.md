@@ -59,12 +59,12 @@ memman persists everything in SQLite (or Postgres + pgvector) with a complete wr
 
 ### Why LLM-Supervised instead of an embedded LLM?
 
-| Dimension          | LLM-Embedded (Mem0, etc.) | LLM-Supervised (memman)                                                                       |
-| ------------------ | ------------------------- | --------------------------------------------------------------------------------------------- |
-| LLM capability     | One model for everything  | Host LLM + a `slow` worker role for enrichment (tunable via `MEMMAN_LLM_MODEL_SLOW`)          |
-| Pipeline LLM       | One model for everything  | `slow` for enrichment and `doctor`'s connectivity probe (tunable via `MEMMAN_LLM_MODEL_SLOW`) |
-| Network dependency | Required                  | Required (LLM + embedding provider APIs)                                                      |
-| Swappability       | API-bound                 | Any LLM CLI                                                                                   |
+| Dimension          | LLM-Embedded (Mem0, etc.) | LLM-Supervised (memman)                                                                  |
+| ------------------ | ------------------------- | ---------------------------------------------------------------------------------------- |
+| LLM capability     | One model for everything  | Host LLM + a `slow` worker role for enrichment (tunable via `MEMMAN_LLM_MODEL`)          |
+| Pipeline LLM       | One model for everything  | `slow` for enrichment and `doctor`'s connectivity probe (tunable via `MEMMAN_LLM_MODEL`) |
+| Network dependency | Required                  | Required (LLM + embedding provider APIs)                                                 |
+| Swappability       | API-bound                 | Any LLM CLI                                                                              |
 
 ### Why SQLite WAL instead of an embedded graph database?
 

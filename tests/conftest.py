@@ -162,8 +162,8 @@ def _set_env_file_value(key: str, value: str | None) -> None:
 def env_file():
     """Yield a callable that writes/removes keys in the test env file.
 
-    Usage: `env_file('MEMMAN_LLM_MODEL_SLOW', 'foo')` writes the row;
-    `env_file('MEMMAN_LLM_MODEL_SLOW', None)` removes it. Cache is
+    Usage: `env_file('MEMMAN_LLM_MODEL', 'foo')` writes the row;
+    `env_file('MEMMAN_LLM_MODEL', None)` removes it. Cache is
     auto-reset; the autouse `_isolate_env` fixture handles cleanup.
     """
     return _set_env_file_value

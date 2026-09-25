@@ -23,15 +23,15 @@ def test_unset_slow_model_var_raises(env_file):
     """Verify an unset slow model fails loudly instead of falling back.
 
     Mutation: a fallback to a hardcoded default model when
-        `MEMMAN_LLM_MODEL_SLOW` is unset, which bills enrichment on a
+        `MEMMAN_LLM_MODEL` is unset, which bills enrichment on a
         model the operator never chose.
     Oracle: `ConfigError` raised with the slow var cleared.
     """
-    from memman.config import LLM_API_KEY, LLM_ENDPOINT, LLM_MODEL_SLOW
+    from memman.config import LLM_API_KEY, LLM_ENDPOINT, LLM_MODEL
     from memman.exceptions import ConfigError
     env_file(LLM_ENDPOINT, 'https://openrouter.ai/api/v1')
     env_file(LLM_API_KEY, 'k')
-    env_file(LLM_MODEL_SLOW, None)
+    env_file(LLM_MODEL, None)
     reset_role_cache()
     with pytest.raises(ConfigError):
         get_llm_client('slow')

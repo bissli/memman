@@ -52,7 +52,7 @@ DATA_DIR = 'MEMMAN_DATA_DIR'
 STORE = 'MEMMAN_STORE'
 LLM_ENDPOINT = 'MEMMAN_LLM_ENDPOINT'
 LLM_API_KEY = 'MEMMAN_LLM_API_KEY'
-LLM_MODEL_SLOW = 'MEMMAN_LLM_MODEL_SLOW'
+LLM_MODEL = 'MEMMAN_LLM_MODEL'
 LLM_PROVIDER_ONLY = 'MEMMAN_LLM_PROVIDER_ONLY'
 LLM_DATA_COLLECTION = 'MEMMAN_LLM_DATA_COLLECTION'
 LLM_ZDR = 'MEMMAN_LLM_ZDR'
@@ -216,7 +216,7 @@ SECRET_VARS = frozenset({
 INSTALLABLE_KEYS = (
     LLM_ENDPOINT,
     LLM_API_KEY,
-    LLM_MODEL_SLOW,
+    LLM_MODEL,
     LLM_PROVIDER_ONLY,
     LLM_DATA_COLLECTION,
     LLM_ZDR,
@@ -315,7 +315,7 @@ def is_loopback_endpoint(url: str) -> bool:
 
 INSTALL_DEFAULTS: dict[str, str] = {
     LLM_ENDPOINT: 'https://openrouter.ai/api/v1',
-    LLM_MODEL_SLOW: 'qwen/qwen3-235b-a22b-2507',
+    LLM_MODEL: 'qwen/qwen3-235b-a22b-2507',
     LLM_PROVIDER_ONLY: 'amazon-bedrock,azure,google-vertex',
     LLM_DATA_COLLECTION: 'deny',
     LLM_ZDR: 'true',
@@ -658,7 +658,7 @@ def effective_source(name: str) -> str:
 
 
 _LLM_ROLE_KEYS: tuple[tuple[str, str], ...] = (
-    (LLM_MODEL_SLOW, 'slow'),
+    (LLM_MODEL, 'slow'),
     )
 
 

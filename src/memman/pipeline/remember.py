@@ -49,7 +49,7 @@ def compute_prompt_version() -> str:
     -------
     str
         First 16 hex chars of a SHA-256 over the enrichment prompt
-        and the resolved `MEMMAN_LLM_MODEL_SLOW` id.
+        and the resolved `MEMMAN_LLM_MODEL` id.
 
     Notes
     -----
@@ -79,7 +79,7 @@ def compute_prompt_version() -> str:
     from memman.graph.enrichment import ENRICHMENT_SYSTEM_PROMPT
 
     try:
-        metadata_model = config.require(config.LLM_MODEL_SLOW)
+        metadata_model = config.require(config.LLM_MODEL)
     except ConfigError:
         metadata_model = ''
     blob = f'{ENRICHMENT_SYSTEM_PROMPT}\x00{metadata_model}'

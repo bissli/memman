@@ -9,7 +9,7 @@ by editing `MEMMAN_LLM_ENDPOINT` (and `MEMMAN_LLM_API_KEY` plus the
 role-model slug).
 
 One role exists: `slow`, the derived-metadata path (enrichment and
-doctor's connectivity probe). It reads `MEMMAN_LLM_MODEL_SLOW`.
+doctor's connectivity probe). It reads `MEMMAN_LLM_MODEL`.
 """
 
 import logging
@@ -29,7 +29,7 @@ ROLE_SLOW = 'slow'
 VALID_ROLES = frozenset({ROLE_SLOW})
 
 _ROLE_ENV_VARS = {
-    ROLE_SLOW: config.LLM_MODEL_SLOW,
+    ROLE_SLOW: config.LLM_MODEL,
     }
 
 WORKER_MAX_TOKENS = 4096

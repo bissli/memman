@@ -50,7 +50,7 @@ DSN_PROBE_TIMEOUT_SEC = 5
 ENDPOINT_MAX_ATTEMPTS = 3
 API_KEY_MAX_ATTEMPTS = 3
 MODEL_SLUG_PROMPTS: tuple[tuple[str, str], ...] = (
-    ('slow', 'MEMMAN_LLM_MODEL_SLOW'),
+    ('slow', 'MEMMAN_LLM_MODEL'),
     )
 
 

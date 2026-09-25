@@ -42,14 +42,14 @@
         <mxCell id="haiku_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;fontSize=11;" vertex="1" parent="1">
           <mxGeometry x="460" y="75" width="380" height="560" as="geometry" />
         </mxCell>
-        <mxCell id="haiku_title" value="&lt;b&gt;Internal Pipeline LLM (1 role)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;slow (model tunable via MEMMAN_LLM_MODEL_SLOW); 1 call/write, none on recall&lt;/font&gt;" style="text;html=1;align=center;fontSize=14;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+        <mxCell id="haiku_title" value="&lt;b&gt;Internal Pipeline LLM (1 role)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;slow (model tunable via MEMMAN_LLM_MODEL); 1 call/write, none on recall&lt;/font&gt;" style="text;html=1;align=center;fontSize=14;fillColor=none;strokeColor=none;" vertex="1" parent="1">
           <mxGeometry x="485" y="85" width="330" height="40" as="geometry" />
         </mxCell>
         <mxCell id="h3" value="&lt;b&gt;Enrichment&lt;/b&gt; &lt;font style=&quot;font-size:9px&quot;&gt;[slow]&lt;/font&gt;&lt;br&gt;Generate keywords, summary for insight&lt;br&gt;also the role behind the doctor probe" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="485" y="145" width="330" height="50" as="geometry" />
         </mxCell>
 
-        <mxCell id="haiku_note" value="&lt;font style=&quot;font-size:9px&quot;&gt;&lt;b&gt;LLM models:&lt;/b&gt; MEMMAN_LLM_MODEL_SLOW (any model on the configured provider endpoint); resolved at install, persisted in ~/.memman/env&lt;br&gt;&lt;b&gt;Embeddings:&lt;/b&gt; pluggable provider registry (voyage / openai / openrouter / ollama); per-store fingerprint binds; dim provider-defined&lt;br&gt;&lt;b&gt;Requires:&lt;/b&gt; credentials for the selected providers (provider-dependent)&lt;/font&gt;" style="text;html=1;whiteSpace=wrap;align=center;fontSize=10;fillColor=none;strokeColor=none;verticalAlign=middle;" vertex="1" parent="1">
+        <mxCell id="haiku_note" value="&lt;font style=&quot;font-size:9px&quot;&gt;&lt;b&gt;LLM models:&lt;/b&gt; MEMMAN_LLM_MODEL (any model on the configured provider endpoint); resolved at install, persisted in ~/.memman/env&lt;br&gt;&lt;b&gt;Embeddings:&lt;/b&gt; pluggable provider registry (voyage / openai / openrouter / ollama); per-store fingerprint binds; dim provider-defined&lt;br&gt;&lt;b&gt;Requires:&lt;/b&gt; credentials for the selected providers (provider-dependent)&lt;/font&gt;" style="text;html=1;whiteSpace=wrap;align=center;fontSize=10;fillColor=none;strokeColor=none;verticalAlign=middle;" vertex="1" parent="1">
           <mxGeometry x="485" y="480" width="330" height="90" as="geometry" />
         </mxCell>
 

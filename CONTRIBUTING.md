@@ -35,7 +35,7 @@ The `Type` column distinguishes how each variable is sourced:
 | `MEMMAN_VOYAGE_API_KEY`         | installed | Voyage AI embeddings (512-dim). Required when `MEMMAN_EMBED_PROVIDER=voyage` (the default).                                                                                                                                         |
 | `MEMMAN_LLM_ENDPOINT`           | installed | OpenAI-compatible `/chat/completions` endpoint URL (default `https://openrouter.ai/api/v1`). Set to any vendor's OpenAI-compat URL to switch providers.                                                                             |
 | `MEMMAN_LLM_API_KEY`            | installed | Bearer token for the configured LLM endpoint. Required for any non-loopback endpoint; loopback endpoints (Ollama, local vLLM/LiteLLM) may leave it blank.                                                                           |
-| `MEMMAN_LLM_MODEL_SLOW`         | installed | Worker model for derived metadata (enrichment summaries/keywords). OpenRouter endpoints resolve the latest at install time; other endpoints are prompted interactively.                                                             |
+| `MEMMAN_LLM_MODEL`              | installed | Worker model for derived metadata (enrichment summaries/keywords). OpenRouter endpoints resolve the latest at install time; other endpoints are prompted interactively.                                                             |
 | `MEMMAN_EMBED_PROVIDER`         | installed | `voyage` (default), `openai`, `openrouter`, or `ollama`.                                                                                                                                                                            |
 | `MEMMAN_OPENROUTER_ENDPOINT`    | installed | OpenRouter base URL (default `https://openrouter.ai/api/v1`).                                                                                                                                                                       |
 | `MEMMAN_LOG_LEVEL`              | installed | Logger level when neither `--verbose` nor `--debug` is passed (default `WARNING`).                                                                                                                                                  |
@@ -100,7 +100,7 @@ The two migrators (`SqliteMigrator`, `PostgresMigrator`) extend a common `Migrat
 
 The client adds OpenRouter attribution headers (`HTTP-Referer`, `X-Title`) when `config.is_openrouter_endpoint(endpoint)` matches; for any other host the request goes through plain. Loopback endpoints (`localhost`, `127.0.0.1`, `::1`) may omit `MEMMAN_LLM_API_KEY` - the client drops the `Authorization` header when the key is blank.
 
-Model selection comes from `MEMMAN_LLM_MODEL_SLOW`. For OpenRouter endpoints it is resolved against `/v1/models` at install time; for non-OpenRouter endpoints the install wizard prompts interactively for the slug.
+Model selection comes from `MEMMAN_LLM_MODEL`. For OpenRouter endpoints it is resolved against `/v1/models` at install time; for non-OpenRouter endpoints the install wizard prompts interactively for the slug.
 
 Retry policy, timeouts, and JSON parsing helpers live in `src/memman/_http.py` and `src/memman/llm/shared.py` respectively; embed providers (`voyage`, `openai`, `openrouter`, `ollama`) are a separate subsystem under `src/memman/embed/` keyed by `MEMMAN_EMBED_PROVIDER`.
 

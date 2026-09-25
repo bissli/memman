@@ -55,13 +55,13 @@ def test_key_moves_for_a_prompt_the_rebuild_replays(
 def test_key_moves_for_the_metadata_model(env_file):
     """The key tracks the metadata model, which link_pending replays on.
 
-    Mutation: leaving `MEMMAN_LLM_MODEL_SLOW` out of the key,
+    Mutation: leaving `MEMMAN_LLM_MODEL` out of the key,
         which would report a rebuild's own model change as nothing --
         the one drift the remedy CAN fix would then go unreported.
     Oracle: the key recomputed across a swap of the metadata model.
     """
     base = _key()
-    env_file(config.LLM_MODEL_SLOW, 'anthropic/claude-other-9.9')
+    env_file(config.LLM_MODEL, 'anthropic/claude-other-9.9')
     assert _key() != base, (
         'the metadata model produces exactly what a rebuild replays,'
         ' so swapping it must move the key')

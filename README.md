@@ -136,7 +136,7 @@ memman config set MEMMAN_LLM_ENDPOINT https://api.openai.com/v1
 memman config set MEMMAN_LLM_API_KEY sk-...
 ```
 
-The model slug for the `slow` role (`MEMMAN_LLM_MODEL_SLOW`) is auto-resolved against `/v1/models` for OpenRouter endpoints; for any other endpoint, re-run `memman install` and the wizard prompts for the slug interactively.
+The model slug for the `slow` role (`MEMMAN_LLM_MODEL`) is auto-resolved against `/v1/models` for OpenRouter endpoints; for any other endpoint, re-run `memman install` and the wizard prompts for the slug interactively.
 
 #### Embedding providers
 

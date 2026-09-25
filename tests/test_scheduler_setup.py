@@ -954,7 +954,7 @@ def _install_env_full(data_dir):
         **{
             config.LLM_ENDPOINT: 'https://openrouter.ai/api/v1',
             config.LLM_API_KEY: 'sk-llm-installed',
-            config.LLM_MODEL_SLOW: 'anthropic/claude-sonnet-4.6',
+            config.LLM_MODEL: 'anthropic/claude-sonnet-4.6',
             config.EMBED_PROVIDER: 'voyage',
             config.OPENROUTER_API_KEY: 'sk-or-installed',
             config.VOYAGE_API_KEY: 'pa-installed',
@@ -986,7 +986,7 @@ class TestUninstall:
         assert config.LLM_API_KEY not in contents
         assert (f'{config.LLM_ENDPOINT}=https://openrouter.ai/api/v1'
                 in contents)
-        assert config.LLM_MODEL_SLOW in contents
+        assert config.LLM_MODEL in contents
         assert config.EMBED_PROVIDER in contents
         assert f'{config.DEFAULT_BACKEND}=postgres' in contents
 

@@ -421,12 +421,12 @@ class TestEnvCompleteness:
         from memman import config
         lines = [
             f'{key}=v' for key in config.INSTALLABLE_KEYS
-            if key != config.LLM_MODEL_SLOW
+            if key != config.LLM_MODEL
             ]
         write_env('\n'.join(lines) + '\n')
         out = check_env_completeness()
         assert out['status'] == 'warn'
-        assert config.LLM_MODEL_SLOW in out['detail']['missing']
+        assert config.LLM_MODEL in out['detail']['missing']
         assert 'memman install' in out['detail']['fix']
 
     def test_ignores_optional_secret(self, write_env):

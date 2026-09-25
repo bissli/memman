@@ -4047,7 +4047,7 @@ def _graph_rebuild_stale_only(
     # input drifted without un-folding the hash.
     try:
         enrich_model: str | None = config.require(
-            config.LLM_MODEL_SLOW)
+            config.LLM_MODEL)
     except Exception:
         enrich_model = None
 

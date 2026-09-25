@@ -54,7 +54,7 @@ def test_prompt_version_unchanged_by_length_caps():
 
     Two inputs move this value and neither is a length cap: the
     enrichment prompt, and the configured
-    `MEMMAN_LLM_MODEL_SLOW`, which the key folds in and which
+    `MEMMAN_LLM_MODEL`, which the key folds in and which
     the suite seeds from `INSTALL_DEFAULTS` -- changing that default
     re-pins this test, deliberately.
 
