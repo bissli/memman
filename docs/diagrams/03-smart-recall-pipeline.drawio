@@ -55,7 +55,7 @@
         <mxCell id="s_e5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" edge="1" parent="1" source="s_rrf" target="s_topk">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="s_beam_box" value="&lt;b&gt;Beam Search&lt;/b&gt;  (per anchor, MAGMA §3.3)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=11;align=left;spacingLeft=10;dashed=1;" vertex="1" parent="1">
+        <mxCell id="s_beam_box" value="&lt;b&gt;Beam Search&lt;/b&gt;  (per anchor)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=11;align=left;spacingLeft=10;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="130" y="630" width="640" height="200" as="geometry" />
         </mxCell>
         <mxCell id="s_pq" value="&lt;b&gt;Priority Queue&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;heapq&lt;br&gt;seed: anchor node&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">

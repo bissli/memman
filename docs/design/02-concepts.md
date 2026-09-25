@@ -54,7 +54,7 @@ An Edge connects two insights:
 └────────────────────────────────────────────┘
 ```
 
-memman keeps three of MAGMA's four graphs. [Graph Model](03-graph-model.md) details them.
+memman's graph model has three edge types. [Graph Model](03-graph-model.md) details them.
 
 ## 2.3 Database schema
 

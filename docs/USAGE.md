@@ -455,4 +455,4 @@ The host session never blocks on the network. Newly stored memories become recal
 4. **Cross-encoder rerank** (on by default; toggle per-store via `MEMMAN_RERANK_ENABLED_<store>`) - the configured reranker (default `voyage` / `rerank-3-lite`) re-scores the top 100 candidates; replaces the multi-signal score for the final ordering. Auto-skips on 1-2 token queries.
 5. **Ordering** - nothing re-sorts after the limit cut: rows come back in relevance order.
 
-Inspired by [MAGMA](https://arxiv.org/abs/2601.03236). See [Design & Architecture](DESIGN.md) for the full deep dive.
+See [Design & Architecture](DESIGN.md) for the full deep dive.

@@ -16,7 +16,7 @@
           <mxGeometry x="80" y="100" width="280" height="50" as="geometry" />
         </mxCell>
 
-        <mxCell id="r_validate" value="Validate args&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;importance ∈ [1,5] (CLI) ;&lt;br&gt;content ≤ 8000 chars&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_validate" value="Validate args&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;importance ∈ [1,5] (CLI) ;&lt;br&gt;content ≤ 1000 UTF-8 bytes&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="400" y="100" width="180" height="50" as="geometry" />
         </mxCell>
 
@@ -82,7 +82,7 @@
           <mxGeometry x="640" y="495" width="220" height="80" as="geometry" />
         </mxCell>
 
-        <mxCell id="r_qg" value="Quality gate&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;check_content_quality(content)&lt;br&gt;reject ≥ 2 transient warnings&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_qg" value="Quality gate&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;check_content_quality(content)&lt;br&gt;advisory warnings only; never blocks the write&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="80" y="590" width="280" height="55" as="geometry" />
         </mxCell>
 

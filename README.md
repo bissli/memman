@@ -278,11 +278,6 @@ memman uninstall    # remove integration
 - [Usage & Reference](docs/USAGE.md) - CLI commands, configuration, embedding support
 - [Architecture Diagrams](docs/diagrams/) - system architecture, pipelines, lifecycle management
 
-## References
-
-- **MAGMA** - Jiang et al. [A Multi-Graph based Agentic Memory Architecture](https://arxiv.org/abs/2601.03236). 2025. Four-graph model (temporal, entity, causal, semantic) with intent-adaptive retrieval and beam search traversal.
-- **RRF** - Cormack, Clarke & Buttcher. [Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods](https://dl.acm.org/doi/10.1145/1571941.1572114). SIGIR 2009. Multi-signal anchor fusion with k=60.
-
 ## License
 
 [MIT](LICENSE)

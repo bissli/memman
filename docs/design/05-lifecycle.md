@@ -122,7 +122,7 @@ Vector serialization depends on the active storage backend for the store (`MEMMA
 
 - **Embed (remember, post-enrichment)**: the row is embedded once, after LLM enrichment - keyword-enriched text when enrichment returned keywords, else the content alone.
 - **Recovery (`graph rebuild`)**: re-enriches all insights through the full LLM pipeline and updates embeddings.
-- **Recall**: expanded query is embedded for vector search anchors and reranking.
+- **Recall**: the query string is embedded as given for vector search anchors and reranking.
 
 ### 5.3.4 Recovery
 
