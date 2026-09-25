@@ -33,9 +33,9 @@ def test_a_typed_entity_list_replaces_the_inherited_one(mm_runner):
 
     Mutation: unioning the predecessor's entity list into the
         successor on a `replace`, so a typed list can only add and
-        the caller cannot remove a name the model got wrong.
+        the caller cannot remove a stale name.
     Oracle: the hand-typed one-name list, against the successor's
-        stored list with the enrichment's own names removed.
+        stored list exactly.
     """
     _, data_dir = mm_runner
     old_id, name = _seed(mm_runner, data_dir, ['kombu', 'celery'])
@@ -47,8 +47,7 @@ def test_a_typed_entity_list_replaces_the_inherited_one(mm_runner):
     assert result.exit_code == 0, result.output
     successor = parse_remember(result, mm_runner)
     stored = open_backend(name, data_dir).nodes.get(successor['id']).entities
-    assert 'rabbitmq' in stored
-    assert [e for e in stored if e in {'kombu', 'celery'}] == []
+    assert stored == ['rabbitmq']
 
 
 def test_an_empty_typed_entity_list_clears_the_inherited_one(mm_runner):
@@ -57,8 +56,7 @@ def test_an_empty_typed_entity_list_clears_the_inherited_one(mm_runner):
     Mutation: treating a typed empty list as "not given", which
         makes the flag indistinguishable from omitting it and leaves
         the caller no route to empty the list.
-    Oracle: the successor's stored list, which must hold none of the
-        predecessor's names.
+    Oracle: the successor's stored list, which must be empty.
     """
     _, data_dir = mm_runner
     old_id, name = _seed(mm_runner, data_dir, ['kombu', 'celery'])
@@ -69,7 +67,7 @@ def test_an_empty_typed_entity_list_clears_the_inherited_one(mm_runner):
     assert result.exit_code == 0, result.output
     successor = parse_remember(result, mm_runner)
     stored = open_backend(name, data_dir).nodes.get(successor['id']).entities
-    assert [e for e in stored if e in {'kombu', 'celery'}] == []
+    assert stored == []
 
 
 def test_an_unflagged_replace_still_inherits_every_name(mm_runner):
@@ -81,8 +79,8 @@ def test_an_unflagged_replace_still_inherits_every_name(mm_runner):
 
     Mutation: dropping the inherited list along with the union, so an
         unflagged replace loses every entity the row carried.
-    Oracle: the hand-seeded two-name list, every name of which must
-        be present on the successor.
+    Oracle: the hand-seeded two-name list, against the successor's
+        stored list exactly.
     """
     _, data_dir = mm_runner
     old_id, name = _seed(mm_runner, data_dir, ['kombu', 'celery'])
@@ -93,8 +91,7 @@ def test_an_unflagged_replace_still_inherits_every_name(mm_runner):
     assert result.exit_code == 0, result.output
     successor = parse_remember(result, mm_runner)
     stored = open_backend(name, data_dir).nodes.get(successor['id']).entities
-    assert [e for e in stored if e in {'kombu', 'celery'}] == [
-        'kombu', 'celery']
+    assert stored == ['kombu', 'celery']
 
 
 def test_replace_offers_no_reconcile_flag(mm_runner):

@@ -614,13 +614,20 @@ class TestEnrichmentSchema:
     """Verify enrichment columns exist in fresh databases."""
 
     def test_new_columns_in_schema(self, tmp_db):
-        """Fresh DB has keywords, summary, semantic_facts columns."""
+        """Fresh DB has keywords and summary, and no semantic_facts.
+
+        Mutation: leaving `semantic_facts` in `_BASELINE_SCHEMA`
+            after the enrichment prompt stops populating it, so a
+            fresh store still carries a column no write or read
+            touches.
+        Oracle: `PRAGMA table_info`, read straight off a fresh store.
+        """
         cols = tmp_db._conn.execute(
             'PRAGMA table_info(insights)').fetchall()
         col_names = {row[1] for row in cols}
         assert 'keywords' in col_names
         assert 'summary' in col_names
-        assert 'semantic_facts' in col_names
+        assert 'semantic_facts' not in col_names
 
 
 class TestPendingLinkIndex:

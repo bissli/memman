@@ -120,14 +120,13 @@ Vector serialization depends on the active storage backend for the store (`MEMMA
 
 ### 5.3.3 Embedding in the pipeline
 
-- **Initial (remember - sequential)**: the write's text is embedded immediately, whether the plan adds or replaces.
-- **Enriched (remember - parallel)**: after LLM enrichment extracts keywords, the insight is re-embedded with enriched text (content + keywords).
+- **Embed (remember, post-enrichment)**: the row is embedded once, after LLM enrichment - keyword-enriched text when enrichment returned keywords, else the content alone.
 - **Recovery (`graph rebuild`)**: re-enriches all insights through the full LLM pipeline and updates embeddings.
 - **Recall**: expanded query is embedded for vector search anchors and reranking.
 
 ### 5.3.4 Recovery
 
-`memman graph rebuild` re-enriches all insights through the full LLM pipeline and updates embeddings. The worker owns the embedding lifecycle (initial, enriched, rebuild).
+`memman graph rebuild` re-enriches all insights through the full LLM pipeline and updates embeddings. The worker owns the embedding lifecycle (post-enrichment, rebuild).
 
 ### 5.3.5 Online embedding swap
 

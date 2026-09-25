@@ -12,7 +12,6 @@ canned responses. This exercises the real code paths.
 
 import hashlib
 import json
-import re
 import struct
 from datetime import datetime, timezone
 from pathlib import Path
@@ -436,24 +435,7 @@ def _mock_enrichment(content: str) -> str:
     return json.dumps({
         'keywords': content.lower().split()[:5],
         'summary': content[:100],
-        'entities': _extract_mock_entities(content),
         })
-
-
-def _extract_mock_entities(text: str) -> list[str]:
-    """Extract entities from text using capitalized words heuristic."""
-    stopwords = {'The', 'A', 'An', 'In', 'On', 'For', 'With', 'And',
-                 'Or', 'Is', 'Are', 'Was', 'Were', 'To', 'From', 'By',
-                 'At', 'Of', 'But', 'Not', 'It', 'This', 'That', 'If',
-                 'As', 'So', 'We', 'I', 'My', 'No', 'Yes', 'Chose',
-                 'Switched', 'Store', 'Production', 'Configured',
-                 'Infrastructure', 'Deployed', 'Critical', 'Uses',
-                 'Using', 'Based', 'After', 'Before'}
-    entities = []
-    for word in re.findall(r'\b[A-Z][a-zA-Z0-9]+\b', text):
-        if word not in stopwords and word not in entities:
-            entities.append(word)
-    return entities[:5]
 
 
 def _mock_rerank(self: object, query: str, documents: list[str],

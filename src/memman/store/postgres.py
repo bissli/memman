@@ -125,7 +125,6 @@ create table if not exists {schema}.insights (
     source      text default 'user',
     keywords    jsonb,
     summary     text,
-    semantic_facts jsonb,
     embedding   vector({dim}),
     linked_at   timestamptz,
     enriched_at timestamptz,
@@ -699,21 +698,17 @@ where id = %s
                 id))
 
     def update_enrichment(
-            self, id: Id, *, keywords: list[str], summary: str,
-            semantic_facts: list[str]) -> None:
+            self, id: Id, *, keywords: list[str], summary: str) -> None:
         import json as _json
         sql = self._q("""
 update {s}.insights
 set keywords = %s::jsonb,
     summary = %s,
-    semantic_facts = %s::jsonb,
     updated_at = now()
 where id = %s
 """)
         with self._conn.cursor() as cur:
-            cur.execute(sql, (
-                _json.dumps(keywords), summary,
-                _json.dumps(semantic_facts), id))
+            cur.execute(sql, (_json.dumps(keywords), summary, id))
 
     def count_active(self) -> int:
         sql = self._q("""
@@ -997,11 +992,6 @@ select count(*),
        count(*) filter (
            where (summary is null or summary = '')
              and enriched_at is null
-       ),
-       count(*) filter (
-           where semantic_facts is null
-              or semantic_facts::text = '[]'
-              or jsonb_typeof(semantic_facts) is null
        )
 from {s}.insights
 where deleted_at is null and superseded_by is null
@@ -1015,8 +1005,7 @@ where deleted_at is null and superseded_by is null
             total_active=int(row[0] or 0),
             missing_embedding=int(row[1] or 0),
             missing_keywords=int(row[2] or 0),
-            missing_summary=int(row[3] or 0),
-            missing_semantic_facts=int(row[4] or 0))
+            missing_summary=int(row[3] or 0))
 
     def embedding_size_distribution(self) -> dict[int, int]:
         sql = self._q("""
@@ -2670,7 +2659,7 @@ class PostgresMigrator(Migrator):
             pending_select = ', embedding_pending' if has_pending else ''
             cur.execute(f"""
 select id, content, category, importance, entities,
-       source, keywords, summary, semantic_facts, embedding,
+       source, keywords, summary, embedding,
        linked_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, embedding_model,
        session_id, queue_uuid, superseded_by,
@@ -2683,7 +2672,7 @@ order by id
             insights: list[MigrateInsight] = []
             pending: list[PendingReembed] = []
             for r in insight_rows:
-                emb = list(r[9]) if r[9] is not None else None
+                emb = list(r[8]) if r[8] is not None else None
                 insights.append(MigrateInsight(
                     id=r[0], content=r[1], category=r[2],
                     importance=int(r[3]),
@@ -2692,22 +2681,20 @@ order by id
                     keywords=(
                         list(r[6]) if r[6] is not None else None),
                     summary=r[7],
-                    semantic_facts=(
-                        list(r[8]) if r[8] is not None else None),
                     embedding=emb,
-                    linked_at=r[10],
-                    enriched_at=r[11],
-                    created_at=r[12],
-                    updated_at=r[13],
-                    deleted_at=r[14],
-                    prompt_version=r[15],
-                    embedding_model=r[16],
-                    session_id=r[17], queue_uuid=r[18],
-                    superseded_by=r[19],
-                    author=r[20]))
-                if has_pending and r[21] is not None:
+                    linked_at=r[9],
+                    enriched_at=r[10],
+                    created_at=r[11],
+                    updated_at=r[12],
+                    deleted_at=r[13],
+                    prompt_version=r[14],
+                    embedding_model=r[15],
+                    session_id=r[16], queue_uuid=r[17],
+                    superseded_by=r[18],
+                    author=r[19]))
+                if has_pending and r[20] is not None:
                     pending.append(PendingReembed(
-                        insight_id=r[0], vector=list(r[21])))
+                        insight_id=r[0], vector=list(r[20])))
 
             cur.execute(f"""
 select source_id, target_id, edge_type, weight,
@@ -2806,9 +2793,6 @@ order by sqlite_id
                             json.dumps(ins.keywords)
                             if ins.keywords is not None else None,
                             ins.summary,
-                            json.dumps(ins.semantic_facts)
-                            if ins.semantic_facts is not None
-                            else None,
                             emb,
                             ins.linked_at, ins.enriched_at,
                             ins.created_at, ins.updated_at,
@@ -2826,7 +2810,7 @@ order by sqlite_id
                             f'insert into {schema}.insights ('
                             ' id, content, category, importance,'
                             ' entities, source,'
-                            ' keywords, summary, semantic_facts,'
+                            ' keywords, summary,'
                             ' embedding,'
                             ' linked_at, enriched_at, created_at,'
                             ' updated_at, deleted_at,'
@@ -2835,7 +2819,7 @@ order by sqlite_id
                             ' queue_uuid,'
                             ' kw_tokens, superseded_by, author)'
                             ' values (%s, %s, %s, %s, %s::jsonb,'
-                            ' %s, %s::jsonb, %s, %s::jsonb,'
+                            ' %s, %s::jsonb, %s,'
                             ' %s, %s, %s, %s, %s, %s, %s, %s,'
                             ' %s, %s, %s, %s, %s)'
                             ' on conflict (id) do nothing',

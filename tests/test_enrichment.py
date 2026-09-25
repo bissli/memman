@@ -12,27 +12,23 @@ from tests.conftest import make_insight
 OLD = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
 
-def _make_enrichment_response(
-        entities=None, keywords=None,
-        summary='test summary', facts=None) -> str:
+def _make_enrichment_response(keywords=None, summary='test summary') -> str:
     """Build a mock LLM enrichment JSON response."""
     return json.dumps({
-        'entities': entities or ['Python', 'FastAPI'],
         'keywords': keywords or ['web', 'framework'],
         'summary': summary,
-        'semantic_facts': facts or ['Python is used'],
         })
 
 
 def _content_containing(*names) -> str:
-    """Body holding every name, so only the cap under test can drop one."""
+    """Content that names each of `names`."""
     return 'cap body ' + ' '.join(names)
 
 
 def _read_enrichment_columns(db, insight_id: str) -> dict:
     """Read enrichment columns directly from DB."""
     row = db._conn.execute(
-        'SELECT keywords, summary, semantic_facts, entities'
+        'SELECT keywords, summary, entities'
         ' FROM insights WHERE id = ?',
         (insight_id,)).fetchone()
     if row is None:
@@ -40,8 +36,7 @@ def _read_enrichment_columns(db, insight_id: str) -> dict:
     return {
         'keywords': json.loads(row[0]) if row[0] else None,
         'summary': row[1],
-        'semantic_facts': json.loads(row[2]) if row[2] else None,
-        'entities': json.loads(row[3]) if row[3] else None,
+        'entities': json.loads(row[2]) if row[2] else None,
         }
 
 
@@ -61,20 +56,39 @@ class TestEnrichWithLLM:
 
         mock_client = MagicMock()
         mock_client.complete.return_value = _make_enrichment_response(
-            entities=['Python', 'FastAPI', 'Django'],
             keywords=['web', 'framework', 'comparison'],
-            summary='Comparing Python web frameworks',
-            facts=['FastAPI is faster', 'Django is mature'])
+            summary='Comparing Python web frameworks')
 
         result = enrich_with_llm(insight, mock_client)
 
         assert result['keywords'] == ['web', 'framework', 'comparison']
         assert result['summary'] == 'Comparing Python web frameworks'
-        assert result['semantic_facts'] == [
-            'FastAPI is faster', 'Django is mature']
-        assert 'Python' in result['entities']
-        assert 'FastAPI' in result['entities']
-        assert 'Django' in result['entities']
+
+    def test_enrichment_returns_only_keywords_and_summary(self):
+        """Verify the result carries no `entities` or `semantic_facts` key.
+
+        Mutation: `enrich_with_llm` copying the model's `entities`
+            or `semantic_facts` into its result dict, so a caller
+            reads fields outside the enrichment contract.
+        Oracle: the LLM body below carries its own `entities` and
+            `semantic_facts`, so a surviving key proves the drop
+            never happened, not that the mock omitted them.
+        """
+        insight = make_insight(
+            id='ks-1', content='Redis backs the session cache',
+            entities=['caller-tag'])
+
+        mock_client = MagicMock()
+        mock_client.complete.return_value = json.dumps({
+            'entities': ['Redis'],
+            'keywords': ['redis', 'cache'],
+            'summary': 'Redis backs the session cache',
+            'semantic_facts': ['Redis backs the session cache'],
+            })
+
+        result = enrich_with_llm(insight, mock_client)
+
+        assert set(result) == {'keywords', 'summary'}
 
     def test_llm_unavailable_returns_empty(self):
         """ConnectionError from LLM returns empty dict, no crash."""
@@ -151,72 +165,24 @@ class TestEnrichWithLLM:
         assert cols['keywords'] is None
         assert cols['summary'] is None
 
-    def test_entity_merge_deduplicates(self):
-        """LLM entities merge with existing without duplicates."""
-        insight = make_insight(
-            id='em-1', content='Python FastAPI web',
-            entities=['Python'])
+    def test_keywords_capped(self):
+        """An over-long LLM keyword list is capped to the salience limit.
 
-        mock_client = MagicMock()
-        mock_client.complete.return_value = _make_enrichment_response(
-            entities=['Python', 'FastAPI'])
-
-        result = enrich_with_llm(insight, mock_client)
-
-        assert 'Python' in result['entities']
-        assert 'FastAPI' in result['entities']
-        assert result['entities'].count('Python') == 1
-
-    def test_entity_merge_empty_llm(self):
-        """Empty LLM entities preserve existing regex entities."""
-        insight = make_insight(
-            id='ee-1', content='test content',
-            entities=['Go'])
-
-        mock_client = MagicMock()
-        mock_client.complete.return_value = _make_enrichment_response(
-            entities=[])
-
-        result = enrich_with_llm(insight, mock_client)
-        assert 'Go' in result['entities']
-
-    def test_entities_and_keywords_capped(self):
-        """Over-long LLM entity/keyword lists are capped to salience limits."""
-        from memman.graph.enrichment import MAX_ENRICH_ENTITIES
+        Mutation: dropping the `[:MAX_ENRICH_KEYWORDS]` slice, so an
+            over-eager model inflates the keyword-enriched embed.
+        Oracle: 40 proposed keywords capped at `MAX_ENRICH_KEYWORDS`.
+        """
         from memman.graph.enrichment import MAX_ENRICH_KEYWORDS
-        llm_names = [f'e{i}' for i in range(80)]
-        insight = make_insight(
-            id='cap-1', entities=[],
-            content=_content_containing(*llm_names))
+        insight = make_insight(id='cap-1', content='cap body')
         mock_client = MagicMock()
         mock_client.complete.return_value = json.dumps({
-            'entities': llm_names,
             'keywords': [f'k{i}' for i in range(40)],
             'summary': 'summary',
-            'semantic_facts': ['fact'],
             })
 
         result = enrich_with_llm(insight, mock_client)
 
-        assert len(result['entities']) == MAX_ENRICH_ENTITIES
         assert len(result['keywords']) == MAX_ENRICH_KEYWORDS
-
-    def test_entity_merge_malformed(self):
-        """Malformed entities field does not clobber existing."""
-        insight = make_insight(
-            id='ef-1', content='test content',
-            entities=['Docker'])
-
-        mock_client = MagicMock()
-        mock_client.complete.return_value = json.dumps({
-            'entities': 'not a list',
-            'keywords': ['test'],
-            'summary': 'test',
-            'semantic_facts': ['test'],
-            })
-
-        result = enrich_with_llm(insight, mock_client)
-        assert 'Docker' in result['entities']
 
 
 class TestReEmbed:
@@ -302,8 +268,7 @@ class TestEnrichmentPurity:
 
         mock_client = MagicMock()
         mock_client.complete.return_value = _make_enrichment_response(
-            keywords=['test'], summary='test summary',
-            facts=['fact one'])
+            keywords=['test'], summary='test summary')
 
         result = enrich_with_llm(insight, mock_client)
 
@@ -311,15 +276,13 @@ class TestEnrichmentPurity:
         assert result['summary'] == 'test summary'
 
         row = tmp_db._conn.execute(
-            'SELECT keywords, summary, semantic_facts'
+            'SELECT keywords, summary'
             ' FROM insights WHERE id = ?',
             ('pw-1',)).fetchone()
         assert row[0] is None, (
             'enrich_with_llm should not write keywords to DB')
         assert row[1] is None, (
             'enrich_with_llm should not write summary to DB')
-        assert row[2] is None, (
-            'enrich_with_llm should not write semantic_facts to DB')
 
     def test_markdown_fence_json_parsed(self):
         """LLM response wrapped in ```json fence is parsed correctly."""
@@ -383,35 +346,29 @@ def test_link_pending_relink_only_skips_enrich(tmp_db, tmp_backend):
 
 
 class TestLengthCaps:
-    """Per-string length guardrails on LLM entities and keywords (F5)."""
+    """Per-string length guardrails on LLM keywords (F5)."""
 
-    def test_overlong_entity_dropped_not_truncated(self):
-        """An over-long entity or keyword is dropped, never truncated.
+    def test_overlong_keyword_dropped_not_truncated(self):
+        """An over-long keyword is dropped, never truncated.
 
-        A truncated entity is still a valid exact-match key and still
-        lands in the embedding, preserving the pathology under a new
-        name.
+        A truncated keyword still lands in the enriched-text embed,
+        preserving the pathology under a new name.
 
         Mutation: truncating to `MAX_ENRICH_STRING_CHARS` instead of
             dropping.
         Oracle: neither the over-long value nor any prefix of it
-            appears in the result; the valid siblings survive.
+            appears in the result; the valid sibling survives.
         """
-        insight = make_insight(
-            id='cap-1', entities=[],
-            content=_content_containing('Redis', 'e' * 250, 'cache'))
+        insight = make_insight(id='cap-1', content='cap body')
         mock_client = MagicMock()
         mock_client.complete.return_value = _make_enrichment_response(
-            entities=['Redis', 'e' * 250],
             keywords=['cache', 'k' * 250])
         result = enrich_with_llm(insight, mock_client)
-        assert 'Redis' in result['entities']
-        assert all(not e.startswith('eee') for e in result['entities'])
         assert 'cache' in result['keywords']
         assert all(not k.startswith('kkk') for k in result['keywords'])
 
     def test_length_cap_boundary_sits_at_the_measured_200(self):
-        """A 200-char string survives; its 201-char sibling drops.
+        """A 200-char keyword survives; its 201-char sibling drops.
 
         The literals pin the fleet-measured constant itself, not
         just the comparison: a drift to 2000 (or a `>=` flip) is a
@@ -424,175 +381,33 @@ class TestLengthCaps:
         """
         at_cap = 'a' * 200
         over_cap = 'b' * 201
-        insight = make_insight(
-            id='cap-4', entities=[],
-            content=_content_containing(at_cap, over_cap, 'Redis'))
+        insight = make_insight(id='cap-4', content='cap body')
         mock_client = MagicMock()
         mock_client.complete.return_value = _make_enrichment_response(
-            entities=[at_cap, over_cap, 'Redis'],
-            keywords=['cache'])
+            keywords=[at_cap, over_cap, 'cache'])
         result = enrich_with_llm(insight, mock_client)
-        assert at_cap in result['entities']
-        assert over_cap not in result['entities']
-        assert 'Redis' in result['entities']
+        assert at_cap in result['keywords']
+        assert over_cap not in result['keywords']
+        assert 'cache' in result['keywords']
 
     def test_length_cap_applies_before_count_cap(self):
-        """20 valid + 3 over-long LLM entities yield 20, not 17.
+        """12 valid + 3 over-long keywords yield 12, not 9.
 
-        The 3 over-long inputs are listed FIRST and are LLM-proposed
-        (over-long USER entities survive by design), so a count-cap-
-        first ordering provably drops 3 valid entities from the tail.
+        The 3 over-long inputs are listed FIRST, so a count-cap-first
+        ordering provably drops 3 valid keywords from the tail.
 
         Mutation: applying the count cap before the length cap.
-        Oracle: exactly `MAX_ENRICH_ENTITIES` valid entities survive.
+        Oracle: exactly `MAX_ENRICH_KEYWORDS` valid keywords survive.
         """
-        from memman.graph.enrichment import MAX_ENRICH_ENTITIES
+        from memman.graph.enrichment import MAX_ENRICH_KEYWORDS
         overlong = [('x' * 250) + str(i) for i in range(3)]
-        valid = [f'entity-{i}' for i in range(MAX_ENRICH_ENTITIES)]
-        insight = make_insight(
-            id='cap-2', entities=[],
-            content=_content_containing(*(overlong + valid)))
+        valid = [f'keyword-{i}' for i in range(MAX_ENRICH_KEYWORDS)]
+        insight = make_insight(id='cap-2', content='cap body')
         mock_client = MagicMock()
         mock_client.complete.return_value = _make_enrichment_response(
-            entities=overlong + valid)
+            keywords=overlong + valid)
         result = enrich_with_llm(insight, mock_client)
-        assert result['entities'] == valid
-
-    def test_user_supplied_entities_are_not_capped(self):
-        """Over-long user `--entity` values survive; over-long LLM ones drop.
-
-        `merged` is seeded from `insight.entities`, which carries the
-        user's `--entity` values all the way down -- length-filtering
-        `merged` would drop over-long user entities.
-
-        Mutation: applying the length cap to `merged` instead of
-            `llm_entities`.
-        Oracle: a 250-char user entity is present in the result while
-            a 250-char LLM entity is absent.
-        """
-        long_user = 'u' * 250
-        insight = make_insight(
-            id='cap-3', entities=[long_user],
-            content=_content_containing('ok-entity', 'L' * 250))
-        mock_client = MagicMock()
-        mock_client.complete.return_value = _make_enrichment_response(
-            entities=['ok-entity', 'L' * 250])
-        result = enrich_with_llm(insight, mock_client)
-        assert long_user in result['entities']
-        assert 'ok-entity' in result['entities']
-        assert ('L' * 250) not in result['entities']
-
-    def test_user_supplied_entities_are_not_count_capped(self):
-        """A user list longer than the count cap survives whole.
-
-        `MAX_ENRICH_ENTITIES` exists to stop an over-eager model
-        inflating the entity graph, but `merged` is seeded from
-        `insight.entities`, which carries the user's `--entity` values.
-        Capping the merged list therefore binds caller input the CLI
-        already accepted and reported success for.
-
-        Mutation: applying the count cap to `merged` instead of to
-            the LLM's own contribution -- the defect this test was
-            written against.
-        Oracle: the hand-built 50-name user list, every name of
-            which must survive.
-        """
-        user = [f'user-{i:02d}' for i in range(50)]
-        insight = make_insight(
-            id='cap-4', content='cap body', entities=list(user))
-        mock_client = MagicMock()
-        mock_client.complete.return_value = _make_enrichment_response(
-            entities=['Redis'])
-
-        result = enrich_with_llm(insight, mock_client)
-
-        assert [e for e in user if e in result['entities']] == user
-
-    def test_the_count_cap_still_bounds_the_llm_contribution(self):
-        """The model cannot add more than the cap beside a user list.
-
-        Mutation: deleting the count cap outright rather than
-            scoping it to the LLM's contribution, which is the
-            inflation the constant exists to prevent.
-        Oracle: the count of result entities absent from the user's
-            own list, against `MAX_ENRICH_ENTITIES`.
-        """
-        from memman.graph.enrichment import MAX_ENRICH_ENTITIES
-        user = ['user-a', 'user-b']
-        llm_names = [f'llm-{i:02d}' for i in range(80)]
-        insight = make_insight(
-            id='cap-5', entities=list(user),
-            content=_content_containing(*llm_names))
-        mock_client = MagicMock()
-        mock_client.complete.return_value = _make_enrichment_response(
-            entities=llm_names)
-
-        result = enrich_with_llm(insight, mock_client)
-
-        added = [e for e in result['entities'] if e not in user]
-        assert len(added) == MAX_ENRICH_ENTITIES
-
-
-class TestRebuildEntityClearing:
-    """The rebuild path replaces a row's entity vocabulary."""
-
-    def test_rebuild_reset_row_drops_the_old_vocabulary(
-            self, tmp_db, tmp_backend):
-        """Verify a rebuild-reset row stores only the new entities.
-
-        Mutation: seeding `merged` from `insight.entities` on the
-            rebuild path, so the previous vocabulary survives and sits
-            first in stored order, spending the entity edge budget on
-            names the rebuild exists to replace.
-        Oracle: hand-computed - the stub returns the verbatim spans of
-            the two stored coined labels, so a replaced list is exactly
-            those two spans and a seeded list is all four.
-        """
-        insight = make_insight(
-            id='clr-1',
-            content='bgodin deployed the stack into us-east-1 today.',
-            entities=['Person: bgodin', 'AWS Region: us-east-1'])
-        insert_insight(tmp_db, insight)
-
-        mock_client = MagicMock()
-        mock_client.complete.return_value = _make_enrichment_response(
-            entities=['bgodin', 'us-east-1'])
-
-        link_pending(
-            tmp_backend, metadata_llm_client=mock_client, max_batch=1,
-            store_name='test', replace_entity_ids={'clr-1'})
-
-        stored = _read_enrichment_columns(tmp_db, 'clr-1')['entities']
-        assert stored == ['bgodin', 'us-east-1']
-
-    def test_never_enriched_row_keeps_caller_entities(
-            self, tmp_db, tmp_backend):
-        """Verify a first enrichment still seeds from the stored list.
-
-        Mutation: dropping the seed unconditionally, which destroys the
-            caller's `--entity` names on a row whose enrichment never
-            ran - they are recoverable from no schema column, oplog row
-            or queue hint.
-        Oracle: hand-computed - a row absent from `replace_entity_ids`
-            keeps its stored name beside the model's contribution, so
-            the list is the seed followed by the two new spans.
-        """
-        insight = make_insight(
-            id='clr-2',
-            content='bgodin deployed the stack into us-east-1 today.',
-            entities=['OPAD.W.25'])
-        insert_insight(tmp_db, insight)
-
-        mock_client = MagicMock()
-        mock_client.complete.return_value = _make_enrichment_response(
-            entities=['bgodin', 'us-east-1'])
-
-        link_pending(
-            tmp_backend, metadata_llm_client=mock_client, max_batch=1,
-            store_name='test')
-
-        stored = _read_enrichment_columns(tmp_db, 'clr-2')['entities']
-        assert stored == ['OPAD.W.25', 'bgodin', 'us-east-1']
+        assert result['keywords'] == valid
 
 
 class _SequenceClient:
@@ -611,12 +426,11 @@ class _SequenceClient:
         return self.responses.pop(0)
 
 
-# A body cut mid entity name while the provider reported a
-# finish_reason of `stop`, so nothing but the parse failure names it
-# as unusable.
-_CUT_MID_ENTITY_BODY = (
-    '{\n  "entities": [\n    "HANDOFF.md",\n'
-    '    "notes/environment-deployed-resources.')
+# A body cut mid keyword while the provider reported a finish_reason
+# of `stop`, so nothing but the parse failure names it as unusable.
+_CUT_MID_KEYWORD_BODY = (
+    '{\n  "keywords": [\n    "handoff",\n'
+    '    "environment-deployed-resources.')
 
 
 def test_enrichment_rerolls_a_body_that_does_not_parse():
@@ -625,14 +439,14 @@ def test_enrichment_rerolls_a_body_that_does_not_parse():
     Mutation: dropping the re-roll, so a cut body leaves the row
         unenriched while the drain stamps a prompt_version on it, and
         no later stage retries.
-    Oracle: the entities of the second response, and two calls.
+    Oracle: the keywords of the second response, and two calls.
     """
     insight = make_insight(content=_content_containing('Python'))
     client = _SequenceClient([
-        _CUT_MID_ENTITY_BODY,
-        _make_enrichment_response(entities=['Python'])])
+        _CUT_MID_KEYWORD_BODY,
+        _make_enrichment_response(keywords=['python'])])
     result = enrich_with_llm(insight, client)
-    assert result['entities'] == ['Python']
+    assert result['keywords'] == ['python']
     assert len(client.calls) == 2
 
 
@@ -647,7 +461,7 @@ def test_enrichment_does_not_reroll_a_body_that_parses():
         content=_content_containing('Python', 'FastAPI'))
     client = _SequenceClient([_make_enrichment_response()])
     result = enrich_with_llm(insight, client)
-    assert result['entities'] == ['Python', 'FastAPI']
+    assert result['keywords'] == ['web', 'framework']
     assert len(client.calls) == 1
 
 
@@ -661,47 +475,3 @@ def test_enrichment_rerolls_at_most_once():
     client = _SequenceClient(['not json', 'still not json', 'nor this'])
     assert enrich_with_llm(insight, client) == {}
     assert len(client.calls) == 2
-
-
-def test_enrich_drops_entities_absent_from_the_content():
-    """Only literal substrings of the row's own content survive.
-
-    Mutation: removing the verbatim filter, so a model-invented span
-    such as a CJK fragment spliced into an identifier is stored and
-    becomes an edge key no other row can ever match.
-    Oracle: hand-computed -- of the four returned names only the two
-    the content actually contains may remain.
-    """
-    insight = make_insight(
-        id='verbatim-1',
-        content='makedirs dedup runs before DriveS3 uploads')
-    client = MagicMock()
-    client.complete.return_value = _make_enrichment_response(
-        entities=['makedirs dedup', 'DriveS3',
-                  'makedirs dedup游戏副本lication',
-                  'CoinedThing'])
-
-    result = enrich_with_llm(insight, client)
-
-    assert result['entities'] == ['makedirs dedup', 'DriveS3']
-
-
-def test_enrich_keeps_a_caller_supplied_entity_absent_from_content():
-    """The verbatim filter bounds the MODEL, never the caller's seed.
-
-    Mutation: applying the verbatim filter to the merged list instead
-    of to the model's own names, which silently drops a --entity
-    value the CLI already validated and no re-enrichment restores.
-    Oracle: hand-computed -- the seed survives though it is no
-    substring of the content.
-    """
-    insight = make_insight(
-        id='verbatim-2', content='alpha beta',
-        entities=['operator-supplied-tag'])
-    client = MagicMock()
-    client.complete.return_value = _make_enrichment_response(
-        entities=['alpha'])
-
-    result = enrich_with_llm(insight, client)
-
-    assert result['entities'] == ['operator-supplied-tag', 'alpha']

@@ -139,15 +139,15 @@ def dedupe_entities(entities: list[str]) -> list[str]:
     Parameters
     ----------
     entities : list[str]
-        Entity names as written by a caller or the enrichment, in
-        priority order.
+        Entity names as the caller typed them or the replaced row
+        carried them.
 
     Returns
     -------
     list[str]
         The names in input order, each stripped, none empty, one per
         name compared case-insensitively. The FIRST form of a name
-        wins, so the highest-priority writer decides its casing.
+        decides its casing.
 
     Notes
     -----
@@ -323,15 +323,14 @@ class EnrichmentCoverage:
     """Per-field NULL counts for the enrichment columns on `insights`.
 
     `memman doctor` consumes this to report which enrichment fields
-    (embedding, keywords, summary, semantic_facts) have unfilled
-    values among active insights.
+    (embedding, keywords, summary) have unfilled values among active
+    insights.
     """
 
     total_active: int = 0
     missing_embedding: int = 0
     missing_keywords: int = 0
     missing_summary: int = 0
-    missing_semantic_facts: int = 0
 
 
 @dataclass

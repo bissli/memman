@@ -3,9 +3,9 @@
 Structure:
 
 1. Quality check - advisory warnings only.
-2. Planning phase - the write's text, as the agent wrote it, is the
-   one row: embed it, then enrich the row and re-embed it if the
-   enrichment carries keywords. **No DB writes.**
+2. Planning phase - enrich the row, then embed it once:
+   keyword-enriched text when the enrichment carries keywords, else
+   the content alone. **No DB writes.**
 3. Apply phase - one transaction commits the replace link, insert,
    edges, enrichment update, and stamp.
 
@@ -99,6 +99,11 @@ class FactPlan:
     targets : list[tuple[str, str]]
         `(insight_id, relation)`: the `replace` target; empty for an
         add.
+    embed_vec : list[float] or None
+        Vector of `build_enriched_text(content, keywords)`; None when
+        the embed failed.
+    enrichment : dict[str, Any]
+        `keywords` and `summary`; empty when enrichment failed.
     """
 
     action: str
@@ -106,7 +111,6 @@ class FactPlan:
     targets: list[tuple[str, str]] = field(default_factory=list)
     embed_vec: list[float] | None = None
     enrichment: dict[str, Any] = field(default_factory=dict)
-    enriched_vec: list[float] | None = None
 
 
 def run_remember(
@@ -153,16 +157,6 @@ def run_remember(
     if plan.action == 'replace':
         embed_cache.pop(replaced_id, None)
 
-    keywords = plan.enrichment.get('keywords', [])
-    if keywords and ec is not None and ec.available():
-        try:
-            plan.enriched_vec = ec.embed(
-                build_enriched_text(plan.fact_insight.content, keywords))
-        except EmbedCredentialError:
-            raise
-        except Exception as exc:
-            logger.warning(f'enriched-text embed failed: {exc}')
-
     with backend.transaction():
         result = _apply_plan(
             backend, plan, embed_cache, store_name=store_name)
@@ -202,6 +196,13 @@ def _plan_fact(
     tuple[FactPlan, int]
         The plan - an add, or a replace of `replaced_id` - and the
         LLM calls made, 0 or 1.
+
+    Raises
+    ------
+    EmbedCredentialError
+        The store's embed provider has no credentials. An HTTP or
+        runtime embed failure is logged instead, and the row is
+        planned without a vector.
     """
     fact_insight = Insight(
         id=str(uuid.uuid4()), content=fact_text,
@@ -211,15 +212,6 @@ def _plan_fact(
         session_id=parent.session_id, queue_uuid=parent.queue_uuid,
         author=parent.author)
 
-    fact_vec = None
-    try:
-        fact_vec = ec.embed(fact_text)
-    except EmbedCredentialError:
-        raise
-    except (httpx.HTTPError, RuntimeError) as exc:
-        logger.warning(
-            f'fact embed failed; row stored without vector: {exc}')
-
     calls = 0
     try:
         enrichment = enrich_with_llm(fact_insight, metadata_llm_client)
@@ -227,8 +219,15 @@ def _plan_fact(
     except Exception:
         enrichment = {}
 
-    if enrichment:
-        fact_insight.entities = enrichment.get('entities', [])
+    fact_vec = None
+    try:
+        fact_vec = ec.embed(
+            build_enriched_text(fact_text, enrichment.get('keywords', [])))
+    except EmbedCredentialError:
+        raise
+    except (httpx.HTTPError, RuntimeError) as exc:
+        logger.warning(
+            f'fact embed failed; row stored without vector: {exc}')
 
     return FactPlan(
         action='replace' if replaced_id else 'add',
@@ -368,7 +367,7 @@ def _apply_plan(
         fi.created_at = stored.created_at
         fi.updated_at = stored.updated_at
 
-    final_vec = plan.enriched_vec or plan.embed_vec
+    final_vec = plan.embed_vec
     embedded = final_vec is not None
     if final_vec is not None:
         # The new row is not in the cache yet, and the semantic-edge
@@ -415,8 +414,7 @@ def _apply_plan(
         backend.nodes.update_enrichment(
             fi.id,
             keywords=plan.enrichment.get('keywords', []),
-            summary=plan.enrichment.get('summary', ''),
-            semantic_facts=plan.enrichment.get('semantic_facts', []))
+            summary=plan.enrichment.get('summary', ''))
         backend.nodes.stamp_enriched(fi.id)
 
     if linking and not linked_targets:
@@ -437,8 +435,6 @@ def _apply_plan(
         'enrichment': {
             'keywords': plan.enrichment.get('keywords', []),
             'summary': plan.enrichment.get('summary', ''),
-            'entities': plan.enrichment.get('entities', []),
-            'semantic_facts': plan.enrichment.get('semantic_facts', []),
             },
         'embedded': embedded,
         }

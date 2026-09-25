@@ -136,7 +136,7 @@ def test_insight_baselines_name_no_dropped_column():
     """
     dropped = (
         'content_hash', 'corroboration_count', 'model_id',
-        'access_count', 'last_accessed_at')
+        'access_count', 'last_accessed_at', 'semantic_facts')
     for name, ddl in (
             ('sqlite', _BASELINE_SCHEMA), ('postgres', PG_BASELINE_SCHEMA)):
         found = [column for column in dropped if column in ddl]

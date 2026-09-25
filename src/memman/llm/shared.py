@@ -18,24 +18,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger('memman')
 
 # Guardrail bounding pathological LLM output (a sentence or paragraph
-# emitted as one entity/keyword), NOT a retrieval tunable -- it needs
+# emitted as one keyword), NOT a retrieval tunable -- it needs
 # no ablation-harness sweep. 200 chars clears the long legitimate
 # forms a name can take: a cloud ARN, a directory distinguished name,
 # a Windows path.
 MAX_ENRICH_STRING_CHARS = 200
 
 
-def drop_overlong_strings(
-        values: list[str], *, kind: str, owner: str) -> list[str]:
+def drop_overlong_strings(values: list[str], *, owner: str) -> list[str]:
     """Drop strings over `MAX_ENRICH_STRING_CHARS`, logging each drop.
 
     Parameters
     ----------
     values : list[str]
-        LLM-proposed entities or keywords. Never pass user-supplied
-        values -- the CLI validates them before enqueue.
-    kind : str
-        'entity' or 'keyword', for the drop log line.
+        LLM-proposed keywords. Never pass user-supplied values -- the
+        CLI validates them before enqueue.
     owner : str
         Insight id (or producer label) named in the drop log line.
 
@@ -46,67 +43,19 @@ def drop_overlong_strings(
 
     Notes
     -----
-    - Drop, never truncate: a truncated entity is still a valid
-      exact-match edge key and still lands in the embedding,
-      preserving the pathology under a new name.
+    - Drop, never truncate: a truncated keyword still lands in the
+      enriched-text embed, preserving the pathology under a new name.
     - The cap is a guardrail bounding pathological LLM output, NOT a
       retrieval tunable: it needs no ablation-harness sweep. It is
       set to clear the long legitimate forms a name can take, not
       tuned for retrieval quality.
-    - Extraction-side drops are logged by content prefix, not
-      insight id: no insight exists yet at extraction time, so the
-      spec's log-the-id requirement is unmeetable there by
-      construction.
     """
     kept = []
     for v in values:
         if len(v) > MAX_ENRICH_STRING_CHARS:
             logger.info(
-                f'dropped over-long {kind} ({len(v)} chars) for'
+                f'dropped over-long keyword ({len(v)} chars) for'
                 f' {owner}: {v[:40]!r}...')
-            continue
-        kept.append(v)
-    return kept
-
-
-def drop_non_verbatim_entities(
-        values: list[str], *, content: str, owner: str) -> list[str]:
-    """Drop entities that are no literal substring of `content`.
-
-    Parameters
-    ----------
-    values : list[str]
-        LLM-proposed entities. Never pass user-supplied values -- the
-        CLI validates those and no re-enrichment restores one dropped.
-    content : str
-        The row's own text, which every entity must appear inside.
-    owner : str
-        Insight id (or producer label) named in the drop log line.
-
-    Returns
-    -------
-    list[str]
-        The surviving values, order preserved.
-
-    Notes
-    -----
-    - Matching folds case and surrounding space, the same key
-      `store/edge.py` joins on, so a name kept here is a name that
-      can reach an edge.
-    - This enforces in code the rule the enrichment prompt already
-      states. A name absent from the text can only ever match
-      another row carrying the identical invention, so it is an edge
-      key with no reachable partner.
-    - Model-invariant by construction: it asks what the text
-      contains, never what a given model tends to emit, so it does
-      not weaken as models improve.
-    """
-    src = content.lower()
-    kept = []
-    for v in values:
-        if v.strip().lower() not in src:
-            logger.info(
-                f'dropped non-verbatim entity for {owner}: {v[:40]!r}')
             continue
         kept.append(v)
     return kept

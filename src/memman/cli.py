@@ -433,10 +433,8 @@ def _validate_caller_entities(entities: tuple[str, ...]) -> list[str]:
     - The 200-char per-entity cap guards against a pathological
       argument rather than a real name.
     - MAX_ROW_ENTITIES bounds the typed list. It does NOT bound what
-      a row holds: the enrichment adds up to MAX_ENRICH_ENTITIES names
-      on top of whatever seeds it, and the list a `replace` inherits
-      passes whole however long it is, so a stored row can carry more
-      than the cap either way.
+      a row holds: the list a `replace` inherits passes whole however
+      long it is.
     - Neither cap is the binding constraint on usefulness.
       `graph/entity.py` caps entity edges at MAX_TOTAL_ENTITY_EDGES
       = 50 and counts two per target (forward and reverse) at
@@ -1803,10 +1801,9 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
       through verbatim (idempotency rides on the queue uuid, so a
       non-null source hint no longer suppresses the replay check).
       Each of the four overrides when typed, `--entity ''` included,
-      which clears the list; enrichment then rebuilds it from the new
-      content.
+      which clears the list, and the successor stores it empty.
     - The content lands as one row exactly as typed; enrichment still
-      runs and rebuilds keywords, summary and entities.
+      runs and rebuilds keywords and summary.
     - `--session` does not inherit: the successor carries the session
       that wrote it, so it enters that session's backbone chain.
       It also inherits the replaced insight's edges, including that
@@ -4006,8 +4003,7 @@ def _settle_rebuilt_edges(
     Notes
     -----
     - A rebuild's per-row pass deletes each row's auto edges in BOTH
-      directions before recreating them, against a corpus whose
-      vocabulary is still converging, so it leaves edges a clean
+      directions before recreating them, so it leaves edges a clean
       derivation never writes. One global re-derive repairs the whole
       store at no LLM cost, which is why no operator command is owed.
     - `reindex_auto_edges` ends in `clear_linked_at`, so the relink
@@ -4127,7 +4123,6 @@ def _graph_rebuild_stale_only(
             for i in range(0, total_count, MAX_LINK_BATCH):
                 batch_ids = stale_ids[i:i + MAX_LINK_BATCH]
                 backend.nodes.reset_for_rebuild(batch_ids)
-                reset_ids = set(batch_ids)
 
                 while True:
                     count = link_pending(
@@ -4135,8 +4130,7 @@ def _graph_rebuild_stale_only(
                         metadata_llm_client=metadata_llm_client,
                         embed_client=ec,
                         on_progress=_on_progress,
-                        store_name=store_name,
-                        replace_entity_ids=reset_ids)
+                        store_name=store_name)
                     processed += count
                     if count == 0:
                         break
@@ -4243,7 +4237,6 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
             for i in range(0, total_count, MAX_LINK_BATCH):
                 batch_ids = all_ids[i:i + MAX_LINK_BATCH]
                 backend.nodes.reset_for_rebuild(batch_ids)
-                reset_ids = set(batch_ids)
 
                 while True:
                     count = link_pending(
@@ -4251,8 +4244,7 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
                         metadata_llm_client=metadata_llm_client,
                         embed_client=ec,
                         on_progress=_on_progress,
-                        store_name=store_name,
-                        replace_entity_ids=reset_ids)
+                        store_name=store_name)
                     processed += count
                     if count == 0:
                         break

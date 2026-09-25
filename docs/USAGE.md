@@ -88,7 +88,7 @@ ambiguous prefix is refused with the number of rows it matches.
 | ----------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `--cat`     | `fact`  | Category: `preference`, `decision`, `fact`, `insight`, `context`                                                                  |
 | `--imp`     | `3`     | Importance 1-5, a sort key stored as passed                                                                                       |
-| `--entity`  |         | Entity name (repeatable; merged with enrichment's)                                                                                |
+| `--entity`  |         | Entity name (repeatable); the row stores exactly these names                                                                      |
 | `--source`  | `user`  | Source: `user` (default), `agent`, or a locator for imported material; stored verbatim; recall filters by exact match             |
 | `--session` | (env)   | Session id for the temporal chain; defaults to `$MEMMAN_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID`. No session, no backbone edge |
 
@@ -443,7 +443,7 @@ The variables below are not installable - they are read from the env file on dem
 `memman remember` appends one row to the queue in ~50 ms on the host session - no LLM calls, no embeddings, no edges. The full pipeline runs out of band:
 
 1. **Tier 1 (host)** - append a row to `~/.memman/queue.db` with `status='pending'`, the raw text, and any `--cat`/`--imp`/`--entity` hints. Returns `{action: queued, queue_id, queue_uuid, store}`. The `queue_uuid` is the join key: it is stamped on every insight this write produces and outlives the queue row, which `purge_done` drops about a minute after the drain.
-2. **Tier 2 (worker)** - systemd timer (Linux), launchd agent (macOS), or `memman scheduler serve` PID 1 (containers) invokes `memman scheduler drain --timeout 60` every 60 s under an `flock` on `~/.memman/drain.lock`. Per row: quality gate → embed → add, or replace the row `replace <id>` names → fast edges (temporal + entity + semantic) → enrichment → re-embed → rebuild auto edges → mark done.
+2. **Tier 2 (worker)** - systemd timer (Linux), launchd agent (macOS), or `memman scheduler serve` PID 1 (containers) invokes `memman scheduler drain --timeout 60` every 60 s under an `flock` on `~/.memman/drain.lock`. Per row: quality gate → enrichment → embed (keyword-enriched text, or content alone) → add, or replace the row `replace <id>` names → edges (temporal + entity + semantic) → mark done.
 
 The host session never blocks on the network. Newly stored memories become recallable on the next drain tick (default 60 s).
 

@@ -34,7 +34,7 @@
         <mxCell id="fg_t3" value="proximity w=1/(1+hours_diff)" style="rounded=1;strokeColor=#6c8ebf;strokeWidth=1;dashed=1;fontSize=8;fontColor=#6c8ebf;" edge="1" parent="1" source="fg_n1" target="fg_n5">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="fg_e_label" value="&lt;b&gt;② Entity Graph&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;co-occurrence on shared entities&lt;br&gt;LLM-extracted (enrich_with_llm)&lt;br&gt;IDF-weighted&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="fg_e_label" value="&lt;b&gt;② Entity Graph&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;co-occurrence on shared entities&lt;br&gt;caller-supplied (--entity)&lt;br&gt;IDF-weighted&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="280" y="550" width="200" height="60" as="geometry" />
         </mxCell>
         <mxCell id="fg_e1" value="entity: SQLite" style="rounded=1;strokeColor=#82b366;strokeWidth=2;fontSize=9;fontColor=#82b366;" edge="1" parent="1" source="fg_n1" target="fg_n3">

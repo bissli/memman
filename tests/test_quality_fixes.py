@@ -1,8 +1,5 @@
 """Entity SQL case-insensitivity, edge caps and temporal constants."""
 
-from datetime import datetime, timezone
-
-from memman.graph.enrichment import enrich_with_llm
 from memman.graph.entity import create_entity_edges
 from memman.graph.temporal import create_temporal_edge
 from memman.store.edge import count_insights_with_entity
@@ -86,34 +83,6 @@ class TestUpdateEntitiesDedup:
         from memman.store.node import get_insight_by_id
         ins = get_insight_by_id(tmp_db, 'ud-2')
         assert len(ins.entities) == 3
-
-
-class TestEnrichmentMergeCaseInsensitive:
-    """Enrichment merge prevents case-variant duplicates."""
-
-    def test_merge_skips_case_variant(self):
-        """LLM entity 'thesis' is not added when 'Thesis' exists."""
-        import json
-        from unittest.mock import MagicMock
-
-        insight = make_insight(
-            id='em-ci-1', content='Thesis analysis',
-            entities=['Thesis'],
-            created_at=datetime(2024, 1, 1, tzinfo=timezone.utc))
-
-        mock_client = MagicMock()
-        mock_client.complete.return_value = json.dumps({
-            'entities': ['thesis', 'analysis'],
-            'keywords': ['thesis'],
-            'summary': 'test',
-            'semantic_facts': ['test'],
-            })
-
-        result = enrich_with_llm(insight, mock_client)
-        lower_entities = [e.lower() for e in result['entities']]
-        assert lower_entities.count('thesis') == 1
-        assert 'analysis' in lower_entities
-
 
 
 class TestTemporalConstants:

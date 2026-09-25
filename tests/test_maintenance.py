@@ -80,10 +80,8 @@ def test_maintenance_reenriches_stranded_row(tmp_db, tmp_backend):
     ctx.ec.available.return_value = False
     ctx.llm_client = MagicMock()
     ctx.llm_client.complete.return_value = json.dumps({
-        'entities': ['Python'],
         'keywords': ['web', 'framework'],
         'summary': 'Python web frameworks',
-        'semantic_facts': ['Python has web frameworks'],
         })
 
     _run_per_store_maintenance(ctx, 'default', time.monotonic() + 60)
@@ -110,8 +108,7 @@ def test_idle_store_relinks_after_constants_drift():
     from memman.maintenance import _reindex_all_stores_if_drift
     from memman.store.factory import open_backend
     from memman.store.model import format_timestamp
-    from memman.store.node import (insert_insight, stamp_enriched,
-                                   stamp_linked)
+    from memman.store.node import insert_insight, stamp_enriched, stamp_linked
 
     data_dir = os.environ[config.DATA_DIR]
     store = 'idlestore'
@@ -135,15 +132,16 @@ def test_idle_store_relinks_after_constants_drift():
         backend2.close()
 
 
-def test_stranded_reenrich_replaces_entities_rather_than_accreting(
+def test_stranded_reenrich_keeps_the_stored_entities(
             tmp_db, tmp_backend, monkeypatch):
-    """A re-enriched stranded row keeps only the new draw's entities.
+    """A re-enriched stranded row keeps its stored entities as given.
 
-    Mutation: dropping `replace_entity_ids` from the `link_pending`
-    call in `_run_per_store_maintenance`, which lets `seed_entities`
-    default to True and union the draw onto the stored list.
-    Oracle: hand-computed list -- the stored row must equal exactly
-    what the stubbed enrichment returned, with the stale name gone.
+    Mutation: the re-enrich step in `_run_per_store_maintenance`
+        overwriting `insight.entities` with the enrichment's returned
+        list, so a re-draw that names no entities at all empties the
+        row instead of leaving the caller's list untouched.
+    Oracle: the stale name the row was seeded with, against the
+        stored row.
     """
     insight = make_insight(
         id='stranded-1', content='alpha beta',
@@ -156,10 +154,7 @@ def test_stranded_reenrich_replaces_entities_rather_than_accreting(
     import memman.graph.enrichment as enrichment_mod
     monkeypatch.setattr(
         enrichment_mod, 'enrich_with_llm',
-        lambda ins, client, *, seed_entities=True: {
-            'entities': (['alpha', 'beta'] if not seed_entities
-                         else list(ins.entities) + ['alpha', 'beta']),
-            'keywords': [], 'summary': '', 'semantic_facts': []})
+        lambda ins, client: {'keywords': [], 'summary': ''})
 
     ctx = MagicMock()
     ctx.backend = tmp_backend
@@ -171,4 +166,4 @@ def test_stranded_reenrich_replaces_entities_rather_than_accreting(
     _run_per_store_maintenance(ctx, 'default', time.monotonic() + 60)
 
     stored = tmp_backend.nodes.get('stranded-1')
-    assert stored.entities == ['alpha', 'beta']
+    assert stored.entities == ['stale-coinage']

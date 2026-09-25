@@ -32,7 +32,27 @@ def check_integrity(backend: Backend) -> dict[str, Any]:
 
 
 def check_enrichment_coverage(backend: Backend) -> dict[str, Any]:
-    """Check that embedding, keywords, summary, semantic_facts are populated."""
+    """Grade how many active rows carry an embedding, keywords and a summary.
+
+    Parameters
+    ----------
+    backend : Backend
+        The open store.
+
+    Returns
+    -------
+    dict[str, Any]
+        `name` is `enrichment_coverage`. `status` is `pass` when no
+        active row misses a field, `warn` at 90 percent coverage or
+        above, `fail` below. `detail` carries `total_active`, the
+        three `missing_*` counts and `coverage_pct`; an empty store
+        passes at 100.0.
+
+    Notes
+    -----
+    - coverage_pct = (total_active - max(missing_*)) / total_active *
+      100, so the worst single field decides the grade.
+    """
     cov = backend.nodes.enrichment_coverage()
     total = cov.total_active
     if total == 0:
@@ -40,7 +60,7 @@ def check_enrichment_coverage(backend: Backend) -> dict[str, Any]:
                 'detail': {'total_active': 0, 'coverage_pct': 100.0}}
     missing_any = max(
         cov.missing_embedding, cov.missing_keywords,
-        cov.missing_summary, cov.missing_semantic_facts)
+        cov.missing_summary)
     coverage_pct = round((total - missing_any) / total * 100, 1)
     if missing_any == 0:
         status = 'pass'
@@ -56,7 +76,6 @@ def check_enrichment_coverage(backend: Backend) -> dict[str, Any]:
             'missing_embedding': cov.missing_embedding,
             'missing_keywords': cov.missing_keywords,
             'missing_summary': cov.missing_summary,
-            'missing_semantic_facts': cov.missing_semantic_facts,
             'coverage_pct': coverage_pct,
             },
         }
@@ -370,7 +389,7 @@ def check_queue_backlog(data_dir: str) -> dict[str, Any]:
 EXPECTED_INSIGHT_COLUMNS = {
     'prompt_version', 'embedding_model',
     'linked_at', 'enriched_at',
-    'summary', 'keywords', 'semantic_facts',
+    'summary', 'keywords',
     'session_id', 'queue_uuid',
     'superseded_by', 'author',
     }

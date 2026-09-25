@@ -1098,9 +1098,7 @@ class TestLink:
             the stored row, which would report 0.3 after the upsert
             kept 0.9.
         Oracle: the second call's own output, against the weight the
-            first call stored. The type is `semantic` because the
-            enrichment pass mints an entity edge at weight 1.0 between
-            any two insights, which would satisfy `>= 0.9` on its own.
+            first call stored.
         """
         r1 = invoke(runner, [
             'remember', 'chose SQLite because embedded serverless'])
@@ -1126,7 +1124,15 @@ class TestSingleTierEnrichment:
     """Remember runs enrichment inline on the drain worker."""
 
     def test_output_has_enrichment_dict(self, runner):
-        """Worker enrichment lands keywords/summary/entities on the row."""
+        """Verify the drain stores the enrichment keywords on the row.
+
+        Mutation: `_apply_plan` stamping `enriched_at` without the
+            `update_enrichment` write, so the row reads as enriched,
+            holds no keywords, and no stranded-row sweep revisits it.
+        Oracle: the autouse mock LLM, which echoes the enrichment
+            prompt's opening words, the content's first word among
+            them, as keywords.
+        """
         from memman.store.db import open_read_only, store_dir
 
         result = invoke(runner, [
@@ -1139,17 +1145,12 @@ class TestSingleTierEnrichment:
         db = open_read_only(store_dir(data_dir, 'default'))
         try:
             row = db._query(
-                'SELECT keywords, summary, semantic_facts, entities'
-                ' FROM insights WHERE id = ?',
+                'SELECT keywords FROM insights WHERE id = ?',
                 (iid,)).fetchone()
         finally:
             db.close()
         assert row is not None
-        keywords, summary, semantic_facts, entities = row
-        assert keywords is not None
-        assert summary is not None
-        assert semantic_facts is not None
-        assert entities is not None
+        assert 'redis' in json.loads(row[0])
 
     def test_no_link_pending_in_output(self, runner):
         """Output no longer includes link_pending field."""
@@ -1368,19 +1369,17 @@ class TestGraphRebuild:
             'should preserve created_by=claude')
         db.close()
 
-    def test_rebuild_replaces_the_stored_entity_vocabulary(
+    def test_rebuild_keeps_the_stored_entity_list(
             self, tmp_path, monkeypatch):
-        """Rebuild stores the new entity names, not both vocabularies.
+        """Rebuild keeps the stored entity list, whatever the LLM returns.
 
-        Mutation: the rebuild loop omitting `replace_entity_ids`, so
-            `link_pending` seeds from the stored list and the old
-            coined labels survive ahead of the new names, where
-            `create_entity_edges` spends the edge budget before it
-            reaches one of them.
-        Oracle: the enrichment stub derives entities from capitalized
-            words in the body it is sent, so a `Database: Postgres`
-            label that body does not contain can only survive by being
-            seeded.
+        Mutation: the rebuild loop replacing a row's entities with the
+            re-enrichment draw, so a redrawn body that names none of
+            the stored labels erases them.
+        Oracle: the stubbed LLM body names an entity the stored list
+            lacks (`Warrant`, a literal substring of the content) and
+            omits every stored label; the stored list surviving
+            unchanged proves nothing from the draw was adopted.
         """
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
@@ -1400,6 +1399,20 @@ class TestGraphRebuild:
             " WHERE id = 'vocab-1'")
         db.close()
 
+        def fake_complete(self, system, user, **kwargs):
+            if 'keyword' in system.lower() and 'enrichment' in system.lower():
+                return json.dumps({
+                    'entities': ['Warrant'],
+                    'keywords': ['ledger'],
+                    'summary': 'a ledger migration',
+                    'semantic_facts': ['Postgres replaced SQLite'],
+                    })
+            return json.dumps({'facts': [{'text': user, 'category': 'fact',
+                                          'entities': []}]})
+
+        monkeypatch.setattr(
+            'memman.llm.client.MemmanLLMClient.complete', fake_complete)
+
         runner = CliRunner()
         result = runner.invoke(cli, [
             '--data-dir', data_dir, 'graph', 'rebuild'])
@@ -1411,9 +1424,7 @@ class TestGraphRebuild:
             ).fetchone()[0]
         db.close()
         stored = json.loads(raw)
-        assert 'Database: Postgres' not in stored
-        assert 'Library: SQLite' not in stored
-        assert {'Postgres', 'SQLite', 'Warrant'} <= set(stored)
+        assert stored == ['Database: Postgres', 'Library: SQLite']
 
 
 @pytest.mark.scheduler_stopped
@@ -1434,7 +1445,7 @@ class TestGraphRebuildAutoEdges:
             writes no edge for it at all.
         Oracle: a differential re-implementation - `reindex_auto_edges`
             deletes every auto edge in one pre-pass and rebuilds from
-            the converged vocabulary, so its output is the set a
+            the stored entity list, so its output is the set a
             finished rebuild owes.
         """
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
@@ -1450,7 +1461,8 @@ class TestGraphRebuildAutoEdges:
             group = 'Redis' if n < 4 else 'Kafka'
             insert_insight(db, make_insight(
                 id=f'ae-{n}',
-                content=f'Postgres carries the {group} ledger, note {n}.'))
+                content=f'Postgres carries the {group} ledger, note {n}.',
+                entities=['Postgres', group]))
         db.close()
 
         result = CliRunner().invoke(cli, [
@@ -1524,7 +1536,7 @@ class TestGraphRebuildStaleOnly:
             id='fresh-1', content='Fresh insight already on active config',
             prompt_version=active_pv))
         for iid in ('drift-1', 'fresh-1'):
-            update_enrichment(db, iid, ['kw'], 'sum', ['fact'])
+            update_enrichment(db, iid, ['kw'], 'sum')
             db._conn.execute(
                 'UPDATE insights SET linked_at = ?, enriched_at = ?'
                 ' WHERE id = ?',

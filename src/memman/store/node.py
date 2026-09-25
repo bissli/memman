@@ -307,16 +307,14 @@ def update_entities(db: 'DB', id: str, entities: list[str]) -> None:
 
 
 def update_enrichment(
-        db: 'DB', id: str, keywords: list[str],
-        summary: str, semantic_facts: list[str]) -> None:
+        db: 'DB', id: str, keywords: list[str], summary: str) -> None:
     """Update LLM enrichment columns for an insight."""
     sql = """
 update insights
-set keywords = ?, summary = ?, semantic_facts = ?
+set keywords = ?, summary = ?
 where id = ?
 """
-    db._exec(sql, (
-        json.dumps(keywords), summary, json.dumps(semantic_facts), id))
+    db._exec(sql, (json.dumps(keywords), summary, id))
 
 
 def count_active_insights(db: 'DB') -> int:

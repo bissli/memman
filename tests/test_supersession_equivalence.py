@@ -93,9 +93,9 @@ def _build(backend, *, supersede):
         backend.nodes.update_embedding(
             rid, _mock_embed(embedder, content), 'test-model')
     backend.nodes.update_enrichment(
-        'p-1', keywords=['kombu'], summary='old broker', semantic_facts=['f'])
+        'p-1', keywords=['kombu'], summary='old broker')
     backend.nodes.update_enrichment(
-        'q-1', keywords=['beta'], summary='dashboard', semantic_facts=['g'])
+        'q-1', keywords=['beta'], summary='dashboard')
     for source_id, target_id, edge_type, weight in _EDGES:
         backend.edges.upsert(Edge(
             source_id=source_id, target_id=target_id,

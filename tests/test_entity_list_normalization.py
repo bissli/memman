@@ -114,33 +114,37 @@ def test_the_stored_and_reported_entity_lists_agree(tmp_backend):
     assert len([e for e in stored if e.lower() == 'kombu']) == 1
 
 
-def test_a_whitespace_only_entity_from_the_model_is_dropped(tmp_backend):
-    """Verify a blank name never reaches the stored entity list.
+def test_a_write_stores_exactly_the_callers_entities(tmp_backend, monkeypatch):
+    """Verify a write's stored entities equal the caller's list exactly.
 
-    A blank string is truthy, so an `if e` filter keeps it and its
-    merge key is the empty string.
-
-    Mutation: filtering on the raw value rather than the stripped
-        one, in either the enrichment merge or the fact extractor.
-    Oracle: the stored entity list, which must hold no name that is
-        empty after stripping.
+    Mutation: `remember.py`'s `_plan_fact` overwriting
+        `fact_insight.entities` with `enrichment.get('entities', [])`
+        after the LLM call, so a model that returns its own entities
+        replaces the caller's list instead of the row keeping it.
+    Oracle: the caller's `entities=['caller-tag']`, against the
+        stored row -- the LLM body below carries its own entities and
+        semantic_facts so this stays toothed once the conftest mock
+        drops those fields.
     """
     import json as _json
-    from unittest.mock import MagicMock
 
-    from memman.graph.enrichment import enrich_with_llm
+    def fake_complete(self, system, user, **kwargs):
+        return _json.dumps({
+            'entities': ['Postgres', 'SQLite', 'Warrant'],
+            'keywords': ['k'],
+            'summary': 's',
+            'semantic_facts': ['f'],
+            })
 
-    insight = make_insight(
-        id='ws-1', content='body naming Redis', entities=[])
-    client = MagicMock()
-    client.complete.return_value = _json.dumps({
-        'entities': ['   ', '\t', 'Redis'],
-        'keywords': ['k'],
-        'summary': 's',
-        'semantic_facts': ['f'],
-        })
+    monkeypatch.setattr(
+        'memman.llm.client.MemmanLLMClient.complete', fake_complete)
 
-    result = enrich_with_llm(insight, client)
+    content = 'Postgres replaced SQLite for the Warrant ledger.'
+    parent = _parent(content)
+    parent.entities = ['caller-tag']
+    res = run_remember(
+        tmp_backend, parent, content,
+        ec=bound_embedder(tmp_backend), store_name='test')
 
-    assert [e for e in result['entities'] if not e.strip()] == []
-    assert 'Redis' in result['entities']
+    stored = tmp_backend.nodes.get(res['facts'][0]['id']).entities
+    assert stored == ['caller-tag']

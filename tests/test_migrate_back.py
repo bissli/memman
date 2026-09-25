@@ -199,7 +199,6 @@ _FIDELITY_ROW = {
     'source': 'fidelity-test',
     'keywords': ['kw-one', 'kw-two'],
     'summary': 'the summary text',
-    'semantic_facts': ['fact-one'],
     'linked_at': datetime(2026, 2, 3, 4, 5, 6, tzinfo=timezone.utc),
     'enriched_at': datetime(2026, 3, 4, 5, 6, 7, tzinfo=timezone.utc),
     'created_at': datetime(2026, 4, 5, 6, 7, 8, tzinfo=timezone.utc),
@@ -227,17 +226,16 @@ def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
         db.conn.execute(
             'insert into insights ('
             ' id, content, category, importance, entities, source,'
-            ' keywords, summary, semantic_facts,'
+            ' keywords, summary,'
             ' linked_at, enriched_at, created_at,'
             ' updated_at, deleted_at, prompt_version,'
             ' embedding_model, session_id, queue_uuid, superseded_by,'
             ' author)'
-            ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
+            ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
             ' ?, ?, ?, ?, ?, ?)',
             (r['id'], r['content'], r['category'], r['importance'],
              json.dumps(r['entities']), r['source'],
              json.dumps(r['keywords']), r['summary'],
-             json.dumps(r['semantic_facts']),
              format_timestamp(r['linked_at']),
              format_timestamp(r['enriched_at']),
              format_timestamp(r['created_at']),

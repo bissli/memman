@@ -37,10 +37,10 @@ WORKER_MAX_TOKENS = 4096
 EMPTY_RETRY_DELAY = 0.1
 
 # Per-role output budget + read timeout. `slow` emits JSON that
-# scales with input size (enrichment entity/keyword lists); a small cap
-# truncates large insights mid-JSON and the parse fails, so it gets a
-# large token budget and a long timeout. A caller raises the budget
-# for one call through `complete(max_tokens=)`.
+# scales with input size (the enrichment keywords and summary); a
+# small cap truncates large insights mid-JSON and the parse fails, so
+# it gets a large token budget and a long timeout. A caller raises
+# the budget for one call through `complete(max_tokens=)`.
 _ROLE_LIMITS = {
     ROLE_SLOW: (WORKER_MAX_TOKENS, WORKER_TIMEOUT),
     }

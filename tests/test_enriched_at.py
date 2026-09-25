@@ -62,8 +62,7 @@ class TestEnrichedAtOnLinkPending:
 
         mock_llm = MagicMock()
         mock_llm.complete.return_value = (
-            '{"keywords": ["test"], "summary": "test",'
-            ' "semantic_facts": [], "entities": []}')
+            '{"keywords": ["test"], "summary": "test"}')
 
         link_pending(tmp_backend, metadata_llm_client=mock_llm, store_name='test')
 
@@ -91,8 +90,7 @@ class TestEnrichedAtOnLinkPending:
 
         mock_llm = MagicMock()
         mock_llm.complete.return_value = (
-            '{"keywords": ["alpha"], "summary": "s",'
-            ' "semantic_facts": [], "entities": []}')
+            '{"keywords": ["alpha"], "summary": "s"}')
 
         class _FailingClient:
             available = staticmethod(lambda: True)

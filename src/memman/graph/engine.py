@@ -16,7 +16,7 @@ from memman.graph.temporal import MAX_PROXIMITY_EDGES, MIN_PROXIMITY_WEIGHT
 from memman.graph.temporal import TEMPORAL_WINDOW_HOURS, create_temporal_edge
 from memman.llm.client import MemmanLLMClient, get_llm_client
 from memman.store.backend import Backend
-from memman.store.model import Insight, dedupe_entities
+from memman.store.model import Insight
 
 logger = logging.getLogger('memman')
 
@@ -44,7 +44,6 @@ def link_pending(
         on_progress: Callable[[str, Insight], None] | None = None,
         *,
         store_name: str,
-        replace_entity_ids: set[str] | None = None,
         ) -> int:
     """Process insights where linked_at IS NULL.
 
@@ -64,13 +63,6 @@ def link_pending(
     model on every row this pass writes, so any other client
     enriching the row makes that stamp name a model that did not run
     and prices the call at the wrong role.
-
-    `replace_entity_ids` names the rows whose stored entity vocabulary
-    this pass REPLACES rather than extends - the ids a rebuild just
-    passed to `reset_for_rebuild`. Every other row keeps its stored
-    names as the seed. It is a set rather than a flag because one
-    `link_pending` call drains whatever is pending, which mixes a
-    rebuild's reset rows with rows the drain left behind.
     """
     pending_ids = backend.nodes.get_pending_link_ids(limit=max_batch)
     if not pending_ids:
@@ -81,9 +73,6 @@ def link_pending(
 
     semantic_threshold = _resolve_semantic_threshold(
         backend, store_name=store_name)
-
-    if replace_entity_ids is None:
-        replace_entity_ids = set()
 
     from memman.graph.enrichment import enrich_with_llm
     from memman.pipeline.remember import compute_prompt_version
@@ -125,9 +114,7 @@ def link_pending(
             try:
                 if metadata_llm_client is None:
                     metadata_llm_client = get_llm_client('slow')
-                enrichment = enrich_with_llm(
-                    insight, metadata_llm_client,
-                    seed_entities=insight_id not in replace_entity_ids)
+                enrichment = enrich_with_llm(insight, metadata_llm_client)
             except Exception:
                 enrichment = {}
 
@@ -156,11 +143,7 @@ def link_pending(
                 backend.nodes.update_enrichment(
                     insight.id,
                     keywords=enrichment.get('keywords', []),
-                    summary=enrichment.get('summary', ''),
-                    semantic_facts=enrichment.get('semantic_facts', []))
-                entities = dedupe_entities(enrichment.get('entities', []))
-                backend.nodes.update_entities(insight.id, entities)
-                insight.entities = entities
+                    summary=enrichment.get('summary', ''))
 
             if new_vec is not None:
                 if embed_cache is not None:

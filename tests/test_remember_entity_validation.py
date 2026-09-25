@@ -146,22 +146,17 @@ def test_replace_rejects_an_oversized_entity_list_too(mm_runner):
 def test_replace_inherits_an_oversized_stored_entity_list(mm_runner):
     """Verify `replace` without `--entity` carries a 66-entity list through.
 
-    The enrichment path writes `entities` without passing through
-    `_validate_caller_entities` and merges as a monotonic union, so a
-    stored list grows past the caller cap on its own. Applying the
-    caller-input cap to that inherited list makes the row permanently
-    unreplaceable, whatever the replacement text says.
+    A stored list can hold more names than the caller cap allows,
+    since `update_entities` bypasses `_validate_caller_entities`.
+    Applying the caller-input cap to that inherited list makes the
+    row permanently unreplaceable, whatever the replacement text says.
 
     Mutation: validating the INHERITED entity list against the
         caller-input cap -- the defect this test was written
         against -- or truncating it to 50 instead of passing it
         whole.
     Oracle: a hand-built 66-entity list, decoded off the enqueued
-        row exactly, and read back off the stored successor as a
-        subset. The successor carries the enrichment's own names
-        beside the inherited ones, so exact equality there would
-        pass only while something upstream was discarding the
-        enrichment - which is what the count cap used to do.
+        row and read back off the stored successor, both exactly.
     """
     _, data_dir = mm_runner
     grown = [f'ent{i}' for i in range(66)]
@@ -185,4 +180,4 @@ def test_replace_inherits_an_oversized_stored_entity_list(mm_runner):
     successor = parse_remember(result, mm_runner)
     stored = open_backend(name, data_dir).nodes.get(
         successor['id']).entities
-    assert [e for e in stored if e in grown] == grown
+    assert stored == grown

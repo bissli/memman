@@ -354,7 +354,6 @@ create table if not exists insights (
     source      text default 'user',
     keywords    text,
     summary     text,
-    semantic_facts text,
     embedding   blob,
     embedding_pending blob,
     linked_at   text,

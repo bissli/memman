@@ -192,8 +192,7 @@ class NodeStore(Protocol):
         ...
 
     def update_enrichment(
-            self, id: Id, *, keywords: list[str], summary: str,
-            semantic_facts: list[str]) -> None:
+            self, id: Id, *, keywords: list[str], summary: str) -> None:
         """Update LLM enrichment columns for an insight."""
         ...
 
@@ -323,9 +322,12 @@ class NodeStore(Protocol):
     def enrichment_coverage(self) -> EnrichmentCoverage:
         """Per-field NULL counts on the enrichment columns.
 
-        Returns total_active + missing_{embedding,keywords,summary,
-        semantic_facts}. Doctor consumes this for the
-        enrichment-coverage check.
+        Returns
+        -------
+        EnrichmentCoverage
+            `total_active` and `missing_embedding`,
+            `missing_keywords`, `missing_summary` over active rows;
+            doctor's enrichment-coverage check reads it.
         """
         ...
 

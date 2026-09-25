@@ -74,7 +74,7 @@ insights (
   entities, source,
   embedding,                                    -- embedding vector (active provider)
   embedding_pending,                            -- shadow vector during online provider swap
-  keywords, summary, semantic_facts,            -- LLM enrichment columns
+  keywords, summary,                            -- LLM enrichment columns
   linked_at, enriched_at,                       -- Pipeline progress timestamps
   prompt_version, embedding_model,              -- Provenance for re-enrichment
   created_at, updated_at, deleted_at,

@@ -34,7 +34,7 @@ def _insert_healthy_insight(db, id: str, content: str = 'Healthy test insight wi
     """Insert an insight with all enrichment fields populated."""
     ins = make_insight(id=id, content=content)
     insert_insight(db, ins)
-    update_enrichment(db, id, ['kw1', 'kw2'], 'summary text', ['fact1'])
+    update_enrichment(db, id, ['kw1', 'kw2'], 'summary text')
     update_embedding(db, id, _fake_embedding(), 'voyage-3-lite')
 
 
@@ -58,7 +58,13 @@ class TestSqliteIntegrity:
 class TestEnrichmentCoverage:
 
     def test_full_pass(self, tmp_db, tmp_backend):
-        """All enrichment fields populated returns pass."""
+        """Verify rows with keywords, a summary and an embedding pass.
+
+        Mutation: `enrichment_coverage` selecting a column the baseline
+            no longer declares, such as `semantic_facts`, which raises
+            rather than reports, or counting it as a missing field.
+        Oracle: two rows carrying exactly the three graded fields.
+        """
         from memman.doctor import check_enrichment_coverage
         _insert_healthy_insight(tmp_db, 'e-1')
         _insert_healthy_insight(tmp_db, 'e-2')
