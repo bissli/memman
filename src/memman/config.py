@@ -52,7 +52,6 @@ DATA_DIR = 'MEMMAN_DATA_DIR'
 STORE = 'MEMMAN_STORE'
 LLM_ENDPOINT = 'MEMMAN_LLM_ENDPOINT'
 LLM_API_KEY = 'MEMMAN_LLM_API_KEY'
-LLM_MODEL_FAST = 'MEMMAN_LLM_MODEL_FAST'
 LLM_MODEL_SLOW = 'MEMMAN_LLM_MODEL_SLOW'
 LLM_PROVIDER_ONLY = 'MEMMAN_LLM_PROVIDER_ONLY'
 LLM_DATA_COLLECTION = 'MEMMAN_LLM_DATA_COLLECTION'
@@ -217,7 +216,6 @@ SECRET_VARS = frozenset({
 INSTALLABLE_KEYS = (
     LLM_ENDPOINT,
     LLM_API_KEY,
-    LLM_MODEL_FAST,
     LLM_MODEL_SLOW,
     LLM_PROVIDER_ONLY,
     LLM_DATA_COLLECTION,
@@ -317,7 +315,6 @@ def is_loopback_endpoint(url: str) -> bool:
 
 INSTALL_DEFAULTS: dict[str, str] = {
     LLM_ENDPOINT: 'https://openrouter.ai/api/v1',
-    LLM_MODEL_FAST: 'qwen/qwen3-235b-a22b-2507',
     LLM_MODEL_SLOW: 'qwen/qwen3-235b-a22b-2507',
     LLM_PROVIDER_ONLY: 'amazon-bedrock,azure,google-vertex',
     LLM_DATA_COLLECTION: 'deny',
@@ -661,7 +658,6 @@ def effective_source(name: str) -> str:
 
 
 _LLM_ROLE_KEYS: tuple[tuple[str, str], ...] = (
-    (LLM_MODEL_FAST, 'fast'),
     (LLM_MODEL_SLOW, 'slow'),
     )
 
@@ -670,13 +666,13 @@ def _resolve_llm_role_slugs(
         knobs: dict[str, str],
         needs_resolve: set[str],
         endpoint: str) -> None:
-    """Populate the two LLM role slugs from OpenRouter's public catalog.
+    """Populate the LLM role slug from OpenRouter's public catalog.
 
-    Fires only when `endpoint` points at OpenRouter; each role is
+    Fires only when `endpoint` points at OpenRouter; the role is
     resolved against OR's `/v1/models` endpoint (no auth required).
     Non-OR endpoints are handled by the wizard's interactive
-    model-slug prompt: the role keys stay in `needs_resolve` here
-    and are required to be filled by either the file, the shell, or
+    model-slug prompt: the role key stays in `needs_resolve` here
+    and must be filled by either the file, the shell, or
     the wizard before install completes.
     """
     if not is_openrouter_endpoint(endpoint):
@@ -695,7 +691,7 @@ def collect_install_knobs(data_dir: str) -> dict[str, str]:
     """Build the dict of values to persist to `~/.memman/env` at install.
 
     Precedence per key: existing env file > `os.environ` > OpenRouter
-    live resolver (FAST/SLOW only, OR endpoint only) > `INSTALL_DEFAULTS`.
+    live resolver (SLOW only, OR endpoint only) > `INSTALL_DEFAULTS`.
     The shell environment is consulted at install time only as a
     one-time seed for keys missing from the file -- existing file
     values are sticky and a later shell export never overrides them.

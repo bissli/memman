@@ -117,8 +117,8 @@ def memman_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def live_keys() -> None:
     """Gate live-key tests; fail-loud under MEMMAN_E2E_REQUIRE_LIVE=1.
 
-    Tests that exercise enrichment, intent expansion, or any path that
-    hits OpenRouter / Voyage take this fixture as a dependency. With
+    Tests that exercise enrichment, or any path that hits OpenRouter /
+    Voyage, take this fixture as a dependency. With
     `MEMMAN_E2E_REQUIRE_LIVE=1` set, missing keys raise instead of
     skipping silently.
 

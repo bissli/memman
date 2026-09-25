@@ -44,14 +44,6 @@ def _invoke(args: list) -> 'click.testing.Result':
     return CliRunner().invoke(cli, args)
 
 
-def _parse_recall_json(output: str) -> dict:
-    """Extract the JSON object from recall output (strips WARNING logs)."""
-    brace = output.index('{')
-    decoder = json.JSONDecoder()
-    obj, _ = decoder.raw_decode(output[brace:])
-    return obj
-
-
 class TestFingerprintRegistry:
     """Provider registry resolution and Fingerprint serialization."""
 
@@ -204,7 +196,12 @@ class TestReembed:
     @pytest.mark.no_autoseed_fingerprint
     def test_recall_on_fresh_store_returns_empty(self, tmp_path):
         """Recall on a brand-new store auto-seeds the fingerprint and
-        returns empty results, not EmbedFingerprintError.
+        prints nothing, not EmbedFingerprintError.
+
+        Mutation: an unhandled `EmbedFingerprintError` reaching the
+            CLI, or a page line printed for a store holding no row.
+        Oracle: an empty page (Section: the recall page's empty-page
+            contract) alongside the auto-seeded fingerprint on disk.
         """
         result = _invoke([
             '--data-dir', str(tmp_path),
@@ -212,8 +209,7 @@ class TestReembed:
         assert result.exit_code == 0, (
             f'recall failed: exit={result.exit_code} '
             f'output={result.output}')
-        payload = _parse_recall_json(result.output)
-        assert payload['results'] == []
+        assert result.output == ''
 
         from memman.store.db import store_dir
         sdir = store_dir(str(tmp_path), 'default')
@@ -225,7 +221,12 @@ class TestReembed:
 
     @pytest.mark.no_autoseed_fingerprint
     def test_custom_store_recall_on_fresh_returns_empty(self, tmp_path):
-        """Recall on a never-used --store custom name auto-seeds and returns empty.
+        """Recall on a never-used --store custom name auto-seeds and
+        prints nothing.
+
+        Mutation: an unhandled `EmbedFingerprintError` reaching the
+            CLI on a never-used store name.
+        Oracle: an empty page from a store that has never held a row.
         """
         result = _invoke([
             '--data-dir', str(tmp_path), '--store', 'custom',
@@ -233,8 +234,7 @@ class TestReembed:
         assert result.exit_code == 0, (
             f'recall failed: exit={result.exit_code} '
             f'output={result.output}')
-        payload = _parse_recall_json(result.output)
-        assert payload['results'] == []
+        assert result.output == ''
 
     @pytest.mark.no_autoseed_fingerprint
     def test_remember_on_fresh_store_seeds_and_drains(self, tmp_path):

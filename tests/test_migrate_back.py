@@ -36,10 +36,8 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
             importance=3,
             entities=['alpha', 'beta'],
             source='migrate-back-test',
-            access_count=0,
             updated_at=datetime.now(timezone.utc),
-            deleted_at=None,
-            last_accessed_at=None)
+            deleted_at=None)
         insert_insight(db, ins)
         set_meta(db, 'embed_fingerprint',
                  '{"provider":"voyage","model":"voyage-3-lite","dim":512}')
@@ -199,11 +197,9 @@ _FIDELITY_ROW = {
     'importance': 4,
     'entities': ['alpha', 'beta'],
     'source': 'fidelity-test',
-    'access_count': 11,
     'keywords': ['kw-one', 'kw-two'],
     'summary': 'the summary text',
     'semantic_facts': ['fact-one'],
-    'last_accessed_at': datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
     'linked_at': datetime(2026, 2, 3, 4, 5, 6, tzinfo=timezone.utc),
     'enriched_at': datetime(2026, 3, 4, 5, 6, 7, tzinfo=timezone.utc),
     'created_at': datetime(2026, 4, 5, 6, 7, 8, tzinfo=timezone.utc),
@@ -231,18 +227,17 @@ def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
         db.conn.execute(
             'insert into insights ('
             ' id, content, category, importance, entities, source,'
-            ' access_count, keywords, summary, semantic_facts,'
-            ' last_accessed_at, linked_at, enriched_at, created_at,'
+            ' keywords, summary, semantic_facts,'
+            ' linked_at, enriched_at, created_at,'
             ' updated_at, deleted_at, prompt_version,'
             ' embedding_model, session_id, queue_uuid, superseded_by,'
             ' author)'
-            ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
-            ' ?, ?, ?, ?, ?, ?, ?)',
+            ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
+            ' ?, ?, ?, ?, ?, ?)',
             (r['id'], r['content'], r['category'], r['importance'],
-             json.dumps(r['entities']), r['source'], r['access_count'],
+             json.dumps(r['entities']), r['source'],
              json.dumps(r['keywords']), r['summary'],
              json.dumps(r['semantic_facts']),
-             format_timestamp(r['last_accessed_at']),
              format_timestamp(r['linked_at']),
              format_timestamp(r['enriched_at']),
              format_timestamp(r['created_at']),
@@ -312,8 +307,8 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
         db = open_db(target)
         try:
             row = db.conn.execute(
-                'select category, importance, access_count, summary,'
-                ' last_accessed_at, linked_at, enriched_at, created_at,'
+                'select category, importance, summary,'
+                ' linked_at, enriched_at, created_at,'
                 ' updated_at, deleted_at, prompt_version,'
                 ' embedding_model, session_id, queue_uuid, superseded_by,'
                 ' author from insights where id = ?',
@@ -322,8 +317,8 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
             db.close()
         r = _FIDELITY_ROW
         assert tuple(row) == (
-            r['category'], r['importance'], r['access_count'],
-            r['summary'], '2026-01-02T03:04:05Z',
+            r['category'], r['importance'],
+            r['summary'],
             '2026-02-03T04:05:06Z', '2026-03-04T05:06:07Z',
             '2026-04-05T06:07:08Z', '2026-05-06T07:08:09Z', None,
             r['prompt_version'], r['embedding_model'],

@@ -10,7 +10,7 @@ These tests pin three properties:
    all chunks succeed).
 3. Maintenance reindexes every on-disk store on drift, including
    stores that received no queue traffic in the current drain.
-4. Recall's optional bookkeeping write (access_count + oplog) never
+4. Recall's optional bookkeeping write (the oplog row) never
    propagates `database is locked` to the caller - it skips quietly.
 """
 
@@ -188,7 +188,7 @@ class TestRecallBookkeepingLockSafety:
                 'recall', '--basic', 'Go SQLite'])
 
         assert result.exit_code == 0, result.output
-        assert '"results"' in result.output, result.output
+        assert 'SQLite' in result.output, result.output
         assert any(
             'recall_bookkeep_skipped' in rec.getMessage()
             for rec in caplog.records), (

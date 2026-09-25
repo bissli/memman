@@ -12,8 +12,7 @@ def stub_resolver(monkeypatch):
 
     def fake(role, endpoint='https://openrouter.ai/api/v1'):
         calls.append((role, endpoint))
-        family = 'haiku' if role == 'fast' else 'sonnet'
-        return f'anthropic/claude-{family}-4.5'
+        return 'anthropic/claude-sonnet-4.5'
 
     monkeypatch.setattr(
         'memman.llm.openrouter_models.resolve_latest_for_role', fake)
@@ -37,14 +36,14 @@ class TestCollectInstallKnobs:
         (data_dir / config.ENV_FILENAME).write_text(
             f'{config.OPENROUTER_API_KEY}=file-or-key\n'
             f'{config.VOYAGE_API_KEY}=file-vy-key\n'
-            f'{config.LLM_MODEL_FAST}=file/haiku-pin\n'
+            f'{config.LLM_MODEL_SLOW}=file/sonnet-pin\n'
             f'{config.LLM_ENDPOINT}=https://openrouter.ai/api/v1\n')
         monkeypatch.setenv(config.DATA_DIR, str(data_dir))
-        monkeypatch.setenv(config.LLM_MODEL_FAST, 'env/haiku-OVERRIDE')
+        monkeypatch.setenv(config.LLM_MODEL_SLOW, 'env/sonnet-OVERRIDE')
         monkeypatch.setenv(config.OPENROUTER_API_KEY, 'env-or-OVERRIDE')
         config.reset_file_cache()
         knobs = config.collect_install_knobs(str(data_dir))
-        assert knobs[config.LLM_MODEL_FAST] == 'file/haiku-pin'
+        assert knobs[config.LLM_MODEL_SLOW] == 'file/sonnet-pin'
         assert knobs[config.OPENROUTER_API_KEY] == 'file-or-key'
 
     def test_shell_env_seeds_file_when_key_missing(
@@ -54,12 +53,12 @@ class TestCollectInstallKnobs:
         monkeypatch.setenv(config.DATA_DIR, data_dir)
         monkeypatch.setenv(config.OPENROUTER_API_KEY, 'shell-or-key')
         monkeypatch.setenv(config.VOYAGE_API_KEY, 'shell-vy-key')
-        monkeypatch.setenv(config.LLM_MODEL_FAST, 'shell/haiku-seed')
+        monkeypatch.setenv(config.LLM_MODEL_SLOW, 'shell/sonnet-seed')
         config.reset_file_cache()
         knobs = config.collect_install_knobs(data_dir)
         assert knobs[config.OPENROUTER_API_KEY] == 'shell-or-key'
         assert knobs[config.VOYAGE_API_KEY] == 'shell-vy-key'
-        assert knobs[config.LLM_MODEL_FAST] == 'shell/haiku-seed'
+        assert knobs[config.LLM_MODEL_SLOW] == 'shell/sonnet-seed'
 
     def test_file_value_wins_over_resolver_and_default(
             self, tmp_path, monkeypatch, stub_resolver):
@@ -74,19 +73,16 @@ class TestCollectInstallKnobs:
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
         (data_dir / config.ENV_FILENAME).write_text(
-            f'{config.LLM_MODEL_FAST}=file/haiku-pinned\n'
             f'{config.LLM_MODEL_SLOW}=file/sonnet-pinned\n'
             f'{config.OPENROUTER_API_KEY}=file-or-key\n'
             f'{config.VOYAGE_API_KEY}=file-vy-key\n'
             f'{config.LLM_ENDPOINT}=https://openrouter.ai/api/v1\n')
         monkeypatch.setenv(config.DATA_DIR, str(data_dir))
-        monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
         monkeypatch.delenv(config.LLM_MODEL_SLOW, raising=False)
         monkeypatch.delenv(config.OPENROUTER_API_KEY, raising=False)
         monkeypatch.delenv(config.VOYAGE_API_KEY, raising=False)
         config.reset_file_cache()
         knobs = config.collect_install_knobs(str(data_dir))
-        assert knobs[config.LLM_MODEL_FAST] == 'file/haiku-pinned'
         assert knobs[config.LLM_MODEL_SLOW] == 'file/sonnet-pinned'
         assert knobs[config.OPENROUTER_API_KEY] == 'file-or-key'
         assert stub_resolver == [], 'resolver should NOT fire when file has value'
@@ -111,9 +107,7 @@ class TestCollectInstallKnobs:
         config.reset_file_cache()
         knobs = config.collect_install_knobs(str(data_dir))
         roles = [c[0] for c in stub_resolver]
-        assert 'fast' in roles
         assert 'slow' in roles
-        assert knobs[config.LLM_MODEL_FAST] == 'anthropic/claude-haiku-4.5'
         assert knobs[config.LLM_MODEL_SLOW] == 'anthropic/claude-sonnet-4.5'
 
     def test_resolver_none_falls_back_to_install_defaults(
@@ -130,8 +124,8 @@ class TestCollectInstallKnobs:
             lambda *a, **k: None)
         config.reset_file_cache()
         knobs = config.collect_install_knobs(str(data_dir))
-        assert knobs[config.LLM_MODEL_FAST] == \
-            config.INSTALL_DEFAULTS[config.LLM_MODEL_FAST]
+        assert knobs[config.LLM_MODEL_SLOW] == \
+            config.INSTALL_DEFAULTS[config.LLM_MODEL_SLOW]
 
     def test_missing_mandatory_secret_raises(self, tmp_path, monkeypatch):
         """ConfigError when the embed provider's mandatory secret is missing."""

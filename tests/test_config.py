@@ -12,7 +12,6 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_STORE',
     'MEMMAN_LLM_ENDPOINT',
     'MEMMAN_LLM_API_KEY',
-    'MEMMAN_LLM_MODEL_FAST',
     'MEMMAN_LLM_MODEL_SLOW',
     'MEMMAN_LLM_PROVIDER_ONLY',
     'MEMMAN_LLM_DATA_COLLECTION',
@@ -170,7 +169,6 @@ def test_constants_match_expected_names():
     actual = {
         config.DATA_DIR, config.STORE,
         config.LLM_ENDPOINT, config.LLM_API_KEY,
-        config.LLM_MODEL_FAST,
         config.LLM_MODEL_SLOW,
         config.LLM_PROVIDER_ONLY,
         config.LLM_DATA_COLLECTION,
@@ -344,11 +342,9 @@ def test_enumerate_reflects_current_env(env_file):
     """enumerate_effective_config() returns live values for set vars.
     """
     env_file(config.LLM_ENDPOINT, 'https://openrouter.ai/api/v1')
-    env_file(config.LLM_MODEL_FAST, 'anthropic/claude-haiku-4.5')
     env_file(config.LLM_MODEL_SLOW, 'anthropic/claude-sonnet-4.6')
     out = config.enumerate_effective_config()
     assert out[config.LLM_ENDPOINT] == 'https://openrouter.ai/api/v1'
-    assert out[config.LLM_MODEL_FAST] == 'anthropic/claude-haiku-4.5'
     assert out[config.LLM_MODEL_SLOW] == 'anthropic/claude-sonnet-4.6'
 
 
@@ -374,9 +370,9 @@ def test_enumerate_redact_false_exposes_secrets(env_file):
 def test_enumerate_empty_string_is_unset(env_file):
     """Empty-string env vars map to None (not the empty string).
     """
-    env_file(config.LLM_MODEL_FAST, '')
+    env_file(config.LLM_MODEL_SLOW, '')
     out = config.enumerate_effective_config()
-    assert out[config.LLM_MODEL_FAST] is None
+    assert out[config.LLM_MODEL_SLOW] is None
 
 
 class TestConfigSet:
@@ -646,62 +642,62 @@ class TestConfigResolver:
 
     def test_get_ignores_shell_env_for_installable_keys(self, env_path, monkeypatch):
         """Installable keys are file-canonical; shell env never overrides."""
-        monkeypatch.setenv(config.LLM_MODEL_FAST, 'env-model')
-        _write_env(env_path, f'{config.LLM_MODEL_FAST}=file-model\n')
-        assert config.get(config.LLM_MODEL_FAST) == 'file-model'
+        monkeypatch.setenv(config.LLM_MODEL_SLOW, 'env-model')
+        _write_env(env_path, f'{config.LLM_MODEL_SLOW}=file-model\n')
+        assert config.get(config.LLM_MODEL_SLOW) == 'file-model'
 
     def test_get_returns_file_value(self, env_path, monkeypatch):
         """get() returns the value from the env file."""
-        monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
-        _write_env(env_path, f'{config.LLM_MODEL_FAST}=file-model\n')
-        assert config.get(config.LLM_MODEL_FAST) == 'file-model'
+        monkeypatch.delenv(config.LLM_MODEL_SLOW, raising=False)
+        _write_env(env_path, f'{config.LLM_MODEL_SLOW}=file-model\n')
+        assert config.get(config.LLM_MODEL_SLOW) == 'file-model'
 
     def test_get_returns_none_when_file_missing_key(self, env_path, monkeypatch):
         """get() returns None when the key is absent from the file."""
-        monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
-        assert config.get(config.LLM_MODEL_FAST) is None
+        monkeypatch.delenv(config.LLM_MODEL_SLOW, raising=False)
+        assert config.get(config.LLM_MODEL_SLOW) is None
 
     def test_get_returns_none_when_shell_env_set_but_file_missing(
             self, env_path, monkeypatch):
         """Shell-only value is invisible -- file is the only source."""
-        monkeypatch.setenv(config.LLM_MODEL_FAST, 'env-only')
-        assert config.get(config.LLM_MODEL_FAST) is None
+        monkeypatch.setenv(config.LLM_MODEL_SLOW, 'env-only')
+        assert config.get(config.LLM_MODEL_SLOW) is None
 
     def test_parser_skips_blank_lines_and_comments(self, env_path):
         """Parser ignores blank lines and # comments."""
         contents = '\n'.join([
             '# This is a comment',
             '',
-            f'{config.LLM_MODEL_FAST}=fast',
+            f'{config.LLM_MODEL_SLOW}=fast',
             '   ',
             '# Another comment',
-            f'{config.LLM_MODEL_SLOW}=slow',
+            f'{config.LLM_ENDPOINT}=slow',
             ])
         _write_env(env_path, contents + '\n')
-        assert config.get(config.LLM_MODEL_FAST) == 'fast'
-        assert config.get(config.LLM_MODEL_SLOW) == 'slow'
+        assert config.get(config.LLM_MODEL_SLOW) == 'fast'
+        assert config.get(config.LLM_ENDPOINT) == 'slow'
 
     def test_parser_strips_quoted_values(self, env_path):
         """Parser strips single and double quotes from values."""
         contents = '\n'.join([
-            f'{config.LLM_MODEL_FAST}="quoted-fast"',
-            f"{config.LLM_MODEL_SLOW}='quoted-slow'",
+            f'{config.LLM_MODEL_SLOW}="quoted-fast"',
+            f"{config.LLM_ENDPOINT}='quoted-slow'",
             ])
         _write_env(env_path, contents + '\n')
-        assert config.get(config.LLM_MODEL_FAST) == 'quoted-fast'
-        assert config.get(config.LLM_MODEL_SLOW) == 'quoted-slow'
+        assert config.get(config.LLM_MODEL_SLOW) == 'quoted-fast'
+        assert config.get(config.LLM_ENDPOINT) == 'quoted-slow'
 
     def test_parser_does_not_expand_variables(self, env_path):
         """Parser does not expand shell variable syntax."""
-        contents = f'{config.LLM_MODEL_FAST}=${{HOME}}/models\n'
+        contents = f'{config.LLM_MODEL_SLOW}=${{HOME}}/models\n'
         _write_env(env_path, contents)
-        assert config.get(config.LLM_MODEL_FAST) == '${HOME}/models'
+        assert config.get(config.LLM_MODEL_SLOW) == '${HOME}/models'
 
     def test_missing_file_returns_none(self, env_path, monkeypatch):
         """Missing env file returns None without error."""
-        monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
+        monkeypatch.delenv(config.LLM_MODEL_SLOW, raising=False)
         assert not env_path.exists()
-        assert config.get(config.LLM_MODEL_FAST) is None
+        assert config.get(config.LLM_MODEL_SLOW) is None
 
     def test_data_dir_change_invalidates_cache(self, tmp_path, monkeypatch):
         """Changing DATA_DIR causes the file cache to be invalidated."""
@@ -710,17 +706,17 @@ class TestConfigResolver:
         dir_a.mkdir()
         dir_b.mkdir()
         (dir_a / config.ENV_FILENAME).write_text(
-            f'{config.LLM_MODEL_FAST}=from-a\n')
+            f'{config.LLM_MODEL_SLOW}=from-a\n')
         (dir_b / config.ENV_FILENAME).write_text(
-            f'{config.LLM_MODEL_FAST}=from-b\n')
+            f'{config.LLM_MODEL_SLOW}=from-b\n')
 
-        monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
+        monkeypatch.delenv(config.LLM_MODEL_SLOW, raising=False)
         monkeypatch.setenv(config.DATA_DIR, str(dir_a))
         config.reset_file_cache()
-        assert config.get(config.LLM_MODEL_FAST) == 'from-a'
+        assert config.get(config.LLM_MODEL_SLOW) == 'from-a'
 
         monkeypatch.setenv(config.DATA_DIR, str(dir_b))
-        assert config.get(config.LLM_MODEL_FAST) == 'from-b'
+        assert config.get(config.LLM_MODEL_SLOW) == 'from-b'
 
     def test_get_bool_resolves_through_file(self, env_path, monkeypatch):
         """get_bool() resolves installable keys through the file."""
@@ -738,14 +734,14 @@ class TestConfigResolver:
     def test_effective_source_reports_file_only_for_installable(
             self, env_path, monkeypatch):
         """Installable keys report 'file' or 'unset'; shell env is invisible."""
-        monkeypatch.setenv(config.LLM_MODEL_FAST, 'env-val')
-        assert config.effective_source(config.LLM_MODEL_FAST) == 'unset'
+        monkeypatch.setenv(config.LLM_MODEL_SLOW, 'env-val')
+        assert config.effective_source(config.LLM_MODEL_SLOW) == 'unset'
 
-        _write_env(env_path, f'{config.LLM_MODEL_FAST}=file-val\n')
-        assert config.effective_source(config.LLM_MODEL_FAST) == 'file'
+        _write_env(env_path, f'{config.LLM_MODEL_SLOW}=file-val\n')
+        assert config.effective_source(config.LLM_MODEL_SLOW) == 'file'
 
         _write_env(env_path, '')
-        assert config.effective_source(config.LLM_MODEL_FAST) == 'unset'
+        assert config.effective_source(config.LLM_MODEL_SLOW) == 'unset'
 
     def test_effective_source_reports_env_for_process_control(
             self, env_path, monkeypatch):
@@ -766,10 +762,10 @@ class TestConfigResolver:
 
     def test_enumerate_resolves_through_file(self, env_path, monkeypatch):
         """enumerate_effective_config returns file-only values."""
-        monkeypatch.delenv(config.LLM_MODEL_FAST, raising=False)
-        _write_env(env_path, f'{config.LLM_MODEL_FAST}=file-only\n')
+        monkeypatch.delenv(config.LLM_MODEL_SLOW, raising=False)
+        _write_env(env_path, f'{config.LLM_MODEL_SLOW}=file-only\n')
         out = config.enumerate_effective_config(redact=False)
-        assert out[config.LLM_MODEL_FAST] == 'file-only'
+        assert out[config.LLM_MODEL_SLOW] == 'file-only'
 
     def test_process_control_vars_bypass_file(self, env_path, monkeypatch):
         """Process-control vars written to file are invisible to enumerate."""
@@ -793,15 +789,3 @@ class TestConfigResolver:
         """Every secret is in INSTALLABLE_KEYS so install can write it."""
         for secret in config.SECRET_VARS:
             assert secret in config.INSTALLABLE_KEYS
-
-
-def test_install_defaults_name_one_llm_tier():
-    """The offline install fallback puts every LLM role on one tier.
-
-    Mutation: INSTALL_DEFAULTS keeps a pricier slow-role slug, so an
-    install whose resolver call fails still bills enrichment at a rate
-    the cost model never covered.
-    Oracle: the fast role's own INSTALL_DEFAULTS entry.
-    """
-    fast = config.INSTALL_DEFAULTS[config.LLM_MODEL_FAST]
-    assert config.INSTALL_DEFAULTS[config.LLM_MODEL_SLOW] == fast

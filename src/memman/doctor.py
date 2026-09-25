@@ -369,7 +369,7 @@ def check_queue_backlog(data_dir: str) -> dict[str, Any]:
 
 EXPECTED_INSIGHT_COLUMNS = {
     'prompt_version', 'embedding_model',
-    'linked_at', 'enriched_at', 'last_accessed_at',
+    'linked_at', 'enriched_at',
     'summary', 'keywords', 'semantic_facts',
     'session_id', 'queue_uuid',
     'superseded_by', 'author',
@@ -1014,7 +1014,7 @@ def check_llm_probe() -> dict[str, Any]:
         from memman.exceptions import ConfigError
         from memman.llm.client import get_llm_client
         try:
-            client = get_llm_client('fast')
+            client = get_llm_client('slow')
         except ConfigError as exc:
             detail['error'] = str(exc)
             detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)

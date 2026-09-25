@@ -34,11 +34,11 @@ def _seed_with_artifacts(store_dir: Path) -> None:
         vec = [0.5] * 512
         conn.execute(
             'INSERT INTO insights (id, content, category, importance,'
-            ' entities, source, access_count, embedding, created_at,'
+            ' entities, source, embedding, created_at,'
             ' updated_at)'
-            ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             (str(uuid.uuid4()), 'cleanup test', 'fact', 3, '[]',
-             'user', 0, struct.pack(f'<{len(vec)}d', *vec), now, now))
+             'user', struct.pack(f'<{len(vec)}d', *vec), now, now))
         conn.execute(
             'INSERT INTO meta (key, value) VALUES (?, ?)',
             ('embed_fingerprint',

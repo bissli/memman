@@ -8,7 +8,6 @@ graph, search, embed, and LLM primitives live under their own packages.
 import json
 import logging
 import logging.handlers
-import math
 import os
 import pathlib
 import re
@@ -36,8 +35,8 @@ _BACKEND_CHOICES = sorted(known_backends())
 from memman.embed import SUPPORTED_EMBED_PROVIDERS as _EMBED_PROVIDER_CHOICES
 from memman.store.model import MAX_ROW_ENTITIES, VALID_CATEGORIES
 from memman.store.model import VALID_EDGE_TYPES, Edge, Insight
-from memman.store.model import format_timestamp, insight_to_brief_dict
-from memman.store.model import insight_to_full_dict
+from memman.store.model import format_timestamp, insight_to_full_dict
+from memman.store.model import insight_to_recall_line
 from memman.store.sqlite import open_ro_db
 from tqdm import tqdm
 
@@ -335,8 +334,7 @@ def _get_llm_client_or_fail(role: str) -> 'MemmanLLMClient':
 
     Keeps `memman.llm` free of `click` - the CLI boundary is the only
     place that should know how to surface a user-facing config error.
-    `role` is `'fast'` or `'slow'` (worker pipeline, operator
-    rebuilds).
+    `role` is `'slow'` (worker pipeline, operator rebuilds).
     """
     from memman.exceptions import ConfigError
     from memman.llm.client import get_llm_client
@@ -1535,7 +1533,6 @@ def _process_queue_row(
         return
 
     now = datetime.now(timezone.utc)
-    access_count = 0
     replaced_id = row.hint_replaced_id or ''
     redirected_from = ''
     if replaced_id:
@@ -1553,11 +1550,10 @@ def _process_queue_row(
             seen.add(old.id)
             old = backend.nodes.get_include_deleted(old.superseded_by)
         if (old is not None and old.deleted_at is None
-                and old.superseded_by is None):
-            access_count = old.access_count
-            if old.id != replaced_id:
-                redirected_from = replaced_id
-                replaced_id = old.id
+                and old.superseded_by is None
+                and old.id != replaced_id):
+            redirected_from = replaced_id
+            replaced_id = old.id
     # Both fields must reach the parent Insight: _plan_fact copies
     # session_id and queue_uuid off it, so omitting either makes the
     # whole feature a silent no-op.
@@ -1565,7 +1561,6 @@ def _process_queue_row(
         id=str(uuid.uuid4()), content=row.content,
         category=category, importance=importance,
         entities=entity_list, source=source,
-        access_count=access_count,
         created_at=now, updated_at=now,
         session_id=row.session_id, queue_uuid=row.queue_uuid,
         author=row.author)
@@ -1586,20 +1581,10 @@ def _process_queue_row(
 @cli.command()
 @click.argument('keyword', nargs=-1, required=True)
 @click.option('--cat', default='', help='Filter by category')
-@click.option('--limit', default=10, type=int, help='Max results')
+@click.option('--limit', default=20, type=int, help='Max results')
 @click.option('--source', default='',
               help='Filter by source (exact match on the stored provenance string)')
 @click.option('--basic', is_flag=True, default=False, help='Simple SQL LIKE matching')
-@click.option('--brief', is_flag=True, default=False,
-              help='Project each row to id, category, importance, '
-                   'created_at, summary')
-@click.option('--intent', default='', help='Override intent')
-@click.option('--expand', 'expand', is_flag=True, default=False,
-              help='Run LLM query expansion before retrieval (off by default)')
-@click.option('--min-score', 'min_score', default=0.0,
-              type=click.FloatRange(0.0, 2.0),
-              help='Drop rows whose keyword+similarity sum is below '
-                   'this floor (0.0 = off, max 2.0)')
 @click.option('--session', default='',
               envvar=[config.SESSION_ID, config.CLAUDE_SESSION_ID],
               help='Calling session id, recorded on the recall-detail '
@@ -1608,37 +1593,50 @@ def _process_queue_row(
                    '$CLAUDE_CODE_SESSION_ID, matching `remember`)')
 @click.pass_context
 def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
-           limit: int, source: str, basic: bool, brief: bool,
-           intent: str, expand: bool, min_score: float,
-           session: str) -> None:
-    """Retrieve insights by keyword."""
-    from memman import trace
-    from memman.embed.fingerprint import assert_fingerprint_unchanged_for_sync
-    from memman.embed.fingerprint import bound_embedder, stored_fingerprint
-    from memman.llm import usage as llm_usage
-    from memman.llm.extract import expand_query
-    from memman.search.intent import intent_from_string
+           limit: int, source: str, basic: bool, session: str) -> None:
+    """Print the insights matching a query, one line each, best first.
+
+    Each line is `<id8> <score> <created_at> <author> <category> |
+    <text>`: the first 8 characters of the id, the score to two
+    decimals, the author or `-`, then the summary or a content prefix.
+    `--basic` prints the same line without a score. An empty page
+    prints nothing.
+
+    \b
+    Parameters
+    ----------
+    keyword : tuple[str, ...]
+        Query words, joined by single spaces.
+    cat : str
+        Keep only rows of this exact category ('' = no filter).
+    limit : int
+        Maximum lines printed.
+    source : str
+        Keep only rows with this exact source ('' = no filter).
+    basic : bool
+        SQL LIKE matching; computes no score.
+    session : str
+        Calling session id, stamped on the `recall-detail` oplog row.
+
+    \b
+    Notes
+    -----
+    - A score compares only against the other rows of its own page,
+      never across queries.
+    - Recall writes nothing to the store but its oplog row.
+
+    \b
+    Examples
+    --------
+    memman recall "retry cap"
+    memman recall "retry cap" --cat decision --limit 5
+    memman recall "retry" --basic
+    """  # noqa: D301, D410, D411
+    # Deferred: the embed and search stack would load on every other
+    # command's startup.
+    from memman.embed.fingerprint import bound_embedder
     from memman.search.recall import intent_aware_recall
-    project = insight_to_brief_dict if brief else insight_to_full_dict
     keyword_str = ' '.join(keyword)
-    if math.isnan(min_score):
-        raise click.ClickException(
-            '--min-score must be a number; NaN compares false against '
-            'every floor and would silently disable the filter.')
-    if basic and min_score > 0.0:
-        raise click.ClickException(
-            '--min-score needs the scored path; --basic is SQL LIKE '
-            'matching and computes no scores.')
-    # Validated above the `--basic` early return, or `--basic --intent
-    # bogus` exits 0 reporting the flag as merely ignored -- telling the
-    # caller their intent was well-formed but unusable here, which is a
-    # worse answer than silence.
-    typed_intent = None
-    if intent:
-        try:
-            typed_intent = intent_from_string(intent)
-        except ValueError as e:
-            raise click.ClickException(str(e))
     store_name = _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store'])
     per_store_rerank = config.get_store_rerank_enabled(store_name)
     rerank = (per_store_rerank if per_store_rerank is not None
@@ -1650,9 +1648,6 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                 source=source, limit=limit)
             try:
                 with backend.transaction():
-                    for r in results:
-                        backend.nodes.increment_access_count(r.id)
-                        r.access_count += 1
                     backend.oplog.log(
                         operation='recall:basic', insight_id='',
                         detail=f'q={keyword_str} hits={len(results)}')
@@ -1660,54 +1655,11 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                 logger.debug(
                     'recall_bookkeep_skipped basic q=%r: %s',
                     keyword_str, exc)
-            # Notes:
-            # - `--min-score` is rejected above, not named here: it
-            #   is a FILTER, so ignoring it would certify every
-            #   returned row as having cleared a floor it never met.
-            # - `--intent` and `--expand` leave the caller a
-            #   complete, visible result set, so naming them is
-            #   enough; an exit code would break a hook that passes
-            #   them out of habit.
-            # - The tuple order below fixes the reported order.
-            basic_meta: dict[str, Any] = {'basic': True}
-            ignored = [
-                name for name, was_given
-                in (('intent', bool(intent)), ('expand', expand))
-                if was_given]
-            if ignored:
-                basic_meta['ignored'] = ignored
-            _json_out({
-                'results': [project(r) for r in results],
-                'meta': basic_meta,
-                })
+            for ins in results:
+                click.echo(insight_to_recall_line(ins, None))
             return
 
         ec = bound_embedder(backend)
-        bound_fp = stored_fingerprint(backend)
-
-        expansion: dict = {}
-        if expand:
-            llm_client = _get_llm_client_or_fail('fast')
-            # The recall process exits right after retrieval, so the
-            # query_expansion bucket would die unreported without a
-            # summary emitted here (drains never see this stage).
-            expand_usage_snap = llm_usage.snapshot()
-            expansion = expand_query(llm_client, keyword_str)
-            keyword_str = expansion['expanded_query']
-            trace.event(
-                'llm_usage_summary',
-                usage=llm_usage.delta(
-                    expand_usage_snap, llm_usage.snapshot()))
-
-        intent_override = typed_intent
-        if not intent and expansion.get('intent'):
-            try:
-                intent_override = intent_from_string(
-                    expansion['intent'])
-            except ValueError:
-                pass
-
-        assert_fingerprint_unchanged_for_sync(backend, bound_fp)
         query_vec = None
         try:
             query_vec = ec.embed(keyword_str)
@@ -1718,30 +1670,20 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                 type(exc).__name__, exc)
 
         resp = intent_aware_recall(
-            backend, keyword_str, query_vec,
-            limit,
-            intent_override=intent_override, rerank=rerank,
-            category=cat, source=source, min_score=min_score)
+            backend, keyword_str, query_vec, limit,
+            rerank=rerank, category=cat, source=source)
 
-        hits = [{'id': r['insight'].id[:8], 'via': r.get('via', ''),
-                 'score': round(r['score'], 3),
-                 'kw': round(r['signals']['keyword'], 3),
-                 'sim': round(r['signals']['similarity'], 3),
-                 'gr': round(r['signals']['graph'], 3)}
+        hits = [{'id': r['insight'].id[:8],
+                 'score': round(r['score'], 3)}
                 for r in resp['results']]
         try:
             with backend.transaction():
-                for r in resp['results']:
-                    backend.nodes.increment_access_count(r['insight'].id)
-                    r['insight'].access_count += 1
                 # `limit` is the REQUESTED page size, not len(hits):
                 # the returned count cannot distinguish a thin page
-                # from a small ask, which is why the old payload
-                # could not tell which one produced hits_median = 5.
+                # from a small ask.
                 backend.oplog.log(
                     operation='recall-detail', insight_id='',
-                    detail=json.dumps({'intent': resp['meta']['intent'],
-                                       'q': keyword_str[:80],
+                    detail=json.dumps({'q': keyword_str[:80],
                                        'limit': limit,
                                        'session': session,
                                        'hits': hits}))
@@ -1750,19 +1692,8 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                 'recall_bookkeep_skipped detail q=%r: %s',
                 keyword_str, exc)
 
-        out = {
-            'results': [
-                {
-                    'insight': project(r['insight']),
-                    'score': r['score'],
-                    'intent': r['intent'],
-                    'signals': r['signals'],
-                    }
-                for r in resp['results']
-                ],
-            'meta': resp['meta'],
-            }
-        _json_out(out)
+        for r in resp['results']:
+            click.echo(insight_to_recall_line(r['insight'], r['score']))
 
 
 def _not_current_reason(ins: 'Insight | None', id: str) -> str:
@@ -3140,7 +3071,6 @@ def log_list(ctx: click.Context, limit: int, since: str,
             stats_data = backend.oplog.stats(since=since_ts)
             _json_out({
                 'operation_counts': stats_data.operation_counts,
-                'never_accessed': stats_data.never_accessed,
                 'total_active': stats_data.total_active,
                 })
             return
@@ -4042,7 +3972,7 @@ def prime() -> None:
                 pass
         click.echo(f'[memman] Context was just compacted ({trigger}). '
                    f'Recall critical context now: '
-                   f'memman recall "<topic>" --limit 5')
+                   f'memman recall "<topic>"')
 
     shipped = (pkg_files('memman.setup.assets')
                .joinpath('claude/guide.md').read_text())

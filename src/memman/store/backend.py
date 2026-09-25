@@ -197,10 +197,6 @@ class NodeStore(Protocol):
         """Update LLM enrichment columns for an insight."""
         ...
 
-    def increment_access_count(self, id: Id) -> None:
-        """Bump access_count and refresh last_accessed_at."""
-        ...
-
     def count_active(self) -> int:
         """Count current insights: neither deleted nor superseded."""
         ...
@@ -619,7 +615,7 @@ class Oplog(Protocol):
         ...
 
     def stats(self, *, since: str = '') -> OpLogStats:
-        """Operation counts + never-accessed insight count."""
+        """Operation counts plus the current insight count."""
         ...
 
 
@@ -637,9 +633,8 @@ class RecallSession(Protocol):
     inside the `with recall_session()` block. SQLite serves it from
     an in-process embedding matrix built once per session; Postgres
     serves it via HNSW with `embedding <=>`. Similarity for
-    non-anchor nodes comes from `similarities`, and MMR's bounded
-    vector need from `vectors_for_ids` -- the pipeline never holds a
-    whole-store embedding dict. `keyword_counts` is the same story
+    non-anchor nodes comes from `similarities` -- the pipeline never
+    holds a whole-store embedding dict. `keyword_counts` is the same story
     for tokens: the pipeline never tokenizes the store.
 
     Notes
@@ -702,15 +697,6 @@ class RecallSession(Protocol):
         """
         ...
 
-    def vectors_for_ids(
-            self, ids: list[Id]) -> dict[Id, list[float]]:
-        """Embeddings for specific ids, for a bounded pool.
-
-        Ids with no embedding, or whose width differs from the
-        store's modal width, are absent from the result.
-        """
-        ...
-
     def keyword_counts(
             self, query_tokens: set[str]) -> dict[Id, int]:
         r"""Distinct query tokens present in each active insight.
@@ -733,8 +719,8 @@ class RecallSession(Protocol):
         - The count is over the insight's content AND its entities,
           the same union `keyword.insight_tokens` builds, and it is
           the numerator of `kw_score`. A backend that returns a
-          different count changes `signals.keyword`, `--min-score`
-          and the rerank blend together.
+          different count changes `signals.keyword` and the rerank
+          blend together.
         - NON-ASCII TEXT DIVERGES ON SQLITE, deliberately and
           measurably. `keyword._WORD_RE` is `[a-zA-Z0-9]+`, so it
           splits a run at any other character; FTS5 `unicode61`

@@ -6,9 +6,8 @@ Dual-mode API mocking: mocked by default, real APIs with --live flag.
     pytest --live             # real Haiku + Voyage APIs (slow, needs keys)
 
 Mock mode patches `MemmanLLMClient.complete` and `voyage.Client.embed`
-at the HTTP layer, so all extraction/reconciliation/expansion logic
-still runs with realistic canned responses. This exercises the real
-code paths.
+at the HTTP layer, so all enrichment logic still runs with realistic
+canned responses. This exercises the real code paths.
 """
 
 import hashlib
@@ -164,8 +163,8 @@ def _set_env_file_value(key: str, value: str | None) -> None:
 def env_file():
     """Yield a callable that writes/removes keys in the test env file.
 
-    Usage: `env_file('MEMMAN_LLM_MODEL_FAST', 'foo')` writes the row;
-    `env_file('MEMMAN_LLM_MODEL_FAST', None)` removes it. Cache is
+    Usage: `env_file('MEMMAN_LLM_MODEL_SLOW', 'foo')` writes the row;
+    `env_file('MEMMAN_LLM_MODEL_SLOW', None)` removes it. Cache is
     auto-reset; the autouse `_isolate_env` fixture handles cleanup.
     """
     return _set_env_file_value
@@ -360,7 +359,7 @@ def _mock_apis(request, monkeypatch):
     """Mock LLM and embedding HTTP calls unless --live is set.
 
     Patches at the method layer: MemmanLLMClient.complete returns
-    realistic JSON that the real enrichment and expansion code parses.
+    realistic JSON that the real enrichment code parses.
     Voyage embed returns a deterministic content-hash vector.
     `openrouter_models.resolve_latest_for_role` is stubbed to a fixed
     id so install-path tests never hit the network.
@@ -383,8 +382,7 @@ def _mock_apis(request, monkeypatch):
             _mock_llm_complete)
 
     def _stub_resolve_role(role, endpoint='https://openrouter.ai/api/v1'):
-        family = 'haiku' if role == 'fast' else 'sonnet'
-        return f'anthropic/claude-{family}-4.5'
+        return 'anthropic/claude-sonnet-4.5'
 
     monkeypatch.setattr(
         'memman.llm.openrouter_models.resolve_latest_for_role',
@@ -401,9 +399,7 @@ def _mock_apis(request, monkeypatch):
     from memman import config
     config.reset_file_cache()
     from memman.llm import client as llm_client_mod
-    from memman.llm import extract as llm_extract_mod
     llm_client_mod.reset_role_cache()
-    llm_extract_mod.reset_expand_cache()
 
 
 def _mock_llm_complete(self: object, system: str, user: str,
@@ -429,24 +425,10 @@ def _mock_llm_complete(self: object, system: str, user: str,
         The canned JSON response for that stage; a `facts` list
         echoing the user body when no marker matches.
     """
-    if 'Expand a search query' in system:
-        return _mock_query_expansion(user)
     if 'keyword' in system.lower() and 'enrichment' in system.lower():
         return _mock_enrichment(user)
     return json.dumps({'facts': [{'text': user, 'category': 'fact',
                                   'entities': []}]})
-
-
-def _mock_query_expansion(query: str) -> str:
-    """Generate realistic query expansion response."""
-    words = query.split()
-    entities = [w for w in words if w[0:1].isupper()]
-    return json.dumps({
-        'expanded_query': query,
-        'keywords': words,
-        'entities': entities,
-        'intent': 'GENERAL',
-        })
 
 
 def _mock_enrichment(content: str) -> str:
@@ -740,11 +722,9 @@ def make_insight(**overrides) -> Insight:
         'importance': 3,
         'entities': [],
         'source': 'test',
-        'access_count': 0,
         'created_at': now,
         'updated_at': now,
         'deleted_at': None,
-        'last_accessed_at': None,
         }
     defaults.update(overrides)
     if 'entities' in overrides and overrides['entities'] is None:

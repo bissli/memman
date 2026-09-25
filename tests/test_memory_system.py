@@ -6,9 +6,17 @@ module imports.
 
 import json
 import os
+import re
 
 import pytest
 from tests.conftest import invoke, parse_remember
+
+_SCORED_LINE = re.compile(
+    r'^(?P<id>\S{8}) (?P<score>-?\d+\.\d\d)'
+    r' (?P<created>\S+) (?P<author>\S+) (?P<category>\S+) \| (?P<text>.*)$')
+_BASIC_LINE = re.compile(
+    r'^(?P<id>\S{8})'
+    r' (?P<created>\S+) (?P<author>\S+) (?P<category>\S+) \| (?P<text>.*)$')
 
 
 @pytest.fixture
@@ -44,11 +52,28 @@ def remember(runner_tuple, content, **flags):
     return parse_remember(result, runner_tuple)
 
 
+def _hydrate_page(runner_tuple, output, basic):
+    """Resolve a recall page's id8 lines to their full insight dicts.
+
+    Mutation: reading the deleted JSON envelope in place of the
+        plain-text page.
+    """
+    pattern = _BASIC_LINE if basic else _SCORED_LINE
+    rows = []
+    for line in output.splitlines():
+        match = pattern.match(line)
+        assert match, f'line off the page format: {line!r}'
+        result = invoke(runner_tuple, ['insights', 'show', match['id']])
+        assert result.exit_code == 0, result.output
+        rows.append(json.loads(result.output))
+    return rows
+
+
 def recall_basic(runner_tuple, keyword):
     """Recall via --basic (SQL LIKE on single keyword), return list."""
     result = invoke(runner_tuple, ['recall', keyword, '--basic'])
     assert result.exit_code == 0, result.output
-    return json.loads(result.output)['results']
+    return _hydrate_page(runner_tuple, result.output, basic=True)
 
 
 def recall_smart(runner_tuple, query, **flags):
@@ -58,15 +83,14 @@ def recall_smart(runner_tuple, query, **flags):
         args.extend([f'--{k}', str(v)])
     result = invoke(runner_tuple, args)
     assert result.exit_code == 0, result.output
-    data = json.loads(result.output)
-    return [r['insight'] for r in data.get('results', [])]
+    return _hydrate_page(runner_tuple, result.output, basic=False)
 
 
 def search_cmd(runner_tuple, query):
     """Keyword-only retrieval via recall --basic, return insight list."""
     result = invoke(runner_tuple, ['recall', '--basic', query])
     assert result.exit_code == 0, result.output
-    return json.loads(result.output).get('results', [])
+    return _hydrate_page(runner_tuple, result.output, basic=True)
 
 
 def contents(results):
@@ -202,21 +226,32 @@ class TestReplaceAtomicity:
         assert any('FastAPI' in c for c in contents(hits_new))
 
     def test_replace_inherits_metadata(self, runner):
-        """Replace without flags inherits cat/imp from original."""
+        """Replace without flags inherits cat/imp from original.
+
+        Mutation: dropping the inherited category or importance on a
+            flag-less replace, defaulting instead.
+        Oracle: `insights show` on the replacement id, compared
+            against the original's stored values.
+        """
         data = remember(runner, 'chose event sourcing for audit trail', cat='decision', imp='5')
         result = invoke(runner, ['replace', data['id'],
                                  'chose CQRS with event sourcing for audit'])
         new = parse_remember(result, runner)
         assert 'id' in new
 
-        result = invoke(runner, ['recall', '--basic', 'CQRS'])
-        hits = json.loads(result.output)['results']
-        match = [h for h in hits if h['id'] == new['id']][0]
-        assert match['category'] == 'decision'
-        assert match['importance'] == 5
+        shown = json.loads(
+            invoke(runner, ['insights', 'show', new['id']]).output)
+        assert shown['category'] == 'decision'
+        assert shown['importance'] == 5
 
     def test_replace_override_metadata(self, runner):
-        """Replace with explicit flags overrides original metadata."""
+        """Replace with explicit flags overrides original metadata.
+
+        Mutation: keeping the original category/importance despite an
+            explicit override on the replace command.
+        Oracle: `insights show` on the replacement id, compared
+            against the flags passed to `replace`.
+        """
         data = remember(runner, 'Varnish HTTP cache configured with 2GB memory for static assets', cat='fact', imp='2')
         result = invoke(runner, ['replace', data['id'],
                                  'Switched from Varnish to CloudFront CDN for global edge caching',
@@ -224,25 +259,10 @@ class TestReplaceAtomicity:
         new = parse_remember(result, runner)
         assert 'id' in new
 
-        result = invoke(runner, ['recall', '--basic', 'CloudFront CDN'])
-        hits = json.loads(result.output)['results']
-        match = [h for h in hits if h['id'] == new['id']][0]
-        assert match['category'] == 'decision'
-        assert match['importance'] == 5
-
-    def test_replace_preserves_access_count(self, runner):
-        """Replace carries forward accumulated access count."""
-        data = remember(runner,
-                        'PostgreSQL migration from version 14 to 16 completed successfully')
-        recall_basic(runner, 'PostgreSQL')
-        recall_basic(runner, 'PostgreSQL')
-        result = invoke(runner, ['replace', data['id'],
-                                 'PostgreSQL migration from 14 to 16 required reindex of all GIN indexes'])
-        new = parse_remember(result, runner)
-        hits = recall_basic(runner, 'PostgreSQL')
-        replaced = [h for h in hits if h['id'] == new['id']]
-        assert replaced
-        assert replaced[0]['access_count'] >= 2
+        shown = json.loads(
+            invoke(runner, ['insights', 'show', new['id']]).output)
+        assert shown['category'] == 'decision'
+        assert shown['importance'] == 5
 
     def test_replace_nonexistent_id_errors(self, runner):
         """Replace with fake ID fails."""
@@ -603,20 +623,6 @@ class TestContradictionDetection:
         assert result['action'] == 'add'
 
 
-class TestAccessCountAccuracy:
-    """Access count should exactly track recall invocations."""
-
-    def test_access_count_matches_recall_count(self, runner):
-        """After N recalls, access_count should be N."""
-        remember(runner,
-                 'Wireguard VPN tunnel configured with 256-bit encryption between datacenters')
-        for _ in range(5):
-            recall_basic(runner, 'Wireguard')
-        hits = recall_basic(runner, 'Wireguard')
-        assert hits[0]['access_count'] == 6, (
-            f'Expected 6, got {hits[0]["access_count"]}')
-
-
 class TestRecallPrecisionUnderNoise:
     """Recall should find the right needle in a large haystack."""
 
@@ -674,8 +680,10 @@ class TestStoreIsolation:
 
         result = invoke(runner, ['--store', 'work', 'recall',
                                  'secret', '--basic'])
-        work_hits = json.loads(result.output)['results']
-        assert any('secret' in c for c in contents(work_hits))
+        assert result.exit_code == 0, result.output
+        rows = [_BASIC_LINE.match(line).groupdict()
+                for line in result.output.splitlines()]
+        assert any('secret' in row['text'] for row in rows)
 
     def test_forget_in_one_store_does_not_affect_another(self, runner):
         """Forget in store A leaves store B's copy intact."""
@@ -691,8 +699,10 @@ class TestStoreIsolation:
 
         result_b = invoke(runner, ['--store', 'beta', 'recall',
                                    'Terraform', '--basic'])
-        beta_hits = json.loads(result_b.output)['results']
-        assert any('terraform' in c.lower() for c in contents(beta_hits))
+        assert result_b.exit_code == 0, result_b.output
+        rows = [_BASIC_LINE.match(line).groupdict()
+                for line in result_b.output.splitlines()]
+        assert any('terraform' in row['text'].lower() for row in rows)
 
 
 class TestRecallCompleteness:

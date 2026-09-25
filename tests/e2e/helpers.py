@@ -121,25 +121,24 @@ def extract_queue_id(data: dict) -> int:
 
 def find_insight_by_recall(home: Path, data_dir: Path,
                            keyword: str) -> str:
-    """Recall the most recent insight matching `keyword`; return its id.
+    """Recall the most recent insight matching `keyword`; return its id8.
 
     Used after a drain pass to translate a write back to its insight
     without a queue-side back-reference (the queue table has no
     `insight_id` column). The keyword must be unique within the data
-    dir so the top-1 result is the intended insight.
+    dir so the top line is the intended insight.
 
-    `recall --basic` returns insight rows directly (not wrapped under
-    `{insight: ...}`); this helper reads `results[0]['id']`.
+    `recall --basic` prints one page line per row; this helper reads
+    the first line's leading 8-character id.
     """
     out = run_cli(['recall', '--basic', keyword, '--limit', '1'],
                   home, data_dir)
-    data = json_out(out)
-    results = data.get('results', [])
-    if not results:
+    lines = out.stdout.splitlines()
+    if not lines:
         raise AssertionError(
             f'recall found no insight for keyword {keyword!r}; '
             f'drain may not have run')
-    return str(results[0]['id'])
+    return lines[0].split(' ', 1)[0]
 
 
 def find_result(results: list[dict], insight_id: str) -> dict | None:

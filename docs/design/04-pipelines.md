@@ -35,7 +35,7 @@ Per-blob processing inside `_process_queue_row`:
 3. **Quality gate** - regex-based `check_content_quality()` returns advisory warnings; it never blocks the write.
 4. **Plan the write**: embed the write's text via the store's bound provider. The write adds a row, unless the caller named a `replace <id>` target, which the write replaces regardless of content.
 5. **Enrichment**: LLM-proposed entities and keywords over 200 chars are dropped post-parse (never truncated: a truncated entity is still a valid exact-match edge key), before the count caps and before the merge with user-supplied `--entity` values. The caps are pathological-input guardrails, sized well above the longest legitimate string the fleet produces, not retrieval tunables, and they live post-parse so `prompt_version` is unaffected.
-6. **Re-embed** with enriched keywords, when the enrichment carried any; rebuild auto edges. Apply the plan: a `replace` supersedes its target, moves the target's edges to the new row, carries `access_count` as the max of the two rows onto the new row, keeps the caller's entity list, and writes an oplog row with operation `replace` and detail `replaced by <id>`. A target that is no longer current by apply time (forgotten, or already superseded) is dropped: the oplog records operation `target-gone` against the new row, naming the requested target, and the write degrades to a plain add - the row IS stored, leaving `memman log list` the only place a caller learns a correction did not attach.
+6. **Re-embed** with enriched keywords, when the enrichment carried any; rebuild auto edges. Apply the plan: a `replace` supersedes its target, moves the target's edges to the new row, keeps the caller's entity list, and writes an oplog row with operation `replace` and detail `replaced by <id>`. A target that is no longer current by apply time (forgotten, or already superseded) is dropped: the oplog records operation `target-gone` against the new row, naming the requested target, and the write degrades to a plain add - the row IS stored, leaving `memman log list` the only place a caller learns a correction did not attach.
 7. `mark_done(queue_id)` on success, or `mark_failed` (retry up to 5 times across stale-claim windows before status='failed'). A row that exhausts its retries stays in the queue at `status='failed'` with its text intact until `queue retry` requeues it.
 
 Edge upserts and embed/LLM call sites no longer swallow exceptions; failures (constraint violation, network error, malformed payload) reach `mark_failed` and consume the retry budget. Best-effort cleanup (HTTP session resets, platform probes, pool teardown) keeps narrow typed catches at `logger.debug`.
@@ -51,7 +51,6 @@ A `replace` is not an in-place edit. `_apply_plan` supersedes the target and ins
 | `importance`                                   | incoming                              | the caller's `--imp`, stored as passed                                                      |
 | `source`, `session_id`, `queue_uuid`, `author` | incoming                              | provenance names the write that produced this row                                           |
 | `entities`                                     | incoming, as given                    | the caller's entity list; a CLI check caps a directly-typed list at `MAX_ROW_ENTITIES` (50) |
-| `access_count`                                 | **max** of both                       | earned recall history must survive a rewording                                              |
 | `superseded_by`                                | predecessor's, set to the new row     | the link `insights show --history` and `unsupersede` read                                   |
 | `created_at`                                   | new row's own                         | server-side default; the row is new                                                         |
 | edges                                          | **re-pointed** from target to new row | the target's neighborhood is the graph's value; a bare delete throws it away                |
@@ -62,18 +61,17 @@ Edge re-pointing skips any edge whose far endpoint is the target itself or the n
 
 ### Per-stage token accounting
 
-Every `MemmanLLMClient.complete` call names its originating stage from a closed set (`query_expansion`, `enrichment`, `probe`, plus `harness` for off-pipeline measurement tooling - an unknown stage raises). The client reads the provider's `usage` block **per attempt inside the retry loop** - an empty HTTP-200 body retried twice is three billed completions, so success-only accounting undercounts - and accumulates into a process-wide ledger behind a `threading.Lock` (the drain processes rows concurrently, so event-order attribution is unrecoverable). The drain worker snapshots the ledger per row (each `queue_done`/`queue_failed` trace event carries the row's per-stage delta) and emits an `llm_usage_summary` trace event plus an `llm_usage` key in the drain's JSON output with the drain-level totals. An HTTP-200 response with no `usage` block counts the call under `missing_usage` without inventing zero tokens; non-2xx attempts land in `http_errors` rather than `calls`, so a retried rate-limit storm cannot inflate the billed-call signal, and an HTTP-200 whose body is not JSON is booked like an empty body and retried.
+Every `MemmanLLMClient.complete` call names its originating stage from a closed set (`enrichment`, `probe`, plus `harness` for off-pipeline measurement tooling - an unknown stage raises). The client reads the provider's `usage` block **per attempt inside the retry loop** - an empty HTTP-200 body retried twice is three billed completions, so success-only accounting undercounts - and accumulates into a process-wide ledger behind a `threading.Lock` (the drain processes rows concurrently, so event-order attribution is unrecoverable). The drain worker snapshots the ledger per row (each `queue_done`/`queue_failed` trace event carries the row's per-stage delta) and emits an `llm_usage_summary` trace event plus an `llm_usage` key in the drain's JSON output with the drain-level totals. An HTTP-200 response with no `usage` block counts the call under `missing_usage` without inventing zero tokens; non-2xx attempts land in `http_errors` rather than `calls`, so a retried rate-limit storm cannot inflate the billed-call signal, and an HTTP-200 whose body is not JSON is booked like an empty body and retried.
 
 ### LLM routing
 
-Both the session path (`memman recall` query expansion) and the scheduler path go through a single `MemmanLLMClient` that posts to the OpenAI-compatible `/chat/completions` endpoint configured via `MEMMAN_LLM_ENDPOINT` (default `https://openrouter.ai/api/v1`). Switching providers is one env edit - any vendor exposing an OpenAI-compat shim (OpenRouter, OpenAI, Anthropic, Google, Ollama, vLLM, LiteLLM, ...) is reachable without code changes. The client speaks one wire protocol; there are no per-vendor subclasses.
+Both the scheduler's enrichment path and `doctor`'s connectivity probe go through a single `MemmanLLMClient` that posts to the OpenAI-compatible `/chat/completions` endpoint configured via `MEMMAN_LLM_ENDPOINT` (default `https://openrouter.ai/api/v1`). Switching providers is one env edit - any vendor exposing an OpenAI-compat shim (OpenRouter, OpenAI, Anthropic, Google, Ollama, vLLM, LiteLLM, ...) is reachable without code changes. The client speaks one wire protocol; there are no per-vendor subclasses.
 
-Two role slots key off the configured endpoint:
+One role slot keys off the configured endpoint:
 
-- `MEMMAN_LLM_MODEL_FAST` - the `fast` role: recall hot path (`--expand` query expansion) and `doctor`'s connectivity probe.
-- `MEMMAN_LLM_MODEL_SLOW` - the `slow` role: worker's derived-metadata path (enrichment summaries/keywords).
+- `MEMMAN_LLM_MODEL_SLOW` - the `slow` role: worker's derived-metadata path (enrichment summaries/keywords) and `doctor`'s connectivity probe.
 
-For OpenRouter endpoints, `memman install` queries `/v1/models` once per role and writes the resolved id to `~/.memman/env`. For any non-OpenRouter endpoint the install wizard prompts for each slug interactively (vendor-native model ids like `gpt-4o-mini` or `qwen2.5:7b` don't share OpenRouter's `provider/model` slug shape and cannot be auto-resolved). Runtime never queries the model inventory; it reads the persisted id and sends it through unchanged. Re-run `memman install` to bump to a current version when a new model family ships.
+For OpenRouter endpoints, `memman install` queries `/v1/models` once and writes the resolved id to `~/.memman/env`. For any non-OpenRouter endpoint the install wizard prompts for the slug interactively (vendor-native model ids like `gpt-4o-mini` or `qwen2.5:7b` don't share OpenRouter's `provider/model` slug shape and cannot be auto-resolved). Runtime never queries the model inventory; it reads the persisted id and sends it through unchanged. Re-run `memman install` to bump to a current version when a new model family ships.
 
 ### Operational controls
 
@@ -94,35 +92,13 @@ For OpenRouter endpoints, `memman install` queries `/v1/models` once per role an
 
 ## 4.2 Read pipeline: smart recall
 
-`memman recall` combines optional LLM query expansion, intent detection, multi-signal anchor selection, beam search graph traversal, and multi-factor re-ranking. Use `--basic` for SQL LIKE fallback.
+`memman recall` combines multi-signal anchor selection, beam search graph traversal, and multi-factor re-ranking, then prints one plain-text line per row, best first: `<id8> <score> <created_at> <author> <category> | <text>`. `id8` is the first 8 characters of the id; `score` is the row's rank score to two decimals, comparable only within the same page; `author` is `-` when unset; `text` is the summary when the row has one, else the first 200 characters of content, with line breaks folded and `...` marking a cut. An empty page prints nothing and exits 0. Use `--basic` for SQL LIKE fallback, which prints the same line without the `score` field.
 
-`--basic` returns before Step 0 and runs none of the steps below, so every flag that only feeds a step is inert there. `--intent` is still validated -- `--basic --intent bogus` fails rather than reporting a malformed intent as merely ignored -- and both it and `--expand` are then named in `meta.ignored`. `--min-score` is rejected instead, whenever it is actually set: it is a filter, and dropping a floor silently would leave every returned row looking like it had cleared one. (`--min-score 0` is the off value and passes.) `--cat`, `--source` and `--brief` stay fully active. So does `--limit`, with one trap: `--limit 0` means unbounded on the scored path, where the slice runs only when `limit > 0`, but the basic path passes the number straight into a SQL `limit ?`, so `--basic --limit 0` returns nothing at all.
+`--basic` returns before anchor selection and runs none of the steps below, so every flag that only feeds a step is inert there. `--cat`, `--source` and `--limit` stay fully active, with one trap: `--limit 0` means unbounded on the scored path, where the slice runs only when `limit > 0`, but the basic path passes the number straight into a SQL `limit ?`, so `--basic --limit 0` returns nothing at all.
 
 ![Smart Recall Pipeline](../diagrams/03-smart-recall-pipeline.drawio.png)
 
-### Step 0: LLM query expansion (opt-in, off by default)
-
-`expand_query(llm_client, query)` sends the raw query to the LLM and returns:
-
-- **expanded_query**: original + synonyms and related terms
-- **intent**: WHY / WHEN / ENTITY / GENERAL (can override regex detection)
-
-Expansion runs only when the user passes `--expand`, and never under `--basic`. By default the raw query is embedded directly. Expansion is gated because the LLM has no domain scope and can pull the candidate pool toward general-knowledge synonyms that recency-aware rerank (Step 4) then amplifies. Modern embedding models already capture most synonym intent; recency does the rest. See § 4.3.
-
-### Step 1: Intent detection
-
-Query intent is identified via regex (or LLM override from Step 0):
-
-| Intent  | Trigger Patterns                                                                       |
-| ------- | -------------------------------------------------------------------------------------- |
-| WHY     | `why`, `reason`, `because`, `cause`, `motivation`, `rationale`                         |
-| WHEN    | `when`, `time`, `date`, `before`, `after`, `during`, `timeline`, `history`, `sequence` |
-| ENTITY  | `what is`, `who is`, `tell me about`, `describe`, `about`                              |
-| GENERAL | None of the above match                                                                |
-
-`--intent` manually overrides automatic detection. Under `--basic` no intent is detected at all, so the flag is validated and then reported in `meta.ignored`.
-
-### Step 2: Multi-signal anchor selection (RRF fusion)
+### Step 1: Multi-signal anchor selection (RRF fusion)
 
 Three signals run in parallel and fuse via Reciprocal Rank Fusion:
 
@@ -144,7 +120,7 @@ Each insight may rank differently across signals; RRF fusion produces a composit
 - **No absolute cosine floor on the vector channel.** `VECTOR_SEARCH_MIN_SIM = 0.10` was deleted, along with the `min_sim` parameter it fed: a fixed cosine means different things under different embedding models, so the floor bound silently on a store whose cosines center low and could not be re-derived when the provider changed. Measured inert where it shipped - over 120 queries and 166,156 (query, row) cosines under `voyage-3-lite` it removed ZERO rows from any top-30 anchor set, though 5.85% of pairs fell below it. `vector_anchors` now returns positives only, which is the one floor that is model-invariant: an orthogonal row is orthogonal under every model. A store with fewer than `k` positive-cosine rows therefore returns fewer than `k` anchors, by design.
 - **The keyword channel counts in the store, not in Python, and no longer tokenizes a row at recall time.** `RecallSession.keyword_counts` returns how many distinct query tokens each active insight holds, counted where the text lives. On SQLite that is an index probe per query token against an FTS5 table. On Postgres each row stores its own distinct token set in `insights.kw_tokens`, written by `keyword.insight_tokens` at insert and recomputed when entities change, so the count is one GIN-indexed array intersection. The count is identical to the Python route by construction: stopword filtering on the row side cannot change it, because query tokens are stopword-filtered too and only tokens present in both sides enter the intersection. The first version of this channel counted in the store but still re-expressed the tokenizer in SQL and scanned sequentially, which measured at 75% of recall latency on the largest Postgres store; the stored column is 97% faster and returns the same rows. Each step replaced a slower route and moved nothing else - the score formula, its `[0, 1]` range and every returned row are unchanged. FTS5 `match` takes a query language, so the probe is built from `tokenize` output and never from query text; 8 of 11 realistic queries handed to `match` raw raise a syntax error. `search/keyword.py` keeps the per-row route for insights not yet indexed.
 
-### Step 3: Beam search graph traversal
+### Step 2: Beam search graph traversal
 
 From each anchor, beam search traverses the three graphs:
 
@@ -157,7 +133,7 @@ for each anchor:
         node = pop(priority_queue)
         for edge in GetEdgesFrom(node):
             neighbor = edge.target
-            structural_score = edge.weight × intent_weight[edge.type]
+            structural_score = edge.weight × edge_weight[edge.type]
             semantic_score = cosine(vec_neighbor, vec_query)
             total = score_node + λ₁·structural + λ₂·semantic
             //  λ₁ = 1.0 (structural weight), λ₂ = 0.4 (semantic weight)
@@ -167,9 +143,9 @@ for each anchor:
                 push(priority_queue, neighbor)
 ```
 
-Beam width, max depth, and max-visited budgets are intent-adaptive - see the per-intent tuning table in Step 4.
+Beam width, max depth, and max-visited hold one fixed budget for every query: beam 10, depth 4, max visited 500.
 
-### Step 4: Multi-factor re-ranking
+### Step 3: Multi-factor re-ranking
 
 For all collected candidates, a three-dimensional score is computed and combined via weighted sum:
 
@@ -187,127 +163,39 @@ graph_score    = (traversal_score - min) / (max - min)   // min-max normalizatio
 final = w_kw·keyword + w_sim·similarity + w_gr·graph
 ```
 
-Each row sums to 1.0, so `final` is a weighted average carrying one range at every intent. A fourth term, `entity`, was removed in 0.23.0 (see the note below), which left the rows summing to WHY 0.90, WHEN 0.90, ENTITY 0.65 and GENERAL 0.85; 0.23.1 divided each row by its own sum. Both claims hold to within a float ulp: WHEN sums to 0.9999999999999999, and `similarity` is an unclamped cosine that can return 1 + 1 ulp, so `final` is bounded by 1 + 4.5e-16 rather than by 1. One range is not one meaning - the mix behind a 0.7 still differs per intent - and `graph_score` is min-max normalized over the query's own candidate pool, so no score compares across queries at any intent.
+The row sums to 1.0, so `final` is a weighted average carrying one range. `(w_kw, w_sim, w_gr)` is `_RERANK_WEIGHTS_RAW = (0.25, 0.45, 0.15)` divided by its own sum. The division is computed at import, not written out, because no quotient here has an exact float literal; computing it also keeps the sum from drifting when someone edits the raw row. `graph_score` is min-max normalized over the query's own candidate pool, so no score compares across queries.
 
-The rows inherit their DIRECTION from the pre-0.23.0 four-weight table; only the scale is new. They are not a measured optimum. `experiments/quality_matrix/results/sweep_rerank/` holds WHEN and WHY swept against three corpora, and the shipped arm is flagged beaten by the grid peak in all six runs; ENTITY and GENERAL have no grid at all. Read that record before treating this table as settled.
+Note the interaction with the cross-encoder (Step 4): when rerank fires it overwrites `final` for the top `RERANK_SHORTLIST = 100` rows, so on a pool of 100 or fewer these weights decide nothing about the order the caller sees. Above 100 they decide which rows reach the reranker at all.
 
-The division is computed at import, not written out, because no quotient here has an exact float literal - 0.45/0.90 is 1/2, yet computes to 0.5000000000000001, because the raw row sums to 0.8999999999999999. A rounded literal turns the row as well as scaling it: `experiments/recall_ablation/verify_weight_rounding.py` prices that turn in returned positions, and its record in that directory's README shows four decimals moving 68 of 8000 slots at limit 100 where the computed form moves none. Computing it also keeps the sum from drifting when someone edits a raw row.
+When the pool exceeds the shortlist, that splice leaves cross-encoder scores on the head and blended scores on the tail; a smaller pool is overwritten whole and has no tail. The limit slice normally drops the tail, but it runs only when `limit > 0`, so `--limit 0` (unbounded) or `--limit > 100` returns both scales in one list, ordered on one key. The order within the head and within the tail is each internally consistent; only a comparison ACROSS the boundary is meaningless. Nothing re-sorts after the slice.
 
-Rescaling one intent's row by a positive constant leaves the weighted-sum order untouched, because every candidate in a call shares one intent. Two things break that end to end. Above the shortlist (next paragraph) the list holds two score scales at once, and lifting only one of them can reorder. And MMR scores `lam * relevance - (1 - lam) * max_pool_similarity`, mixing the blended score with a raw cosine, so it is not scale-invariant either - inert at the shipped `MMR_LAMBDA = 1.0`, but a swept lambda means something different after a rescale.
+**Fixed budgets.** Step 2's traversal budget and Step 3's reranker weights are each one row, not a table:
 
-Note the interaction with the cross-encoder (Step 4b): when rerank fires it overwrites `final` for the top `RERANK_SHORTLIST = 100` rows, so on a pool of 100 or fewer these weights decide nothing about the order the caller sees. Above 100 they decide which rows reach the reranker at all.
-
-When the pool exceeds the shortlist, that splice leaves cross-encoder scores on the head and blended scores on the tail; a smaller pool is overwritten whole and has no tail. The limit slice normally drops the tail, but it runs only when `limit > 0`, so `--limit 0` (unbounded) or `--limit > 100` returns both scales in one list, ordered on one key. The order within the head and within the tail is each internally consistent; only a comparison ACROSS the boundary is meaningless. Nothing re-sorts after the slice, so the splice can no longer be compounded by a second ordering pass - which is what previously let a weight change perturb the returned order on that path.
-
-**Per-intent tuning.** The Step 3 traversal budget and the Step 4 reranker weights both vary by intent. Left columns tune beam search; right columns tune the reranker:
-
-Reranker columns are the RAW rows as written in `_RERANK_WEIGHTS_RAW`; the shipped values are each divided by its row sum.
-
-| Intent  | Beam | Depth | MaxVis | KW   | Sim      | Graph    |
-| ------- | ---- | ----- | ------ | ---- | -------- | -------- |
-| WHY     | 15   | 5     | 500    | 0.15 | **0.45** | **0.30** |
-| WHEN    | 10   | 5     | 400    | 0.20 | **0.40** | **0.30** |
-| ENTITY  | 10   | 4     | 400    | 0.20 | **0.35** | 0.10     |
-| GENERAL | 10   | 4     | 500    | 0.25 | **0.45** | 0.15     |
+| Beam | Depth | MaxVis | KW   | Sim      | Graph |
+| ---- | ----- | ------ | ---- | -------- | ----- |
+| 10   | 4     | 500    | 0.25 | **0.45** | 0.15  |
 
 **Rationale.**
 
-- **`LAMBDA1 = 1.0`, `LAMBDA2 = 0.4`** (Step 3 traversal-score blend): `LAMBDA1` is from MAGMA Table 5 ("λ1 (Structure Coef.): 1.0 (Base)"); `LAMBDA2` falls within MAGMA's empirically tuned range (0.3-0.7), at the conservative end so structural signal is weighted 2.5× semantic.
-- **Beam / Depth / MaxVis**: max depth 5 (WHY/WHEN) is from MAGMA Table 5. WHY gets beam width 15 (50% wider than the base 10) because a rationale chain typically spans more hops. GENERAL gets `MaxVis=500` (matching WHY) because unknown intent should not restrict exploration. WHEN/ENTITY get 400 as a moderate budget, because their primary edges (temporal/entity) form shorter chains.
-- **KW / Sim / Graph**: extends MAGMA's intent-adaptive philosophy (which steers beam search via edge type weights) into the final reranking stage. MAGMA does not define a separate reranking stage - this is memman's extension.
-- **The retired entity term.** A fourth signal, `matched_entities / query_entities_count`, was removed in 0.23.0. Its only feeder was Step 0's expansion, so from the moment expansion became opt-in it was identically 0.0 on the default path and non-zero only under `--expand` - and no harness ever swept it in that live state, because every harness call site passed an empty entity list. Fed deliberately, it measured indistinguishable from a random channel of the same magnitude, and the reason is scale: the mean of `w_ent x` the largest `entity_score` a query actually produced was 0.0596 against a mean rank-5-to-6 score margin of 0.0118, and on individual queries a full-scale match was worth 24x to 108x the margin it had to clear. A term that large does not inform the blend, it overrides it. Entities still reach recall two ways - as keyword tokens through the union above, and as `entity` graph edges, which carry the highest edge weight of any intent under ENTITY (0.611).
+- **`LAMBDA1 = 1.0`, `LAMBDA2 = 0.4`** (Step 2 traversal-score blend): `LAMBDA1` is from MAGMA Table 5 ("λ1 (Structure Coef.): 1.0 (Base)"); `LAMBDA2` falls within MAGMA's empirically tuned range (0.3-0.7), at the conservative end so structural signal is weighted 2.5× semantic.
+- **Beam / Depth / MaxVis**: `MaxVis=500` gives the traversal room MAGMA's Table 5 bounds at 200, because the flat insight hierarchy (no episode/narrative super-nodes) needs a larger budget for equivalent coverage.
+- **KW / Sim / Graph**: extends MAGMA's edge-type weighting into the final reranking stage. MAGMA does not define a separate reranking stage - this is memman's extension.
 
-Embeddings are Nd vectors from the store's bound provider (dim is provider-defined; current default is `voyage-3-lite`, 512-dim). The expanded query from Step 0 is embedded for vector search and reranking.
+Embeddings are Nd vectors from the store's bound provider (dim is provider-defined; current default is `voyage-3-lite`, 512-dim). The query is embedded once for both vector search and reranking.
 
-### The `--min-score` floor (off by default)
+### Step 4: Cross-encoder rerank
 
-The floor runs between the `--cat` / `--source` result filter and the MMR pass of Step 4a. `--min-score` drops any row whose `keyword + similarity` falls below the floor, so its range is 0.0 to 2.0 and `0.0` means off. It thresholds that sum rather than the blended `score` because `graph_score` is min-max normalized: the top candidate of any query scores 1.0 there, so a blended floor would sit at `w_gr` and move with the intent. It ships opt-in because the deep tail of a recall is often where the useful row sits.
+Rerank is on by default. The decision to run is resolved at recall time per call from config: `MEMMAN_RERANK_ENABLED_<store>` (per-store override) falls back to `MEMMAN_RERANK_ENABLED` (global default, `true` post-install). When enabled and the query has more than `MIN_RERANK_TOKENS` (default 2) whitespace tokens, the top `RERANK_SHORTLIST` (default 100) candidates from Step 3 are re-scored by the configured cross-encoder reranker (`MEMMAN_RERANK_PROVIDER`; current default `voyage` with model `rerank-3-lite`), and the rerank score replaces the multi-signal score for the final ordering. Operators disable rerank for a noisy store with `memman config set MEMMAN_RERANK_ENABLED_<store> false`.
 
-### Step 4a: MMR diversity re-sort (off by default)
+Bi-encoder retrieval (Steps 1-3) embeds the query and each insight independently and ranks by cosine plus the three signals. A cross-encoder reads `(query, content)` together with full attention and outputs a relevance score directly, so it resolves cases where bi-encoder cosine misses the right answer despite low token overlap.
 
-Between the `--cat`/`--source` result filter and the cross-encoder shortlist, a one-shot MMR pass can re-sort the top `MMR_POOL` (200) candidates by `lam * relevance - (1 - lam) * max_pool_similarity`, computed with one gram-matrix BLAS call over L2-normalized stored vectors (diagonal zeroed so a row's self-similarity is excluded). It is the cheap one-shot variant - every candidate scored once against the whole pool, then one sort - not greedy iterative MMR. Candidates without a cached embedding are exempt from the re-sort and hold their relevance position (scoring them would hand the degraded rows a zero penalty - the maximum diversity bonus). `MMR_POOL > RERANK_SHORTLIST` by construction so the pass can change shortlist membership when rerank is on. `MMR_LAMBDA` ships at the value measured by the `experiments/recall_ablation` mmr sweep; `1.0` disables the term (see the sweep record in that directory's README for why).
-
-### Step 4b: Cross-encoder rerank
-
-Rerank is on by default. The decision to run is resolved at recall time per call from config: `MEMMAN_RERANK_ENABLED_<store>` (per-store override) falls back to `MEMMAN_RERANK_ENABLED` (global default, `true` post-install). When enabled and the query has more than `MIN_RERANK_TOKENS` (default 2) whitespace tokens, the top `RERANK_SHORTLIST` (default 100) candidates from Step 4 are re-scored by the configured cross-encoder reranker (`MEMMAN_RERANK_PROVIDER`; current default `voyage` with model `rerank-3-lite`), and the rerank score replaces the multi-signal score for the final ordering. Operators disable rerank for a noisy store with `memman config set MEMMAN_RERANK_ENABLED_<store> false`.
-
-Bi-encoder retrieval (Steps 1-4) embeds the query and each insight independently and ranks by cosine plus the three signals. A cross-encoder reads `(query, content)` together with full attention and outputs a relevance score directly, so it resolves cases where bi-encoder cosine misses the right answer despite low token overlap.
-
-Failures (timeouts, non-200 responses) are caught and logged; the baseline ordering is returned unchanged with `meta.reranked = false`. The 1-2 token query gate skips rerank when there is too little query signal for the cross-encoder to use.
+Failures (timeouts, non-200 responses) are caught and logged; the baseline ordering is returned unchanged. The 1-2 token query gate skips rerank when there is too little query signal for the cross-encoder to use.
 
 ### Why rerank is on by default
 
-Rerank is enabled by default because a labeled-corpus evaluation showed it lifts retrieval quality where the bi-encoder is weakest, with no observed regression on the kinds of queries it was predicted to hurt. WHY and WHEN intents - initially predicted to regress under cross-encoder reranking - gained the most, because their bi-encoder baselines were the weakest. The per-store `MEMMAN_RERANK_ENABLED_<store>` knob exists for operators whose corpora prove to be exceptions.
+Rerank is enabled by default because a labeled-corpus evaluation showed it lifts retrieval quality where the bi-encoder is weakest, with no observed regression on the kinds of queries it was predicted to hurt: queries turning on rationale or timeline, initially predicted to regress under cross-encoder reranking, gained the most, because their bi-encoder baselines were the weakest. The per-store `MEMMAN_RERANK_ENABLED_<store>` knob exists for operators whose corpora prove to be exceptions.
 
-**Rows are not re-ordered.** There is no post-limit sort on any intent: the returned order is relevance order at every `--limit`, so the first `n` rows of a page of `m` are exactly what a page of `n` returns. A chronological or topological re-sort of a page already cut by relevance asserts an ordering the result set does not contain - five rows dated across a year read as a timeline when they are the five most relevant, arranged to look like one. Relevance order asserts only what each row's visible `score` already shows. A `WHEN` timeline comes from each row's `created_at`, which `--brief` carries.
-
-### Signal breakdown
-
-Each retrieval result includes signal details:
-
-```json
-{
-  "insight": {
-    "id": "...",
-    "content": "...",
-    "summary": "..."
-  },
-  "score": 0.72,
-  "intent": "ENTITY",
-  "via": "entity",
-  "signals": {
-    "keyword": 0.85,
-    "similarity": 0.72,
-    "graph": 0.45,
-    "rerank": 0.81
-  }
-}
-```
-
-Provenance is tracked internally but NOT returned. The pipeline keeps
-a `via` label per candidate -- either the anchor channel that selected
-the row (`keyword`, `vector`, `hybrid`, `time`) or the edge type that
-reached it (`entity`, `temporal`, `semantic`) -- and the
-traversal overwrites an anchor's channel label whenever it re-scores
-that node. On a well-connected store that overwrite is near-total:
-measured over 3,000 returned rows, the label took only edge-type
-values and reported an anchor channel ZERO times, so a row the vector
-channel surfaced came back labeled `entity`. It also predicted
-nothing, spanning 0.05 in precision against judged relevance across
-the values it took while a typical page carried several distinct
-ones. A
-field that is both wrong and uninformative was removed from the
-caller payload rather than corrected in place; reinstating it means
-fixing the overwrite first.
-
-`signals.rerank` is present only on rows Step 4b actually re-scored: it is the cross-encoder score, and it is the same number that replaced `score`. Its absence means the row never reached the shortlist, or that rerank was off, gated by the token minimum, or failed.
-
-The `summary` field is the LLM-authored one-line gloss produced during enrichment (slow role). It is present only when (a) enrichment has run for the row and (b) the summary actually compresses the content (write-time gate at `len(summary) < len(insight.content) * 0.85`); rows that fail the gate emit no `summary` key. Calling LLMs see ~3.6× token compression with ~90% ranking-decision agreement vs full content.
-
-The host LLM sees these signals and can apply its own judgment with full conversation context.
-
-### Response envelope
-
-`intent_aware_recall` returns `{'results': [...], 'meta': {...}}`. The `meta` object is the pipeline's account of its own run, and is what lets a calling LLM weigh the rows it got:
-
-| Field           | Computed at | Meaning                                                                                          |
-| --------------- | ----------- | ------------------------------------------------------------------------------------------------ |
-| `intent`        | Step 1      | The resolved intent, whatever supplied it                                                        |
-| `intent_source` | Step 1      | `override` when `--intent` or a Step 0 expansion hint supplied the intent, else `auto`           |
-| `hint`          | Step 1      | Per-intent reasoning guidance from `RECALL_HINTS`; always present                                |
-| `anchor_count`  | Step 2      | Fused anchor pool size, after `--cat` / `--source` filtering                                     |
-| `traversed`     | Step 3      | Candidates scored, deliberately unfiltered                                                       |
-| `reranked`      | Step 4b     | `true` only when the cross-encoder re-scored the shortlist; a reranker failure leaves it `false` |
-
-Two of these carry a trap worth stating. `intent_source` reads `override` for a Step 0 expansion hint exactly as it does for an explicit `--intent`, so it distinguishes automatic detection from everything else, not the user from the LLM. And `anchor_count` against `traversed` is the filter diagnostic, read against the budget rule in Step 2 rather than against a flat 30: while `limit` stays at or below `ANCHOR_TOP_K`, an anchor count that collapses under a selective `--cat` while `traversed` stays wide says the filter starved the anchor pools, not the graph. Above that, a filter widens the budget itself and the two move for reasons that are not the diagnosis.
-
-**There is no confidence flag, and that is deliberate.** Recall returns rows even when nothing matches -- Step 2's Recency channel anchors the newest insights regardless -- so a full page is not evidence that anything on it is relevant. An empty `results` means the store itself is empty, not that the query failed. The response answers this per ROW instead: every returned row carries its own `score` and its per-channel `signals`, which a caller compares WITHIN one response. A boolean derived from a threshold would freeze one reranker's score scale into the envelope, and the scale changes when `MEMMAN_RERANK_PROVIDER` or the model does; a per-row score weighed against its siblings does not.
-
-`ignored` is emitted only when non-empty. A calling LLM reads this envelope out of its own context window, so a key that always reported `false` would spend tokens to say nothing.
-
-Under `--basic` none of those keys exist. That envelope is `{'basic': true}`, plus `ignored` when a flag was wasted -- a list of bare flag names (`intent`, `expand`), without the leading dashes. `--basic` returns before ranking, so it carries no `score` and no `signals` either: it can return nothing and says so no differently than a full page.
-
-The rows change shape as well, which matters more to a consumer than the missing `meta` keys. A scored row wraps its insight -- `{'insight': ..., 'score': ..., 'intent': ..., 'signals': ...}` -- while a basic row IS the bare insight dict. Code reading `results[i]['insight']` or `results[i]['signals']` breaks under `--basic`.
+**Rows are not re-ordered.** There is no post-limit sort: the returned order is relevance order at every `--limit`, so the first `n` rows of a page of `m` are exactly what a page of `n` returns. A chronological or topological re-sort of a page already cut by relevance asserts an ordering the result set does not contain - five rows dated across a year read as a timeline when they are the five most relevant, arranged to look like one. Relevance order asserts only what each row's visible `score` already shows. A chronological view comes from each row's `created_at`, printed on every line.
 
 ### Recall trace events
 
@@ -319,7 +207,7 @@ memman calls LLMs at write time (enrichment) and embedding models on every vecto
 
 Two principles:
 
-1. **Keep slow work off the hot path.** The write path defers LLM work to the scheduler drain (Tier 2 in 4.1). The read path is embedding-only at the bare-CLI level. LLM query expansion is opt-in via `--expand`; the cross-encoder reranker is on by default but gated by the per-store config knob `MEMMAN_RERANK_ENABLED_<store>` (no CLI flag - the model never sees it). Where LLM judgment is unavoidable, the output is tagged with what produced it and re-runnable.
+1. **Keep slow work off the hot path.** The write path defers LLM work to the scheduler drain (Tier 2 in 4.1). The read path is embedding-only, with no LLM call of its own; the cross-encoder reranker is on by default but gated by the per-store config knob `MEMMAN_RERANK_ENABLED_<store>` (no CLI flag - the model never sees it). Where LLM judgment is unavoidable, the output is tagged with what produced it and re-runnable.
 2. **Provenance + re-run beats deterministic-rule replacement.** Hard rules (length thresholds, importance clamps, similarity cutoffs) calcify with one model's behavior baked in. Provenance + re-run tracks what produced each row and re-derives when inputs change. Same precedent as the embed-fingerprint mechanism.
 
 ### Invalidation hooks

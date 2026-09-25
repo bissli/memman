@@ -108,8 +108,7 @@ def _build(backend, *, supersede):
 
 def _recall_view(backend, query):
     """Ids, scores and traversal count of one recall, rounded for compare."""
-    resp = intent_aware_recall(
-        backend, query, None, 10, intent_override='GENERAL')
+    resp = intent_aware_recall(backend, query, None, 10)
     rows = [(r['insight'].id, round(r['score'], 9),
              {k: round(v, 9) for k, v in r['signals'].items()})
             for r in resp['results']]
@@ -135,8 +134,7 @@ def test_supersession_reads_identically_to_a_soft_delete(twin_backends):
     for query in ('alpha broker kombu', 'beta dashboard metrics', 'gamma'):
         assert _recall_view(superseded, query) == _recall_view(deleted, query)
     assert {r['insight'].id for r in intent_aware_recall(
-        superseded, 'alpha broker kombu', None, 10,
-        intent_override='GENERAL')['results']}.isdisjoint({'p-1'})
+        superseded, 'alpha broker kombu', None, 10)['results']}.isdisjoint({'p-1'})
 
     assert superseded.nodes.count_active() == deleted.nodes.count_active()
     assert superseded.nodes.count_orphans() == deleted.nodes.count_orphans()

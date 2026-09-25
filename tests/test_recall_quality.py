@@ -122,60 +122,15 @@ class TestGraphTraversal:
         assert g3['signals']['graph'] > 0
 
 
-class TestWhyIntentTraversal:
-    """WHY intent reaches a linked row through the graph."""
-
-    def test_why_intent_reaches_a_linked_row(self, backend):
-        """A row linked to a hit is reached through the graph under WHY.
-
-        Mutation: dropping the structural term from the WHY scoring,
-            or skipping traversal on that intent -- `why-effect` then
-            enters only on its own keyword overlap and its graph
-            signal falls to zero.
-        Oracle: the `graph` signal on the returned row, which is
-            non-zero only for a row the traversal scored. Presence in
-            the page is not the oracle: the store is small enough that
-            every row comes back regardless.
-        """
-        _insert_fillers(backend)
-        backend.nodes.insert(make_insight(
-            id='why-cause',
-            content='Chose SQLite because embedded serverless database',
-            importance=4))
-        backend.nodes.insert(make_insight(
-            id='why-effect',
-            content='the whole thing ships as one artifact',
-            importance=4))
-
-        backend.edges.upsert(make_edge(
-            source_id='why-cause', target_id='why-effect',
-            edge_type='entity', weight=0.9))
-
-        result = intent_aware_recall(
-            backend,
-            query='why SQLite chosen because embedded',
-            query_vec=None,
-            limit=20, intent_override='WHY')
-
-        cause = _find_result(result['results'], 'why-cause')
-        effect = _find_result(result['results'], 'why-effect')
-        assert cause is not None
-        assert effect is not None
-        assert effect['signals']['keyword'] == 0.0
-        assert effect['signals']['graph'] > 0
-
-
 class TestRelevanceOrderingSurvivesTheLimit:
-    """Nothing re-sorts after the limit slice, on any intent."""
+    """Nothing re-sorts after the limit slice."""
 
-    @pytest.mark.parametrize('intent', ['WHY', 'WHEN', 'GENERAL'])
-    def test_results_are_score_descending(self, backend, intent):
-        """Every intent returns rows in descending score order.
+    def test_results_are_score_descending(self, backend):
+        """Recall returns rows in descending score order.
 
-        Mutation: adding any intent-specific reorder after the
-            `results[:limit]` slice - a WHEN sort on
-            `(created_at, score)`, or a WHY reorder along the graph -
-            either of which moves a page already cut by score.
+        Mutation: adding a reorder after the `results[:limit]` slice -
+            a sort on `(created_at, score)` that moves a page already
+            cut by score.
         Oracle: the returned rows sorted by `-score` independently,
             compared as an id sequence.
         """
@@ -191,47 +146,13 @@ class TestRelevanceOrderingSurvivesTheLimit:
 
         result = intent_aware_recall(
             backend, query='database production migration',
-            query_vec=None, limit=20, intent_override=intent)
+            query_vec=None, limit=20)
 
         got = [r['insight'].id for r in result['results']]
         want = [r['insight'].id
                 for r in sorted(result['results'],
                                 key=lambda r: -r['score'])]
         assert got == want
-
-    @pytest.mark.parametrize('intent', ['WHY', 'WHEN'])
-    def test_a_short_page_is_the_head_of_a_long_one(self, backend, intent):
-        """The first n rows of a limit-m recall ARE a limit-n recall.
-
-        Mutation: reinstating either post-limit re-sort. Both run
-            AFTER the slice, so they make a page of 3 the three
-            newest (or topologically first) of the top 3 rather than
-            the head of the top 20 - the exact defect that made
-            `limit 5` disagree with the top 5 of `limit 30`.
-        Oracle: two independent calls at different limits on one
-            store, compared as id sequences.
-        """
-        from tests.conftest import set_created_at
-        _insert_fillers(backend)
-        for i, word in enumerate(
-                ('rollback', 'schema', 'deploy', 'backup', 'restore')):
-            backend.nodes.insert(make_insight(
-                id=f'head-{i}',
-                content=f'database production migration {word}',
-                importance=4))
-            set_created_at(backend, f'head-{i}',
-                           OLD.replace(year=2024 + i))
-
-        wide = intent_aware_recall(
-            backend, query='database production migration',
-            query_vec=None, limit=20, intent_override=intent)
-        narrow = intent_aware_recall(
-            backend, query='database production migration',
-            query_vec=None, limit=3, intent_override=intent)
-
-        assert len(narrow['results']) == 3
-        assert ([r['insight'].id for r in narrow['results']]
-                == [r['insight'].id for r in wide['results']][:3])
 
 
 class TestImportanceTiebreaker:
@@ -257,7 +178,7 @@ class TestImportanceTiebreaker:
             backend,
             query='logging best practices',
             query_vec=None,
-            limit=20, intent_override='GENERAL')
+            limit=20)
 
         high = _find_result(result['results'], 'tie-high')
         low = _find_result(result['results'], 'tie-low')
@@ -313,11 +234,9 @@ def _populate_recall(backend, topic_centers: list) -> None:
                 importance=3,
                 entities=[],
                 source='recall-at-10-test',
-                access_count=0,
                 created_at=None,
                 updated_at=None,
-                deleted_at=None,
-                last_accessed_at=None)
+                deleted_at=None)
             backend.nodes.insert(ins)
             vec = _perturb(center, seed=t_idx * 100 + k)
             backend.nodes.update_embedding(ins_id, vec, 'voyage-3-lite')
@@ -328,7 +247,7 @@ def _topk_ids(backend, qvec, k) -> list:
     result = intent_aware_recall(
         backend, query='topic insight',
         query_vec=qvec,
-        limit=k, intent_override='GENERAL')
+        limit=k)
     return [r['insight'].id for r in result['results'][:k]]
 
 

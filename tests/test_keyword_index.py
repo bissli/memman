@@ -2,8 +2,8 @@
 
 `RecallSession.keyword_counts` replaced a per-recall tokenization of
 every active row. It fills `kw_score`'s numerator, so a count that
-disagrees with `keyword.insight_tokens` moves `signals.keyword`,
-`--min-score` and the rerank blend together. These pin the count, the
+disagrees with `keyword.insight_tokens` moves `signals.keyword` and
+the rerank blend together. These pin the count, the
 query-language safety rule, and the index's sync with the rows it
 indexes.
 """
@@ -155,11 +155,11 @@ def test_edits_reindex_and_unrelated_writes_do_not(backend):
 
     Notes
     -----
-    - The access bump asserts the index survives an unrelated write.
-      It does NOT pin the trigger's `of content, entities` scoping:
-      a bare `after update` rewrites the row with identical values,
-      so it costs writes and changes no output. Catching that needs
-      a write-count spy, not this assertion.
+    - The embedding write asserts the index survives an unrelated
+      write. It does NOT pin the trigger's `of content, entities`
+      scoping: a bare `after update` rewrites the row with identical
+      values, so it costs writes and changes no output. Catching that
+      needs a write-count spy, not this assertion.
     """
     _seed(backend)
     backend.nodes.update_entities('kw-a', ['canis'])
@@ -168,7 +168,7 @@ def test_edits_reindex_and_unrelated_writes_do_not(backend):
         assert session.keyword_counts({'vulpes'}) == {}
         assert session.keyword_counts({'canis'}) == {'kw-a': 1}
 
-    backend.nodes.increment_access_count('kw-a')
+    backend.nodes.update_embedding('kw-a', [0.0] * 512, 'test-model')
     assert backend.integrity_check()['ok']
     with backend.recall_session() as session:
         assert session.keyword_counts({'canis'}) == {'kw-a': 1}
@@ -241,8 +241,8 @@ def test_keyword_signal_is_the_overlap_fraction(backend):
 
     Mutation: any rescale of the score - `bm25()`, an IDF weight, or
         a denominator of matched-rather-than-query tokens. All three
-        keep ordering plausible while moving `--min-score` and the
-        rerank blend off their documented range.
+        keep ordering plausible while moving the rerank blend off its
+        documented range.
     Oracle: hand-computed. 'brown fox jumps quantum' has four
         tokens; kw-a holds three of them and kw-b one.
 

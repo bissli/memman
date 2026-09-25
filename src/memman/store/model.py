@@ -42,11 +42,9 @@ class Insight:
     importance: int = 3
     entities: list[str] = field(default_factory=list)
     source: str = 'user'
-    access_count: int = 0
     created_at: datetime | None = None
     updated_at: datetime | None = None
     deleted_at: datetime | None = None
-    last_accessed_at: datetime | None = None
     prompt_version: str | None = None
     embedding_model: str | None = None
     summary: str = ''
@@ -188,59 +186,48 @@ def insight_to_delta_dict(ins: 'Insight') -> dict[str, Any]:
 BRIEF_CONTENT_CHARS = 200
 
 
-def insight_to_brief_dict(ins: 'Insight') -> dict[str, Any]:
-    """Return the projection `recall --brief` emits in place of the full row.
+def insight_to_recall_line(ins: 'Insight', score: float | None) -> str:
+    """Return the one recall page line that shows an insight.
 
     Parameters
     ----------
     ins : Insight
-        The insight to project.
+        The row to show.
+    score : float | None
+        The row's rank score, printed to two decimals; None omits the
+        field, since `recall --basic` computes no score.
 
     Returns
     -------
-    dict[str, Any]
-        `id`, `category`, `importance`, `created_at`, and `summary`,
-        plus `truncated: True` when `summary` holds a content prefix
-        rather than a real summary.
+    str
+        `<id8> <score> <created_at> <author> <category> | <text>`, with
+        `-` for an unset author and `_` joining any whitespace inside
+        one, so every field before `|` is one space-free token.
 
     Notes
     -----
-    - `summary` is the single text key either way, so a caller reads
-      one field and checks `truncated` to learn whether anything was
-      withheld.
-    - `created_at` is formatted identically to the full projection's,
-      because a brief page is the one a WHEN query reads and row
-      order carries no timeline: rows come back in relevance order,
-      so the field is the only thing a caller can sort on.
-    - A row can reach here with no summary several ways: the
-      enrichment compression gate blanks one that is too close to the
-      content, and an LLM or parse failure leaves the row unenriched
-      entirely. A summary-only projection would return an unreadable
-      row for a large minority of the store, so the fallback is the
-      first `BRIEF_CONTENT_CHARS` characters of `content`.
-    - `truncated` marks content the caller has NOT seen, so it fires
-      only when the fallback actually cut something. Marking every
-      fallback would be false for most of them -- the compression gate
-      blanks a summary precisely when the content is short enough not
-      to need one, so a summary-less row is usually under the limit
-      already -- and would send the caller to `insights show` for a
-      row it already holds in full.
+    - `text` is the summary when the row has one, else the first
+      `BRIEF_CONTENT_CHARS` characters of `content`, ending in `...`
+      when the cut dropped anything.
+    - Every run of whitespace, line breaks included, folds to one
+      space in both, so a row never spans two lines.
+    - `id8` is the first 8 characters of the id; every id-taking
+      command resolves an unambiguous prefix.
     """
-    out: dict[str, Any] = {
-        'id': ins.id,
-        'category': ins.category,
-        'importance': ins.importance,
-        'created_at': format_timestamp(ins.created_at),
-        }
-    if ins.author:
-        out['author'] = ins.author
     if ins.summary.strip():
-        out['summary'] = ins.summary
+        text = ' '.join(ins.summary.split())
     else:
-        out['summary'] = ins.content[:BRIEF_CONTENT_CHARS]
-        if len(ins.content) > BRIEF_CONTENT_CHARS:
-            out['truncated'] = True
-    return out
+        text = ' '.join(ins.content.split())
+        if len(text) > BRIEF_CONTENT_CHARS:
+            text = text[:BRIEF_CONTENT_CHARS] + '...'
+    fields = [ins.id[:8]]
+    if score is not None:
+        fields.append(f'{score:.2f}')
+    fields += [
+        format_timestamp(ins.created_at),
+        '_'.join((ins.author or '').split()) or '-',
+        ins.category]
+    return f"{' '.join(fields)} | {text}"
 
 
 def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
@@ -261,7 +248,6 @@ def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
         'importance': ins.importance,
         'entities': list(ins.entities or []),
         'source': ins.source,
-        'access_count': ins.access_count,
         'created_at': format_timestamp(ins.created_at),
         'updated_at': format_timestamp(ins.updated_at or ins.created_at),
         }
@@ -285,7 +271,6 @@ class OpLogStats:
     """Aggregated oplog statistics."""
 
     operation_counts: dict[str, int] = field(default_factory=dict)
-    never_accessed: int = 0
     total_active: int = 0
 
 

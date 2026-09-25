@@ -116,26 +116,6 @@ def test_stats_reports_current_superseded_and_deleted_separately(backend):
     assert sum(stats.by_category.values()) == 3
 
 
-def test_access_counter_ignores_a_superseded_row(backend):
-    """Verify the access counter does not move on a superseded row.
-
-    Mutation: no `superseded_by is null` guard on
-        `increment_access_count`.
-    Oracle: the counter reads back unchanged on the predecessor, and
-        the same call still moves the successor's counter.
-    """
-    _seed_pair(backend)
-    assert backend.nodes.supersede('p-1', 'p-2') is True
-
-    backend.nodes.increment_access_count('p-1')
-    old = backend.nodes.get_include_deleted('p-1')
-    assert old.access_count == 0
-
-    backend.nodes.increment_access_count('p-2')
-    new = backend.nodes.get('p-2')
-    assert new.access_count == 1
-
-
 def test_pending_link_count_matches_its_id_list_after_supersession(backend):
     """Verify the count/iter maintenance pairs move together.
 

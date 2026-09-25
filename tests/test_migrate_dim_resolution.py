@@ -32,11 +32,11 @@ def _seed_store(store_dir: Path, dim: int, n_rows: int = 3) -> None:
             vec = rng.uniform(-1.0, 1.0, dim).astype(np.float64).tolist()
             conn.execute(
                 'INSERT INTO insights (id, content, category, importance,'
-                ' entities, source, access_count, embedding, created_at,'
+                ' entities, source, embedding, created_at,'
                 ' updated_at)'
-                ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (str(uuid.uuid4()), f'row-{i}', 'fact', 3,
-                 '[]', 'user', 0,
+                 '[]', 'user',
                  struct.pack(f'<{dim}d', *vec), now, now))
         conn.execute(
             'INSERT INTO meta (key, value) VALUES (?, ?)',
@@ -109,11 +109,11 @@ def test_migrate_raises_on_mixed_dim_rows(pg_dsn, tmp_path):
         for i, vec in enumerate([good, bad]):
             conn.execute(
                 'INSERT INTO insights (id, content, category, importance,'
-                ' entities, source, access_count, embedding, created_at,'
+                ' entities, source, embedding, created_at,'
                 ' updated_at)'
-                ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (str(uuid.uuid4()), f'row-{i}', 'fact', 3, '[]',
-                 'user', 0, struct.pack(f'<{len(vec)}d', *vec), now, now))
+                 'user', struct.pack(f'<{len(vec)}d', *vec), now, now))
         conn.execute(
             'INSERT INTO meta (key, value) VALUES (?, ?)',
             ('embed_fingerprint',

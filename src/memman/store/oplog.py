@@ -116,7 +116,7 @@ limit ?
 
 
 def get_oplog_stats(db: 'DB', since: str = '') -> dict[str, Any]:
-    """Return grouped operation counts and never-accessed insight count."""
+    """Return grouped operation counts and the current insight count."""
     if since:
         sql = """
 select operation, count(*)
@@ -137,12 +137,6 @@ order by count(*) desc
 
     op_counts = {row[0]: row[1] for row in rows}
 
-    never_row = db._query(
-        'select count(*) from insights'
-        ' where deleted_at is null and superseded_by is null and access_count = 0',
-        ()).fetchone()
-    never_accessed = never_row[0] if never_row else 0
-
     total_row = db._query(
         'select count(*) from insights'
         ' where deleted_at is null and superseded_by is null',
@@ -151,6 +145,5 @@ order by count(*) desc
 
     return {
         'operation_counts': op_counts,
-        'never_accessed': never_accessed,
         'total_active': total_active,
         }

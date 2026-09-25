@@ -125,9 +125,6 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
         _node.update_enrichment(
             self._db, id, keywords, summary, semantic_facts)
 
-    def increment_access_count(self, id: Id) -> None:
-        _node.increment_access_count(self._db, id)
-
     def count_active(self) -> int:
         return _node.count_active_insights(self._db)
 
@@ -450,7 +447,6 @@ class SqliteOplog(Oplog):
         d = _oplog.get_oplog_stats(self._db, since=since)
         return OpLogStats(
             operation_counts=d.get('operation_counts', {}),
-            never_accessed=d.get('never_accessed', 0),
             total_active=d.get('total_active', 0))
 
     def delta_coverage(self) -> tuple[int, int]:
@@ -597,27 +593,6 @@ where deleted_at is null and superseded_by is null and embedding is not null
             row_ids[row]: float(sims[row])
             for row in np.nonzero(sims > 0.0)[0]
             }
-
-    def vectors_for_ids(
-            self, ids: list[Id]) -> dict[Id, list[float]]:
-        """Embeddings for specific ids.
-
-        Reads whatever width each id was stored at, so a store mid
-        -reembed returns both.
-        """
-        self._load()
-        if not self._groups or self._row_of is None:
-            return {}
-        out: dict[Id, list[float]] = {}
-        for rid in ids:
-            found = self._row_of.get(rid)
-            if found is None:
-                continue
-            dim, row = found
-            group = self._groups.get(dim)
-            if group is not None:
-                out[rid] = group[1][row].tolist()
-        return out
 
     def keyword_counts(
             self, query_tokens: set[str]) -> dict[Id, int]:
@@ -1074,8 +1049,7 @@ class SqliteMigrator(Migrator):
 
             rows = conn.execute("""
 select id, content, category, importance, entities,
-       source, access_count, keywords, summary, semantic_facts,
-       last_accessed_at, embedding,
+       source, keywords, summary, semantic_facts, embedding,
        linked_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, embedding_model,
        embedding_pending, session_id, queue_uuid,
@@ -1086,34 +1060,32 @@ order by id
             insights: list[MigrateInsight] = []
             pending: list[PendingReembed] = []
             for r in rows:
-                emb = deserialize_vector(r[11]) if r[11] else None
+                emb = deserialize_vector(r[9]) if r[9] else None
                 insights.append(MigrateInsight(
                     id=r[0], content=r[1], category=r[2],
                     importance=int(r[3]),
                     entities=json.loads(r[4]) if r[4] else [],
-                    source=r[5], access_count=int(r[6]),
-                    keywords=json.loads(r[7]) if r[7] else None,
-                    summary=r[8],
+                    source=r[5],
+                    keywords=json.loads(r[6]) if r[6] else None,
+                    summary=r[7],
                     semantic_facts=(
-                        json.loads(r[9]) if r[9] else None),
-                    last_accessed_at=(
-                        parse_timestamp(r[10]) if r[10] else None),
+                        json.loads(r[8]) if r[8] else None),
                     embedding=emb,
                     linked_at=(
-                        parse_timestamp(r[12]) if r[12] else None),
+                        parse_timestamp(r[10]) if r[10] else None),
                     enriched_at=(
-                        parse_timestamp(r[13]) if r[13] else None),
-                    created_at=parse_timestamp(r[14]),
-                    updated_at=parse_timestamp(r[15]),
+                        parse_timestamp(r[11]) if r[11] else None),
+                    created_at=parse_timestamp(r[12]),
+                    updated_at=parse_timestamp(r[13]),
                     deleted_at=(
-                        parse_timestamp(r[16]) if r[16] else None),
-                    prompt_version=r[17],
-                    embedding_model=r[18],
-                    session_id=r[20], queue_uuid=r[21],
-                    superseded_by=r[22],
-                    author=r[23]))
-                if r[19] is not None:
-                    pv = deserialize_vector(r[19])
+                        parse_timestamp(r[14]) if r[14] else None),
+                    prompt_version=r[15],
+                    embedding_model=r[16],
+                    session_id=r[18], queue_uuid=r[19],
+                    superseded_by=r[20],
+                    author=r[21]))
+                if r[17] is not None:
+                    pv = deserialize_vector(r[17])
                     if pv is not None:
                         pending.append(PendingReembed(
                             insight_id=r[0], vector=pv))
@@ -1212,15 +1184,13 @@ order by id
                         ins.id, ins.content, ins.category,
                         ins.importance,
                         json.dumps(ins.entities),
-                        ins.source, ins.access_count,
+                        ins.source,
                         json.dumps(ins.keywords)
                         if ins.keywords is not None else None,
                         ins.summary,
                         json.dumps(ins.semantic_facts)
                         if ins.semantic_facts is not None
                         else None,
-                        format_timestamp(ins.last_accessed_at)
-                        if ins.last_accessed_at else None,
                         emb_blob,
                         format_timestamp(ins.linked_at)
                         if ins.linked_at else None,
@@ -1239,16 +1209,16 @@ order by id
                     conn.executemany(
                         'insert into insights ('
                         ' id, content, category, importance,'
-                        ' entities, source, access_count,'
+                        ' entities, source,'
                         ' keywords, summary, semantic_facts,'
-                        ' last_accessed_at, embedding,'
+                        ' embedding,'
                         ' linked_at, enriched_at, created_at,'
                         ' updated_at, deleted_at, prompt_version,'
                         ' embedding_model, session_id,'
                         ' queue_uuid,'
                         ' superseded_by, author)'
                         ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
-                        ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         insight_rows)
 
                 edge_rows = [(

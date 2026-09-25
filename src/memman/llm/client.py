@@ -6,18 +6,10 @@ natively, Anthropic at `/v1`, Google at `/v1beta/openai`, OpenAI of
 course, plus Groq / DeepSeek / Mistral / Cerebras / Ollama / vLLM /
 LiteLLM / HuggingFace which speak it natively. Users switch vendors
 by editing `MEMMAN_LLM_ENDPOINT` (and `MEMMAN_LLM_API_KEY` plus the
-two role-model slugs).
+role-model slug).
 
-Two roles exist:
-
-- `fast` -- synchronous CLI hot path (recall query expansion, doctor's
-  connectivity probe). Reads `MEMMAN_LLM_MODEL_FAST`.
-- `slow` -- derived-metadata path (enrichment). Reads
-  `MEMMAN_LLM_MODEL_SLOW`.
-
-Routing the recall path to a small/fast model and enrichment to a
-larger/slow/reasoning model means switching the enrichment model never
-adds latency to interactive commands.
+One role exists: `slow`, the derived-metadata path (enrichment and
+doctor's connectivity probe). It reads `MEMMAN_LLM_MODEL_SLOW`.
 """
 
 import logging
@@ -33,28 +25,23 @@ from memman.llm.shared import safe_json
 
 logger = logging.getLogger('memman')
 
-ROLE_FAST = 'fast'
 ROLE_SLOW = 'slow'
-VALID_ROLES = frozenset({ROLE_FAST, ROLE_SLOW})
+VALID_ROLES = frozenset({ROLE_SLOW})
 
 _ROLE_ENV_VARS = {
-    ROLE_FAST: config.LLM_MODEL_FAST,
     ROLE_SLOW: config.LLM_MODEL_SLOW,
     }
 
-FAST_MAX_TOKENS = 1024
 WORKER_MAX_TOKENS = 4096
 
 EMPTY_RETRY_DELAY = 0.1
 
-# Per-role output budget + read timeout. `fast` is the recall hot
-# path and stays tight. `slow` emits JSON that scales with input size
-# (enrichment entity/keyword lists); a small cap truncates large
-# insights mid-JSON and the parse fails, so it gets a larger token
-# budget and a longer timeout. A caller raises the budget for one call
-# through `complete(max_tokens=)`.
+# Per-role output budget + read timeout. `slow` emits JSON that
+# scales with input size (enrichment entity/keyword lists); a small cap
+# truncates large insights mid-JSON and the parse fails, so it gets a
+# large token budget and a long timeout. A caller raises the budget
+# for one call through `complete(max_tokens=)`.
 _ROLE_LIMITS = {
-    ROLE_FAST: (FAST_MAX_TOKENS, ENRICHMENT_TIMEOUT),
     ROLE_SLOW: (WORKER_MAX_TOKENS, WORKER_TIMEOUT),
     }
 
@@ -296,7 +283,7 @@ _ROLE_CACHE: dict[str, MemmanLLMClient] = {}
 def get_llm_client(role: str) -> MemmanLLMClient:
     """Return a cached `MemmanLLMClient` for the given role.
 
-    `role` must be `'fast'` or `'slow'`. Reads `MEMMAN_LLM_ENDPOINT`,
+    `role` must be `'slow'`. Reads `MEMMAN_LLM_ENDPOINT`,
     `MEMMAN_LLM_API_KEY`, and the role's model env var from the
     canonical env file. Raises `ConfigError` when a required value is
     missing. OpenRouter endpoints automatically receive memman's

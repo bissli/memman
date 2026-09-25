@@ -81,24 +81,6 @@ def test_replace_repoint_drops_target_self_edge(tmp_db, tmp_backend):
         if e.source_id == 'new-1' and e.target_id == 'new-1']
 
 
-def test_replace_carries_target_access_count(tmp_db, tmp_backend):
-    """Verify recall history on the target survives the replace.
-
-    Mutation: leaving access_count at the incoming write's zero, which
-        erases every recall the target had served.
-    Oracle: hand-computed 7, the target's stored count.
-    """
-    insert_insight(tmp_db, make_insight(
-        id='old-1', content='original', access_count=7))
-
-    plan = _replace_plan('new-1', 'old-1')
-    _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
-
-    successor = get_insight_by_id(tmp_db, 'new-1')
-    assert successor is not None
-    assert successor.access_count == 7
-
-
 def test_replace_plan_links_the_predecessor_and_keeps_it(tmp_db, tmp_backend):
     """Verify a replace plan supersedes the target instead of deleting it.
 

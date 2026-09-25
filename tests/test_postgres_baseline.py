@@ -356,9 +356,9 @@ def test_postgres_recall_issues_pgvector_distance_operator(
             id=f'hs-{i:02d}',
             content=f'document {i} alpha bravo charlie',
             category='fact', importance=3, entities=[],
-            source='hnsw-smoke', access_count=0,
+            source='hnsw-smoke',
             created_at=None, updated_at=None,
-            deleted_at=None, last_accessed_at=None)
+            deleted_at=None)
         backend.nodes.insert(ins)
         backend.nodes.update_embedding(
             ins.id, _voyage_shape_vector(seed=i), 'voyage-3-lite')
@@ -376,7 +376,7 @@ def test_postgres_recall_issues_pgvector_distance_operator(
         intent_aware_recall(
             backend, query='document alpha',
             query_vec=_voyage_shape_vector(seed=999),
-            limit=5, intent_override='GENERAL')
+            limit=5)
     finally:
         try:
             backend.close()

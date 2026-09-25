@@ -27,8 +27,7 @@ def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
         own entities.
     """
     tmp_backend.nodes.insert(make_insight(
-        id='old-1', content='first', entities=['inherited'],
-        access_count=9))
+        id='old-1', content='first', entities=['inherited']))
     tmp_backend.nodes.insert(make_insight(id='new-1', content='second'))
     assert tmp_backend.nodes.supersede('old-1', 'new-1') is True
     tmp_backend.nodes.insert(make_insight(id='gone-1', content='gone'))
@@ -49,7 +48,6 @@ def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
     assert 'replaced_ids' not in late
     stored = tmp_backend.nodes.get('late-1')
     assert stored.entities == ['own']
-    assert stored.access_count == 0
     assert tmp_backend.nodes.get_include_deleted('old-1').superseded_by == 'new-1'
 
     forgotten = _apply_plan(tmp_backend, _replace('late-2', 'gone-1'),

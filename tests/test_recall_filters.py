@@ -55,7 +55,7 @@ def test_filtered_recall_fills_to_limit(backend):
           days_old=10)
     resp = intent_aware_recall(
         backend, 'alpha topic note', None, 10,
-        intent_override='GENERAL', category='preference')
+        category='preference')
     assert len(resp['results']) == 10
     assert all(r['insight'].category == 'preference'
                for r in resp['results'])
@@ -75,8 +75,7 @@ def test_unfiltered_recall_anchor_k_unchanged(backend):
     """
     _seed(backend, 60, 'fact', 'filler row body {i}')
     resp = intent_aware_recall(
-        backend, 'zzz unmatched query', None, 50,
-        intent_override='GENERAL')
+        backend, 'zzz unmatched query', None, 50)
     assert resp['meta']['anchor_count'] == ANCHOR_TOP_K
 
 
@@ -91,7 +90,7 @@ def test_filtered_recall_above_anchor_top_k(backend):
     _seed(backend, 60, 'preference', 'quiet other subject {i}')
     resp = intent_aware_recall(
         backend, 'zzz unmatched query', None, 50,
-        intent_override='GENERAL', category='preference')
+        category='preference')
     assert len(resp['results']) == 50
     assert all(r['insight'].category == 'preference'
                for r in resp['results'])
@@ -129,7 +128,7 @@ def test_filter_does_not_block_graph_traversal(backend):
             source_id=b, target_id=a, edge_type='semantic', weight=1.0))
     resp = intent_aware_recall(
         backend, 'zzz unmatched query', None, 0,
-        intent_override='GENERAL', category='preference')
+        category='preference')
     ids = {r['insight'].id for r in resp['results']}
     assert 'p-far' in ids
     assert 'g-bridge' not in ids
@@ -170,7 +169,7 @@ def test_session_vector_anchors_filter_before_topk(backend):
     qv[0] = 1.0
     resp = intent_aware_recall(
         backend, 'zzz unmatched query', qv, 35,
-        intent_override='GENERAL', category='preference')
+        category='preference')
     assert len(resp['results']) == 35
     assert all(r['insight'].category == 'preference'
                for r in resp['results'])
@@ -200,8 +199,7 @@ def test_recall_survives_a_raising_session_verb(backend, monkeypatch):
     query_vec = _vec512(0.2)
 
     healthy = intent_aware_recall(
-        backend, 'kombu serialization body', query_vec, 10,
-        intent_override='GENERAL')
+        backend, 'kombu serialization body', query_vec, 10)
 
     def _raise(self, *args, **kwargs):
         raise RuntimeError('forced session failure')
@@ -212,8 +210,7 @@ def test_recall_survives_a_raising_session_verb(backend, monkeypatch):
     monkeypatch.setattr(session_cls, 'vector_anchors', _raise)
 
     degraded = intent_aware_recall(
-        backend, 'kombu serialization body', query_vec, 10,
-        intent_override='GENERAL')
+        backend, 'kombu serialization body', query_vec, 10)
 
     assert len(degraded['results']) == len(healthy['results']) > 0
     assert all(r['signals']['similarity'] == 0.0
@@ -244,8 +241,7 @@ def test_recall_survives_a_failed_keyword_channel(backend, monkeypatch):
     _seed(backend, 12, 'fact', 'kombu serialization body {i}')
 
     healthy = intent_aware_recall(
-        backend, 'kombu serialization body', None, 10,
-        intent_override='GENERAL')
+        backend, 'kombu serialization body', None, 10)
     assert any(r['signals']['keyword'] > 0.0
                for r in healthy['results'])
 
@@ -257,8 +253,7 @@ def test_recall_survives_a_failed_keyword_channel(backend, monkeypatch):
     monkeypatch.setattr(session_cls, 'keyword_counts', _raise)
 
     degraded = intent_aware_recall(
-        backend, 'kombu serialization body', None, 10,
-        intent_override='GENERAL')
+        backend, 'kombu serialization body', None, 10)
 
     assert degraded['results'], 'time anchors should still answer'
     assert all(r['signals']['keyword'] == 0.0
@@ -289,7 +284,7 @@ def test_filter_precedes_rerank(backend, monkeypatch):
     _seed(backend, 10, 'fact', 'alpha shared topic gen {i}')
     resp = intent_aware_recall(
         backend, 'alpha shared topic', None, 10,
-        intent_override='GENERAL', rerank=True, category='preference')
+        rerank=True, category='preference')
     assert resp['meta']['reranked'] is True
     assert seen_docs, 'rerank spy never called'
     assert all('pref' in d for d in seen_docs)

@@ -1,13 +1,14 @@
 """Tests for memman.llm.shared -- reading the JSON object out of a response.
 
-Query expansion and enrichment both read their result through
-`parse_json_response`. A response the model wraps in reasoning, corrects
-after a first attempt, or mis-escapes must still yield its final object,
-or the caller falls back to its unparsed default.
+Enrichment reads its result through `parse_json_response`. A response
+the model wraps in reasoning, corrects after a first attempt, or
+mis-escapes must still yield its final object, or the caller falls back
+to its unparsed default.
 """
 
 import json
 
+import pytest
 from memman.llm.shared import parse_json_list_response, parse_json_response
 
 
@@ -104,3 +105,22 @@ def test_parse_json_response_scan_keeps_a_literal_newline_inside_a_string():
     """
     raw = 'Here is the merge.\n\n{"merged_text": "Line one.\nLine two."}'
     assert parse_json_response(raw) == {'merged_text': 'Line one.\nLine two.'}
+
+
+@pytest.mark.parametrize(('raw', 'expected'), [
+    ('{"key": "val"}', {'key': 'val'}),
+    ('```json\n{"key": "val"}\n```', {'key': 'val'}),
+    ('not json', None),
+    ('[1, 2, 3]', None),
+    ('[' * 3000, None),
+    ('{"actions": ' + '[' * 1200, None),
+])
+def test_parse_json_response(raw, expected):
+    """JSON response parsing strips fences, rejects non-dicts and runaway nesting.
+
+    Mutation: catching `ValueError` alone, so a body nested past the
+        recursion limit raises out of every stage reader and fails the
+        write instead of reading as no object.
+    Oracle: hand-paired rows; the two nested rows read as None.
+    """
+    assert parse_json_response(raw) == expected

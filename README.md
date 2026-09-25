@@ -71,9 +71,9 @@ Two invariants follow from this split:
 
 - **Built for coding agents** - memory for Claude Code: the decisions, preferences, and facts a coding session settles, recalled in the next one.
 - **Hook-driven** - five lifecycle hooks handle memory operations automatically.
-- **LLM-supervised** - the host LLM decides what to remember and forget; a worker model handles enrichment and query expansion. No LLM judges a write.
+- **LLM-supervised** - the host LLM decides what to remember and forget; a worker model handles enrichment. No LLM judges a write.
 - **Multi-graph architecture** - temporal, entity, and semantic edges.
-- **Intent-aware recall** - graph beam search with RRF fusion. Query intent (WHY/WHEN/ENTITY/GENERAL) controls edge weights and traversal budget. Results always come back in relevance order.
+- **Graph-aware recall** - beam search over RRF-fused keyword, vector, and recency anchors, blended with a fixed edge-weight table and reranked by a cross-encoder on longer queries. Results always come back in relevance order.
 - **Write once, retire deliberately** - a write adds a row, or replaces the row `replace <id>` names; only `replace` and `supersede` retire a row. A replaced or superseded memory is never deleted: it keeps its content behind `superseded_by`, leaves recall by default, and `memman insights show <id> --history` walks the chain.
 - **Operator-only deletion** - a store is uncapped and nothing expires or is pruned on its own. `memman forget <id>` is the only thing that removes a memory; `memman insights review` surfaces transient content for that decision.
 - **Pluggable embeddings, per-store sovereignty** - registered providers include `voyage`, `openai` (any OpenAI-compatible endpoint: OpenAI, vLLM, LiteLLM, ...), `openrouter`, and `ollama`. Each store's `meta.embed_fingerprint` is the runtime authority over its embedder, so one process can serve multiple stores with different embedders. Switch online via `memman embed swap` or offline via `memman embed reembed`.
@@ -96,7 +96,7 @@ In a TTY, the install wizard prompts for an LLM endpoint URL and an embedding pr
 
 ### Provider setup
 
-memman talks to three external services: an **LLM** (enrichment, query expansion), an **embedding provider** (vector search, graph connectivity), and a **reranker** (final ordering of recall results). All three are pluggable; the embed side is also per-store via `meta.embed_fingerprint`.
+memman talks to three external services: an **LLM** (enrichment), an **embedding provider** (vector search, graph connectivity), and a **reranker** (final ordering of recall results). All three are pluggable; the embed side is also per-store via `meta.embed_fingerprint`.
 
 #### Where keys are needed
 
@@ -107,7 +107,6 @@ The agent's own login is never involved. These are the calls memman makes on its
 | `memman remember`                                        | inside the turn | none                                                  | works - the only verb that opens no store                          |
 | every verb that opens a store, `recall --basic` included | inside the turn | the active embedding provider's key (none for Ollama) | the command stops: `MEMMAN_VOYAGE_API_KEY is not set in <dir>/env` |
 | `recall` - reorder the top results                       | inside the turn | `MEMMAN_VOYAGE_API_KEY`                               | recall keeps its earlier order, and logs why                       |
-| `recall --expand`                                        | inside the turn | `MEMMAN_LLM_API_KEY` (blank for a local LLM)          | the LLM rejects the call and the command stops                     |
 | enrichment                                               | worker          | `MEMMAN_LLM_API_KEY` (blank for a local LLM)          | the row still stores, unenriched                                   |
 | embedding, edge inference                                | worker          | the active embedding provider's key                   | no memory is ever stored                                           |
 | `embed reembed`, `embed swap`, `migrate`                 | on demand       | the active embedding provider's key                   | the command stops with an error                                    |
@@ -137,7 +136,7 @@ memman config set MEMMAN_LLM_ENDPOINT https://api.openai.com/v1
 memman config set MEMMAN_LLM_API_KEY sk-...
 ```
 
-Model slugs per role (`MEMMAN_LLM_MODEL_FAST` / `_SLOW`) are auto-resolved against `/v1/models` for OpenRouter endpoints; for any other endpoint, re-run `memman install` and the wizard prompts for each slug interactively.
+The model slug for the `slow` role (`MEMMAN_LLM_MODEL_SLOW`) is auto-resolved against `/v1/models` for OpenRouter endpoints; for any other endpoint, re-run `memman install` and the wizard prompts for the slug interactively.
 
 #### Embedding providers
 

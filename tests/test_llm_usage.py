@@ -68,7 +68,7 @@ def test_usage_attributed_to_originating_stage(monkeypatch):
         the success site (dropping retry accumulation).
     Oracle: an [empty-with-usage, valid] sequence on 'enrichment'
         records 2 calls / 15 prompt tokens there; a single valid call
-        on 'query_expansion' records 1 call / 7 -- exact per-stage sums.
+        on 'probe' records 1 call / 7 -- exact per-stage sums.
     """
     monkeypatch.setattr(llm_client_mod.time, 'sleep', lambda s: None)
     before = usage.snapshot()
@@ -82,13 +82,13 @@ def test_usage_attributed_to_originating_stage(monkeypatch):
         'sys', 'user', stage=usage.STAGE_ENRICHMENT) == 'ok'
     _install_fake_post(monkeypatch, [_valid()])
     assert _client().complete(
-        'sys', 'user', stage=usage.STAGE_QUERY_EXPANSION) == 'ok'
+        'sys', 'user', stage=usage.STAGE_PROBE) == 'ok'
     d = usage.delta(before, usage.snapshot())
     assert d[usage.STAGE_ENRICHMENT]['calls'] == 2
     assert d[usage.STAGE_ENRICHMENT]['prompt_tokens'] == 15
     assert d[usage.STAGE_ENRICHMENT]['completion_tokens'] == 3
-    assert d[usage.STAGE_QUERY_EXPANSION]['calls'] == 1
-    assert d[usage.STAGE_QUERY_EXPANSION]['prompt_tokens'] == 7
+    assert d[usage.STAGE_PROBE]['calls'] == 1
+    assert d[usage.STAGE_PROBE]['prompt_tokens'] == 7
 
 
 @pytest.mark.no_mock_llm
@@ -160,11 +160,11 @@ def test_unparseable_200_body_is_booked_and_retried(monkeypatch):
     _install_fake_post(monkeypatch, [
         (200, '<html>bad gateway page</html>'), _valid()])
     assert _client().complete(
-        'sys', 'user', stage=usage.STAGE_QUERY_EXPANSION) == 'ok'
+        'sys', 'user', stage=usage.STAGE_HARNESS) == 'ok'
     d = usage.delta(before, usage.snapshot())
-    assert d[usage.STAGE_QUERY_EXPANSION]['calls'] == 2
-    assert d[usage.STAGE_QUERY_EXPANSION]['missing_usage'] == 1
-    assert d[usage.STAGE_QUERY_EXPANSION]['prompt_tokens'] == 7
+    assert d[usage.STAGE_HARNESS]['calls'] == 2
+    assert d[usage.STAGE_HARNESS]['missing_usage'] == 1
+    assert d[usage.STAGE_HARNESS]['prompt_tokens'] == 7
 
 
 @pytest.mark.no_mock_llm
@@ -263,7 +263,7 @@ def test_all_call_sites_use_closed_set_stages():
             if not named:
                 continue
             sites.append((py.name, node))
-    assert len(sites) == 5, 'expected the five documented call sites'
+    assert len(sites) == 4, 'expected the four documented call sites'
     forwarded = 0
     for name, node in sites:
         stage_kw = [k for k in node.keywords if k.arg == 'stage']
@@ -324,53 +324,3 @@ def test_drain_json_carries_llm_usage_delta(mm_runner, monkeypatch):
     stage = data['llm_usage'][usage.STAGE_ENRICHMENT]
     assert stage['calls'] == 1
     assert stage['prompt_tokens'] == 11
-
-
-def test_expand_usage_summary_uses_the_drain_event_key(
-        mm_runner, monkeypatch):
-    """`recall --expand` emits llm_usage_summary under the `usage` key.
-
-    The drain's emitter names the payload `usage`; a second emitter
-    for the same event name under a different key is invisible to
-    every consumer keyed on the shipped shape -- the exact
-    observability hole the emission exists to close.
-
-    Mutation: emitting the delta under `llm_usage=`, or dropping the
-        emission from the recall command.
-    Oracle: a trace.event spy captures exactly one llm_usage_summary
-        whose `usage` payload carries the query_expansion stage.
-    """
-    from memman import trace
-    from memman.cli import cli
-
-    events = []
-    monkeypatch.setattr(
-        trace, 'event',
-        lambda name, **kw: events.append((name, kw)))
-    monkeypatch.setattr(
-        'memman.cli._get_llm_client_or_fail', lambda role: object())
-
-    def _fake_expand(client, q):
-        usage.record(
-            usage.STAGE_QUERY_EXPANSION, {'prompt_tokens': 5})
-        return {'expanded_query': q + ' broadened'}
-
-    monkeypatch.setattr(
-        'memman.llm.extract.expand_query', _fake_expand)
-    r, data_dir = mm_runner
-    res = r.invoke(cli, [
-        '--data-dir', data_dir, 'remember', 'expansion seed row'])
-    assert res.exit_code == 0, res.output
-    res = r.invoke(cli, [
-        '--data-dir', data_dir, 'recall', 'expansion', 'seed',
-        '--expand'])
-    assert res.exit_code == 0, res.output
-    # The auto-drain after `remember` emits its own summary; the
-    # recall's is the one carrying the expansion stage under the
-    # shipped `usage` key.
-    summaries = [
-        kw for name, kw in events if name == 'llm_usage_summary']
-    expansion = [
-        kw for kw in summaries
-        if usage.STAGE_QUERY_EXPANSION in kw.get('usage', {})]
-    assert len(expansion) == 1

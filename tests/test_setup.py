@@ -621,30 +621,30 @@ class TestPrimeAndCompactHooks:
 class TestUserPromptHook:
     """`user_prompt.sh` recall reminder and session-id hint."""
 
-    def test_session_id_reaches_the_reminder(self, tmp_path):
-        """Verify the hook relays the session id it was handed.
+    def test_prints_the_bare_recall_reminder_regardless_of_session_id(
+            self, tmp_path):
+        """Verify the hook prints one fixed reminder, reading no session id.
 
-        Mutation: dropping the SESSION_HINT line, so the agent is never
-            told which --session to stamp its recalls and writes with.
-        Oracle: hand-written pair straddling the hook's one branch - the
-            exact id when the payload carries one, no --session at all
-            when it does not.
+        Mutation: reintroducing a `--session` hint keyed off the
+            payload's session id, so a payload with one and a payload
+            without one print different lines.
+        Oracle: the exact shipped reminder line, unchanged whether the
+            payload carries a session id or not.
         """
         with_id = _run_hook(
             _prompt_script(),
             '{"session_id": "sess-6"}',
             tmp_path)
-        assert with_id.returncode == 0
-        assert 'recall' in with_id.stdout.lower()
-        assert '--session sess-6' in with_id.stdout
-
         without_id = _run_hook(
             _prompt_script(),
             '{}',
             tmp_path)
+
+        assert with_id.returncode == 0
         assert without_id.returncode == 0
-        assert 'recall' in without_id.stdout.lower()
-        assert '--session' not in without_id.stdout
+        expected = '[memman] Recall: memman recall "<focused query>"\n'
+        assert with_id.stdout == expected
+        assert without_id.stdout == expected
 
     def test_carries_no_write_instruction(self, tmp_path):
         """Verify the reminder asks for a recall and never for a write.

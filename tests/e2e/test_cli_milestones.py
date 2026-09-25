@@ -186,26 +186,21 @@ class TestM1CRUD:
     @pytest.mark.requires_live_keys
     def test_recall_no_match_still_answers_with_judgeable_rows(
             self, home_dir: Path, m1_dir: Path, live_keys):
-        """A no-match query returns rows carrying the evidence to reject them.
+        """A no-match query still returns a page with score and category.
 
-        Mutation: returning `results: []` on a no-match query, or
-            dropping `score` / `signals` from the row projection -
-            either leaves a caller unable to tell "the store holds
-            nothing" from "these are the nearest unrelated rows",
-            which is the whole job the deleted `meta.sparse` flag
-            used to attempt.
+        Mutation: printing nothing for a no-match query, or dropping
+            the score field from the page line - either leaves a
+            caller unable to tell "the store holds nothing" from
+            "these are the nearest unrelated rows".
         Oracle: a token deliberately absent from the corpus, against
             a store this test seeds itself; the recency anchor
-            channel must still seed rows, and every row must carry
-            both judgement fields.
+            channel must still seed a line, and it must carry a
+            parseable score.
 
         Notes
         -----
         - Seeds its own row rather than relying on the class's
-            earlier tests. The predecessor asserted `meta.sparse` and
-            so passed TRIVIALLY in isolation, because the flag fired
-            on the empty set - order-dependence in the opposite
-            direction. Recall returns `[]` on a genuinely empty
+            earlier tests. Recall prints nothing for a genuinely empty
             store, so the recency claim needs at least one row to be
             a claim at all.
         """
@@ -217,16 +212,15 @@ class TestM1CRUD:
             home_dir, m1_dir)
         run_cli(['scheduler', 'serve', '--once'], home_dir, m1_dir)
 
-        data = json_out(run_cli(
+        out = run_cli(
             ['recall', 'nonexistent_xyz_no_match_token'],
-            home_dir, m1_dir))
-        assert data['results'], (
-            'recency anchors must answer even a no-match query')
-        for row in data['results']:
-            assert 'score' in row, 'row must carry its own score'
-            assert 'signals' in row, 'row must carry per-channel signals'
-        assert 'sparse' not in data['meta']
-        assert 'ordering' not in data['meta']
+            home_dir, m1_dir)
+        lines = out.stdout.splitlines()
+        assert lines, 'recency anchors must answer even a no-match query'
+        for line in lines:
+            fields = line.split(' | ', 1)[0].split(' ')
+            assert len(fields) == 5, f'line off the page format: {line!r}'
+            float(fields[1])
 
     @pytest.mark.requires_live_keys
     def test_status_statistics(self, home_dir: Path, m1_dir: Path,
@@ -274,14 +268,19 @@ class TestM3Search:
                       home_dir, m3_dir)
         assert_contains(out.stdout, 'Chose Qdrant',
                         'finds decision insight')
-        assert_contains(out.stdout, '"results"', 'results envelope')
 
     @pytest.mark.requires_live_keys
     def test_recall_basic_no_match(self, home_dir: Path, m3_dir: Path,
                                    live_keys):
+        """Verify a no-match --basic query prints an empty page.
+
+        Mutation: printing a header, a notice line, or the deleted
+            `{results: []}` envelope in place of an empty page.
+        Oracle: the empty string on stdout.
+        """
         out = run_cli(['recall', '--basic', 'zzz_no_match_zzz'],
                       home_dir, m3_dir)
-        assert_jq(json_out(out), 'results', [], 'empty results array')
+        assert out.stdout == '', 'empty page'
 
 
 # ---------------------------------------------------------------------
@@ -290,9 +289,15 @@ class TestM3Search:
 
 class TestM11Reranking:
 
-    def test_invalid_intent_rejected(self, home_dir: Path, m3_dir: Path):
+    def test_deleted_intent_flag_rejected(self, home_dir: Path, m3_dir: Path):
+        """Verify `--intent` is an unknown option, not a validated value.
+
+        Mutation: keeping the `--intent` option on the recall command.
+        Oracle: click's usage-error exit and `No such option` message.
+        """
         out = run_cli(
             ['recall', 'test', '--intent', 'INVALID'],
             home_dir, m3_dir, check=False)
-        assert_contains(out.stdout + out.stderr, 'unknown intent',
-                        'rejects invalid intent')
+        assert out.returncode == 2, out.stdout + out.stderr
+        assert_contains(out.stdout + out.stderr, 'No such option',
+                        'rejects the deleted flag')

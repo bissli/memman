@@ -30,7 +30,7 @@ def _parent(content):
     now = datetime.now(timezone.utc)
     return Insight(
         id=str(uuid.uuid4()), content=content, category='fact',
-        importance=3, entities=[], source='test', access_count=0,
+        importance=3, entities=[], source='test',
         created_at=now, updated_at=now)
 
 

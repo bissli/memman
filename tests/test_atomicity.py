@@ -2,13 +2,12 @@
 
 After autocommit=True landed on PostgresBackend, every statement
 commits independently unless explicitly grouped under
-`backend.transaction()`. These tests assert that the wrapping is in
-place for the two CLI paths that group more than one statement:
+`backend.transaction()`. This test asserts that the wrapping is in
+place for the CLI path that groups more than one statement:
 
-- `recall --basic` (per-result increment_access_count + oplog.log)
 - `graph link` (existence checks + reverse-edge upsert + oplog.log)
 
-Each test runs over SQLite (the default backend); the wrapping is
+Runs over SQLite (the default backend); the wrapping is
 backend-agnostic so the same Protocol contract holds on Postgres.
 """
 
@@ -66,23 +65,6 @@ def _wrap_backend_open(monkeypatch):
 
     monkeypatch.setattr(session_mod, 'active_store', wrapped)
     return entries
-
-
-def test_recall_basic_mutations_run_in_one_transaction(tmp_path, monkeypatch):
-    """`recall --basic` wraps the per-result increments + oplog in one tx."""
-    monkeypatch.delenv('MEMMAN_STORE', raising=False)
-    data_dir = str(tmp_path)
-    pathlib.Path(data_dir).mkdir(exist_ok=True, parents=True)
-    _insert_seed_insight(data_dir, 'default', 'r-1', 'alpha bravo charlie')
-    _insert_seed_insight(data_dir, 'default', 'r-2', 'alpha delta echo')
-
-    entries = _wrap_backend_open(monkeypatch)
-
-    runner = CliRunner()
-    result = runner.invoke(
-        cli, ['--data-dir', data_dir, 'recall', 'alpha', '--basic'])
-    assert result.exit_code == 0, result.output
-    assert entries.count('begin') == 1, entries
 
 
 def test_link_check_and_upsert_run_in_one_transaction(tmp_path, monkeypatch):

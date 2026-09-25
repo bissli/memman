@@ -17,7 +17,6 @@ class TestOplogStats:
         """Returns valid dict on empty DB."""
         stats = get_oplog_stats(tmp_db)
         assert stats['total_active'] == 0
-        assert stats['never_accessed'] == 0
         assert isinstance(stats['operation_counts'], dict)
 
     def test_stats_counts_active(self, tmp_db):
@@ -27,15 +26,6 @@ class TestOplogStats:
         soft_delete_insight(tmp_db, 'b')
         stats = get_oplog_stats(tmp_db)
         assert stats['total_active'] == 1
-
-    def test_stats_never_accessed(self, tmp_db):
-        """Counts insights with access_count = 0."""
-        insert_insight(tmp_db, make_insight(id='a'))
-        tmp_db._exec(
-            "UPDATE insights SET access_count = 1 WHERE id = 'a'")
-        insert_insight(tmp_db, make_insight(id='b'))
-        stats = get_oplog_stats(tmp_db)
-        assert stats['never_accessed'] == 1
 
 
 def _insert_at(db, created_at_dt):

@@ -9,6 +9,7 @@ set `MEMMAN_AUTHOR`, never the `getpass.getuser()` fallback.
 """
 
 import json
+import re
 import shutil
 from datetime import datetime, timezone
 
@@ -143,9 +144,9 @@ def test_author_survives_migrate_round_trip_postgres(tmp_path, pg_dsn):
         insert_insight(db, Insight(
             id='author-migrate-1', content='author migrate test',
             category='fact', importance=3, entities=[],
-            source='test', access_count=0,
+            source='test',
             updated_at=datetime.now(timezone.utc),
-            deleted_at=None, last_accessed_at=None,
+            deleted_at=None,
             author='alice'))
         set_meta(
             db, 'embed_fingerprint',
@@ -194,27 +195,31 @@ def test_author_survives_migrate_round_trip_postgres(tmp_path, pg_dsn):
         _drop_schema()
 
 
-# --- Author in recall --brief and insights show ---
+# --- Author in the recall page and insights show ---
 
-def test_recall_brief_carries_author(mm_runner, monkeypatch):
-    """Verify recall --brief rows include the author field.
+_SCORED_LINE = re.compile(
+    r'^(?P<id>\S{8}) (?P<score>-?\d+\.\d\d)'
+    r' (?P<created>\S+) (?P<author>\S+) (?P<category>\S+) \| (?P<text>.*)$')
 
-    Mutation: omitting author from insight_to_brief_dict's projection.
-    Oracle: the parsed JSON row has an 'author' key equal to the set env var.
+
+def test_recall_page_carries_author(mm_runner, monkeypatch):
+    """Verify a recall page line includes the author field.
+
+    Mutation: printing `-` in place of the row's own author.
+    Oracle: the parsed page line's author field, equal to the set env var.
     """
     _, data_dir = mm_runner
     monkeypatch.setenv('MEMMAN_AUTHOR', 'alice')
 
     invoke(mm_runner, ['remember', 'recall brief test'])
 
-    result = invoke(mm_runner, ['recall', '--brief', 'recall brief test'])
+    result = invoke(mm_runner, ['recall', 'recall brief test'])
     assert result.exit_code == 0, result.output
-    parsed = json.loads(result.output)
-    assert parsed['results'], 'expected at least one result'
-    row = parsed['results'][0]
-    insight = row.get('insight', row)
-    assert 'author' in insight, f'author absent from brief row: {row}'
-    assert insight['author'] == 'alice'
+    lines = result.output.splitlines()
+    assert lines, 'expected at least one result'
+    match = _SCORED_LINE.match(lines[0])
+    assert match, f'line off the page format: {lines[0]!r}'
+    assert match['author'] == 'alice'
 
 
 def test_insights_show_carries_author(mm_runner, monkeypatch):

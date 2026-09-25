@@ -20,7 +20,6 @@
 │ source     : "user"     (provenance)         │
 │ session_id : "s-1f2e…"  (temporal chain key) │
 │ queue_uuid : "9b0c…"    (idempotency key)    │
-│ access_count : 3                             │
 │ author     : "bob"      (who wrote it)       │
 │ created_at : 2026-02-18T10:00:00Z            │
 └──────────────────────────────────────────────┘
@@ -76,8 +75,6 @@ insights (
   embedding,                                    -- embedding vector (active provider)
   embedding_pending,                            -- shadow vector during online provider swap
   keywords, summary, semantic_facts,            -- LLM enrichment columns
-  access_count,                                 -- Retrievals; read by `never_accessed` in `memman log list --stats`
-  last_accessed_at,                             -- Last retrieval; no runtime reader, read by the stale-serve measurement
   linked_at, enriched_at,                       -- Pipeline progress timestamps
   prompt_version, embedding_model,              -- Provenance for re-enrichment
   created_at, updated_at, deleted_at,
@@ -139,14 +136,14 @@ memman's architecture is divided into five layers:
 ├──────────────────────────────────────────────────────────────┤
 │  Pipeline             pipeline/ (remember, drain worker)       │
 ├──────────────────────────────────────────────────────────────┤
-│  Core Engine          search/ (recall, intent, keyword,        │
+│  Core Engine          search/ (recall, keyword,                │
 │                                quality)                        │
 │                       graph/  (temporal, entity,               │
 │                                semantic, engine, bfs,          │
 │                                enrichment)                     │
 │                       embed/  (voyage, openai_compat,          │
 │                                openrouter, ollama, vector)     │
-│                       llm/    (client, extract, shared,        │
+│                       llm/    (client, shared,                 │
 │                                openrouter_models)              │
 ├──────────────────────────────────────────────────────────────┤
 │  Storage Layer        store/   (backend, base, factory, db,    │

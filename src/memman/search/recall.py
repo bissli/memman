@@ -1,4 +1,4 @@
-"""Intent-aware recall with beam search and RRF fusion.
+"""Recall with beam search and RRF fusion.
 
 Reads live storage on every request. The candidate universe is
 `nodes.get_all_active()` and the graph is one `edges.adjacency()`
@@ -26,9 +26,7 @@ from collections import Counter
 from collections.abc import Callable
 from typing import Any
 
-import numpy as np
 from memman import trace
-from memman.search.intent import detect_intent, get_weights
 from memman.search.keyword import keyword_search, tokenize
 from memman.store.backend import Backend
 from memman.store.model import Insight
@@ -43,87 +41,43 @@ RERANK_SHORTLIST = 100
 MIN_RERANK_TOKENS = 2
 
 # Notes:
-# - MMR_LAMBDA weighs relevance against the one-shot diversity
-#   penalty: score = lam * rel - (1 - lam) * max pool similarity;
-#   1.0 disables the term.
-# - 1.0 is the MEASURED value, not a default: the recall_ablation
-#   mmr sweep (2026-08-05, lambda in {0.5..0.9} x rerank on/off, 12
-#   queries, search-store sandbox) showed that under the default
-#   cross-encoder rerank the final output is byte-identical at 0.9
-#   and within 1.6 redundancy points at 0.5, while rerank-off gains
-#   (0.655 -> 0.504 redundancy at 0.5) rewrite most of the top-10
-#   with no relevance oracle to certify them. See
-#   experiments/recall_ablation/README.md for the sweep record.
-# - MMR_POOL bounds the gram matrix (O(n^2)); it must exceed
-#   RERANK_SHORTLIST or MMR provably cannot change shortlist
-#   membership whenever rerank is on (the default).
-MMR_LAMBDA = 1.0
-MMR_POOL = 200
-
-TRAVERSAL_PARAMS: dict[str, tuple[int, int, int]] = {
-    'WHY': (15, 5, 500),
-    'WHEN': (10, 5, 400),
-    'ENTITY': (10, 4, 400),
-    'GENERAL': (10, 4, 500),
+# - The weight per edge type sums to 1.0. That fixes the STRUCTURAL
+#   term's scale against the two terms it is summed with in a
+#   traversal score, `anchor_rrf + LAMBDA1 * structural + LAMBDA2 *
+#   semantic`, neither of which these weights touch.
+# - The balance is load-bearing: scaling only the middle term is not
+#   a transform the min-max normalization of `graph_score` undoes. It
+#   re-ranks rows and changes which nodes the beam keeps at its cut,
+#   so changing a weight here changes retrieved order.
+# - The types weighted are exactly the edge types the store writes. A
+#   type nothing mints would contribute nothing while still consuming
+#   the 1.0 budget, shrinking every other type's share.
+EDGE_WEIGHTS: dict[str, float] = {
+    'temporal': 0.334, 'semantic': 0.333, 'entity': 0.333,
     }
 
+# `(beam_width, max_depth, max_visited)` for every traversal.
+TRAVERSAL_PARAMS: tuple[int, int, int] = (10, 4, 500)
+
 # Notes:
-# - `(w_kw, w_sim, w_gr)` per intent, each raw row divided by its own
-#   sum, so every shipped row sums to 1.0 and `score` carries one
-#   range at every intent. Both hold only to within a float ulp:
-#   WHEN sums to 0.9999999999999999, and `sim_score` is an unclamped
-#   cosine that can return 1 + 1 ulp, so the true bound is
-#   [0, 1 + 4.5e-16]. One range is not one meaning - the mix behind
-#   a 0.7 still differs per intent - and `graph_score` is min-max
-#   normalized over the query's own pool, so no score compares
-#   across queries at any intent.
-# - The raw rows are the pre-0.23.0 four-weight table with `w_ent`
-#   deleted and the survivors untouched, which left them summing to
-#   WHY 0.90, WHEN 0.90, ENTITY 0.65, GENERAL 0.85. The shipped rows
-#   inherit their DIRECTION from that table; only the scale is new.
-#   They are not a measured optimum: the sweeps recorded under
-#   `experiments/quality_matrix/results/sweep_rerank/` flag the
-#   shipped arm as beaten by the grid peak in all six WHEN and WHY
-#   runs, and ENTITY and GENERAL have no grid at all.
+# - `(w_kw, w_sim, w_gr)`: the raw row divided by its own sum, so the
+#   weights sum to 1.0 and `score` spans one range. Both hold only to
+#   within a float ulp, and `sim_score` is an unclamped cosine that
+#   can exceed 1 by an ulp.
+# - The raw row is the four-weight table's GENERAL row with `w_ent`
+#   deleted and the survivors untouched. It carries that table's
+#   direction and is not a measured optimum.
 # - The division is computed rather than written out because no
-#   quotient here has an exact float literal - 0.45/0.90 is 1/2, yet
-#   computes to 0.5000000000000001, because the raw row sums to
-#   0.8999999999999999. A rounded literal turns a row as well as
-#   scaling it;
-#   `experiments/recall_ablation/verify_weight_rounding.py` prices
-#   that turn in returned positions.
+#   quotient here has an exact float literal, and a rounded literal
+#   turns the row as well as scaling it.
 # - `score` is NOT comparable across the rerank shortlist boundary.
 #   When the pool exceeds `RERANK_SHORTLIST` the cross-encoder
 #   overwrites the head's scores while the tail keeps these blended
 #   values; a smaller pool is overwritten whole, leaving no tail.
-_RERANK_WEIGHTS_RAW: dict[str, tuple[float, float, float]] = {
-    'WHY':     (0.15, 0.45, 0.30),
-    'WHEN':    (0.20, 0.40, 0.30),
-    'ENTITY':  (0.20, 0.35, 0.10),
-    'GENERAL': (0.25, 0.45, 0.15),
-    }
+_RERANK_WEIGHTS_RAW: tuple[float, float, float] = (0.25, 0.45, 0.15)
 
-RERANK_WEIGHTS: dict[str, tuple[float, float, float]] = {
-    intent: (kw / (kw + sim + gr),
-             sim / (kw + sim + gr),
-             gr / (kw + sim + gr))
-    for intent, (kw, sim, gr) in _RERANK_WEIGHTS_RAW.items()
-    }
-
-
-RECALL_HINTS: dict[str, str] = {
-    'WHY': ('Rows are relevance-ordered; weigh each row against its '
-            'siblings to account for what the query asks about'),
-    'WHEN': ('Rows are relevance-ordered; each carries created_at - '
-             'order by it to reconstruct the timeline'),
-    'ENTITY': 'Describe the entity using evidence across these memories',
-    'GENERAL': 'Synthesize key points across these related memories',
-    }
-
-
-def get_traversal_params(intent: str) -> tuple[int, int, int]:
-    """Return (beam_width, max_depth, max_visited) for the given intent."""
-    return TRAVERSAL_PARAMS.get(intent, TRAVERSAL_PARAMS['GENERAL'])
+RERANK_WEIGHTS: tuple[float, float, float] = tuple(
+    weight / sum(_RERANK_WEIGHTS_RAW) for weight in _RERANK_WEIGHTS_RAW)
 
 
 def _bidirectional_adjacency(
@@ -165,9 +119,9 @@ def beam_search_from_anchor(
     start_score : float
         Anchor's fused RRF score; seeds the running path score.
     weights : dict[str, float]
-        Intent-adaptive weight per edge type.
+        Weight per edge type.
     params : tuple[int, int, int]
-        `(beam_width, max_depth, max_visited)` for the intent.
+        `(beam_width, max_depth, max_visited)`.
     score_map : dict[str, float]
         Best path score per node; updated in place.
     via_map : dict[str, str]
@@ -261,15 +215,11 @@ def intent_aware_recall(
         backend: Backend, query: str,
         query_vec: list[float] | None,
         limit: int, *,
-        intent_override: str | None = None,
         rerank: bool = False,
-        rerank_weights_override: dict[
-            str, tuple[float, float, float]] | None = None,
         category: str = '',
         source: str = '',
-        min_score: float = 0.0,
         ) -> dict[str, Any]:
-    """Perform MAGMA-aligned intent-aware retrieval.
+    """Rank the store's current rows against a query, best first.
 
     Parameters
     ----------
@@ -281,26 +231,20 @@ def intent_aware_recall(
         Query embedding; None degrades to the keyword/time paths.
     limit : int
         Result cap; `limit <= 0` means unbounded.
-    intent_override : str | None, default None
-        Force an intent instead of `detect_intent(query)`.
     rerank : bool, default False
         Re-score the shortlist with the cross-encoder (see Notes).
-    rerank_weights_override : dict | None, default None
-        Read the intent's `(w_kw, w_sim, w_gr)` from this dict
-        instead of module-level `RERANK_WEIGHTS`.
     category : str, default ''
         Keep only insights with this exact category ('' = no filter).
     source : str, default ''
         Keep only insights with this exact source ('' = no filter).
-    min_score : float, default 0.0
-        Relevance floor on `kw_score + sim_score`; 0.0 = no filter.
 
     Returns
     -------
     dict[str, Any]
-        `{'results': [...], 'meta': {...}}`; `meta.anchor_count` is
-        the filtered anchor count and `meta.traversed` is deliberately
-        unfiltered.
+        `{'results': [...], 'meta': {...}}`. Each result carries
+        `insight`, `score`, `via` and `signals`; `meta` carries
+        `anchor_count` (filtered), `traversed` (deliberately
+        unfiltered) and `reranked`.
 
     Notes
     -----
@@ -323,23 +267,10 @@ def intent_aware_recall(
       configured Voyage reranker; the filter runs before the rerank
       block so the shortlist holds only returnable rows. On reranker
       failure the baseline ordering is preserved.
-    - `min_score` thresholds `kw_score + sim_score`, never the blended
-      score: `graph_score` is min-max normalized, so the top candidate
-      of any query scores 1.0 there and a blended floor would sit at
-      `w_gr`, which moves per intent. Its range is therefore 0.0-2.0.
     - Rows come back in relevance order at every `limit`, so the
       first `n` of a `limit`-`m` recall are the `limit`-`n` recall.
       Nothing re-sorts after the limit slice.
     """
-    if intent_override:
-        intent = intent_override
-        intent_source = 'override'
-    else:
-        intent = detect_intent(query)
-        intent_source = 'auto'
-
-    weights = get_weights(intent)
-    params = get_traversal_params(intent)
     # Hoisted once: `is_enabled` can fall through to a file read, so
     # calling it per event site is a hot-path regression.
     enabled = trace.is_enabled()
@@ -478,7 +409,6 @@ def intent_aware_recall(
         # the vector scan return fewer than k anchors.
         trace.event(
             'recall_anchors',
-            intent=intent,
             anchor_k=anchor_k,
             keyword_hits=len(keyword_anchors),
             vector_hits=len(vector_hits),
@@ -501,11 +431,11 @@ def intent_aware_recall(
     capped_anchors = 0
     for aid, (ins, score, via) in anchor_map.items():
         visited = beam_search_from_anchor(
-            aid, score, weights, params,
+            aid, score, EDGE_WEIGHTS, TRAVERSAL_PARAMS,
             score_map, via_map, insight_map, sim_cache,
             _edges_lookup, _insight_lookup, phantom_ids)
         visited_total += visited
-        if visited >= params[2]:
+        if visited >= TRAVERSAL_PARAMS[2]:
             capped_anchors += 1
 
     traversed_count = len(score_map)
@@ -514,7 +444,7 @@ def intent_aware_recall(
             'recall_traversal',
             visited=visited_total,
             capped_anchors=capped_anchors,
-            max_visited=params[2],
+            max_visited=TRAVERSAL_PARAMS[2],
             traversed=traversed_count)
 
     candidates: list[dict[str, Any]] = []
@@ -556,11 +486,7 @@ def intent_aware_recall(
         c['sim_score'] = sim_score
         c['graph_score'] = graph_score
 
-    rerank_table = (rerank_weights_override
-                    if rerank_weights_override is not None
-                    else RERANK_WEIGHTS)
-    w_kw, w_sim, w_gr = rerank_table.get(
-        intent, RERANK_WEIGHTS['GENERAL'])
+    w_kw, w_sim, w_gr = RERANK_WEIGHTS
 
     results: list[dict[str, Any]] = []
     for c in candidates:
@@ -570,7 +496,6 @@ def intent_aware_recall(
         results.append({
             'insight': c['ins'],
             'score': final_score,
-            'intent': intent,
             'via': c['via'],
             'signals': {
                 'keyword': c['kw_score'],
@@ -587,74 +512,6 @@ def intent_aware_recall(
     # cross-encoder shortlist holds only returnable rows).
     if category or source:
         results = [r for r in results if _matches(r['insight'])]
-
-    if min_score > 0.0:
-        results = [
-            r for r in results
-            if r['signals']['keyword'] + r['signals']['similarity']
-            >= min_score]
-
-    # One-shot MMR diversity: score every candidate once against the
-    # whole pool, then sort once -- NOT greedy iterative MMR (an
-    # O(k*n) selection loop and a different algorithm). Runs between
-    # the filter (only returnable rows) and the rerank block (so it
-    # can change shortlist membership).
-    if MMR_LAMBDA < 1.0 and len(results) > 1:
-        pool = results[:MMR_POOL]
-        # Notes:
-        # - A second, short session, so no database connection is held
-        #   across the rerank network call below.
-        # - Bounded by id on Postgres. On SQLite it rebuilds the whole
-        #   store's embedding matrix, because that is what the session
-        #   reads from - so enabling MMR costs a second matrix build
-        #   per recall there.
-        try:
-            with backend.recall_session() as mmr_session:
-                embed_cache = mmr_session.vectors_for_ids(
-                    [r['insight'].id for r in pool])
-        except Exception as exc:
-            logger.warning(f'MMR vector fetch failed, skipping: {exc}')
-            embed_cache = {}
-        vec_rows = [
-            (i, embed_cache[r['insight'].id])
-            for i, r in enumerate(pool)
-            if r['insight'].id in embed_cache]
-        if len(vec_rows) > 1:
-            # Ragged dims (mid-model-swap, a partial reembed, or a
-            # short blob) would make np.array raise; off-modal rows
-            # join the unembedded set and hold their positions.
-            modal_dim = Counter(
-                len(v) for _, v in vec_rows).most_common(1)[0][0]
-            vec_rows = [
-                (i, v) for i, v in vec_rows if len(v) == modal_dim]
-        if len(vec_rows) > 1:
-            mx = np.array([v for _, v in vec_rows], dtype=np.float64)
-            norms = np.linalg.norm(mx, axis=1, keepdims=True)
-            norms[norms == 0.0] = 1.0
-            unit = mx / norms
-            gram = unit @ unit.T
-            # Zero the diagonal so a candidate's self-similarity is
-            # excluded from its own max.
-            np.fill_diagonal(gram, 0.0)
-            max_sim = gram.max(axis=1)
-            # Only embedded rows are re-sorted, each holding one of
-            # the slots the embedded set occupied; a vector-less row
-            # keeps its relevance position. Scoring it instead would
-            # hand it a zero penalty -- the maximum diversity bonus
-            # -- and float exactly the degraded rows to the head.
-            embedded = [idx for idx, _v in vec_rows]
-            mmr_by_idx = {
-                idx: (MMR_LAMBDA * pool[idx]['score']
-                      - (1.0 - MMR_LAMBDA) * float(ms))
-                for (idx, _v), ms in zip(vec_rows, max_sim)}
-            reordered_iter = iter(sorted(
-                embedded, key=lambda i: mmr_by_idx[i], reverse=True))
-            embedded_set = set(embedded)
-            pool = [
-                pool[next(reordered_iter)] if i in embedded_set
-                else pool[i]
-                for i in range(len(pool))]
-            results = pool + results[MMR_POOL:]
 
     reranked = False
     if rerank and len(query.split()) > MIN_RERANK_TOKENS:
@@ -696,11 +553,8 @@ def intent_aware_recall(
         results = results[:limit]
 
     meta: dict[str, Any] = {
-        'intent': intent,
-        'intent_source': intent_source,
         'anchor_count': anchor_count,
         'traversed': traversed_count,
-        'hint': RECALL_HINTS.get(intent, RECALL_HINTS['GENERAL']),
         'reranked': reranked,
         }
 

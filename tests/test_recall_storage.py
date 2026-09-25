@@ -161,41 +161,6 @@ def test_ragged_embedding_widths_do_not_break_recall(tmp_backend):
     assert {a for a, _s in anchors} == {'wide-0', 'wide-1', 'wide-2'}
 
 
-def test_vectors_for_ids_round_trips_on_both_backends(backend):
-    """Verify `vectors_for_ids` returns the stored vector, by id.
-
-    This is the verb the MMR block consumes. MMR ships disabled
-    (`MMR_LAMBDA = 1.0`), so without a direct test the Postgres
-    implementation - including its `pgvector_to_list` conversion -
-    never executes at all.
-
-    Mutation: returning the wrong row for an id, dropping the
-        pgvector-to-list conversion, or returning every id rather
-        than only the ones asked for.
-    Oracle: distinct hand-built vectors, each identified by its own
-        leading element.
-    """
-    dim = 512
-    wanted = {}
-    for n in range(3):
-        iid = f'vfi-{n}'
-        vec = [float(n + 1)] + [0.0] * (dim - 1)
-        wanted[iid] = vec
-        backend.nodes.insert(
-            make_insight(id=iid, content=f'vectors-for-ids body {n}'))
-        backend.nodes.update_embedding(iid, vec, 'test-model')
-    backend.nodes.insert(
-        make_insight(id='vfi-absent', content='never asked for'))
-
-    with backend.recall_session() as session:
-        got = session.vectors_for_ids(['vfi-0', 'vfi-2', 'vfi-absent'])
-
-    assert set(got) == {'vfi-0', 'vfi-2'}
-    assert got['vfi-0'][0] == pytest.approx(1.0)
-    assert got['vfi-2'][0] == pytest.approx(3.0)
-    assert len(got['vfi-0']) == dim
-
-
 def test_dangling_edge_does_not_enter_the_candidate_pool(tmp_backend):
     """Verify an edge to a soft-deleted row scores nothing and costs nothing.
 
@@ -229,8 +194,7 @@ def test_dangling_edge_does_not_enter_the_candidate_pool(tmp_backend):
         ' where id = ?', ('dang-2',))
 
     resp = intent_aware_recall(
-        tmp_backend, 'dangling probe kombu', None, 10,
-        intent_override='GENERAL')
+        tmp_backend, 'dangling probe kombu', None, 10)
 
     returned = {r['insight'].id for r in resp['results']}
     assert returned == {'dang-0', 'dang-1'}
@@ -260,8 +224,7 @@ def test_superseded_row_is_not_returned_by_recall(backend):
     assert backend.nodes.supersede('sup-2', 'sup-3') is True
 
     resp = intent_aware_recall(
-        backend, 'superseded probe kombu', None, 10,
-        intent_override='GENERAL')
+        backend, 'superseded probe kombu', None, 10)
 
     returned = {r['insight'].id for r in resp['results']}
     assert returned == {'sup-0', 'sup-1', 'sup-3'}
@@ -275,7 +238,7 @@ def test_minority_width_query_still_scores_its_own_rows(tmp_backend):
     model holds two widths while `bound_embedder` still produces query
     vectors at one of them. Scoring only the majority width blanks the
     entire vector channel for such a query, including the rows it can
-    score, and `--min-score` then starts dropping rows too.
+    score.
 
     Mutation: reducing the stored embeddings to a single modal width
         and comparing every query against that one matrix - the exact
@@ -298,14 +261,9 @@ def test_minority_width_query_still_scores_its_own_rows(tmp_backend):
     with tmp_backend.recall_session() as session:
         sims = session.similarities(query)
         anchors = session.vector_anchors(query, k=10)
-        vectors = session.vectors_for_ids(
-            ['majority-0', 'minority-0'])
 
     assert set(sims) == {'minority-0', 'minority-1'}
     assert {a for a, _s in anchors} == {'minority-0', 'minority-1'}
-    # vectors_for_ids reads each id at whatever width it was stored at
-    assert len(vectors['majority-0']) == 8
-    assert len(vectors['minority-0']) == 512
 
 
 def test_malformed_embedding_blob_does_not_break_recall(tmp_backend):

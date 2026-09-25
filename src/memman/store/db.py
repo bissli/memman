@@ -352,11 +352,9 @@ create table if not exists insights (
     importance  integer default 3,
     entities    text default '[]',
     source      text default 'user',
-    access_count integer default 0,
     keywords    text,
     summary     text,
     semantic_facts text,
-    last_accessed_at text,
     embedding   blob,
     embedding_pending blob,
     linked_at   text,
@@ -451,8 +449,8 @@ create virtual table insights_fts using fts5(
 )
 """,
     # Scoped to the two indexed columns: a bare `after update` would
-    # make `increment_access_count` and `update_enrichment` write to
-    # the index on every recall.
+    # make `update_enrichment` and every stamp update write to the
+    # index.
     """
 create trigger insights_fts_insert after insert on insights begin
     insert into insights_fts(rowid, content, entities)

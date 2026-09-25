@@ -7,7 +7,7 @@ description: Persistent memory CLI for LLM agents. Store facts, recall past know
 
 `memman` is a CLI on PATH. Invoke commands directly via Bash. Memory is
 typed insights and a graph of edges between them. A write goes to a
-queue and a background worker enriches it. Reads are intent-aware.
+queue and a background worker enriches it.
 
 ## Storing what you learn
 
@@ -26,7 +26,7 @@ retrievable and supersedes cleanly. A too-large one forces a rewrite
 and drops clauses.
 
 Pick the most accurate `--cat`. Writes link into one temporal chain
-by session, which is what WHEN recall walks. Omit `--session`: it
+by session, which recall's graph walk follows. Omit `--session`: it
 reads `$CLAUDE_CODE_SESSION_ID` by itself. Pass it only to pin a
 different id.
 
@@ -147,8 +147,7 @@ rewords, splits, or judges it. Every write lands as its own row: a
 second write of the same text is a second row. Nothing a `remember`
 does retires a stored memory; only `replace` and `supersede` do.
 
-To correct a stored insight by ID and keep its `access_count` and
-edges:
+To correct a stored insight by ID and keep its edges:
 
 ```bash
 memman replace <id> "<new content>"
@@ -187,43 +186,56 @@ conversation. Recall always runs before:
 
 The query is focused and keyword-rich, never the raw user prompt.
 
-Recall: vector + graph traversal + cross-encoder reranker. Reranker
-runs by default on multi-token queries and auto-skips on 1-2 token
-queries.
+Recall: vector + graph traversal + cross-encoder reranker. Every
+query ranks the same way. The reranker runs by default on multi-token
+queries and skips 1-2 token queries.
 
 ```bash
-memman recall "<query>" --brief --limit 20 --session <id>
+memman recall "<query>"
 ```
 
-Add `--intent WHY|WHEN|ENTITY` to bias the ranking when intent is
-unambiguous (rationale, timeline, entity-centric). Add `--cat` or
-`--source` to filter.
+The page is one plain-text line per row, best first, and nothing
+else:
 
-A brief page of 20 costs a fraction of a full page of 5 and carries
-several times the relevant material, so scan wide and open what earns
-it with `memman insights show <id>`. Any unambiguous prefix of the id
-works.
+```
+<id8> <score> <created_at> <author> <category> | <text>
+```
 
-On the scored path (no `--basic`) the response's `meta` object
-carries:
+- `id8`: the first eight characters of the id. Every id-taking
+  command (`memman insights show <id8>`, `replace`, `forget`,
+  `supersede`, `graph related`) resolves an unambiguous prefix.
+- `score`: two decimals. Compare it only against the other scores on
+  the same page, never against a fixed number and never across
+  pages: the scale belongs to whichever reranker is configured.
+- `created_at`: ISO UTC to the second. A timeline question sorts on
+  this field rather than reading row order, which is relevance
+  order.
+- `author`: who wrote the row - `MEMMAN_AUTHOR` from the directory's
+  `.envrc`, else the OS username - or `-` when unset.
+- `text`: the stored summary, else the first 200 characters of the
+  content with line breaks folded to spaces and `...` where the cut
+  dropped anything. A summarized row carries no marker however much
+  its summary left out.
 
-- `hint`: intent-specific reasoning guidance, always present. It
-  frames the synthesis of the results.
-- `reranked`: true when the cross-encoder rerank stage fired; false
-  when the query was too short or rerank is disabled for this store
-  via `MEMMAN_RERANK_ENABLED_<store>=false`.
+The page is for choosing which row to open, not for reading the rows
+themselves: `memman insights show <id8>` reads the rest of any row
+worth more than a scan. `--limit` defaults to 20. A wide page costs
+little and carries several times the relevant material of a narrow
+one, so scan wide and open what earns it. Rows come back in relevance
+order at every `--limit`, so the first `n` of a page of `m` are
+exactly a page of `n`.
 
-Recall returns rows even when nothing matches: a recency channel
-seeds the newest insights as anchors regardless. An empty `results`
-therefore means the store itself is empty, not that the query failed.
-A full page is not evidence that anything on it is relevant. A page
-that looks thin usually is not, because the store nearly always holds
-something bearing on a query drawn from the same work. Judge each row
-on its merits against the query. Each row carries its own `score` and
-per-channel `signals`; compare them WITHIN the page and never against
-a fixed number, because the scale belongs to whichever reranker is
-configured. Report that nothing relevant is stored only when no row
-bears on the query.
+Recall prints rows even when nothing matches: a recency channel seeds
+the newest rows as anchors whatever the query. A scored page with no
+line therefore means the store, or the pool left after `--cat` and
+`--source`, holds no memory, not that the query failed. A full page
+is not evidence that anything on it is relevant. A page that looks
+thin usually is not, because the store nearly always holds something
+bearing on a query drawn from the same work. Judge each row on its
+merits against the query and against its siblings on the page.
+Report that nothing relevant is stored only when no row bears on the
+query. If a paraphrase returns nothing that bears on the query,
+re-ask in the store's own words before concluding it is empty.
 
 Rows assert; CLAUDE.md directs. A `decision` row is history with its
 rationale, not an instruction to follow now. A row that names a file
@@ -235,51 +247,18 @@ this repo, since a store can hold rows from several repos; `git log -1
 -- <path>` confirms the path exists here before silence is read as
 currency.
 
-`--basic` returns before ranking, so it carries no `score` and no
-`signals` to judge with at all, and an empty `results` there says
-nothing about how well anything matched. Its envelope is
-`{basic: true}` plus `ignored`, a list of flag names present only when
-non-empty: `--intent` and `--expand` do nothing on this path and are
-named rather than obeyed. If a paraphrase returns nothing that bears on
-the query, re-ask in the store's own words before concluding it is
-empty.
-
-Rows come back in relevance order at every `--limit`, so the first `n`
-of a page of `m` are exactly a page of `n`.
-
-`--min-score` drops rows whose keyword plus similarity sum is under
-the floor (0.0 to 2.0, `0.0` = off). `--basic` rejects it: a filter
-that quietly did nothing would certify rows it never checked, unlike
-`--intent` and `--expand`, which `--basic` names in `meta.ignored`
-instead. Leave it off by default: the deep tail of a recall is often
-where the useful row sits. No value is worth copying. The usable band
-depends on the embedder and the store, so find it by running the
-query with and without a floor.
-
-For a fast token-only lookup that skips graph and reranking (cheap,
-no network cost; rows come back ranked by importance, then recency):
+Add `--cat <category>` or `--source <source>` to filter; both are
+exact matches. For a fast token-only lookup that skips graph and
+reranking (cheap, no network cost; rows come back ranked by
+importance, then recency):
 
 ```bash
 memman recall "<keyword>" --basic
 ```
 
-Add `--brief` to cut each insight to `id`, `category`, `importance`,
-`author`, `created_at`, and `summary`. `author` is who wrote the row:
-`MEMMAN_AUTHOR` from the directory's `.envrc`, else the OS username.
-Use it to scan for which insight to open
-rather than to read the insights themselves. It works on both paths;
-the ranked path keeps the `score`, `intent`, and `signals` keys around
-each insight. A row with no summary falls back to its content, so no
-row comes back blank. `truncated: true` marks a fallback row whose
-content ran past the cut: the text is a raw 200-character content
-prefix. The marker's ABSENCE does not prove the row is whole: a
-summarized row carries no marker however much its summary left out.
-`memman insights show <id>` reads the rest of any row worth more than
-a scan.
-
-A brief row carries `created_at`, so a WHEN query reconstructs a
-timeline by sorting on that field rather than by reading row order,
-which is relevance-ordered on every path.
+`--basic` computes no score, so it prints the same line without the
+score field. It has no recency channel: an empty `--basic` page means
+no row matched the keyword.
 
 Read a single insight by ID:
 

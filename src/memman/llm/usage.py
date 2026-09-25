@@ -28,7 +28,6 @@ Notes
 
 import threading
 
-STAGE_QUERY_EXPANSION = 'query_expansion'
 STAGE_ENRICHMENT = 'enrichment'
 STAGE_PROBE = 'probe'
 # Off-pipeline measurement tooling (experiments/ harnesses, eval
@@ -36,8 +35,7 @@ STAGE_PROBE = 'probe'
 STAGE_HARNESS = 'harness'
 
 VALID_STAGES = frozenset({
-    STAGE_QUERY_EXPANSION, STAGE_ENRICHMENT, STAGE_PROBE,
-    STAGE_HARNESS,
+    STAGE_ENRICHMENT, STAGE_PROBE, STAGE_HARNESS,
     })
 
 _COUNTER_KEYS = (

@@ -134,7 +134,9 @@ def test_insight_baselines_name_no_dropped_column():
         left, which recreates the column on every new store.
     Oracle: the dropped names searched for in the raw DDL text.
     """
-    dropped = ('content_hash', 'corroboration_count', 'model_id')
+    dropped = (
+        'content_hash', 'corroboration_count', 'model_id',
+        'access_count', 'last_accessed_at')
     for name, ddl in (
             ('sqlite', _BASELINE_SCHEMA), ('postgres', PG_BASELINE_SCHEMA)):
         found = [column for column in dropped if column in ddl]

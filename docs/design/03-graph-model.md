@@ -8,7 +8,7 @@ MAGMA's argument: a single edge type (e.g., vector similarity) cannot capture ev
 
 ![MAGMA Four-Graph Model](../diagrams/04-magma-four-graph.drawio.png)
 
-memman keeps three of the paper's four edge types and writes no causal edge. [01-background.md](01-background.md) records the deviation. No auto type makes a network call. Temporal is three indexed queries. Entity and semantic are O(N) in-process per insight: on a copy of the largest SQLite store, every row embedded, `fast_edges` (temporal plus entity) takes 252 ms per insight, of which the entity `json_each` scans are the bulk at about 22 ms per entity over 20 entities; `create_semantic_edges` takes 45 ms with a prebuilt cache, and the cache itself 36 ms per drain batch of `MAX_LINK_BATCH = 20`, 1.8 ms amortized. About 300 ms per insight in all, against the several LLM calls each write makes in the same drain. The read value of every typed-edge weighting is bounded at +0.0103 nDCG@5 on the 285-query MAIN set because the shortlist already reaches 0.9897 of the oracle, so `INTENT_WEIGHTS` (section 3.2) stays unswept: a sweep can move at most that ceiling and fits the reranker and corpus it was swept on. What reopens the question: the per-insight edge time becoming a material share of a drain row's wall time on the largest store (the `json_each` scans and the per-call `np.asarray` in `cosine_similarity` are the two places to look; an ndarray cache is an optimization, not a keep-or-drop question), a recall change that raises the typed-edge ceiling, or a store an order of magnitude above today's largest.
+memman keeps three of the paper's four edge types and writes no causal edge. [01-background.md](01-background.md) records the deviation. No auto type makes a network call. Temporal is three indexed queries. Entity and semantic are O(N) in-process per insight: on a copy of the largest SQLite store, every row embedded, `fast_edges` (temporal plus entity) takes 252 ms per insight, of which the entity `json_each` scans are the bulk at about 22 ms per entity over 20 entities; `create_semantic_edges` takes 45 ms with a prebuilt cache, and the cache itself 36 ms per drain batch of `MAX_LINK_BATCH = 20`, 1.8 ms amortized. About 300 ms per insight in all, against the several LLM calls each write makes in the same drain. The read value of every typed-edge weighting is bounded at +0.0103 nDCG@5 on the 285-query MAIN set because the shortlist already reaches 0.9897 of the oracle, so `EDGE_WEIGHTS` (section 3.2) stays unswept: a sweep can move at most that ceiling and fits the reranker and corpus it was swept on. What reopens the question: the per-insight edge time becoming a material share of a drain row's wall time on the largest store (the `json_each` scans and the per-call `np.asarray` in `cosine_similarity` are the two places to look; an ndarray cache is an optimization, not a keep-or-drop question), a recall change that raises the typed-edge ceiling, or a store an order of magnitude above today's largest.
 
 ## 3.1 Edge type reference
 
@@ -28,17 +28,12 @@ Edge metadata is JSON:
 
 > **Threshold resolution.** `AUTO_SEMANTIC_THRESHOLD` is resolved per `(provider, model, surface)` at runtime in this order: (1) per-store env override `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>`; (2) `memman.embed.thresholds.resolve(provider, model, surface)` against the calibrated table in `memman.embed._thresholds_generated`; (3) surface-wide median fallback via `thresholds.resolve_with_fallback`. The `surface` dimension is a closed set `{'code', 'claw'}` resolved per store via `MEMMAN_SURFACE_<store>` (default `'code'`). Uncalibrated triples fall through to the surface median rather than skipping edges entirely; `memman doctor`'s `embed_threshold` check reports the `source` (`calibrated`, `surface_median`, `override`, or `override_skip`). See `docs/design/05-lifecycle.md` § 5.3.1a-5.3.1b for the calibrated table and the fallback values. The module default `AUTO_SEMANTIC_THRESHOLD = 0.62` remains as a back-compat path for callers that pass no `threshold=` kwarg.
 
-## 3.2 Intent-adaptive weighting
+## 3.2 Edge-type weighting
 
-Different query intents activate different graph-traversal weights:
+One weight vector governs every traversal, `EDGE_WEIGHTS`:
 
-| Intent      | Temporal  | Entity    | Semantic |
-| ----------- | --------- | --------- | -------- |
-| **WHY**     | **0.666** | 0.167     | 0.167    |
-| **WHEN**    | **0.764** | 0.118     | 0.118    |
-| **ENTITY**  | 0.056     | **0.611** | 0.333    |
-| **GENERAL** | 0.334     | 0.333     | 0.333    |
+| Temporal | Entity | Semantic |
+| -------- | ------ | -------- |
+| 0.334    | 0.333  | 0.333    |
 
-"Why was SQLite chosen?" leans on the temporal backbone, which orders a decision against what preceded it. "Memories related to React" puts entity weight highest.
-
-The distributions draw on MAGMA's intent-adaptive traversal (§3.3) and the weight ranges in Table 5. Table 5 gives per-edge-type ranges but no per-intent distribution, so memman interpolates each intent's values from those ranges and the paper's qualitative guidance. Every vector sums to 1.0. That is not about comparing intents, which never happens in one call; it fixes the structural term's scale against the anchor's RRF score and the semantic term it is summed with, neither of which these weights touch. Scaling only the structural term re-ranks rows and changes which nodes the beam keeps, so editing a vector here changes retrieved order. WHY leans temporal hard enough to stay distinct from GENERAL's near-flat baseline.
+The vector draws on the weight ranges in MAGMA's Table 5, near-uniform because no query-side signal picks a different distribution. It sums to 1.0, which fixes the structural term's scale against the anchor's RRF score and the semantic term it is summed with, neither of which this weight touches. Scaling it re-ranks rows and changes which nodes the beam keeps, so editing the vector changes retrieved order.

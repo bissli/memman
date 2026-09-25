@@ -123,11 +123,9 @@ create table if not exists {schema}.insights (
     importance  integer default 3,
     entities    jsonb default '[]'::jsonb,
     source      text default 'user',
-    access_count integer default 0,
     keywords    jsonb,
     summary     text,
     semantic_facts jsonb,
-    last_accessed_at timestamptz,
     embedding   vector({dim}),
     linked_at   timestamptz,
     enriched_at timestamptz,
@@ -360,26 +358,23 @@ def _row_to_insight(row: tuple[Any, ...]) -> Insight:
     else:
         i.entities = []
     i.source = row[5] or 'user'
-    i.access_count = row[6] or 0
-    i.created_at = _datetime_or_none(row[7])
-    i.updated_at = _datetime_or_none(row[8])
-    i.deleted_at = _datetime_or_none(row[9])
-    if len(row) > 10 and row[10]:
-        i.summary = row[10]
+    i.created_at = _datetime_or_none(row[6])
+    i.updated_at = _datetime_or_none(row[7])
+    i.deleted_at = _datetime_or_none(row[8])
+    if len(row) > 9 and row[9]:
+        i.summary = row[9]
+    if len(row) > 10:
+        i.linked_at = _datetime_or_none(row[10])
     if len(row) > 11:
-        i.linked_at = _datetime_or_none(row[11])
-    if len(row) > 12:
-        i.enriched_at = _datetime_or_none(row[12])
-    if len(row) > 13:
-        i.last_accessed_at = _datetime_or_none(row[13])
+        i.enriched_at = _datetime_or_none(row[11])
+    if len(row) > 12 and row[12]:
+        i.session_id = row[12]
+    if len(row) > 13 and row[13]:
+        i.queue_uuid = row[13]
     if len(row) > 14 and row[14]:
-        i.session_id = row[14]
+        i.superseded_by = row[14]
     if len(row) > 15 and row[15]:
-        i.queue_uuid = row[15]
-    if len(row) > 16 and row[16]:
-        i.superseded_by = row[16]
-    if len(row) > 17 and row[17]:
-        i.author = row[17]
+        i.author = row[15]
     return i
 
 
@@ -406,8 +401,8 @@ def _row_to_edge(row: tuple[Any, ...]) -> Edge:
 # _INSIGHT_COLUMNS (see test_insight_column_lists_are_identical_across_backends).
 _INSIGHT_COLS = (
     'id, content, category, importance, entities,'
-    ' source, access_count, created_at, updated_at, deleted_at,'
-    ' summary, linked_at, enriched_at, last_accessed_at,'
+    ' source, created_at, updated_at, deleted_at,'
+    ' summary, linked_at, enriched_at,'
     ' session_id, queue_uuid, superseded_by,'
     ' author')
 
@@ -472,16 +467,15 @@ where attrelid = (%s || '.insights')::regclass
         sql = self._q("""
 insert into {s}.insights
     (id, content, category, importance, entities,
-     source, access_count, created_at, updated_at,
+     source, created_at, updated_at,
      prompt_version, embedding_model,
      session_id, queue_uuid, kw_tokens, author)
-values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-        %s)
+values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (
                 ins.id, ins.content, ins.category, ins.importance,
-                ins.entities_json(), ins.source, ins.access_count,
+                ins.entities_json(), ins.source,
                 now, now,
                 ins.prompt_version, ins.embedding_model,
                 ins.session_id, ins.queue_uuid,
@@ -720,15 +714,6 @@ where id = %s
             cur.execute(sql, (
                 _json.dumps(keywords), summary,
                 _json.dumps(semantic_facts), id))
-
-    def increment_access_count(self, id: Id) -> None:
-        sql = self._q("""
-update {s}.insights
-set access_count = access_count + 1, last_accessed_at = now()
-where id = %s and deleted_at is null and superseded_by is null
-""")
-        with self._conn.cursor() as cur:
-            cur.execute(sql, (id,))
 
     def count_active(self) -> int:
         sql = self._q("""
@@ -1647,12 +1632,6 @@ order by count(*) desc
                 cur.execute(sql)
             for op, cnt in cur.fetchall():
                 op_counts[op] = int(cnt)
-            never_sql = f"""
-select count(*) from {self._schema}.insights
-where deleted_at is null and superseded_by is null and access_count = 0
-"""
-            cur.execute(never_sql)
-            never = int(cur.fetchone()[0])
             total_sql = f"""
 select count(*) from {self._schema}.insights
 where deleted_at is null and superseded_by is null
@@ -1660,8 +1639,7 @@ where deleted_at is null and superseded_by is null
             cur.execute(total_sql)
             total = int(cur.fetchone()[0])
         return OpLogStats(
-            operation_counts=op_counts, never_accessed=never,
-            total_active=total)
+            operation_counts=op_counts, total_active=total)
 
     def delta_coverage(self) -> tuple[int, int]:
         sql = f"""
@@ -1845,25 +1823,6 @@ where i.deleted_at is null and i.superseded_by is null and i.kw_tokens && %(q)s:
         with self._conn.cursor() as cur:
             cur.execute(sql, {'q': sorted(query_tokens)})
             return {r[0]: int(r[1]) for r in cur}
-
-    def vectors_for_ids(
-            self, ids: list[Id]) -> dict[Id, list[float]]:
-        """Embeddings for a bounded set of ids."""
-        if not ids:
-            return {}
-        assert self._conn is not None
-        sql = f"""
-select id, embedding
-from {self._schema}.insights
-where deleted_at is null and superseded_by is null and embedding is not null
-  and id = any(%s::text[])
-"""
-        with self._conn.cursor() as cur:
-            cur.execute(sql, (list(ids),))
-            return {
-                r[0]: pgvector_to_list(r[1]) for r in cur
-                if r[1] is not None
-                }
 
 
 class PostgresBackend(Backend):
@@ -2711,8 +2670,7 @@ class PostgresMigrator(Migrator):
             pending_select = ', embedding_pending' if has_pending else ''
             cur.execute(f"""
 select id, content, category, importance, entities,
-       source, access_count, keywords, summary, semantic_facts,
-       last_accessed_at, embedding,
+       source, keywords, summary, semantic_facts, embedding,
        linked_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, embedding_model,
        session_id, queue_uuid, superseded_by,
@@ -2725,32 +2683,31 @@ order by id
             insights: list[MigrateInsight] = []
             pending: list[PendingReembed] = []
             for r in insight_rows:
-                emb = list(r[11]) if r[11] is not None else None
+                emb = list(r[9]) if r[9] is not None else None
                 insights.append(MigrateInsight(
                     id=r[0], content=r[1], category=r[2],
                     importance=int(r[3]),
                     entities=list(r[4]) if r[4] is not None else [],
-                    source=r[5], access_count=int(r[6]),
+                    source=r[5],
                     keywords=(
-                        list(r[7]) if r[7] is not None else None),
-                    summary=r[8],
+                        list(r[6]) if r[6] is not None else None),
+                    summary=r[7],
                     semantic_facts=(
-                        list(r[9]) if r[9] is not None else None),
-                    last_accessed_at=r[10],
+                        list(r[8]) if r[8] is not None else None),
                     embedding=emb,
-                    linked_at=r[12],
-                    enriched_at=r[13],
-                    created_at=r[14],
-                    updated_at=r[15],
-                    deleted_at=r[16],
-                    prompt_version=r[17],
-                    embedding_model=r[18],
-                    session_id=r[19], queue_uuid=r[20],
-                    superseded_by=r[21],
-                    author=r[22]))
-                if has_pending and r[23] is not None:
+                    linked_at=r[10],
+                    enriched_at=r[11],
+                    created_at=r[12],
+                    updated_at=r[13],
+                    deleted_at=r[14],
+                    prompt_version=r[15],
+                    embedding_model=r[16],
+                    session_id=r[17], queue_uuid=r[18],
+                    superseded_by=r[19],
+                    author=r[20]))
+                if has_pending and r[21] is not None:
                     pending.append(PendingReembed(
-                        insight_id=r[0], vector=list(r[23])))
+                        insight_id=r[0], vector=list(r[21])))
 
             cur.execute(f"""
 select source_id, target_id, edge_type, weight,
@@ -2845,14 +2802,14 @@ order by sqlite_id
                             ins.id, ins.content, ins.category,
                             ins.importance,
                             json.dumps(ins.entities),
-                            ins.source, ins.access_count,
+                            ins.source,
                             json.dumps(ins.keywords)
                             if ins.keywords is not None else None,
                             ins.summary,
                             json.dumps(ins.semantic_facts)
                             if ins.semantic_facts is not None
                             else None,
-                            ins.last_accessed_at, emb,
+                            emb,
                             ins.linked_at, ins.enriched_at,
                             ins.created_at, ins.updated_at,
                             ins.deleted_at, ins.prompt_version,
@@ -2868,9 +2825,9 @@ order by sqlite_id
                         cur.executemany(
                             f'insert into {schema}.insights ('
                             ' id, content, category, importance,'
-                            ' entities, source, access_count,'
+                            ' entities, source,'
                             ' keywords, summary, semantic_facts,'
-                            ' last_accessed_at, embedding,'
+                            ' embedding,'
                             ' linked_at, enriched_at, created_at,'
                             ' updated_at, deleted_at,'
                             ' prompt_version,'
@@ -2878,9 +2835,9 @@ order by sqlite_id
                             ' queue_uuid,'
                             ' kw_tokens, superseded_by, author)'
                             ' values (%s, %s, %s, %s, %s::jsonb,'
-                            ' %s, %s, %s::jsonb, %s, %s::jsonb,'
+                            ' %s, %s::jsonb, %s, %s::jsonb,'
                             ' %s, %s, %s, %s, %s, %s, %s, %s,'
-                            ' %s, %s, %s, %s, %s, %s)'
+                            ' %s, %s, %s, %s, %s)'
                             ' on conflict (id) do nothing',
                             insight_rows)
 

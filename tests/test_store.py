@@ -11,9 +11,9 @@ from memman.store.edge import get_edges_by_source_and_type, insert_edge
 from memman.store.node import count_active_insights, get_all_active_insights
 from memman.store.node import get_embedding, get_insight_by_id
 from memman.store.node import get_insight_by_id_include_deleted
-from memman.store.node import increment_access_count, insert_insight
-from memman.store.node import query_insights, review_content_quality
-from memman.store.node import soft_delete_insight, update_embedding
+from memman.store.node import insert_insight, query_insights
+from memman.store.node import review_content_quality, soft_delete_insight
+from memman.store.node import update_embedding
 from memman.store.oplog import get_oplog, log_op
 from tests.conftest import make_edge, make_insight
 
@@ -413,24 +413,6 @@ class TestGetMany:
         backend.nodes.insert(Insight(id='gm-2', content='two'))
         insights = backend.nodes.get_many(['gm-2', 'absent', 'gm-1'])
         assert [i.id for i in insights] == ['gm-2', 'gm-1']
-
-
-# --- IncrementAccessCount ---
-
-
-class TestIncrementAccessCount:
-    """Bump access_count on an insight."""
-
-    def test_increment(self, tmp_db):
-        """Two increments result in access_count = 2."""
-        insert_insight(tmp_db, make_insight(
-            id='acc-1', content='content'))
-
-        increment_access_count(tmp_db, 'acc-1')
-        increment_access_count(tmp_db, 'acc-1')
-
-        got = get_insight_by_id(tmp_db, 'acc-1')
-        assert got.access_count == 2
 
 
 # --- Store management ---

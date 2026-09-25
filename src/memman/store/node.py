@@ -27,14 +27,14 @@ def insert_insight(db: 'DB', i: Insight) -> None:
     sql = """
 insert into insights
     (id, content, category, importance, entities,
-     source, access_count, created_at, updated_at,
+     source, created_at, updated_at,
      prompt_version, embedding_model,
      session_id, queue_uuid, author)
-values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
     db._exec(sql, (
         i.id, i.content, i.category, i.importance,
-        i.entities_json(), i.source, i.access_count,
+        i.entities_json(), i.source,
         now, now,
         i.prompt_version, i.embedding_model,
         i.session_id, i.queue_uuid,
@@ -46,8 +46,8 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 # _INSIGHT_COLS (see test_insight_column_lists_are_identical_across_backends).
 _INSIGHT_COLUMNS = (
     'id, content, category, importance, entities,'
-    ' source, access_count, created_at, updated_at, deleted_at,'
-    ' summary, linked_at, enriched_at, last_accessed_at,'
+    ' source, created_at, updated_at, deleted_at,'
+    ' summary, linked_at, enriched_at,'
     ' session_id, queue_uuid, superseded_by,'
     ' author')
 
@@ -317,17 +317,6 @@ where id = ?
 """
     db._exec(sql, (
         json.dumps(keywords), summary, json.dumps(semantic_facts), id))
-
-
-def increment_access_count(db: 'DB', id: str) -> None:
-    """Bump the access count and refresh last_accessed_at on a current row."""
-    now = format_timestamp(datetime.now(timezone.utc))
-    sql = """
-update insights
-set access_count = access_count + 1, last_accessed_at = ?
-where id = ? and deleted_at is null and superseded_by is null
-"""
-    db._exec(sql, (now, id))
 
 
 def count_active_insights(db: 'DB') -> int:
@@ -913,25 +902,22 @@ def _scan_insight(row: tuple[Any, ...]) -> Insight:
     i.importance = row[3]
     i.parse_entities(row[4])
     i.source = row[5]
-    i.access_count = row[6]
-    i.created_at = parse_timestamp(row[7])
-    i.updated_at = parse_timestamp(row[8])
-    if row[9]:
-        i.deleted_at = parse_timestamp(row[9])
+    i.created_at = parse_timestamp(row[6])
+    i.updated_at = parse_timestamp(row[7])
+    if row[8]:
+        i.deleted_at = parse_timestamp(row[8])
+    if len(row) > 9 and row[9]:
+        i.summary = row[9]
     if len(row) > 10 and row[10]:
-        i.summary = row[10]
+        i.linked_at = parse_timestamp(row[10])
     if len(row) > 11 and row[11]:
-        i.linked_at = parse_timestamp(row[11])
+        i.enriched_at = parse_timestamp(row[11])
     if len(row) > 12 and row[12]:
-        i.enriched_at = parse_timestamp(row[12])
+        i.session_id = row[12]
     if len(row) > 13 and row[13]:
-        i.last_accessed_at = parse_timestamp(row[13])
+        i.queue_uuid = row[13]
     if len(row) > 14 and row[14]:
-        i.session_id = row[14]
+        i.superseded_by = row[14]
     if len(row) > 15 and row[15]:
-        i.queue_uuid = row[15]
-    if len(row) > 16 and row[16]:
-        i.superseded_by = row[16]
-    if len(row) > 17 and row[17]:
-        i.author = row[17]
+        i.author = row[15]
     return i

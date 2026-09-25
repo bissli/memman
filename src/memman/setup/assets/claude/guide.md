@@ -8,12 +8,13 @@ and writes to it after.
 Before a new user message, a new task, a topic switch, a design
 decision, or a delegation, the agent runs
 
-    memman recall "<focused query>" --brief --limit 20 --session $SESSION_ID
+    memman recall "<focused query>"
 
 The query is focused keywords, never the raw user prompt. The one
 exception is a direct follow-up whose topic is already in context.
-Rows come back in relevance order. The agent judges each row against
-the query, never against a fixed score, and opens one with
+The page is one line per row, best first: id, score, date, author,
+category, then the text. The agent judges each row against the
+query, never against a fixed score, and opens one with
 `memman insights show <id>`.
 
 ## Remember
@@ -40,6 +41,6 @@ instead.
 
 A literal `$SESSION_ID` means the host supplied no id: omit the flag.
 
-The memman skill is the full manual: recall triggers and response
-keys, categories, what never to store, corrections, the write
-pipeline, and scheduler controls.
+The memman skill is the full manual: recall triggers, categories,
+what never to store, corrections, the write pipeline, and scheduler
+controls.

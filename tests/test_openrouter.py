@@ -40,7 +40,7 @@ def test_fast_picks_the_newest_snapshot_of_the_pinned_line(monkeypatch):
     dated snapshot of one model line.
     """
     monkeypatch.setattr(om, '_fetch_models', lambda *a, **k: SAMPLE_MODELS)
-    assert om.resolve_latest_for_role('fast') == 'qwen/qwen3-235b-a22b-2507'
+    assert om.resolve_latest_for_role('slow') == 'qwen/qwen3-235b-a22b-2507'
 
 
 def test_resolver_never_picks_a_reasoning_variant(monkeypatch):
@@ -54,9 +54,8 @@ def test_resolver_never_picks_a_reasoning_variant(monkeypatch):
     thinking snapshot of the same line at the same date.
     """
     monkeypatch.setattr(om, '_fetch_models', lambda *a, **k: SAMPLE_MODELS)
-    for role in ('fast', 'slow'):
-        resolved = om.resolve_latest_for_role(role)
-        assert 'thinking' not in resolved, f'{role} resolved {resolved!r}'
+    resolved = om.resolve_latest_for_role('slow')
+    assert 'thinking' not in resolved, f'slow resolved {resolved!r}'
 
 
 def test_unknown_role_returns_none(monkeypatch):
@@ -67,7 +66,7 @@ def test_unknown_role_returns_none(monkeypatch):
 def test_returns_none_when_no_match(monkeypatch):
     monkeypatch.setattr(om, '_fetch_models', lambda *a, **k: [
         {'id': 'meta-llama/llama-4-maverick'}])
-    assert om.resolve_latest_for_role('fast') is None
+    assert om.resolve_latest_for_role('slow') is None
 
 
 def test_returns_none_on_network_failure(monkeypatch):
@@ -77,7 +76,7 @@ def test_returns_none_on_network_failure(monkeypatch):
         raise httpx.ConnectError('no route')
 
     monkeypatch.setattr(om, '_fetch_models', boom)
-    assert om.resolve_latest_for_role('fast') is None
+    assert om.resolve_latest_for_role('slow') is None
 
 
 def test_caches_within_session(monkeypatch):
@@ -88,8 +87,8 @@ def test_caches_within_session(monkeypatch):
         return SAMPLE_MODELS
 
     monkeypatch.setattr(om, '_fetch_models', counting)
-    om.resolve_latest_for_role('fast')
-    om.resolve_latest_for_role('fast')
+    om.resolve_latest_for_role('slow')
+    om.resolve_latest_for_role('slow')
     assert calls['n'] == 1
 
 
@@ -152,21 +151,6 @@ def test_llm_client_accepts_model():
         model='anthropic/claude-haiku-4.5')
     assert client.model == 'anthropic/claude-haiku-4.5'
     assert client.endpoint == 'https://openrouter.ai/api/v1'
-
-
-def test_install_resolver_puts_every_role_on_one_tier():
-    """Both LLM roles resolve to the same model family at install.
-
-    Mutation: the slow-role pattern names a pricier family than the
-    fast role, so a fresh install bills fact extraction and enrichment
-    at a rate the cost model never covered.
-    Oracle: the fast role's resolved slug over the same catalog.
-    """
-    fast = om.resolve_latest_for_role('fast')
-    slow = om.resolve_latest_for_role('slow')
-    fast_family = fast.split('/', 1)[-1].rsplit('-', 1)[0]
-    slow_family = slow.split('/', 1)[-1].rsplit('-', 1)[0]
-    assert slow_family == fast_family, f'{slow!r} is not {fast_family!r}'
 
 
 def _capture_post(monkeypatch):

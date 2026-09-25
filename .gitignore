@@ -35,14 +35,8 @@ dist/
 .testdata/
 M/
 
-# Experiments: track the recall_ablation harness (it is the arbiter
-# of shipped retrieval constants); everything else under
-# experiments/ stays local, as do its data artifacts.
+# experiments/ stays local.
 experiments/*
-!experiments/recall_ablation/
-experiments/recall_ablation/results*.csv
-experiments/recall_ablation/sandbox/
-experiments/recall_ablation/*.jsonl
 tests/experiments/
 
 # Local planning / scratch documents (not for git)

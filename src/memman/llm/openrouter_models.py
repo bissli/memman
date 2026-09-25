@@ -52,12 +52,9 @@ def _version_sort_key(model_id: str) -> tuple:
 # Notes:
 # - The trailing `-\d` anchors on a dated snapshot, which excludes the
 #   `-thinking-` variant of the same line: a reasoning model bills
-#   reasoning tokens on every enrichment and query-expansion call and
-#   can return an empty body at the role's token ceiling.
-# - Both roles name one line. The roles still resolve separately, so
-#   an operator splits them by setting the env vars directly.
+#   reasoning tokens on every enrichment call and can return an empty
+#   body at the role's token ceiling.
 _ROLE_PATTERNS: dict[str, re.Pattern] = {
-    'fast': re.compile(r'^qwen/qwen3-235b-a22b-\d'),
     'slow': re.compile(r'^qwen/qwen3-235b-a22b-\d'),
     }
 
@@ -88,7 +85,7 @@ def resolve_latest_for_role(
         role: str, endpoint: str = DEFAULT_ENDPOINT) -> str | None:
     """Return the latest OR-formatted model slug for `role`, or None.
 
-    `role` is `'fast'` or `'slow'`. Returns None when no rule exists,
+    `role` is `'slow'`. Returns None when no rule exists,
     when OR's catalog has no match, or when the network call fails --
     the caller falls back to `INSTALL_DEFAULTS`. Only fires when the
     install endpoint points at OpenRouter (callers guard via

@@ -140,24 +140,3 @@ def bound_embedder(backend: 'Backend') -> 'EmbeddingProvider':
             "store has no embed fingerprint;"
             " run 'memman embed reembed' to initialize.")
     return _ec_registry.get_for(fp.provider, fp.model)
-
-
-def assert_fingerprint_unchanged_for_sync(
-        backend: 'Backend', expected: Fingerprint) -> None:
-    """Raise `EmbedFingerprintError` if the store fingerprint drifted.
-
-    Sync analogue of `_StoreContext.assert_fingerprint_unchanged`.
-    Callers in the sync CLI capture the fingerprint at command entry
-    and re-check it before any embed call to catch a swap that
-    completed mid-command (e.g., between LLM query expansion and
-    `ec.embed(query)` inside `recall`).
-    """
-    current = stored_fingerprint(backend)
-    if current != expected:
-        raise EmbedFingerprintError(
-            f'store fingerprint changed mid-command: was'
-            f' {expected.provider}:{expected.model}:{expected.dim},'
-            f' now {current.provider if current else None}:'
-            f'{current.model if current else None}:'
-            f'{current.dim if current else None};'
-            ' rerun the command.')

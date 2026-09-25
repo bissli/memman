@@ -207,7 +207,6 @@ def _plan_fact(
         id=str(uuid.uuid4()), content=fact_text,
         category=parent.category, importance=parent.importance,
         entities=list(parent.entities), source=parent.source,
-        access_count=parent.access_count,
         created_at=parent.created_at, updated_at=parent.updated_at,
         session_id=parent.session_id, queue_uuid=parent.queue_uuid,
         author=parent.author)
@@ -336,14 +335,10 @@ def _apply_plan(
             linked_targets.append((target_id, relation))
             carried.append((target_id, carried_edges))
             predecessors.append((target_id, relation, before_target))
-        # Every predecessor keeps its content behind `superseded_by`;
-        # the successor copies what the CURRENT view keeps: recall
-        # history as the max over the linked targets. The CLI already
+        # Every predecessor keeps its content behind `superseded_by`,
+        # and the successor copies nothing from it: the CLI already
         # seeded the caller's entity list from the target when the
-        # flag was omitted, so that list stands.
-        for _target_id, _relation, before_target in predecessors:
-            fi.access_count = max(
-                fi.access_count, before_target.access_count)
+        # flag was omitted.
         for target_id, _relation, before_target in predecessors:
             backend.oplog.log(
                 operation='replace', insight_id=target_id,

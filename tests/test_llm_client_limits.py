@@ -1,23 +1,13 @@
 """Per-role LLM client output-token and timeout budgets.
 
-The recall hot path (`fast`) stays tight; the `slow` worker
-role emits JSON that scales with input size and must not truncate
-large insights, so it gets a larger token budget and a longer read
-timeout.
+The `slow` worker role emits JSON that scales with input size and
+must not truncate large insights, so it gets a large token budget and
+a long read timeout.
 """
 
 import pytest
 from memman.llm import usage as llm_usage
 from memman.llm.client import MemmanLLMClient, get_llm_client, reset_role_cache
-
-
-def test_fast_role_keeps_tight_budget():
-    """Recall hot-path role keeps the small token budget and short timeout.
-    """
-    reset_role_cache()
-    client = get_llm_client('fast')
-    assert client.max_tokens == 1024
-    assert client.timeout == 10.0
 
 
 def test_slow_role_gets_large_budget():
@@ -27,6 +17,24 @@ def test_slow_role_gets_large_budget():
     client = get_llm_client('slow')
     assert client.max_tokens >= 4096
     assert client.timeout >= 60.0
+
+
+def test_unset_slow_model_var_raises(env_file):
+    """Verify an unset slow model fails loudly instead of falling back.
+
+    Mutation: a fallback to a hardcoded default model when
+        `MEMMAN_LLM_MODEL_SLOW` is unset, which bills enrichment on a
+        model the operator never chose.
+    Oracle: `ConfigError` raised with the slow var cleared.
+    """
+    from memman.config import LLM_API_KEY, LLM_ENDPOINT, LLM_MODEL_SLOW
+    from memman.exceptions import ConfigError
+    env_file(LLM_ENDPOINT, 'https://openrouter.ai/api/v1')
+    env_file(LLM_API_KEY, 'k')
+    env_file(LLM_MODEL_SLOW, None)
+    reset_role_cache()
+    with pytest.raises(ConfigError):
+        get_llm_client('slow')
 
 
 class _RecordingSession:

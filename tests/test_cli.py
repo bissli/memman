@@ -6,6 +6,7 @@ Requires OPENROUTER_API_KEY and VOYAGE_API_KEY in environment.
 
 import json
 import pathlib
+import re
 from unittest.mock import patch
 
 import pytest
@@ -17,6 +18,28 @@ from memman.store.db import store_exists
 from memman.store.errors import BackendError
 from memman.store.node import insert_insight, update_embedding
 from tests.conftest import invoke, make_insight, parse_remember
+
+_SCORED_LINE = re.compile(
+    r'^(?P<id>\S{8}) (?P<score>-?\d+\.\d\d)'
+    r' (?P<created>\S+) (?P<author>\S+) (?P<category>\S+) \| (?P<text>.*)$')
+_BASIC_LINE = re.compile(
+    r'^(?P<id>\S{8})'
+    r' (?P<created>\S+) (?P<author>\S+) (?P<category>\S+) \| (?P<text>.*)$')
+
+
+def _parse_recall_lines(output: str, basic: bool = False) -> list[dict]:
+    """Parse a recall page into one field dict per line, id8-keyed order kept.
+
+    Mutation: a caller comparing against the deleted JSON envelope
+        instead of this plain-text line shape.
+    """
+    pattern = _BASIC_LINE if basic else _SCORED_LINE
+    rows = []
+    for line in output.splitlines():
+        match = pattern.match(line)
+        assert match, f'line off the page format: {line!r}'
+        rows.append(match.groupdict())
+    return rows
 
 
 @pytest.fixture
@@ -38,7 +61,13 @@ class TestRemember:
         assert 'sqlite' in data['content'].lower()
 
     def test_remember_with_flags(self, runner):
-        """Store with category and importance."""
+        """Store with category and importance.
+
+        Mutation: dropping the `--cat`/`--imp` values on the way to
+            storage, so the stored row keeps the defaults.
+        Oracle: `insights show` on the stored id, compared against the
+            flags passed to `remember`.
+        """
         result = invoke(runner, [
             'remember', 'Chose Docker for container orchestration in production',
             '--cat', 'decision', '--imp', '4'])
@@ -46,11 +75,10 @@ class TestRemember:
         data = parse_remember(result, runner)
         assert 'id' in data
 
-        result = invoke(runner, ['recall', '--basic', 'Docker container'])
-        hits = json.loads(result.output)['results']
-        match = [h for h in hits if h['id'] == data['id']][0]
-        assert match['category'] == 'decision'
-        assert match['importance'] == 4
+        shown = json.loads(
+            invoke(runner, ['insights', 'show', data['id']]).output)
+        assert shown['category'] == 'decision'
+        assert shown['importance'] == 4
 
     def test_remember_invalid_category(self, runner):
         """Invalid category is rejected."""
@@ -192,81 +220,68 @@ class TestRecall:
                   if 'recall query embed failed' in r.getMessage()]
         assert warned
 
-    def test_recall_default_does_not_call_expand_query(self, runner):
-        """Default recall must not run LLM query expansion."""
-        invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage'])
-
-        from unittest.mock import patch
-        with patch('memman.llm.extract.expand_query',
-                   side_effect=AssertionError('expand_query called')) as mock_ex:
-            result = invoke(runner, ['recall', 'Go SQLite storage'])
-            assert result.exit_code == 0
-            mock_ex.assert_not_called()
-
-    def test_recall_expand_flag_calls_expand_query(self, runner):
-        """Recall --expand re-enables the LLM query expansion path."""
-        invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage'])
-
-        from unittest.mock import patch
-        fake = {'expanded_query': 'Go SQLite storage', 'intent': '', 'entities': []}
-        with patch('memman.llm.extract.expand_query',
-                   return_value=fake) as mock_ex:
-            result = invoke(runner, ['recall', 'Go SQLite storage', '--expand'])
-            assert result.exit_code == 0
-            mock_ex.assert_called_once()
-
     def test_recall_default_runs_rerank(self, runner):
-        """Default install seeds MEMMAN_RERANK_ENABLED=true, so rerank fires."""
+        """Default install seeds MEMMAN_RERANK_ENABLED=true, so rerank fires.
+
+        Mutation: dropping the `rerank=rerank` kwarg from the
+            `intent_aware_recall` call, so the config default never
+            reaches the reranker.
+        Oracle: a spy on the Voyage client, called once.
+        """
         for fact in [
                 'Go uses SQLite for persistent storage',
                 'Go modules manage dependency versions',
                 'SQLite uses WAL mode for concurrent writes']:
             invoke(runner, ['remember', fact])
 
-        from unittest.mock import patch
         with patch('memman.rerank.voyage.Client.rerank',
                    return_value=[(0, 0.9), (1, 0.5), (2, 0.1)]) as mock_re:
             result = invoke(runner, ['recall', 'Go SQLite persistent storage'])
             assert result.exit_code == 0
             mock_re.assert_called_once()
-            data = json.loads(result.output)
-            assert data['meta'].get('reranked') is True
 
     def test_recall_global_disable_skips_rerank(self, runner, env_file):
-        """MEMMAN_RERANK_ENABLED=false disables rerank globally."""
+        """MEMMAN_RERANK_ENABLED=false disables rerank globally.
+
+        Mutation: ignoring the global config flag, running the
+            reranker regardless.
+        Oracle: a spy on the Voyage client, never called.
+        """
         invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage'])
         env_file('MEMMAN_RERANK_ENABLED', 'false')
 
-        from unittest.mock import patch
         with patch('memman.rerank.voyage.Client.rerank',
                    side_effect=AssertionError('rerank called')) as mock_re:
             result = invoke(runner, ['recall', 'Go SQLite storage'])
             assert result.exit_code == 0
             mock_re.assert_not_called()
-            data = json.loads(result.output)
-            assert data['meta'].get('reranked') is False
 
     def test_recall_per_store_disable_overrides_global(self, runner, env_file):
-        """MEMMAN_RERANK_ENABLED_<store>=false wins over the global default."""
+        """MEMMAN_RERANK_ENABLED_<store>=false wins over the global default.
+
+        Mutation: reading only the global flag, so a per-store
+            override is silently ignored.
+        Oracle: a spy on the Voyage client, never called.
+        """
         invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage'])
         env_file('MEMMAN_RERANK_ENABLED_default', 'false')
 
-        from unittest.mock import patch
         with patch('memman.rerank.voyage.Client.rerank',
                    side_effect=AssertionError('rerank called')) as mock_re:
             result = invoke(runner, ['recall', 'Go SQLite storage'])
             assert result.exit_code == 0
             mock_re.assert_not_called()
-            data = json.loads(result.output)
-            assert data['meta'].get('reranked') is False
 
     def test_recall_per_store_enable_overrides_global_disable(
             self, runner, env_file):
-        """Per-store true beats global false."""
+        """Per-store true beats global false.
+
+        Mutation: letting the global false short-circuit before the
+            per-store override is read.
+        Oracle: a spy on the Voyage client, called once.
+        """
         for fact in [
                 'Go uses SQLite for persistent storage',
                 'Go modules manage dependency versions',
@@ -275,29 +290,28 @@ class TestRecall:
         env_file('MEMMAN_RERANK_ENABLED', 'false')
         env_file('MEMMAN_RERANK_ENABLED_default', 'true')
 
-        from unittest.mock import patch
         with patch('memman.rerank.voyage.Client.rerank',
                    return_value=[(0, 0.9), (1, 0.5), (2, 0.1)]) as mock_re:
             result = invoke(runner, ['recall', 'Go SQLite persistent storage'])
             assert result.exit_code == 0
             mock_re.assert_called_once()
-            data = json.loads(result.output)
-            assert data['meta'].get('reranked') is True
 
     def test_recall_rerank_skipped_on_short_query(self, runner):
-        """Rerank auto-skips when the query has <=2 tokens, even with default on."""
+        """Rerank auto-skips when the query has <=2 tokens, even with default on.
+
+        Mutation: dropping the token-count guard, so a short query
+            still reaches the reranker.
+        Oracle: a spy on the Voyage client, never called.
+        """
         invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage'])
 
-        from unittest.mock import patch
         with patch('memman.rerank.voyage.Client.rerank',
                    side_effect=AssertionError('rerank called on short query')
                    ) as mock_re:
             result = invoke(runner, ['recall', 'storage'])
             assert result.exit_code == 0
             mock_re.assert_not_called()
-            data = json.loads(result.output)
-            assert data['meta'].get('reranked') is False
 
     def test_recall_rerank_failure_falls_back_gracefully(self, runner):
         """Reranker errors must not break recall; falls back to baseline."""
@@ -313,125 +327,42 @@ class TestRecall:
             assert result.exit_code == 0
             mock_re.assert_called_once()
 
-    def test_recall_min_score_reaches_retrieval(self, runner):
-        """`--min-score` is forwarded to `intent_aware_recall`.
-
-        Mutation: dropping `min_score=min_score` from the call site, so
-            the flag parses and silently does nothing.
-        Oracle: a spy capturing the kwarg, compared against the value
-            typed on the command line and against the unflagged
-            default.
-        """
-        invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage'])
-
-        empty = {'results': [], 'meta': {'intent': 'GENERAL'}}
-        with patch('memman.search.recall.intent_aware_recall',
-                   return_value=empty) as spy:
-            invoke(runner, ['recall', 'Go SQLite storage',
-                            '--min-score', '0.4'])
-            assert spy.call_args.kwargs['min_score'] == 0.4
-        with patch('memman.search.recall.intent_aware_recall',
-                   return_value=empty) as spy:
-            invoke(runner, ['recall', 'Go SQLite storage'])
-            assert spy.call_args.kwargs['min_score'] == 0.0
-
-    def test_recall_min_score_rejected_on_basic_path(self, runner):
-        """`--basic --min-score` fails rather than ignoring the floor.
-
-        Mutation: dropping the guard, which makes the floor a silent
-            no-op on the SQL LIKE path that computes no scores.
-        Oracle: a non-zero exit whose message names both flags, against
-            the same command with the floor left at its default.
-        """
-        invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage'])
-        rejected = invoke(runner, ['recall', 'Go SQLite', '--basic',
-                                   '--min-score', '0.5'])
-        assert rejected.exit_code != 0
-        assert '--min-score' in rejected.output
-        assert '--basic' in rejected.output
-        allowed = invoke(runner, ['recall', 'Go SQLite', '--basic'])
-        assert allowed.exit_code == 0
-
-    def test_recall_basic_names_the_flags_it_ignored(self, runner):
-        """`--basic` reports inert ranking flags in `meta.ignored`.
-
-        Mutation: dropping the `was_given` guard so both names are
-            always listed, emitting `ignored` unconditionally, naming
-            only `intent` and letting `--expand` stay silently inert,
-            or leaking the key onto the scored envelope where
-            `--intent` is genuinely honored.
-        Oracle: the whole `meta` dict compared against a hand-written
-            expectation for each of the four flag combinations, so an
-            absent key and an empty list are distinguishable.
-        """
-        invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage'])
-
-        def meta(*flags):
-            r = invoke(runner, ['recall', 'Go SQLite', '--basic', *flags])
-            assert r.exit_code == 0, r.output
-            return json.loads(r.output)['meta']
-
-        assert meta() == {'basic': True}
-        assert meta('--intent', 'WHY') == {
-            'basic': True, 'ignored': ['intent']}
-        assert meta('--expand') == {
-            'basic': True, 'ignored': ['expand']}
-        assert meta('--intent', 'WHY', '--expand') == {
-            'basic': True, 'ignored': ['intent', 'expand']}
-
-        # The key must never reach the scored envelope: recall fires
-        # from a hook on every user message, and `--intent` IS honored
-        # there, so reporting it would be a lie as well as bytes.
-        scored = invoke(runner, [
-            'recall', 'Go SQLite', '--intent', 'WHY', '--limit', '1'])
-        assert scored.exit_code == 0, scored.output
-        assert 'ignored' not in json.loads(scored.output)['meta']
-
-    def test_recall_min_score_rejects_out_of_domain_values(self, runner):
-        """Values that cannot act as a floor are refused, not ignored.
-
-        Mutation: dropping the NaN guard, or widening the FloatRange,
-            either of which restores a floor that parses and then
-            silently filters nothing.
-        Oracle: three values that cannot threshold anything (below the
-            range, above it, and NaN, which compares false against
-            every row) against an in-range value that is accepted.
-        """
-        invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage'])
-        for bad in ('-1', '3.0', 'nan'):
-            rejected = invoke(runner, ['recall', 'Go SQLite',
-                                       '--min-score', bad])
-            assert rejected.exit_code != 0, bad
-        accepted = invoke(runner, ['recall', 'Go SQLite',
-                                   '--min-score', '2.0'])
-        assert accepted.exit_code == 0
-
     def test_recall_basic_mode(self, runner):
-        """Basic recall returns {results: [...], meta: {basic: True}}."""
+        """Basic recall prints a scoreless page line per matching row.
+
+        Mutation: keeping the deleted `{results, meta}` JSON envelope.
+        Oracle: the basic-line regex, matched against every printed
+            line.
+        """
         invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage'])
         result = invoke(runner, ['recall', 'Go SQLite', '--basic'])
         assert result.exit_code == 0
-        data = json.loads(result.output)
-        assert data['meta']['basic'] is True
-        assert isinstance(data['results'], list)
+        rows = _parse_recall_lines(result.output, basic=True)
+        assert rows
 
     def test_recall_basic_returns_envelope(self, runner):
-        """Recall --basic returns insights wrapped in {results: [...]}."""
+        """Recall --basic prints a line whose text names the stored content.
+
+        Mutation: keeping the deleted `{results: [...]}` envelope.
+        Oracle: the parsed page line's `text` field containing the
+            stored word.
+        """
         invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage'])
         result = invoke(runner, ['recall', '--basic', 'Go SQLite'])
         assert result.exit_code == 0
-        data = json.loads(result.output)
-        assert 'results' in data
-        assert any('SQLite' in r['content'] for r in data['results'])
+        rows = _parse_recall_lines(result.output, basic=True)
+        assert any('SQLite' in r['text'] for r in rows)
 
     def test_recall_emits_summary_when_populated(self, runner):
-        """Smart recall emits summary in result['insight'] when row has one."""
+        """A row with a summary shows the summary, not the content prefix.
+
+        Mutation: always falling back to the content prefix even when
+            a summary is stored.
+        Oracle: the row's stored summary, read independently via
+            `insights show`, compared to the page line's text.
+        """
         long_content = (
             'The application uses a write-through cache layer between the '
             'API tier and Postgres. TTL is 5 minutes for hot keys and 1 '
@@ -440,27 +371,42 @@ class TestRecall:
         invoke(runner, ['remember', long_content])
         result = invoke(runner, ['recall', 'cache invalidation'])
         assert result.exit_code == 0
-        data = json.loads(result.output)
-        matched = [r for r in data['results']
-                   if 'cache' in r['insight']['content'].lower()]
-        assert matched, 'expected at least one matching result'
-        insight = matched[0]['insight']
-        assert insight.get('summary'), \
+        rows = _parse_recall_lines(result.output)
+        assert rows, 'expected at least one matching row'
+        shown = json.loads(
+            invoke(runner, ['insights', 'show', rows[0]['id']]).output)
+        assert shown.get('summary'), \
             'summary should be present and non-empty for substantive content'
-        assert insight['summary'] != insight['content']
+        assert shown['summary'] != shown['content']
+        assert rows[0]['text'] == ' '.join(shown['summary'].split())
 
     def test_recall_omits_summary_when_unenriched(self, runner):
-        """When summary is empty/null, the field is not emitted at all."""
+        """A row with no summary shows the content prefix instead.
+
+        Mutation: printing an empty string in place of the content
+            fallback when summary is unset.
+        Oracle: the row's stored content, read via `insights show`,
+            folded the same way the page line folds it.
+        """
         invoke(runner, [
             'remember', 'Q', '--cat', 'fact'])
         result = invoke(runner, ['recall', '--basic', 'Q'])
         assert result.exit_code == 0
-        data = json.loads(result.output)
-        for r in data['results']:
-            assert 'summary' not in r or r['summary'] == ''
+        rows = _parse_recall_lines(result.output, basic=True)
+        assert rows
+        shown = json.loads(
+            invoke(runner, ['insights', 'show', rows[0]['id']]).output)
+        assert 'summary' not in shown
+        assert rows[0]['text'] == ' '.join(shown['content'].split())
 
     def test_recall_basic_emits_summary_when_present(self, runner):
-        """--basic mode also surfaces summary; both paths share the serializer."""
+        """--basic mode also shows summary; both paths share the formatter.
+
+        Mutation: the --basic branch always falling back to content
+            even when the row has a summary.
+        Oracle: the stored summary, read via `insights show`, compared
+            to the --basic page line's text.
+        """
         long_content = (
             'The job scheduler uses systemd timers on Linux hosts and '
             'launchd on macOS hosts. The drain interval defaults to 60 '
@@ -468,68 +414,13 @@ class TestRecall:
         invoke(runner, ['remember', long_content])
         result = invoke(runner, ['recall', '--basic', 'scheduler timer'])
         assert result.exit_code == 0
-        data = json.loads(result.output)
-        matched = [r for r in data['results']
-                   if 'scheduler' in r['content'].lower()]
-        if matched and matched[0].get('summary'):
-            assert matched[0]['summary'] != matched[0]['content']
-
-    def test_recall_brief_projects_ranked_rows(self, runner):
-        """--brief cuts the ranked path's insight body to the projection.
-
-        Mutation: wiring --brief into the --basic branch only, leaving
-            the ranked path -- the one the UserPromptSubmit hook fires
-            on every user message -- emitting full content.
-        Oracle: the key set the unflagged run emits for the same
-            query, differenced against the flagged one.
-        """
-        invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage'])
-        full = json.loads(
-            invoke(runner, ['recall', 'Go SQLite storage']).output)
-        assert full['results'], 'expected the ranked path to return a row'
-        full_keys = set(full['results'][0]['insight'])
-        assert 'content' in full_keys
-
-        result = invoke(runner, ['recall', 'Go SQLite storage', '--brief'])
-        assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
-        assert data['results'], 'expected --brief to return the same row'
-        brief_keys = set(data['results'][0]['insight'])
-        assert brief_keys - {'truncated'} == {
-            'id', 'category', 'importance', 'created_at', 'summary', 'author'}
-        assert 'content' in full_keys - brief_keys
-
-    def test_recall_brief_carries_the_stored_created_at(self, runner):
-        """--brief emits created_at with the value the store holds.
-
-        Mutation: emitting `updated_at`, `datetime.now()`, or a
-            constant in place of the row's own `created_at` - a
-            key-set assertion passes on all three, and a WHEN caller
-            sorting on the field would build a wrong timeline from a
-            page that looks correct.
-        Oracle: the same row's `created_at` off the FULL projection,
-            which is independently formatted by
-            `insight_to_full_dict`.
-        """
-        invoke(runner, [
-            'remember', 'Kafka retains partitions by time and size'])
-        full = json.loads(
-            invoke(runner, ['recall', 'Kafka partitions retention']).output)
-        brief = json.loads(
-            invoke(runner, [
-                'recall', 'Kafka partitions retention', '--brief']).output)
-        assert full['results']
-        assert brief['results']
-
-        full_by_id = {r['insight']['id']: r['insight'] for r in full['results']}
-        checked = 0
-        for row in brief['results']:
-            ins = row['insight']
-            assert ins['created_at'] == full_by_id[ins['id']]['created_at']
-            assert ins['created_at'].endswith('Z')
-            checked += 1
-        assert checked, 'expected at least one row to compare'
+        rows = _parse_recall_lines(result.output, basic=True)
+        assert rows
+        shown = json.loads(
+            invoke(runner, ['insights', 'show', rows[0]['id']]).output)
+        if shown.get('summary'):
+            assert rows[0]['text'] == ' '.join(shown['summary'].split())
+            assert shown['summary'] != shown['content']
 
     def test_recall_detail_oplog_records_the_request(self, runner):
         """The recall-detail row carries the REQUESTED limit and session.
@@ -570,7 +461,7 @@ class TestRecall:
         Mutation: dropping the `envvar` list from the `--session`
             option, which leaves the oplog session blank on every
             recall an agent issues without the flag - the normal case,
-            since the hooks only ever remind it about the flag.
+            since the shipped hooks never pass it explicitly.
         Oracle: the oplog row from a recall run with no `--session`
             argument at all, against the exported id.
         """
@@ -587,110 +478,14 @@ class TestRecall:
         assert details, 'expected a recall-detail row'
         assert details[0]['session'] == 'env-session-9'
 
-    def test_recall_brief_projects_the_insight_not_the_row(self, runner):
-        """--brief cuts the insight and leaves the ranking envelope whole.
-
-        Mutation: projecting the whole result row rather than its
-            `insight` value, dropping the ranking diagnostics the
-            recall hint and the quality harness both read.
-        Oracle: the envelope keys and the projected insight's key set
-            asserted on the same row, so neither half can pass alone.
-        """
-        invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage'])
-        result = invoke(runner, ['recall', 'Go SQLite storage', '--brief'])
-        assert result.exit_code == 0, result.output
-        row = json.loads(result.output)['results'][0]
-        assert {'insight', 'score', 'intent', 'signals'} <= set(row)
-        assert set(row['insight']) - {'truncated'} == {
-            'id', 'category', 'importance', 'created_at', 'summary', 'author'}
-
-    def test_recall_brief_basic_path_projects_rows(self, runner):
-        """--brief projects the --basic branch's rows and drops none.
-
-        Mutation: returning `insight_to_full_dict` on the --basic
-            branch, so `recall --basic --brief` still ships content; or
-            letting the flag change how many rows come back rather than
-            only their shape.
-        Oracle: exact four-key set on each row, and the row count of
-            the same query run without the flag.
-        """
-        from memman.store.db import open_db
-        db = open_db(str(pathlib.Path(runner[1]) / 'data' / 'default'))
-        for i in range(3):
-            insert_insight(db, make_insight(
-                id=f'brief-many-{i}', content=f'yankee row {i}',
-                category='fact'))
-        db.close()
-
-        full = json.loads(
-            invoke(runner, ['recall', '--basic', 'yankee']).output)
-        assert len(full['results']) == 3, full['results']
-
-        result = invoke(runner, [
-            'recall', '--basic', '--brief', 'yankee'])
-        assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
-        assert len(data['results']) == 3, data['results']
-        for r in data['results']:
-            assert set(r) - {'truncated'} == {
-                'id', 'category', 'importance', 'created_at', 'summary'}
-
-    def test_recall_brief_emits_a_real_summary_unmarked(self, runner):
-        """A row that HAS a summary ships it verbatim, with no marker.
-
-        Mutation: always taking the content-prefix fallback. Every
-            other --brief CLI test seeds through `remember`, which
-            leaves summary blank, so all of them run the fallback
-            branch and none would notice.
-        Oracle: the seeded summary string, which is absent from the
-            content, so a fallback cannot produce it.
-        """
-        from memman.store.db import open_db
-        db = open_db(str(pathlib.Path(runner[1]) / 'data' / 'default'))
-        insert_insight(db, make_insight(
-            id='brief-summ', content='zeta ' * 100, category='fact'))
-        db._conn.execute(
-            'update insights set summary = ? where id = ?',
-            ('a genuine enrichment summary', 'brief-summ'))
-        db.close()
-
-        result = invoke(runner, ['recall', '--basic', '--brief', 'zeta'])
-        assert result.exit_code == 0, result.output
-        rows = [r for r in json.loads(result.output)['results']
-                if r['id'] == 'brief-summ']
-        assert rows, 'expected the seeded row back'
-        assert rows[0]['summary'] == 'a genuine enrichment summary'
-        assert 'truncated' not in rows[0]
-
-    def test_recall_brief_never_returns_an_empty_row(self, runner):
-        """A row the compression gate left summary-less still carries text.
-
-        Mutation: a summary-only projection -- `graph/enrichment.py`
-            blanks summary whenever it fails the 0.85 compression gate,
-            which was 46 of 118 rows on a live store, so a third of
-            results come back with nothing to read.
-        Oracle: a seeded row whose 400-char content has no summary; the
-            emitted text is the hand-computed 200-char prefix and the
-            row is marked truncated because content really was cut.
-        """
-        from memman.store.db import open_db
-        content = 'abcde' * 80
-        db = open_db(str(pathlib.Path(runner[1]) / 'data' / 'default'))
-        insert_insight(db, make_insight(
-            id='brief-gate', content=content, category='fact'))
-        db.close()
-
-        result = invoke(runner, ['recall', '--basic', '--brief', 'abcde'])
-        assert result.exit_code == 0, result.output
-        rows = [r for r in json.loads(result.output)['results']
-                if r['id'] == 'brief-gate']
-        assert rows, 'expected the seeded row back'
-        assert rows[0]['summary'] == 'abcde' * 40
-        assert rows[0]['truncated'] is True
-
     def test_recall_source_filter_smart(self, runner):
-        """Smart recall respects --source filter."""
+        """Smart recall respects --source filter.
+
+        Mutation: dropping the `source` predicate from the anchor
+            scans, so a non-matching row's id reaches the page.
+        Oracle: `insights show` on every returned id, compared against
+            the filter value.
+        """
         invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage', '--source', 'agent'])
         invoke(runner, [
@@ -699,9 +494,12 @@ class TestRecall:
         result = invoke(runner, [
             'recall', 'database storage', '--source', 'agent'])
         assert result.exit_code == 0
-        data = json.loads(result.output)
-        for r in data['results']:
-            assert r['insight']['source'] == 'agent'
+        rows = _parse_recall_lines(result.output)
+        assert rows
+        for row in rows:
+            shown = json.loads(
+                invoke(runner, ['insights', 'show', row['id']]).output)
+            assert shown['source'] == 'agent'
 
     def test_recall_source_filter_returns_matching_rows(self, runner):
         """Recall --source surfaces a matching row the top-k would drop.
@@ -735,10 +533,12 @@ class TestRecall:
             'recall', 'PostgreSQL database',
             '--source', 'agent', '--limit', '3'])
         assert result.exit_code == 0
-        data = json.loads(result.output)
-        assert data['results'], 'filtered recall returned nothing'
-        for r in data['results']:
-            assert r['insight']['source'] == 'agent'
+        rows = _parse_recall_lines(result.output)
+        assert rows, 'filtered recall returned nothing'
+        for row in rows:
+            shown = json.loads(
+                invoke(runner, ['insights', 'show', row['id']]).output)
+            assert shown['source'] == 'agent'
 
 
 class TestForget:
@@ -1033,7 +833,13 @@ class TestReplace:
         assert 'redis' in data['content'].lower()
 
     def test_replace_inherits_metadata(self, runner):
-        """Replace without flags inherits cat/imp from original."""
+        """Replace without flags inherits cat/imp from original.
+
+        Mutation: dropping the inherited category or importance on a
+            flag-less replace, defaulting instead.
+        Oracle: `insights show` on the replacement id, compared
+            against the original's stored values.
+        """
         result = invoke(runner, [
             'remember', 'Chose PostgreSQL over MySQL for JSONB support',
             '--cat', 'decision', '--imp', '5'])
@@ -1046,14 +852,19 @@ class TestReplace:
         data = parse_remember(result, runner)
         assert 'id' in data
 
-        result = invoke(runner, ['recall', '--basic', 'PostgreSQL JSONB'])
-        hits = json.loads(result.output)['results']
-        match = [h for h in hits if h['id'] == data['id']][0]
-        assert match['category'] == 'decision'
-        assert match['importance'] == 5
+        shown = json.loads(
+            invoke(runner, ['insights', 'show', data['id']]).output)
+        assert shown['category'] == 'decision'
+        assert shown['importance'] == 5
 
     def test_replace_overrides_metadata(self, runner):
-        """Replace with explicit flags uses new values."""
+        """Replace with explicit flags uses new values.
+
+        Mutation: keeping the original category/importance despite an
+            explicit override on the replace command.
+        Oracle: `insights show` on the replacement id, compared
+            against the flags passed to `replace`.
+        """
         result = invoke(runner, [
             'remember', 'Nginx configured as reverse proxy for API gateway', '--cat', 'fact', '--imp', '2'])
         old_id = parse_remember(result, runner)['id']
@@ -1066,31 +877,10 @@ class TestReplace:
         data = parse_remember(result, runner)
         assert 'id' in data
 
-        result = invoke(runner, ['recall', '--basic', 'Envoy service mesh'])
-        hits = json.loads(result.output)['results']
-        match = [h for h in hits if h['id'] == data['id']][0]
-        assert match['category'] == 'decision'
-        assert match['importance'] == 5
-
-    def test_replace_preserves_access_count(self, runner):
-        """Replace carries over access_count from original."""
-        result = invoke(runner, [
-            'remember', 'Terraform modules organized by environment and region'])
-        old_id = parse_remember(result, runner)['id']
-        invoke(runner, ['recall', 'Terraform modules', '--basic'])
-        invoke(runner, ['recall', 'Terraform modules', '--basic'])
-
-        result = invoke(runner, [
-            'replace', old_id,
-            'Terraform modules organized by service and environment'])
-        assert result.exit_code == 0
-        new_id = parse_remember(result, runner)['id']
-
-        result = invoke(runner, ['recall', 'Terraform modules', '--basic'])
-        hits = json.loads(result.output)['results']
-        match = [h for h in hits if h['id'] == new_id]
-        assert match
-        assert match[0]['access_count'] >= 2
+        shown = json.loads(
+            invoke(runner, ['insights', 'show', data['id']]).output)
+        assert shown['category'] == 'decision'
+        assert shown['importance'] == 5
 
     def test_replace_nonexistent_id(self, runner):
         """Replace a nonexistent ID produces error."""
@@ -1139,9 +929,10 @@ class TestReplace:
         assert result.exit_code != 0
         assert f'is superseded by {new_id}' in result.output
         assert '--history' in result.output
-        active = json.loads(invoke(
-            runner, ['recall', '--basic', 'Kafka']).output)['results']
-        assert [h['id'] for h in active] == [new_id]
+        active = _parse_recall_lines(
+            invoke(runner, ['recall', '--basic', 'Kafka']).output,
+            basic=True)
+        assert [row['id'] for row in active] == [new_id[:8]]
 
     def test_replace_oplog_entries(self, runner):
         """Replace logs both replace and remember ops."""

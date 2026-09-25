@@ -54,17 +54,14 @@ One live-read command (called by the SessionStart hook, not by hand):
 memman remember "Chose Qdrant over Milvus for vector search" \
   --cat decision --imp 5 --entity Qdrant --entity Milvus --source agent
 
-# Recall - intent-aware graph-enhanced retrieval (default)
+# Recall - graph-enhanced retrieval (default), one line per row
 memman recall "vector database" --limit 10
-
-# Recall with explicit intent override
-memman recall "why did we choose Qdrant" --intent WHY
 
 # Recall with category/source filter (fills to --limit: the filter
 # runs inside the anchor scans, not as a post-cut)
 memman recall "auth" --cat decision --source agent
 
-# Simple SQL LIKE matching (faster, no graph traversal, no LLM expansion)
+# Simple SQL LIKE matching (faster, no graph traversal)
 memman recall "auth" --basic
 
 # Replace - deterministic replacement by ID (inherits metadata from
@@ -97,17 +94,13 @@ ambiguous prefix is refused with the number of rows it matches.
 
 **Recall flags:**
 
-| Flag          | Default       | Description                                                                                                                                                                         |
-| ------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--limit`     | `10`          | Max results                                                                                                                                                                         |
-| `--intent`    | (auto-detect) | Override intent: `WHY`, `WHEN`, `ENTITY`, `GENERAL`; validated always, but inert under `--basic` and named in `meta.ignored`                                                        |
-| `--cat`       |               | Filter by category                                                                                                                                                                  |
-| `--source`    |               | Filter by source                                                                                                                                                                    |
-| `--basic`     | `false`       | Use simple SQL LIKE matching instead of smart recall; returns before ranking so it carries no `score` or `signals`, and names `--intent` / `--expand` in `meta.ignored` when passed |
-| `--brief`     | `false`       | Cut each result to id, category, importance, created_at, summary, author (when set)                                                                                                 |
-| `--session`   |               | Calling session id, recorded on the `recall-detail` oplog row so a return is attributable to a session                                                                              |
-| `--expand`    | `false`       | Opt-in LLM query expansion (synonyms + intent hint); inert under `--basic` and named in `meta.ignored`                                                                              |
-| `--min-score` | `0.0`         | Relevance floor on keyword+similarity, 0.0 to 2.0 (`0.0` = off); rejected with `--basic`                                                                                            |
+| Flag        | Default | Description                                                                                                   |
+| ----------- | ------- | ------------------------------------------------------------------------------------------------------------- |
+| `--limit`   | `20`    | Max results                                                                                                   |
+| `--cat`     |         | Filter by category                                                                                            |
+| `--source`  |         | Filter by source                                                                                              |
+| `--basic`   | `false` | Use simple SQL LIKE matching instead of smart recall; returns before ranking, so each line carries no `score` |
+| `--session` |         | Calling session id, recorded on the `recall-detail` oplog row so a return is attributable to a session        |
 
 The cross-encoder rerank stage is on by default and auto-skips on 1-2 token
 queries. Provider is selected via `MEMMAN_RERANK_PROVIDER` (any registered
@@ -121,37 +114,25 @@ insights as traversal anchors regardless, so a query that matches
 nothing still comes back full. A full page is therefore not evidence
 that anything on it is relevant, and a page that looks thin usually is
 not: a store nearly always holds something bearing on a query drawn
-from the same work. An empty `results` means the store itself is
-empty, not that the query failed.
+from the same work. An empty page means the store itself is empty,
+not that the query failed.
 
-There is no flag for this, deliberately. Every returned row carries
-its own `score` and its per-channel `signals` (keyword, similarity,
-graph), and those are what a caller judges on - compared WITHIN one
-response, never against a fixed number, because the scale belongs to
+There is no flag for this, deliberately. Every printed row carries its
+own `score`, and that is what a caller judges on - compared WITHIN one
+page, never against a fixed number, because the scale belongs to
 whichever reranker is configured and changes when the model does. A
 boolean computed from a threshold would freeze one model's scale into
-the response.
+the output.
 
 Rows come back in relevance order at every `--limit`, so the first `n`
 rows of a page of `m` are exactly what a page of `n` returns. Nothing
-re-sorts after the limit cut. A `WHEN` timeline comes from each row's
-`created_at`, which `--brief` also carries.
+re-sorts after the limit cut. Each row's own `created_at` field is
+always printed, so a chronological view is a caller's own re-sort of
+the page, not something recall does for it.
 
 If a query returns nothing that bears on it, the likeliest cause is
 vocabulary: re-ask in the store's own words before concluding the
 store does not hold it.
-
-`--min-score` is the filter. It drops rows whose keyword plus
-similarity sum falls under the floor, so the range is 0.0 to 2.0 and
-`0.0` means off. It reads those two signals rather than the ranked
-`score` on purpose: the graph signal is min-max normalized, so the top
-row of any query scores 1.0 there and a floor on the blended score
-would shift with the intent's graph weight. Keep it off unless you
-would rather have nothing than something unrelated, because the deep
-tail of a recall is often where the useful row sits. There is no
-canonical value to copy: the usable band is a property of the embedder
-and the store, so find it by running the same query with and without a
-floor and watching what leaves.
 
 ### Graph operations
 
@@ -323,7 +304,7 @@ memman config show                                  # effective configuration (e
 memman log list                                     # operation audit log (default JSON, last 20)
 memman log list --limit 50                          # show more entries
 memman log list --since 7d                          # entries from last 7 days
-memman log list --since 7d --stats                  # grouped counts + never-accessed
+memman log list --since 7d --stats                  # grouped counts by operation
 memman log list --text                              # human-readable text table
 
 memman log worker [--errors] [--lines N]            # tail worker stdout/stderr (~/.memman/logs/enrich.{log,err})
@@ -394,7 +375,7 @@ memman backup restore ~/Dropbox/code/archive/memman-backup-<host>-<stamp>.tar.gz
 
 memman reads config at runtime from one source: `<MEMMAN_DATA_DIR>/env`, a `KEY=VALUE` file at mode 0600 (default `~/.memman/env`). Shell environment variables are not consulted at runtime for installable settings, so a stale shell export cannot override a committed value.
 
-`memman install` performs a one-time pull from the current shell into the env file. Precedence per key: existing file value > wizard prompt (TTY only) > `os.environ` > OpenRouter `/models` resolver (FAST/SLOW only) > `INSTALL_DEFAULTS`. Existing file values are sticky; reinstall never lets a shell export override them.
+`memman install` performs a one-time pull from the current shell into the env file. Precedence per key: existing file value > wizard prompt (TTY only) > `os.environ` > OpenRouter `/models` resolver (SLOW only) > `INSTALL_DEFAULTS`. Existing file values are sticky; reinstall never lets a shell export override them.
 
 `memman config set KEY VALUE` is the override path. Use it after install to change a backend, rotate an API key, or update a DSN. Conflicts between an `INSTALLABLE_KEYS` flag and an existing env-file value are rejected with the exact `memman config set ...` command to run.
 
@@ -404,7 +385,7 @@ The full variable list lives in [CONTRIBUTING.md § Variable reference](../CONTR
 
 ### Install wizard
 
-Run `memman install` in a TTY to get the interactive wizard. It prompts for the LLM endpoint URL (any OpenAI-compatible endpoint; ships defaulted to `https://openrouter.ai/api/v1`); for OpenRouter endpoints it auto-resolves the two role model slugs (`MEMMAN_LLM_MODEL_FAST` / `_SLOW`) against `/v1/models`, for any other endpoint it prompts for each slug interactively. It then prompts (masked input) for `MEMMAN_LLM_API_KEY` (required for non-loopback endpoints; loopback endpoints like Ollama may leave it blank), then for the embedding provider (any registered provider; ships defaulted to `voyage`) and the matching key for that provider (e.g. `MEMMAN_VOYAGE_API_KEY` for voyage, `MEMMAN_OPENAI_EMBED_API_KEY` for openai; openrouter reuses the LLM key). It also offers a backend selector (sqlite/postgres) when the `memman[postgres]` extra is installed; the wizard probes the DSN, verifies the `pgvector` extension, and (for non-localhost DSNs) emits a hint about PgBouncer transaction pooling. Headless installs bypass the wizard:
+Run `memman install` in a TTY to get the interactive wizard. It prompts for the LLM endpoint URL (any OpenAI-compatible endpoint; ships defaulted to `https://openrouter.ai/api/v1`); for OpenRouter endpoints it auto-resolves the `slow` role's model slug (`MEMMAN_LLM_MODEL_SLOW`) against `/v1/models`, for any other endpoint it prompts for the slug interactively. It then prompts (masked input) for `MEMMAN_LLM_API_KEY` (required for non-loopback endpoints; loopback endpoints like Ollama may leave it blank), then for the embedding provider (any registered provider; ships defaulted to `voyage`) and the matching key for that provider (e.g. `MEMMAN_VOYAGE_API_KEY` for voyage, `MEMMAN_OPENAI_EMBED_API_KEY` for openai; openrouter reuses the LLM key). It also offers a backend selector (sqlite/postgres) when the `memman[postgres]` extra is installed; the wizard probes the DSN, verifies the `pgvector` extension, and (for non-localhost DSNs) emits a hint about PgBouncer transaction pooling. Headless installs bypass the wizard:
 
 - `--backend [sqlite|postgres]` - explicit backend choice; required in non-interactive mode if you want anything other than sqlite.
 - `--pg-dsn URL` - Postgres DSN; required with `--backend postgres` in non-interactive mode. The DSN may omit the password to use `~/.pgpass`, `PGSERVICE`, or `PGPASSWORD`.
@@ -468,12 +449,10 @@ The host session never blocks on the network. Newly stored memories become recal
 
 ### Recall pipeline
 
-1. **LLM query expansion** (opt-in via `--expand`) - synonyms and intent detection.
-2. **RRF anchor selection** - keyword + vector + recency fused with K=60.
-3. **Beam search** - intent-weighted graph traversal from anchors.
-4. **3-signal rerank** - keyword, similarity, graph (intent-weighted). A stored entity name reaches the keyword signal because a candidate's token set unions its content tokens with its entity-name tokens.
-   - **4a. MMR diversity re-sort** - one-shot re-sort of the top 200; shipped disabled (`MMR_LAMBDA = 1.0`, measured a no-op under the cross-encoder rerank at both placements - see `experiments/recall_ablation/README.md`).
-5. **Cross-encoder rerank** (on by default; toggle per-store via `MEMMAN_RERANK_ENABLED_<store>`) - the configured reranker (default `voyage` / `rerank-3-lite`) re-scores the top 100 candidates; replaces the multi-signal score for the final ordering. Auto-skips on 1-2 token queries.
-6. **Ordering** - nothing re-sorts after the limit cut: rows come back in relevance order on every intent.
+1. **RRF anchor selection** - keyword + vector + recency fused with K=60.
+2. **Beam search** - graph traversal from anchors over one fixed edge-weight table.
+3. **3-signal blend** - keyword, similarity, graph. A stored entity name reaches the keyword signal because a candidate's token set unions its content tokens with its entity-name tokens.
+4. **Cross-encoder rerank** (on by default; toggle per-store via `MEMMAN_RERANK_ENABLED_<store>`) - the configured reranker (default `voyage` / `rerank-3-lite`) re-scores the top 100 candidates; replaces the multi-signal score for the final ordering. Auto-skips on 1-2 token queries.
+5. **Ordering** - nothing re-sorts after the limit cut: rows come back in relevance order.
 
 Inspired by [MAGMA](https://arxiv.org/abs/2601.03236). See [Design & Architecture](DESIGN.md) for the full deep dive.

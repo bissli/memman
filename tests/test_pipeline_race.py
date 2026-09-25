@@ -53,10 +53,12 @@ def test_forget_then_replace_race(runner):
         cli, ['--data-dir', data_dir, 'scheduler', 'drain'])
     assert drain_result.exit_code == 0, drain_result.output
 
-    recall_pre = _invoke(
-        r, data_dir, 'recall', 'VACUUM ANALYZE', '--basic')
-    assert recall_pre['results'], 'remember + drain failed to land insight'
-    original_id = recall_pre['results'][0]['id']
+    recall_pre = r.invoke(
+        cli, ['--data-dir', data_dir, 'recall', 'VACUUM ANALYZE', '--basic'])
+    assert recall_pre.exit_code == 0, recall_pre.output
+    pre_lines = recall_pre.output.splitlines()
+    assert pre_lines, 'remember + drain failed to land insight'
+    original_id = pre_lines[0].split(' ', 1)[0]
 
     _invoke(r, data_dir, 'replace', original_id, replacement_content)
     _invoke(r, data_dir, 'forget', original_id)
@@ -69,8 +71,10 @@ def test_forget_then_replace_race(runner):
     assert failed_out['rows'] == [], (
         f'queue rows failed unexpectedly: {failed_out!r}')
 
-    recall_post = _invoke(
-        r, data_dir, 'recall', 'VACUUM ANALYZE', '--basic')
-    contents = [hit['content'] for hit in recall_post.get('results', [])]
+    recall_post = r.invoke(
+        cli, ['--data-dir', data_dir, 'recall', 'VACUUM ANALYZE', '--basic'])
+    assert recall_post.exit_code == 0, recall_post.output
+    contents = [line.split(' | ', 1)[1]
+                for line in recall_post.output.splitlines()]
     assert any('Sunday' in c or 'weekly' in c for c in contents), contents
     assert all('03:00 UTC' not in c for c in contents), contents
