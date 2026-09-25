@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from memman.queue import queue_db
 from memman.store.model import Edge, Insight
 
 try:
@@ -922,6 +923,13 @@ def invoke(runner_tuple, args):
     from memman.cli import cli
     r, data_dir = runner_tuple
     return r.invoke(cli, ['--data-dir', data_dir] + args)
+
+
+def queued_contents(data_dir):
+    """Return the content of every queue row, in insert order."""
+    with queue_db(data_dir) as conn:
+        return [r[0] for r in conn.execute(
+            'select content from queue order by id').fetchall()]
 
 
 def parse_remember(result, runner_tuple=None):

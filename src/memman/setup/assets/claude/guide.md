@@ -25,15 +25,16 @@ no conclusion.
 
     memman remember "<self-contained text>" --cat <category> --session $SESSION_ID
 
-The text names its subject outright, with no "this" or "it", and
-never opens with who wrote it or when: `author` and `created_at`
-carry those.
+One thought per call, as one paragraph that opens on its subject and
+keeps its reasoning with it. The text names its subject outright,
+with no "this" or "it", and never opens with a label or with who
+wrote it or when: `author` and `created_at` carry those.
 
-    BAD   alice decided on 2026-09-24 that the retry cap stays at three.
-    GOOD  The retry cap stays at three.
+    BAD   Decision (alice, 2026-09-24): retry cap stays at three.
+    GOOD  The retry cap stays at three, since a fourth try only adds load.
 
-One claim per call. memman refuses text over 1,000 bytes, or whose
-first word is the author's name. A behavioral rule ("always",
+memman refuses text over 1,000 bytes, text naming a line number, and
+text off this shape, and says why. A behavioral rule ("always",
 "never") goes to the project CLAUDE.md `## Directives` section
 instead.
 

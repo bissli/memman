@@ -48,6 +48,19 @@ _WORKER_LOG_MAX_BYTES = 5 * 1024 * 1024
 _WORKER_LOG_BACKUPS = 3
 _MAX_CONTENT_BYTES = 1000
 _LINE_WORD_RE = re.compile(r'\bline \d+\b', re.IGNORECASE)
+_LINE_BREAK_RE = re.compile(r'[\r\n\v\f\x85\u2028\u2029]')
+# Notes:
+# - A label is at most three words before a colon and a space, so
+#   `Fix:`, `**Fix:**`, `- AWS gotcha:` and `User decision
+#   2026-09-17:` refuse.
+# - A longer run before the colon is as often a sentence ("The rule
+#   is simple:") as a label, so it passes.
+# - The space after the colon keeps `localhost:6379`, `14:18` and
+#   `https://` from reading as a label.
+# - A quote or backtick ends the match, so a memory may open on a
+#   quoted error such as `fatal: not a git repository`.
+_LEADING_LABEL_RE = re.compile(
+    r'^[\s*_#>-]*[^\s:`"\']+(?: [^\s:`"\']+){0,2}:[*_`]*(?=\s)')
 # Notes:
 # - Only a source, config or doc extension marks a locator: a bare
 #   dot-letter run would also match a dotted host such as
@@ -122,6 +135,50 @@ def _author_refusal_message(content: str) -> str | None:
         f'content starts with the author name {author!r};'
         ' the author field already records who wrote this --'
         ' start with the subject instead')
+
+
+def _content_refusal_message(content: str) -> str | None:
+    """Return the refusal for text not shaped as one memory, or None.
+
+    Parameters
+    ----------
+    content : str
+        The write text, as `remember` or `replace` received it.
+
+    Returns
+    -------
+    str or None
+        The refusal of the first check `content` fails, in the order
+        size, line number, author, line break, leading label; None
+        when it passes all five.
+
+    Notes
+    -----
+    - A memory is one thought written as one paragraph that opens on
+      its subject. Every check refuses and none rewrites, so the
+      stored row is always the agent's own words.
+    - The size cap counts UTF-8 bytes, not characters.
+    """
+    content_bytes = len(content.encode('utf-8'))
+    if content_bytes > _MAX_CONTENT_BYTES:
+        return (
+            f'content too long ({content_bytes} bytes, max'
+            f' {_MAX_CONTENT_BYTES}); split it into several remember'
+            ' calls, one thought each')
+    refusal = (_line_locator_refusal_message(content)
+               or _author_refusal_message(content))
+    if refusal:
+        return refusal
+    if _LINE_BREAK_RE.search(content):
+        return (
+            'content spans several lines; write one thought as one'
+            ' paragraph, and give each further thought its own call')
+    label = _LEADING_LABEL_RE.match(content)
+    if label:
+        return (
+            f'content opens with a label ({label.group(0)!r});'
+            ' open on the subject and write the thought as a sentence')
+    return None
 
 
 def _configure_logging(data_dir: str, verbose: bool, debug: bool) -> None:
@@ -799,16 +856,8 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     """
     _require_started('write')
     content_str = ' '.join(content)
-    content_bytes = len(content_str.encode('utf-8'))
-    if content_bytes > _MAX_CONTENT_BYTES:
-        raise click.ClickException(
-            f'content too long ({content_bytes} bytes, max'
-            f' {_MAX_CONTENT_BYTES}); split it into several remember'
-            ' calls, one claim each')
-
     author = config.resolve_author()
-    refusal = (_line_locator_refusal_message(content_str)
-               or _author_refusal_message(content_str))
+    refusal = _content_refusal_message(content_str)
     if refusal:
         raise click.ClickException(refusal)
 
@@ -1822,16 +1871,8 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
     _require_started('write')
 
     content_str = ' '.join(content)
-    content_bytes = len(content_str.encode('utf-8'))
-    if content_bytes > _MAX_CONTENT_BYTES:
-        raise click.ClickException(
-            f'content too long ({content_bytes} bytes, max'
-            f' {_MAX_CONTENT_BYTES}); split it into several remember'
-            ' calls, one claim each')
-
     author = config.resolve_author()
-    refusal = (_line_locator_refusal_message(content_str)
-               or _author_refusal_message(content_str))
+    refusal = _content_refusal_message(content_str)
     if refusal:
         raise click.ClickException(refusal)
 

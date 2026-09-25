@@ -7,8 +7,7 @@ the text, so the agent names the file and the symbol in its own words.
 
 import pytest
 from memman.cli import _line_locator_refusal_message
-from memman.queue import queue_db
-from tests.conftest import invoke, parse_remember
+from tests.conftest import invoke, parse_remember, queued_contents
 
 
 @pytest.mark.parametrize(('text', 'locator'), [
@@ -46,13 +45,6 @@ def test_refusal_names_only_a_file_line_locator(text, locator):
         assert f'({locator!r})' in message
 
 
-def _queued_contents(data_dir):
-    """Return the content of every queue row, in insert order."""
-    with queue_db(data_dir) as conn:
-        return [r[0] for r in conn.execute(
-            'select content from queue order by id').fetchall()]
-
-
 def test_remember_refuses_a_file_line_locator(mm_runner):
     """Verify `path.ext:N` fails the write and enqueues nothing.
 
@@ -69,7 +61,7 @@ def test_remember_refuses_a_file_line_locator(mm_runner):
     assert result.exit_code != 0
     assert "'scripts/auth.py:88'" in result.output
     assert 'line number' in result.output
-    assert _queued_contents(data_dir) == []
+    assert queued_contents(data_dir) == []
 
 
 def test_remember_refuses_the_word_line_and_a_number(mm_runner):
@@ -85,7 +77,7 @@ def test_remember_refuses_the_word_line_and_a_number(mm_runner):
 
     assert result.exit_code != 0
     assert "'line 88'" in result.output
-    assert _queued_contents(data_dir) == []
+    assert queued_contents(data_dir) == []
 
 
 def test_remember_accepts_ports_versions_and_times(mm_runner):
@@ -105,7 +97,7 @@ def test_remember_accepts_ports_versions_and_times(mm_runner):
     result = invoke(mm_runner, ['remember', text])
 
     assert result.exit_code == 0, result.output
-    assert _queued_contents(data_dir) == [text]
+    assert queued_contents(data_dir) == [text]
 
 
 def test_replace_refuses_a_line_locator(mm_runner):
@@ -119,11 +111,11 @@ def test_replace_refuses_a_line_locator(mm_runner):
     first = invoke(mm_runner, [
         'remember', 'a note that will be replaced'])
     old = parse_remember(first, mm_runner)
-    before = _queued_contents(data_dir)
+    before = queued_contents(data_dir)
 
     result = invoke(mm_runner, [
         'replace', old['id'], 'The poller retries in poll.py:120'])
 
     assert result.exit_code != 0
     assert 'line number' in result.output
-    assert _queued_contents(data_dir) == before
+    assert queued_contents(data_dir) == before

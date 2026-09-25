@@ -11,15 +11,19 @@ queue and a background worker enriches it. Reads are intent-aware.
 
 ## Storing what you learn
 
-Store one self-contained fact per call: one thing that can go stale
-on its own. If half could become false while the rest stays true,
-that is two memories. Do not split what shares a fate: a decision and
-its reason, a rule and the value it constrains, a constraint and its
-rationale become false together, so they stay together. Several
-calls per turn is normal. Unrelated facts are not merged to look
-tidy, and one fact is not padded to look substantial. When unsure,
-go smaller. A too-small memory stays retrievable and supersedes
-cleanly. A too-large one forces a rewrite and drops clauses.
+Store one thought per call, written as one paragraph that opens on
+its subject, with no label prefix, list, or line break. A thought is
+one thing that can go stale on its own. If half could become false
+while the rest stays true, that is two memories, and a paragraph
+holding two independent thoughts is two memories. Do not split what
+shares a fate: a decision and its reason, a rule and the value it
+constrains, a constraint and its rationale become false together, so
+they stay together in the one paragraph, however many sentences it
+takes. Several calls per turn is normal. Unrelated thoughts are not
+merged to look tidy, and one thought is not padded to look
+substantial. When unsure, go smaller. A too-small memory stays
+retrievable and supersedes cleanly. A too-large one forces a rewrite
+and drops clauses.
 
 Pick the most accurate `--cat`. Writes link into one temporal chain
 by session, which is what WHEN recall walks. Omit `--session`: it
@@ -27,7 +31,7 @@ reads `$CLAUDE_CODE_SESSION_ID` by itself. Pass it only to pin a
 different id.
 
 ```bash
-memman remember "<fact>" --cat <category> --imp <1-5> --entity e1 --entity e2 --source agent
+memman remember "<thought>" --cat <category> --imp <1-5> --entity e1 --entity e2 --source agent
 ```
 
 Categories: `preference`, `decision`, `fact`, `insight`, `context`.
@@ -104,11 +108,12 @@ earlier write restated plus the change.
 
 The text stores conclusions AND enough context to understand them. It
 is self-contained: every "that", "this", and "it" is dereferenced into
-its actual subject before the call. It never opens with who wrote it
-or when: `author`, `created_at`, and `source` carry those.
+its actual subject before the call. It never opens with a label such
+as `Fix:` or `Decision:`, nor with who wrote it or when: `author`,
+`created_at`, and `source` carry those.
 
-    BAD   alice decided on 2026-09-24 that the retry cap stays at three.
-    GOOD  The retry cap stays at three.
+    BAD   Decision (alice, 2026-09-24): retry cap stays at three.
+    GOOD  The retry cap stays at three, since a fourth try only adds load.
 
 An event date, or the name of another person the fact is about, stays
 in the text. The agent runs `memman remember` directly in the current
@@ -398,14 +403,19 @@ and exits 0.
 - Never store secrets, passwords, or tokens.
 - `remember` and `replace` refuse text over 1,000 bytes, counted as
   UTF-8 bytes, and never truncate it. Split the text into several
-  calls, one claim each. A long literal goes in a repo file, and the
-  memory names the path. They also refuse text whose first word is
-  the author's name (`author` carries that) or that names a line
+  calls, one thought each. A long literal goes in a repo file, and
+  the memory names the path. They also refuse text whose first word
+  is the author's name (`author` carries that) or that names a line
   number (`auth.py:88`, `line 88`), which goes stale on the next
-  edit: name the file and symbol instead.
-- One self-contained fact per `remember` call. The worker stores each
-  call as one memory, so a second unrelated subject rides along and
-  goes stale with the first; give it its own call.
+  edit: name the file and symbol instead. They refuse text spanning
+  several lines: write one thought as one paragraph, and give each
+  further thought its own call. They refuse text opening with a
+  label of at most three words before a colon and a space (`Fix:`,
+  `AWS gotcha:`): open on the subject and write the thought as a
+  sentence.
+- One thought per `remember` call. The worker stores each call as
+  one memory, so a second unrelated subject rides along and goes
+  stale with the first; give it its own call.
 - `--source agent` for the agent's own conclusion, a locator (URL,
   script, dataset pull) for imported material; `user`, the default, is
   for the user's words. Recall's `--source` filter is an exact match on
