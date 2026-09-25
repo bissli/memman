@@ -7,11 +7,9 @@ superseded, and cannot miss one it holds as current.
 
 Notes
 -----
-- There is deliberately no derived read artifact on this path. A
-  materialized snapshot shipped here once and froze permanently: its
-  writer stopped above a row cap while its reader had no staleness
-  check, so recall served deleted rows and hid live ones until the
-  file was removed by hand.
+- There is deliberately no derived read artifact on this path: a
+  materialized copy needs its own staleness check, and without one
+  recall serves deleted rows and hides live ones.
 - Vector work stays behind `RecallSession`: `vector_anchors` for the
   top-k and `similarities` for the per-candidate cosine. This module
   never holds a whole-store embedding dict.
@@ -293,12 +291,12 @@ def intent_aware_recall(
 
     # Notes:
     # - One projection-only read of the whole edge table, not one
-    #   query per frontier node. The per-node form re-read each edge
-    #   about 4.4x over (125,699 rows scanned against E=28,862) and
-    #   cost a psycopg round-trip apiece on Postgres.
-    # - `adjacency()` skips `metadata`, whose per-row json.loads was
-    #   69% of the equivalent `edges.all()` and which traversal
-    #   discards.
+    #   query per frontier node. The per-node form re-reads each
+    #   edge several times over and costs a psycopg round-trip
+    #   apiece on Postgres.
+    # - `adjacency()` skips `metadata`, whose per-row json.loads is
+    #   the costliest part of the equivalent `edges.all()` and which
+    #   traversal discards.
     bidir = _bidirectional_adjacency(backend.edges.adjacency())
     phantom_ids: set[str] = set()
 
@@ -315,11 +313,10 @@ def intent_aware_recall(
     with backend.recall_session() as session:
         # Notes:
         # - Counted where the text lives -- one FTS5 probe per token
-        #   on SQLite -- rather than tokenizing every active row per
-        #   request, which was the largest N-linear term left in
-        #   recall.
-        # - This IS `kw_score`'s numerator, so it also replaces the
-        #   whole-store token cache the scoring loop used to read.
+        #   on SQLite -- rather than tokenizing every active row
+        #   per request.
+        # - This IS `kw_score`'s numerator, so the scoring loop
+        #   needs no whole-store token cache.
         try:
             keyword_counts = session.keyword_counts(query_tokens)
         except Exception as exc:
@@ -329,8 +326,9 @@ def intent_aware_recall(
         if query_vec is not None:
             # Scored where the vectors live: one matmul on SQLite, one
             # `embedding <=>` query on Postgres. The pipeline needs N
-            # scalars, and pulling N x dim floats to compute them was
-            # a whole-store read per recall on both backends.
+            # scalars, and pulling N x dim floats to compute them
+            # would be a whole-store read per recall on both
+            # backends.
             try:
                 sim_cache = session.similarities(query_vec)
             except Exception as exc:

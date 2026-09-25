@@ -1017,8 +1017,7 @@ def check_drain_heartbeat(data_dir: str) -> dict[str, Any]:
 def check_llm_probe() -> dict[str, Any]:
     """Probe the LLM endpoint with the cheapest possible call.
 
-    Verifies API key validity + endpoint reachability. Subsumes what
-    used to be `memman keys test`'s LLM check.
+    Verifies API key validity + endpoint reachability.
     """
     import time as _time
 
@@ -1056,8 +1055,6 @@ def check_llm_probe() -> dict[str, Any]:
 
 def check_embed_probe() -> dict[str, Any]:
     """Probe the embedding endpoint with the cheapest possible call.
-
-    Subsumes what used to be `memman keys test`'s embed check.
     """
     import time as _time
 

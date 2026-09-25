@@ -1,7 +1,7 @@
 """Oplog `before` / `after` content deltas.
 
-Persists pre- and post-state on reconcile / forget so
-forensic questions ("what did insight X say before reconciliation?")
+Persists pre- and post-state on replace / forget so
+forensic questions ("what did insight X say before it was replaced?")
 can be answered from the oplog instead of requiring a backup.
 """
 
@@ -20,7 +20,7 @@ class TestOplogLogAcceptsDeltas:
         """
         with backend.transaction():
             backend.oplog.log(
-                operation='reconcile-update',
+                operation='replace',
                 insight_id='x-1',
                 detail='replaced',
                 before={'content': 'old', 'importance': 3},
@@ -115,7 +115,7 @@ class TestDoctorOplogDeltaCoverage:
         """
         with backend.transaction():
             backend.oplog.log(
-                operation='reconcile-update', insight_id='m-1',
+                operation='replace', insight_id='m-1',
                 detail='', before={'a': 1}, after={'a': 2})
             backend.oplog.log(
                 operation='remember', insight_id='m-2', detail='')

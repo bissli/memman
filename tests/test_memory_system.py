@@ -297,7 +297,7 @@ class TestDeduplication:
             shown = invoke(runner, ['insights', 'show', insight_id])
             assert shown.exit_code == 0, shown.output
 
-    def test_reconcile_runs_when_similar_exists(self, runner):
+    def test_similar_but_not_identical_write_is_added(self, runner):
         """A write whose nearest stored row is similar, not identical, adds.
 
         Mutation: the write path retiring or merging the earlier row

@@ -213,9 +213,9 @@ else:
 - `author`: who wrote the row - `MEMMAN_AUTHOR` from the directory's
   `.envrc`, else the OS username - or `-` when unset.
 - `text`: the stored summary, else the first 200 characters of the
-  content with line breaks folded to spaces and `...` where the cut
-  dropped anything. A summarized row carries no marker however much
-  its summary left out.
+  content, with `...` where the cut dropped anything. Every whitespace
+  run in either folds to one space. A summarized row carries no
+  marker however much its summary left out.
 
 The page is for choosing which row to open, not for reading the rows
 themselves: `memman insights show <id8>` reads the rest of any row

@@ -29,22 +29,6 @@ logger = logging.getLogger('memman')
 
 
 @dataclass(frozen=True)
-class EnvKey:
-    """Env-file key contract for a backend.
-
-    `name` is the suffix appended after `MEMMAN_<BACKEND>_` (e.g.
-    `'DSN'` for `MEMMAN_POSTGRES_DSN_<store>`). `secret=True` flags
-    the value for masked CLI display + `~/.memman/env` mode-600
-    storage. `required=False` when a backend-default fallback key
-    is acceptable.
-    """
-
-    name: str
-    secret: bool
-    required: bool
-
-
-@dataclass(frozen=True)
 class BackendDescriptor:
     """Registry record for one storage backend.
 
@@ -61,7 +45,6 @@ class BackendDescriptor:
     list_stores_keys: Callable[[str, dict[str, str]], set[str]]
     drop_store_fn: Callable[[str, str], None]
     migrator_cls: type
-    env_keys: tuple[EnvKey, ...]
     extras_packages: tuple[str, ...]
 
 
@@ -117,7 +100,6 @@ def _build_sqlite_descriptor() -> BackendDescriptor:
         list_stores_keys=_list,
         drop_store_fn=_drop,
         migrator_cls=SqliteMigrator,
-        env_keys=(),
         extras_packages=())
 
 
@@ -190,7 +172,6 @@ def _build_postgres_descriptor() -> BackendDescriptor:
         list_stores_keys=_list,
         drop_store_fn=_drop,
         migrator_cls=PostgresMigrator,
-        env_keys=(EnvKey('DSN', secret=True, required=False),),
         extras_packages=('psycopg', 'psycopg-pool', 'pgvector'))
 
 

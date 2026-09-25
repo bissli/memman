@@ -45,12 +45,8 @@ from memman.store.db import read_active, store_dir, write_active
 logger = logging.getLogger('memman')
 
 # Restore is a byte copy, so a bundle carries its schema with it
-# and a version mismatch is refused outright: v2 added
-# session_id/queue_uuid (0.18.0), v3 corroboration_count (0.19.0),
-# v4 superseded_by (0.33.0), v5 the queue's hint_entities as JSON
-# (0.36.2), which an older drain reads as one name per comma. An
-# older bundle is read with the pinned install of the release that
-# wrote it.
+# and a version mismatch is refused outright. An older bundle is
+# read with the pinned install of the release that wrote it.
 BACKUP_FORMAT_VERSION = 5
 DB_FILENAME = 'memman.db'
 QUEUE_FILENAME = 'queue.db'

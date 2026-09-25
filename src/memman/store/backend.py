@@ -260,11 +260,6 @@ class NodeStore(Protocol):
         """
         ...
 
-    def get_recent_active(
-            self, *, exclude_id: Id, limit: int) -> list[Insight]:
-        """Return the N most recent active insights, any source."""
-        ...
-
     def get_all_active(self) -> list[Insight]:
         """Return all active insights ordered by created_at desc."""
         ...

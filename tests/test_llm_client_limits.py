@@ -64,7 +64,8 @@ def test_complete_honors_a_per_call_max_tokens(monkeypatch):
     """Verify `max_tokens` on `complete` overrides the role ceiling for that call.
 
     Mutation: ignoring the keyword and always sending the role ceiling,
-        so the reconciler's larger budget never reaches the request.
+        so a caller's per-call budget from `shared.py` never reaches
+        the request.
     Oracle: the recorded request bodies: the role ceiling without the
         keyword, the override with it.
     """

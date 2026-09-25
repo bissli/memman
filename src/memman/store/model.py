@@ -1,8 +1,7 @@
 """Shared dataclasses for backend implementations and pipeline code.
 
 Domain types (Insight, Edge) plus DTOs returned by Backend Protocol
-verbs (Neighbor, ScoredId, OpLogEntry, OpLogStats, NodeStats,
-ProvenanceCount, IntegrityReport, QueueRow, QueueHints, QueueStats,
+verbs (OpLogEntry, OpLogStats, NodeStats, ProvenanceCount, QueueRow,
 WorkerRun, ReembedRow). Includes the timestamp helper and importance
 helpers used across the package.
 
@@ -92,23 +91,6 @@ class Edge:
             self.metadata = {}
         if self.metadata is None:
             self.metadata = {}
-
-
-@dataclass
-class Neighbor:
-    """A graph neighbor: target id + edge type + weight."""
-
-    target_id: Id
-    edge_type: str
-    weight: float
-
-
-@dataclass
-class ScoredId:
-    """An id with an associated score (similarity, anchor weight, etc)."""
-
-    id: Id
-    score: Score
 
 
 @dataclass
@@ -308,17 +290,6 @@ class ProvenanceCount:
 
 
 @dataclass
-class IntegrityReport:
-    """Aggregate integrity findings used by `memman doctor`."""
-
-    orphan_count: int = 0
-    total_active: int = 0
-    dangling_by_type: dict[str, int] = field(default_factory=dict)
-    degree_distribution: dict[str, int] = field(default_factory=dict)
-    provenance: list[ProvenanceCount] = field(default_factory=list)
-
-
-@dataclass
 class EnrichmentCoverage:
     """Per-field NULL counts for the enrichment columns on `insights`.
 
@@ -343,23 +314,6 @@ class QueueRow:
     payload: str
     attempts: int
     created_at: datetime
-
-
-@dataclass
-class QueueHints:
-    """Hints attached to a queue row (per-store recency, etc)."""
-
-    store: str
-    last_seen: datetime | None = None
-    pending_count: int = 0
-
-
-@dataclass
-class QueueStats:
-    """Aggregate queue statistics."""
-
-    total: int = 0
-    by_store: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass

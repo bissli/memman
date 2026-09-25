@@ -532,21 +532,6 @@ limit 1
     return _scan_insight(row)
 
 
-def get_recent_active_insights(
-        db: 'DB', exclude_id: str,
-        limit: int) -> list[Insight]:
-    """Return the N most recent non-deleted insights regardless of source."""
-    sql = f"""
-select {_INSIGHT_COLUMNS}
-from insights
-where id != ? and deleted_at is null and superseded_by is null
-order by created_at desc
-limit ?
-"""
-    rows = db._query(sql, (exclude_id, limit)).fetchall()
-    return [_scan_insight(r) for r in rows]
-
-
 def get_all_active_insights(db: 'DB') -> list[Insight]:
     """Return all non-deleted insights."""
     sql = f"""

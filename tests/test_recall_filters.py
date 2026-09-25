@@ -10,11 +10,7 @@ Vector-path tests seed deliberately correlated embeddings via
 `nodes.update_embedding` rather than going through the autouse mock
 embedder: the mock builds SHA-256 unit vectors whose pairwise cosine
 is ~1/sqrt(dim) of arbitrary sign, so which rows anchor is noise and a
-vector-path assertion would be testing the hash. This was previously
-written up as the anchors coming back EMPTY, which was true only while
-`VECTOR_SEARCH_MIN_SIM = 0.10` gated the channel above that cosine;
-the floor is gone, so the reason is now arbitrariness rather than
-absence, and the practice is unchanged.
+vector-path assertion would be testing the hash.
 """
 
 import math
@@ -181,11 +177,9 @@ def test_recall_survives_a_raising_session_verb(backend, monkeypatch):
 
     A dimension mismatch, a missing pgvector extension, or a statement
     timeout makes `similarities` / `vector_anchors` raise. Recall must
-    keep the keyword and time channels and still answer; the previous
-    design papered over this with a whole-store Python cosine scan,
-    which is the cost this change removed, so the degrade path is now
-    the only thing standing between an operator error and an empty
-    recall.
+    keep the keyword and time channels and still answer. No other path
+    computes vector scores, so the degrade path is the only thing
+    standing between an operator error and an empty recall.
 
     Mutation: letting either exception escape `intent_aware_recall`,
         or returning an empty result set instead of falling through to

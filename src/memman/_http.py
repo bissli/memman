@@ -32,16 +32,6 @@ def get_session(name: str) -> httpx.Client:
     return client
 
 
-def reset_sessions() -> None:
-    """Drop every cached session. Used by tests that swap transports."""
-    for client in _SESSIONS.values():
-        try:
-            client.close()
-        except httpx.HTTPError as exc:
-            logger.debug(f'http session close failed: {exc}')
-    _SESSIONS.clear()
-
-
 def post_with_retry(
         session: httpx.Client,
         url: str,

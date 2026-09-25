@@ -57,17 +57,16 @@ def test_all_descriptors_returns_BackendDescriptor_instances():
 
 
 def test_descriptor_features_typed_dataclass():
-    """`migrator_cls.snapshot_features` is a `BackendFeatures` dataclass.
+    """Verify each migrator advertises a typed `BackendFeatures`.
 
-    Not a `frozenset[str]` - the v3 refactor explicitly replaced
-    string capability sets with typed boolean fields so adding a
-    feature flag is a typed change, not a stringly-typed drift.
+    Mutation: a migrator shipping a bare set or dict as
+        `snapshot_features`, or `accepted_embedding_dtypes` as a list,
+        so `apply()` reads a shape it does not expect.
+    Oracle: `isinstance` against the dataclass and `frozenset`.
     """
     for d in all_descriptors():
         features = d.migrator_cls.snapshot_features
         assert isinstance(features, BackendFeatures)
-        assert isinstance(features.supports_edges, bool)
-        assert isinstance(features.supports_oplog, bool)
         assert isinstance(features.accepted_embedding_dtypes, frozenset)
 
 

@@ -39,19 +39,12 @@ EmbeddingDtype = Literal[
 
 @dataclass(frozen=True)
 class BackendFeatures:
-    """Capability flags a backend's migrator advertises.
+    """Capability data a backend's migrator advertises.
 
-    Drives capability gates in the CLI (e.g. dry-run) and
-    `apply()` payload-content checks (e.g. refusing edge-bearing
-    payloads on edgeless backends).
+    `apply()` reads `accepted_embedding_dtypes` to refuse a payload
+    whose embedding dtype the backend cannot store.
     """
 
-    supports_edges: bool
-    supports_oplog: bool
-    supports_reembed: bool
-    supports_drain_heartbeat: bool
-    supports_filesystem_artifacts: bool
-    supports_dry_run: bool
     accepted_embedding_dtypes: frozenset[str] = field(
         default_factory=lambda: frozenset({'float32', 'float64'}))
 
@@ -151,8 +144,7 @@ class MigrationPayload:
 
     Backend-agnostic. Produced by `Migrator.gather`, consumed by
     `Migrator.apply`. Round-trip preservation between any two
-    backends with matching `BackendFeatures.supports_*` is the
-    invariant.
+    backends is the invariant.
     """
 
     payload_version: int
@@ -165,18 +157,6 @@ class MigrationPayload:
     embedding_pending: list[PendingReembed]
     swap_state: SwapState | None
     meta: dict[str, str]
-
-    @property
-    def has_edges(self) -> bool:
-        return bool(self.edges)
-
-    @property
-    def has_oplog(self) -> bool:
-        return bool(self.oplog)
-
-    @property
-    def has_swap(self) -> bool:
-        return self.swap_state is not None or bool(self.embedding_pending)
 
 
 @dataclass
@@ -288,20 +268,6 @@ class SchemaState(enum.Enum):
     ABSENT = 'absent'
     EMPTY = 'empty'
     POPULATED = 'populated'
-
-
-@dataclass
-class MigrateResult:
-    """One store's migration outcome (counts per table)."""
-
-    store: str
-    schema: str
-    insights: int = 0
-    edges: int = 0
-    oplog: int = 0
-    meta: int = 0
-    dry_run: bool = False
-    verified: bool = False
 
 
 def preflight(dsn: str) -> dict[str, bool]:

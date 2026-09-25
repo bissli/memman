@@ -519,8 +519,8 @@ def purge_worker_runs(
     """Drop worker_runs rows older than `keep_days`. Returns deleted count.
 
     The serve loop writes a heartbeat row every iteration (including
-    empty drains) -- at 60 s cadence that is ~525 k rows/year without
-    pruning. The maintenance phase calls this once per drain.
+    empty drains), so without pruning the table grows without bound.
+    The maintenance phase calls this once per drain.
     """
     cutoff = int(time.time()) - keep_days * 86400
     cur = conn.execute(

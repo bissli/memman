@@ -2406,8 +2406,7 @@ def scheduler_start(ctx: click.Context, text_output: bool) -> None:
 @scheduler.command('stop')
 @click.option('--text', 'text_output', is_flag=True, default=False,
               help='Human-readable output (default: JSON)')
-@click.pass_context
-def scheduler_stop(ctx: click.Context, text_output: bool) -> None:
+def scheduler_stop(text_output: bool) -> None:
     """Stop the scheduler. Trigger files stay; memman becomes recall-only.
 
     Writes (`remember`/`replace`/`forget`/`graph link`/`graph
@@ -2542,8 +2541,7 @@ def scheduler_interval(ctx: click.Context, seconds: int | None) -> None:
 
 
 @scheduler.command('trigger')
-@click.pass_context
-def scheduler_trigger(ctx: click.Context) -> None:
+def scheduler_trigger() -> None:
     """Dispatch a drain now. The command does not wait for it to finish.
 
     Rejected when the scheduler is stopped. systemd uses
@@ -2577,8 +2575,7 @@ def scheduler_debug() -> None:
 
 
 @scheduler_debug.command('on')
-@click.pass_context
-def scheduler_debug_on(ctx: click.Context) -> None:
+def scheduler_debug_on() -> None:
     """Enable persistent debug traces."""
     from memman.setup.scheduler import set_debug
     actions = set_debug(True)
@@ -2592,8 +2589,7 @@ def scheduler_debug_on(ctx: click.Context) -> None:
 
 
 @scheduler_debug.command('off')
-@click.pass_context
-def scheduler_debug_off(ctx: click.Context) -> None:
+def scheduler_debug_off() -> None:
     """Disable persistent debug traces; existing debug.log files are kept."""
     from memman.setup.scheduler import set_debug
     actions = set_debug(False)
@@ -2601,8 +2597,7 @@ def scheduler_debug_off(ctx: click.Context) -> None:
 
 
 @scheduler_debug.command('status')
-@click.pass_context
-def scheduler_debug_status(ctx: click.Context) -> None:
+def scheduler_debug_status() -> None:
     """Show whether persistent debug traces are enabled."""
     from memman.setup.scheduler import get_debug
     logs_dir = pathlib.Path.home() / '.memman' / 'logs'
@@ -2703,9 +2698,9 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
     except BackendError as exc:
         raise click.ClickException(
             f'could not remove store {name!r}: {exc}')
-    # Lazy import: memman.setup.scheduler costs ~4 ms of interpreter
-    # startup (measured), which every CLI call would pay -- including
-    # the per-prompt recall hook -- for a cold-path command.
+    # Lazy import: memman.setup.scheduler adds interpreter startup
+    # cost that every CLI call would pay -- including the per-prompt
+    # recall hook -- for a cold-path command.
     from memman.setup.scheduler import _write_env_keys_with_flock
     per_store_keys = {
         f'{prefix}{name}' for prefix, _, _ in config.PER_STORE_KEY_SPECS}
@@ -2806,8 +2801,7 @@ def backup_unschedule(ctx: click.Context) -> None:
 
 @backup.command('list')
 @click.argument('target', required=False)
-@click.pass_context
-def backup_list(ctx: click.Context, target: str | None) -> None:
+def backup_list(target: str | None) -> None:
     """List bundles at TARGET (or MEMMAN_BACKUP_TARGET) from sidecars."""
     target = target or config.get(config.BACKUP_TARGET)
     if not target:
@@ -2837,8 +2831,7 @@ def backup_list(ctx: click.Context, target: str | None) -> None:
 
 
 @backup.command('status')
-@click.pass_context
-def backup_status(ctx: click.Context) -> None:
+def backup_status() -> None:
     """Report backup config, schedule, last fire, and latest bundle."""
     from memman.setup import scheduler as sched
 

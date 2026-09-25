@@ -167,11 +167,6 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
         return _node.get_latest_insight_by_session(
             self._db, session_id, exclude_id)
 
-    def get_recent_active(
-            self, *, exclude_id: Id, limit: int) -> list[Insight]:
-        return _node.get_recent_active_insights(
-            self._db, exclude_id, limit)
-
     def get_all_active(self) -> list[Insight]:
         return _node.get_all_active_insights(self._db)
 
@@ -476,9 +471,9 @@ class SqliteRecallSession(RecallSession):
     -----
     - The matrix is float64 because `embed.vector.cosine_similarity`
       promotes to float64, so a float64 matmul keeps this path within
-      a float ulp of the per-pair helper it replaces. The speed comes
-      from `np.frombuffer` replacing `struct.unpack` (measured
-      12.4 ms -> 1.0 ms at N=1053), not from a narrower dtype.
+      a float ulp of that helper. The speed comes from
+      `np.frombuffer` over `struct.unpack`, not from a narrower
+      dtype.
     - Rows whose blob width differs from the store's modal width are
       left out of the matrix, so a half-finished `embed swap` scores
       them 0.0 instead of raising on a ragged `np.array`.
@@ -486,13 +481,11 @@ class SqliteRecallSession(RecallSession):
 
     db: DB
     _groups: dict[int, tuple[list[Id], Any, Any]] | None = None
-    _row_of: dict[Id, tuple[int, int]] | None = None
     _meta: dict[Id, tuple[str, str]] | None = None
 
     def close(self) -> None:
         """Drop the matrices so they do not outlive the request."""
         self._groups = None
-        self._row_of = None
         self._meta = None
 
     def _load(self) -> None:
@@ -542,19 +535,16 @@ where deleted_at is null and superseded_by is null and embedding is not null
                 f' `memman embed reembed` to repair')
 
         groups: dict[int, tuple[list[Id], Any, Any]] = {}
-        row_of: dict[Id, tuple[int, int]] = {}
         for width, entries in by_width.items():
             dim = width // 8
             matrix = np.empty((len(entries), dim), dtype=np.float64)
             for row, (rid, blob) in enumerate(entries):
                 matrix[row] = np.frombuffer(blob, dtype='<f8')
-                row_of[rid] = (dim, row)
             norms = np.linalg.norm(matrix, axis=1)
             norms[norms == 0.0] = 1.0
             groups[dim] = ([rid for rid, _b in entries], matrix, norms)
 
         self._groups = groups
-        self._row_of = row_of
 
     def _cosines(
             self, query_vec: list[float]) -> tuple[list[Id], Any]:
@@ -598,13 +588,12 @@ where deleted_at is null and superseded_by is null and embedding is not null
         -----
         - Agrees with `keyword.insight_tokens` on ASCII text and
           diverges on non-ASCII; see the Protocol docstring for the
-          class and the measured rate. Do not "fix" it here -- the
-          tokenizers differ by construction.
+          class. Do not "fix" it here -- the tokenizers differ by
+          construction.
         - One probe per token rather than one `OR` expression: the
           combined form returns the union of the rows but not which
           token matched which row, and the per-token count IS
-          `kw_score`'s numerator. Measured at the same cost either
-          way (3.1 ms against 3.0 ms for 50 tokens at N=1054).
+          `kw_score`'s numerator. The two forms cost the same.
         - The probe expression is built here and never from user
           text: FTS5 `match` takes a query language, and 8 of 11
           realistic queries handed to it raw raise a syntax error.
@@ -924,12 +913,6 @@ def drop_sqlite_store(store: str, data_dir: str) -> None:
 
 
 _SQLITE_MIGRATOR_FEATURES = BackendFeatures(
-    supports_edges=True,
-    supports_oplog=True,
-    supports_reembed=True,
-    supports_drain_heartbeat=False,
-    supports_filesystem_artifacts=True,
-    supports_dry_run=True,
     accepted_embedding_dtypes=frozenset({'float32', 'float64'}))
 
 

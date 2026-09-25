@@ -7,7 +7,6 @@ from memman.setup.detect import home_dir
 COLOR_GREEN = '\033[32m'
 COLOR_DIM = '\033[2m'
 COLOR_RED = '\033[31m'
-COLOR_BOLD = '\033[1m'
 COLOR_RESET = '\033[0m'
 SYM_OK = '✓'
 SYM_FAIL = '✗'
@@ -18,7 +17,7 @@ _colors_inited = False
 
 def _init_colors() -> None:
     """Clear ANSI codes when stdout is not a TTY."""
-    global COLOR_GREEN, COLOR_DIM, COLOR_RED, COLOR_BOLD, COLOR_RESET, _colors_inited
+    global COLOR_GREEN, COLOR_DIM, COLOR_RED, COLOR_RESET, _colors_inited
     if _colors_inited:
         return
     _colors_inited = True
@@ -26,7 +25,6 @@ def _init_colors() -> None:
         COLOR_GREEN = ''
         COLOR_DIM = ''
         COLOR_RED = ''
-        COLOR_BOLD = ''
         COLOR_RESET = ''
 
 

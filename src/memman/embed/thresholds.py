@@ -17,8 +17,8 @@ Two resolution APIs are exposed:
   the median of all calibrated thresholds for that surface. This is a
   store-independent constant derived deterministically from the
   shipped table at import time; it has bounded retrieval-quality loss
-  (mean nDCG@5 loss ~0.014 vs calibrated, max ~0.08 across the shipped
-  triples) and is the right shape for an "unknown model" fallback
+  against a calibrated threshold and is the right shape for an "unknown
+  model" fallback
   precisely because it does not depend on the user's own embedding
   distribution (which would be store-dependent and surface-blind).
 

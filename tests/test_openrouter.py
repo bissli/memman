@@ -48,7 +48,7 @@ def test_resolver_never_picks_a_reasoning_variant(monkeypatch):
 
     Mutation: the role pattern admits the reasoning variant, so a
     fresh install pins a model that bills reasoning tokens on every
-    reconcile call and can return an empty body at the stage's token
+    enrichment call and can return an empty body at the stage's token
     ceiling.
     Oracle: the catalog above, which carries the plain and the
     thinking snapshot of the same line at the same date.

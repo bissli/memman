@@ -1,6 +1,6 @@
 """Embedding swap orchestration shared by both backends.
 
-State machine: pending -> backfilling -> cutover -> done.
+State machine: '' (not started) -> backfilling -> cutover -> done.
 
 Per-store progress is persisted in `meta.embed_swap_*` keys so a
 crashed swap can resume from the recorded cursor without re-embedding
@@ -39,8 +39,6 @@ logger = logging.getLogger('memman')
 STATE_BACKFILLING = 'backfilling'
 STATE_CUTOVER = 'cutover'
 STATE_DONE = 'done'
-
-VALID_STATES = frozenset({STATE_BACKFILLING, STATE_CUTOVER, STATE_DONE})
 
 DEFAULT_BATCH_SIZE = 200
 
