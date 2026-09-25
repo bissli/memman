@@ -54,7 +54,16 @@ class TestEnrichedAtOnLinkPending:
         assert row[1] is None
 
     def test_llm_success_sets_enriched_at(self, tmp_db, tmp_backend):
-        """With successful LLM enrichment, enriched_at is set."""
+        """Verify an enrichment plus a vector stamps enriched_at.
+
+        Mutation: inverting the vector check to `new_vec is None`, which
+            stamps only the rows whose embed failed and leaves every
+            enriched row to the stranded-row sweep.
+        Oracle: the enriched_at column after one pass with a working
+            LLM and embedder.
+        """
+        from memman.embed.fingerprint import bound_embedder
+
         _insert_pending(tmp_db, 'ls-1', 'test with llm enrichment')
         tmp_db._conn.execute(
             'UPDATE insights SET enriched_at = NULL'
@@ -64,7 +73,9 @@ class TestEnrichedAtOnLinkPending:
         mock_llm.complete.return_value = (
             '{"keywords": ["test"], "summary": "test"}')
 
-        link_pending(tmp_backend, metadata_llm_client=mock_llm, store_name='test')
+        link_pending(
+            tmp_backend, metadata_llm_client=mock_llm,
+            embed_client=bound_embedder(tmp_backend), store_name='test')
 
         row = tmp_db._conn.execute(
             'SELECT linked_at, enriched_at FROM insights'
@@ -114,3 +125,63 @@ class TestEnrichedAtOnLinkPending:
         assert row[0] is not None
         assert row[1] is None, (
             'enriched_at must stay NULL when the re-embed failed')
+
+    def test_skipped_embed_leaves_a_vectorless_row_unstamped(
+            self, tmp_db, tmp_backend):
+        """Verify an embed that cannot run leaves a vectorless row unstamped.
+
+        Mutation: stamping whenever the enrichment returned, so an
+            embedder whose probe failed mid-outage stamps the row with
+            no vector, and the stranded-row sweep never revisits it.
+        Oracle: the row's enriched_at, beside its linked_at, which the
+            pass does set.
+        """
+        _insert_pending(tmp_db, 'sk-1', 'skipped embed content')
+        tmp_db._conn.execute(
+            'UPDATE insights SET enriched_at = NULL'
+            " WHERE id = 'sk-1'")
+
+        mock_llm = MagicMock()
+        mock_llm.complete.return_value = (
+            '{"keywords": ["alpha"], "summary": "s"}')
+        unavailable = MagicMock()
+        unavailable.available.return_value = False
+
+        link_pending(
+            tmp_backend, metadata_llm_client=mock_llm,
+            embed_client=unavailable, store_name='test')
+
+        row = tmp_db._conn.execute(
+            'SELECT linked_at, enriched_at FROM insights'
+            " WHERE id = 'sk-1'").fetchone()
+        assert row[0] is not None
+        assert row[1] is None
+
+    def test_vectorless_row_gets_a_vector_without_keywords(
+            self, tmp_db, tmp_backend):
+        """Verify link_pending embeds a vectorless row with no keywords.
+
+        Mutation: embedding only when the enrichment carries keywords,
+            so a row the write stored without a vector, whose retry
+            enrichment finds no keywords, is stamped enriched while
+            still vectorless and is never revisited.
+        Oracle: the store's embedding set, which lacks the row before
+            the pass.
+        """
+        from memman.embed.fingerprint import bound_embedder
+
+        _insert_pending(tmp_db, 'nv-1', 'vectorless content')
+        tmp_db._conn.execute(
+            'UPDATE insights SET enriched_at = NULL'
+            " WHERE id = 'nv-1'")
+        assert 'nv-1' not in dict(
+            tmp_backend.nodes.iter_embeddings_as_vecs())
+
+        mock_llm = MagicMock()
+        mock_llm.complete.return_value = '{"keywords": [], "summary": "s"}'
+
+        link_pending(
+            tmp_backend, metadata_llm_client=mock_llm,
+            embed_client=bound_embedder(tmp_backend), store_name='test')
+
+        assert 'nv-1' in dict(tmp_backend.nodes.iter_embeddings_as_vecs())

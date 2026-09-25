@@ -1,16 +1,9 @@
-"""A typed `replace --entity` decides the successor's entity list.
+"""A `replace` stores the entity list the caller gives it.
 
-`replace`'s own docstring says an unflagged `--cat` / `--imp` /
-`--source` / `--entity` inherits the replaced insight's value. The
-first three override when typed; `--entity` did not. The predecessor
-union in `_apply_plan` re-added the target's names after the caller's
-list was already set, so a typed list could only ADD names and an
-empty one did nothing at all.
-
-The union itself is right for `update` and `supersede`: its own
-rationale is that the extractor sees only the incoming text and would
-narrow the merged row's entity set. On a `replace` the extractor never
-runs, and the caller named the list.
+- A typed `--entity` list becomes the successor's list exactly, and a
+  typed empty list clears it.
+- An unflagged `--entity` inherits the replaced row's list whole, the
+  rule `--cat`, `--imp` and `--source` follow too.
 """
 
 from memman.store.db import read_active

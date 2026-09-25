@@ -41,8 +41,18 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
     Returns
     -------
     dict
-        Keys `keywords`, `summary`, or empty on an LLM or parse
-        failure. Pure function -- the caller handles every DB write.
+        Keys `keywords` and `summary`, or `{}` when the LLM call fails.
+
+    Notes
+    -----
+    - A body that decodes on neither draw returns both keys empty. The
+      outcome is terminal: retrying it would bill the call on every
+      drain of the row's store.
+    - Callers stamp `enriched_at` only when a non-empty dict and a
+      vector land in the same pass, so `{}` leaves the row to the
+      stranded-row sweep. On a re-enrichment the empty keys replace
+      the keywords and summary the row held.
+    - Pure function -- the caller handles every DB write.
     """
     prompt = f'INSIGHT (id={insight.id[:8]}):\n{insight.content}'
     trace.event(
@@ -70,14 +80,14 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
     if parsed is None:
         logger.warning(
             'enrichment body did not decode for %s (len=%d, raw_len=%d)'
-            ' on either draw; row stays unenriched',
+            ' on either draw; returning empty keywords and summary',
             insight.id, len(insight.content), len(raw))
         trace.event(
             'enrich_result',
             insight_id=insight.id,
             outcome='parse_error',
             raw=raw)
-        return {}
+        return {'keywords': [], 'summary': ''}
 
     keywords = parsed.get('keywords', [])
     if not isinstance(keywords, list):

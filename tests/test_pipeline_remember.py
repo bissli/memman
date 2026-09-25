@@ -43,6 +43,88 @@ def test_a_write_embeds_once_after_enrichment(tmp_backend, monkeypatch):
     assert calls == [expected]
 
 
+def test_a_write_whose_embed_fails_stays_unenriched(
+        tmp_backend, monkeypatch):
+    """Verify a write stored without a vector is left for the sweep.
+
+    Mutation: `_apply_plan` stamping `enriched_at` whenever the
+        enrichment returned, so the vectorless row falls outside the
+        stranded-row sweep, which selects `enriched_at is null`, and
+        never gets a vector.
+    Oracle: the stored row's `enriched_at`, beside its summary, which
+        proves the enrichment itself landed.
+    """
+    ec = bound_embedder(tmp_backend)
+
+    def failing_embed(text):
+        raise RuntimeError('forced embed failure')
+
+    monkeypatch.setattr(ec, 'embed', failing_embed)
+
+    content = (
+        'Redis backs the session cache for the web tier, evicts keys'
+        ' under an LRU policy, and replicates to a standby node in a'
+        ' second zone')
+    parent = make_insight(id='embed-fail-1', content=content)
+    res = run_remember(
+        tmp_backend, parent, content, ec=ec, store_name='test')
+
+    stored = tmp_backend.nodes.get(res['facts'][0]['id'])
+    assert stored.summary
+    assert stored.enriched_at is None
+
+
+def test_a_write_whose_enrichment_never_decodes_is_stamped(
+        tmp_backend, monkeypatch):
+    """Verify a write whose enrichment body never decodes is stamped.
+
+    Mutation: treating a body that decodes on neither draw as a
+        failed call, which leaves `enriched_at` null, so the
+        stranded-row sweep re-enriches the row on every drain of its
+        store and bills the call each time.
+    Oracle: the stored row's `enriched_at`.
+    """
+    monkeypatch.setattr(
+        'memman.llm.client.MemmanLLMClient.complete',
+        lambda self, system, user, **kwargs: 'not json at all')
+    ec = bound_embedder(tmp_backend)
+
+    parent = make_insight(
+        id='undecodable-1', content='Redis backs the session cache')
+    res = run_remember(
+        tmp_backend, parent, 'Redis backs the session cache',
+        ec=ec, store_name='test')
+
+    stored = tmp_backend.nodes.get(res['facts'][0]['id'])
+    assert stored.enriched_at is not None
+
+
+def test_a_write_whose_enrichment_call_fails_stays_unenriched(
+        tmp_backend, monkeypatch):
+    """Verify a write whose enrichment call raises is left for the sweep.
+
+    Mutation: `_apply_plan` stamping whenever the embed succeeded, so a
+        row with no enrichment reads as enriched and the stranded-row
+        sweep never enriches it.
+    Oracle: the stored row's `enriched_at`.
+    """
+    def failing_complete(self, system, user, **kwargs):
+        raise ConnectionError('forced enrichment failure')
+
+    monkeypatch.setattr(
+        'memman.llm.client.MemmanLLMClient.complete', failing_complete)
+    ec = bound_embedder(tmp_backend)
+
+    parent = make_insight(
+        id='enrich-fail-1', content='Redis backs the session cache')
+    res = run_remember(
+        tmp_backend, parent, 'Redis backs the session cache',
+        ec=ec, store_name='test')
+
+    stored = tmp_backend.nodes.get(res['facts'][0]['id'])
+    assert stored.enriched_at is None
+
+
 def test_prompt_version_unchanged_by_length_caps():
     """The length caps live post-parse; the prompt hash is pinned.
 

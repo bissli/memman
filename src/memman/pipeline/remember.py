@@ -415,6 +415,10 @@ def _apply_plan(
             fi.id,
             keywords=plan.enrichment.get('keywords', []),
             summary=plan.enrichment.get('summary', ''))
+    # A vectorless row stays unstamped: the stranded-row sweep selects
+    # `enriched_at is null`, and it is the only path that embeds the
+    # row again.
+    if plan.enrichment and embedded:
         backend.nodes.stamp_enriched(fi.id)
 
     if linking and not linked_targets:

@@ -101,8 +101,15 @@ class TestEnrichWithLLM:
         result = enrich_with_llm(insight, mock_client)
         assert result == {}
 
-    def test_malformed_json_returns_empty(self):
-        """Unparseable LLM output returns empty dict."""
+    def test_undecodable_body_returns_empty_fields(self):
+        """Verify a body that decodes on neither draw yields empty fields.
+
+        Mutation: returning `{}` here as for a failed call, which
+            leaves the row unstamped, so the stranded-row sweep
+            re-enriches it on every drain and bills the call each time.
+        Oracle: the literal empty-valued dict, against the `{}` a
+            failed call returns in `test_llm_unavailable_returns_empty`.
+        """
         insight = make_insight(
             id='mj-1', content='test content')
 
@@ -110,7 +117,7 @@ class TestEnrichWithLLM:
         mock_client.complete.return_value = 'not json at all'
 
         result = enrich_with_llm(insight, mock_client)
-        assert result == {}
+        assert result == {'keywords': [], 'summary': ''}
 
     def test_llm_failure_logged_at_warning(self, caplog):
         """An LLM exception during enrichment is logged at WARNING."""
@@ -126,16 +133,20 @@ class TestEnrichWithLLM:
         assert any(r.levelno == logging.WARNING for r in caplog.records)
 
     def test_parse_error_logged_at_warning(self, caplog):
-        """Unparseable (e.g. truncated) LLM output is logged at WARNING."""
+        """Verify an undecodable (e.g. truncated) body logs at WARNING.
+
+        Mutation: logging the decode failure at debug, which hides a
+            row stamped enriched with no keywords from the default log.
+        Oracle: the captured record levels.
+        """
         import logging
         insight = make_insight(id='warn-2', content='test content')
         mock_client = MagicMock()
         mock_client.complete.return_value = 'not json at all'
 
         with caplog.at_level(logging.WARNING, logger='memman'):
-            result = enrich_with_llm(insight, mock_client)
+            enrich_with_llm(insight, mock_client)
 
-        assert result == {}
         assert any(r.levelno == logging.WARNING for r in caplog.records)
 
     def test_unresolvable_metadata_role_still_links(
@@ -466,12 +477,13 @@ def test_enrichment_does_not_reroll_a_body_that_parses():
 
 
 def test_enrichment_rerolls_at_most_once():
-    """Verify a model that cannot produce the shape is billed twice, never more.
+    """Verify an undecodable model is billed twice, never more.
 
     Mutation: an unbounded retry loop on the drain's hottest stage.
-    Oracle: two calls, and the empty dict the caller reads as unenriched.
+    Oracle: two calls, and the empty fields the caller stamps as a
+        terminal outcome.
     """
     insight = make_insight()
     client = _SequenceClient(['not json', 'still not json', 'nor this'])
-    assert enrich_with_llm(insight, client) == {}
+    assert enrich_with_llm(insight, client) == {'keywords': [], 'summary': ''}
     assert len(client.calls) == 2

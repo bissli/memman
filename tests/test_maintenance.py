@@ -56,12 +56,16 @@ def test_maintenance_skips_vacuum_when_deadline_exceeded(tmp_backend):
 
 
 def test_maintenance_reenriches_stranded_row(tmp_db, tmp_backend):
-    """A linked-but-unenriched row is re-queued and re-enriched.
+    """Verify a linked-but-unenriched row is re-queued and re-enriched.
 
-    Reproduces the stranding bug: an insight stamped linked_at but not
-    enriched_at sits outside the pending-link retry path forever. The
-    maintenance self-heal must reset it so link_pending re-enriches it.
+    Mutation: dropping the stranded-row reset from
+        `_run_per_store_maintenance`, so a row stamped linked_at but
+        not enriched_at never re-enters link_pending.
+    Oracle: the row's keywords and enriched_at after one maintenance
+        pass.
     """
+    from memman.embed.fingerprint import bound_embedder
+
     insight = make_insight(
         id='strand-1', content='Python web framework facts')
     insert_insight(tmp_db, insight)
@@ -76,8 +80,7 @@ def test_maintenance_reenriches_stranded_row(tmp_db, tmp_backend):
     ctx = MagicMock()
     ctx.backend = tmp_backend
     ctx.embed_cache = {}
-    ctx.ec = MagicMock()
-    ctx.ec.available.return_value = False
+    ctx.ec = bound_embedder(tmp_backend)
     ctx.llm_client = MagicMock()
     ctx.llm_client.complete.return_value = json.dumps({
         'keywords': ['web', 'framework'],

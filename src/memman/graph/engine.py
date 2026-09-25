@@ -121,8 +121,9 @@ def link_pending(
         keywords = enrichment.get('keywords', [])
         new_vec = None
         new_vec_model = ''
-        reembed_failed = False
-        if (keywords
+        # Embeds on any enrichment, keywords or none: a row the write
+        # stored without a vector gets one only here.
+        if (enrichment
                 and embed_client is not None
                 and embed_client.available()):
             from memman.graph.enrichment import build_enriched_text
@@ -132,7 +133,6 @@ def link_pending(
                 new_vec = embed_client.embed(enriched_text)
                 new_vec_model = embed_client.model or ''
             except Exception as exc:
-                reembed_failed = True
                 logger.warning(
                     'Re-embed failed for %s: %s; insight will not flip'
                     ' to enriched (retry on next pass)',
@@ -160,7 +160,9 @@ def link_pending(
                 threshold=semantic_threshold)
 
             backend.nodes.stamp_linked(insight_id)
-            if enrichment and not reembed_failed:
+            # No vector this pass, no stamp: an embed that failed or
+            # could not run leaves the row for the stranded-row sweep.
+            if enrichment and new_vec is not None:
                 backend.nodes.stamp_enriched(
                     insight_id, prompt_version=active_pv)
             return sem_count
