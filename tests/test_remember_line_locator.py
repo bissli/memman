@@ -45,6 +45,40 @@ def test_refusal_names_only_a_file_line_locator(text, locator):
         assert f'({locator!r})' in message
 
 
+@pytest.mark.parametrize(('text', 'locator'), [
+    ('The accesses at lines 427-431 route through from_dict',
+     'lines 427'),
+    ('The guard at app.py-1233 refuses the stamp', 'app.py-1233'),
+    ('Production recall reranks at cli.py ~1190', 'cli.py ~1190'),
+    ('The deny branch sits at :1774 in the gate', ':1774'),
+    ('OnRefreshPressed (:243) calls CalculateFull', ':243'),
+    ('The trim runs in libtc/tc/emsx.py L419', 'L419'),
+    ('preprocess_excel_file (~L287) returns early', '~L287'),
+    ('The oplog keeps keyword_str[:80] of the query', None),
+    ('Export DISPLAY=:99 before drawio runs', None),
+    ('The rewrite left 1175 lines in documents.py', None),
+    ('The CPU L1 cache misses on the scan', None),
+])
+def test_refusal_names_every_line_number_form(text, locator):
+    """Verify the refusal catches each stored line-number form.
+
+    Mutation: refusing only `path.ext:N` and `line N`, which passes
+        `lines N`, `path.ext-N`, `path.ext ~N`, a bare `:N` and an
+        `L123`; or a bare-colon pattern that also reads a slice
+        `[:80]` or `DISPLAY=:99`, a line count `1175 lines`, or an
+        `L1` cache as a line number.
+    Oracle: hand-paired rows drawn from forms stored rows carry; each
+        refusing row names the exact locator the message must quote,
+        each passing row names none.
+    """
+    message = _line_locator_refusal_message(text)
+
+    if locator is None:
+        assert message is None
+    else:
+        assert f'({locator!r})' in message
+
+
 def test_remember_refuses_a_file_line_locator(mm_runner):
     """Verify `path.ext:N` fails the write and enqueues nothing.
 

@@ -47,7 +47,7 @@ _LOG_FORMAT = '%(asctime)s %(levelname)s %(name)s: %(message)s'
 _WORKER_LOG_MAX_BYTES = 5 * 1024 * 1024
 _WORKER_LOG_BACKUPS = 3
 _MAX_CONTENT_BYTES = 1000
-_LINE_WORD_RE = re.compile(r'\bline \d+\b', re.IGNORECASE)
+_LINE_WORD_RE = re.compile(r'\blines? \d+\b', re.IGNORECASE)
 _LINE_BREAK_RE = re.compile(r'[\r\n\v\f\x85\u2028\u2029]')
 # Notes:
 # - A label is at most three words before a colon and a space, so
@@ -67,11 +67,19 @@ _LEADING_LABEL_RE = re.compile(
 #   `db.example.com:5432` and refuse its port.
 # - `localhost:8080`, `192.0.2.1:8000`, `14:18`, `python:3.11` and
 #   `code:404` carry no such extension before the colon.
+# - `-N` is grep's context-line form and `~N` an approximate line.
 _FILE_LINE_RE = re.compile(
     r'\b[\w./-]+\.(?:py|pyi|js|jsx|ts|tsx|md|rst|txt|html|htm|css|scss'
     r'|json|jsonl|yaml|yml|toml|ini|cfg|conf|sql|sh|bash|zsh|ps1|rs|go'
     r'|java|kt|c|h|cc|cpp|hpp|cs|rb|php|swift|lua|xml|csv|tsv|ipynb'
-    r'|drawio|tf|vue|svelte|proto|mk|cmake):\d{1,5}\b', re.IGNORECASE)
+    r'|drawio|tf|vue|svelte|proto|mk|cmake)(?:[:-]|\s+~)\d{1,5}\b',
+    re.IGNORECASE)
+# Notes:
+# - A bare `:N` or `L123` names a line of a file the text named
+#   earlier. Only a start, space, `(`, `,` or `;` may precede it, so a
+#   slice `[:80]`, `DISPLAY=:99` and `14:18` pass.
+# - `L` takes two digits or more, so an `L1` or `L2` cache passes.
+_BARE_LINE_RE = re.compile(r'(?<![^\s(,;])(?::\d{1,5}|~?L\d{2,5})\b')
 
 
 def _line_locator_refusal_message(content: str) -> str | None:
@@ -85,16 +93,22 @@ def _line_locator_refusal_message(content: str) -> str | None:
     Returns
     -------
     str or None
-        The refusal quoting the first `path.ext:N` locator, else the
-        first `line N` phrase; None when `content` holds neither.
+        The refusal quoting the first `path.ext:N`, `path.ext-N` or
+        `path.ext ~N` locator, else the first `line N` or `lines N`
+        phrase, else the first bare `:N` or `L123`; None when `content`
+        holds none of them.
 
     Notes
     -----
     - A line number is a snapshot of the file at write time and goes
       stale on the next edit. The text is refused, never rewritten,
       so the stored row is always the agent's own words.
+    - A bare `:N` also refuses a port written without its host, such
+      as `:9222`; `localhost:9222` passes.
     """
-    match = _FILE_LINE_RE.search(content) or _LINE_WORD_RE.search(content)
+    match = (_FILE_LINE_RE.search(content)
+             or _LINE_WORD_RE.search(content)
+             or _BARE_LINE_RE.search(content))
     if match is None:
         return None
     return (
