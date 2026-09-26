@@ -1,12 +1,10 @@
 """Insight CRUD, lifecycle, statistics, and embedding operations."""
 
-import json
 import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from memman.store.model import Insight, dedupe_entities, format_timestamp
-from memman.store.model import parse_timestamp
+from memman.store.model import Insight, format_timestamp, parse_timestamp
 
 if TYPE_CHECKING:
     from memman.store.db import DB
@@ -26,15 +24,13 @@ def insert_insight(db: 'DB', i: Insight) -> None:
     now = format_timestamp(datetime.now(timezone.utc))
     sql = """
 insert into insights
-    (id, content, category, importance, entities,
-     source, created_at, updated_at,
+    (id, content, category, created_at, updated_at,
      prompt_version, embedding_model,
      queue_uuid, author)
-values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+values (?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
     db._exec(sql, (
-        i.id, i.content, i.category, i.importance,
-        i.entities_json(), i.source,
+        i.id, i.content, i.category,
         now, now,
         i.prompt_version, i.embedding_model,
         i.queue_uuid, i.author))
@@ -44,8 +40,7 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 # must stay byte-identical to postgres.py's _INSIGHT_COLS (see
 # test_insight_column_lists_are_identical_across_backends).
 _INSIGHT_COLUMNS = (
-    'id, content, category, importance, entities,'
-    ' source, created_at, updated_at, deleted_at,'
+    'id, content, category, created_at, updated_at, deleted_at,'
     ' summary, linked_at, enriched_at,'
     ' queue_uuid, superseded_by,'
     ' author')
@@ -77,9 +72,9 @@ where id = ?
     return _scan_insight(row)
 
 
-def query_insights(db: 'DB', keyword: str = '', category: str = '',
-                   source: str = '', limit: int = 20) -> list[Insight]:
-    """Return insights matching filters, ordered by importance desc, created_at desc."""
+def query_insights(
+        db: 'DB', keyword: str = '', limit: int = 20) -> list[Insight]:
+    """Return current insights holding every keyword word, newest first."""
     conditions = ['deleted_at is null and superseded_by is null']
     args: list[Any] = []
 
@@ -87,17 +82,8 @@ def query_insights(db: 'DB', keyword: str = '', category: str = '',
         for word in keyword.split():
             escaped = word.replace(
                 '\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
-            conditions.append(
-                "(content like ? escape '\\'"
-                " or entities like ? escape '\\'"
-                " or keywords like ? escape '\\')")
-            args.extend([f'%{escaped}%'] * 3)
-    if category:
-        conditions.append('category = ?')
-        args.append(category)
-    if source:
-        conditions.append('source = ?')
-        args.append(source)
+            conditions.append("content like ? escape '\\'")
+            args.append(f'%{escaped}%')
 
     args.append(limit)
 
@@ -106,7 +92,7 @@ def query_insights(db: 'DB', keyword: str = '', category: str = '',
 select {_INSIGHT_COLUMNS}
 from insights
 where {where_clause}
-order by importance desc, created_at desc
+order by created_at desc
 limit ?
 """
     rows = db._query(sql, tuple(args)).fetchall()
@@ -276,24 +262,9 @@ order by created_at, id
     return [_scan_insight(r) for r in rows]
 
 
-def update_entities(db: 'DB', id: str, entities: list[str]) -> None:
-    """Update the entities field for an insight."""
-    deduped = dedupe_entities(entities)
-    now = format_timestamp(datetime.now(timezone.utc))
-    db._exec(
-        'update insights set entities = ?, updated_at = ? where id = ?',
-        (json.dumps(deduped, sort_keys=True), now, id))
-
-
-def update_enrichment(
-        db: 'DB', id: str, keywords: list[str], summary: str) -> None:
-    """Update LLM enrichment columns for an insight."""
-    sql = """
-update insights
-set keywords = ?, summary = ?
-where id = ?
-"""
-    db._exec(sql, (json.dumps(keywords), summary, id))
+def update_enrichment(db: 'DB', id: str, summary: str) -> None:
+    """Store the enrichment summary for an insight."""
+    db._exec('update insights set summary = ? where id = ?', (summary, id))
 
 
 def count_active_insights(db: 'DB') -> int:
@@ -489,23 +460,6 @@ group by category
 
     row = db._query('select count(*) from oplog').fetchone()
     stats['oplog_count'] = row[0]
-
-    top_entities = []
-    try:
-        ent_sql = """
-select je.value, count(distinct i.id) as cnt
-from insights i, json_each(i.entities) je
-where i.deleted_at is null and i.superseded_by is null
-group by je.value
-order by cnt desc
-limit 20
-"""
-        erows = db._query(ent_sql).fetchall()
-        for entity, count in erows:
-            top_entities.append({'entity': entity, 'count': count})
-    except Exception:
-        pass
-    stats['top_entities'] = top_entities
 
     return stats
 
@@ -763,23 +717,20 @@ def _scan_insight(row: tuple[Any, ...]) -> Insight:
     i.id = row[0]
     i.content = row[1]
     i.category = row[2]
-    i.importance = row[3]
-    i.parse_entities(row[4])
-    i.source = row[5]
-    i.created_at = parse_timestamp(row[6])
-    i.updated_at = parse_timestamp(row[7])
-    if row[8]:
-        i.deleted_at = parse_timestamp(row[8])
+    i.created_at = parse_timestamp(row[3])
+    i.updated_at = parse_timestamp(row[4])
+    if row[5]:
+        i.deleted_at = parse_timestamp(row[5])
+    if len(row) > 6 and row[6]:
+        i.summary = row[6]
+    if len(row) > 7 and row[7]:
+        i.linked_at = parse_timestamp(row[7])
+    if len(row) > 8 and row[8]:
+        i.enriched_at = parse_timestamp(row[8])
     if len(row) > 9 and row[9]:
-        i.summary = row[9]
+        i.queue_uuid = row[9]
     if len(row) > 10 and row[10]:
-        i.linked_at = parse_timestamp(row[10])
+        i.superseded_by = row[10]
     if len(row) > 11 and row[11]:
-        i.enriched_at = parse_timestamp(row[11])
-    if len(row) > 12 and row[12]:
-        i.queue_uuid = row[12]
-    if len(row) > 13 and row[13]:
-        i.superseded_by = row[13]
-    if len(row) > 14 and row[14]:
-        i.author = row[14]
+        i.author = row[11]
     return i

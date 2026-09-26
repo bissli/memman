@@ -196,7 +196,7 @@ def test_partial_index_predicates_fail_on_a_retired_index(tmp_backend):
     tmp_backend.nodes.insert(make_insight(id='p-1', content='row'))
     tmp_backend._db._exec(
         'create index idx_insights_deleted_importance_created'
-        ' on insights(deleted_at, importance, created_at)', ())
+        ' on insights(deleted_at, linked_at, created_at)', ())
 
     result = check_partial_index_predicates(tmp_backend)
     assert result['status'] == 'fail'

@@ -61,16 +61,16 @@ class TestRemember:
         assert 'sqlite' in data['content'].lower()
 
     def test_remember_with_flags(self, runner):
-        """Store with category and importance.
+        """Store with an explicit category.
 
-        Mutation: dropping the `--cat`/`--imp` values on the way to
-            storage, so the stored row keeps the defaults.
+        Mutation: dropping the `--cat` value on the way to storage, so
+            the stored row keeps the default.
         Oracle: `insights show` on the stored id, compared against the
-            flags passed to `remember`.
+            flag passed to `remember`.
         """
         result = invoke(runner, [
             'remember', 'Chose Docker for container orchestration in production',
-            '--cat', 'decision', '--imp', '4'])
+            '--cat', 'decision'])
         assert result.exit_code == 0
         data = parse_remember(result, runner)
         assert 'id' in data
@@ -78,7 +78,6 @@ class TestRemember:
         shown = json.loads(
             invoke(runner, ['insights', 'show', data['id']]).output)
         assert shown['category'] == 'decision'
-        assert shown['importance'] == 4
 
     def test_remember_invalid_category(self, runner):
         """Invalid category is rejected."""
@@ -97,12 +96,6 @@ class TestRemember:
         assert result.exit_code != 0
         assert 'valid:' in result.output
         assert 'fact' in result.output
-
-    def test_remember_invalid_importance(self, runner):
-        """Importance outside 1-5 is rejected."""
-        result = invoke(runner, [
-            'remember', 'Go uses SQLite for storage', '--imp', '0'])
-        assert result.exit_code != 0
 
     def test_remember_does_not_link_old_pending_insights(self, runner, monkeypatch):
         """Remember does inline enrichment, never calls link_pending."""
@@ -429,68 +422,6 @@ class TestRecall:
             'fixture must under-fill the page so the two cannot be '
             'confused')
 
-    def test_recall_source_filter_smart(self, runner):
-        """Smart recall respects --source filter.
-
-        Mutation: dropping the `source` predicate from the anchor
-            scans, so a non-matching row's id reaches the page.
-        Oracle: `insights show` on every returned id, compared against
-            the filter value.
-        """
-        invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage', '--source', 'agent'])
-        invoke(runner, [
-            'remember', 'Python uses PostgreSQL for web application storage', '--source', 'human'])
-
-        result = invoke(runner, [
-            'recall', 'database storage', '--source', 'agent'])
-        assert result.exit_code == 0
-        rows = _parse_recall_lines(result.output)
-        assert rows
-        for row in rows:
-            shown = json.loads(
-                invoke(runner, ['insights', 'show', row['id']]).output)
-            assert shown['source'] == 'agent'
-
-    def test_recall_source_filter_returns_matching_rows(self, runner):
-        """Recall --source surfaces a matching row the top-k would drop.
-
-        Folded from `test_recall_source_filter_inflates_fetch_limit`
-        after D2 replaced the fetch-inflation post-filter with anchor
-        scans that filter before the top-k cut; the deep fill-to-limit
-        regression lives in
-        `tests/test_recall_filters.py::test_filtered_recall_fills_to_limit`.
-
-        Mutation: dropping the `source` predicate from the anchor
-            scans (or filtering only after the cut).
-        Oracle: the single agent-sourced row appears despite six
-            better-matching user rows competing for the slots.
-        """
-        topics = [
-            'PostgreSQL query optimization with EXPLAIN ANALYZE',
-            'PostgreSQL index types including B-tree GIN GiST',
-            'PostgreSQL vacuum autovacuum tuning parameters',
-            'PostgreSQL partitioning strategies for large tables',
-            'PostgreSQL connection pooling with PgBouncer setup',
-            'PostgreSQL replication streaming and logical decoding',
-            ]
-        for topic in topics:
-            invoke(runner, [
-                'remember', topic, '--source', 'user'])
-        invoke(runner, [
-            'remember', 'PostgreSQL JSONB operators for document queries', '--source', 'agent'])
-
-        result = invoke(runner, [
-            'recall', 'PostgreSQL database',
-            '--source', 'agent', '--limit', '3'])
-        assert result.exit_code == 0
-        rows = _parse_recall_lines(result.output)
-        assert rows, 'filtered recall returned nothing'
-        for row in rows:
-            shown = json.loads(
-                invoke(runner, ['insights', 'show', row['id']]).output)
-            assert shown['source'] == 'agent'
-
 
 class TestForget:
     """`memman forget` happy paths and missing-id error."""
@@ -741,11 +672,20 @@ class TestInsightsReview:
     """`memman insights review` flags transient content."""
 
     def test_review_flags_transient_content(self, runner):
-        """A stored instance id is flagged; a durable decision is not."""
-        invoke(runner, [
+        """A stored instance id is flagged; a durable decision is not.
+
+        Mutation: a seeding `remember` call silently failing to store,
+            which would leave `total_flagged` at 0 for the wrong
+            reason.
+        Oracle: both seed calls checked for a zero exit code before
+            the review assertion runs.
+        """
+        r1 = invoke(runner, [
             'remember', 'Production outage traced to instance i-0c220c2402a5245bc running out of memory causing cascading failure'])
-        invoke(runner, [
-            'remember', 'SQLite chosen for simplicity and embedded operation', '--imp', '5'])
+        assert r1.exit_code == 0, r1.output
+        r2 = invoke(runner, [
+            'remember', 'SQLite chosen for simplicity and embedded operation'])
+        assert r2.exit_code == 0, r2.output
         result = invoke(runner, ['insights', 'review'])
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -769,7 +709,7 @@ class TestReplace:
     def test_replace_basic(self, runner):
         """Replace an insight, verify old soft-deleted, new exists."""
         result = invoke(runner, [
-            'remember', 'Redis cache configured with 512MB memory limit', '--cat', 'fact', '--imp', '3'])
+            'remember', 'Redis cache configured with 512MB memory limit', '--cat', 'fact'])
         old_id = parse_remember(result, runner)['id']
 
         result = invoke(runner, [
@@ -782,16 +722,16 @@ class TestReplace:
         assert 'redis' in data['content'].lower()
 
     def test_replace_inherits_metadata(self, runner):
-        """Replace without flags inherits cat/imp from original.
+        """Replace without flags inherits category from original.
 
-        Mutation: dropping the inherited category or importance on a
-            flag-less replace, defaulting instead.
+        Mutation: dropping the inherited category on a flag-less
+            replace, defaulting instead.
         Oracle: `insights show` on the replacement id, compared
-            against the original's stored values.
+            against the original's stored value.
         """
         result = invoke(runner, [
             'remember', 'Chose PostgreSQL over MySQL for JSONB support',
-            '--cat', 'decision', '--imp', '5'])
+            '--cat', 'decision'])
         old_id = parse_remember(result, runner)['id']
 
         result = invoke(runner, [
@@ -804,24 +744,23 @@ class TestReplace:
         shown = json.loads(
             invoke(runner, ['insights', 'show', data['id']]).output)
         assert shown['category'] == 'decision'
-        assert shown['importance'] == 5
 
     def test_replace_overrides_metadata(self, runner):
-        """Replace with explicit flags uses new values.
+        """Replace with an explicit flag uses the new value.
 
-        Mutation: keeping the original category/importance despite an
-            explicit override on the replace command.
+        Mutation: keeping the original category despite an explicit
+            override on the replace command.
         Oracle: `insights show` on the replacement id, compared
-            against the flags passed to `replace`.
+            against the flag passed to `replace`.
         """
         result = invoke(runner, [
-            'remember', 'Nginx configured as reverse proxy for API gateway', '--cat', 'fact', '--imp', '2'])
+            'remember', 'Nginx configured as reverse proxy for API gateway', '--cat', 'fact'])
         old_id = parse_remember(result, runner)['id']
 
         result = invoke(runner, [
             'replace', old_id,
             'Switched from Nginx to Envoy for service mesh integration',
-            '--cat', 'decision', '--imp', '5'])
+            '--cat', 'decision'])
         assert result.exit_code == 0
         data = parse_remember(result, runner)
         assert 'id' in data
@@ -829,7 +768,6 @@ class TestReplace:
         shown = json.loads(
             invoke(runner, ['insights', 'show', data['id']]).output)
         assert shown['category'] == 'decision'
-        assert shown['importance'] == 5
 
     def test_replace_nonexistent_id(self, runner):
         """Replace a nonexistent ID produces error."""
@@ -917,19 +855,21 @@ class TestSingleTierEnrichment:
     """Remember runs enrichment inline on the drain worker."""
 
     def test_output_has_enrichment_dict(self, runner):
-        """Verify the drain stores the enrichment keywords on the row.
+        """Verify the drain stores the enrichment summary on the row.
 
         Mutation: `_apply_plan` stamping `enriched_at` without the
-            `update_enrichment` write, so the row reads as enriched,
-            holds no keywords, and no stranded-row sweep revisits it.
-        Oracle: the autouse mock LLM, which echoes the enrichment
-            prompt's opening words, the content's first word among
-            them, as keywords.
+            `update_enrichment` write, so the row reads as enriched
+            and holds no summary, and no stranded-row sweep revisits
+            it.
+        Oracle: the autouse mock LLM, which echoes the content's first
+            100 characters as the summary.
         """
         from memman.store.db import open_read_only, store_dir
 
-        result = invoke(runner, [
-            'remember', 'Redis cache configured with LRU eviction policy'])
+        content = ('Redis cache configured with LRU eviction policy, '
+                   'replicated across three availability zones for '
+                   'automatic failover and durability')
+        result = invoke(runner, ['remember', content])
         assert result.exit_code == 0
         data = parse_remember(result, runner)
         iid = data['id']
@@ -938,12 +878,12 @@ class TestSingleTierEnrichment:
         db = open_read_only(store_dir(data_dir, 'default'))
         try:
             row = db._query(
-                'SELECT keywords FROM insights WHERE id = ?',
+                'SELECT summary FROM insights WHERE id = ?',
                 (iid,)).fetchone()
         finally:
             db.close()
         assert row is not None
-        assert 'redis' in json.loads(row[0])
+        assert 'redis' in row[0].lower()
 
     def test_no_link_pending_in_output(self, runner):
         """Output no longer includes link_pending field."""
@@ -1001,7 +941,7 @@ class TestSingleTierEnrichment:
 
 @pytest.mark.scheduler_stopped
 class TestGraphRebuild:
-    """Graph rebuild command tests - dry-run, live, entity list."""
+    """Graph rebuild command tests - dry-run, live."""
 
     def test_rebuild_dry_run_reports_count(self, tmp_path, monkeypatch):
         """Dry run reports total insights without modifying DB."""
@@ -1039,7 +979,15 @@ class TestGraphRebuild:
 
     def test_rebuild_reprocesses_stale_insights(
             self, tmp_path, monkeypatch):
-        """Rebuild re-enriches insights with stale/empty keywords."""
+        """Rebuild re-enriches insights with a stale/empty summary.
+
+        Mutation: the rebuild loop skipping a row whose `enriched_at`
+            is already set, so a blanked summary is never
+            re-populated.
+        Oracle: two rows seeded with `summary = ''` and a stale
+            `enriched_at`; after rebuild both carry a non-empty
+            summary and a fresh `enriched_at`.
+        """
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
@@ -1048,16 +996,20 @@ class TestGraphRebuild:
         from tests.conftest import make_insight
         db = open_db(str(store_path))
         insert_insight(db, make_insight(
-            id='rs-1', content='Python and SQLite used for data analysis',
-            entities=['Python', 'SQLite']))
+            id='rs-1', content=(
+                'Python and SQLite used for data analysis across the '
+                'reporting pipeline with scheduled batch jobs and '
+                'nightly validation checks')))
         insert_insight(db, make_insight(
-            id='rs-2', content='SQLite database migration with Python scripts',
-            entities=['SQLite', 'Python']))
+            id='rs-2', content=(
+                'SQLite database migration with Python scripts run '
+                'nightly across every regional replica before the '
+                'reporting jobs start')))
         db._conn.execute(
             "UPDATE insights"
             " SET linked_at = '2024-01-01T00:00:00+00:00',"
             "     enriched_at = '2024-01-01T00:00:00+00:00',"
-            "     keywords = '[]'"
+            "     summary = ''"
             " WHERE id IN ('rs-1', 'rs-2')")
         db.close()
 
@@ -1070,17 +1022,10 @@ class TestGraphRebuild:
 
         db = open_db(str(store_path))
         row = db._conn.execute(
-            "SELECT keywords, enriched_at FROM insights"
+            "SELECT summary, enriched_at FROM insights"
             " WHERE id = 'rs-1'").fetchone()
-        keywords = json.loads(row[0]) if row[0] else []
-        assert len(keywords) > 0, 'rebuild should populate keywords'
+        assert row[0], 'rebuild should populate summary'
         assert row[1] is not None, 'rebuild should set enriched_at'
-
-        entities_raw = db._conn.execute(
-            "SELECT entities FROM insights"
-            " WHERE id = 'rs-1'").fetchone()[0]
-        entities = json.loads(entities_raw) if entities_raw else []
-        assert len(entities) > 0, 'rebuild should populate entities'
         db.close()
 
     def test_rebuild_handles_mix_of_linked_and_unlinked(
@@ -1118,63 +1063,6 @@ class TestGraphRebuild:
             ' AND deleted_at IS NULL').fetchone()[0]
         assert pending == 0, 'all insights should be linked after rebuild'
         db.close()
-
-    def test_rebuild_keeps_the_stored_entity_list(
-            self, tmp_path, monkeypatch):
-        """Rebuild keeps the stored entity list, whatever the LLM returns.
-
-        Mutation: the rebuild loop replacing a row's entities with the
-            re-enrichment draw, so a redrawn body that names none of
-            the stored labels erases them.
-        Oracle: the stubbed LLM body names an entity the stored list
-            lacks (`Warrant`, a literal substring of the content) and
-            omits every stored label; the stored list surviving
-            unchanged proves nothing from the draw was adopted.
-        """
-        monkeypatch.delenv('MEMMAN_STORE', raising=False)
-        data_dir = str(tmp_path)
-        store_path = tmp_path / 'data' / 'default'
-        from memman.store.db import open_db
-        from memman.store.node import insert_insight
-        from tests.conftest import make_insight
-        db = open_db(str(store_path))
-        insert_insight(db, make_insight(
-            id='vocab-1',
-            content='Postgres replaced SQLite for the Warrant ledger.',
-            entities=['Database: Postgres', 'Library: SQLite']))
-        db._conn.execute(
-            "UPDATE insights"
-            " SET linked_at = '2024-01-01T00:00:00+00:00',"
-            "     enriched_at = '2024-01-01T00:00:00+00:00'"
-            " WHERE id = 'vocab-1'")
-        db.close()
-
-        def fake_complete(self, system, user, **kwargs):
-            if 'keyword' in system.lower() and 'enrichment' in system.lower():
-                return json.dumps({
-                    'entities': ['Warrant'],
-                    'keywords': ['ledger'],
-                    'summary': 'a ledger migration',
-                    'semantic_facts': ['Postgres replaced SQLite'],
-                    })
-            return json.dumps({'facts': [{'text': user, 'category': 'fact',
-                                          'entities': []}]})
-
-        monkeypatch.setattr(
-            'memman.llm.client.MemmanLLMClient.complete', fake_complete)
-
-        runner = CliRunner()
-        result = runner.invoke(cli, [
-            '--data-dir', data_dir, 'graph', 'rebuild'])
-        assert result.exit_code == 0, result.output
-
-        db = open_db(str(store_path))
-        raw = db._conn.execute(
-            "SELECT entities FROM insights WHERE id = 'vocab-1'"
-            ).fetchone()[0]
-        db.close()
-        stored = json.loads(raw)
-        assert stored == ['Database: Postgres', 'Library: SQLite']
 
 
 class TestGraphRebuildIsolation:
@@ -1222,7 +1110,7 @@ class TestGraphRebuildStaleOnly:
             id='fresh-1', content='Fresh insight already on active config',
             prompt_version=active_pv))
         for iid in ('drift-1', 'fresh-1'):
-            update_enrichment(db, iid, ['kw'], 'sum')
+            update_enrichment(db, iid, 'sum')
             db._conn.execute(
                 'UPDATE insights SET linked_at = ?, enriched_at = ?'
                 ' WHERE id = ?',
@@ -1419,8 +1307,8 @@ class TestHotPathPurity:
         fp = seed_default_fingerprint()
         write_fingerprint(SqliteBackend(db), fp)
 
-        a = make_insight(id='aud-a', content='alpha', importance=3)
-        b = make_insight(id='aud-b', content='beta', importance=3)
+        a = make_insight(id='aud-a', content='alpha')
+        b = make_insight(id='aud-b', content='beta')
         insert_insight(db, a)
         insert_insight(db, b)
         update_embedding(db, 'aud-a',

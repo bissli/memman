@@ -36,22 +36,21 @@ HOSTILE_QUERIES = [
     ]
 
 CORPUS = [
-    ('kw-a', 'the quick brown fox jumps over cutover',
-     ['vulpes', 'reindex_auto_edges']),
-    ('kw-b', 'a slow brown bear sleeps near the adjacency map',
-     ['ursus', 'sqlite']),
-    ('kw-c', 'quantum entanglement of photons and bm25 ranking',
-     ['physics', '_ALLOWED_BOOL_FLAGS']),
-    ('kw-d', 'meta sparse contract for the kw_score range',
-     ['contract']),
+    ('kw-a', ('the quick brown fox vulpes jumps over cutover'
+     ' reindex_auto_edges')),
+    ('kw-b', ('a slow brown bear ursus sleeps near the adjacency'
+     ' sqlite map')),
+    ('kw-c', ('quantum entanglement of photons physics and bm25'
+     ' ranking _ALLOWED_BOOL_FLAGS')),
+    ('kw-d', 'meta sparse contract for the kw_score range'),
 ]
 
 
 def _seed(backend):
     """Insert the shared corpus and return its insights by id."""
     out = {}
-    for iid, content, ents in CORPUS:
-        ins = make_insight(id=iid, content=content, entities=ents)
+    for iid, content in CORPUS:
+        ins = make_insight(id=iid, content=content)
         backend.nodes.insert(ins)
         out[iid] = ins
     return out
@@ -70,10 +69,9 @@ def _python_counts(insights, query_tokens):
 def test_counts_match_python_tokenization(backend):
     """Verify the index reproduces `insight_tokens` overlap exactly.
 
-    Mutation: indexing `content` but not `entities`, or swapping the
-        tokenizer for a stemming one - both keep recall working while
-        silently moving every `kw_score` that depends on an entity or
-        on an inflected word.
+    Mutation: swapping the tokenizer for a stemming one, which keeps
+        recall working while silently moving every `kw_score` that
+        depends on an inflected word.
     Oracle: the counts recomputed in Python from `insight_tokens`,
         which is the route the drain still uses.
 
@@ -145,24 +143,34 @@ def test_soft_deleted_rows_never_surface(backend):
         assert session.keyword_counts({'brown'}) == {'kw-a': 1}
 
 
-def test_edits_reindex_and_unrelated_writes_do_not(backend):
-    """Verify the index tracks content and entity edits, and only those.
+def test_edits_reindex_and_unrelated_writes_do_not(tmp_path):
+    """Verify a content edit reindexes, and only that write does.
 
     Mutation: omitting the paired `'delete'` in the update trigger,
         so the old terms linger and the row keeps matching a word it
         no longer holds.
-    Oracle: probes for the removed and the added entity, by value.
+    Oracle: probes for the removed and the added word, by value.
 
     Notes
     -----
+    - SQLite-only: the FTS5 trigger is what reindexes a content edit.
+      Postgres has no equivalent -- `kw_tokens` is set once, at
+      insert.
     - The embedding write asserts the index survives an unrelated
-      write. It does NOT pin the trigger's `of content, entities`
-      scoping: a bare `after update` rewrites the row with identical
-      values, so it costs writes and changes no output. Catching that
-      needs a write-count spy, not this assertion.
+      write. It does NOT pin the trigger's `of content` scoping: a
+      bare `after update` rewrites the row with identical values, so
+      it costs writes and changes no output. Catching that needs a
+      write-count spy, not this assertion.
     """
+    store = tmp_path / 'reindex'
+    db = open_db(str(store))
+    backend = SqliteBackend(db)
     _seed(backend)
-    backend.nodes.update_entities('kw-a', ['canis'])
+
+    backend._db._exec(
+        'update insights set content = ? where id = ?',
+        (('the quick brown fox canis jumps over cutover'
+         ' reindex_auto_edges'), 'kw-a'))
 
     with backend.recall_session() as session:
         assert session.keyword_counts({'vulpes'}) == {}
@@ -172,6 +180,7 @@ def test_edits_reindex_and_unrelated_writes_do_not(backend):
     assert backend.integrity_check()['ok']
     with backend.recall_session() as session:
         assert session.keyword_counts({'canis'}) == {'kw-a': 1}
+    db.close()
 
 
 def test_recall_stops_tokenizing_every_row(backend, monkeypatch):
@@ -445,7 +454,7 @@ def test_non_ascii_divergence_stays_where_it_is(backend, backend_kind):
       backend.
     """
     backend.nodes.insert(make_insight(
-        id='kw-nonascii', content='a naïve fallback', entities=[]))
+        id='kw-nonascii', content='a naïve fallback'))
 
     with backend.recall_session() as session:
         got = session.keyword_counts({'na', 've', 'fallback'})

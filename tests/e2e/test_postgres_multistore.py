@@ -69,10 +69,8 @@ def test_drop_store_a_does_not_affect_store_b(pg_dsn, request):
     a = open_postgres_backend(store_a, pg_dsn)
     b = open_postgres_backend(store_b, pg_dsn)
     try:
-        a.nodes.insert(Insight(
-            id='a-1', content='only in A', importance=3, source='user'))
-        b.nodes.insert(Insight(
-            id='b-1', content='only in B', importance=3, source='user'))
+        a.nodes.insert(Insight(id='a-1', content='only in A'))
+        b.nodes.insert(Insight(id='b-1', content='only in B'))
         a._conn.commit()
         b._conn.commit()
     finally:
@@ -121,9 +119,7 @@ def test_cross_backend_parity_insert_and_get(pg_dsn, tmp_path, request):
     pg_backend = open_postgres_backend(pg_store, pg_dsn)
 
     try:
-        ins = Insight(
-            id='parity-1', content='same content both ways',
-            importance=4, source='user')
+        ins = Insight(id='parity-1', content='same content both ways')
         sqlite_backend.nodes.insert(ins)
         pg_backend.nodes.insert(ins)
         pg_backend._conn.commit()
@@ -133,8 +129,6 @@ def test_cross_backend_parity_insert_and_get(pg_dsn, tmp_path, request):
         assert sq is not None
         assert pg is not None
         assert sq.content == pg.content == 'same content both ways'
-        assert sq.importance == pg.importance == 4
-        assert sq.source == pg.source == 'user'
     finally:
         sqlite_backend.close()
         pg_backend.close()

@@ -92,9 +92,8 @@ It keeps every other env-file setting, including `MEMMAN_POSTGRES_DSN_<store>`, 
 
 ```bash
 memman remember "The retry cap stays at three, since a fourth try only adds load." \
-  --cat decision --imp 4 --entity RetryPolicy --source agent
+  --cat decision
 memman recall "retry cap" --limit 10
-memman recall "auth" --cat decision --source agent
 memman recall "auth" --basic
 memman replace <id> "The retry cap is four for batch jobs and three elsewhere."
 memman supersede <old_id> <new_id>
@@ -112,14 +111,11 @@ Every command that takes a memory id also accepts an unambiguous prefix of one, 
 
 `quality_warnings` lists phrasing that tends to go stale, such as an instance id or the word "currently". The warnings never block the write.
 
-| Flag       | `remember` default | `replace` default  | Meaning                                                                         |
-| ---------- | ------------------ | ------------------ | ------------------------------------------------------------------------------- |
-| `--cat`    | `fact`             | the target's value | Category: `preference`, `decision`, `fact`, `insight`, or `context`.            |
-| `--imp`    | `3`                | the target's value | Importance, 1 to 5. A sort key for listings and ties, stored as given.          |
-| `--entity` | none               | the target's value | One entity name per flag, repeatable, at most 50. A name may contain a comma.   |
-| `--source` | `user`             | the target's value | Source: `user`, `agent`, or the location of imported material. Stored as given. |
+| Flag    | `remember` default | `replace` default  | Meaning                                                              |
+| ------- | ------------------ | ------------------ | -------------------------------------------------------------------- |
+| `--cat` | `fact`             | the target's value | Category: `preference`, `decision`, `fact`, `insight`, or `context`. |
 
-`replace <id>` queues a successor for a current memory. When the drain stores the successor, the target becomes superseded: it keeps its content and leaves recall and every listing. A forgotten or superseded target is refused, and the error for a superseded one names its successor. Each flag left off inherits the target's value. `--entity ''` clears the entity list.
+`replace <id>` queues a successor for a current memory. When the drain stores the successor, the target becomes superseded: it keeps its content and leaves recall and every listing. A forgotten or superseded target is refused, and the error for a superseded one names its successor. Each flag left off inherits the target's value.
 
 ### What remember and replace refuse
 
@@ -136,18 +132,14 @@ Both commands check the text in this order and report the first problem:
 4. **Line break.** Text that spans several lines.
 5. **Leading label.** Text that opens with at most three words, a colon, and a space: `Fix:`, `AWS gotcha:`, `User decision 2026-09-17:`. A longer phrase before the colon is allowed because it may be part of a sentence, such as "The rule is simple:". A quote or backtick ends the match, so text may start with a quoted error.
 
-They also refuse an unknown category, an importance outside 1 to 5, an empty `--source`, more than 50 entities, and an entity name over 200 characters. `replace` checks an inherited category, importance, and source the same way.
+They also refuse an unknown category. `replace` checks an inherited category the same way.
 
 ### recall
 
-| Flag       | Default | Description                                                |
-| ---------- | ------- | ---------------------------------------------------------- |
-| `--limit`  | `20`    | Maximum lines printed.                                     |
-| `--cat`    | none    | Keep only this exact category.                             |
-| `--source` | none    | Keep only this exact source.                               |
-| `--basic`  | off     | SQL `LIKE` matching with no ranking. Lines carry no score. |
-
-`--cat` and `--source` filter each ranking channel before its cut, so a filtered page still fills to `--limit` when enough memories match.
+| Flag      | Default | Description                                                |
+| --------- | ------- | ---------------------------------------------------------- |
+| `--limit` | `20`    | Maximum lines printed.                                     |
+| `--basic` | off     | SQL `LIKE` matching with no ranking. Lines carry no score. |
 
 Recall prints one line per memory, best first, and prints nothing for an empty result:
 
@@ -159,7 +151,7 @@ Recall prints one line per memory, best first, and prints nothing for an empty r
 
 Compare scores only within the same result page. They have no fixed meaning across queries. Recency ranking always adds the newest memories to the candidates, so a full page does not by itself show a match. If none of the results are relevant, the query may use different wording from the stored memories. Try a query using words from the store. [Chapter 3](design/03-pipelines.md) describes the ranking.
 
-`--basic` keeps memories in which every query word appears in the content, the entities, or the keywords, and orders them by importance, then by creation time, newest first.
+`--basic` keeps memories in which every query word appears in the content, and orders them by creation time, newest first.
 
 **Rerank.** For a query of more than two words, a cross-encoder re-scores the top 100 candidates. The only rerank provider is Voyage (`MEMMAN_RERANK_PROVIDER=voyage`, model `MEMMAN_VOYAGE_RERANK_MODEL`, default `rerank-3-lite`), and it needs `MEMMAN_VOYAGE_API_KEY`. When the rerank call fails, recall logs a warning and keeps the blended order. `MEMMAN_RERANK_ENABLED` (default `true`) enables or disables reranking for every store, and `MEMMAN_RERANK_ENABLED_<store>` overrides it for one store:
 
@@ -194,7 +186,7 @@ memman insights review [--limit N]     # memories with quality warnings
 
 ## Re-enrichment
 
-`memman graph rebuild` re-runs enrichment (keywords and summary) and the embedding for current memories.
+`memman graph rebuild` re-runs enrichment (summary) and the embedding for current memories.
 
 ```bash
 memman graph rebuild               # every current memory
@@ -333,7 +325,7 @@ memman log worker [--errors] [--lines N]
 memman log worker --stack [--lines N]
 ```
 
-**`status`** prints the store name, its backend, the backends in use, counts of current, superseded, and forgotten memories, `stale_insights` (the count `graph rebuild --stale-only` would process), the oplog size, counts by category, the top entities, and the storage path.
+**`status`** prints the store name, its backend, the backends in use, counts of current, superseded, and forgotten memories, `stale_insights` (the count `graph rebuild --stale-only` would process), the oplog size, counts by category, and the storage path.
 
 **`doctor`** exits 1 when any check fails and 0 otherwise. It makes one live LLM call and one live embedding call.
 

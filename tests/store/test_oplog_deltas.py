@@ -60,21 +60,24 @@ class TestInsightToDeltaDict:
     """`insight_to_delta_dict` shapes the dict for oplog deltas."""
 
     def test_includes_content_and_metadata(self):
-        """The delta dict carries content/category/importance/source.
+        """The delta dict carries content and category.
+
+        Mutation: dropping the content or category key from the dict.
+        Oracle: the two fields the insight was built with.
         """
-        ins = make_insight(
-            id='d-1', content='hello', category='fact',
-            importance=4, source='cli')
+        ins = make_insight(id='d-1', content='hello', category='fact')
         d = insight_to_delta_dict(ins)
         assert d['content'] == 'hello'
         assert d['category'] == 'fact'
-        assert d['importance'] == 4
-        assert d['source'] == 'cli'
 
     def test_round_trips_through_json(self):
         """The delta dict is JSON-serializable as written.
+
+        Mutation: a non-serializable value (e.g. a datetime) left in
+            the dict without conversion.
+        Oracle: `json.dumps` raising `TypeError` on such a value.
         """
-        ins = make_insight(id='d-2', content='x', entities=['a', 'b'])
+        ins = make_insight(id='d-2', content='x')
         d = insight_to_delta_dict(ins)
         json.dumps(d)
 

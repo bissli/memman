@@ -31,9 +31,6 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
             id='m-1',
             content='migrate test insight',
             category='fact',
-            importance=3,
-            entities=[],
-            source='migrate-test',
             updated_at=datetime.now(timezone.utc),
             deleted_at=None)
         insert_insight(db, ins)

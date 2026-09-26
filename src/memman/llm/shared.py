@@ -17,49 +17,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger('memman')
 
-# Guardrail bounding pathological LLM output (a sentence or paragraph
-# emitted as one keyword), NOT a retrieval tunable -- it needs
-# no ablation-harness sweep. 200 chars clears the long legitimate
-# forms a name can take: a cloud ARN, a directory distinguished name,
-# a Windows path.
-MAX_ENRICH_STRING_CHARS = 200
-
-
-def drop_overlong_strings(values: list[str], *, owner: str) -> list[str]:
-    """Drop strings over `MAX_ENRICH_STRING_CHARS`, logging each drop.
-
-    Parameters
-    ----------
-    values : list[str]
-        LLM-proposed keywords. Never pass user-supplied values -- the
-        CLI validates them before enqueue.
-    owner : str
-        Insight id (or producer label) named in the drop log line.
-
-    Returns
-    -------
-    list[str]
-        The surviving values, order preserved.
-
-    Notes
-    -----
-    - Drop, never truncate: a truncated keyword still lands in the
-      enriched-text embed, preserving the pathology under a new name.
-    - The cap is a guardrail bounding pathological LLM output, NOT a
-      retrieval tunable: it needs no ablation-harness sweep. It is
-      set to clear the long legitimate forms a name can take, not
-      tuned for retrieval quality.
-    """
-    kept = []
-    for v in values:
-        if len(v) > MAX_ENRICH_STRING_CHARS:
-            logger.info(
-                f'dropped over-long keyword ({len(v)} chars) for'
-                f' {owner}: {v[:40]!r}...')
-            continue
-        kept.append(v)
-    return kept
-
 
 def strip_code_fences(raw: str) -> str:
     """Strip markdown code fences from LLM output."""

@@ -33,9 +33,6 @@ def _seed_sqlite_store(data_dir: Path, store: str) -> Path:
             id=f'rb-{store}-1',
             content='reverse migrate test insight',
             category='fact',
-            importance=3,
-            entities=['alpha', 'beta'],
-            source='migrate-back-test',
             updated_at=datetime.now(timezone.utc),
             deleted_at=None)
         insert_insight(db, ins)
@@ -194,10 +191,6 @@ _FIDELITY_ROW = {
     'id': 'rb-fid-1',
     'content': 'field fidelity round-trip subject',
     'category': 'decision',
-    'importance': 4,
-    'entities': ['alpha', 'beta'],
-    'source': 'fidelity-test',
-    'keywords': ['kw-one', 'kw-two'],
     'summary': 'the summary text',
     'linked_at': datetime(2026, 2, 3, 4, 5, 6, tzinfo=timezone.utc),
     'enriched_at': datetime(2026, 3, 4, 5, 6, 7, tzinfo=timezone.utc),
@@ -214,8 +207,6 @@ _FIDELITY_ROW = {
 
 def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
     """Write one insight whose every column carries a distinct value."""
-    import json
-
     from memman.store.db import open_db, set_meta, store_dir
     from memman.store.model import format_timestamp
     r = _FIDELITY_ROW
@@ -224,17 +215,14 @@ def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
     try:
         db.conn.execute(
             'insert into insights ('
-            ' id, content, category, importance, entities, source,'
-            ' keywords, summary,'
+            ' id, content, category, summary,'
             ' linked_at, enriched_at, created_at,'
             ' updated_at, deleted_at, prompt_version,'
             ' embedding_model, queue_uuid, superseded_by,'
             ' author)'
-            ' values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,'
-            ' ?, ?, ?, ?, ?)',
-            (r['id'], r['content'], r['category'], r['importance'],
-             json.dumps(r['entities']), r['source'],
-             json.dumps(r['keywords']), r['summary'],
+            ' values (?, ?, ?, ?, ?, ?, ?,'
+            ' ?, ?, ?, ?, ?, ?, ?)',
+            (r['id'], r['content'], r['category'], r['summary'],
              format_timestamp(r['linked_at']),
              format_timestamp(r['enriched_at']),
              format_timestamp(r['created_at']),
@@ -304,7 +292,7 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
         db = open_db(target)
         try:
             row = db.conn.execute(
-                'select category, importance, summary,'
+                'select category, summary,'
                 ' linked_at, enriched_at, created_at,'
                 ' updated_at, deleted_at, prompt_version,'
                 ' embedding_model, queue_uuid, superseded_by,'
@@ -314,7 +302,7 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
             db.close()
         r = _FIDELITY_ROW
         assert tuple(row) == (
-            r['category'], r['importance'],
+            r['category'],
             r['summary'],
             '2026-02-03T04:05:06Z', '2026-03-04T05:06:07Z',
             '2026-04-05T06:07:08Z', '2026-05-06T07:08:09Z', None,

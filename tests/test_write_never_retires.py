@@ -55,7 +55,6 @@ def test_a_contradicting_write_is_added_and_retires_nothing(
     now = datetime.now(timezone.utc)
     parent = Insight(
         id=str(uuid.uuid4()), content=content, category='fact',
-        importance=3, entities=[], source='test',
         created_at=now, updated_at=now)
 
     res = run_remember(
@@ -83,7 +82,6 @@ def test_an_identical_write_adds_a_second_row(tmp_backend):
     now = datetime.now(timezone.utc)
     parent = Insight(
         id=str(uuid.uuid4()), content=content, category='fact',
-        importance=3, entities=[], source='test',
         created_at=now, updated_at=now)
 
     res = run_remember(

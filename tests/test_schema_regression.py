@@ -18,7 +18,8 @@ from __future__ import annotations
 import re
 
 from memman.migrate import PAYLOAD_VERSION, MigrateInsight, MigrationPayload
-from memman.store.db import _BASELINE_SCHEMA
+from memman.queue import _BASELINE_SCHEMA as _QUEUE_BASELINE_SCHEMA
+from memman.store.db import _BASELINE_SCHEMA, _FTS_STATEMENTS
 from memman.store.postgres import PG_BASELINE_SCHEMA
 
 _MIGRATE_INSIGHT_FIELDS = set(MigrateInsight.__dataclass_fields__.keys())
@@ -132,12 +133,30 @@ def test_insight_baselines_name_no_dropped_column():
     Mutation: an index line left in either baseline, which fails at
         open on a store whose column the DDL dropped, or a column line
         left, which recreates the column on every new store.
-    Oracle: the dropped names searched for in the raw DDL text.
+    Oracle: the dropped names searched for in the raw DDL text, and a
+        column line named `source` matched as a whole word.
     """
     dropped = (
         'content_hash', 'corroboration_count', 'model_id',
-        'access_count', 'last_accessed_at', 'semantic_facts')
+        'access_count', 'last_accessed_at', 'semantic_facts',
+        'importance', 'entities', 'keywords', 'idx_insights_source')
     for name, ddl in (
-            ('sqlite', _BASELINE_SCHEMA), ('postgres', PG_BASELINE_SCHEMA)):
+            ('sqlite', _BASELINE_SCHEMA), ('postgres', PG_BASELINE_SCHEMA),
+            ('sqlite fts', ''.join(_FTS_STATEMENTS))):
         found = [column for column in dropped if column in ddl]
+        found += ['source'] * bool(re.search(r'^\s*source\s', ddl, re.M))
         assert not found, f'{name} baseline still names {found}'
+
+
+def test_the_queue_baseline_names_no_dropped_hint():
+    """Verify the queue DDL keeps `hint_cat` and names no dropped hint.
+
+    Mutation: a hint column left in the queue baseline, which recreates
+        it on every new queue.db.
+    Oracle: the hint names searched for in the raw DDL text.
+    """
+    found = [hint for hint in ('hint_imp', 'hint_source', 'hint_entities')
+             if hint in _QUEUE_BASELINE_SCHEMA]
+
+    assert 'hint_cat' in _QUEUE_BASELINE_SCHEMA
+    assert not found

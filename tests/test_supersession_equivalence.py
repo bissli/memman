@@ -16,13 +16,13 @@ from memman.search.recall import intent_aware_recall
 from tests.conftest import _mock_embed, make_insight, set_created_at
 
 _ROWS = [
-    ('p-1', 'alpha service moved to the kombu broker', ['kombu', 'alpha']),
-    ('p-2', 'alpha service now uses the redis broker', ['redis', 'alpha']),
-    ('q-1', 'beta dashboard reads alpha metrics', ['alpha', 'beta']),
-    ('r-1', 'gamma pipeline runs nightly', ['gamma']),
-    ('t-1', 'alpha deploys ride the tuesday train', ['alpha', 'train']),
-    ('t-2', 'delta cache keys rotate hourly', ['delta']),
-    ('t-3', 'epsilon exports land in the alpha bucket', ['alpha', 'epsilon']),
+    ('p-1', 'alpha service moved to the kombu broker'),
+    ('p-2', 'alpha service now uses the redis broker'),
+    ('q-1', 'beta dashboard reads alpha metrics'),
+    ('r-1', 'gamma pipeline runs nightly'),
+    ('t-1', 'alpha deploys ride the tuesday train'),
+    ('t-2', 'delta cache keys rotate hourly'),
+    ('t-3', 'epsilon exports land in the alpha bucket'),
     ]
 
 
@@ -75,19 +75,16 @@ def _build(backend, *, supersede):
     # Distinct, fixed timestamps: the anchor pool orders on
     # created_at, and SQLite stamps whole seconds, so two stores
     # built seconds apart would tie-break differently.
-    for n, (rid, content, entities) in enumerate(_ROWS):
+    for n, (rid, content) in enumerate(_ROWS):
         backend.nodes.insert(make_insight(
-            id=rid, content=content, entities=entities,
-            prompt_version='pv-1'))
+            id=rid, content=content, prompt_version='pv-1'))
         set_created_at(backend, rid,
                        datetime(2026, 3, 1, tzinfo=timezone.utc)
                        + timedelta(hours=n))
         backend.nodes.update_embedding(
             rid, _mock_embed(embedder, content), 'test-model')
-    backend.nodes.update_enrichment(
-        'p-1', keywords=['kombu'], summary='old broker')
-    backend.nodes.update_enrichment(
-        'q-1', keywords=['beta'], summary='dashboard')
+    backend.nodes.update_enrichment('p-1', summary='old broker')
+    backend.nodes.update_enrichment('q-1', summary='dashboard')
     if supersede:
         assert backend.nodes.supersede('p-1', 'p-2') is True
     else:

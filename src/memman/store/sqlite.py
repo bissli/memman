@@ -82,11 +82,8 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
             f'prefix {id_or_prefix!r} matches {len(rows)} rows')
 
     def query(
-            self, *, keyword: str = '', category: str = '',
-            source: str = '', limit: int = 20) -> list[Insight]:
-        return _node.query_insights(
-            self._db, keyword=keyword, category=category, source=source,
-            limit=limit)
+            self, *, keyword: str = '', limit: int = 20) -> list[Insight]:
+        return _node.query_insights(self._db, keyword=keyword, limit=limit)
 
     def soft_delete(self, id: Id) -> bool:
         return _node.soft_delete_insight(self._db, id)
@@ -104,12 +101,8 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
     def supersession_integrity(self) -> dict[str, list[Id]]:
         return _node.supersession_integrity(self._db)
 
-    def update_entities(self, id: Id, entities: list[str]) -> None:
-        _node.update_entities(self._db, id, entities)
-
-    def update_enrichment(
-            self, id: Id, *, keywords: list[str], summary: str) -> None:
-        _node.update_enrichment(self._db, id, keywords, summary)
+    def update_enrichment(self, id: Id, *, summary: str) -> None:
+        _node.update_enrichment(self._db, id, summary)
 
     def count_active(self) -> int:
         return _node.count_active_insights(self._db)
@@ -150,8 +143,7 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
             superseded_insights=d.get('superseded_insights', 0),
             deleted_insights=d.get('deleted_insights', 0),
             oplog_count=d.get('oplog_count', 0),
-            by_category=d.get('by_category', {}),
-            top_entities=d.get('top_entities', []))
+            by_category=d.get('by_category', {}))
 
     def update_embedding(
             self, id: Id, vec: list[float], model: str) -> None:
@@ -168,7 +160,6 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
         sql = """
 select count(*),
        sum(case when embedding is null then 1 else 0 end),
-       sum(case when keywords is null or keywords = '' then 1 else 0 end),
        sum(case when (summary is null or summary = '')
                  and enriched_at is null
                 then 1 else 0 end)
@@ -178,11 +169,10 @@ where deleted_at is null and superseded_by is null
         row = self._db._query(sql).fetchone()
         if row is None:
             return EnrichmentCoverage()
-        total, miss_emb, miss_kw, miss_sum = row
+        total, miss_emb, miss_sum = row
         return EnrichmentCoverage(
             total_active=int(total or 0),
             missing_embedding=int(miss_emb or 0),
-            missing_keywords=int(miss_kw or 0),
             missing_summary=int(miss_sum or 0))
 
     def embedding_size_distribution(self) -> dict[int, int]:
@@ -337,12 +327,10 @@ class SqliteRecallSession(RecallSession):
 
     db: DB
     _groups: dict[int, tuple[list[Id], Any, Any]] | None = None
-    _meta: dict[Id, tuple[str, str]] | None = None
 
     def close(self) -> None:
         """Drop the matrices so they do not outlive the request."""
         self._groups = None
-        self._meta = None
 
     def _load(self) -> None:
         """Build one embedding matrix per stored width, once.
@@ -357,26 +345,19 @@ class SqliteRecallSession(RecallSession):
           against a query of its own width, which is
           `cosine_similarity`'s own 0.0-on-mismatch rule applied per
           row rather than per store.
-        - One pass reads category and source beside the blob, so the
-          eligibility filter in `vector_anchors` needs no second
-          query and no cache handed in by the pipeline.
         """
         if self._groups is not None:
             return
         sql = """
-select id, category, source, embedding
+select id, embedding
 from insights
 where deleted_at is null and superseded_by is null and embedding is not null
 """
-        rows = [
-            (rid, cat, src, blob)
-            for rid, cat, src, blob in self.db._query(sql)
-            if blob]
-        self._meta = {rid: (cat, src) for rid, cat, src, _b in rows}
+        rows = [(rid, blob) for rid, blob in self.db._query(sql) if blob]
 
         by_width: dict[int, list[tuple[Id, bytes]]] = {}
         malformed = 0
-        for rid, _cat, _src, blob in rows:
+        for rid, blob in rows:
             # A float64 vector is a whole number of 8-byte doubles.
             # np.frombuffer would raise on anything else and take the
             # whole channel down with it.
@@ -471,30 +452,17 @@ where insights_fts match ? and i.deleted_at is null and i.superseded_by is null
         return counts
 
     def vector_anchors(
-            self, query_vec: list[float], *, k: int = 10,
-            category: str = '', source: str = '') -> list[tuple[Id, float]]:
+            self, query_vec: list[float], *,
+            k: int = 10) -> list[tuple[Id, float]]:
         """Return top-k (id, similarity) matches. Cosine in (0, 1].
 
-        Notes
-        -----
-        - `category` / `source` restrict eligibility BEFORE the top-k
-          cut, so a filtered recall still returns k anchors where k
-          exist. Post-filtering the hits would under-fill k.
-        - Ties break on id descending, matching the previous
-          `sort(reverse=True)` over `(sim, id)` pairs.
+        Ties break on id descending.
         """
         row_ids, sims = self._cosines(query_vec)
-        meta = self._meta or {}
-        scored: list[tuple[float, Id]] = []
-        for row in np.nonzero(sims > 0.0)[0]:
-            rid = row_ids[row]
-            if category or source:
-                cat, src = meta.get(rid, ('', ''))
-                if category and cat != category:
-                    continue
-                if source and src != source:
-                    continue
-            scored.append((float(sims[row]), rid))
+        scored = [
+            (float(sims[row]), row_ids[row])
+            for row in np.nonzero(sims > 0.0)[0]
+            ]
         scored.sort(reverse=True)
         return [(rid, sim) for sim, rid in scored[:k]]
 
@@ -872,8 +840,7 @@ class SqliteMigrator(Migrator):
             fingerprint = Fingerprint.from_json(fp_str)
 
             rows = conn.execute("""
-select id, content, category, importance, entities,
-       source, keywords, summary, embedding,
+select id, content, category, summary, embedding,
        linked_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, embedding_model,
        embedding_pending, queue_uuid,
@@ -884,30 +851,26 @@ order by id
             insights: list[MigrateInsight] = []
             pending: list[PendingReembed] = []
             for r in rows:
-                emb = deserialize_vector(r[8]) if r[8] else None
+                emb = deserialize_vector(r[4]) if r[4] else None
                 insights.append(MigrateInsight(
                     id=r[0], content=r[1], category=r[2],
-                    importance=int(r[3]),
-                    entities=json.loads(r[4]) if r[4] else [],
-                    source=r[5],
-                    keywords=json.loads(r[6]) if r[6] else None,
-                    summary=r[7],
+                    summary=r[3],
                     embedding=emb,
                     linked_at=(
-                        parse_timestamp(r[9]) if r[9] else None),
+                        parse_timestamp(r[5]) if r[5] else None),
                     enriched_at=(
-                        parse_timestamp(r[10]) if r[10] else None),
-                    created_at=parse_timestamp(r[11]),
-                    updated_at=parse_timestamp(r[12]),
+                        parse_timestamp(r[6]) if r[6] else None),
+                    created_at=parse_timestamp(r[7]),
+                    updated_at=parse_timestamp(r[8]),
                     deleted_at=(
-                        parse_timestamp(r[13]) if r[13] else None),
-                    prompt_version=r[14],
-                    embedding_model=r[15],
-                    queue_uuid=r[17],
-                    superseded_by=r[18],
-                    author=r[19]))
-                if r[16] is not None:
-                    pv = deserialize_vector(r[16])
+                        parse_timestamp(r[9]) if r[9] else None),
+                    prompt_version=r[10],
+                    embedding_model=r[11],
+                    queue_uuid=r[13],
+                    superseded_by=r[14],
+                    author=r[15]))
+                if r[12] is not None:
+                    pv = deserialize_vector(r[12])
                     if pv is not None:
                         pending.append(PendingReembed(
                             insight_id=r[0], vector=pv))
@@ -989,11 +952,6 @@ order by id
                         if ins.embedding is not None else None)
                     insight_rows.append((
                         ins.id, ins.content, ins.category,
-                        ins.importance,
-                        json.dumps(ins.entities),
-                        ins.source,
-                        json.dumps(ins.keywords)
-                        if ins.keywords is not None else None,
                         ins.summary,
                         emb_blob,
                         format_timestamp(ins.linked_at)
@@ -1012,16 +970,14 @@ order by id
                 if insight_rows:
                     conn.executemany(
                         'insert into insights ('
-                        ' id, content, category, importance,'
-                        ' entities, source,'
-                        ' keywords, summary,'
+                        ' id, content, category, summary,'
                         ' embedding,'
                         ' linked_at, enriched_at, created_at,'
                         ' updated_at, deleted_at, prompt_version,'
                         ' embedding_model,'
                         ' queue_uuid,'
                         ' superseded_by, author)'
-                        ' values (?, ?, ?, ?, ?, ?, ?, ?, ?,'
+                        ' values (?, ?, ?, ?, ?,'
                         ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         insight_rows)
 

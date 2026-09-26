@@ -1,4 +1,4 @@
-"""Enrichment pass over pending rows: keywords, summary, vector."""
+"""Enrichment pass over pending rows: summary, vector."""
 
 import logging
 from collections.abc import Callable
@@ -90,19 +90,15 @@ def link_pending(
         except Exception:
             enrichment = {}
 
-        keywords = enrichment.get('keywords', [])
         new_vec = None
         new_vec_model = ''
-        # Embeds on any enrichment, keywords or none: a row the write
-        # stored without a vector gets one only here.
+        # Embeds on any enrichment: a row the write stored without a
+        # vector gets one only here.
         if (enrichment
                 and embed_client is not None
                 and embed_client.available()):
-            from memman.graph.enrichment import build_enriched_text
-            enriched_text = build_enriched_text(
-                insight.content, keywords)
             try:
-                new_vec = embed_client.embed(enriched_text)
+                new_vec = embed_client.embed(insight.content)
                 new_vec_model = embed_client.model or ''
             except Exception as exc:
                 logger.warning(
@@ -113,9 +109,7 @@ def link_pending(
         with backend.transaction():
             if enrichment:
                 backend.nodes.update_enrichment(
-                    insight.id,
-                    keywords=enrichment.get('keywords', []),
-                    summary=enrichment.get('summary', ''))
+                    insight.id, summary=enrichment.get('summary', ''))
 
             if new_vec is not None:
                 backend.nodes.update_embedding(

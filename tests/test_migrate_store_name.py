@@ -38,11 +38,11 @@ def _seed_store(data_dir, name, dim=512):
              ('{"provider":"voyage","model":"voyage-3-lite","dim":'
               f'{dim}}}')))
         conn.execute(
-            'insert into insights (id, content, category, importance,'
-            ' entities, source, created_at, updated_at)'
-            ' values (?, ?, ?, ?, ?, ?, ?, ?)',
+            'insert into insights (id, content, category,'
+            ' created_at, updated_at)'
+            ' values (?, ?, ?, ?, ?)',
             ('11111111-1111-4111-8111-111111111111', 'seed text',
-             'fact', 3, '[]', 'user', '2026-01-01T00:00:00Z',
+             'fact', '2026-01-01T00:00:00Z',
              '2026-01-01T00:00:00Z'))
         conn.commit()
     finally:

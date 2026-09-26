@@ -55,7 +55,7 @@ During a turn, the agent queues writes and recalls stored memories. A background
 | `memman recall`         | inside  | query embedding and reranking                 | rerank skips a query of two words or fewer            |
 | `memman remember`       | inside  | none                                          | appends to `queue.db`                                 |
 | drain trigger           | outside | none                                          | systemd or launchd timer, or `memman scheduler serve` |
-| enrichment              | outside | one LLM call                                  | adds keywords and a summary                           |
+| enrichment              | outside | one LLM call                                  | adds a summary                                        |
 | embedding               | outside | one embedding call                            | vector for semantic search                            |
 | DB write                | outside | none                                          | makes the memory recallable                           |
 
@@ -121,7 +121,7 @@ memman calls three outside services: an LLM for enrichment, an embedding provide
 | `memman remember`                                            | inside the turn | none                                                                                        | works: it is the only memory command that opens no store                          |
 | every command that opens a store, including `recall --basic` | inside the turn | the key of `MEMMAN_EMBED_PROVIDER` and of the store's own provider (`voyage`, `openrouter`) | the command stops. Voyage reports `MEMMAN_VOYAGE_API_KEY is not set in <dir>/env` |
 | `recall`: rerank the top results                             | inside the turn | `MEMMAN_VOYAGE_API_KEY`                                                                     | recall keeps the order it had before reranking and logs a warning                 |
-| enrichment                                                   | worker          | `MEMMAN_LLM_API_KEY` (blank for a local endpoint)                                           | the memory is stored without keywords or a summary                                |
+| enrichment                                                   | worker          | `MEMMAN_LLM_API_KEY` (blank for a local endpoint)                                           | the memory is stored without a summary                                            |
 | embedding                                                    | worker          | the active embedding provider's key                                                         | the queued write fails, retries, and after 5 attempts stays queued as `failed`    |
 
 - **Opening a store builds two embedding clients.** One is for `MEMMAN_EMBED_PROVIDER`. The other is for the provider the store's fingerprint names. The `voyage` and `openrouter` clients refuse to start without their key. The `openai` client starts without a key, and its first embedding call fails.

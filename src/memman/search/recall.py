@@ -59,8 +59,6 @@ def intent_aware_recall(
         query_vec: list[float] | None,
         limit: int, *,
         rerank: bool = False,
-        category: str = '',
-        source: str = '',
         ) -> dict[str, Any]:
     """Rank the store's current rows against a query, best first.
 
@@ -76,10 +74,6 @@ def intent_aware_recall(
         Result cap; `limit <= 0` means unbounded.
     rerank : bool, default False
         Re-score the shortlist with the cross-encoder (see Notes).
-    category : str, default ''
-        Keep only insights with this exact category ('' = no filter).
-    source : str, default ''
-        Keep only insights with this exact source ('' = no filter).
 
     Returns
     -------
@@ -94,14 +88,10 @@ def intent_aware_recall(
       `nodes.get_all_active()`, so a row the store has deleted or
       superseded cannot be returned and a row it holds as current
       cannot be hidden.
-    - The candidates are exactly the fused anchors. `category` and
-      `source` filter every channel before its cut, so each candidate
-      is returnable.
-    - The keyword and recency channels take `ANCHOR_TOP_K` rows each;
-      with a filter and `limit > 0` that becomes
-      `max(ANCHOR_TOP_K, limit)`. The vector channel takes at least
-      `RERANK_SHORTLIST`, so the reranker sees up to a full shortlist
-      of query neighbors.
+    - The candidates are exactly the fused anchors.
+    - The keyword and recency channels take `ANCHOR_TOP_K` rows each.
+      The vector channel takes at least `RERANK_SHORTLIST`, so the
+      reranker sees up to a full shortlist of query neighbors.
     - `signals['anchor']` is the min-max of the fused RRF score: the
       one term that carries recency into `score`, so a recent row with
       no keyword or vector match still outranks an older one.
@@ -118,18 +108,7 @@ def intent_aware_recall(
     # calling it per event site is a hot-path regression.
     enabled = trace.is_enabled()
 
-    def _matches(ins: Insight) -> bool:
-        return ((not category or ins.category == category)
-                and (not source or ins.source == source))
-
-    # Notes:
-    # - The `limit <= 0` half matters because a non-positive limit
-    #   means unbounded at the slice below.
-    # - A bare max() would silently override the ablation harness's
-    #   anchor_top_k sweep on every unfiltered rerank config.
-    anchor_k = (ANCHOR_TOP_K
-                if (limit <= 0 or not (category or source))
-                else max(ANCHOR_TOP_K, limit))
+    anchor_k = ANCHOR_TOP_K
     vector_k = max(RERANK_SHORTLIST, anchor_k)
 
     all_insights = backend.nodes.get_all_active()
@@ -165,9 +144,7 @@ def intent_aware_recall(
                     f'session.similarities failed, similarity signal'
                     f' unavailable: {exc}')
             try:
-                vector_hits = session.vector_anchors(
-                    query_vec, k=vector_k,
-                    category=category, source=source)
+                vector_hits = session.vector_anchors(query_vec, k=vector_k)
             except Exception as exc:
                 logger.warning(
                     f'session.vector_anchors failed, no vector'
@@ -176,13 +153,10 @@ def intent_aware_recall(
         else:
             vector_hits = []
 
-    anchor_pool = (all_insights if not (category or source)
-                   else [i for i in all_insights if _matches(i)])
-
     anchor_map: dict[str, tuple[Insight, float, str]] = {}
 
     keyword_anchors = keyword_search(
-        anchor_pool, query, anchor_k, keyword_counts)
+        all_insights, query, anchor_k, keyword_counts)
     for rank, (ins, _score) in enumerate(keyword_anchors):
         anchor_map[ins.id] = (
             ins, 1.0 / (RRF_K + rank + 1), 'keyword')
@@ -199,7 +173,7 @@ def intent_aware_recall(
                 anchor_map[vid] = (looked, rrf_score, 'vector')
 
     time_sorted = sorted(
-        anchor_pool, key=lambda i: i.created_at, reverse=True)
+        all_insights, key=lambda i: i.created_at, reverse=True)
     time_limit = min(anchor_k, len(time_sorted))
     for rank in range(time_limit):
         ins = time_sorted[rank]
@@ -229,9 +203,6 @@ def intent_aware_recall(
             f'query={query[:80]}')
 
     if enabled:
-        # vector_hits against vector_k shows whether a selective
-        # --cat/--source filter makes the vector scan return fewer
-        # than k anchors.
         trace.event(
             'recall_anchors',
             anchor_k=anchor_k,
@@ -241,8 +212,7 @@ def intent_aware_recall(
             time_hits=time_limit,
             fused_pool=anchor_count,
             via_counts=dict(Counter(
-                via for _, _, via in anchor_map.values())),
-            filtered=bool(category or source))
+                via for _, _, via in anchor_map.values())))
 
     anchor_scores = [s for _, s, _ in anchor_map.values()]
     anchor_min = min(anchor_scores, default=0.0)
@@ -271,8 +241,7 @@ def intent_aware_recall(
                 },
             })
 
-    results.sort(
-        key=lambda r: (-r['score'], -r['insight'].importance))
+    results.sort(key=lambda r: -r['score'])
 
     reranked = False
     if rerank and len(query.split()) > MIN_RERANK_TOKENS:

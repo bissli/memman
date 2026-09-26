@@ -18,16 +18,12 @@ def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
     """Verify a replace whose target is already superseded says so.
 
     Mutation: reporting the degraded add with no `targets_gone`, so the
-        caller cannot find the row that now holds the topic; or
-        inheriting entities and counts from a row the add did not
-        supersede.
+        caller cannot find the row that now holds the topic.
     Oracle: the result dict for a superseded target (successor named)
         and for a forgotten target (`superseded_by` None), with no
-        `replaced_ids` on either, and the inserted row carrying only its
-        own entities.
+        `replaced_ids` on either.
     """
-    tmp_backend.nodes.insert(make_insight(
-        id='old-1', content='first', entities=['inherited']))
+    tmp_backend.nodes.insert(make_insight(id='old-1', content='first'))
     tmp_backend.nodes.insert(make_insight(id='new-1', content='second'))
     assert tmp_backend.nodes.supersede('old-1', 'new-1') is True
     tmp_backend.nodes.insert(make_insight(id='gone-1', content='gone'))
@@ -36,8 +32,7 @@ def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
     def _replace(new_id, target_id):
         return FactPlan(
             action='replace',
-            fact_insight=make_insight(
-                id=new_id, content='third', entities=['own']),
+            fact_insight=make_insight(id=new_id, content='third'),
             targets=[(target_id, 'replace')], embed_vec=None,
             enrichment={})
 
@@ -45,8 +40,6 @@ def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
     assert late['action'] == 'add'
     assert late['targets_gone'] == [{'id': 'old-1', 'superseded_by': 'new-1'}]
     assert 'replaced_ids' not in late
-    stored = tmp_backend.nodes.get('late-1')
-    assert stored.entities == ['own']
     assert tmp_backend.nodes.get_include_deleted('old-1').superseded_by == 'new-1'
 
     forgotten = _apply_plan(tmp_backend, _replace('late-2', 'gone-1'))

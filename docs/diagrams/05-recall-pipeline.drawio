@@ -8,19 +8,19 @@
           <mxGeometry x="200" y="10" width="700" height="45" as="geometry" />
         </mxCell>
 
-        <mxCell id="s_start" value="&lt;b&gt;memman recall &amp;lt;query&amp;gt;&lt;/b&gt;&lt;br&gt;[--limit N, default 20] [--cat C] [--source S] [--basic]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="s_start" value="&lt;b&gt;memman recall &amp;lt;query&amp;gt;&lt;/b&gt;&lt;br&gt;[--limit N, default 20] [--basic]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="250" y="70" width="400" height="50" as="geometry" />
         </mxCell>
         <mxCell id="s_basic_q" value="--basic?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="380" y="140" width="140" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="s_basic" value="&lt;b&gt;Basic match&lt;/b&gt;&lt;br&gt;Every query word must appear in content, entities, or keywords (SQL LIKE). Ordered by importance, then newest first. No embedding and no score." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="s_basic" value="&lt;b&gt;Basic match&lt;/b&gt;&lt;br&gt;Every query word must appear in content (SQL LIKE). Ordered by newest first. No embedding and no score." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="700" y="130" width="300" height="80" as="geometry" />
         </mxCell>
         <mxCell id="s_emb" value="&lt;b&gt;Embed the query&lt;/b&gt;&lt;br&gt;With the store's embedding model. On failure, recall goes on with the keyword and recency channels." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="250" y="225" width="400" height="55" as="geometry" />
         </mxCell>
-        <mxCell id="s_getall" value="&lt;b&gt;Read every current memory&lt;/b&gt;&lt;br&gt;Each memory not forgotten or superseded. --cat and --source filter every channel." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="s_getall" value="&lt;b&gt;Read every current memory&lt;/b&gt;&lt;br&gt;Each memory not forgotten or superseded." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="250" y="300" width="400" height="50" as="geometry" />
         </mxCell>
 
@@ -36,14 +36,11 @@
         <mxCell id="s_sig3" value="&lt;b&gt;Recency&lt;/b&gt;&lt;br&gt;Newest by created_at. Top 30." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="690" y="405" width="290" height="70" as="geometry" />
         </mxCell>
-        <mxCell id="s_sig_note" value="With --cat or --source and a limit above 30, the keyword and recency channels take limit rows, and the vector channel takes at least as many." style="text;html=1;whiteSpace=wrap;align=left;fontSize=9;fontStyle=2;fillColor=none;strokeColor=none;" vertex="1" parent="1">
-          <mxGeometry x="80" y="482" width="900" height="30" as="geometry" />
-        </mxCell>
 
         <mxCell id="s_rrf" value="&lt;b&gt;RRF fusion&lt;/b&gt; (k=60)&lt;br&gt;fused = Σ 1/(k + r) over the channels that list the memory, r = 1-based rank.&lt;br&gt;Every fused memory is a candidate." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="250" y="545" width="400" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="s_weights" value="&lt;b&gt;Blend&lt;/b&gt;&lt;br&gt;score = w_kw * keyword + w_sim * similarity + w_anchor * anchor&lt;br&gt;Sorted by score. Ties go to the higher importance." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="s_weights" value="&lt;b&gt;Blend&lt;/b&gt;&lt;br&gt;score = w_kw * keyword + w_sim * similarity + w_anchor * anchor&lt;br&gt;Sorted by score." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="250" y="630" width="400" height="60" as="geometry" />
         </mxCell>
         <mxCell id="s_wtable" value="&lt;table style=&quot;font-size:10px; border-collapse:collapse; width:100%&quot;&gt;&lt;tr style=&quot;font-weight:bold;&quot;&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;Term&lt;/td&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;Value&lt;/td&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;Raw weight&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;keyword&lt;/td&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;matched tokens / query tokens&lt;/td&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;0.25&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;similarity&lt;/td&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;positive cosine, else 0&lt;/td&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;0.45&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;anchor&lt;/td&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;min-max of the fused score&lt;/td&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;0.15&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;&lt;div style=&quot;font-size:9px; padding:2px 6px;&quot;&gt;Each weight is the raw weight divided by the sum of the three.&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;overflow=fill;verticalAlign=top;align=left;" vertex="1" parent="1">

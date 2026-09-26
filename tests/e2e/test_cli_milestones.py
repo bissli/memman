@@ -166,7 +166,7 @@ class TestM1CRUD:
         run_cli(
             ['remember',
              f'User prefers Qdrant for vector DB recall-keyword-{unique}',
-             '--cat', 'preference', '--imp', '4'],
+             '--cat', 'preference'],
             home_dir, m1_dir)
         run_cli(['scheduler', 'serve', '--once'], home_dir, m1_dir)
         out = run_cli(['recall', '--basic', f'recall-keyword-{unique}'],
@@ -199,7 +199,7 @@ class TestM1CRUD:
         run_cli(
             ['remember',
              f'User prefers Redis for cache-probe-{unique}',
-             '--cat', 'preference', '--imp', '3'],
+             '--cat', 'preference'],
             home_dir, m1_dir)
         run_cli(['scheduler', 'serve', '--once'], home_dir, m1_dir)
 
@@ -228,7 +228,7 @@ class TestM1CRUD:
         run_cli(
             ['remember',
              f'User prefers PostgreSQL for forget-test-{unique}',
-             '--cat', 'preference', '--imp', '3'],
+             '--cat', 'preference'],
             home_dir, m1_dir)
         run_cli(['scheduler', 'serve', '--once'], home_dir, m1_dir)
         insight_id = find_insight_by_recall(
@@ -252,7 +252,7 @@ class TestM3Search:
         run_cli(
             ['remember',
              f'Chose Qdrant because of Rust performance basic-{unique}',
-             '--cat', 'decision', '--imp', '5'],
+             '--cat', 'decision'],
             home_dir, m3_dir)
         run_cli(['scheduler', 'serve', '--once'], home_dir, m3_dir)
         out = run_cli(['recall', '--basic', f'basic-{unique}'],

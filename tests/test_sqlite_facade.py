@@ -33,7 +33,7 @@ def test_backend_path_exposes_db_path(backend):
 
 def test_node_insert_roundtrip(backend):
     """nodes.insert + nodes.get returns the same content."""
-    ins = Insight(id='abc', content='hello', category='fact', importance=4)
+    ins = Insight(id='abc', content='hello', category='fact')
     backend.nodes.insert(ins)
     fetched = backend.nodes.get('abc')
     assert fetched is not None

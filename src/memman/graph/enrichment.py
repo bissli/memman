@@ -1,10 +1,10 @@
-"""LLM-based insight enrichment: keywords, summary."""
+"""LLM-based insight enrichment: a one-sentence summary."""
 
 import logging
 
 from memman import trace
 from memman.llm import usage as llm_usage
-from memman.llm.shared import complete_parsed, drop_overlong_strings
+from memman.llm.shared import complete_parsed
 from memman.store.model import Insight
 
 logger = logging.getLogger('memman')
@@ -12,20 +12,10 @@ logger = logging.getLogger('memman')
 ENRICHMENT_SYSTEM_PROMPT = (
     'You are a memory graph enrichment engine. Given a memory insight, '
     'extract structured metadata.\n\n'
-    'Return JSON with these fields:\n'
+    'Return JSON with this field:\n'
     '{\n'
-    '  "keywords": ["search keywords that would help find this insight"],\n'
     '  "summary": "one-sentence summary of the core fact or decision"\n'
-    '}\n\n'
-    'Focus on precision -- only include keywords you are confident about '
-    'from the text.')
-
-# Hard cap on the MODEL's own contribution, so an over-eager LLM
-# (e.g. dozens of keywords on a large multi-claim blob) cannot inflate
-# the keyword-enriched embedding. Enforced in post-processing rather
-# than the prompt so prompt_version (and stored-row provenance) stays
-# stable.
-MAX_ENRICH_KEYWORDS = 12
+    '}')
 
 
 def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
@@ -41,17 +31,17 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
     Returns
     -------
     dict
-        Keys `keywords` and `summary`, or `{}` when the LLM call fails.
+        Key `summary`, or `{}` when the LLM call fails.
 
     Notes
     -----
-    - A body that decodes on neither draw returns both keys empty. The
-      outcome is terminal: retrying it would bill the call on every
-      drain of the row's store.
+    - A body that decodes on neither draw returns an empty summary.
+      The outcome is terminal: retrying it would bill the call on
+      every drain of the row's store.
     - Callers stamp `enriched_at` only when a non-empty dict and a
       vector land in the same pass, so `{}` leaves the row to the
-      stranded-row sweep. On a re-enrichment the empty keys replace
-      the keywords and summary the row held.
+      stranded-row sweep. On a re-enrichment the empty summary
+      replaces the one the row held.
     - Pure function -- the caller handles every DB write.
     """
     prompt = f'INSIGHT (id={insight.id[:8]}):\n{insight.content}'
@@ -80,21 +70,14 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
     if parsed is None:
         logger.warning(
             'enrichment body did not decode for %s (len=%d, raw_len=%d)'
-            ' on either draw; returning empty keywords and summary',
+            ' on either draw; returning an empty summary',
             insight.id, len(insight.content), len(raw))
         trace.event(
             'enrich_result',
             insight_id=insight.id,
             outcome='parse_error',
             raw=raw)
-        return {'keywords': [], 'summary': ''}
-
-    keywords = parsed.get('keywords', [])
-    if not isinstance(keywords, list):
-        keywords = []
-    keywords = drop_overlong_strings(
-        [str(k) for k in keywords if k],
-        owner=insight.id)[:MAX_ENRICH_KEYWORDS]
+        return {'summary': ''}
 
     summary = parsed.get('summary', '')
     if not isinstance(summary, str):
@@ -102,37 +85,9 @@ def enrich_with_llm(insight: Insight, llm_client: object) -> dict:
     if summary and len(summary) >= len(insight.content) * 0.85:
         summary = ''
 
-    logger.debug(f'Enriched {insight.id}: {len(keywords)} keywords')
-
-    result = {
-        'keywords': keywords,
-        'summary': summary,
-        }
     trace.event(
         'enrich_result',
         insight_id=insight.id,
         outcome='ok',
-        keyword_count=len(keywords),
         summary=summary)
-    return result
-
-
-def build_enriched_text(content: str, keywords: list[str]) -> str:
-    """Text the store embeds for a row: its content plus its keywords.
-
-    Parameters
-    ----------
-    content : str
-        The row's content.
-    keywords : list[str]
-        Enrichment keywords; empty when enrichment failed or found none.
-
-    Returns
-    -------
-    str
-        `content` alone when `keywords` is empty, else
-        `'<content> [KEYWORDS: k1 k2 ...]'`.
-    """
-    if not keywords:
-        return content
-    return f'{content} [KEYWORDS: {" ".join(keywords)}]'
+    return {'summary': summary}

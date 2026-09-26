@@ -85,9 +85,7 @@ def test_recreate_after_drop_yields_empty_schema(pg_dsn, request):
 
     first = open_postgres_backend(store, pg_dsn)
     try:
-        first.nodes.insert(Insight(
-            id='pre-wipe', content='will be wiped',
-            importance=3, source='user'))
+        first.nodes.insert(Insight(id='pre-wipe', content='will be wiped'))
         first._conn.commit()
         assert first.nodes.get('pre-wipe') is not None
     finally:

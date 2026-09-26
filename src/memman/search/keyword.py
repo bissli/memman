@@ -33,11 +33,8 @@ def tokenize(text: str) -> set[str]:
 
 
 def insight_tokens(ins: Insight) -> set[str]:
-    """Return combined token set from content and entities."""
-    tokens = tokenize(ins.content)
-    for ent in ins.entities:
-        tokens |= tokenize(ent)
-    return tokens
+    """Return the token set of an insight's content."""
+    return tokenize(ins.content)
 
 
 def keyword_search(
@@ -50,9 +47,9 @@ def keyword_search(
     Parameters
     ----------
     insights : list[Insight]
-        Rows to rank. Order matters: an exact tie on
-        `(score, importance)` is resolved in favor of whichever row
-        reached the heap first.
+        Rows to rank. Order matters: an exact tie on `score` at the
+        limit is resolved in favor of whichever row reached the heap
+        first.
     query : str
         Search text, tokenized here to fix the score denominator.
     limit : int
@@ -75,26 +72,22 @@ def keyword_search(
     if not query_tokens:
         return []
 
-    heap_list: list[tuple[float, int, str, Insight]] = []
+    heap_list: list[tuple[float, str, Insight]] = []
     for ins in insights:
         intersection = counts.get(ins.id, 0)
         if intersection == 0:
             continue
         score = intersection / len(query_tokens)
 
-        entry = (score, ins.importance, ins.id, ins)
+        entry = (score, ins.id, ins)
         if limit <= 0 or len(heap_list) < limit:
             heapq.heappush(heap_list, entry)
-        else:
-            top = heap_list[0]
-            if (score > top[0]
-                    or (score == top[0]
-                        and ins.importance > top[1])):
-                heapq.heapreplace(heap_list, entry)
+        elif score > heap_list[0][0]:
+            heapq.heapreplace(heap_list, entry)
 
     result = []
     while heap_list:
-        score, _imp, _id, ins = heapq.heappop(heap_list)
+        score, _id, ins = heapq.heappop(heap_list)
         result.append((ins, score))
     result.reverse()
     return result

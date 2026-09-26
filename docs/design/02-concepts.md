@@ -8,20 +8,17 @@
 
 A memory is one stored claim. The caller sets its text and metadata. The background worker adds the rest.
 
-| Field                 | Set by                                       | Meaning                                                                                                                            |
-| --------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `content`             | the `remember` or `replace` text             | The claim, stored as written. At most 1,000 UTF-8 bytes.                                                                           |
-| `category`            | `--cat`, default `fact`                      | One of the five categories below.                                                                                                  |
-| `importance`          | `--imp`, 1-5, default 3                      | A sort key, stored as passed.                                                                                                      |
-| `entities`            | `--entity`, once per name                    | Names the caller attaches, stored verbatim. At most 50, each at most 200 characters.                                               |
-| `source`              | `--source`, default `user`                   | Source: `user`, `agent`, or a location such as a URL.                                                                              |
-| `author`              | `MEMMAN_AUTHOR`, otherwise the OS login name | Who wrote the memory.                                                                                                              |
-| `id`                  | the worker                                   | A version 4 UUID. Every command that takes an id also accepts an unambiguous prefix.                                               |
-| `keywords`, `summary` | the enrichment model                         | Search aids. The drain and `graph rebuild` embed the keywords with the content. Recall prints the summary in place of the content. |
-| `created_at`          | the worker                                   | When the worker stored the memory.                                                                                                 |
-| `queue_uuid`          | `remember` or `replace`, when queued         | A unique key that prevents retries from creating duplicate memories.                                                               |
+| Field        | Set by                                       | Meaning                                                                              |
+| ------------ | -------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `content`    | the `remember` or `replace` text             | The claim, stored as written. At most 1,000 UTF-8 bytes.                             |
+| `category`   | `--cat`, default `fact`                      | One of the five categories below.                                                    |
+| `author`     | `MEMMAN_AUTHOR`, otherwise the OS login name | Who wrote the memory.                                                                |
+| `id`         | the worker                                   | A version 4 UUID. Every command that takes an id also accepts an unambiguous prefix. |
+| `summary`    | the enrichment model                         | Search aid. Recall prints the summary in place of the content.                       |
+| `created_at` | the worker                                   | When the worker stored the memory.                                                   |
+| `queue_uuid` | `remember` or `replace`, when queued         | A unique key that prevents retries from creating duplicate memories.                 |
 
-`replace` inherits the target's category, importance, source, and entities for each flag it omits. `--entity ''` clears the list.
+`replace` inherits the target's category for each flag it omits.
 
 [USAGE](../USAGE.md#what-remember-and-replace-refuse) lists every rule `remember` and `replace` enforce on the text.
 
@@ -34,8 +31,6 @@ Five categories describe what a memory holds:
 | `fact`       | A fact about a system, tool, or domain               | "The billing API rate limit is 100 req/s"                              |
 | `insight`    | A conclusion drawn from several sources              | "The flaky test fails only when the cache is cold"                     |
 | `context`    | Background: project setup, user role, or environment | "The user maintains the billing service and deploys it with Terraform" |
-
-Importance is a sort key. `recall --basic` orders by importance, then by `created_at`, both descending. Keyword results and ranked recall use importance to break score ties. memman never deletes, keeps, or protects a memory because of its importance ([Lifecycle](04-lifecycle.md)).
 
 ---
 
@@ -60,12 +55,8 @@ insights (
   id                text primary key,     -- UUID4
   content           text not null,
   category          text default 'fact',
-  importance        integer default 3,
-  entities          text default '[]',    -- JSON list
-  source            text default 'user',
-  keywords          text,                 -- JSON list, from enrichment
   summary           text,                 -- from enrichment
-  embedding         blob,                 -- vector of content plus keywords, or content alone
+  embedding         blob,                 -- vector of content
   embedding_pending blob,                 -- target vector during embed swap
   linked_at         text,                 -- set once enrichment was tried
   enriched_at       text,                 -- set when enrichment and a vector were both saved
@@ -79,7 +70,7 @@ insights (
   author            text
 )
 
-insights_fts (content, entities)          -- SQLite only, FTS5
+insights_fts (content)                    -- SQLite only, FTS5
 
 oplog (
   id                integer primary key autoincrement,
@@ -99,7 +90,7 @@ meta (
 
 **Current memories.** A memory is current when `deleted_at is null and superseded_by is null`. Recall and `insights review` read only current memories. `status` and `insights show` also report retired ones. `superseded_by` carries no foreign key. The worker sets the pointer before it inserts the successor. The migrators copy rows in id order, so a predecessor can be inserted before its successor. The `supersession_integrity` check in `memman doctor` is the only check that validates the pointer.
 
-**Keyword index.** On SQLite, `insights_fts` is an FTS5 table (SQLite's full-text search extension) over `content` and `entities`. It holds only the terms. The text stays in `insights`. Triggers keep the index up to date when rows are inserted or deleted or either column changes. It indexes every row, including forgotten and superseded memories. Queries join it with `insights` to return only current rows. Opening a store that lacks the table creates and fills it in one transaction. On Postgres, the `kw_tokens` column plays this role.
+**Keyword index.** On SQLite, `insights_fts` is an FTS5 table (SQLite's full-text search extension) over `content`. It holds only the terms. The text stays in `insights`. Triggers keep the index up to date when rows are inserted or deleted or either column changes. It indexes every row, including forgotten and superseded memories. Queries join it with `insights` to return only current rows. Opening a store that lacks the table creates and fills it in one transaction. On Postgres, the `kw_tokens` column plays this role.
 
 **Model-change markers.** `prompt_version` holds the first 16 hex characters of a SHA-256 hash over the enrichment prompt and `MEMMAN_LLM_MODEL`. A memory whose non-null `prompt_version` differs from the current hash is stale, and `memman graph rebuild --stale-only` re-enriches it. `embedding_model` names the model behind the vector. `memman embed reembed` re-embeds each current memory in every SQLite store whose `embedding_model` or vector length differs from the target. [Pipelines](03-pipelines.md) covers both re-runs.
 
@@ -111,21 +102,20 @@ meta (
 
 **Postgres differences.** The logical layout matches. These columns differ:
 
-| Column                  | SQLite                        | Postgres                                                           |
-| ----------------------- | ----------------------------- | ------------------------------------------------------------------ |
-| timestamps              | ISO 8601 text                 | `timestamptz`                                                      |
-| `entities`, `keywords`  | JSON text                     | `jsonb`                                                            |
-| `oplog.before`, `after` | JSON text                     | `jsonb`                                                            |
-| `embedding`             | BLOB of little-endian float64 | `vector(N)`, where N is the store's embedding dimension            |
-| `embedding_pending`     | in the baseline               | added by `embed swap`, renamed to `embedding` at cutover           |
-| `kw_tokens`             | absent                        | `text[] not null`: the distinct tokens of `content` and `entities` |
-| `oplog.legacy_id`       | absent                        | `bigint unique`: the SQLite oplog id a migration copied            |
-| `worker_runs`           | absent                        | one row per drain that opens the store, with a heartbeat time      |
+| Column                  | SQLite                        | Postgres                                                      |
+| ----------------------- | ----------------------------- | ------------------------------------------------------------- |
+| timestamps              | ISO 8601 text                 | `timestamptz`                                                 |
+| `oplog.before`, `after` | JSON text                     | `jsonb`                                                       |
+| `embedding`             | BLOB of little-endian float64 | `vector(N)`, where N is the store's embedding dimension       |
+| `embedding_pending`     | in the baseline               | added by `embed swap`, renamed to `embedding` at cutover      |
+| `kw_tokens`             | absent                        | `text[] not null`: the distinct tokens of `content`           |
+| `oplog.legacy_id`       | absent                        | `bigint unique`: the SQLite oplog id a migration copied       |
+| `worker_runs`           | absent                        | one row per drain that opens the store, with a heartbeat time |
 
-**Indexes.** Both backends index `category`, `importance`, `created_at`, `deleted_at`, `source`, `queue_uuid`, and `oplog.created_at`. Two composite indexes serve fixed queries:
+**Indexes.** Both backends index `category`, `created_at`, `deleted_at`, `queue_uuid`, and `oplog.created_at`. Two composite indexes serve fixed queries:
 
 - `idx_insights_pending_link` on `(linked_at, created_at)`, limited to current memories with no `linked_at`. The enrichment pass reads pending memories in order from it.
-- `idx_insights_current_listing` on `(deleted_at, superseded_by, importance, created_at)`. `recall --basic` reads its filter and sort order from it.
+- `idx_insights_current_listing` on `(deleted_at, superseded_by, created_at)`. `recall --basic` reads its filter and sort order from it.
 
 Postgres adds a GIN index on `kw_tokens` and an HNSW index on `embedding`, both limited to current memories. Opening a Postgres store for reading and writing builds the HNSW index if it is missing.
 
@@ -134,7 +124,7 @@ Postgres adds a GIN index on `kw_tokens` and an HNSW index on `embedding`, both 
 ```sql
 queue (
   id, store, content,
-  hint_cat, hint_imp, hint_source, hint_entities,
+  hint_cat,
   hint_replaced_id,                       -- replace target, null for remember
   queue_uuid,                             -- unique
   priority, queued_at, claimed_at, worker_pid, attempts,
@@ -281,11 +271,11 @@ Resolution order, highest first:
 --store flag  >  MEMMAN_STORE env  >  <data dir>/active file  >  "default"
 ```
 
-| Mechanism          | Scenario                                                              |
-| ------------------ | --------------------------------------------------------------------- |
-| `--store` flag     | One-off override on a single command or script                        |
-| `MEMMAN_STORE` env | Per-process isolation: two sessions on one host use different stores  |
-| `active` file      | Persistent choice, set with `memman store use work`                   |
-| `"default"`        | Fallback when none of the above is set                                |
+| Mechanism          | Scenario                                                             |
+| ------------------ | -------------------------------------------------------------------- |
+| `--store` flag     | One-off override on a single command or script                       |
+| `MEMMAN_STORE` env | Per-process isolation: two sessions on one host use different stores |
+| `active` file      | Persistent choice, set with `memman store use work`                  |
+| `"default"`        | Fallback when none of the above is set                               |
 
 [USAGE](../USAGE.md#store-management) documents the store commands.

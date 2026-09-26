@@ -18,23 +18,21 @@ from tests.conftest import make_insight
 
 
 class TestInsertAndGetInsight:
-    """Insert with entities and verify round-trip."""
+    """Insert and verify round-trip."""
 
     def test_insert_and_get(self, tmp_db):
-        """Insert insight with entities, retrieve by id, verify fields."""
-        ins = make_insight(
-            id='ins-1',
-            content='Go uses SQLite for storage',
-            importance=3,
-            entities=['Go', 'SQLite'])
+        """Insert insight, retrieve by id, verify content round-trips.
+
+        Mutation: `get_insight_by_id` reading a stale or truncated
+            content column.
+        Oracle: the content string the insight was built with.
+        """
+        ins = make_insight(id='ins-1', content='Go uses SQLite for storage')
         insert_insight(tmp_db, ins)
 
         got = get_insight_by_id(tmp_db, 'ins-1')
         assert got is not None
         assert got.content == ins.content
-        assert got.importance == 3
-        assert len(got.entities) == 2
-        assert got.entities[0] == 'Go'
 
 
 class TestGetInsightByIDNotFound:
@@ -51,7 +49,7 @@ class TestSoftDeleteInsight:
 
     def test_soft_delete(self, tmp_db):
         """Verify not found via get, found via include_deleted."""
-        ins = make_insight(id='del-1', content='to be deleted', importance=2)
+        ins = make_insight(id='del-1', content='to be deleted')
         insert_insight(tmp_db, ins)
 
         soft_delete_insight(tmp_db, 'del-1')
@@ -67,38 +65,19 @@ class TestSoftDeleteInsight:
 
 
 class TestQueryInsightsFilters:
-    """Keyword, category, and importance filters."""
+    """Keyword filter."""
 
     def test_keyword_filter(self, tmp_db):
         """Keyword filter matches content via LIKE."""
         insert_insight(tmp_db, make_insight(
-            id='q-1', content='Go language features',
-            importance=5, category='fact'))
+            id='q-1', content='Go language features', category='fact'))
         insert_insight(tmp_db, make_insight(
-            id='q-2', content='Python web framework',
-            importance=2, category='decision'))
+            id='q-2', content='Python web framework', category='decision'))
         insert_insight(tmp_db, make_insight(
-            id='q-3', content='Go concurrency patterns',
-            importance=4, category='fact'))
+            id='q-3', content='Go concurrency patterns', category='fact'))
 
         results = query_insights(tmp_db, keyword='Go')
         assert len(results) == 2
-
-    def test_category_filter(self, tmp_db):
-        """Category filter matches exact category."""
-        insert_insight(tmp_db, make_insight(
-            id='q-1', content='Go language features',
-            importance=5, category='fact'))
-        insert_insight(tmp_db, make_insight(
-            id='q-2', content='Python web framework',
-            importance=2, category='decision'))
-        insert_insight(tmp_db, make_insight(
-            id='q-3', content='Go concurrency patterns',
-            importance=4, category='fact'))
-
-        results = query_insights(tmp_db, category='decision')
-        assert len(results) == 1
-        assert results[0].id == 'q-2'
 
 
 # --- Edges ---
@@ -356,28 +335,11 @@ class TestInTransactionReturn:
         assert result is None
 
 
-class TestKeywordColumnSearch:
-    """LIKE search covers the keywords enrichment column."""
-
-    def test_keyword_search_matches_keywords_column(self, tmp_db):
-        """LIKE search finds insights via enrichment keywords column."""
-        insight = make_insight(
-            id='ks-1', content='unrelated words only')
-        insert_insight(tmp_db, insight)
-        tmp_db._conn.execute(
-            'UPDATE insights SET keywords = ? WHERE id = ?',
-            ('["targetkw", "otherkw"]', 'ks-1'))
-
-        results = query_insights(tmp_db, keyword='targetkw')
-        assert len(results) == 1
-        assert results[0].id == 'ks-1'
-
-
 class TestEnrichmentSchema:
     """Verify enrichment columns exist in fresh databases."""
 
     def test_new_columns_in_schema(self, tmp_db):
-        """Fresh DB has keywords and summary, and no semantic_facts.
+        """Fresh DB has summary, and no semantic_facts.
 
         Mutation: leaving `semantic_facts` in `_BASELINE_SCHEMA`
             after the enrichment prompt stops populating it, so a
@@ -388,7 +350,6 @@ class TestEnrichmentSchema:
         cols = tmp_db._conn.execute(
             'PRAGMA table_info(insights)').fetchall()
         col_names = {row[1] for row in cols}
-        assert 'keywords' in col_names
         assert 'summary' in col_names
         assert 'semantic_facts' not in col_names
 

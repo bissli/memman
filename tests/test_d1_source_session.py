@@ -1,15 +1,15 @@
-"""D1: one field per job - source, queue_uuid.
+"""D1: idempotency keyed on queue_uuid, and column-list parity.
 
-`source` is provenance stored verbatim; idempotency rides on a uuid4
-minted at enqueue. These tests pin the decomposition end to end
-through the real queue drain.
+Idempotency rides on a uuid4 minted at enqueue, not the queue row's
+integer id. These tests pin that decomposition end to end through the
+real queue drain.
 """
 
 import json
 import sqlite3
 
 from memman.store.db import store_dir
-from tests.conftest import force_drain, invoke, parse_remember
+from tests.conftest import force_drain, invoke
 
 
 def _queue_row(data_dir, queue_id):
@@ -22,11 +22,11 @@ def _queue_row(data_dir, queue_id):
 
 
 def _stored(data_dir, store, where, params):
-    """Rows of (id, source, queue_uuid) from the store."""
+    """Rows of (id, queue_uuid) from the store."""
     db_path = f'{store_dir(data_dir, store)}/memman.db'
     with sqlite3.connect(db_path) as conn:
         return conn.execute(
-            'select id, source, queue_uuid from insights'
+            'select id, queue_uuid from insights'
             f' where {where} and deleted_at is null', params).fetchall()
 
 
@@ -41,80 +41,10 @@ def _requeue(data_dir, queue_id):
         conn.commit()
 
 
-def test_source_round_trips_verbatim(mm_runner):
-    """The default `user` source is stored as `'user'`, not `queue:N`.
-
-    Mutation: restoring the `!= 'user'` mapping at the CLI enqueue.
-    Oracle: default write stores `'user'`; `--source agent` stores
-        `'agent'`.
-    """
-    _, data_dir = mm_runner
-    r1 = invoke(mm_runner, [
-        'remember', 'a default sourced note'])
-    raw1 = json.loads(r1.output)
-    r2 = invoke(mm_runner, [
-        'remember', 'an agent sourced note',
-        '--source', 'agent'])
-    raw2 = json.loads(r2.output)
-    u1 = _queue_row(data_dir, raw1['queue_id'])
-    u2 = _queue_row(data_dir, raw2['queue_id'])
-    assert _stored(
-        data_dir, raw1['store'], 'queue_uuid = ?', (u1,))[0][1] == 'user'
-    assert _stored(
-        data_dir, raw2['store'], 'queue_uuid = ?', (u2,))[0][1] == 'agent'
-
-
-def test_source_defaults_to_user_for_programmatic_enqueue(mm_runner):
-    """A bare `enqueue()` with no hint yields `source = 'user'`.
-
-    Mutation: dropping the `or 'user'` at the drain - a programmatic
-        enqueue (hint_source None) would write NULL into a column the
-        recall filter compares with `=`.
-    Oracle: direct enqueue, drained, stores `'user'`.
-    """
-    from memman.queue import enqueue, queue_db
-    _, data_dir = mm_runner
-    with queue_db(data_dir) as conn:
-        row_id, _ = enqueue(conn, store='default',
-                            content='programmatic enqueue note')
-    force_drain(data_dir)
-    queue_uuid = _queue_row(data_dir, row_id)
-    rows = _stored(data_dir, 'default', 'queue_uuid = ?', (queue_uuid,))
-    assert len(rows) == 1
-    assert rows[0][1] == 'user'
-
-
-def test_replace_inherits_source(mm_runner):
-    """`replace` without `--source` keeps the old insight's source.
-
-    Mutation: dropping the replace-side fix - its own
-        `source_explicit` guard (independent of the remember-side
-        mapping) discarded the inherited source as a None hint, and
-        the drain then fell back to the default.
-    Oracle: the replacement row carries `'agent'` from the original.
-    """
-    _, data_dir = mm_runner
-    r1 = invoke(mm_runner, [
-        'remember', 'original agent note',
-        '--source', 'agent'])
-    old = parse_remember(r1, mm_runner)
-    r2 = invoke(mm_runner, [
-        'replace', old['id'], 'updated agent note'])
-    assert r2.exit_code == 0, r2.output
-    raw2 = json.loads(r2.output)
-    queue_uuid = _queue_row(data_dir, raw2['queue_id'])
-    rows = _stored(data_dir, raw2['store'],
-                   'queue_uuid = ?', (queue_uuid,))
-    assert len(rows) == 1
-    assert rows[0][1] == 'agent'
-
-
 def test_idempotency_keyed_on_queue_uuid(mm_runner):
     """A replay skips; a second write does not.
 
-    Mutation: keying the drain replay check on `source` (the first
-        `user` write would suppress every later default write) or on
-        the integer row id.
+    Mutation: keying the drain replay check on the integer row id.
     Oracle: two separate writes both store; re-queueing the first
         row and re-draining adds nothing.
     """
@@ -135,27 +65,6 @@ def test_idempotency_keyed_on_queue_uuid(mm_runner):
     rows_after = _stored(data_dir, raw1['store'],
                          'queue_uuid in (?, ?)', (u1, u2))
     assert len(rows_after) == 2
-
-
-def test_idempotency_check_runs_for_explicit_source(mm_runner):
-    """The replay check fires even when a source hint is present.
-
-    Mutation: restoring the old `hint_source is None` precondition -
-        a replayed row with an explicit source would store twice.
-    Oracle: re-queueing an `--source agent` row and re-draining
-        leaves exactly one stored insight for its uuid.
-    """
-    _, data_dir = mm_runner
-    r1 = invoke(mm_runner, [
-        'remember', 'explicit source replay note',
-        '--source', 'agent'])
-    raw = json.loads(r1.output)
-    queue_uuid = _queue_row(data_dir, raw['queue_id'])
-    _requeue(data_dir, raw['queue_id'])
-    force_drain(data_dir)
-    rows = _stored(data_dir, raw['store'],
-                   'queue_uuid = ?', (queue_uuid,))
-    assert len(rows) == 1
 
 
 def test_queue_uuid_survives_counter_rewind(mm_runner):

@@ -1,9 +1,4 @@
-"""A `replace` stores the entity list the caller gives it.
-
-- A typed `--entity` list becomes the successor's list exactly, and a
-  typed empty list clears it.
-- An unflagged `--entity` inherits the replaced row's list whole, the
-  rule `--cat`, `--imp` and `--source` follow too.
+"""A `replace` stores its content verbatim and rejects an unknown flag.
 """
 
 from memman.store.db import read_active
@@ -11,77 +6,13 @@ from memman.store.factory import open_backend
 from tests.conftest import invoke, parse_remember
 
 
-def _seed(mm_runner, data_dir, entities):
-    """Store one row carrying `entities` and return its id and store."""
+def _seed(mm_runner, data_dir):
+    """Store one row and return its id and store name."""
     first = invoke(mm_runner, [
         'remember', 'the broker is kombu'])
     old = parse_remember(first, mm_runner)
     name = read_active(data_dir) or 'default'
-    open_backend(name, data_dir).nodes.update_entities(old['id'], entities)
     return old['id'], name
-
-
-def test_a_typed_entity_list_replaces_the_inherited_one(mm_runner):
-    """Verify a typed `--entity` drops the names it did not name.
-
-    Mutation: unioning the predecessor's entity list into the
-        successor on a `replace`, so a typed list can only add and
-        the caller cannot remove a stale name.
-    Oracle: the hand-typed one-name list, against the successor's
-        stored list exactly.
-    """
-    _, data_dir = mm_runner
-    old_id, name = _seed(mm_runner, data_dir, ['kombu', 'celery'])
-
-    result = invoke(mm_runner, [
-        'replace', old_id, 'the broker is rabbit now',
-        '--entity', 'rabbitmq'])
-
-    assert result.exit_code == 0, result.output
-    successor = parse_remember(result, mm_runner)
-    stored = open_backend(name, data_dir).nodes.get(successor['id']).entities
-    assert stored == ['rabbitmq']
-
-
-def test_an_empty_typed_entity_list_clears_the_inherited_one(mm_runner):
-    """Verify `--entity ''` clears rather than silently inheriting.
-
-    Mutation: treating a typed empty list as "not given", which
-        makes the flag indistinguishable from omitting it and leaves
-        the caller no route to empty the list.
-    Oracle: the successor's stored list, which must be empty.
-    """
-    _, data_dir = mm_runner
-    old_id, name = _seed(mm_runner, data_dir, ['kombu', 'celery'])
-
-    result = invoke(mm_runner, [
-        'replace', old_id, 'the broker is gone', '--entity', ''])
-
-    assert result.exit_code == 0, result.output
-    successor = parse_remember(result, mm_runner)
-    stored = open_backend(name, data_dir).nodes.get(successor['id']).entities
-    assert stored == []
-
-
-def test_an_unflagged_replace_still_inherits_every_name(mm_runner):
-    """Verify omitting `--entity` carries the stored list whole.
-
-    Mutation: the CLI queuing an empty entity list when `--entity` is
-        omitted, so an unflagged replace loses every entity the row
-        carried.
-    Oracle: the hand-seeded two-name list, against the successor's
-        stored list exactly.
-    """
-    _, data_dir = mm_runner
-    old_id, name = _seed(mm_runner, data_dir, ['kombu', 'celery'])
-
-    result = invoke(mm_runner, [
-        'replace', old_id, 'the broker is rabbit now'])
-
-    assert result.exit_code == 0, result.output
-    successor = parse_remember(result, mm_runner)
-    stored = open_backend(name, data_dir).nodes.get(successor['id']).entities
-    assert stored == ['kombu', 'celery']
 
 
 def test_replace_offers_no_reconcile_flag(mm_runner):
@@ -93,7 +24,7 @@ def test_replace_offers_no_reconcile_flag(mm_runner):
         option.
     """
     _, data_dir = mm_runner
-    old_id, _name = _seed(mm_runner, data_dir, ['kombu'])
+    old_id, _name = _seed(mm_runner, data_dir)
 
     result = invoke(mm_runner, [
         'replace', old_id, 'the broker is rabbit now', '--reconcile'])
@@ -112,7 +43,7 @@ def test_a_replace_stores_its_content_verbatim(mm_runner):
         stored content.
     """
     _, data_dir = mm_runner
-    old_id, name = _seed(mm_runner, data_dir, ['kombu'])
+    old_id, name = _seed(mm_runner, data_dir)
     text = ('the broker is rabbit now and the cache is redis and the'
             ' queue drains every minute')
 

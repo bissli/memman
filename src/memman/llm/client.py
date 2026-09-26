@@ -25,11 +25,11 @@ from memman.llm.shared import safe_json
 
 logger = logging.getLogger('memman')
 
-# Enrichment emits JSON that scales with input size (the keywords and
-# summary); a small cap truncates large insights mid-JSON and the
-# parse fails, so the client gets a large token budget and, with
-# WORKER_TIMEOUT, a long read timeout. A caller raises the budget for
-# one call through `complete(max_tokens=)`.
+# Enrichment emits JSON that scales with input size (its summary); a
+# small cap truncates large insights mid-JSON and the parse fails, so
+# the client gets a large token budget and, with WORKER_TIMEOUT, a
+# long read timeout. A caller raises the budget for one call through
+# `complete(max_tokens=)`.
 WORKER_MAX_TOKENS = 4096
 
 EMPTY_RETRY_DELAY = 0.1

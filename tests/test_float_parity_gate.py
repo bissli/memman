@@ -77,9 +77,6 @@ def _populate(backend, topic_centers: list[list[float]]) -> None:
                 id=ins_id,
                 content=f'topic {t_idx} insight {k} alpha bravo charlie',
                 category='fact',
-                importance=3,
-                entities=[],
-                source='parity-test',
                 created_at=None,
                 updated_at=None,
                 deleted_at=None)

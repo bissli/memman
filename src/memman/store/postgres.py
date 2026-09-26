@@ -119,10 +119,6 @@ create table if not exists {schema}.insights (
     id          text primary key,
     content     text not null,
     category    text default 'fact',
-    importance  integer default 3,
-    entities    jsonb default '[]'::jsonb,
-    source      text default 'user',
-    keywords    jsonb,
     summary     text,
     embedding   vector({dim}),
     linked_at   timestamptz,
@@ -166,14 +162,10 @@ create table if not exists {schema}.worker_runs (
 
 create index if not exists idx_insights_category_{schema}
     on {schema}.insights(category);
-create index if not exists idx_insights_importance_{schema}
-    on {schema}.insights(importance);
 create index if not exists idx_insights_created_{schema}
     on {schema}.insights(created_at);
 create index if not exists idx_insights_deleted_{schema}
     on {schema}.insights(deleted_at);
-create index if not exists idx_insights_source_{schema}
-    on {schema}.insights(source);
 create index if not exists idx_insights_queue_uuid_{schema}
     on {schema}.insights(queue_uuid);
 create index if not exists idx_insights_pending_link_{schema}
@@ -183,7 +175,7 @@ create index if not exists idx_insights_kw_tokens_{schema}
     on {schema}.insights using gin (kw_tokens)
     where deleted_at is null and superseded_by is null;
 create index if not exists idx_insights_current_listing_{schema}
-    on {schema}.insights(deleted_at, superseded_by, importance, created_at);
+    on {schema}.insights(deleted_at, superseded_by, created_at);
 
 create index if not exists idx_oplog_created_{schema}
     on {schema}.oplog(created_at);
@@ -304,30 +296,21 @@ def _row_to_insight(row: tuple[Any, ...]) -> Insight:
     i.id = row[0]
     i.content = row[1]
     i.category = row[2] or 'fact'
-    i.importance = row[3] if row[3] is not None else 3
-    ents = row[4]
-    if isinstance(ents, list):
-        i.entities = ents
-    elif isinstance(ents, str):
-        i.parse_entities(ents)
-    else:
-        i.entities = []
-    i.source = row[5] or 'user'
-    i.created_at = _datetime_or_none(row[6])
-    i.updated_at = _datetime_or_none(row[7])
-    i.deleted_at = _datetime_or_none(row[8])
+    i.created_at = _datetime_or_none(row[3])
+    i.updated_at = _datetime_or_none(row[4])
+    i.deleted_at = _datetime_or_none(row[5])
+    if len(row) > 6 and row[6]:
+        i.summary = row[6]
+    if len(row) > 7:
+        i.linked_at = _datetime_or_none(row[7])
+    if len(row) > 8:
+        i.enriched_at = _datetime_or_none(row[8])
     if len(row) > 9 and row[9]:
-        i.summary = row[9]
-    if len(row) > 10:
-        i.linked_at = _datetime_or_none(row[10])
-    if len(row) > 11:
-        i.enriched_at = _datetime_or_none(row[11])
-    if len(row) > 12 and row[12]:
-        i.queue_uuid = row[12]
-    if len(row) > 13 and row[13]:
-        i.superseded_by = row[13]
-    if len(row) > 14 and row[14]:
-        i.author = row[14]
+        i.queue_uuid = row[9]
+    if len(row) > 10 and row[10]:
+        i.superseded_by = row[10]
+    if len(row) > 11 and row[11]:
+        i.author = row[11]
     return i
 
 
@@ -335,8 +318,7 @@ def _row_to_insight(row: tuple[Any, ...]) -> Insight:
 # must stay byte-identical to node.py's _INSIGHT_COLUMNS (see
 # test_insight_column_lists_are_identical_across_backends).
 _INSIGHT_COLS = (
-    'id, content, category, importance, entities,'
-    ' source, created_at, updated_at, deleted_at,'
+    'id, content, category, created_at, updated_at, deleted_at,'
     ' summary, linked_at, enriched_at,'
     ' queue_uuid, superseded_by,'
     ' author')
@@ -399,16 +381,14 @@ where attrelid = (%s || '.insights')::regclass
         now = format_timestamp(datetime.now(timezone.utc))
         sql = self._q("""
 insert into {s}.insights
-    (id, content, category, importance, entities,
-     source, created_at, updated_at,
+    (id, content, category, created_at, updated_at,
      prompt_version, embedding_model,
      queue_uuid, kw_tokens, author)
-values (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s)
+values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (
-                ins.id, ins.content, ins.category, ins.importance,
-                ins.entities_json(), ins.source,
+                ins.id, ins.content, ins.category,
                 now, now,
                 ins.prompt_version, ins.embedding_model,
                 ins.queue_uuid,
@@ -460,30 +440,20 @@ where id = %s
             f'prefix {id_or_prefix!r} matches {len(rows)} rows')
 
     def query(
-            self, *, keyword: str = '', category: str = '',
-            source: str = '', limit: int = 20) -> list[Insight]:
+            self, *, keyword: str = '', limit: int = 20) -> list[Insight]:
         conditions = ['deleted_at is null and superseded_by is null']
         args: list[Any] = []
         if keyword:
             for word in keyword.split():
-                conditions.append(
-                    '(content ilike %s or entities::text ilike %s'
-                    ' or keywords::text ilike %s)')
-                pat = f'%{word}%'
-                args.extend([pat, pat, pat])
-        if category:
-            conditions.append('category = %s')
-            args.append(category)
-        if source:
-            conditions.append('source = %s')
-            args.append(source)
+                conditions.append('content ilike %s')
+                args.append(f'%{word}%')
         args.append(limit)
         where_clause = ' and '.join(conditions)
         sql = self._q(f"""
 select {_INSIGHT_COLS}
 from {{s}}.insights
 where {where_clause}
-order by importance desc, created_at desc
+order by created_at desc
 limit %s
 """)
         with self._conn.cursor() as cur:
@@ -561,51 +531,15 @@ select id, superseded_by from {s}.insights where superseded_by is not null
             out['unterminated'] = unterminated_chains(dict(cur.fetchall()))
         return out
 
-    def update_entities(self, id: Id, entities: list[str]) -> None:
-        seen: set[str] = set()
-        deduped: list[str] = []
-        for e in entities:
-            key = e.strip().lower()
-            if key not in seen:
-                seen.add(key)
-                deduped.append(e)
-        # `kw_tokens` covers content AND entities, so an entity edit
-        # that left it alone would keep answering `keyword_counts`
-        # from the pre-edit token set. Content is read back rather
-        # than taken from the caller because both call sites pass
-        # entities only.
-        content_sql = self._q(
-            'select content from {s}.insights where id = %s')
+    def update_enrichment(self, id: Id, *, summary: str) -> None:
         sql = self._q("""
 update {s}.insights
-set entities = %s::jsonb,
-    kw_tokens = %s,
+set summary = %s,
     updated_at = now()
 where id = %s
 """)
         with self._conn.cursor() as cur:
-            cur.execute(content_sql, (id,))
-            row = cur.fetchone()
-            if row is None:
-                return
-            edited = Insight(content=row[0], entities=deduped)
-            cur.execute(sql, (
-                edited.entities_json(),
-                sorted(insight_tokens(edited)),
-                id))
-
-    def update_enrichment(
-            self, id: Id, *, keywords: list[str], summary: str) -> None:
-        import json as _json
-        sql = self._q("""
-update {s}.insights
-set keywords = %s::jsonb,
-    summary = %s,
-    updated_at = now()
-where id = %s
-""")
-        with self._conn.cursor() as cur:
-            cur.execute(sql, (_json.dumps(keywords), summary, id))
+            cur.execute(sql, (summary, id))
 
     def count_active(self) -> int:
         sql = self._q("""
@@ -707,14 +641,6 @@ from {s}.insights
 where deleted_at is null and superseded_by is null
 group by category
 """)
-        ent_sql = self._q("""
-select je, count(distinct i.id) cnt
-from {s}.insights i, jsonb_array_elements_text(i.entities) je
-where i.deleted_at is null and i.superseded_by is null
-group by je
-order by cnt desc
-limit 20
-""")
         with self._conn.cursor() as cur:
             cur.execute(active_sql)
             total = int(cur.fetchone()[0])
@@ -726,19 +652,11 @@ limit 20
             by_category = {r[0]: int(r[1]) for r in cur.fetchall()}
             cur.execute(self._q('select count(*) from {s}.oplog'))
             oplog = int(cur.fetchone()[0])
-            top_entities: list[dict[str, Any]] = []
-            try:
-                cur.execute(ent_sql)
-                for entity, cnt in cur.fetchall():
-                    top_entities.append(
-                        {'entity': entity, 'count': int(cnt)})
-            except Exception as exc:
-                logger.warning(f'top_entities query failed: {exc}')
         return NodeStats(
             total_insights=total, superseded_insights=superseded,
             deleted_insights=deleted,
             oplog_count=oplog,
-            by_category=by_category, top_entities=top_entities)
+            by_category=by_category)
 
     def update_embedding(
             self, id: Id, vec: list[float], model: str) -> None:
@@ -782,11 +700,6 @@ where deleted_at is null and superseded_by is null
 select count(*),
        count(*) filter (where embedding is null),
        count(*) filter (
-           where keywords is null
-              or keywords::text = '[]'
-              or jsonb_typeof(keywords) is null
-       ),
-       count(*) filter (
            where (summary is null or summary = '')
              and enriched_at is null
        )
@@ -801,8 +714,7 @@ where deleted_at is null and superseded_by is null
         return EnrichmentCoverage(
             total_active=int(row[0] or 0),
             missing_embedding=int(row[1] or 0),
-            missing_keywords=int(row[2] or 0),
-            missing_summary=int(row[3] or 0))
+            missing_summary=int(row[2] or 0))
 
     def embedding_size_distribution(self) -> dict[int, int]:
         sql = self._q("""
@@ -1182,13 +1094,12 @@ class PostgresRecallSession(RecallSession):
         self.__exit__(None, None, None)
 
     def vector_anchors(
-            self, query_vec: list[float], *, k: int = 10,
-            category: str = '', source: str = '') -> list[tuple[Id, float]]:
+            self, query_vec: list[float], *,
+            k: int = 10) -> list[tuple[Id, float]]:
         """Return top-k (id, similarity) matches via HNSW.
 
         Similarity is `1 - (embedding <=> :q)` (cosine in (0, 1],
-        higher is better). `category` / `source` filter in SQL before
-        the limit so the top-k cut is taken over eligible rows only.
+        higher is better).
 
         Notes
         -----
@@ -1212,16 +1123,12 @@ class PostgresRecallSession(RecallSession):
 select id, 1 - (embedding <=> %s::vector) as sim
 from {self._schema}.insights
 where deleted_at is null and superseded_by is null and embedding is not null
-  and (%s = '' or category = %s)
-  and (%s = '' or source = %s)
 order by embedding <=> %s::vector
 limit %s
 """
         with self._conn.cursor() as cur:
             cur.execute(f'set hnsw.ef_search = {max(40, 4 * int(k))}')
-            cur.execute(sql, (
-                query_vec, category, category, source, source,
-                query_vec, k))
+            cur.execute(sql, (query_vec, query_vec, k))
             return [
                 (r[0], float(r[1])) for r in cur.fetchall()
                 if r[1] is not None and float(r[1]) > 0.0
@@ -2114,8 +2021,7 @@ class PostgresMigrator(Migrator):
             has_pending = cur.fetchone() is not None
             pending_select = ', embedding_pending' if has_pending else ''
             cur.execute(f"""
-select id, content, category, importance, entities,
-       source, keywords, summary, embedding,
+select id, content, category, summary, embedding,
        linked_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, embedding_model,
        queue_uuid, superseded_by,
@@ -2128,29 +2034,24 @@ order by id
             insights: list[MigrateInsight] = []
             pending: list[PendingReembed] = []
             for r in insight_rows:
-                emb = list(r[8]) if r[8] is not None else None
+                emb = list(r[4]) if r[4] is not None else None
                 insights.append(MigrateInsight(
                     id=r[0], content=r[1], category=r[2],
-                    importance=int(r[3]),
-                    entities=list(r[4]) if r[4] is not None else [],
-                    source=r[5],
-                    keywords=(
-                        list(r[6]) if r[6] is not None else None),
-                    summary=r[7],
+                    summary=r[3],
                     embedding=emb,
-                    linked_at=r[9],
-                    enriched_at=r[10],
-                    created_at=r[11],
-                    updated_at=r[12],
-                    deleted_at=r[13],
-                    prompt_version=r[14],
-                    embedding_model=r[15],
-                    queue_uuid=r[16],
-                    superseded_by=r[17],
-                    author=r[18]))
-                if has_pending and r[19] is not None:
+                    linked_at=r[5],
+                    enriched_at=r[6],
+                    created_at=r[7],
+                    updated_at=r[8],
+                    deleted_at=r[9],
+                    prompt_version=r[10],
+                    embedding_model=r[11],
+                    queue_uuid=r[12],
+                    superseded_by=r[13],
+                    author=r[14]))
+                if has_pending and r[15] is not None:
                     pending.append(PendingReembed(
-                        insight_id=r[0], vector=list(r[19])))
+                        insight_id=r[0], vector=list(r[15])))
 
             cur.execute(f"""
 select coalesce(legacy_id, id) as sqlite_id,
@@ -2228,11 +2129,6 @@ order by sqlite_id
                             if ins.embedding is not None else None)
                         insight_rows.append((
                             ins.id, ins.content, ins.category,
-                            ins.importance,
-                            json.dumps(ins.entities),
-                            ins.source,
-                            json.dumps(ins.keywords)
-                            if ins.keywords is not None else None,
                             ins.summary,
                             emb,
                             ins.linked_at, ins.enriched_at,
@@ -2242,16 +2138,13 @@ order by sqlite_id
                             ins.queue_uuid,
                             [] if ins.deleted_at else sorted(
                                 insight_tokens(Insight(
-                                    content=ins.content,
-                                    entities=list(ins.entities)))),
+                                    content=ins.content))),
                             ins.superseded_by,
                             ins.author))
                     with conn.cursor() as cur:
                         cur.executemany(
                             f'insert into {schema}.insights ('
-                            ' id, content, category, importance,'
-                            ' entities, source,'
-                            ' keywords, summary,'
+                            ' id, content, category, summary,'
                             ' embedding,'
                             ' linked_at, enriched_at, created_at,'
                             ' updated_at, deleted_at,'
@@ -2259,8 +2152,7 @@ order by sqlite_id
                             ' embedding_model,'
                             ' queue_uuid,'
                             ' kw_tokens, superseded_by, author)'
-                            ' values (%s, %s, %s, %s, %s::jsonb,'
-                            ' %s, %s::jsonb, %s,'
+                            ' values (%s, %s, %s, %s,'
                             ' %s, %s, %s, %s, %s, %s, %s, %s,'
                             ' %s, %s, %s, %s)'
                             ' on conflict (id) do nothing',

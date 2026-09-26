@@ -36,17 +36,12 @@ def remember(runner_tuple, content, **flags):
 
     `remember` queues + auto-drains via the CliRunner wrapper, then
     we look up the newly-stored insight by the queue row's
-    `queue_uuid` (since D1, `source` is provenance and defaults to
-    `'user'`) so existing assertions like `data['id']` keep working.
-
-    A flag whose value is a list or tuple repeats, one occurrence per
-    item, which is how `--entity` supplies several names.
+    `queue_uuid` so existing assertions like `data['id']` keep
+    working.
     """
     args = ['remember', content]
     for k, v in flags.items():
-        values = v if isinstance(v, (list, tuple)) else [v]
-        for value in values:
-            args.extend([f'--{k}', str(value)])
+        args.extend([f'--{k}', str(v)])
     result = invoke(runner_tuple, args)
     assert result.exit_code == 0, result.output
     return parse_remember(result, runner_tuple)
@@ -226,14 +221,14 @@ class TestReplaceAtomicity:
         assert any('FastAPI' in c for c in contents(hits_new))
 
     def test_replace_inherits_metadata(self, runner):
-        """Replace without flags inherits cat/imp from original.
+        """Replace without flags inherits category from original.
 
-        Mutation: dropping the inherited category or importance on a
-            flag-less replace, defaulting instead.
+        Mutation: dropping the inherited category on a flag-less
+            replace, defaulting instead.
         Oracle: `insights show` on the replacement id, compared
-            against the original's stored values.
+            against the original's stored value.
         """
-        data = remember(runner, 'chose event sourcing for audit trail', cat='decision', imp='5')
+        data = remember(runner, 'chose event sourcing for audit trail', cat='decision')
         result = invoke(runner, ['replace', data['id'],
                                  'chose CQRS with event sourcing for audit'])
         new = parse_remember(result, runner)
@@ -242,27 +237,25 @@ class TestReplaceAtomicity:
         shown = json.loads(
             invoke(runner, ['insights', 'show', new['id']]).output)
         assert shown['category'] == 'decision'
-        assert shown['importance'] == 5
 
     def test_replace_override_metadata(self, runner):
-        """Replace with explicit flags overrides original metadata.
+        """Replace with an explicit flag overrides the original metadata.
 
-        Mutation: keeping the original category/importance despite an
-            explicit override on the replace command.
+        Mutation: keeping the original category despite an explicit
+            override on the replace command.
         Oracle: `insights show` on the replacement id, compared
-            against the flags passed to `replace`.
+            against the flag passed to `replace`.
         """
-        data = remember(runner, 'Varnish HTTP cache configured with 2GB memory for static assets', cat='fact', imp='2')
+        data = remember(runner, 'Varnish HTTP cache configured with 2GB memory for static assets', cat='fact')
         result = invoke(runner, ['replace', data['id'],
                                  'Switched from Varnish to CloudFront CDN for global edge caching',
-                                 '--cat', 'decision', '--imp', '5'])
+                                 '--cat', 'decision'])
         new = parse_remember(result, runner)
         assert 'id' in new
 
         shown = json.loads(
             invoke(runner, ['insights', 'show', new['id']]).output)
         assert shown['category'] == 'decision'
-        assert shown['importance'] == 5
 
     def test_replace_nonexistent_id_errors(self, runner):
         """Replace with fake ID fails."""
@@ -380,12 +373,6 @@ class TestInputValidation:
         result = invoke(runner, ['remember', 'test', '--cat', 'bogus'])
         assert result.exit_code != 0
 
-    def test_importance_out_of_range_rejected(self, runner):
-        """Importance 0 and 6 are out of range."""
-        for imp in ['0', '6']:
-            result = invoke(runner, ['remember', 'test', '--imp', imp])
-            assert result.exit_code != 0
-
     def test_store_name_invalid_rejected(self, runner):
         """Invalid store names are rejected."""
         for name in ['-bad', 'has space', '.hidden']:
@@ -399,41 +386,12 @@ class TestRanking:
     def test_exact_keyword_match_outranks_partial(self, runner):
         """Exact keyword match ranks above partial overlap."""
         a = remember(runner,
-                     'I tuned Redis cache eviction to allkeys-lru', imp='3')
+                     'I tuned Redis cache eviction to allkeys-lru')
         b = remember(runner,
-                     'I automated Redis deployment with Ansible', imp='3')
+                     'I automated Redis deployment with Ansible')
         hits = search_cmd(runner, 'Redis cache eviction')
         assert hits, 'Expected at least one result'
         assert hits[0]['id'] == a['id']
-
-    def test_importance_breaks_ties(self, runner):
-        """Higher importance ranks first among similar content.
-
-        Mutation: `order by` dropping `importance desc` from the basic
-            query, or comparing on `created_at` alone.
-        Oracle: the two rows' index positions in the returned list.
-        """
-        low = remember(runner,
-                       'I set up Grafana dashboards for API latency monitoring', imp='2')
-        high = remember(runner,
-                        'I set up Grafana dashboards for request throughput monitoring', imp='5')
-        hits = search_cmd(runner, 'Grafana')
-        assert len(hits) >= 2
-        hit_ids = result_ids(hits)
-        high_idx = hit_ids.index(high['id'])
-        low_idx = hit_ids.index(low['id'])
-        assert high_idx < low_idx
-
-    def test_category_filter_restricts_results(self, runner):
-        """Recall --cat returns only matching category."""
-        remember(runner, 'chose Postgres for relational data', cat='decision')
-        remember(runner, 'prefer dark mode for IDEs', cat='preference')
-        remember(runner, 'SQLite is an embedded database', cat='fact')
-        hits = recall_smart(runner, 'database', cat='decision')
-        categories = [h['category'] for h in hits]
-        assert all(c == 'decision' for c in categories), (
-            f'Expected only decision, got {categories}')
-        assert any('postgres' in h['content'].lower() for h in hits)
 
 
 class TestOplogChronology:
@@ -473,21 +431,6 @@ class TestStatusAfterMutations:
         result = invoke(runner, ['status'])
         data = json.loads(result.output)
         assert data['total_insights'] >= 3
-
-
-class TestRecallFindsContentByEntities:
-    """Insights should be findable by their entities, not just content."""
-
-    def test_basic_recall_finds_by_entity(self, runner):
-        """Insight with entity 'Kubernetes' found by recalling 'Kubernetes'.
-
-        Content says 'Kubernetes pod scheduling uses affinity rules and taints for node placement' with
-        no mention of Kubernetes, but the entity field has it.
-        """
-        remember(runner,
-                 'Kubernetes pod scheduling uses affinity rules and taints for node placement', entity='Kubernetes')
-        hits = recall_basic(runner, 'Kubernetes')
-        assert len(hits) > 0
 
 
 class TestMultiWordRecall:
@@ -545,35 +488,6 @@ class TestRecallPrecisionUnderNoise:
         hits = recall_basic(runner, 'alertmanager')
         assert any('alertmanager' in c.lower() for c in contents(hits))
 
-    def test_high_importance_surfaces_above_noise(self, runner):
-        """imp=5 insight ranks first among 20 imp=1 with same keywords."""
-        for i in range(20):
-            remember(runner,
-                     f'Memcached slab allocation class {i} configured for session storage', imp='1')
-        remember(runner,
-                 'Memcached critical production outage caused by thundering herd on cache expiry', imp='5')
-        hits = recall_basic(runner, 'Memcached')
-        assert hits[0]['importance'] == 5, (
-            f'Expected imp=5 first, got imp={hits[0]["importance"]}')
-
-    def test_search_ranks_by_importance(self, runner):
-        """Search (token-based) does rank by importance tiebreak.
-
-        Mutation: `order by` dropping `importance desc` from the basic
-            query, or comparing on `created_at` alone.
-        Oracle: the two rows' index positions in the returned list.
-        """
-        low = remember(runner,
-                       'I deployed Fluentd for log aggregation to Elasticsearch', imp='2')
-        high = remember(runner,
-                        'I deployed Fluentd for log aggregation and shipping', imp='5')
-        hits = search_cmd(runner, 'Fluentd')
-        assert len(hits) >= 2
-        hit_ids = result_ids(hits)
-        high_idx = hit_ids.index(high['id'])
-        low_idx = hit_ids.index(low['id'])
-        assert high_idx < low_idx
-
 
 class TestStoreIsolation:
     """Named stores are airtight - no data leakage."""
@@ -624,12 +538,12 @@ class TestRecallCompleteness:
         to use - they should all find the same insights.
         """
         remember(runner,
-                 'AWS Lambda serverless functions with DynamoDB backend', entity=('Lambda', 'DynamoDB'))
+                 'AWS Lambda serverless functions with DynamoDB backend')
 
         search_hits = search_cmd(runner, 'Lambda')
         basic_hits = recall_basic(runner, 'Lambda')
 
-        assert len(search_hits) > 0, 'Search should find by entity'
+        assert len(search_hits) > 0, 'Search should find by content'
         assert len(basic_hits) > 0, 'Basic recall should also find it'
 
 
@@ -641,7 +555,7 @@ class TestContentReview:
         remember(runner,
                  'Production outage traced to instance i-0c220c2402a5245bc running out of memory causing cascading failure')
         remember(runner,
-                 'Chose SQLite for single-node simplicity and embedded operation', imp='5')
+                 'Chose SQLite for single-node simplicity and embedded operation')
         result = invoke(runner, ['insights', 'review'])
         data = json.loads(result.output)
         assert data['total_flagged'] >= 1

@@ -18,7 +18,6 @@ def _replace_plan(new_id, target_id, **insight_overrides):
     overrides = {
         'id': new_id,
         'content': 'merged content',
-        'importance': 3,
         }
     overrides.update(insight_overrides)
     return FactPlan(

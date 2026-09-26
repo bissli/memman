@@ -32,10 +32,10 @@ memman runs commands during the agent's turn and processes queued writes in a ba
 
 ### Step 1: queue the write during the session
 
-`memman remember [--cat C] [--imp N] [--source S] [--entity E ...] "<text>"` runs these steps in order:
+`memman remember [--cat C] "<text>"` runs these steps in order:
 
 1. Stop if the scheduler is stopped.
-2. Reject text over 1,000 UTF-8 bytes or text containing a line number, an opening author name, a line break, or a leading label. Reject an unknown category, an importance outside 1-5, an empty source, more than 50 entities, or an entity name over 200 characters. [USAGE](../USAGE.md#what-remember-and-replace-refuse) lists each refusal.
+2. Reject text over 1,000 UTF-8 bytes or text containing a line number, an opening author name, a line break, or a leading label. Reject an unknown category. [USAGE](../USAGE.md#what-remember-and-replace-refuse) lists each refusal.
 3. Run the quality check. Regular expressions flag temporary information, such as an AWS instance id, the word "currently", or a dated observation. The warnings return as `quality_warnings` and never block the write.
 4. Add one row to the queue, `<data dir>/queue.db`, with `status='pending'`, the text, the flag values, and a newly generated random UUID in `queue_uuid`. Every store shares this one SQLite file, in WAL mode, whatever backend the store uses.
 5. Print `{action: queued, queue_id, queue_uuid, store, quality_warnings}`.
@@ -45,7 +45,7 @@ memman runs commands during the agent's turn and processes queued writes in a ba
 `memman replace <id> "<text>"` runs the same steps, with three differences:
 
 - It rejects a target that is not current. If the target is superseded, the error names its successor.
-- When `--cat`, `--imp`, `--source` or `--entity` is omitted, the replacement inherits the target's value. `--entity ''` clears the list.
+- When `--cat` is omitted, the replacement inherits the target's value.
 - The queue row carries the target as `hint_replaced_id`, and the output adds `replaced_id`.
 
 ### Step 2: process the write in the background worker
@@ -68,11 +68,11 @@ A drain claims rows one at a time until it has handled 100 (`--limit`), reaches 
 2. **Open the store.** The first row for a store opens it, checks its embedding fingerprint, and builds its embedding client ([chapter 4](04-lifecycle.md)). If the store cannot be opened, the row fails. Before each row the drain checks that the fingerprint has not changed, because a swap that finished mid-drain would make the cached client write vectors of the wrong size.
 3. **Check for an earlier attempt.** When the store holds a memory with the row's `queue_uuid`, the drain marks the row done and stores nothing. A superseded memory counts. A forgotten one does not. This check makes a replay after a crash safe. The UUID identifies the write across retries. Restoring a backup can reset the queue's row ID counter.
 4. **Redirect a replacement.** If an earlier queued replacement has already superseded the target, the new replacement follows the `superseded_by` chain to the current memory and targets it. The result carries `redirected_from`.
-5. **Enrich.** One LLM call returns keywords and a one-sentence summary. A reply with no JSON object gets one more call. memman then drops any keyword over 200 characters (`MAX_ENRICH_STRING_CHARS`), keeps the first 12 (`MAX_ENRICH_KEYWORDS`), and drops a summary at least 85% as long as the content. These limits are defined in code. Changing them leaves the prompt and `prompt_version` unchanged.
-6. **Embed.** The store's embedding model embeds `<content> [KEYWORDS: k1 k2 ...]`, or the content alone when there are no keywords.
+5. **Enrich.** One LLM call returns a one-sentence summary. A reply with no JSON object gets one more call. memman then drops a summary at least 85% as long as the content. This limit is defined in code. Changing it leaves the prompt and `prompt_version` unchanged.
+6. **Embed.** The store's embedding model embeds the content.
 7. **Apply.** One transaction commits the write:
    - For a replacement, supersede the target and write an oplog row `replace` with detail `replaced by <id>`. If the target has been forgotten or superseded by this point, the new memory is stored without replacing it. The oplog records `target-gone` against the new memory and names the target. The result lists the target under `targets_gone`.
-   - Insert the memory with its `prompt_version` and `embedding_model`, store the vector and the entity names, write an oplog row `remember`, set `linked_at`, and store the keywords and summary.
+   - Insert the memory with its `prompt_version` and `embedding_model`, store the vector, write an oplog row `remember`, set `linked_at`, and store the summary.
    - Set `enriched_at` only when both enrichment and the vector were saved.
 8. **Finish.** Mark the row `done`. Any exception in steps 2-7 calls `mark_failed` instead.
 
@@ -80,17 +80,14 @@ A drain claims rows one at a time until it has handled 100 (`--limit`), reaches 
 
 A replacement never edits a memory in place. It supersedes the target and stores one successor. The target keeps its content and records its successor in `superseded_by`. Recall and listings skip it.
 
-| Field                              | Value used                               | Why                                                       |
-| ---------------------------------- | ---------------------------------------- | --------------------------------------------------------- |
-| `content`                          | incoming                                 | the replacement text, stored as written                       |
-| `category`, `importance`, `source` | flag value if supplied, otherwise target | omitted flags inherit the target's metadata               |
-| `entities`                         | flag value if supplied, otherwise target | `--entity ''` clears the list                             |
-| `queue_uuid`, `author`             | incoming                                 | identifies the write that produced the row and its author |
-| `keywords`, `summary`, vector      | fresh                                    | enrichment and embedding use the replacement text         |
-| `created_at`                       | successor's own                          | the successor is a new row                                |
-| `superseded_by` on the target      | the successor's id                       | `insights show --history` and `unsupersede` read the link |
-
-An entity list supplied through flags is limited to 50 entries (`MAX_ROW_ENTITIES`). An inherited list is kept in full.
+| Field                         | Value used                               | Why                                                       |
+| ----------------------------- | ---------------------------------------- | --------------------------------------------------------- |
+| `content`                     | incoming                                 | the replacement text, stored as written                   |
+| `category`                    | flag value if supplied, otherwise target | omitted flag inherits the target's metadata               |
+| `queue_uuid`, `author`        | incoming                                 | identifies the write that produced the row and its author |
+| `summary`, vector             | fresh                                    | enrichment and embedding use the replacement text         |
+| `created_at`                  | successor's own                          | the successor is a new row                                |
+| `superseded_by` on the target | the successor's id                       | `insights show --history` and `unsupersede` read the link |
 
 `memman supersede <predecessor> <successor>` links two memories that both exist. It runs in the turn, in one transaction, with no queue and no model call. Both memories must be current and different. It writes an oplog row `supersede`. One successor can supersede several predecessors.
 
@@ -99,7 +96,7 @@ An entity list supplied through flags is limited to 50 entries (`MAX_ROW_ENTITIE
 Some errors cause the queued write to fail. Others allow it to be stored without complete enrichment or an embedding.
 
 - **The row fails.** A store that fails to open, a missing LLM endpoint or model, a missing embedding credential, a changed fingerprint, or an insert error raises an exception. `mark_failed` records the error. The row then waits 60, 120, 240 and 480 seconds before successive retries. The fifth failed attempt sets `status='failed'`. The failed row stays in the queue, with its text, until `memman scheduler queue retry <id>` returns it to pending.
-- **The memory is stored without complete enrichment or an embedding.** An LLM or embedding call that still fails after the client's retries does not cause the row to fail. The memory is stored without `enriched_at`, and the re-enrichment pass retries it (next section). When neither reply carries a JSON object, enrichment ends for that memory. The memory gets empty keywords and an empty summary. If its vector was saved, it also gets `enriched_at`, so later drains do not repeat the enrichment call.
+- **The memory is stored without complete enrichment or an embedding.** An LLM or embedding call that still fails after the client's retries does not cause the row to fail. The memory is stored without `enriched_at`, and the re-enrichment pass retries it (next section). When neither reply carries a JSON object, enrichment ends for that memory. The memory gets an empty summary. If its vector was saved, it also gets `enriched_at`, so later drains do not repeat the enrichment call.
 
 ### Maintenance after each drain
 
@@ -166,7 +163,7 @@ On an OpenRouter endpoint, `llm/openrouter_models.py` checks the configured mode
 
 `memman install` runs the check at once and prints the result under `[model]`. If a catalog cannot be read, installation prints an error and continues. Each drain runs the check unless `model.state` records a check of the configured model less than 24 hours old (`CHECK_INTERVAL_SECONDS = 86_400`). It writes `{model, checked_at, notice}` to `<data dir>/model.state`. A failed fetch keeps the existing notice and restarts the 24-hour clock. `memman prime` prints the recorded notice if it refers to the configured model. The LLM client never reads a catalog: it sends the configured id through unchanged.
 
-If the configured model becomes unavailable, memories are still stored. The enrichment call fails, so the write is stored without keywords or a summary, and the re-enrichment pass enriches it once a working model is set.
+If the configured model becomes unavailable, memories are still stored. The enrichment call fails, so the write is stored without a summary, and the re-enrichment pass enriches it once a working model is set.
 
 ### Per-stage token accounting
 
@@ -197,30 +194,28 @@ Each `complete` call names its stage: `enrichment`, `probe`, or `harness` for me
 - `author` is `-` when unset. Whitespace inside it becomes `_`.
 - `text` is the summary, or else the first 200 characters of content, with `...` marking shortened text. Line breaks become spaces, so each memory takes one line.
 
-An empty page prints nothing and exits 0. `--limit` defaults to 20. `--cat` and `--source` keep exact matches only. Recall writes one oplog row and nothing else, and it works while the scheduler is stopped.
+An empty page prints nothing and exits 0. `--limit` defaults to 20. Recall writes one oplog row and nothing else, and it works while the scheduler is stopped.
 
 ### `--basic`
 
-`--basic` returns before the steps below and computes no score. Each whitespace-separated query word must appear as a substring of the content, the entities or the keywords. The match ignores letter case (ASCII letters only on SQLite). Rows sort by importance, then newest first. The line omits `score`.
+`--basic` returns before the steps below and computes no score. Each whitespace-separated query word must appear as a substring of the content. The match ignores letter case (ASCII letters only on SQLite). Rows sort newest first. The line omits `score`.
 
-`--cat`, `--source` and `--limit` still apply. `--basic` passes the limit straight to SQL `limit`, so `--basic --limit 0` returns nothing. The scored path treats `--limit 0` as no limit.
+`--limit` still applies. `--basic` passes the limit straight to SQL `limit`, so `--basic --limit 0` returns nothing. The scored path treats `--limit 0` as no limit.
 
 ### Step 1: combine keyword, vector, and recency rankings
 
 The store's embedding model embeds the query once ([chapter 4](04-lifecycle.md)). When the embedding call fails, recall logs a warning and runs the keyword and recency channels only.
 
-Three search methods each rank the current memories. `--cat` and `--source` filter each list before its size limit is applied, so every candidate meets the filters.
+| Channel | Ranks by                                                    | Takes                |
+| ------- | ----------------------------------------------------------- | -------------------- |
+| Keyword | distinct query words the memory holds                       | `anchor_k`           |
+| Vector  | cosine similarity to the query vector, positive values only | `max(100, anchor_k)` |
+| Recency | `created_at`, newest first                                  | `anchor_k`           |
 
-| Channel | Ranks by                                                         | Takes                |
-| ------- | ---------------------------------------------------------------- | -------------------- |
-| Keyword | distinct query words the memory holds, ties broken on importance | `anchor_k`           |
-| Vector  | cosine similarity to the query vector, positive values only      | `max(100, anchor_k)` |
-| Recency | `created_at`, newest first                                       | `anchor_k`           |
-
-- `anchor_k` is `ANCHOR_TOP_K = 30`. With `--cat` or `--source` set and a positive `--limit`, it becomes `max(30, limit)`, so a filtered recall can fill a large page. Unfiltered recall keeps 30.
+- `anchor_k` is `ANCHOR_TOP_K = 30`.
 - The vector channel takes at least `RERANK_SHORTLIST = 100` rows, so the reranker can see a full shortlist of the query's nearest memories.
 
-**Keyword search.** memman lowercases the query, splits it on every character outside `[a-zA-Z0-9]`, and drops stopwords. The count covers the memory's content and entity names. Enrichment keywords do not count. The store counts the matches, so recall never tokenizes every row per query.
+**Keyword search.** memman lowercases the query, splits it on every character outside `[a-zA-Z0-9]`, and drops stopwords. The count covers the memory's content. The store counts the matches, so recall never tokenizes every row per query.
 
 - SQLite runs one FTS5 probe per query word.
 - Postgres stores each memory's word set in `insights.kw_tokens` at write time and counts with one GIN-indexed array intersection.
@@ -257,7 +252,7 @@ The weights come from `_RERANK_WEIGHTS_RAW = (0.25, 0.45, 0.15)` divided by thei
 | `similarity` | 0.45       | 0.529       |
 | `anchor`     | 0.15       | 0.176       |
 
-The `anchor` term is the only one that carries the recency channel into the score, so a recent memory with no keyword or vector match can still rank. Candidates sort by score. Higher importance breaks ties.
+The `anchor` term is the only one that carries the recency channel into the score, so a recent memory with no keyword or vector match can still rank. Candidates sort by score.
 
 ### Step 3: rerank with a cross-encoder
 

@@ -1,10 +1,8 @@
-"""Filtered recall (`--cat`/`--source`) fills to the limit.
+"""Recall channel degradation, and the unfiltered anchor count.
 
-D2: the old CLI over-fetched `limit * 3`, post-filtered in Python and
-truncated, silently under-returning whenever matching rows ranked
-below the unfiltered top `3 * limit`. The fix pushes the predicate
-into the anchor scans and filters after the weighted-sum sort, before
-rerank.
+A failing vector or keyword channel leaves recall to answer from the
+surviving channels, and an unfiltered recall keeps `ANCHOR_TOP_K`
+recency anchors at any limit.
 
 Vector-path tests seed deliberately correlated embeddings via
 `nodes.update_embedding` rather than going through the autouse mock
@@ -22,39 +20,15 @@ from tests.conftest import make_insight, set_created_at
 NOW = datetime.now(timezone.utc)
 
 
-def _seed(backend, count, category, content_fmt, *, days_old=0,
-          prefix=''):
+def _seed(backend, count, category, content_fmt):
     ids = []
     for i in range(count):
-        iid = f'{prefix}{category}-{i}'
+        iid = f'{category}-{i}'
         backend.nodes.insert(make_insight(
             id=iid, category=category, content=content_fmt.format(i=i)))
-        set_created_at(
-            backend, iid,
-            NOW - timedelta(days=days_old, minutes=i))
+        set_created_at(backend, iid, NOW - timedelta(minutes=i))
         ids.append(iid)
     return ids
-
-
-def test_filtered_recall_fills_to_limit(backend):
-    """A category filter returns `limit` rows when enough rows match.
-
-    Mutation: reverting to post-filtering (fetch an unfiltered
-        `limit * 3`, filter, truncate) - the 15 matching rows are old
-        and keyword-dark, so no unfiltered anchor scan surfaces them
-        and the post-filter returns zero.
-    Oracle: exactly `limit` results, every one in the filtered
-        category.
-    """
-    _seed(backend, 45, 'fact', 'alpha topic note {i}')
-    _seed(backend, 15, 'preference', 'quiet other subject {i}',
-          days_old=10)
-    resp = intent_aware_recall(
-        backend, 'alpha topic note', None, 10,
-        category='preference')
-    assert len(resp['results']) == 10
-    assert all(r['insight'].category == 'preference'
-               for r in resp['results'])
 
 
 def test_unfiltered_recall_anchor_k_unchanged(backend):
@@ -75,23 +49,6 @@ def test_unfiltered_recall_anchor_k_unchanged(backend):
     assert resp['meta']['anchor_count'] == ANCHOR_TOP_K
 
 
-def test_filtered_recall_above_anchor_top_k(backend):
-    """`--limit 50` with 60 matching rows returns 50, not ANCHOR_TOP_K.
-
-    Mutation: leaving `anchor_k` at `ANCHOR_TOP_K` under a filter -
-        time anchors then cap the candidate pool at 30 and only 30
-        rows return.
-    Oracle: exactly 50 results from 60 keyword-dark matching rows.
-    """
-    _seed(backend, 60, 'preference', 'quiet other subject {i}')
-    resp = intent_aware_recall(
-        backend, 'zzz unmatched query', None, 50,
-        category='preference')
-    assert len(resp['results']) == 50
-    assert all(r['insight'].category == 'preference'
-               for r in resp['results'])
-
-
 def _vec512(second):
     """Unit vector [1, second, 0, ...]/norm at the snapshot dim (512)."""
     n = math.sqrt(1.0 + second * second)
@@ -99,39 +56,6 @@ def _vec512(second):
     v[0] = 1.0 / n
     v[1] = second / n
     return v
-
-
-def test_session_vector_anchors_filter_before_topk(backend):
-    """`RecallSession.vector_anchors` itself filters before top-k.
-
-    This is the only vector anchor path: eligibility is applied to
-    the candidate rows, never to the returned hits.
-
-    Mutation: dropping the `category`/`source` eligibility filter
-        from `vector_anchors` - the top-35 cut over all 70 vectors
-        then keeps the 30 higher-similarity non-matching rows and
-        only 5 matching vector hits survive.
-    Oracle: all 35 results carry via='hybrid' (time + vector agree
-        on the 35 newest matching rows, whose similarity rank
-        matches their recency rank by construction).
-    """
-    pref_ids = _seed(backend, 40, 'preference', 'quiet other subject {i}')
-    fact_ids = _seed(backend, 30, 'fact', 'plain filler body {i}')
-    for i, iid in enumerate(pref_ids):
-        backend.nodes.update_embedding(
-            iid, _vec512(0.3 + 0.002 * i), 'voyage-3-lite')
-    for iid in fact_ids:
-        backend.nodes.update_embedding(
-            iid, _vec512(0.1), 'voyage-3-lite')
-    qv = [0.0] * 512
-    qv[0] = 1.0
-    resp = intent_aware_recall(
-        backend, 'zzz unmatched query', qv, 35,
-        category='preference')
-    assert len(resp['results']) == 35
-    assert all(r['insight'].category == 'preference'
-               for r in resp['results'])
-    assert all(r['via'] == 'hybrid' for r in resp['results'])
 
 
 def test_recall_survives_a_raising_session_verb(backend, monkeypatch):
@@ -214,34 +138,3 @@ def test_recall_survives_a_failed_keyword_channel(backend, monkeypatch):
     assert degraded['results'], 'time anchors should still answer'
     assert all(r['signals']['keyword'] == 0.0
                for r in degraded['results'])
-
-
-def test_filter_precedes_rerank(backend, monkeypatch):
-    """The cross-encoder shortlist contains only filter-matching rows.
-
-    Filtering after rerank spends the 100-slot cross-encoder window
-    on rows about to be discarded.
-
-    Mutation: moving the result filter below the rerank block.
-    Oracle: a spy rerank client records the shortlist documents; every
-        one must belong to the filtered category and none to the
-        marker category.
-    """
-    seen_docs = []
-
-    class _SpyRerank:
-        def rerank(self, query, docs, top_k=None):
-            seen_docs.extend(docs)
-            return [(i, 1.0 - 0.01 * i) for i in range(len(docs))]
-
-    monkeypatch.setattr(
-        'memman.rerank.get_client', _SpyRerank)
-    _seed(backend, 10, 'preference', 'alpha shared topic pref {i}')
-    _seed(backend, 10, 'fact', 'alpha shared topic gen {i}')
-    resp = intent_aware_recall(
-        backend, 'alpha shared topic', None, 10,
-        rerank=True, category='preference')
-    assert resp['meta']['reranked'] is True
-    assert seen_docs, 'rerank spy never called'
-    assert all('pref' in d for d in seen_docs)
-    assert not any('gen' in d for d in seen_docs)

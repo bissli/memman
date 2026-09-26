@@ -2,8 +2,8 @@
 
 The domain type (Insight) plus DTOs returned by Backend Protocol
 verbs (OpLogEntry, OpLogStats, NodeStats, ProvenanceCount, QueueRow,
-WorkerRun, ReembedRow). Includes the timestamp helper and importance
-helpers used across the package.
+WorkerRun, ReembedRow). Includes the timestamp helper used across the
+package.
 
 Protocol commitment: `Insight.created_at` and `Insight.updated_at`
 carry no `default_factory` -- backends stamp
@@ -12,7 +12,6 @@ a value yields `None`; backends fill them in on insert and reads
 return them populated.
 """
 
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -36,9 +35,6 @@ class Insight:
     id: str = ''
     content: str = ''
     category: str = 'fact'
-    importance: int = 3
-    entities: list[str] = field(default_factory=list)
-    source: str = 'user'
     created_at: datetime | None = None
     updated_at: datetime | None = None
     deleted_at: datetime | None = None
@@ -50,19 +46,6 @@ class Insight:
     queue_uuid: str | None = None
     superseded_by: str | None = None
     author: str | None = None
-
-    def entities_json(self) -> str:
-        """Return entities as a JSON string for storage."""
-        return json.dumps(self.entities, sort_keys=True)
-
-    def parse_entities(self, s: str) -> None:
-        """Parse a JSON string into the entities field."""
-        try:
-            self.entities = json.loads(s)
-        except (json.JSONDecodeError, TypeError):
-            self.entities = []
-        if self.entities is None:
-            self.entities = []
 
 
 @dataclass
@@ -84,42 +67,6 @@ class OpLogEntry:
     after: dict[str, Any] | None = None
 
 
-MAX_ROW_ENTITIES = 50
-
-
-def dedupe_entities(entities: list[str]) -> list[str]:
-    """Fold case and whitespace variants of one entity name into one.
-
-    Parameters
-    ----------
-    entities : list[str]
-        Entity names as the caller typed them or the replaced row
-        carried them.
-
-    Returns
-    -------
-    list[str]
-        The names in input order, each stripped, none empty, one per
-        name compared case-insensitively. The FIRST form of a name
-        decides its casing.
-
-    Notes
-    -----
-    - The stored column, the result JSON and the oplog delta all read
-      this list. Folding in only one of them makes a write report an
-      entity the store does not hold.
-    """
-    seen: set[str] = set()
-    deduped: list[str] = []
-    for entity in entities:
-        name = entity.strip()
-        key = name.lower()
-        if name and key not in seen:
-            seen.add(key)
-            deduped.append(name)
-    return deduped
-
-
 def insight_to_delta_dict(ins: 'Insight') -> dict[str, Any]:
     """Return the content fields of an insight for oplog deltas.
 
@@ -130,9 +77,6 @@ def insight_to_delta_dict(ins: 'Insight') -> dict[str, Any]:
     return {
         'content': ins.content,
         'category': ins.category,
-        'importance': ins.importance,
-        'entities': list(ins.entities or []),
-        'source': ins.source,
         'summary': ins.summary,
         }
 
@@ -199,9 +143,6 @@ def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
         'id': ins.id,
         'content': ins.content,
         'category': ins.category,
-        'importance': ins.importance,
-        'entities': list(ins.entities or []),
-        'source': ins.source,
         'created_at': format_timestamp(ins.created_at),
         'updated_at': format_timestamp(ins.updated_at or ins.created_at),
         }
@@ -248,7 +189,6 @@ class NodeStats:
     deleted_insights: int = 0
     oplog_count: int = 0
     by_category: dict[str, int] = field(default_factory=dict)
-    top_entities: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -265,13 +205,11 @@ class EnrichmentCoverage:
     """Per-field NULL counts for the enrichment columns on `insights`.
 
     `memman doctor` consumes this to report which enrichment fields
-    (embedding, keywords, summary) have unfilled values among active
-    insights.
+    (embedding, summary) have unfilled values among active insights.
     """
 
     total_active: int = 0
     missing_embedding: int = 0
-    missing_keywords: int = 0
     missing_summary: int = 0
 
 

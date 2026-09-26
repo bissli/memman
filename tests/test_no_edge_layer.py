@@ -17,7 +17,7 @@ from click.testing import CliRunner
 from memman.cli import cli
 from memman.doctor import run_all_checks
 from memman.embed.fingerprint import bound_embedder
-from memman.migrate import PAYLOAD_VERSION, MigrateInsight, MigrationPayload
+from memman.migrate import MigrateInsight, MigrationPayload
 from memman.pipeline.remember import run_remember
 from memman.queue import open_queue_db
 from memman.search import recall as recall_mod
@@ -455,19 +455,19 @@ def test_supersession_integrity_reports_three_populations(backend):
 
 
 def test_the_migration_payload_carries_no_edges_or_sessions():
-    """Verify the payload shape and its version move together.
+    """Verify the payload carries no edges and no session id.
 
-    Mutation: dropping the `edges` or `session_id` field without
-        bumping PAYLOAD_VERSION, so an older payload passes the
-        version equality check with a field the target cannot load.
-    Oracle: the dataclass fields, and the version one past 7.
+    Mutation: keeping the `edges` payload field or the `session_id`
+        insight field, which the target store has no table or column
+        to load. tests/test_no_group3_fields.py pins the version the
+        current shape carries.
+    Oracle: the dataclass fields.
     """
     payload_fields = {f.name for f in fields(MigrationPayload)}
     insight_fields = {f.name for f in fields(MigrateInsight)}
 
     assert ('edges' not in payload_fields)
     assert ('session_id' not in insight_fields)
-    assert (PAYLOAD_VERSION == 8)
 
 
 def test_the_wizard_prints_no_surface_note(monkeypatch, tmp_path, capsys):
@@ -493,8 +493,8 @@ def test_a_maintenance_pass_opens_no_untouched_store(mm_runner, monkeypatch):
     Oracle: a spy on `open_backend` across a pass with no touched
         store, over two stores on disk.
     """
-    from memman.store import factory
     from memman.maintenance import run_maintenance
+    from memman.store import factory
     _, data_dir = mm_runner
     _remember(mm_runner, 'first store row')
     assert invoke(mm_runner, [

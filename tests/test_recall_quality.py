@@ -28,8 +28,7 @@ def _insert_fillers(backend, count=8):
     for i in range(count):
         backend.nodes.insert(make_insight(
             id=f'filler-{i}',
-            content=f'unrelated filler content alpha bravo {i}',
-            importance=3))
+            content=f'unrelated filler content alpha bravo {i}'))
 
 
 def _find_result(results, insight_id):
@@ -48,16 +47,13 @@ class TestKeywordSignal:
         _insert_fillers(backend)
         backend.nodes.insert(make_insight(
             id='kw-match',
-            content='Prometheus monitoring Grafana dashboards observability',
-            importance=3))
+            content='Prometheus monitoring Grafana dashboards observability'))
         backend.nodes.insert(make_insight(
             id='kw-miss-1',
-            content='SQLite database schema migration patterns',
-            importance=3))
+            content='SQLite database schema migration patterns'))
         backend.nodes.insert(make_insight(
             id='kw-miss-2',
-            content='Docker container orchestration strategy',
-            importance=3))
+            content='Docker container orchestration strategy'))
 
         result = intent_aware_recall(
             backend,
@@ -93,8 +89,7 @@ class TestRelevanceOrderingSurvivesTheLimit:
         for i, word in enumerate(('rollback', 'schema', 'deploy')):
             backend.nodes.insert(make_insight(
                 id=f'ord-{i}',
-                content=f'database production migration {word}',
-                importance=4))
+                content=f'database production migration {word}'))
             set_created_at(backend, f'ord-{i}',
                            OLD.replace(year=2024 + i))
 
@@ -107,45 +102,6 @@ class TestRelevanceOrderingSurvivesTheLimit:
                 for r in sorted(result['results'],
                                 key=lambda r: -r['score'])]
         assert got == want
-
-
-class TestImportanceTiebreaker:
-    """Higher importance wins when scores are tied."""
-
-    def test_importance_tiebreaker(self, backend):
-        """imp=5 ranks before imp=2 with identical content and timestamps."""
-        from tests.conftest import set_created_at
-        _insert_fillers(backend)
-        ts = OLD
-        backend.nodes.insert(make_insight(
-            id='tie-high',
-            content='logging best practices structured output',
-            importance=5))
-        backend.nodes.insert(make_insight(
-            id='tie-low',
-            content='logging best practices structured output',
-            importance=2))
-        set_created_at(backend, 'tie-high', ts)
-        set_created_at(backend, 'tie-low', ts)
-
-        result = intent_aware_recall(
-            backend,
-            query='logging best practices',
-            query_vec=None,
-            limit=20)
-
-        high = _find_result(result['results'], 'tie-high')
-        low = _find_result(result['results'], 'tie-low')
-        assert high is not None
-        assert low is not None
-
-        high_idx = next(
-            i for i, r in enumerate(result['results'])
-            if r['insight'].id == 'tie-high')
-        low_idx = next(
-            i for i, r in enumerate(result['results'])
-            if r['insight'].id == 'tie-low')
-        assert high_idx < low_idx
 
 
 _N_TOPICS = 20
@@ -185,9 +141,6 @@ def _populate_recall(backend, topic_centers: list) -> None:
                 id=ins_id,
                 content=f'topic {t_idx} insight {k}',
                 category='fact',
-                importance=3,
-                entities=[],
-                source='recall-at-10-test',
                 created_at=None,
                 updated_at=None,
                 deleted_at=None)

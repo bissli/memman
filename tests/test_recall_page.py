@@ -405,7 +405,7 @@ def _stamp(backend, insight_id: str, columns: dict) -> None:
 
 
 def test_live_mappers_read_every_trailing_field(backend):
-    """Verify the row mapper reads each field after `source` from its own column.
+    """Verify the row mapper reads each field from its own column.
 
     Mutation: a stale positional index in `node._scan_insight` or
         `postgres._row_to_insight` after a column drop, which reads a
@@ -416,7 +416,6 @@ def test_live_mappers_read_every_trailing_field(backend):
     """
     backend.nodes.insert(make_insight(
         id='fidelity-row', content='fidelity row', category='decision',
-        importance=4, source='fid-source',
         queue_uuid='queue-f', author='carol'))
     stamps = {
         'summary': 'fidelity summary',
@@ -429,8 +428,7 @@ def test_live_mappers_read_every_trailing_field(backend):
 
     got = backend.nodes.get_include_deleted('fidelity-row')
 
-    assert (got.category, got.importance, got.source) == (
-        'decision', 4, 'fid-source')
+    assert got.category == 'decision'
     assert got.summary == 'fidelity summary'
     assert got.linked_at == stamps['linked_at']
     assert got.enriched_at == stamps['enriched_at']

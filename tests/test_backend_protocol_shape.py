@@ -64,8 +64,7 @@ class TestBackendIntrospection:
         cols = backend.introspect_columns('insights')
         assert isinstance(cols, set)
         expected_core = {
-            'id', 'content', 'category', 'importance',
-            'entities', 'source', 'created_at', 'updated_at',
+            'id', 'content', 'category', 'created_at', 'updated_at',
             'embedding'}
         assert expected_core.issubset(cols), (
             f'missing core columns: {sorted(expected_core - cols)}; '

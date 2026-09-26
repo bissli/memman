@@ -344,10 +344,6 @@ create table if not exists insights (
     id          text primary key,
     content     text not null,
     category    text default 'fact',
-    importance  integer default 3,
-    entities    text default '[]',
-    source      text default 'user',
-    keywords    text,
     summary     text,
     embedding   blob,
     embedding_pending blob,
@@ -364,10 +360,8 @@ create table if not exists insights (
 );
 
 create index if not exists idx_insights_category on insights(category);
-create index if not exists idx_insights_importance on insights(importance);
 create index if not exists idx_insights_created on insights(created_at);
 create index if not exists idx_insights_deleted on insights(deleted_at);
-create index if not exists idx_insights_source on insights(source);
 create index if not exists idx_insights_queue_uuid on insights(queue_uuid);
 -- `created_at` rides along so the scheduler's pending-link scan
 -- takes its order from the index; without it the planner prefers
@@ -380,11 +374,10 @@ create index if not exists idx_insights_pending_link
 -- carrier of `query_insights`' whole predicate and sort order, so
 -- `recall --basic` honors its limit from the index instead of
 -- reading every current row into a temp b-tree. Declared as a
--- plain composite, not a partial index: the planner searches the
--- two leading null columns as equalities, while it passes over a
--- partial `(importance, created_at)` for a temp b-tree.
+-- plain composite, not a partial index, so the planner searches the
+-- two leading null columns as equalities.
 create index if not exists idx_insights_current_listing
-    on insights(deleted_at, superseded_by, importance, created_at);
+    on insights(deleted_at, superseded_by, created_at);
 
 create table if not exists oplog (
     id          integer primary key autoincrement,
@@ -416,34 +409,29 @@ _FTS_STATEMENTS = (
     """
 create virtual table insights_fts using fts5(
     content,
-    entities,
     content='insights',
     content_rowid='rowid',
     tokenize="unicode61 remove_diacritics 0"
 )
 """,
-    # Scoped to the two indexed columns: a bare `after update` would
-    # make `update_enrichment` and every stamp update write to the
-    # index.
+    # Scoped to the indexed column: a bare `after update` would make
+    # `update_enrichment` and every stamp update write to the index.
     """
 create trigger insights_fts_insert after insert on insights begin
-    insert into insights_fts(rowid, content, entities)
-    values (new.rowid, new.content, new.entities);
+    insert into insights_fts(rowid, content) values (new.rowid, new.content);
 end
 """,
     """
 create trigger insights_fts_delete after delete on insights begin
-    insert into insights_fts(insights_fts, rowid, content, entities)
-    values ('delete', old.rowid, old.content, old.entities);
+    insert into insights_fts(insights_fts, rowid, content)
+    values ('delete', old.rowid, old.content);
 end
 """,
     """
-create trigger insights_fts_update
-after update of content, entities on insights begin
-    insert into insights_fts(insights_fts, rowid, content, entities)
-    values ('delete', old.rowid, old.content, old.entities);
-    insert into insights_fts(rowid, content, entities)
-    values (new.rowid, new.content, new.entities);
+create trigger insights_fts_update after update of content on insights begin
+    insert into insights_fts(insights_fts, rowid, content)
+    values ('delete', old.rowid, old.content);
+    insert into insights_fts(rowid, content) values (new.rowid, new.content);
 end
 """,
     "insert into insights_fts(insights_fts) values('rebuild')",

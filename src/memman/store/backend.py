@@ -99,9 +99,8 @@ class NodeStore(Protocol):
         ...
 
     def query(
-            self, *, keyword: str = '', category: str = '',
-            source: str = '', limit: int = 20) -> list[Insight]:
-        """Filtered insight query, ordered by importance/created_at desc.
+            self, *, keyword: str = '', limit: int = 20) -> list[Insight]:
+        """Current insights holding every keyword word, newest first.
         """
         ...
 
@@ -172,13 +171,8 @@ class NodeStore(Protocol):
         """
         ...
 
-    def update_entities(self, id: Id, entities: list[str]) -> None:
-        """Replace the entities array for an insight."""
-        ...
-
-    def update_enrichment(
-            self, id: Id, *, keywords: list[str], summary: str) -> None:
-        """Update LLM enrichment columns for an insight."""
+    def update_enrichment(self, id: Id, *, summary: str) -> None:
+        """Store the enrichment summary for an insight."""
         ...
 
     def count_active(self) -> int:
@@ -256,9 +250,9 @@ class NodeStore(Protocol):
         Returns
         -------
         EnrichmentCoverage
-            `total_active` and `missing_embedding`,
-            `missing_keywords`, `missing_summary` over active rows;
-            doctor's enrichment-coverage check reads it.
+            `total_active`, `missing_embedding` and `missing_summary`
+            over active rows; doctor's enrichment-coverage check reads
+            it.
         """
         ...
 
@@ -431,13 +425,9 @@ class RecallSession(Protocol):
     """
 
     def vector_anchors(
-            self, query_vec: list[float], *, k: int = 10,
-            category: str = '', source: str = '') -> list[tuple[Id, float]]:
+            self, query_vec: list[float], *,
+            k: int = 10) -> list[tuple[Id, float]]:
         """Top-k (id, similarity) anchors. Cosine in (0, 1].
-
-        `category` / `source` restrict eligibility BEFORE the top-k
-        cut ('' = no filter); post-filtering the returned hits would
-        under-fill k, which is the defect this parameter closes.
 
         Notes
         -----
@@ -495,20 +485,17 @@ class RecallSession(Protocol):
 
         Notes
         -----
-        - The count is over the insight's content AND its entities,
-          the same union `keyword.insight_tokens` builds, and it is
-          the numerator of `kw_score`. A backend that returns a
+        - The count is over the insight's content, the same set
+          `keyword.insight_tokens` builds, and it is the numerator of
+          `kw_score`. A backend that returns a
           different count changes `signals.keyword` and the rerank
           blend together.
         - NON-ASCII TEXT DIVERGES ON SQLITE, deliberately and
           measurably. `keyword._WORD_RE` is `[a-zA-Z0-9]+`, so it
           splits a run at any other character; FTS5 `unicode61`
           keeps a whole Unicode word. `naive` spelled with an
-          i-diaeresis is one FTS term and two Python tokens, and an
-          entity reaches the index as its stored JSON text, so
-          `"the\\nservice"` indexes as `nservice` where Python reads
-          `service`. A stored row is affected only if it carries such
-          a run, so the reach is narrow, but it is not nil. Postgres
+          i-diaeresis is one FTS term and two Python tokens. A stored
+          row is affected only if it carries such a run, so the reach is narrow, but it is not nil. Postgres
           matches Python exactly, and by construction rather than by
           agreement: it stores the set `insight_tokens` built at
           write time. Closing the gap means changing

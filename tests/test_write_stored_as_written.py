@@ -42,13 +42,12 @@ def test_drain_stores_a_write_a_model_would_skip(mm_runner, monkeypatch):
 
 
 def test_drain_stores_the_agents_words_and_category(mm_runner, monkeypatch):
-    """Verify the stored row keeps the agent's text, category and entities.
+    """Verify the stored row keeps the agent's text and category.
 
-    Mutation: the model's rewrite stored in place of the input, its
-        category kept over the `--cat` default, or its entities merged
-        into the row.
-    Oracle: the input string byte for byte, the CLI's `fact` default,
-        and an entity the input never names.
+    Mutation: the model's rewrite stored in place of the input, or its
+        category kept over the `--cat` default.
+    Oracle: the input string byte for byte, against the CLI's `fact`
+        default.
     """
     monkeypatch.setattr(
         'memman.llm.client.MemmanLLMClient.complete',
@@ -56,7 +55,6 @@ def test_drain_stores_the_agents_words_and_category(mm_runner, monkeypatch):
             'facts': [{
                 'text': 'Stored rows in goog, and demo-v3 carry bissli.',
                 'category': 'decision',
-                'entities': ['Bogus'],
                 }],
             'skip_reason': None,
             }))
@@ -66,4 +64,3 @@ def test_drain_stores_the_agents_words_and_category(mm_runner, monkeypatch):
 
     assert stored.get('content') == text
     assert stored.get('category') == 'fact'
-    assert 'Bogus' not in stored.get('entities', [])

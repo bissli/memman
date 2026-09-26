@@ -28,9 +28,9 @@ The agent supervises memory from outside the pipeline. It decides what to store,
 | ----------------------------------------- | ------------------ | ----------------------------------------------------------------------------------- |
 | The agent (Claude Code)                   | Judgment           | Decides what to remember, when to recall, and what to replace, supersede, or forget |
 | The memman CLI and background worker      | Deterministic code | Storage, the write queue, keyword search, vector math, rank fusion                  |
-| The enrichment model (`MEMMAN_LLM_MODEL`) | Enrichment         | Adds keywords and a short summary to each memory                                    |
+| The enrichment model (`MEMMAN_LLM_MODEL`) | Enrichment         | Adds a short summary to each memory                                                 |
 
-The agent writes the content of every memory. The enrichment model never rewrites, merges, or categorizes a memory. Its output is stored in separate `keywords` and `summary` columns.
+The agent writes the content of every memory. The enrichment model never rewrites, merges, or categorizes a memory. Its output is stored in the `summary` column.
 
 ![LLM-Supervised Design](../diagrams/01-llm-supervised.drawio.png)
 
@@ -72,19 +72,17 @@ Each write adds one memory. A `replace <id>` write also supersedes the memory it
 
 ### Retrieval and storage decisions
 
-| Aspect               | memman design                                                                                                                                                                            |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| RRF weighting        | Unweighted. The keyword, vector, and recency lists each add `1/(k + rank)`.                                                                                                              |
-| Candidate limit      | No cap on the union of the three lists. Keyword and recency each take `ANCHOR_TOP_K` = 30. Vector takes `RERANK_SHORTLIST` = 100.                                                        |
-| Filtered recall      | With a `--cat` or `--source` filter, a larger `--limit` raises each list to at least `--limit`.                                                                                          |
-| Similarity threshold | The vector list keeps every positive cosine and has no other floor. A fixed cosine means different things under different embedding models, while the sign boundary does not.            |
-| Entities             | No model extracts them. A memory's entities are the `--entity` values the caller passes, stored verbatim with no fixed types. A `replace` without `--entity` inherits the target's list. |
-| Deduplication        | Not automatic. Only `replace <id>` and `supersede` retire a memory. A retried queued write stores one memory, keyed by its `queue_uuid`.                                                 |
-| Recency ranking      | No date parsing. The recency list ranks by `created_at`, whatever the query says.                                                                                                        |
-| Result ordering      | Relevance order at every `--limit`. Nothing re-sorts after the cut, because a date sort would make the results read as a timeline.                                                       |
-| Current facts        | Superseded and forgotten memories leave recall. `replace` stores the caller's text unchanged as the successor.                                                                           |
-| Embeddings           | voyage, openai, openrouter, or ollama (ollama only through `memman config set`). `meta.embed_fingerprint` binds each store to one provider, model, and dimension.                        |
-| Quality review       | `remember` and `replace` return pattern-based `quality_warnings` and store the text anyway. `memman insights review` runs the same patterns on stored memories.                          |
+| Aspect               | memman design                                                                                                                                                                 |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| RRF weighting        | Unweighted. The keyword, vector, and recency lists each add `1/(k + rank)`.                                                                                                   |
+| Candidate limit      | No cap on the union of the three lists. Keyword and recency each take `ANCHOR_TOP_K` = 30. Vector takes `RERANK_SHORTLIST` = 100.                                             |
+| Similarity threshold | The vector list keeps every positive cosine and has no other floor. A fixed cosine means different things under different embedding models, while the sign boundary does not. |
+| Deduplication        | Not automatic. Only `replace <id>` and `supersede` retire a memory. A retried queued write stores one memory, keyed by its `queue_uuid`.                                      |
+| Recency ranking      | No date parsing. The recency list ranks by `created_at`, whatever the query says.                                                                                             |
+| Result ordering      | Relevance order at every `--limit`. Nothing re-sorts after the cut, because a date sort would make the results read as a timeline.                                            |
+| Current facts        | Superseded and forgotten memories leave recall. `replace` stores the caller's text unchanged as the successor.                                                                |
+| Embeddings           | voyage, openai, openrouter, or ollama (ollama only through `memman config set`). `meta.embed_fingerprint` binds each store to one provider, model, and dimension.             |
+| Quality review       | `remember` and `replace` return pattern-based `quality_warnings` and store the text anyway. `memman insights review` runs the same patterns on stored memories.               |
 
 ---
 

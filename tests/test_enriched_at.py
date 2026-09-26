@@ -70,8 +70,7 @@ class TestEnrichedAtOnLinkPending:
             " WHERE id = 'ls-1'")
 
         mock_llm = MagicMock()
-        mock_llm.complete.return_value = (
-            '{"keywords": ["test"], "summary": "test"}')
+        mock_llm.complete.return_value = '{"summary": "test"}'
 
         link_pending(
             tmp_backend, metadata_llm_client=mock_llm,
@@ -100,8 +99,7 @@ class TestEnrichedAtOnLinkPending:
             " WHERE id = 'rf-1'")
 
         mock_llm = MagicMock()
-        mock_llm.complete.return_value = (
-            '{"keywords": ["alpha"], "summary": "s"}')
+        mock_llm.complete.return_value = '{"summary": "s"}'
 
         class _FailingClient:
             available = staticmethod(lambda: True)
@@ -142,8 +140,7 @@ class TestEnrichedAtOnLinkPending:
             " WHERE id = 'sk-1'")
 
         mock_llm = MagicMock()
-        mock_llm.complete.return_value = (
-            '{"keywords": ["alpha"], "summary": "s"}')
+        mock_llm.complete.return_value = '{"summary": "s"}'
         unavailable = MagicMock()
         unavailable.available.return_value = False
 
@@ -157,14 +154,14 @@ class TestEnrichedAtOnLinkPending:
         assert row[0] is not None
         assert row[1] is None
 
-    def test_vectorless_row_gets_a_vector_without_keywords(
+    def test_vectorless_row_gets_a_vector_on_retry(
             self, tmp_db, tmp_backend):
-        """Verify link_pending embeds a vectorless row with no keywords.
+        """Verify link_pending embeds a vectorless row on its retry pass.
 
-        Mutation: embedding only when the enrichment carries keywords,
-            so a row the write stored without a vector, whose retry
-            enrichment finds no keywords, is stamped enriched while
-            still vectorless and is never revisited.
+        Mutation: embedding only on the row's first enrichment pass, so
+            a row the write stored without a vector, retried on a later
+            pass, is stamped enriched while still vectorless and is
+            never revisited.
         Oracle: the store's embedding set, which lacks the row before
             the pass.
         """
@@ -179,7 +176,7 @@ class TestEnrichedAtOnLinkPending:
         assert before[0] is None
 
         mock_llm = MagicMock()
-        mock_llm.complete.return_value = '{"keywords": [], "summary": "s"}'
+        mock_llm.complete.return_value = '{"summary": "s"}'
 
         link_pending(
             tmp_backend, metadata_llm_client=mock_llm,

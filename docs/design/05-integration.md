@@ -36,7 +36,7 @@ Each part has a separate role:
 | `prime`     | SessionStart              | none           | `prime.sh`                | Plain text               | Status line, model notice, compaction reminder, guide |
 | `remind`    | UserPromptSubmit          | none           | `user_prompt.sh`          | Plain text               | Recall reminder                                       |
 | `compact`   | PreCompact + SessionStart | none           | `compact.sh` + `prime.sh` | Flag file                | Recall reminder after compaction                      |
-| `recall`    | PreToolUse                | `Agent\|Task`  | `task_recall.sh`          | `additionalContext` JSON | Recall reminder before delegation                     |
+| `recall`    | PreToolUse                | `Agent\        | Task`                     | `task_recall.sh`         | `additionalContext` JSON                              | Recall reminder before delegation |
 | `exit_plan` | PreToolUse                | `ExitPlanMode` | `exit_plan.sh`            | `additionalContext` JSON | Reminder to store conclusions before execution        |
 
 The Hook column gives the label `memman install` prints. Claude Code passes plain hook stdout to the agent only on SessionStart and UserPromptSubmit, so the two PreToolUse hooks print `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "..."}}` instead.
@@ -106,5 +106,5 @@ The [USAGE guide](../USAGE.md#install-and-uninstall) gives the full flag list.
 `SKILL.md` requires the agent to run `memman remember` directly through Bash in its own turn without delegating to a sub-agent. There are three reasons:
 
 - **The command only queues a write.** It checks the text, appends one row to `queue.db` and returns. It makes no network call and opens no store. Enrichment and embedding run later in the background worker, so there is no slow work to delegate.
-- **The agent holds the context.** It already knows the right `--cat`, `--imp`, `--source` and `--entity`, and what each "this" or "it" refers to. Passing that context to a sub-agent would use more tokens.
+- **The agent holds the context.** It already knows the right `--cat`, and what each "this" or "it" refers to. Passing that context to a sub-agent would use more tokens.
 - **A sub-agent learns nothing more.** `remember` returns `action: queued`, `queue_id`, `queue_uuid`, `store` and `quality_warnings` once the write is queued. The memory reaches recall after the next drain. A sub-agent would get the same reply the agent gets from one Bash call.

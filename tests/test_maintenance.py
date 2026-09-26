@@ -59,8 +59,7 @@ def test_maintenance_reenriches_stranded_row(tmp_db, tmp_backend):
     Mutation: dropping the stranded-row reset from
         `_run_per_store_maintenance`, so a row stamped linked_at but
         not enriched_at never re-enters link_pending.
-    Oracle: the row's keywords and enriched_at after one maintenance
-        pass.
+    Oracle: the row's enriched_at after one maintenance pass.
     """
     from memman.embed.fingerprint import bound_embedder
 
@@ -80,50 +79,12 @@ def test_maintenance_reenriches_stranded_row(tmp_db, tmp_backend):
     ctx.ec = bound_embedder(tmp_backend)
     ctx.llm_client = MagicMock()
     ctx.llm_client.complete.return_value = json.dumps({
-        'keywords': ['web', 'framework'],
         'summary': 'Python web frameworks',
         })
 
     _run_per_store_maintenance(ctx, 'default', time.monotonic() + 60)
 
     row = tmp_db._conn.execute(
-        'SELECT keywords, enriched_at FROM insights WHERE id = ?',
+        'SELECT enriched_at FROM insights WHERE id = ?',
         ('strand-1',)).fetchone()
     assert row[0] is not None
-    assert row[1] is not None
-
-
-def test_stranded_reenrich_keeps_the_stored_entities(
-            tmp_db, tmp_backend, monkeypatch):
-    """A re-enriched stranded row keeps its stored entities as given.
-
-    Mutation: the re-enrich step in `_run_per_store_maintenance`
-        overwriting `insight.entities` with the enrichment's returned
-        list, so a re-draw that names no entities at all empties the
-        row instead of leaving the caller's list untouched.
-    Oracle: the stale name the row was seeded with, against the
-        stored row.
-    """
-    insight = make_insight(
-        id='stranded-1', content='alpha beta',
-        entities=['stale-coinage'])
-    insert_insight(tmp_db, insight)
-    stamp_linked(
-        tmp_db, 'stranded-1',
-        format_timestamp(datetime.now(timezone.utc)))
-
-    import memman.graph.enrichment as enrichment_mod
-    monkeypatch.setattr(
-        enrichment_mod, 'enrich_with_llm',
-        lambda ins, client: {'keywords': [], 'summary': ''})
-
-    ctx = MagicMock()
-    ctx.backend = tmp_backend
-    ctx.llm_client = MagicMock()
-    ctx.ec = MagicMock()
-    ctx.ec.available.return_value = False
-
-    _run_per_store_maintenance(ctx, 'default', time.monotonic() + 60)
-
-    stored = tmp_backend.nodes.get('stranded-1')
-    assert stored.entities == ['stale-coinage']

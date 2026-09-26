@@ -417,18 +417,14 @@ def _mock_llm_complete(self: object, system: str, user: str,
         The canned JSON response for that stage; a `facts` list
         echoing the user body when no marker matches.
     """
-    if 'keyword' in system.lower() and 'enrichment' in system.lower():
+    if 'enrichment' in system.lower() and 'summary' in system.lower():
         return _mock_enrichment(user)
-    return json.dumps({'facts': [{'text': user, 'category': 'fact',
-                                  'entities': []}]})
+    return json.dumps({'facts': [{'text': user, 'category': 'fact'}]})
 
 
 def _mock_enrichment(content: str) -> str:
     """Generate realistic enrichment response."""
-    return json.dumps({
-        'keywords': content.lower().split()[:5],
-        'summary': content[:100],
-        })
+    return json.dumps({'summary': content[:100]})
 
 
 def _mock_rerank(self: object, query: str, documents: list[str],
@@ -694,16 +690,11 @@ def make_insight(**overrides) -> Insight:
         'id': 'test-id',
         'content': 'test content',
         'category': 'fact',
-        'importance': 3,
-        'entities': [],
-        'source': 'test',
         'created_at': now,
         'updated_at': now,
         'deleted_at': None,
         }
     defaults.update(overrides)
-    if 'entities' in overrides and overrides['entities'] is None:
-        defaults['entities'] = []
     return Insight(**defaults)
 
 
@@ -858,9 +849,8 @@ def parse_remember(result, runner_tuple=None):
     Modern `remember`/`replace` returns just `{action: queued,
     queue_id, store}`. The autouse-drain runs the worker after the
     invocation, so the new insight lives in the store DB carrying the
-    queue row's `queue_uuid` (source is provenance and defaults to
-    `'user'` since D1, so it no longer identifies the row). This
-    helper reads the uuid off the queue row - `purge_done` retains
+    queue row's `queue_uuid`. This helper reads the uuid off the
+    queue row - `purge_done` retains
     done rows for 60 s, ample inside a test - and looks the insight
     up by it. Postgres-aware: switches the lookup query when the
     per-store `MEMMAN_BACKEND_<store>=postgres` resolves.
@@ -894,7 +884,7 @@ def parse_remember(result, runner_tuple=None):
         from memman.store.postgres import _store_schema
         schema = _store_schema(name)
         sql = f"""
-select id, content, category, importance
+select id, content, category
 from {schema}.insights
 where queue_uuid = %s
   and deleted_at is null
@@ -909,7 +899,7 @@ order by created_at
         sdir = store_dir(data_dir, name)
         db = open_read_only(sdir)
         sql = """
-select id, content, category, importance
+select id, content, category
 from insights
 where queue_uuid = ?
   and deleted_at is null
@@ -926,7 +916,6 @@ order by created_at
         'id': rows[0][0],
         'content': rows[0][1],
         'category': rows[0][2],
-        'importance': rows[0][3],
         'action': action,
         'replaced_id': raw.get('replaced_id'),
         '_raw': raw,

@@ -28,12 +28,10 @@ and drops clauses.
 Pick the most accurate `--cat`.
 
 ```bash
-memman remember "<thought>" --cat <category> --imp <1-5> --entity e1 --entity e2 --source agent
+memman remember "<thought>" --cat <category>
 ```
 
 Categories: `preference`, `decision`, `fact`, `insight`, `context`.
-`--imp` is a sort key for listings and tie-breaks (1-5, default 3),
-stored as passed. Pass 5 for a fact the whole system rests on.
 
 ### When to write
 
@@ -106,8 +104,8 @@ earlier write restated plus the change.
 The text stores conclusions AND enough context to understand them. It
 is self-contained: every "that", "this", and "it" is dereferenced into
 its actual subject before the call. It never opens with a label such
-as `Fix:` or `Decision:`, nor with who wrote it or when: `author`,
-`created_at`, and `source` carry those.
+as `Fix:` or `Decision:`, nor with who wrote it or when: `author`
+and `created_at` carry those.
 
     BAD   Decision (alice, 2026-09-24): retry cap stays at three.
     GOOD  The retry cap stays at three, since a fourth try only adds load.
@@ -127,15 +125,15 @@ so no confirmation is needed.
 ### The write pipeline
 
 `memman remember` is a fast queue-append. The full pipeline -
-enrichment (keywords, summary), embedding - runs out-of-band in a
+summary enrichment, then embedding - runs out-of-band in a
 worker the scheduler fires on a timer (systemd on Linux, launchd
 on macOS, `memman scheduler serve` in containers).
 A newly stored memory is NOT visible to `memman recall` in the current
 session; it lands for later sessions.
 
-`memman graph rebuild` re-enriches every stored insight through the
-full LLM pipeline - keywords, summary, vector - after a model or
-prompt change or to repair partial enrichment.
+`memman graph rebuild` re-enriches every stored insight - summary
+and vector - after a model or prompt change or to repair partial
+enrichment.
 
 The worker stores the text as written, as one memory; no model
 rewords, splits, or judges it. Every write lands as its own row: a
@@ -148,8 +146,8 @@ To correct a stored insight by ID:
 memman replace <id> "<new content>"
 ```
 
-`replace` inherits the original's category, importance, entities, and
-source unless a flag overrides one.
+`replace` inherits the original's category unless `--cat` overrides
+it.
 
 The original is superseded, not deleted: it keeps its content behind
 `superseded_by`, leaves every recall and listing, and `memman insights
@@ -220,8 +218,8 @@ exactly a page of `n`.
 
 Recall prints rows even when nothing matches: a recency channel seeds
 the newest rows as anchors whatever the query. A scored page with no
-line therefore means the store, or the pool left after `--cat` and
-`--source`, holds no memory, not that the query failed. A full page
+line therefore means the store holds no memory, not that the query
+failed. A full page
 is not evidence that anything on it is relevant. A page that looks
 thin usually is not, because the store nearly always holds something
 bearing on a query drawn from the same work. Judge each row on its
@@ -240,10 +238,8 @@ this repo, since a store can hold rows from several repos; `git log -1
 -- <path>` confirms the path exists here before silence is read as
 currency.
 
-Add `--cat <category>` or `--source <source>` to filter; both are
-exact matches. For a fast token-only lookup that skips vector search
-and reranking (cheap, no network cost; rows come back ranked by
-importance, then recency):
+For a fast token-only lookup that skips vector search and reranking
+(cheap, no network cost; rows come back newest first):
 
 ```bash
 memman recall "<keyword>" --basic
@@ -368,7 +364,3 @@ and exits 0.
 - One thought per `remember` call. The worker stores each call as
   one memory, so a second unrelated subject rides along and goes
   stale with the first; give it its own call.
-- `--source agent` for the agent's own conclusion, a locator (URL,
-  script, dataset pull) for imported material; `user`, the default, is
-  for the user's words. Recall's `--source` filter is an exact match on
-  that string.

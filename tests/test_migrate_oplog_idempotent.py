@@ -35,11 +35,10 @@ def _seed_store_with_oplog(
         vec = [0.5] * 512
         ins_id = str(uuid.uuid4())
         conn.execute(
-            'INSERT INTO insights (id, content, category, importance,'
-            ' entities, source, embedding, created_at,'
-            ' updated_at)'
-            ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            (ins_id, 'oplog test', 'fact', 3, '[]', 'user',
+            'INSERT INTO insights (id, content, category,'
+            ' embedding, created_at, updated_at)'
+            ' VALUES (?, ?, ?, ?, ?, ?)',
+            (ins_id, 'oplog test', 'fact',
              struct.pack(f'<{len(vec)}d', *vec), now, now))
         for i in range(n_oplog):
             cur = conn.execute(

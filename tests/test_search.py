@@ -53,9 +53,9 @@ class TestKeywordSearch:
     def test_keyword_search_ranking(self):
         """Best match ranks first."""
         insights = [
-            Insight(id='1', content='Go language for building CLI tools', importance=3),
-            Insight(id='2', content='SQLite database for Go applications', importance=3),
-            Insight(id='3', content='Python machine learning framework', importance=3),
+            Insight(id='1', content='Go language for building CLI tools'),
+            Insight(id='2', content='SQLite database for Go applications'),
+            Insight(id='3', content='Python machine learning framework'),
             ]
         results = keyword_search(
             insights, 'Go CLI tools', 10, _counts_for(insights, 'Go CLI tools'))
@@ -70,8 +70,7 @@ class TestKeywordSearch:
                  'delta', 'epsilon', 'zeta', 'theta']
         insights = [
             Insight(id=str(i),
-                    content=' '.join(words[:3 + (i % len(words))]),
-                    importance=i + 1)
+                    content=' '.join(words[:3 + (i % len(words))]))
             for i in range(20)
             ]
         results = keyword_search(
@@ -79,33 +78,11 @@ class TestKeywordSearch:
             _counts_for(insights, 'common shared words'))
         assert len(results) <= 5
 
-    def test_keyword_search_importance_tiebreak(self):
-        """Higher importance wins on score tie."""
-        insights = [
-            Insight(id='low', content='Go memory graph', importance=1),
-            Insight(id='high', content='Go memory graph', importance=5),
-            ]
-        results = keyword_search(
-            insights, 'Go memory graph', 10,
-            _counts_for(insights, 'Go memory graph'))
-        assert len(results) >= 2
-        assert results[0][0].id == 'high'
-
     def test_keyword_search_empty_query(self):
         """Empty query returns empty results."""
         insights = [Insight(id='1', content='some content')]
         results = keyword_search(insights, '', 10, {})
         assert len(results) == 0
-
-    def test_keyword_search_entities(self):
-        """Entities contribute to matching."""
-        insights = [
-            Insight(id='1', content='something unrelated',
-                    entities=['SQLite']),
-            ]
-        results = keyword_search(
-            insights, 'SQLite', 10, _counts_for(insights, 'SQLite'))
-        assert len(results) > 0
 
 
 class TestRecallRanking:

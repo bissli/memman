@@ -64,8 +64,7 @@ def _seed(backend, n: int) -> list[str]:
         for i in range(n):
             rid = f'seed{i:04d}'
             ids.append(rid)
-            backend.nodes.insert(
-                Insight(id=rid, content=f'content {i}', importance=3))
+            backend.nodes.insert(Insight(id=rid, content=f'content {i}'))
             backend.nodes.update_embedding(
                 rid, _pg_vec(i), 'voyage-3-lite')
     return ids

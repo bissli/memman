@@ -6,18 +6,6 @@ from memman.store.model import VALID_CATEGORIES, Insight, format_timestamp
 from memman.store.model import parse_timestamp
 
 
-def test_parse_entities_null():
-    """JSON 'null' produces empty list, not None.
-
-    Real branch: `parse_entities` has an explicit `if entities is None`
-    fallback after json.loads. Removing that line leaks a `None`-typed
-    `.entities` to downstream `.append`/iteration which crashes.
-    """
-    ins = Insight()
-    ins.parse_entities('null')
-    assert ins.entities == []
-
-
 def test_valid_categories():
     """The five categories are accepted; `general` and unknowns are not.
 
@@ -31,17 +19,13 @@ def test_valid_categories():
 
 
 def test_semantic_default_values():
-    """Pin semantically-meaningful dataclass defaults.
-
-    These two are real downstream-consumer contracts: changing either
-    of them silently shifts LLM-output fallbacks.
+    """Pin the semantically-meaningful `category` dataclass default.
 
     Mutation: the `general` literal returning as the `Insight` default.
-    Oracle: the dataclass defaults.
+    Oracle: the dataclass default.
     """
     ins = Insight()
     assert ins.category == 'fact'
-    assert ins.importance == 3
 
 
 def test_format_timestamp():

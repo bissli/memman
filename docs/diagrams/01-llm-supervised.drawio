@@ -4,7 +4,7 @@
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="title" value="&lt;b&gt;LLM-Supervised Design&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;The agent makes the judgment calls. memman code does the deterministic work. One enrichment model adds keywords and a summary to each write.&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+        <mxCell id="title" value="&lt;b&gt;LLM-Supervised Design&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;The agent makes the judgment calls. memman code does the deterministic work. One enrichment model adds a summary to each write.&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;strokeColor=none;fillColor=none;" vertex="1" parent="1">
           <mxGeometry x="100" y="10" width="1130" height="45" as="geometry" />
         </mxCell>
 
@@ -17,7 +17,7 @@
         <mxCell id="l1" value="&lt;b&gt;What to store&lt;/b&gt;&lt;br&gt;Preferences, decisions, corrections, conclusions, and context" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="50" y="145" width="320" height="46" as="geometry" />
         </mxCell>
-        <mxCell id="l2" value="&lt;b&gt;Writing the memory&lt;/b&gt;&lt;br&gt;One self-contained thought per call, with category, importance, and entities" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="l2" value="&lt;b&gt;Writing the memory&lt;/b&gt;&lt;br&gt;One self-contained thought per call, with category" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="50" y="199" width="320" height="46" as="geometry" />
         </mxCell>
         <mxCell id="l3" value="&lt;b&gt;Writing the query&lt;/b&gt;&lt;br&gt;Focused keywords drawn from the conversation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
@@ -73,7 +73,7 @@
         <mxCell id="h1" value="&lt;b&gt;Model&lt;/b&gt;&lt;br&gt;Set at install. Changed with memman config set MEMMAN_LLM_MODEL." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="990" y="145" width="320" height="46" as="geometry" />
         </mxCell>
-        <mxCell id="h2" value="&lt;b&gt;Enrichment&lt;/b&gt;&lt;br&gt;Up to 12 keywords and a short summary. One call per write, a second when the reply does not parse." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="h2" value="&lt;b&gt;Enrichment&lt;/b&gt;&lt;br&gt;A short summary. One call per write, a second when the reply does not parse." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="990" y="199" width="320" height="46" as="geometry" />
         </mxCell>
         <mxCell id="h3" value="&lt;b&gt;Content stays as written&lt;/b&gt;&lt;br&gt;The model never rewords a memory or picks its category." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">

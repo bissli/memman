@@ -21,7 +21,6 @@ A superseded memory keeps its content but leaves every recall and listing. `memm
 **Rationale.**
 
 - **No size cap.** A store becomes more useful as it accumulates memories. A cap would force memman to delete true claims to make room.
-- **No retention score.** Importance is a sort key only. Importance does not determine which memories are kept or deleted.
 - **Supersession keeps content.** `replace` never deletes. The old row keeps its text and records its successor in `superseded_by`. `memman insights show <id> --history` shows the chain of replacements.
 - **The oplog is bounded.** The oplog records changes to memories. After each drain, memman deletes oplog rows older than 180 days (`OPLOG_RETENTION_DAYS`) in every store where the drain finished a row. The 5,000-row cap (`MAX_OPLOG_ENTRIES`) runs only when that store still has a current memory without `linked_at`.
 
@@ -59,7 +58,7 @@ Recall uses embeddings for vector search. Each store is bound to one embedding m
 
 | Role                | Effect                                                                                                                                                                                         |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| New stores          | When a store has no fingerprint and no rows, the first open writes this provider's fingerprint. `memman install` configures a new SQLite default store this way.                                    |
+| New stores          | When a store has no fingerprint and no rows, the first open writes this provider's fingerprint. `memman install` configures a new SQLite default store this way.                               |
 | Target              | It names the target of `memman embed reembed` and the default provider of `memman embed swap`.                                                                                                 |
 | Startup requirement | Every command that reads a store first builds this provider's client. A missing Voyage or OpenRouter key causes the command to fail. `doctor`, `embed status` and `embed swap` skip this step. |
 
@@ -94,14 +93,14 @@ HNSW (hierarchical navigable small world) is an index for approximate nearest-ne
 
 ### 4.3.3 Embedding in the pipeline
 
-| Step                      | Client                  | Text embedded                                 |
-| ------------------------- | ----------------------- | --------------------------------------------- |
-| Drain (remember, replace) | The store's fingerprint | Content plus enrichment keywords if available |
-| `memman graph rebuild`    | The store's fingerprint | Content plus enrichment keywords              |
-| Recall                    | The store's fingerprint | The query as given                            |
-| `memman unsupersede`      | The store's fingerprint | Content alone                                 |
-| `memman embed swap`       | The target model        | Content alone                                 |
-| `memman embed reembed`    | `MEMMAN_EMBED_PROVIDER` | Content alone                                 |
+| Step                      | Client                  | Text embedded      |
+| ------------------------- | ----------------------- | ------------------ |
+| Drain (remember, replace) | The store's fingerprint | Content alone      |
+| `memman graph rebuild`    | The store's fingerprint | Content alone      |
+| Recall                    | The store's fingerprint | The query as given |
+| `memman unsupersede`      | The store's fingerprint | Content alone      |
+| `memman embed swap`       | The target model        | Content alone      |
+| `memman embed reembed`    | `MEMMAN_EMBED_PROVIDER` | Content alone      |
 
 The drain embeds each row once, after LLM enrichment. When the embedding call fails with an HTTP or provider error, the drain stores the row without a vector. Missing credentials cause the row to fail.
 

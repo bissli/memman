@@ -7,7 +7,7 @@ synchronous hot path) and the id-based rerank movement metric.
 """
 
 from memman import trace
-from memman.search.recall import intent_aware_recall
+from memman.search.recall import ANCHOR_TOP_K, intent_aware_recall
 from tests.conftest import make_insight
 
 
@@ -87,15 +87,14 @@ def test_anchor_event_reports_vector_hits_against_anchor_k(
         tmp_backend, monkeypatch):
     """`recall_anchors` reports the raw vector hit count, not proxies.
 
-    This event is the measurement Phase 1 deferred: whether a
-    selective filter makes the vector scan return fewer than `k`
-    anchors. Reporting the fused pool or `anchor_k` in its place
-    would answer a different question.
+    Reporting the fused pool size in its place would answer a
+    different question: how many rows anchored by any channel, not
+    how many the vector scan itself returned.
 
-    Mutation: reporting the fused pool size (10 here) or `anchor_k`
-        (35) as `vector_hits`.
+    Mutation: reporting the fused pool size (10 here) as `vector_hits`.
     Oracle: 10 matching rows of which only 6 are embedded -- the
-        event must carry vector_hits == 6 with anchor_k == 35.
+        event must carry vector_hits == 6 with anchor_k ==
+        ANCHOR_TOP_K.
     """
     _seed(tmp_backend, count=10, category='preference')
     for i in range(6):
@@ -110,9 +109,8 @@ def test_anchor_event_reports_vector_hits_against_anchor_k(
     qv = [0.0] * 512
     qv[0] = 1.0
     intent_aware_recall(
-        tmp_backend, 'zzz unmatched query', qv, 35,
-        category='preference')
+        tmp_backend, 'zzz unmatched query', qv, 35)
     ev = [f for n, f in events if n == 'recall_anchors']
     assert ev
-    assert ev[0]['anchor_k'] == 35
+    assert ev[0]['anchor_k'] == ANCHOR_TOP_K
     assert ev[0]['vector_hits'] == 6

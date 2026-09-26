@@ -143,8 +143,7 @@ def test_author_survives_migrate_round_trip_postgres(tmp_path, pg_dsn):
     try:
         insert_insight(db, Insight(
             id='author-migrate-1', content='author migrate test',
-            category='fact', importance=3, entities=[],
-            source='test',
+            category='fact',
             updated_at=datetime.now(timezone.utc),
             deleted_at=None,
             author='alice'))

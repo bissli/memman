@@ -3,9 +3,8 @@
 Structure:
 
 1. Quality check - advisory warnings only.
-2. Planning phase - enrich the row, then embed it once:
-   keyword-enriched text when the enrichment carries keywords, else
-   the content alone. **No DB writes.**
+2. Planning phase - enrich the row, then embed its content once.
+   **No DB writes.**
 3. Apply phase - one transaction commits the replace link, insert,
    enrichment update, and stamp.
 
@@ -28,12 +27,11 @@ from typing import Any
 import httpx
 from memman.embed import EmbeddingProvider
 from memman.exceptions import EmbedCredentialError
-from memman.graph.enrichment import build_enriched_text, enrich_with_llm
+from memman.graph.enrichment import enrich_with_llm
 from memman.llm.client import get_llm_client
 from memman.search.quality import check_content_quality
 from memman.store.backend import Backend
-from memman.store.model import Insight, dedupe_entities, format_timestamp
-from memman.store.model import insight_to_delta_dict
+from memman.store.model import Insight, format_timestamp, insight_to_delta_dict
 
 logger = logging.getLogger('memman')
 
@@ -97,10 +95,9 @@ class FactPlan:
         `(insight_id, relation)`: the `replace` target; empty for an
         add.
     embed_vec : list[float] or None
-        Vector of `build_enriched_text(content, keywords)`; None when
-        the embed failed.
+        Vector of the row's content; None when the embed failed.
     enrichment : dict[str, Any]
-        `keywords` and `summary`; empty when enrichment failed.
+        `summary`; empty when enrichment failed.
     """
 
     action: str
@@ -124,8 +121,7 @@ def run_remember(
     backend : Backend
         The target store.
     insight : Insight
-        The queued row's metadata: category, importance, entities,
-        source, queue_uuid and author.
+        The queued row's metadata: category, queue_uuid and author.
     content : str
         Stored as written: no model judges it, rewords it, or picks
         its category, which is `insight.category`.
@@ -173,8 +169,8 @@ def _plan_fact(
     fact_text : str
         The write's text, as the agent wrote it.
     parent : Insight
-        The queued write; its category, entities and other metadata
-        are inherited by the planned row.
+        The queued write; its category and other metadata are
+        inherited by the planned row.
     replaced_id : str
         A `replace` target, or `''`.
     metadata_llm_client : Any
@@ -197,8 +193,7 @@ def _plan_fact(
     """
     fact_insight = Insight(
         id=str(uuid.uuid4()), content=fact_text,
-        category=parent.category, importance=parent.importance,
-        entities=list(parent.entities), source=parent.source,
+        category=parent.category,
         created_at=parent.created_at, updated_at=parent.updated_at,
         queue_uuid=parent.queue_uuid, author=parent.author)
 
@@ -211,8 +206,7 @@ def _plan_fact(
 
     fact_vec = None
     try:
-        fact_vec = ec.embed(
-            build_enriched_text(fact_text, enrichment.get('keywords', [])))
+        fact_vec = ec.embed(fact_text)
     except EmbedCredentialError:
         raise
     except (httpx.HTTPError, RuntimeError) as exc:
@@ -233,8 +227,7 @@ def _apply_plan(backend: Backend, plan: FactPlan) -> dict[str, Any]:
 
     Notes
     -----
-    - A `replace` supersedes its target (never deletes it). The entity
-      list is the caller's as given.
+    - A `replace` supersedes its target (never deletes it).
     - A target that is not current (forgotten, or superseded by an
       earlier write) is dropped into `targets_gone`, and the plan
       degrades to a plain add.
@@ -263,8 +256,7 @@ def _apply_plan(backend: Backend, plan: FactPlan) -> dict[str, Any]:
             predecessors.append((target_id, relation, before_target))
         # Every predecessor keeps its content behind `superseded_by`,
         # and the successor copies nothing from it: the CLI already
-        # seeded the caller's entity list from the target when the
-        # flag was omitted.
+        # seeded the target's category when `--cat` was omitted.
         for target_id, _relation, before_target in predecessors:
             backend.oplog.log(
                 operation='replace', insight_id=target_id,
@@ -299,12 +291,6 @@ def _apply_plan(backend: Backend, plan: FactPlan) -> dict[str, Any]:
     if final_vec is not None:
         backend.nodes.update_embedding(
             fi.id, final_vec, fi.embedding_model or '')
-    if fi.entities:
-        # Normalize before the column and the result dict read it:
-        # folding only on the way into the store makes the write
-        # report an entity the store does not hold.
-        fi.entities = dedupe_entities(fi.entities)
-        backend.nodes.update_entities(fi.id, fi.entities)
 
     backend.oplog.log(
         operation='remember', insight_id=fi.id, detail=fi.content,
@@ -313,9 +299,7 @@ def _apply_plan(backend: Backend, plan: FactPlan) -> dict[str, Any]:
     backend.nodes.stamp_linked(fi.id)
     if plan.enrichment:
         backend.nodes.update_enrichment(
-            fi.id,
-            keywords=plan.enrichment.get('keywords', []),
-            summary=plan.enrichment.get('summary', ''))
+            fi.id, summary=plan.enrichment.get('summary', ''))
     # A vectorless row stays unstamped: the stranded-row sweep selects
     # `enriched_at is null`, and it is the only path that embeds the
     # row again.
@@ -330,16 +314,11 @@ def _apply_plan(backend: Backend, plan: FactPlan) -> dict[str, Any]:
         'id': fi.id,
         'content': fi.content,
         'category': fi.category,
-        'importance': fi.importance,
-        'entities': fi.entities,
         'action': reported_action,
         'created_at': (
             format_timestamp(fi.created_at)
             if fi.created_at is not None else ''),
-        'enrichment': {
-            'keywords': plan.enrichment.get('keywords', []),
-            'summary': plan.enrichment.get('summary', ''),
-            },
+        'enrichment': {'summary': plan.enrichment.get('summary', '')},
         'embedded': embedded,
         }
     if linking:

@@ -33,9 +33,8 @@ from memman.store.factory import known_backends, list_stores
 _BACKEND_CHOICES = sorted(known_backends())
 
 from memman.embed import SUPPORTED_EMBED_PROVIDERS as _EMBED_PROVIDER_CHOICES
-from memman.store.model import MAX_ROW_ENTITIES, VALID_CATEGORIES, Insight
-from memman.store.model import format_timestamp, insight_to_full_dict
-from memman.store.model import insight_to_recall_line
+from memman.store.model import VALID_CATEGORIES, Insight, format_timestamp
+from memman.store.model import insight_to_full_dict, insight_to_recall_line
 from memman.store.sqlite import open_ro_db
 from tqdm import tqdm
 
@@ -375,71 +374,6 @@ def _parse_since(since: str) -> str:
              'm': timedelta(minutes=val)}[unit]
     cutoff = datetime.now(timezone.utc) - delta
     return format_timestamp(cutoff)
-
-
-def _entities_json(entity_list: list[str]) -> str | None:
-    """Encode an entity list for the queue's `hint_entities` column.
-
-    Parameters
-    ----------
-    entity_list : list[str]
-        Entity names, in the order they should reach the drain.
-
-    Returns
-    -------
-    str or None
-        A JSON array of the names, or None when the list is empty.
-        None is the column's own no-entities form, so an empty list
-        never reaches the drain as the literal `'[]'`.
-    """
-    return json.dumps(entity_list) if entity_list else None
-
-
-def _validate_caller_entities(entities: tuple[str, ...]) -> list[str]:
-    """Validate the caller-supplied `--entity` occurrences.
-
-    Parameters
-    ----------
-    entities : tuple[str, ...]
-        One name per `--entity` occurrence, in the order typed. An
-        empty or whitespace-only occurrence is dropped.
-
-    Returns
-    -------
-    list[str]
-        The names in input order, at most MAX_ROW_ENTITIES, each at
-        most 200 chars.
-
-    Raises
-    ------
-    click.ClickException
-        On more than MAX_ROW_ENTITIES names, or on one name over 200
-        chars.
-
-    Notes
-    -----
-    - One name per occurrence, split on nothing. The option was once
-      one comma-separated value, which no quoting could make express
-      a name containing a comma -- an LDAP distinguished name always
-      does -- so a caller repairing a shredded name reproduced the
-      shredding.
-    - The 200-char per-entity cap guards against a pathological
-      argument rather than a real name.
-    - MAX_ROW_ENTITIES bounds the typed list. It does NOT bound what
-      a row holds: the list a `replace` inherits passes whole however
-      long it is.
-    """
-    entity_list = [e.strip() for e in entities if e.strip()]
-    for e in entity_list:
-        if len(e) > 200:
-            raise click.ClickException(
-                f'entity too long ({len(e)} chars, max 200):'
-                f' {e[:50]}')
-    if len(entity_list) > MAX_ROW_ENTITIES:
-        raise click.ClickException(
-            f'too many entities ({len(entity_list)},'
-            f' max {MAX_ROW_ENTITIES})')
-    return entity_list
 
 
 class MemmanGroup(click.Group):
@@ -813,16 +747,8 @@ def config_show(ctx: click.Context) -> None:
 @cli.command()
 @click.argument('content', nargs=-1, required=True)
 @click.option('--cat', default='fact', help='Category')
-@click.option('--imp', default=3, type=int,
-              help='Sort key for listings and tie-breaks (1-5, default 3)')
-@click.option('--source', default='user', help='Source')
-@click.option('--entity', 'entities', multiple=True,
-              help='Entity name. Repeat the option per name; the'
-                   ' value is never split, so a name may contain a'
-                   ' comma.')
 @click.pass_context
-def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
-             imp: int, source: str, entities: tuple[str, ...]) -> None:
+def remember(ctx: click.Context, content: tuple[str, ...], cat: str) -> None:
     """Store a new insight via the queue.
 
     Always enqueues. The worker drains the queue (under systemd/launchd
@@ -831,12 +757,6 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     Content is screened by `check_content_quality` before enqueue;
     advisory warnings come back on the JSON response under
     `quality_warnings` without blocking the write.
-
-    Notes
-    -----
-    - `--source` is provenance, stored verbatim (including the
-      `user` default); idempotency rides on a queue uuid minted at
-      enqueue. One field per job.
     """
     _require_started('write')
     content_str = ' '.join(content)
@@ -849,17 +769,6 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
         valid = ', '.join(sorted(VALID_CATEGORIES))
         raise click.ClickException(
             f'invalid category {cat!r}; valid: {valid}')
-    if imp < 1 or imp > 5:
-        raise click.ClickException(
-            f'importance must be 1-5, got {imp}')
-    if not source.strip():
-        raise click.ClickException(
-            'source must not be empty; the default is user')
-
-    # Validate here rather than in the drain: the enqueue reports
-    # success to the caller, so a list the worker would reject has to
-    # fail now or the write is lost silently.
-    entities_json = _entities_json(_validate_caller_entities(entities))
 
     from memman.search.quality import check_content_quality
     quality_warnings = check_content_quality(content_str)
@@ -871,9 +780,7 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     with queue_db(data_dir_val) as conn:
         row_id, queue_uuid = enqueue(
             conn, store=name, content=content_str,
-            hint_cat=cat, hint_imp=imp,
-            hint_source=source,
-            hint_entities=entities_json,
+            hint_cat=cat,
             priority=0,
             author=author)
     _json_out({
@@ -1234,10 +1141,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 priority=row.priority,
                 attempts=row.attempts,
                 content_len=len(row.content),
-                hint_cat=row.hint_cat,
-                hint_imp=row.hint_imp,
-                hint_source=row.hint_source,
-                hint_entities=row.hint_entities)
+                hint_cat=row.hint_cat)
 
             ctx = store_contexts.get(row.store)
             if ctx is None:
@@ -1457,10 +1361,8 @@ def _process_queue_row(
         ctx: _StoreContext) -> None:
     """Run the full remember pipeline on a claimed queue row.
 
-    The insight's `source` is `row.hint_source` verbatim (provenance
-    survives the queue), falling back to `'user'` for programmatic
-    enqueues that pass nothing. Crash-recovery idempotency is
-    enforced unconditionally via `row.queue_uuid`.
+    Crash-recovery idempotency is enforced unconditionally via
+    `row.queue_uuid`.
 
     Hoisted state (the backend and the embed client) comes from `ctx`.
     """
@@ -1468,16 +1370,9 @@ def _process_queue_row(
 
     ctx.assert_fingerprint_unchanged()
 
-    entity_list = (
-        json.loads(row.hint_entities) if row.hint_entities else [])
     category = row.hint_cat or 'fact'
-    importance = row.hint_imp if row.hint_imp is not None else 3
-    source = row.hint_source or 'user'
-
     if category not in VALID_CATEGORIES:
         category = 'fact'
-    if importance < 1 or importance > 5:
-        importance = 3
 
     backend = ctx.backend
 
@@ -1486,9 +1381,7 @@ def _process_queue_row(
         row_id=row.id,
         store=row.store,
         data_dir=ctx.data_dir,
-        source=source,
-        category=category,
-        importance=importance)
+        category=category)
 
     if backend.nodes.has_active_with_queue_uuid(row.queue_uuid):
         logger.info(
@@ -1527,8 +1420,7 @@ def _process_queue_row(
     # a silent no-op.
     insight = Insight(
         id=str(uuid.uuid4()), content=row.content,
-        category=category, importance=importance,
-        entities=entity_list, source=source,
+        category=category,
         created_at=now, updated_at=now,
         queue_uuid=row.queue_uuid, author=row.author)
 
@@ -1545,14 +1437,11 @@ def _process_queue_row(
 @claude_callable
 @cli.command()
 @click.argument('keyword', nargs=-1, required=True)
-@click.option('--cat', default='', help='Filter by category')
 @click.option('--limit', default=20, type=int, help='Max results')
-@click.option('--source', default='',
-              help='Filter by source (exact match on the stored provenance string)')
 @click.option('--basic', is_flag=True, default=False, help='Simple SQL LIKE matching')
 @click.pass_context
-def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
-           limit: int, source: str, basic: bool) -> None:
+def recall(ctx: click.Context, keyword: tuple[str, ...], limit: int,
+           basic: bool) -> None:
     """Print the insights matching a query, one line each, best first.
 
     Each line is `<id8> <score> <created_at> <author> <category> |
@@ -1566,14 +1455,11 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
     ----------
     keyword : tuple[str, ...]
         Query words, joined by single spaces.
-    cat : str
-        Keep only rows of this exact category ('' = no filter).
     limit : int
         Maximum lines printed.
-    source : str
-        Keep only rows with this exact source ('' = no filter).
     basic : bool
-        SQL LIKE matching; computes no score.
+        SQL LIKE matching over content, newest first; computes no
+        score.
 
     \b
     Notes
@@ -1586,7 +1472,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
     Examples
     --------
     memman recall "retry cap"
-    memman recall "retry cap" --cat decision --limit 5
+    memman recall "retry cap" --limit 5
     memman recall "retry" --basic
     """  # noqa: D301, D410, D411
     # Deferred: the embed and search stack would load on every other
@@ -1600,9 +1486,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
               else config.get_bool(config.RERANK_ENABLED, default=True))
     with _active_backend(ctx) as backend:
         if basic:
-            results = backend.nodes.query(
-                keyword=keyword_str, category=cat,
-                source=source, limit=limit)
+            results = backend.nodes.query(keyword=keyword_str, limit=limit)
             try:
                 with backend.transaction():
                     backend.oplog.log(
@@ -1627,8 +1511,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                 type(exc).__name__, exc)
 
         resp = intent_aware_recall(
-            backend, keyword_str, query_vec, limit,
-            rerank=rerank, category=cat, source=source)
+            backend, keyword_str, query_vec, limit, rerank=rerank)
 
         hits = [{'id': r['insight'].id[:8],
                  'score': round(r['score'], 3)}
@@ -1726,17 +1609,9 @@ def forget(ctx: click.Context, id: str) -> None:
 @click.argument('id')
 @click.argument('content', nargs=-1, required=True)
 @click.option('--cat', default='fact', help='Category')
-@click.option('--imp', default=3, type=int,
-              help='Sort key for listings and tie-breaks (1-5, default 3)')
-@click.option('--source', default='user', help='Source')
-@click.option('--entity', 'entities', multiple=True,
-              help='Entity name. Repeat the option per name; the'
-                   ' value is never split, so a name may contain a'
-                   ' comma.')
 @click.pass_context
 def replace(ctx: click.Context, id: str, content: tuple[str, ...],
-            cat: str, imp: int, source: str,
-            entities: tuple[str, ...]) -> None:
+            cat: str) -> None:
     """Replace an insight by ID with new content via the queue.
 
     ID is a full insight id or any unambiguous prefix of one.
@@ -1749,14 +1624,10 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
       `unsupersede` reverses it once the successor is forgotten.
     - The id must be current. A forgotten or already superseded id is
       refused, the latter naming its successor.
-    - Unflagged `--cat` / `--imp` / `--source` / `--entity` inherit
-      the replaced insight's values; the inherited source is passed
-      through verbatim (idempotency rides on the queue uuid, so a
-      non-null source hint no longer suppresses the replay check).
-      Each of the four overrides when typed, `--entity ''` included,
-      which clears the list, and the successor stores it empty.
+    - An unflagged `--cat` inherits the replaced insight's category;
+      a typed one overrides it.
     - The content lands as one row exactly as typed; enrichment still
-      runs and rebuilds keywords and summary.
+      runs and rebuilds the summary.
     """
     _require_started('write')
 
@@ -1785,51 +1656,23 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
                        f' insights show {id} --history')
         raise click.ClickException(reason)
 
-    cat_src = ctx.get_parameter_source('cat')
-    imp_src = ctx.get_parameter_source('imp')
-    source_src = ctx.get_parameter_source('source')
-    entities_src = ctx.get_parameter_source('entities')
-    if cat_src != click.core.ParameterSource.COMMANDLINE:
+    if ctx.get_parameter_source('cat') != click.core.ParameterSource.COMMANDLINE:
         cat = old.category
-    if imp_src != click.core.ParameterSource.COMMANDLINE:
-        imp = old.importance
-    if source_src != click.core.ParameterSource.COMMANDLINE:
-        source = old.source
 
     # Validate what is actually ENQUEUED, not only what the caller
-    # typed. A value inherited from a row written under an older
-    # vocabulary would otherwise reach the drain, which coerces an
-    # unusable category to fact and an out-of-range importance to 3
-    # in a worker the caller has already walked away from.
+    # typed. A category inherited from a row written under an older
+    # vocabulary would otherwise reach the drain, which coerces it to
+    # fact in a worker the caller has already walked away from.
     if cat not in VALID_CATEGORIES:
         valid = ', '.join(sorted(VALID_CATEGORIES))
         raise click.ClickException(
             f'invalid category {cat!r}; valid: {valid}')
-    if imp < 1 or imp > 5:
-        raise click.ClickException(
-            f'importance must be 1-5, got {imp}')
-    if not source.strip():
-        raise click.ClickException(
-            'source must not be empty; the default is user')
-    # Notes:
-    # - The inherited list is persisted data, so only a caller-typed
-    #   list is validated. Capping the inherited one makes any row
-    #   already over the cap permanently unreplaceable.
-    # - A stored name may itself contain a comma - an LDAP
-    #   distinguished name always does - so the inherited list is
-    #   encoded rather than re-parsed.
-    if entities_src == click.core.ParameterSource.COMMANDLINE:
-        entities_json = _entities_json(_validate_caller_entities(entities))
-    else:
-        entities_json = _entities_json(old.entities)
 
     from memman.queue import enqueue, queue_db
     with queue_db(data_dir_val) as conn:
         row_id, queue_uuid = enqueue(
             conn, store=name, content=content_str,
-            hint_cat=cat, hint_imp=imp,
-            hint_source=source,
-            hint_entities=entities_json,
+            hint_cat=cat,
             hint_replaced_id=id,
             priority=0,
             author=author)
@@ -1935,9 +1778,9 @@ def unsupersede(ctx: click.Context, id: str) -> None:
 
     ID is a full insight id or any unambiguous prefix of one.
 
-    Clears the row's `superseded_by`, re-embeds its content with the
-    store's embedder, and refreshes its keyword tokens, so it
-    re-enters recall as a current row.
+    Clears the row's `superseded_by` and re-embeds its content with
+    the store's embedder, so it re-enters recall as a current row. Its
+    keyword tokens were never cleared, so they need no refresh.
 
     \b
     Parameters
@@ -2018,7 +1861,6 @@ def unsupersede(ctx: click.Context, id: str) -> None:
                 raise click.ClickException(
                     f'insight {id} changed under this command; re-read it')
             backend.nodes.update_embedding(id, vec, ec.model)
-            backend.nodes.update_entities(id, row.entities)
             backend.nodes.stamp_linked(id)
             backend.oplog.log(
                 operation='unsupersede', insight_id=id,
@@ -2778,7 +2620,6 @@ def status(ctx: click.Context) -> None:
             'stale_insights': stale_insights,
             'oplog_count': node_stats.oplog_count,
             'by_category': node_stats.by_category,
-            'top_entities': node_stats.top_entities,
             'storage_path': backend.path,
             }
         _json_out(out)
@@ -3014,7 +2855,6 @@ def insights_review(ctx: click.Context, limit: int) -> None:
             'review_results': [{
                 'id': f['insight'].id,
                 'content': f['insight'].content,
-                'importance': f['insight'].importance,
                 'quality_warnings': f['quality_warnings'],
                 } for f in flagged],
             'total_flagged': len(flagged),

@@ -26,15 +26,12 @@ path.
 from tests.conftest import make_insight
 
 
-def _seed(backend, ids: list[tuple[str, str, str]]) -> None:
-    """Insert (id, content, source) rows.
+def _seed(backend, rows: list[tuple[str, str]]) -> None:
+    """Insert (id, content) rows.
     """
     with backend.transaction():
-        for rid, content, source in ids:
-            backend.nodes.insert(
-                make_insight(
-                    id=rid, content=content, source=source,
-                    importance=3))
+        for rid, content in rows:
+            backend.nodes.insert(make_insight(id=rid, content=content))
 
 
 class TestReviewContentQuality:
@@ -45,8 +42,8 @@ class TestReviewContentQuality:
         """
         _seed(
             backend,
-            [('rcq-1', 'this is currently broken', 'cli'),
-             ('rcq-2', 'a stable observation', 'cli')])
+            [('rcq-1', 'this is currently broken'),
+             ('rcq-2', 'a stable observation')])
         flagged = backend.nodes.review_content_quality(limit=10)
         ids = {f['insight'].id for f in flagged}
         assert 'rcq-1' in ids
@@ -55,7 +52,7 @@ class TestReviewContentQuality:
     def test_returns_warnings_per_row(self, backend):
         """Each flagged row carries a non-empty warnings list.
         """
-        _seed(backend, [('rcq-3', 'state is clean', 'cli')])
+        _seed(backend, [('rcq-3', 'state is clean')])
         flagged = backend.nodes.review_content_quality(limit=10)
         assert flagged
         assert all(f['quality_warnings'] for f in flagged)
@@ -65,7 +62,7 @@ class TestReviewContentQuality:
         """
         _seed(
             backend,
-            [(f'rcq-l{i}', 'currently broken', 'cli')
+            [(f'rcq-l{i}', 'currently broken')
              for i in range(5)])
         flagged = backend.nodes.review_content_quality(limit=2)
         assert len(flagged) == 2

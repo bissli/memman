@@ -45,9 +45,6 @@ class QueueRow:
     store: str
     content: str
     hint_cat: str | None
-    hint_imp: int | None
-    hint_source: str | None
-    hint_entities: str | None
     hint_replaced_id: str | None
     priority: int
     queued_at: int
@@ -136,9 +133,6 @@ create table if not exists queue (
     store         text not null,
     content       text not null,
     hint_cat      text,
-    hint_imp      integer,
-    hint_source   text,
-    hint_entities text,
     hint_replaced_id text,
     queue_uuid    text not null unique,
     priority      integer not null default 0,
@@ -194,9 +188,6 @@ def enqueue(
         store: str,
         content: str,
         hint_cat: str | None = None,
-        hint_imp: int | None = None,
-        hint_source: str | None = None,
-        hint_entities: str | None = None,
         hint_replaced_id: str | None = None,
         priority: int = 0,
         author: str | None = None,
@@ -211,11 +202,6 @@ def enqueue(
 
     Notes
     -----
-    - `hint_entities` is a JSON array of entity names, or NULL for
-      none. It is the only list-valued hint column, and JSON is what
-      lets a name carry a comma: an LDAP distinguished name always
-      does, and a delimited column cut one into a fragment per
-      component.
     - `queue_uuid` (the idempotency key) is minted here, never passed
       in: a uuid4 survives a `backup.restore` that rewinds the
       AUTOINCREMENT counter, where a fresh enqueue would otherwise
@@ -231,15 +217,13 @@ def enqueue(
     queue_uuid = str(uuid.uuid4())
     sql = """
 insert into queue (
-    store, content, hint_cat, hint_imp,
-    hint_source, hint_entities, hint_replaced_id,
+    store, content, hint_cat, hint_replaced_id,
     queue_uuid, priority, queued_at, author
 )
-values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+values (?, ?, ?, ?, ?, ?, ?, ?)
 """
     cur = conn.execute(sql, (
-        store, content, hint_cat, hint_imp, hint_source,
-        hint_entities, hint_replaced_id,
+        store, content, hint_cat, hint_replaced_id,
         queue_uuid, priority, now, author))
     row_id = cur.lastrowid
     logger.debug(f'queued blob {row_id} for store {store}')
@@ -278,8 +262,7 @@ where id = (
     order by priority desc, queued_at asc
     limit 1
 )
-returning id, store, content, hint_cat, hint_imp,
-          hint_source, hint_entities, hint_replaced_id,
+returning id, store, content, hint_cat, hint_replaced_id,
           priority, queued_at, attempts,
           queue_uuid, author
 """
@@ -289,11 +272,9 @@ returning id, store, content, hint_cat, hint_imp,
         return None
     return QueueRow(
         id=row[0], store=row[1], content=row[2],
-        hint_cat=row[3], hint_imp=row[4],
-        hint_source=row[5], hint_entities=row[6],
-        hint_replaced_id=row[7],
-        priority=row[8], queued_at=row[9], attempts=row[10],
-        queue_uuid=row[11], author=row[12])
+        hint_cat=row[3], hint_replaced_id=row[4],
+        priority=row[5], queued_at=row[6], attempts=row[7],
+        queue_uuid=row[8], author=row[9])
 
 
 def mark_done(conn: sqlite3.Connection, row_id: int) -> None:
@@ -438,8 +419,7 @@ def get_row(
         ) -> dict | None:
     """Return full row (including content) as a dict."""
     sql = """
-select id, store, content, hint_cat, hint_imp,
-       hint_source, hint_entities, priority, queued_at, claimed_at,
+select id, store, content, hint_cat, priority, queued_at, claimed_at,
        worker_pid, attempts, status, last_error, processed_at,
        queue_uuid, author
 from queue
@@ -450,13 +430,12 @@ where id = ?
         return None
     return {
         'id': row[0], 'store': row[1], 'content': row[2],
-        'hint_cat': row[3], 'hint_imp': row[4],
-        'hint_source': row[5], 'hint_entities': row[6],
-        'priority': row[7], 'queued_at': row[8],
-        'claimed_at': row[9], 'worker_pid': row[10],
-        'attempts': row[11], 'status': row[12],
-        'last_error': row[13], 'processed_at': row[14],
-        'queue_uuid': row[15], 'author': row[16],
+        'hint_cat': row[3],
+        'priority': row[4], 'queued_at': row[5],
+        'claimed_at': row[6], 'worker_pid': row[7],
+        'attempts': row[8], 'status': row[9],
+        'last_error': row[10], 'processed_at': row[11],
+        'queue_uuid': row[12], 'author': row[13],
         }
 
 

@@ -148,7 +148,7 @@ def test_unsupersede_relinks_reembeds_and_writes_its_oplog_row(mm_runner):
         and the oplog names the successor it was superseded by.
     """
     _, data_dir = mm_runner
-    old = _remember(mm_runner, 'the broker is kombu', '--entity', 'kombu')
+    old = _remember(mm_runner, 'the broker is kombu')
     new = _remember(mm_runner, 'the broker is redis now')
     assert invoke(mm_runner, ['supersede', old, new]).exit_code == 0
     assert invoke(mm_runner, ['forget', new]).exit_code == 0
@@ -348,7 +348,7 @@ def test_unsupersede_refuses_when_the_embed_fails(mm_runner, monkeypatch):
     from memman.embed import fingerprint as fp_mod
 
     _, data_dir = mm_runner
-    old = _remember(mm_runner, 'the broker is kombu', '--entity', 'kombu')
+    old = _remember(mm_runner, 'the broker is kombu')
     new = _remember(mm_runner, 'the broker is redis now')
     assert invoke(mm_runner, ['supersede', old, new]).exit_code == 0
     assert invoke(mm_runner, ['forget', new]).exit_code == 0
