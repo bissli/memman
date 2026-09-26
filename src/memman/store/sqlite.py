@@ -284,19 +284,6 @@ class SqliteOplog(Oplog):
             operation_counts=d.get('operation_counts', {}),
             total_active=d.get('total_active', 0))
 
-    def delta_coverage(self) -> tuple[int, int]:
-        sql = """
-select count(*),
-       sum(case when before is not null
-                 or after is not null
-                then 1 else 0 end)
-from oplog
-"""
-        row = self._db._query(sql).fetchone()
-        if row is None:
-            return (0, 0)
-        return (int(row[0] or 0), int(row[1] or 0))
-
 
 @dataclass
 class SqliteRecallSession(RecallSession):
@@ -648,21 +635,6 @@ class SqliteBackend(Backend):
                 }
         return {'ok': True, 'detail': result}
 
-    def introspect_columns(self, table: str) -> set[str]:
-        from memman.store.backend import _check_identifier
-        _check_identifier(table)
-        rows = self._db._query(
-            f'pragma table_info({table})').fetchall()
-        return {row[1] for row in rows}
-
-    def introspect_index_definitions(self, table: str) -> dict[str, str]:
-        from memman.store.backend import _check_identifier
-        _check_identifier(table)
-        rows = self._db._query(
-            "select name, sql from sqlite_master where type = 'index'"
-            ' and tbl_name = ? and sql is not null', (table,)).fetchall()
-        return {row[0]: row[1] for row in rows}
-
     def start_run(self) -> int | None:
         """No-op: drain hangs are observable at the foreground prompt.
         """
@@ -904,8 +876,7 @@ order by id
                 target_model=meta_dict.get(
                     'embed_swap_target_model', ''),
                 target_dim=dim,
-                cursor=meta_dict.get('embed_swap_cursor') or None,
-                started_at=None)
+                cursor=meta_dict.get('embed_swap_cursor') or None)
 
         stripped_meta = {
             k: v for k, v in meta_dict.items()
@@ -983,7 +954,7 @@ order by id
 
                 max_oplog_id = 0
                 for op in payload.oplog:
-                    desired_id = op.legacy_id or op.id
+                    desired_id = op.legacy_id
                     row = (
                         desired_id, op.operation, op.insight_id,
                         op.detail,

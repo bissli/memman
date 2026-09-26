@@ -36,9 +36,8 @@ STATUS_STALE = 'stale'
 class QueueRow:
     """A single queued blob claimed by a worker.
 
-    `queue_uuid` sits last so no pre-existing positional index
-    shifts; keep that order (`queue_uuid`, then `author`) in every
-    column list.
+    `queue_uuid` sits last, then `author`; keep that column order in
+    every column list so a positional index stays valid.
     """
 
     id: int

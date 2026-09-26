@@ -13,7 +13,6 @@ from memman.cli import list_claude_permissions
 from memman.llm import openrouter_models
 from memman.setup.deploy import symlink_asset
 from memman.setup.detect import detect_claude_code
-from memman.setup.markdown import remove_memory_block
 from memman.setup.prompt import detection_line, status_error, status_ok
 from memman.setup.prompt import status_updated
 from memman.setup.scheduler import detect_scheduler
@@ -198,17 +197,10 @@ def _install_claude_code(env: dict, data_dir: str,
     _init_default_store(data_dir)
 
 
-def _uninstall_markdown(file_path: str) -> None:
-    """Remove memory guidance block from a markdown file if present."""
-    if remove_memory_block(file_path):
-        print(f'  Memory guidance removed from {file_path}')
-
-
 def _uninstall_env(env: dict) -> bool:
     """Remove memman from Claude Code; True when cleanup reported an error.
     """
     errs = claude_uninstall(env['config_dir'])
-    _uninstall_markdown('CLAUDE.md')
     return len(errs) > 0
 
 

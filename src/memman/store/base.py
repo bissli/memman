@@ -12,9 +12,9 @@ class BaseNodeStore:
     """Mixin with Python-side defaults for selected NodeStore verbs.
 
     No default exists for `has_active_with_queue_uuid` on purpose: a
-    Python `==` scan would match legacy rows whose `queue_uuid` is
-    None against a None argument, where SQL's `= ?` never matches
-    NULL. Each backend implements it in SQL.
+    Python `==` scan would match a row whose `queue_uuid` is None
+    against a None argument, where SQL's `= ?` never matches NULL.
+    Each backend implements it in SQL.
     """
 
     def review_content_quality(

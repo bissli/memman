@@ -269,47 +269,24 @@ def _connection(
             logger.debug(f'pg connection close failed: {exc}')
 
 
-def _datetime_or_none(v: Any) -> datetime | None:
-    """Coerce a psycopg timestamp value to a UTC-aware datetime.
-
-    psycopg returns TIMESTAMPTZ as `datetime`; this helper normalizes
-    naive datetimes (defensive: pgvector / older drivers may strip
-    tzinfo) to UTC and passes through None.
-    """
-    if v is None:
-        return None
-    if isinstance(v, datetime):
-        if v.tzinfo is None:
-            return v.replace(tzinfo=timezone.utc)
-        return v
-    if isinstance(v, str):
-        try:
-            return parse_timestamp(v)
-        except ValueError:
-            return None
-    return None
-
-
 def _row_to_insight(row: tuple[Any, ...]) -> Insight:
     """Map a select row into an Insight dataclass."""
     i = Insight()
     i.id = row[0]
     i.content = row[1]
-    i.category = row[2] or 'fact'
-    i.created_at = _datetime_or_none(row[3])
-    i.updated_at = _datetime_or_none(row[4])
-    i.deleted_at = _datetime_or_none(row[5])
-    if len(row) > 6 and row[6]:
+    i.category = row[2]
+    i.created_at = row[3]
+    i.updated_at = row[4]
+    i.deleted_at = row[5]
+    if row[6]:
         i.summary = row[6]
-    if len(row) > 7:
-        i.linked_at = _datetime_or_none(row[7])
-    if len(row) > 8:
-        i.enriched_at = _datetime_or_none(row[8])
-    if len(row) > 9 and row[9]:
+    i.linked_at = row[7]
+    i.enriched_at = row[8]
+    if row[9]:
         i.queue_uuid = row[9]
-    if len(row) > 10 and row[10]:
+    if row[10]:
         i.superseded_by = row[10]
-    if len(row) > 11 and row[11]:
+    if row[11]:
         i.author = row[11]
     return i
 
@@ -989,8 +966,7 @@ limit %s
             OpLogEntry(
                 id=int(r[0]), operation=r[1],
                 insight_id=r[2] or '', detail=r[3] or '',
-                created_at=_datetime_or_none(r[4])
-                or datetime.now(timezone.utc),
+                created_at=r[4],
                 before=r[5], after=r[6])
             for r in rows
             ]
@@ -1026,20 +1002,6 @@ where deleted_at is null and superseded_by is null
             total = int(cur.fetchone()[0])
         return OpLogStats(
             operation_counts=op_counts, total_active=total)
-
-    def delta_coverage(self) -> tuple[int, int]:
-        sql = f"""
-select count(*),
-       count(*) filter (where before is not null
-                          or after is not null)
-from {self._schema}.oplog
-"""
-        with self._conn.cursor() as cur:
-            cur.execute(sql)
-            row = cur.fetchone()
-        if row is None:
-            return (0, 0)
-        return (int(row[0] or 0), int(row[1] or 0))
 
 
 class PostgresRecallSession(RecallSession):
@@ -1429,26 +1391,6 @@ class PostgresBackend(Backend):
             cur.fetchone()
         return {'ok': True, 'detail': 'schema reachable'}
 
-    def introspect_columns(self, table: str) -> set[str]:
-        _check_identifier(table)
-        sql = """
-select column_name from information_schema.columns
-where table_schema = %s and table_name = %s
-"""
-        with self._conn.cursor() as cur:
-            cur.execute(sql, (self._schema, table))
-            return {row[0] for row in cur.fetchall()}
-
-    def introspect_index_definitions(self, table: str) -> dict[str, str]:
-        _check_identifier(table)
-        sql = """
-select indexname, indexdef from pg_indexes
-where schemaname = %s and tablename = %s
-"""
-        with self._conn.cursor() as cur:
-            cur.execute(sql, (self._schema, table))
-            return {row[0]: row[1] for row in cur.fetchall()}
-
     def start_run(self) -> int | None:
         """Insert a per-store `worker_runs` row, return its id."""
         sql = (
@@ -1496,12 +1438,11 @@ where schemaname = %s and tablename = %s
         return [
             WorkerRun(
                 id=int(r[0]),
-                started_at=_datetime_or_none(r[1])
-                or datetime.now(timezone.utc),
-                ended_at=_datetime_or_none(r[2]),
+                started_at=r[1],
+                ended_at=r[2],
                 rows_processed=int(r[3] or 0),
                 error=r[4] or '',
-                last_heartbeat_at=_datetime_or_none(r[5]))
+                last_heartbeat_at=r[5])
             for r in rows
             ]
 
@@ -1700,26 +1641,18 @@ where attrelid = (%s || '.insights')::regclass
     with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
         cur.execute(dim_sql, (schema,))
         rows = cur.fetchall()
-        try:
-            cur.execute(state_sql)
-            state_row = cur.fetchone()
-        except Exception as exc:
-            logger.debug(
-                f'meta.embed_swap_state read failed on {schema}:'
-                f' {type(exc).__name__}: {exc}')
-            state_row = None
+        cur.execute(state_sql)
+        state_row = cur.fetchone()
     dims = {r[0]: int(r[1]) for r in rows if r[1] is not None
             and int(r[1]) > 0}
-    if not dims:
-        return
     swap_state = (state_row[0] if state_row else '') or ''
     swap_active = swap_state in {'backfilling', 'cutover'}
-    accepted = {dims['embedding']} if 'embedding' in dims else set()
+    accepted = {dims['embedding']}
     if swap_active and 'embedding_pending' in dims:
         accepted.add(dims['embedding_pending'])
     if expected_dim in accepted:
         return
-    stored_dim = dims.get('embedding') or next(iter(dims.values()))
+    stored_dim = dims['embedding']
     raise BackendError(
         f'store {store!r} has vector({stored_dim}) but the active'
         f' embedding client produces dim={expected_dim}.'
@@ -2067,7 +2000,7 @@ order by sqlite_id
                     created_at=o[4],
                     before=dict(o[5]) if o[5] else None,
                     after=dict(o[6]) if o[6] else None,
-                    legacy_id=int(o[0]) if o[0] is not None else None)
+                    legacy_id=int(o[0]))
                 for o in cur.fetchall()]
 
         swap_state = None
@@ -2082,8 +2015,7 @@ order by sqlite_id
                 target_model=meta_dict.get(
                     'embed_swap_target_model', ''),
                 target_dim=dim,
-                cursor=meta_dict.get('embed_swap_cursor') or None,
-                started_at=None)
+                cursor=meta_dict.get('embed_swap_cursor') or None)
 
         stripped_meta = {
             k: v for k, v in meta_dict.items()
@@ -2161,7 +2093,7 @@ order by sqlite_id
                 if payload.oplog:
                     op_rows = []
                     for op in payload.oplog:
-                        legacy = op.legacy_id or op.id
+                        legacy = op.legacy_id
                         op_rows.append((
                             op.operation, op.insight_id, op.detail,
                             op.created_at,

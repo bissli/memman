@@ -14,7 +14,6 @@ verify on its own:
 import dataclasses
 import inspect
 
-import pytest
 from memman.store.backend import NodeStore
 from memman.store.model import Insight, OpLogEntry
 
@@ -45,7 +44,7 @@ def test_node_update_embedding_takes_vec_not_blob():
 
 
 class TestBackendIntrospection:
-    """Backend.integrity_check and Backend.introspect_columns behavior."""
+    """Backend.integrity_check behavior."""
 
     def test_integrity_check_returns_ok_on_fresh_store(self, backend):
         """integrity_check returns {'ok': True, ...} on a healthy fresh store."""
@@ -53,39 +52,3 @@ class TestBackendIntrospection:
         assert isinstance(result, dict)
         assert result.get('ok') is True
         assert 'detail' in result
-
-    def test_introspect_columns_returns_insights_schema(self, backend):
-        """introspect_columns('insights') returns every doctor-expected
-        column. Locks the backend protocol contract so a schema
-        regression on either backend can't sneak past doctor.
-        """
-        from memman.doctor import EXPECTED_INSIGHT_COLUMNS
-
-        cols = backend.introspect_columns('insights')
-        assert isinstance(cols, set)
-        expected_core = {
-            'id', 'content', 'category', 'created_at', 'updated_at',
-            'embedding'}
-        assert expected_core.issubset(cols), (
-            f'missing core columns: {sorted(expected_core - cols)}; '
-            f'got: {sorted(cols)}')
-        assert EXPECTED_INSIGHT_COLUMNS.issubset(cols), (
-            f'missing doctor-expected columns:'
-            f' {sorted(EXPECTED_INSIGHT_COLUMNS - cols)};'
-            f' got: {sorted(cols)}')
-
-    def test_introspect_columns_unknown_table_returns_empty(self, backend):
-        """introspect_columns on an unknown table returns an empty set."""
-        cols = backend.introspect_columns('definitely_not_a_real_table')
-        assert cols == set()
-
-    def test_introspect_columns_rejects_unsafe_identifier(self, backend):
-        """introspect_columns rejects names that are not valid SQL identifiers.
-
-        SQL injection guard: PRAGMA / DDL identifier slots cannot be
-        parameterized; both backends must validate the identifier before
-        interpolation.
-        """
-        from memman.store.errors import ConfigError
-        with pytest.raises(ConfigError):
-            backend.introspect_columns('insights); DROP TABLE insights; --')

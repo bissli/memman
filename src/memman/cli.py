@@ -601,7 +601,7 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
         }
     if key in bare_canonicals:
         raise click.ClickException(
-            f'{key!r} is no longer accepted under the per-store routing'
+            f'{key!r} is not accepted under the per-store routing'
             f' model; {bare_canonicals[key]}')
 
     accepted = key in config.INSTALLABLE_KEYS
@@ -729,17 +729,14 @@ def config_show(ctx: click.Context) -> None:
         'path': str(_state_file_path()),
         'value': read_state(),
         }
-    try:
-        from memman.setup.scheduler import status as scheduler_status_fn
-        s = scheduler_status_fn()
-        out['scheduler'] = {
-            'state': s.get('state'),
-            'installed': s.get('installed'),
-            'platform': s.get('platform'),
-            'interval_seconds': s.get('interval_seconds'),
-            }
-    except (ImportError, ModuleNotFoundError):
-        pass
+    from memman.setup.scheduler import status as scheduler_status_fn
+    s = scheduler_status_fn()
+    out['scheduler'] = {
+        'state': s.get('state'),
+        'installed': s.get('installed'),
+        'platform': s.get('platform'),
+        'interval_seconds': s.get('interval_seconds'),
+        }
     _json_out(out)
 
 
@@ -1370,9 +1367,7 @@ def _process_queue_row(
 
     ctx.assert_fingerprint_unchanged()
 
-    category = row.hint_cat or 'fact'
-    if category not in VALID_CATEGORIES:
-        category = 'fact'
+    category = row.hint_cat
 
     backend = ctx.backend
 
@@ -1660,9 +1655,8 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         cat = old.category
 
     # Validate what is actually ENQUEUED, not only what the caller
-    # typed. A category inherited from a row written under an older
-    # vocabulary would otherwise reach the drain, which coerces it to
-    # fact in a worker the caller has already walked away from.
+    # typed: a caller-typed --cat reaches this same check, and an
+    # inherited category is unvalidated until here.
     if cat not in VALID_CATEGORIES:
         valid = ', '.join(sorted(VALID_CATEGORIES))
         raise click.ClickException(

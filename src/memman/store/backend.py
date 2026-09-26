@@ -189,7 +189,7 @@ class NodeStore(Protocol):
         The idempotency check for queue replays; runs unconditionally
         for every drained row and answers "did this write land", so a
         superseded row counts. Backends implement it in SQL so a null
-        `queue_uuid` on legacy rows can never match.
+        `queue_uuid` can never match.
         """
         ...
 
@@ -313,10 +313,9 @@ class NodeStore(Protocol):
     def iter_stale_insight_ids(self, active_pv: str) -> list[Id]:
         """Return ids of active insights whose staleness key drifted.
 
-        Stale means `prompt_version` is non-NULL and differs from
-        `active_pv`. NULL is not stale. There is no model argument:
-        `active_pv` folds in the LLM model already, and
-        that is the only model a rebuild re-runs.
+        Stale means `prompt_version` differs from `active_pv`. There
+        is no model argument: `active_pv` folds in the LLM model
+        already, and that is the only model a rebuild re-runs.
         """
         ...
 
@@ -384,10 +383,6 @@ class Oplog(Protocol):
             self, *, limit: int = 20,
             since: str = '') -> list[OpLogEntry]:
         """Return the most-recent N oplog entries."""
-        ...
-
-    def delta_coverage(self) -> tuple[int, int]:
-        """Return (total_rows, rows_with_before_or_after)."""
         ...
 
     def stats(self, *, since: str = '') -> OpLogStats:
@@ -652,27 +647,6 @@ class Backend(Protocol):
         Returns a dict shaped `{'ok': bool, 'detail': str}` -- doctor
         composes this with sub-store verbs to assemble its overall
         report.
-        """
-        ...
-
-    def introspect_columns(self, table: str) -> set[str]:
-        """Return the column names on a named table in this store.
-
-        SQLite: `pragma table_info(<table>)`. Postgres:
-        `information_schema.columns` filtered by the store's schema.
-        Returns an empty set when the table does not exist (rather
-        than raising) so doctor's schema-columns check can compute a
-        symmetric difference cleanly across backends.
-        """
-        ...
-
-    def introspect_index_definitions(self, table: str) -> dict[str, str]:
-        """Return `{index name: DDL}` for every index on a named table.
-
-        SQLite: `sqlite_master.sql`, so an automatic primary-key index
-        (null DDL) is omitted. Postgres: `pg_indexes.indexdef` within
-        the store's schema. The doctor's partial-index check reads the
-        `where` clause of each definition.
         """
         ...
 

@@ -131,8 +131,8 @@ def complete_parsed(
     stage : str
         Pipeline stage both attempts are charged to.
     max_tokens : int | None, default None
-        Output budget per attempt; None sends the role ceiling the
-        client was built with.
+        Output budget per attempt; None sends the ceiling the client
+        was built with.
 
     Returns
     -------
@@ -165,36 +165,6 @@ def complete_parsed(
     raw = llm_client.complete(
         system, user, stage=stage, max_tokens=max_tokens)
     return parse_json_response(raw), raw
-
-
-def parse_json_list_response(raw: str) -> list | None:
-    """The JSON list an LLM response carries, or None.
-
-    Parameters
-    ----------
-    raw : str
-        The response text as the model returned it.
-
-    Returns
-    -------
-    list | None
-        The whole text decoded as a list when it is one (fences stripped
-        if present); else the last list of objects the scan finds, so a
-        bracketed index the model wrote in its prose (`[0]`) never
-        replaces the answer; else the last list of any shape; None when
-        no list decodes.
-    """
-    for text in (raw, strip_code_fences(raw)):
-        try:
-            parsed = json.loads(text, strict=False)
-            if isinstance(parsed, list):
-                return parsed
-        except (json.JSONDecodeError, ValueError, RecursionError):
-            pass
-    lists = [v for v in _top_level_json_values(raw, '[') if isinstance(v, list)]
-    of_objects = [v for v in lists if all(isinstance(x, dict) for x in v)]
-    chosen = of_objects or lists
-    return chosen[-1] if chosen else None
 
 
 def safe_json(resp: httpx.Response) -> object:

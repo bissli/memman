@@ -70,8 +70,8 @@ class MemmanLLMClient:
         self.provider_routing = provider_routing
         if not model:
             raise ConfigError(
-                'model is empty; run `memman install` to populate the'
-                ' role-specific model env var or export it manually')
+                'model is empty; run `memman install` to populate'
+                ' MEMMAN_LLM_MODEL or export it manually')
         self.endpoint = endpoint.rstrip('/')
         self.api_key = api_key
         self.model = model

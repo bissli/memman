@@ -62,7 +62,6 @@ class SwapState:
     target_model: str
     target_dim: int
     cursor: str | None
-    started_at: datetime | None
 
 
 @dataclass
@@ -97,7 +96,7 @@ class MigrateInsight:
     embedding_model: str | None
     queue_uuid: str | None
     superseded_by: str | None
-    author: str | None = None
+    author: str | None
 
 
 @dataclass
@@ -118,7 +117,7 @@ class MigrateOpLog:
     created_at: datetime
     before: dict[str, Any] | None
     after: dict[str, Any] | None
-    legacy_id: int | None = None
+    legacy_id: int | None
 
 
 @dataclass

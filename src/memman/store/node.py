@@ -295,8 +295,8 @@ def has_active_with_queue_uuid(db: 'DB', queue_uuid: str) -> bool:
     land", so a superseded row counts: a row a later `replace`
     retired still carries this write's uuid, and excluding superseded
     rows would re-insert a fact the store already corrected. SQL `= ?`
-    never matches NULL, so legacy rows with a null `queue_uuid` can
-    never satisfy it -- do not add a Python-side default that would.
+    never matches NULL, so a row with a null `queue_uuid` can never
+    satisfy it -- do not add a Python-side default that would.
     """
     row = db._query(
         'select 1 from insights where queue_uuid = ?'
@@ -335,8 +335,8 @@ def get_by_queue_uuid(db: 'DB', queue_uuid: str) -> list[Insight]:
     - Superseded rows are returned: a fact a later write superseded
       is still where THIS write landed, and the caller reads the
       successor off `superseded_by`. A forgotten row is not returned.
-      SQL `= ?` never matches the NULL `queue_uuid` of a pre-0.18.0
-      row.
+      SQL `= ?` never matches the NULL `queue_uuid` of a row with no
+      queue uuid.
     - Empty is a real answer, not an error: a write that stored
       nothing produces no rows here.
     """
@@ -664,10 +664,6 @@ def iter_stale_insight_ids(
 
     Notes
     -----
-    - A row is stale iff `prompt_version` is non-NULL and differs from
-      `active_pv`. NULL provenance is deliberately not stale: those
-      rows pre-date provenance tracking and need a backfill, not a
-      rebuild.
     - Keep this predicate aligned with
       `doctor._is_provenance_stale` and the Postgres copy.
     """
@@ -721,16 +717,16 @@ def _scan_insight(row: tuple[Any, ...]) -> Insight:
     i.updated_at = parse_timestamp(row[4])
     if row[5]:
         i.deleted_at = parse_timestamp(row[5])
-    if len(row) > 6 and row[6]:
+    if row[6]:
         i.summary = row[6]
-    if len(row) > 7 and row[7]:
+    if row[7]:
         i.linked_at = parse_timestamp(row[7])
-    if len(row) > 8 and row[8]:
+    if row[8]:
         i.enriched_at = parse_timestamp(row[8])
-    if len(row) > 9 and row[9]:
+    if row[9]:
         i.queue_uuid = row[9]
-    if len(row) > 10 and row[10]:
+    if row[10]:
         i.superseded_by = row[10]
-    if len(row) > 11 and row[11]:
+    if row[11]:
         i.author = row[11]
     return i

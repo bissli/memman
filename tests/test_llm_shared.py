@@ -9,7 +9,7 @@ to its unparsed default.
 import json
 
 import pytest
-from memman.llm.shared import parse_json_list_response, parse_json_response
+from memman.llm.shared import parse_json_response
 
 
 def test_parse_json_response_reads_the_object_after_prose():
@@ -54,32 +54,6 @@ def test_parse_json_response_repairs_a_lone_backslash():
     raw = '{"lone": "NT AUTHORITY\\SYSTEM", "pair": "C:\\\\Users"}'
     parsed = parse_json_response(raw)
     assert parsed == {'lone': 'NT AUTHORITY\\SYSTEM', 'pair': 'C:\\Users'}
-
-
-def test_parse_json_list_response_reads_the_list_after_prose():
-    """Verify an edge list behind a paragraph of reasoning is still read.
-
-    Mutation: trying only the whole text and the whole text with fences
-        stripped, which returns None and drops every edge of the response.
-    Oracle: the hand-written list.
-    """
-    raw = ('Memory [0] caused memory [1]; the rest are unrelated.\n\n```json\n'
-           '[{"source_id": "a", "target_id": "b", "confidence": 0.9}]\n```')
-    assert parse_json_list_response(raw) == [
-        {'source_id': 'a', 'target_id': 'b', 'confidence': 0.9}]
-
-
-def test_parse_json_list_response_prefers_the_list_of_objects():
-    """Verify a bracketed index in trailing prose does not replace the edge list.
-
-    Mutation: returning the last top-level list found, which is the `[1]`
-        the model wrote while explaining itself.
-    Oracle: the edge list, with the prose index left behind.
-    """
-    raw = ('[{"source_id": "a", "target_id": "b", "confidence": 0.9}]\n\n'
-           'I linked [0] to [1] because the second describes the fix.')
-    assert parse_json_list_response(raw) == [
-        {'source_id': 'a', 'target_id': 'b', 'confidence': 0.9}]
 
 
 def test_parse_json_response_keeps_a_literal_newline_inside_a_string():

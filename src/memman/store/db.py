@@ -370,8 +370,9 @@ create index if not exists idx_insights_pending_link
     on insights(linked_at, created_at)
     where linked_at is null and deleted_at is null and superseded_by is null;
 -- Load-bearing twice: as the schema canary, the statement that
--- makes a 0.32.x store fail at open (see _migrate); and as the
--- carrier of `query_insights`' whole predicate and sort order, so
+-- makes a store missing `superseded_by` fail at open (see
+-- _migrate); and as the carrier of `query_insights`' whole
+-- predicate and sort order, so
 -- `recall --basic` honors its limit from the index instead of
 -- reading every current row into a temp b-tree. Declared as a
 -- plain composite, not a partial index, so the planner searches the
@@ -463,9 +464,10 @@ def _migrate(db: DB) -> None:
       nothing that needs a live Backend can report on such a store.
     - Creating `insights_fts` also populates it, in ONE transaction.
       The triggers only carry rows written after the table exists, so
-      a store that predates it -- or one restored from a backup that
-      does -- would otherwise open with an empty index and silently
-      lose the keyword channel. Atomicity is what makes that safe:
+      a store with no `insights_fts` table, including one restored
+      from a backup without it, would otherwise open with an empty
+      index and silently lose the keyword channel. Atomicity is what
+      makes that safe:
       the connection is autocommit and `executescript` commits before
       it runs, so creating the table there would leave an empty index
       durable if the backfill were interrupted, and the absence check

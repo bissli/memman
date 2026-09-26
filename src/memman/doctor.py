@@ -77,32 +77,6 @@ def check_enrichment_coverage(backend: Backend) -> dict[str, Any]:
         }
 
 
-def check_oplog_delta_coverage(backend: Backend) -> dict[str, Any]:
-    """Report the share of oplog rows that carry before/after deltas.
-
-    Informational only -- the `before`/`after` columns were added
-    after the oplog table existed, so historical rows from older
-    memman versions have NULL deltas with no path to backfill.
-    Coverage on long-lived stores trends slowly upward as new
-    writes accrue. Always returns `pass`; operators consult the
-    `coverage_pct` for trend awareness.
-    """
-    total, with_delta = backend.oplog.delta_coverage()
-    if total == 0:
-        coverage_pct = 100.0
-    else:
-        coverage_pct = round(with_delta / total * 100, 1)
-    return {
-        'name': 'oplog_delta_coverage',
-        'status': 'pass',
-        'detail': {
-            'total_oplog_rows': total,
-            'rows_with_delta': with_delta,
-            'coverage_pct': coverage_pct,
-            },
-        }
-
-
 def check_supersession_integrity(backend: Backend) -> dict[str, Any]:
     """Verify every `superseded_by` pointer is well formed.
 
@@ -123,51 +97,6 @@ def check_supersession_integrity(backend: Backend) -> dict[str, Any]:
     detail.update({key: ids[:20] for key, ids in populations.items()})
     return {
         'name': 'supersession_integrity',
-        'status': status,
-        'detail': detail,
-        }
-
-
-RETIRED_INSIGHT_INDEXES = ('idx_insights_deleted_importance_created',)
-
-
-def check_partial_index_predicates(backend: Backend) -> dict[str, Any]:
-    """Verify every index on `insights` is one the current baseline declares.
-
-    `create index if not exists` matches by name, so an index whose
-    WHERE changed in code keeps its old predicate on a live store
-    until it is dropped and the baseline recreates it. A definition is
-    stale when its predicate names `deleted_at is null` without
-    `superseded_by is null`; such an index still serves superseded
-    rows to the scan it backs. An index the baseline no longer
-    declares is retired: it has no predicate to read, costs a write
-    per insert, and only a name check finds it.
-    """
-    definitions = backend.introspect_index_definitions('insights')
-    stale: list[str] = []
-    retired: list[str] = []
-    checked = 0
-    for name, ddl in sorted(definitions.items()):
-        if name.startswith(RETIRED_INSIGHT_INDEXES):
-            retired.append(name)
-            continue
-        _, _, predicate = ' '.join(ddl.lower().split()).partition(' where ')
-        if not predicate:
-            continue
-        checked += 1
-        if ('deleted_at is null' in predicate
-                and 'superseded_by is null' not in predicate):
-            stale.append(name)
-    status = 'pass' if not stale and not retired else 'fail'
-    detail: dict[str, Any] = {
-        'checked': checked, 'stale': stale, 'retired': retired}
-    if stale or retired:
-        detail['remedy'] = (
-            'drop ' + ', '.join(stale + retired)
-            + '; the baseline recreates each current index on the next'
-            ' open')
-    return {
-        'name': 'partial_index_predicates',
         'status': status,
         'detail': detail,
         }
@@ -201,12 +130,13 @@ _ORPHAN_ARTIFACTS = (
 def check_stale_post_migrate_source(data_dir: str) -> dict[str, Any]:
     """Flag SQLite source files left behind on a Postgres-routed store.
 
-    A successful `memman migrate <store>` intentionally preserves the
-    source `memman.db` (plus WAL/SHM) so the
-    operator has a forensic copy of pre-migrate state. The file is no
-    longer the source of truth -- writes go to Postgres -- so it is
-    "stale" and the operator may want to delete it once the postgres
-    side is verified. Report each store where survivors remain.
+    A successful `memman migrate <store>` archives the source
+    `memman.db` (plus WAL/SHM) under
+    `<data_dir>/archive/<store>/<YYYYMMDD>_<NN>/`. When the archive
+    step itself fails, the source is left in place instead, no
+    longer the source of truth since writes now go to Postgres, so
+    it reads as "stale" here until the operator archives or deletes
+    it by hand. Report each store where survivors remain.
 
     Iteration is per-store via `factory.list_stores`: only stores
     whose resolved backend is `postgres` are scanned. The check is
@@ -292,57 +222,6 @@ def check_queue_backlog(data_dir: str) -> dict[str, Any]:
                 'age_fail_seconds': QUEUE_AGE_FAIL_SECONDS,
                 },
             },
-        }
-
-
-EXPECTED_INSIGHT_COLUMNS = {
-    'prompt_version', 'embedding_model',
-    'linked_at', 'enriched_at',
-    'summary',
-    'queue_uuid',
-    'superseded_by', 'author',
-    }
-EXPECTED_QUEUE_TABLES = {'queue', 'worker_runs'}
-
-
-def check_schema_columns(backend: Backend) -> dict[str, Any]:
-    """Verify the insights table has the canonical provenance columns.
-
-    Single-user canonical-schema policy: missing columns mean the DB
-    predates a schema change; the remedy is adding them to the live
-    store by hand. This check only ever fires for stores that OPEN --
-    a pre-migration store fails at open first, which carries the
-    primary diagnostic.
-    """
-    present = backend.introspect_columns('insights')
-    missing = sorted(EXPECTED_INSIGHT_COLUMNS - present)
-    status = 'pass' if not missing else 'fail'
-    detail: dict[str, Any] = {'missing': missing}
-    if missing:
-        detail['remedy'] = 'add the missing columns to the live store'
-    return {
-        'name': 'schema_columns',
-        'status': status,
-        'detail': detail,
-        }
-
-
-def check_queue_schema(data_dir: str) -> dict[str, Any]:
-    """Verify queue.db has the canonical tables (queue + worker_runs).
-    """
-    from memman.queue import queue_db
-
-    with queue_db(data_dir) as conn:
-        rows = conn.execute(
-            "select name from sqlite_master where type='table'"
-            ).fetchall()
-    present = {row[0] for row in rows}
-    missing = sorted(EXPECTED_QUEUE_TABLES - present)
-    status = 'pass' if not missing else 'fail'
-    return {
-        'name': 'queue_schema',
-        'status': status,
-        'detail': {'missing': missing},
         }
 
 
@@ -434,11 +313,8 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
     - fail when the resolved kind is `postgres` and no DSN is reachable
       via `MEMMAN_POSTGRES_DSN_<store>` or `MEMMAN_DEFAULT_POSTGRES_DSN`.
 
-    Also fails the check at the top when the env file carries a bare
-    `MEMMAN_BACKEND` or `MEMMAN_PG_DSN` -- both are silently ignored
-    by the per-store routing model and represent a 0.13->0.14 upgrade
-    trap. The DSN-drift warn (per-store vs default) is intentionally
-    not raised: per-store routing pins a store to a specific DSN, so
+    The DSN-drift warn (per-store vs default) is intentionally not
+    raised: per-store routing pins a store to a specific DSN, so
     differing values are the canonical state, not a typo.
 
     Empty data dirs (no stores at all) pass with an empty list.
@@ -672,16 +548,8 @@ def check_scheduler_state() -> dict[str, Any]:
 
     installed = bool(s.get('installed'))
     state = s.get('state')
-    drift = bool(s.get('drift'))
 
-    if drift:
-        status = 'fail'
-    elif not installed:
-        status = 'warn'
-    elif state == 'off':
-        status = 'warn'
-    else:
-        status = 'pass'
+    status = 'pass' if installed else 'warn'
 
     return {
         'name': 'scheduler_state',
@@ -690,7 +558,6 @@ def check_scheduler_state() -> dict[str, Any]:
             'installed': installed,
             'state': state,
             'active': bool(s.get('active')),
-            'drift': drift,
             'interval_seconds': s.get('interval_seconds'),
             },
         }
@@ -735,19 +602,6 @@ def check_scheduler_heartbeat(data_dir: str) -> dict[str, Any]:
                 'installed': installed,
                 'state': state,
                 'platform': platform,
-                },
-            }
-
-    if platform == 'serve' and interval is None:
-        return {
-            'name': 'scheduler_heartbeat',
-            'status': 'fail',
-            'detail': {
-                'reason': ('serve interval not recorded;'
-                           ' restart `memman scheduler serve` so the'
-                           ' interval file is rewritten'),
-                'platform': platform,
-                'state': state,
                 },
             }
 
@@ -1051,14 +905,12 @@ def _is_provenance_stale(row_pv: str | None, active_pv: str) -> bool:
 
     Notes
     -----
-    - NULL is deliberately not stale: those rows pre-date provenance
-      tracking and need a backfill, not a rebuild.
     - The same predicate is encoded in SQL by `count_stale_insights`
       and `iter_stale_insight_ids` (`store/node.py`,
       `store/postgres.py`); keep those WHERE clauses aligned with
       this function when the rule changes.
     """
-    return row_pv is not None and row_pv != active_pv
+    return row_pv != active_pv
 
 
 def check_provenance_drift(backend: Backend) -> dict[str, Any]:
@@ -1131,11 +983,8 @@ def run_all_checks(
     if total > 0:
         checks.extend([
             check_integrity(backend),
-            check_schema_columns(backend),
             check_enrichment_coverage(backend),
-            check_oplog_delta_coverage(backend),
             check_supersession_integrity(backend),
-            check_partial_index_predicates(backend),
             check_embedding_consistency(backend),
             check_embed_fingerprint(backend),
             check_no_stale_swap_meta(backend),
@@ -1143,15 +992,12 @@ def run_all_checks(
             ])
     else:
         checks.extend([
-            check_schema_columns(backend),
-            check_partial_index_predicates(backend),
             check_supersession_integrity(backend),
             check_embed_fingerprint(backend),
             check_no_stale_swap_meta(backend),
             ])
     if data_dir:
         checks.extend((
-            check_queue_schema(data_dir),
             check_queue_backlog(data_dir),
             check_scheduler_heartbeat(data_dir),
             check_drain_heartbeat(data_dir),

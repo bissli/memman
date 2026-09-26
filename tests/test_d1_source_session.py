@@ -127,15 +127,36 @@ def test_insight_column_lists_are_identical_across_backends():
     assert pg_value == _INSIGHT_COLUMNS
 
 
-def test_expected_insight_columns_covers_new_fields(backend):
-    """`doctor.EXPECTED_INSIGHT_COLUMNS` matches the live schema.
+EXPECTED_INSIGHT_COLUMNS = {
+    'prompt_version', 'embedding_model',
+    'linked_at', 'enriched_at',
+    'summary',
+    'queue_uuid',
+    'superseded_by', 'author',
+    }
 
-    Mutation: adding a column to the schema but not to doctor -
-        `check_schema_columns` would then pass on a store doctor
-        cannot actually vouch for.
-    Oracle: every expected column exists on a freshly created store.
+
+def _insight_columns(backend):
+    """Every column name of the insights table, on either backend."""
+    if hasattr(backend, '_db'):
+        rows = backend._db._query('pragma table_info(insights)').fetchall()
+        return {r[1] for r in rows}
+    with backend._conn.cursor() as cur:
+        cur.execute(
+            'select column_name from information_schema.columns'
+            " where table_schema = %s and table_name = 'insights'",
+            (backend._schema,))
+        return {r[0] for r in cur.fetchall()}
+
+
+def test_expected_insight_columns_covers_new_fields(backend):
+    """The provenance and enrichment columns exist on a fresh store.
+
+    Mutation: dropping one of these columns from a baseline schema
+        while leaving it in the other backend's.
+    Oracle: `pragma table_info(insights)` on SQLite,
+        `information_schema.columns` on Postgres.
     """
-    from memman.doctor import EXPECTED_INSIGHT_COLUMNS
-    present = backend.introspect_columns('insights')
+    present = _insight_columns(backend)
     assert EXPECTED_INSIGHT_COLUMNS <= present
     assert {'queue_uuid'} <= present

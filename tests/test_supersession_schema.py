@@ -56,18 +56,28 @@ def _seed_store(data_dir, store):
     return Path(sdir) / 'memman.db'
 
 
-def test_expected_insight_columns_covers_superseded_by(backend):
-    """`doctor.EXPECTED_INSIGHT_COLUMNS` names the new column.
+def _insight_columns(backend):
+    """Every column name of the insights table, on either backend."""
+    if hasattr(backend, '_db'):
+        rows = backend._db._query('pragma table_info(insights)').fetchall()
+        return {r[1] for r in rows}
+    with backend._conn.cursor() as cur:
+        cur.execute(
+            'select column_name from information_schema.columns'
+            " where table_schema = %s and table_name = 'insights'",
+            (backend._schema,))
+        return {r[0] for r in cur.fetchall()}
 
-    Mutation: adding the column to the baseline schemas but not to
-        doctor -- `check_schema_columns` passes on a store doctor
-        cannot vouch for.
-    Oracle: the constant names the column AND a freshly created
-        store carries it, on both backends.
+
+def test_expected_insight_columns_covers_superseded_by(backend):
+    """A freshly created store carries `superseded_by`, on both backends.
+
+    Mutation: adding the column to only one backend's baseline
+        schema, so a fresh store on the other backend lacks it.
+    Oracle: `pragma table_info(insights)` on SQLite,
+        `information_schema.columns` on Postgres.
     """
-    from memman.doctor import EXPECTED_INSIGHT_COLUMNS
-    present = backend.introspect_columns('insights')
-    assert 'superseded_by' in EXPECTED_INSIGHT_COLUMNS
+    present = _insight_columns(backend)
     assert 'superseded_by' in present
 
 

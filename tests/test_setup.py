@@ -13,7 +13,6 @@ import pytest
 from click.testing import CliRunner
 from memman import config
 from memman.cli import cli, list_claude_permissions
-from memman.setup.markdown import remove_memory_block
 from memman.setup.settings import add_claude_hooks_selective
 from memman.setup.settings import add_memman_permission, read_json_file
 from memman.setup.settings import remove_claude_hooks, remove_if_empty
@@ -188,29 +187,6 @@ class TestHookManagement:
         assert 'SessionStart' in hooks
         assert 'UserPromptSubmit' in hooks
         assert 'Stop' not in hooks
-
-    def test_remove_memory_block(self, tmp_path):
-        """Remove markers and content between them."""
-        p = tmp_path / 'test.md'
-        p.write_text('before\n<!-- memman:start -->\nstuff\n<!-- memman:end -->\nafter\n')
-        assert remove_memory_block(str(p)) is True
-        content = p.read_text()
-        assert 'memman' not in content
-        assert 'before' in content
-        assert 'after' in content
-
-    def test_remove_memory_block_empty_file(self, tmp_path):
-        """File deleted if empty after marker removal."""
-        p = tmp_path / 'test.md'
-        p.write_text('<!-- memman:start -->\nstuff\n<!-- memman:end -->\n')
-        assert remove_memory_block(str(p)) is True
-        assert not p.exists()
-
-    def test_remove_memory_block_no_markers(self, tmp_path):
-        """No markers returns False."""
-        p = tmp_path / 'test.md'
-        p.write_text('no markers here')
-        assert remove_memory_block(str(p)) is False
 
     def test_add_claude_hooks_with_task_recall(self):
         """Verify the pre-delegation entry matches the delegation tool.
@@ -986,7 +962,7 @@ class TestSymlinks:
         from importlib.resources import files as pkg_files
 
         from memman.setup.claude import claude_uninstall, claude_write_skill
-        config = tmp_path / 'claude'
+        config = tmp_path / '.claude'
         claude_write_skill(str(config))
         target = pathlib.Path(str(pkg_files('memman.setup.assets')
                                   .joinpath('claude/SKILL.md'))).resolve()
@@ -1115,7 +1091,6 @@ def test_uninstall_raises_when_claude_code_cleanup_fails(
     monkeypatch.setattr(
         claude_setup, 'claude_uninstall',
         lambda config_dir: [RuntimeError('settings rewrite failed')])
-    monkeypatch.setattr(claude_setup, '_uninstall_markdown', lambda path: None)
     scheduler_calls = []
     monkeypatch.setattr(
         claude_setup, 'uninstall_scheduler',

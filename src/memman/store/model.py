@@ -1,7 +1,7 @@
 """Shared dataclasses for backend implementations and pipeline code.
 
 The domain type (Insight) plus DTOs returned by Backend Protocol
-verbs (OpLogEntry, OpLogStats, NodeStats, ProvenanceCount, QueueRow,
+verbs (OpLogEntry, OpLogStats, NodeStats, ProvenanceCount,
 WorkerRun, ReembedRow). Includes the timestamp helper used across the
 package.
 
@@ -55,7 +55,9 @@ class OpLogEntry:
     `before` and `after` capture the insight content before and
     after the logged operation. Populated by replace, supersede,
     unsupersede and forget so forensic questions can be answered
-    from the oplog alone. Older rows may have both as None.
+    from the oplog alone. A `recall:basic`, `recall-detail`,
+    `rebuild` or `embed_reembed` row carries no deltas, so both
+    stay None.
     """
 
     id: int
@@ -211,18 +213,6 @@ class EnrichmentCoverage:
     total_active: int = 0
     missing_embedding: int = 0
     missing_summary: int = 0
-
-
-@dataclass
-class QueueRow:
-    """One claimable row from the per-host queue."""
-
-    id: int
-    store: str
-    op: str
-    payload: str
-    attempts: int
-    created_at: datetime
 
 
 @dataclass

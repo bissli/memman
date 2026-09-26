@@ -80,7 +80,6 @@ Without the wizard, install refuses to finish when a required value is missing: 
 - the scheduled backup timer or agent,
 - `~/.claude/hooks/memman/` and `~/.claude/skills/memman/`,
 - the memman hooks and permission entries in `~/.claude/settings.json`,
-- a block between `<!-- memman:start -->` and `<!-- memman:end -->` in `CLAUDE.md` in the current directory,
 - the scheduler unit, `~/.memman/scheduler.state`, and `~/.memman/debug.state`,
 - the secret keys in the env file: `MEMMAN_LLM_API_KEY`, `MEMMAN_OPENROUTER_API_KEY`, `MEMMAN_VOYAGE_API_KEY`, `MEMMAN_OPENAI_EMBED_API_KEY`, and `MEMMAN_DEFAULT_POSTGRES_DSN`.
 
@@ -329,14 +328,14 @@ memman log worker --stack [--lines N]
 
 **`doctor`** exits 1 when any check fails and 0 otherwise. It makes one live LLM call and one live embedding call.
 
-| Group              | Checks                                                                                                                                                                                                                     |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Store              | `integrity`, `schema_columns`, `enrichment_coverage`, `oplog_delta_coverage`, `supersession_integrity`, `partial_index_predicates`, `embedding_consistency`, `embed_fingerprint`, `no_stale_swap_meta`, `provenance_drift` |
-| Queue and schedule | `queue_schema`, `queue_backlog`, `scheduler_heartbeat`, `drain_heartbeat`, `scheduler_state`                                                                                                                               |
-| Configuration      | `env_completeness`, `per_store_keys`, `env_permissions`, `stale_post_migrate_source`, `claude_hooks`, `optional_extras`                                                                                                    |
-| Providers          | `llm_probe`, `embed_probe`                                                                                                                                                                                                 |
+| Group              | Checks                                                                                                                                               |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Store              | `integrity`, `enrichment_coverage`, `supersession_integrity`, `embedding_consistency`, `embed_fingerprint`, `no_stale_swap_meta`, `provenance_drift` |
+| Queue and schedule | `queue_backlog`, `scheduler_heartbeat`, `drain_heartbeat`, `scheduler_state`                                                                         |
+| Configuration      | `env_completeness`, `per_store_keys`, `env_permissions`, `stale_post_migrate_source`, `claude_hooks`, `optional_extras`                              |
+| Providers          | `llm_probe`, `embed_probe`                                                                                                                           |
 
-A store with no memories skips `integrity`, `enrichment_coverage`, `oplog_delta_coverage`, `embedding_consistency`, and `provenance_drift`.
+A store with no memories skips `integrity`, `enrichment_coverage`, `embedding_consistency`, and `provenance_drift`.
 
 **`log list`** prints the operation log as JSON, 20 entries by default. `--since` takes a count and a unit: `7d`, `24h`, or `30m`. `--stats` groups the entries by operation. `--text` prints a table.
 

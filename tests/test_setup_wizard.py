@@ -67,17 +67,6 @@ class TestWizardFlow:
         assert config.DEFAULT_BACKEND not in out
         assert config.BACKEND_FOR('default') not in out
 
-    def test_postgres_hidden_when_backend_module_missing(
-            self, tty, tmp_path, monkeypatch):
-        """Even with extras present, the postgres backend module gates visibility."""
-        monkeypatch.setattr(
-            'memman.setup.wizard.extras.is_available', lambda extra: True)
-        monkeypatch.setattr(
-            'memman.setup.wizard._backend_module_exists', lambda: False)
-        out = wizard.run_wizard(str(tmp_path / 'memman'))
-        assert config.DEFAULT_BACKEND not in out
-        assert config.BACKEND_FOR('default') not in out
-
 
 class TestSecretPrompts:
     """Secret-prompt logic for OPENROUTER_API_KEY / VOYAGE_API_KEY."""

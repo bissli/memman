@@ -14,8 +14,8 @@ call writes one JSON line to `~/.memman/logs/debug.log`, which is
 size-rotated by `RotatingFileHandler` to cap total disk use.
 
 The handler attaches to `logging.getLogger('memman')` at DEBUG level, so
-the pre-existing `logger.debug()` calls across the codebase are
-captured for free in the same file.
+every `logger.debug()` call across the codebase is captured for free in
+the same file.
 
 Header redaction replaces values for `Authorization`, `x-api-key`, and
 `Api-Key` (case-insensitive) with `'***REDACTED***'`. Bodies are logged

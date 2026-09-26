@@ -15,10 +15,8 @@ except ImportError:
 from click.testing import CliRunner
 from memman.cli import cli
 from memman.doctor import check_drain_heartbeat, check_env_completeness
-from memman.doctor import check_env_permissions, check_queue_schema
-from memman.doctor import check_scheduler_heartbeat, check_scheduler_state
-from memman.doctor import check_schema_columns
-from memman.store.db import open_db
+from memman.doctor import check_env_permissions, check_scheduler_heartbeat
+from memman.doctor import check_scheduler_state
 from memman.store.node import insert_insight, update_embedding
 from memman.store.node import update_enrichment
 from tests.conftest import make_insight
@@ -31,7 +29,9 @@ def _fake_embedding(dim: int = 512) -> bytes:
 
 def _insert_healthy_insight(db, id: str, content: str = 'Healthy test insight with enough content') -> None:
     """Insert an insight with all enrichment fields populated."""
-    ins = make_insight(id=id, content=content)
+    from memman.pipeline.remember import compute_prompt_version
+    ins = make_insight(
+        id=id, content=content, prompt_version=compute_prompt_version())
     insert_insight(db, ins)
     update_enrichment(db, id, 'summary text')
     update_embedding(db, id, _fake_embedding(), 'voyage-3-lite')
@@ -184,12 +184,11 @@ class TestStaleHelpers:
     def _seed_stale_matrix(self, backend, active_pv):
         """Seed the canonical predicate rows; return expected stale ids.
 
-        Mapping, by prompt_version: A=NULL not stale, B=current not
-        stale, C=OLD STALE, E=OLD STALE.
+        Mapping, by prompt_version: B=current not stale, C=OLD STALE,
+        E=OLD STALE.
         """
         OLD_PV = 'old-prompt-version-deadbeef'
         rows = [
-            ('row-a', None),
             ('row-b', active_pv),
             ('row-c', OLD_PV),
             ('row-e', OLD_PV),
@@ -201,13 +200,11 @@ class TestStaleHelpers:
         return ['row-c', 'row-e']
 
     def test_iter_returns_only_drifted_rows(self, backend):
-        """iter_stale_insight_ids excludes NULL provenance and current rows.
+        """iter_stale_insight_ids excludes the current row.
 
-        Mutation: the two-term predicate rewritten as the null-safe
-            `prompt_version is not ?`, which reports the NULL row as
-            stale, or the `!= active_pv` term dropped, which reports
-            the current row as stale too.
-        Oracle: the hand-built four-row matrix from
+        Mutation: the `!= active_pv` term dropped, which reports the
+            current row as stale too.
+        Oracle: the hand-built three-row matrix from
             `_seed_stale_matrix`, whose only stale ids are the two
             seeded on `OLD_PV`.
         """
@@ -223,9 +220,8 @@ class TestStaleHelpers:
         """count_stale_insights agrees with len(iter_stale_insight_ids).
 
         Mutation: `count_stale_insights`'s SQL predicate drifting from
-            `iter_stale_insight_ids`'s (e.g. rewritten as the null-safe
-            `prompt_version is not ?`, which counts the NULL row), so
-            the two disagree on the seeded matrix.
+            `iter_stale_insight_ids`'s, so the two disagree on the
+            seeded matrix.
         Oracle: the hand-counted stale total of 2 from
             `_seed_stale_matrix`.
         """
@@ -519,85 +515,6 @@ def _started_scheduler_status(interval=900):
 class TestHardening:
     """B12 doctor checks: schema, env perms, scheduler, worker runs."""
 
-    def test_schema_columns_passes_on_current_schema(self, tmp_path):
-        """Fresh DB has all expected provenance columns."""
-        db = open_db(str(tmp_path))
-        try:
-            from memman.store.sqlite import SqliteBackend
-            result = check_schema_columns(SqliteBackend(db))
-            assert result['status'] == 'pass'
-            assert result['detail']['missing'] == []
-        finally:
-            db.close()
-
-    def test_schema_columns_ignores_a_retired_column(self, tmp_path):
-        """The check passes whether or not a retired column is present.
-
-        A store that predates the retention-metric removal still
-        carries `effective_importance`; one created after it does
-        not, and the fleet holds both at once during a migration.
-        `EXPECTED_INSIGHT_COLUMNS` is ONE set shared by both
-        backends, so a retired name left in it reports `fail` on
-        every already-migrated store, with a remedy (rebuild) that
-        cannot help -- and a check written as set EQUALITY would
-        report `fail` on every not-yet-migrated one instead.
-
-        Mutation: re-adding a retired name to
-            `doctor.EXPECTED_INSIGHT_COLUMNS`, or comparing the two
-            sets with `==` rather than subtracting.
-        Oracle: the check's own status on one store in each of the
-            two states, arranged by adding the column and dropping
-            it again.
-        """
-        from memman.store.sqlite import SqliteBackend
-        db = open_db(str(tmp_path))
-        try:
-            db._conn.execute(
-                'alter table insights add column'
-                ' effective_importance real default 0.5')
-            legacy = check_schema_columns(SqliteBackend(db))
-            db._conn.execute(
-                'alter table insights drop column effective_importance')
-            migrated = check_schema_columns(SqliteBackend(db))
-        finally:
-            db.close()
-        assert legacy['status'] == 'pass', legacy['detail']
-        assert migrated['status'] == 'pass', migrated['detail']
-        assert migrated['detail']['missing'] == []
-
-    def test_schema_columns_fails_when_column_missing(self, tmp_path):
-        """A DB without provenance columns should fail the schema check.
-
-        Mutation: computing `missing` as
-            `present - EXPECTED_INSIGHT_COLUMNS` instead of the
-            reverse, which leaves `status` at `pass`, or dropping
-            `prompt_version`/`embedding_model` from
-            `EXPECTED_INSIGHT_COLUMNS`, which drops them from
-            `missing`.
-        Oracle: an `insights` table rebuilt with only an `id` column,
-            checked for `prompt_version` and `embedding_model` by
-            name in `result['detail']['missing']`.
-        """
-        db = open_db(str(tmp_path))
-        try:
-            db._conn.executescript(
-                'CREATE TABLE insights_minimal (id TEXT PRIMARY KEY);'
-                'DROP TABLE insights;'
-                'ALTER TABLE insights_minimal RENAME TO insights;')
-            from memman.store.sqlite import SqliteBackend
-            result = check_schema_columns(SqliteBackend(db))
-            assert result['status'] == 'fail'
-            assert 'prompt_version' in result['detail']['missing']
-            assert 'embedding_model' in result['detail']['missing']
-        finally:
-            db.close()
-
-    def test_queue_schema_passes_with_worker_runs(self, tmp_path):
-        """A fresh queue.db has the worker_runs table."""
-        result = check_queue_schema(str(tmp_path))
-        assert result['status'] == 'pass'
-        assert result['detail']['missing'] == []
-
     @pytest.mark.parametrize(('mode', 'expected_status', 'assert_issue'), [
         (None, 'pass', False),
         (0o644, 'fail', True),
@@ -620,24 +537,36 @@ class TestHardening:
                        for issue in result['detail']['issues'])
 
     def test_scheduler_state_warn_when_uninstalled(self, monkeypatch):
-        """Scheduler-not-installed is a warn, not a fail."""
+        """Scheduler-not-installed is a warn, not a fail.
+
+        Mutation: the `not installed` branch dropped or its status
+            flipped to `pass` or `fail`.
+        Oracle: the check's own status against a stubbed
+            not-installed `status()`.
+        """
         from memman.setup import scheduler as sch
         monkeypatch.setattr(
             sch, 'status',
-            lambda: {'installed': False, 'active': False, 'drift': False,
-                     'state': 'off', 'interval_seconds': None})
+            lambda: {'installed': False, 'active': False,
+                     'state': 'stopped', 'interval_seconds': None})
         result = check_scheduler_state()
         assert result['status'] == 'warn'
 
-    def test_scheduler_state_fail_on_drift(self, monkeypatch):
-        """Drift between state file and OS truth is a fail."""
+    def test_scheduler_state_pass_when_installed(self, monkeypatch):
+        """An installed, active scheduler passes.
+
+        Mutation: the `installed` branch reporting `warn` or `fail`
+            instead of `pass`.
+        Oracle: the check's own status against a stubbed installed,
+            active `status()`.
+        """
         from memman.setup import scheduler as sch
         monkeypatch.setattr(
             sch, 'status',
-            lambda: {'installed': True, 'active': False, 'drift': True,
-                     'state': 'active', 'interval_seconds': 900})
+            lambda: {'installed': True, 'active': True,
+                     'state': 'started', 'interval_seconds': 900})
         result = check_scheduler_state()
-        assert result['status'] == 'fail'
+        assert result['status'] == 'pass'
 
     def test_scheduler_heartbeat_fail_when_no_drains_and_started(self, tmp_path, monkeypatch):
         """Scheduler started + installed but no worker_runs row yet -> fail."""

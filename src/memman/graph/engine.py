@@ -80,8 +80,8 @@ def link_pending(
             on_progress('enrich', insight)
 
         enrichment: dict = {}
-        # Resolved inside the try, so an unresolvable role degrades to
-        # an unenriched row exactly as a failed call does.
+        # Resolved inside the try, so a client that fails to build
+        # degrades to an unenriched row exactly as a failed call does.
         # get_llm_client caches its client, so the repeat costs nothing.
         try:
             if metadata_llm_client is None:

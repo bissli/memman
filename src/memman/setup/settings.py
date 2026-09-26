@@ -103,7 +103,7 @@ def write_or_remove_json_file(path: str, data: dict) -> None:
 def _contains_memman(v: object) -> bool:
     """Recursively check if any string value contains memman hook paths."""
     if isinstance(v, str):
-        return 'memman' in v or 'hooks/mm/' in v
+        return 'memman' in v
     if isinstance(v, dict):
         return any(_contains_memman(val) for val in v.values())
     if isinstance(v, list):
@@ -121,7 +121,7 @@ def remove_claude_hooks(data: dict) -> None:
     hooks = data.get('hooks')
     if not isinstance(hooks, dict):
         return
-    for key in ('UserPromptSubmit', 'Stop', 'SessionStart',
+    for key in ('UserPromptSubmit', 'SessionStart',
                 'PreCompact', 'PreToolUse'):
         arr = hooks.get(key)
         if not isinstance(arr, list):
@@ -269,10 +269,9 @@ def remove_memman_permission(data: dict) -> None:
 
 _REMOVE_IF_EMPTY_ROOTS = frozenset({
     '.claude',
-    'claude',
     })
 _REMOVE_IF_EMPTY_LEAVES = frozenset({
-    'hooks', 'skills', 'memman',
+    'hooks', 'skills',
     })
 
 

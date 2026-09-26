@@ -7,10 +7,11 @@ features today:
    `/chat/completions`). The wizard prompts for a single endpoint URL
    (`MEMMAN_LLM_ENDPOINT`); OpenRouter is the default, and any other
    OpenAI-compat endpoint (Anthropic at `/v1`, OpenAI, Gemini's
-   OpenAI shim, Ollama, vLLM, LiteLLM, ...) is accepted. When the env
-   file has no model, the wizard offers up to three OpenRouter
-   candidates to pick from, or prompts for the slug on any other
-   endpoint (no shared model catalog exists for non-OR vendors).
+   OpenAI shim, Ollama, vLLM, LiteLLM, ...) is accepted. On
+   OpenRouter, `collect_install_knobs` seeds the shipped model from
+   `INSTALL_DEFAULTS` with no prompt; on any other endpoint the
+   operator types the model slug (no shared model catalog exists for
+   non-OR vendors).
 
 2. Mandatory-secret prompting. The embed provider's API key (when one
    is required) and the LLM endpoint's API key (required for any
@@ -18,11 +19,10 @@ features today:
    from both the env file and the shell.
 
 3. Backend selection (sqlite | postgres). Postgres is hidden until
-   the `memman[postgres]` extras are importable AND the
-   `memman.store.postgres` module exists. Until both checks pass,
-   only sqlite is selectable -- the wizard skips the prompt entirely
-   and writes `MEMMAN_DEFAULT_BACKEND=sqlite` straight through,
-   avoiding a one-option confirmation prompt.
+   the `memman[postgres]` extras are importable. Until then, only
+   sqlite is selectable -- the wizard skips the prompt entirely and
+   writes `MEMMAN_DEFAULT_BACKEND=sqlite` straight through, avoiding
+   a one-option confirmation prompt.
 
 The wizard writes per-store dispatch keys: `MEMMAN_DEFAULT_BACKEND`
 (and `MEMMAN_DEFAULT_POSTGRES_DSN` for postgres) plus
@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import os
 import sys
-from importlib.util import find_spec
 
 import click
 from memman import config, extras
@@ -449,22 +448,13 @@ def _select_backend(
 def _selectable_backends() -> list[str]:
     """Return the list of backends the wizard can offer.
 
-    Sqlite is always available. Postgres is included only when both
-    `memman[postgres]` extras are importable AND the runtime
-    `memman.store.postgres` module exists.
+    Sqlite is always available. Postgres is included only when
+    `memman[postgres]` extras are importable.
     """
     out = ['sqlite']
-    if extras.is_available('postgres') and _backend_module_exists():
+    if extras.is_available('postgres'):
         out.append('postgres')
     return out
-
-
-def _backend_module_exists() -> bool:
-    """Return True when `memman.store.postgres` can be imported."""
-    try:
-        return find_spec('memman.store.postgres') is not None
-    except ModuleNotFoundError:
-        return False
 
 
 def _collect_dsn(

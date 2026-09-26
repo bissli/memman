@@ -108,25 +108,3 @@ class TestForgetWritesBefore:
         assert entries
         assert entries[0].before is not None
         assert entries[0].before.get('content') == 'goodbye world'
-
-
-class TestDoctorOplogDeltaCoverage:
-    """`memman doctor` surfaces `oplog_delta_coverage` percentage."""
-
-    def test_coverage_reports_percentage(self, backend):
-        """Mix of populated and bare oplog rows yields 50%.
-        """
-        with backend.transaction():
-            backend.oplog.log(
-                operation='replace', insight_id='m-1',
-                detail='', before={'a': 1}, after={'a': 2})
-            backend.oplog.log(
-                operation='remember', insight_id='m-2', detail='')
-        from memman.doctor import check_oplog_delta_coverage
-        result = check_oplog_delta_coverage(backend)
-        assert result['name'] == 'oplog_delta_coverage'
-        assert result['detail']['total_oplog_rows'] == 2
-        assert (
-            result['detail']['rows_with_delta'] == 1)
-        assert (
-            result['detail']['coverage_pct'] == 50.0)
