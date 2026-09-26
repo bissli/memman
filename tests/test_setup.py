@@ -835,12 +835,12 @@ class TestDocsMatchShippedHooks:
             (root / 'src' / 'memman' / 'setup' / 'assets')
             .glob('claude/*.sh')))
         diagram = (root / 'docs' / 'diagrams'
-                   / '01-system-architecture.drawio').read_text()
+                   / '02-system-architecture.drawio').read_text()
         label = re.search(r'id="a_hooks" value="([^"]*)"', diagram)
         assert label is not None
         text = re.sub(r'<[^>]+>', '/', html.unescape(label.group(1)))
         roles = [
-            token.strip() for token in text.split('/')
+            token.strip() for token in re.split(r'[/,]', text)
             if token.strip() and token.strip().lower() != 'hooks'
             ]
         assert len(roles) == shipped
