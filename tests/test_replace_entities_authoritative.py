@@ -66,12 +66,9 @@ def test_an_empty_typed_entity_list_clears_the_inherited_one(mm_runner):
 def test_an_unflagged_replace_still_inherits_every_name(mm_runner):
     """Verify omitting `--entity` carries the stored list whole.
 
-    The paired control: dropping the union outright would break
-    inheritance if the CLI were not already encoding the stored list
-    into the queue hint.
-
-    Mutation: dropping the inherited list along with the union, so an
-        unflagged replace loses every entity the row carried.
+    Mutation: the CLI queuing an empty entity list when `--entity` is
+        omitted, so an unflagged replace loses every entity the row
+        carried.
     Oracle: the hand-seeded two-name list, against the successor's
         stored list exactly.
     """
@@ -88,11 +85,7 @@ def test_an_unflagged_replace_still_inherits_every_name(mm_runner):
 
 
 def test_replace_offers_no_reconcile_flag(mm_runner):
-    """Verify `replace` carries no `--reconcile` option.
-
-    A replace names its target id directly and never runs the
-    extractor or the exact-match lookup, so a reconcile mode has
-    nothing to switch: no such option exists to advertise.
+    """Verify `replace` has no `--reconcile` option, having no such step.
 
     Mutation: adding a `--reconcile` option that the command silently
         ignores, so the flag reads as live and is not.
@@ -110,16 +103,13 @@ def test_replace_offers_no_reconcile_flag(mm_runner):
 
 
 def test_a_replace_stores_its_content_verbatim(mm_runner):
-    """Verify a replace never splits its content into several facts.
+    """Verify a replace stores its text as one row, exactly as typed.
 
-    The documented consequence of the flag's removal: a replace
-    targets one id, so the extractor never runs and the text lands
-    as one row.
-
-    Mutation: letting the drain reconcile a replace, which would run
-        fact extraction and store N rows for one command.
-    Oracle: the count of rows carrying the write's queue uuid, and
-        the stored content against the text as typed.
+    Mutation: the drain splitting the text into several facts or
+        rewording it, so the successor holds a fragment or a
+        paraphrase.
+    Oracle: the multi-clause text as typed, against the successor's
+        stored content.
     """
     _, data_dir = mm_runner
     old_id, name = _seed(mm_runner, data_dir, ['kombu'])

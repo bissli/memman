@@ -19,6 +19,9 @@ from memman.setup.settings import add_memman_permission, read_json_file
 from memman.setup.settings import remove_claude_hooks, remove_if_empty
 from memman.setup.settings import remove_memman_permission, strip_json5
 from memman.setup.settings import write_json_file
+from memman.store.db import open_db, store_dir, write_active
+from memman.store.node import insert_insight
+from tests.conftest import make_insight
 
 # The host truncates hook stdout above this many bytes and persists the
 # remainder to a file it never reads back.
@@ -880,29 +883,27 @@ class TestSetupCli:
         assert f'[memman] {notice}' in result.output
 
     def test_prime_honors_memman_store_env(self, tmp_path, monkeypatch):
-        """`memman prime` targets MEMMAN_STORE when set, not just the
-        active-store file.
-        """
-        from memman.store.db import default_data_dir, open_db, store_dir
+        """`memman prime` counts the MEMMAN_STORE store, not the active one.
 
+        Mutation: prime reading only the active-store file, so a session
+            pinned to another store reports the wrong store's count.
+        Oracle: one row in the active `default` store and two in `work`.
+        """
         monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
-        data_dir = default_data_dir()
-        pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
-        pathlib.Path(store_dir(data_dir, 'default')).mkdir(
-            parents=True, exist_ok=True)
-        db = open_db(store_dir(data_dir, 'default'))
-        db.close()
-        # Create a different store that will be targeted via MEMMAN_STORE.
-        other = store_dir(data_dir, 'work')
-        pathlib.Path(other).mkdir(parents=True, exist_ok=True)
-        db = open_db(other)
-        db.close()
+        data_dir = os.environ[config.DATA_DIR]
+        for name, row_cnt in (('default', 1), ('work', 2)):
+            path = store_dir(data_dir, name)
+            pathlib.Path(path).mkdir(parents=True, exist_ok=True)
+            db = open_db(path)
+            for row_idx in range(row_cnt):
+                insert_insight(db, make_insight(id=f'{name}-{row_idx}'))
+            db.close()
+        write_active(data_dir, 'default')
 
         monkeypatch.setenv('MEMMAN_STORE', 'work')
-        runner = CliRunner()
-        result = runner.invoke(cli, ['prime'], input='{}')
+        result = CliRunner().invoke(cli, ['prime'], input='{}')
         assert result.exit_code == 0
-        assert '[memman] Memory active' in result.output
+        assert '[memman] Memory active (2 insights).' in result.output
 
     def test_prime_command_emits_compact_hint(self, tmp_path, monkeypatch):
         """`memman prime` emits the compact-recall hint when source=compact."""
