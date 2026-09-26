@@ -73,8 +73,8 @@ class TestLinkPending:
         """An unreachable LLM still links the insight."""
         from memman.graph import engine as engine_mod
 
-        def _unavailable(role, *args, **kwargs):
-            raise RuntimeError(f'no credential for {role}')
+        def _unavailable(*args, **kwargs):
+            raise RuntimeError('no LLM credential')
 
         monkeypatch.setattr(engine_mod, 'get_llm_client', _unavailable)
         _insert_pending(tmp_db, 'ln-1', 'content for llm none test')

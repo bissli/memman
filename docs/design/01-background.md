@@ -45,7 +45,7 @@ The same binary + skill works across Claude Code, Cursor, or any LLM CLI. Swappi
 Anchor selection fuses keyword, vector, and recency signals with Reciprocal Rank Fusion, the exact `1/(k + rank)` formula with k=60. [Pipelines](04-pipelines.md) documents the constants and rationale inline.
 
 **Engineering choices.**
-The pipeline uses one LLM role slot (`slow`); see [§ LLM routing](04-pipelines.md#llm-routing) for the model assignment and cost-tuning rationale. The write path adds one row, or replaces the row `replace <id>` names. The lifecycle is hook-driven: remember → plan → enrich.
+The pipeline uses one LLM model (`MEMMAN_LLM_MODEL`); see [§ LLM routing](04-pipelines.md#llm-routing) for the model assignment and cost-tuning rationale. The write path adds one row, or replaces the row `replace <id>` names. The lifecycle is hook-driven: remember → plan → enrich.
 
 memman persists everything in SQLite (or Postgres + pgvector) with a complete write-back lifecycle and exposes the system through CLI commands - auditable, portable, sandboxed.
 
@@ -61,8 +61,8 @@ memman persists everything in SQLite (or Postgres + pgvector) with a complete wr
 
 | Dimension          | LLM-Embedded (Mem0, etc.) | LLM-Supervised (memman)                                                                  |
 | ------------------ | ------------------------- | ---------------------------------------------------------------------------------------- |
-| LLM capability     | One model for everything  | Host LLM + a `slow` worker role for enrichment (tunable via `MEMMAN_LLM_MODEL`)          |
-| Pipeline LLM       | One model for everything  | `slow` for enrichment and `doctor`'s connectivity probe (tunable via `MEMMAN_LLM_MODEL`) |
+| LLM capability     | One model for everything  | Host LLM + one worker model for enrichment (`MEMMAN_LLM_MODEL`)                          |
+| Pipeline LLM       | One model for everything  | One model for enrichment and `doctor`'s connectivity probe (`MEMMAN_LLM_MODEL`)          |
 | Network dependency | Required                  | Required (LLM + embedding provider APIs)                                                 |
 | Swappability       | API-bound                 | Any LLM CLI                                                                              |
 

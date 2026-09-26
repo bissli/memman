@@ -6,10 +6,10 @@ natively, Anthropic at `/v1`, Google at `/v1beta/openai`, OpenAI of
 course, plus Groq / DeepSeek / Mistral / Cerebras / Ollama / vLLM /
 LiteLLM / HuggingFace which speak it natively. Users switch vendors
 by editing `MEMMAN_LLM_ENDPOINT` (and `MEMMAN_LLM_API_KEY` plus the
-role-model slug).
+model slug).
 
-One role exists: `slow`, the derived-metadata path (enrichment and
-doctor's connectivity probe). It reads `MEMMAN_LLM_MODEL`.
+One model serves every call - enrichment and doctor's connectivity
+probe - and `MEMMAN_LLM_MODEL` names it.
 """
 
 import logging
@@ -25,25 +25,14 @@ from memman.llm.shared import safe_json
 
 logger = logging.getLogger('memman')
 
-ROLE_SLOW = 'slow'
-VALID_ROLES = frozenset({ROLE_SLOW})
-
-_ROLE_ENV_VARS = {
-    ROLE_SLOW: config.LLM_MODEL,
-    }
-
+# Enrichment emits JSON that scales with input size (the keywords and
+# summary); a small cap truncates large insights mid-JSON and the
+# parse fails, so the client gets a large token budget and, with
+# WORKER_TIMEOUT, a long read timeout. A caller raises the budget for
+# one call through `complete(max_tokens=)`.
 WORKER_MAX_TOKENS = 4096
 
 EMPTY_RETRY_DELAY = 0.1
-
-# Per-role output budget + read timeout. `slow` emits JSON that
-# scales with input size (the enrichment keywords and summary); a
-# small cap truncates large insights mid-JSON and the parse fails, so
-# it gets a large token budget and a long timeout. A caller raises
-# the budget for one call through `complete(max_tokens=)`.
-_ROLE_LIMITS = {
-    ROLE_SLOW: (WORKER_MAX_TOKENS, WORKER_TIMEOUT),
-    }
 
 _OR_ATTRIBUTION_HEADERS = {
     'HTTP-Referer': 'https://github.com/bissli/memman',
@@ -112,8 +101,8 @@ class MemmanLLMClient:
             stages raise `ValueError` so a typo cannot create a
             silent phantom bucket.
         max_tokens : int | None, default None
-            Output budget for this call; None sends the role ceiling
-            the client was built with.
+            Output budget for this call; None sends the ceiling the
+            client was built with.
 
         Returns
         -------
@@ -277,37 +266,33 @@ class MemmanLLMClient:
                 f' {MAX_RETRIES} attempts: {raw_body!r}')
 
 
-_ROLE_CACHE: dict[str, MemmanLLMClient] = {}
+_CLIENT: MemmanLLMClient | None = None
 
 
-def get_llm_client(role: str) -> MemmanLLMClient:
-    """Return a cached `MemmanLLMClient` for the given role.
+def get_llm_client() -> MemmanLLMClient:
+    """Return the cached `MemmanLLMClient` built from the env file.
 
-    `role` must be `'slow'`. Reads `MEMMAN_LLM_ENDPOINT`,
-    `MEMMAN_LLM_API_KEY`, and the role's model env var from the
-    canonical env file. Raises `ConfigError` when a required value is
-    missing. OpenRouter endpoints automatically receive memman's
-    attribution headers and the operator's provider-routing block from
+    Reads `MEMMAN_LLM_ENDPOINT`, `MEMMAN_LLM_API_KEY`, and
+    `MEMMAN_LLM_MODEL` from the canonical env file. Raises
+    `ConfigError` when a required value is missing. OpenRouter
+    endpoints automatically receive memman's attribution headers and
+    the operator's provider-routing block from
     `MEMMAN_LLM_PROVIDER_ONLY`, `MEMMAN_LLM_DATA_COLLECTION` and
     `MEMMAN_LLM_ZDR`; other endpoints receive neither.
     """
-    if role not in VALID_ROLES:
-        raise ValueError(
-            f'unknown LLM role {role!r}; valid roles: {sorted(VALID_ROLES)}')
-    cached = _ROLE_CACHE.get(role)
-    if cached is not None:
-        return cached
+    global _CLIENT
+    if _CLIENT is not None:
+        return _CLIENT
     endpoint = config.get(config.LLM_ENDPOINT)
     if not endpoint:
         raise ConfigError(
             f'{config.LLM_ENDPOINT} is not set;'
             ' run `memman install` to populate the env file')
-    role_env_var = _ROLE_ENV_VARS[role]
-    model = config.get(role_env_var)
+    model = config.get(config.LLM_MODEL)
     if not model:
         raise ConfigError(
-            f'{role_env_var} is not set; run `memman install`'
-            ' to resolve and persist the model id')
+            f'{config.LLM_MODEL} is not set; run `memman install`'
+            ' to persist the model id')
     api_key = config.get(config.LLM_API_KEY) or ''
     extra: dict[str, str] = {}
     routing: dict = {}
@@ -334,15 +319,14 @@ def get_llm_client(role: str) -> MemmanLLMClient:
         if (config.get(config.LLM_ZDR) or '').strip().lower() in {
                 '1', 'true', 'yes', 'on'}:
             routing['zdr'] = True
-    max_tokens, timeout = _ROLE_LIMITS[role]
-    client = MemmanLLMClient(
-        endpoint, api_key, model, max_tokens=max_tokens,
-        timeout=timeout, extra_headers=extra or None,
+    _CLIENT = MemmanLLMClient(
+        endpoint, api_key, model, max_tokens=WORKER_MAX_TOKENS,
+        timeout=WORKER_TIMEOUT, extra_headers=extra or None,
         provider_routing=routing or None)
-    _ROLE_CACHE[role] = client
-    return client
+    return _CLIENT
 
 
-def reset_role_cache() -> None:
-    """Drop cached per-role clients. Used by tests that swap env vars."""
-    _ROLE_CACHE.clear()
+def reset_client_cache() -> None:
+    """Drop the cached client. Used by tests that swap env vars."""
+    global _CLIENT
+    _CLIENT = None

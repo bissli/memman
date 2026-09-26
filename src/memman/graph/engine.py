@@ -27,7 +27,7 @@ def link_pending(
     backend : Backend
         The store to work through.
     metadata_llm_client : MemmanLLMClient | None, default None
-        Serves the enrichment call; None resolves the `slow` role.
+        Serves the enrichment call; None resolves `get_llm_client()`.
     embed_client : EmbeddingProvider | None, default None
         The store-bound embedder; None stores no vector.
     max_batch : int, default MAX_LINK_BATCH
@@ -48,12 +48,11 @@ def link_pending(
       succeeded, so a failing row leaves the pending set and a
       rebuild loop terminates. `enriched_at` is stamped only when an
       enrichment and a vector both land.
-    - An omitted `metadata_llm_client` is resolved from `slow` HERE
-      rather than inherited from a caller's other client:
-      `compute_prompt_version` stamps the slow model on every row
-      this pass writes, so any other client enriching the row makes
-      that stamp name a model that did not run and prices the call
-      at the wrong role.
+    - An omitted `metadata_llm_client` resolves to
+      `get_llm_client()`: `compute_prompt_version` stamps
+      `MEMMAN_LLM_MODEL` on every row this pass writes, so a client
+      on any other model makes that stamp name a model that did not
+      run.
     """
     pending_ids = backend.nodes.get_pending_link_ids(limit=max_batch)
     if not pending_ids:
@@ -83,10 +82,10 @@ def link_pending(
         enrichment: dict = {}
         # Resolved inside the try, so an unresolvable role degrades to
         # an unenriched row exactly as a failed call does.
-        # get_llm_client caches per role, so the repeat costs nothing.
+        # get_llm_client caches its client, so the repeat costs nothing.
         try:
             if metadata_llm_client is None:
-                metadata_llm_client = get_llm_client('slow')
+                metadata_llm_client = get_llm_client()
             enrichment = enrich_with_llm(insight, metadata_llm_client)
         except Exception:
             enrichment = {}

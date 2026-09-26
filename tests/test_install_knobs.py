@@ -1,35 +1,22 @@
 """Tests for `memman.config.collect_install_knobs`."""
 
+import httpx
 import pytest
 from memman import config
 from memman.exceptions import ConfigError
 
 
-@pytest.fixture
-def stub_resolver(monkeypatch):
-    """Stub resolve_latest_for_role so tests don't hit the network."""
-    calls = []
-
-    def fake(role, endpoint='https://openrouter.ai/api/v1'):
-        calls.append((role, endpoint))
-        return 'anthropic/claude-sonnet-4.5'
-
-    monkeypatch.setattr(
-        'memman.llm.openrouter_models.resolve_latest_for_role', fake)
-    return calls
-
-
 @pytest.mark.no_default_env
 class TestCollectInstallKnobs:
-    """`config.collect_install_knobs` precedence and resolver behavior.
+    """`config.collect_install_knobs` precedence and refusals.
 
-    All tests share `stub_resolver` and the `no_default_env` mark. The
-    autouse `_isolate_env` fixture skips its env seeding so each test
-    can craft the file/shell state it asserts on.
+    All tests share the `no_default_env` mark. The autouse
+    `_isolate_env` fixture skips its env seeding so each test can craft
+    the file/shell state it asserts on.
     """
 
     def test_file_value_wins_over_shell_env(
-            self, tmp_path, monkeypatch, stub_resolver):
+            self, tmp_path, monkeypatch):
         """File values are sticky; shell env never overrides them on reinstall."""
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -47,7 +34,7 @@ class TestCollectInstallKnobs:
         assert knobs[config.OPENROUTER_API_KEY] == 'file-or-key'
 
     def test_shell_env_seeds_file_when_key_missing(
-            self, tmp_path, monkeypatch, stub_resolver):
+            self, tmp_path, monkeypatch):
         """Shell env values fill blanks in the file at install time."""
         data_dir = str(tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, data_dir)
@@ -60,15 +47,15 @@ class TestCollectInstallKnobs:
         assert knobs[config.VOYAGE_API_KEY] == 'shell-vy-key'
         assert knobs[config.LLM_MODEL] == 'shell/sonnet-seed'
 
-    def test_file_value_wins_over_resolver_and_default(
-            self, tmp_path, monkeypatch, stub_resolver):
+    def test_file_value_wins_over_default(
+            self, tmp_path, monkeypatch):
         """Existing env-file value is preserved across re-installs.
 
-        Mutation: reading the resolver or `INSTALL_DEFAULTS` ahead of
-            an env-file value already on disk, which would overwrite
-            a pinned model slug on every reinstall.
+        Mutation: reading `INSTALL_DEFAULTS` ahead of an env-file value
+            already on disk, which would overwrite a pinned model slug
+            on every reinstall.
         Oracle: the pinned file values, read back from
-            `collect_install_knobs` with the resolver spy empty.
+            `collect_install_knobs`.
         """
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -85,47 +72,6 @@ class TestCollectInstallKnobs:
         knobs = config.collect_install_knobs(str(data_dir))
         assert knobs[config.LLM_MODEL] == 'file/sonnet-pinned'
         assert knobs[config.OPENROUTER_API_KEY] == 'file-or-key'
-        assert stub_resolver == [], 'resolver should NOT fire when file has value'
-
-    def test_resolver_fires_when_file_lacks_model_keys(
-            self, tmp_path, monkeypatch, stub_resolver):
-        """Resolver runs only when the env file has no value for a model key.
-
-        Mutation: firing the resolver unconditionally, or skipping a
-            role the file leaves blank, either of which would seed a
-            role with the wrong model.
-        Oracle: the stub resolver's own recorded roles, against the
-            resolved slug it returns for each.
-        """
-        data_dir = tmp_path / 'memman'
-        data_dir.mkdir(parents=True, exist_ok=True)
-        (data_dir / config.ENV_FILENAME).write_text(
-            f'{config.OPENROUTER_API_KEY}=or-key\n'
-            f'{config.VOYAGE_API_KEY}=vy-key\n'
-            f'{config.LLM_ENDPOINT}=https://openrouter.ai/api/v1\n')
-        monkeypatch.setenv(config.DATA_DIR, str(data_dir))
-        config.reset_file_cache()
-        knobs = config.collect_install_knobs(str(data_dir))
-        roles = [c[0] for c in stub_resolver]
-        assert 'slow' in roles
-        assert knobs[config.LLM_MODEL] == 'anthropic/claude-sonnet-4.5'
-
-    def test_resolver_none_falls_back_to_install_defaults(
-            self, tmp_path, monkeypatch):
-        """When the resolver returns None, INSTALL_DEFAULTS is used."""
-        data_dir = tmp_path / 'memman'
-        data_dir.mkdir(parents=True, exist_ok=True)
-        (data_dir / config.ENV_FILENAME).write_text(
-            f'{config.OPENROUTER_API_KEY}=or-key\n'
-            f'{config.VOYAGE_API_KEY}=vy-key\n')
-        monkeypatch.setenv(config.DATA_DIR, str(data_dir))
-        monkeypatch.setattr(
-            'memman.llm.openrouter_models.resolve_latest_for_role',
-            lambda *a, **k: None)
-        config.reset_file_cache()
-        knobs = config.collect_install_knobs(str(data_dir))
-        assert knobs[config.LLM_MODEL] == \
-            config.INSTALL_DEFAULTS[config.LLM_MODEL]
 
     def test_missing_mandatory_secret_raises(self, tmp_path, monkeypatch):
         """ConfigError when the embed provider's mandatory secret is missing."""
@@ -138,7 +84,7 @@ class TestCollectInstallKnobs:
             config.collect_install_knobs(data_dir)
 
     def test_backend_default_is_sqlite(
-            self, tmp_path, monkeypatch, stub_resolver):
+            self, tmp_path, monkeypatch):
         """`MEMMAN_DEFAULT_BACKEND` resolves to 'sqlite' from INSTALL_DEFAULTS."""
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -151,7 +97,7 @@ class TestCollectInstallKnobs:
         assert knobs[config.DEFAULT_BACKEND] == 'sqlite'
 
     def test_backup_keep_default_present_cron_target_absent(
-            self, tmp_path, monkeypatch, stub_resolver):
+            self, tmp_path, monkeypatch):
         """BACKUP_KEEP defaults to '7'; BACKUP_CRON/TARGET stay unset, no error."""
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -166,7 +112,7 @@ class TestCollectInstallKnobs:
         assert config.BACKUP_TARGET not in knobs
 
     def test_native_voyage_key_seeds_memman_voyage_key(
-            self, tmp_path, monkeypatch, stub_resolver):
+            self, tmp_path, monkeypatch):
         """Native `VOYAGE_API_KEY` (no MEMMAN- prefix) seeds the memman key."""
         data_dir = str(tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, data_dir)
@@ -177,7 +123,7 @@ class TestCollectInstallKnobs:
         assert knobs[config.VOYAGE_API_KEY] == 'native-vy-key'
 
     def test_native_openrouter_key_cascades_into_llm_api_key(
-            self, tmp_path, monkeypatch, stub_resolver):
+            self, tmp_path, monkeypatch):
         """Native `OPENROUTER_API_KEY` seeds OR key AND cascades to LLM key."""
         data_dir = str(tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, data_dir)
@@ -189,7 +135,7 @@ class TestCollectInstallKnobs:
         assert knobs[config.LLM_API_KEY] == 'native-or-key'
 
     def test_native_openai_key_seeds_memman_openai_embed_key(
-            self, tmp_path, monkeypatch, stub_resolver):
+            self, tmp_path, monkeypatch):
         """Native `OPENAI_API_KEY` seeds MEMMAN_OPENAI_EMBED_API_KEY."""
         data_dir = str(tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, data_dir)
@@ -201,7 +147,7 @@ class TestCollectInstallKnobs:
         assert knobs[config.OPENAI_EMBED_API_KEY] == 'native-oai-key'
 
     def test_memman_prefixed_wins_over_native(
-            self, tmp_path, monkeypatch, stub_resolver):
+            self, tmp_path, monkeypatch):
         """When both MEMMAN- and native are exported, MEMMAN- wins."""
         data_dir = str(tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, data_dir)
@@ -213,7 +159,7 @@ class TestCollectInstallKnobs:
         assert knobs[config.VOYAGE_API_KEY] == 'memman-vy-key'
 
     def test_file_wins_over_native_shell(
-            self, tmp_path, monkeypatch, stub_resolver):
+            self, tmp_path, monkeypatch):
         """File value still wins over native shell fallback (sticky seed)."""
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -230,7 +176,7 @@ class TestCollectInstallKnobs:
         assert knobs[config.OPENROUTER_API_KEY] == 'file-or-key'
 
     def test_voyage_embed_model_default_is_written(
-            self, tmp_path, monkeypatch, stub_resolver):
+            self, tmp_path, monkeypatch):
         """`MEMMAN_VOYAGE_EMBED_MODEL=voyage-3-lite` lands from INSTALL_DEFAULTS."""
         data_dir = str(tmp_path / 'memman')
         monkeypatch.setenv(config.DATA_DIR, data_dir)
@@ -241,7 +187,7 @@ class TestCollectInstallKnobs:
         assert knobs[config.VOYAGE_EMBED_MODEL] == 'voyage-3-lite'
 
     def test_backend_value_round_trips_from_file(
-            self, tmp_path, monkeypatch, stub_resolver):
+            self, tmp_path, monkeypatch):
         """Existing `MEMMAN_DEFAULT_BACKEND=postgres` in the file is preserved."""
         data_dir = tmp_path / 'memman'
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -253,3 +199,51 @@ class TestCollectInstallKnobs:
         config.reset_file_cache()
         knobs = config.collect_install_knobs(str(data_dir))
         assert knobs[config.DEFAULT_BACKEND] == 'postgres'
+
+    def test_install_never_writes_a_catalog_picked_model(
+            self, tmp_path, monkeypatch):
+        """An OpenRouter install with no model seeds the shipped default.
+
+        Mutation: install consults the OpenRouter catalog and writes the
+            model it picks, switching the model with no operator choice.
+        Oracle: `INSTALL_DEFAULTS`, against a stubbed catalog whose
+            newest snapshot of the default's line differs from it.
+        """
+        newer = {'data': [{'id': 'qwen/qwen3-235b-a22b-2607'}]}
+        monkeypatch.setattr(
+            httpx.Client, 'get',
+            lambda self, url, **kwargs: httpx.Response(
+                200, json=newer, request=httpx.Request('GET', url)))
+        data_dir = tmp_path / 'memman'
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / config.ENV_FILENAME).write_text(
+            f'{config.OPENROUTER_API_KEY}=or-key\n'
+            f'{config.VOYAGE_API_KEY}=vy-key\n'
+            f'{config.LLM_ENDPOINT}=https://openrouter.ai/api/v1\n')
+        monkeypatch.setenv(config.DATA_DIR, str(data_dir))
+        monkeypatch.delenv(config.LLM_MODEL, raising=False)
+        config.reset_file_cache()
+        knobs = config.collect_install_knobs(str(data_dir))
+        assert knobs[config.LLM_MODEL] == \
+            config.INSTALL_DEFAULTS[config.LLM_MODEL]
+
+    def test_non_openrouter_install_with_no_model_refuses(
+            self, tmp_path, monkeypatch):
+        """A non-OpenRouter install with no model names the missing key.
+
+        Mutation: the install falls back to the OpenRouter qwen default,
+            which the endpoint rejects on the first enrichment call.
+        Oracle: an Anthropic endpoint with the model absent from both
+            the env file and the shell.
+        """
+        data_dir = tmp_path / 'memman'
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / config.ENV_FILENAME).write_text(
+            f'{config.LLM_ENDPOINT}=https://api.anthropic.com/v1\n'
+            f'{config.LLM_API_KEY}=sk-ant-key\n'
+            f'{config.VOYAGE_API_KEY}=vy-key\n')
+        monkeypatch.setenv(config.DATA_DIR, str(data_dir))
+        monkeypatch.delenv(config.LLM_MODEL, raising=False)
+        config.reset_file_cache()
+        with pytest.raises(ConfigError, match=config.LLM_MODEL):
+            config.collect_install_knobs(str(data_dir))

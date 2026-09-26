@@ -7,9 +7,10 @@ features today:
    `/chat/completions`). The wizard prompts for a single endpoint URL
    (`MEMMAN_LLM_ENDPOINT`); OpenRouter is the default, and any other
    OpenAI-compat endpoint (Anthropic at `/v1`, OpenAI, Gemini's
-   OpenAI shim, Ollama, vLLM, LiteLLM, ...) is accepted. For non-OR
-   endpoints the wizard also prompts for the two role-specific model
-   slugs (no shared model catalog exists for non-OR vendors).
+   OpenAI shim, Ollama, vLLM, LiteLLM, ...) is accepted. When the env
+   file has no model, the wizard offers up to three OpenRouter
+   candidates to pick from, or prompts for the slug on any other
+   endpoint (no shared model catalog exists for non-OR vendors).
 
 2. Mandatory-secret prompting. The embed provider's API key (when one
    is required) and the LLM endpoint's API key (required for any
@@ -42,16 +43,15 @@ import sys
 from importlib.util import find_spec
 
 import click
+import httpx
 from memman import config, extras
 from memman.embed import SUPPORTED_EMBED_PROVIDERS
+from memman.llm import openrouter_models
 
 DSN_MAX_ATTEMPTS = 3
 DSN_PROBE_TIMEOUT_SEC = 5
 ENDPOINT_MAX_ATTEMPTS = 3
 API_KEY_MAX_ATTEMPTS = 3
-MODEL_SLUG_PROMPTS: tuple[tuple[str, str], ...] = (
-    ('slow', 'MEMMAN_LLM_MODEL'),
-    )
 
 
 def run_wizard(
@@ -101,7 +101,7 @@ def run_wizard(
         file_values, embed=chosen_embed, interactive=interactive))
     out.update(_collect_llm_api_key(
         file_values, endpoint=endpoint, interactive=interactive))
-    out.update(_collect_llm_model_slugs(
+    out.update(_collect_llm_model(
         file_values, endpoint=endpoint, interactive=interactive))
 
     chosen_backend, backend_was_user_supplied = _select_backend(
@@ -324,49 +324,112 @@ def _collect_llm_api_key(
     return out
 
 
-def _collect_llm_model_slugs(
+def pick_candidate(candidates: list[openrouter_models.Candidate]) -> str:
+    """Number `candidates`, prompt for one, and return its model id.
+
+    Parameters
+    ----------
+    candidates : list[openrouter_models.Candidate]
+        Non-empty, in display order; the prompt defaults to the first.
+
+    Returns
+    -------
+    str
+        The picked candidate's `model_id`.
+    """
+    for number, candidate in enumerate(candidates, 1):
+        click.echo(f'  {number}. {candidate.label()}')
+    number = click.prompt(
+        '  model', type=click.IntRange(1, len(candidates)), default=1)
+    return candidates[number - 1].model_id
+
+
+def _collect_llm_model(
         file_values: dict[str, str],
         *,
         endpoint: str,
         interactive: bool) -> dict[str, str]:
-    """Prompt for the two role-model slugs when the endpoint is non-OR.
+    """Collect `MEMMAN_LLM_MODEL` in a TTY when neither file nor shell has it.
 
-    OpenRouter endpoints rely on `collect_install_knobs` plus the
-    `openrouter_models` resolver to fill role slugs from OR's catalog.
-    Any other endpoint has no shared catalog memman can introspect, so
-    the wizard prompts interactively for each missing slug.
-    Non-interactive non-OR installs leave the slugs unset; the user is
-    expected to set them via `memman config set` or shell env.
+    Parameters
+    ----------
+    file_values : dict[str, str]
+        The env file as parsed before the wizard ran.
+    endpoint : str
+        The LLM endpoint the install uses.
+    interactive : bool
+        False returns `{}` with no prompt.
+
+    Returns
+    -------
+    dict[str, str]
+        `{MEMMAN_LLM_MODEL: <id>}`, or `{}` when a value exists, the
+        session is headless, or OpenRouter offers no candidate.
+
+    Notes
+    -----
+    - On OpenRouter the operator picks from `fetch_candidates`, fed the
+      shipped model's family and the pin and ceilings from the file,
+      the shell, or `INSTALL_DEFAULTS`. A failed fetch or an empty list
+      leaves the key to `INSTALL_DEFAULTS` in `collect_install_knobs`.
+    - Any other endpoint has no catalog memman can read, so the operator
+      types the slug. A headless install there with no model is refused
+      by `collect_install_knobs`.
     """
     out: dict[str, str] = {}
-    if config.is_openrouter_endpoint(endpoint):
-        return out
     if not interactive:
         return out
+    if file_values.get(config.LLM_MODEL, '').strip():
+        return out
+    if os.environ.get(config.LLM_MODEL, '').strip():
+        return out
     click.echo('')
-    click.echo(click.style(
-        'Non-OpenRouter endpoint: enter the two model slugs to use.',
-        bold=True))
-    click.echo(click.style(
-        '  These pass through verbatim to /chat/completions; consult the'
-        " vendor's docs for valid ids.", dim=True))
-    for label, env_key in MODEL_SLUG_PROMPTS:
-        if file_values.get(env_key, '').strip():
-            continue
-        if os.environ.get(env_key, '').strip():
-            continue
-        for attempt in range(1, ENDPOINT_MAX_ATTEMPTS + 1):
-            value = click.prompt(f'  {label} model slug').strip()
-            if value:
-                out[env_key] = value
-                break
+    if config.is_openrouter_endpoint(endpoint):
+        seeds = {
+            key: (file_values.get(key, '').strip()
+                  or os.environ.get(key, '').strip()
+                  or config.INSTALL_DEFAULTS[key])
+            for key in (config.LLM_PROVIDER_ONLY,
+                        config.LLM_MAX_INPUT_PRICE,
+                        config.LLM_MAX_OUTPUT_PRICE)}
+        default_model = config.INSTALL_DEFAULTS[config.LLM_MODEL]
+        try:
+            candidates = openrouter_models.fetch_candidates(
+                endpoint,
+                family=default_model.split('/', 1)[0] + '/',
+                max_input_per_m=float(seeds[config.LLM_MAX_INPUT_PRICE]),
+                max_output_per_m=float(seeds[config.LLM_MAX_OUTPUT_PRICE]),
+                vendors=frozenset(
+                    name.strip()
+                    for name in seeds[config.LLM_PROVIDER_ONLY].split(',')
+                    if name.strip()))
+        except (httpx.HTTPError, RuntimeError) as exc:
             click.echo(click.style(
-                '  model slug cannot be blank', fg='red'))
-            if attempt == ENDPOINT_MAX_ATTEMPTS:
-                raise click.ClickException(
-                    f'gave up collecting {env_key} after'
-                    f' {ENDPOINT_MAX_ATTEMPTS} attempts')
-    return out
+                f'  cannot read the OpenRouter catalogs ({exc});'
+                f' installing {default_model}', fg='yellow'))
+            return out
+        if not candidates:
+            click.echo(click.style(
+                f'  no OpenRouter candidate under the pin and ceilings;'
+                f' installing {default_model}', fg='yellow'))
+            return out
+        click.echo(click.style('Pick the LLM model:', bold=True))
+        out[config.LLM_MODEL] = pick_candidate(candidates)
+        return out
+    click.echo(click.style(
+        'Non-OpenRouter endpoint: enter the model slug to use.', bold=True))
+    click.echo(click.style(
+        '  It passes through verbatim to /chat/completions; consult the'
+        " vendor's docs for valid ids.", dim=True))
+    for attempt in range(1, ENDPOINT_MAX_ATTEMPTS + 1):
+        value = click.prompt('  model slug').strip()
+        if value:
+            out[config.LLM_MODEL] = value
+            return out
+        click.echo(click.style('  model slug cannot be blank', fg='red'))
+    raise click.ClickException(
+        f'gave up collecting {config.LLM_MODEL} after'
+        f' {ENDPOINT_MAX_ATTEMPTS} attempts')
 
 
 def _select_embed_provider(

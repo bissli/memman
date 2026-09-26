@@ -109,7 +109,7 @@
         <mxCell id="a_l5" value="&lt;b&gt;External Services&lt;/b&gt;  (optional)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;verticalAlign=top;fontSize=11;align=left;spacingLeft=10;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="40" y="700" width="1120" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="a_ollama_s" value="&lt;b&gt;LLM provider&lt;/b&gt; (configurable per role via MEMMAN_LLM_MODEL_*) &amp;nbsp;|&amp;nbsp; &lt;b&gt;Embed provider&lt;/b&gt; (per-store; voyage / openai / openrouter / ollama)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;dashed=1;" vertex="1" parent="1">
+        <mxCell id="a_ollama_s" value="&lt;b&gt;LLM provider&lt;/b&gt; (model via MEMMAN_LLM_MODEL) &amp;nbsp;|&amp;nbsp; &lt;b&gt;Embed provider&lt;/b&gt; (per-store; voyage / openai / openrouter / ollama)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="60" y="725" width="320" height="40" as="geometry" />
         </mxCell>
         <mxCell id="a_fs" value="&lt;b&gt;Persistence&lt;/b&gt;&lt;br&gt;Per-store: SQLite at ~/.memman/data/&amp;lt;store&amp;gt;/memman.db OR Postgres store_&amp;lt;name&amp;gt; schema&lt;br&gt;Queue (always SQLite): ~/.memman/queue.db" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;dashed=1;" vertex="1" parent="1">

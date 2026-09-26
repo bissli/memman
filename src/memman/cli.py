@@ -328,17 +328,16 @@ def _ensure_store_backend_key(store_name: str, data_dir: str) -> None:
     _write_env_keys_with_flock(updates, data_dir=data_dir)
 
 
-def _get_llm_client_or_fail(role: str) -> 'MemmanLLMClient':
-    """Return a per-role LLM client, re-wrapping ConfigError as ClickException.
+def _get_llm_client_or_fail() -> 'MemmanLLMClient':
+    """Return the LLM client, re-wrapping ConfigError as ClickException.
 
     Keeps `memman.llm` free of `click` - the CLI boundary is the only
     place that should know how to surface a user-facing config error.
-    `role` is `'slow'` (worker pipeline, operator rebuilds).
     """
     from memman.exceptions import ConfigError
     from memman.llm.client import get_llm_client
     try:
-        return get_llm_client(role)
+        return get_llm_client()
     except ConfigError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -740,6 +739,91 @@ def config_set_pg_dsn(
     _write_env_keys({key: dsn}, data_dir=data_dir)
     config.reset_file_cache()
     click.echo(f'set {key}={redact_dsn(dsn)} in {config.env_file_path(data_dir)}')
+
+
+@config_cmd.command('models')
+@click.pass_context
+def config_models(ctx: click.Context) -> None:
+    r"""List up to three OpenRouter models to run on; in a TTY, pick one.
+
+    Candidates share the current model's family, run under zero data
+    retention on a vendor in MEMMAN_LLM_PROVIDER_ONLY, and sit inside
+    MEMMAN_LLM_MAX_INPUT_PRICE and MEMMAN_LLM_MAX_OUTPUT_PRICE (dollars
+    per million tokens). The pick is written to MEMMAN_LLM_MODEL;
+    outside a TTY the command only prints.
+    \f
+
+    Parameters
+    ----------
+    ctx : click.Context
+        Carries `data_dir`, whose env file is read and written.
+
+    Raises
+    ------
+    click.ClickException
+        When the endpoint is not OpenRouter, a lister key is unset, or
+        a catalog cannot be read.
+
+    Examples
+    --------
+    List, then pick in a TTY::
+
+        $ memman config models
+          1. qwen/qwen3-235b-a22b-2507  google-vertex  $0.25 in / ...
+          model [1]: 1
+        set MEMMAN_LLM_MODEL=qwen/qwen3-235b-a22b-2507 in ~/.memman/env
+    """
+    # Lazy: httpx and the catalog module load for this command only,
+    # not on every CLI call.
+    import httpx
+    from memman.llm import openrouter_models
+    from memman.setup.scheduler import _write_env_keys
+    from memman.setup.wizard import pick_candidate
+
+    data_dir = ctx.obj['data_dir']
+    endpoint = config.get_scoped(config.LLM_ENDPOINT, data_dir) or ''
+    if not config.is_openrouter_endpoint(endpoint):
+        raise click.ClickException(
+            f'{config.LLM_ENDPOINT} is {endpoint!r}; candidates come from'
+            f' OpenRouter only. Set a model with `memman config set'
+            f' {config.LLM_MODEL} <id>`')
+    values: dict[str, str] = {}
+    for key in (config.LLM_MODEL, config.LLM_PROVIDER_ONLY,
+                config.LLM_MAX_INPUT_PRICE, config.LLM_MAX_OUTPUT_PRICE):
+        value = config.get_scoped(key, data_dir)
+        if not value:
+            raise click.ClickException(
+                f'{key} is not set in {config.env_file_path(data_dir)};'
+                f' run `memman config set {key} <value>`')
+        values[key] = value
+    try:
+        candidates = openrouter_models.fetch_candidates(
+            endpoint,
+            family=values[config.LLM_MODEL].split('/', 1)[0] + '/',
+            max_input_per_m=float(values[config.LLM_MAX_INPUT_PRICE]),
+            max_output_per_m=float(values[config.LLM_MAX_OUTPUT_PRICE]),
+            vendors=frozenset(
+                name.strip()
+                for name in values[config.LLM_PROVIDER_ONLY].split(',')
+                if name.strip()))
+    except (httpx.HTTPError, RuntimeError) as exc:
+        raise click.ClickException(
+            f'cannot read the OpenRouter catalogs: {exc}') from exc
+    if not candidates:
+        click.echo(
+            f'no candidate in the {values[config.LLM_MODEL]} family under'
+            ' the provider pin and price ceilings')
+        return
+    if not sys.stdin.isatty():
+        for number, candidate in enumerate(candidates, 1):
+            click.echo(f'  {number}. {candidate.label()}')
+        return
+    model_id = pick_candidate(candidates)
+    _write_env_keys({config.LLM_MODEL: model_id}, data_dir=data_dir)
+    config.reset_file_cache()
+    click.echo(
+        f'set {config.LLM_MODEL}={model_id} in'
+        f' {config.env_file_path(data_dir)}')
 
 
 @config_cmd.command('get')
@@ -3757,7 +3841,7 @@ def _graph_rebuild_stale_only(
 
     Filters work to rows whose persisted `prompt_version` no longer
     matches `compute_prompt_version()` -- the enrichment prompt plus
-    the `slow` model, which is exactly the set this command
+    the LLM model, which is exactly the set this command
     replays. Works on SQLite and Postgres
     (the wholesale rebuild's SQLite-only guard does not apply here:
     the per-row writes through `link_pending` are the same traffic
@@ -3815,7 +3899,7 @@ def _graph_rebuild_stale_only(
                 _json_out(stats)
                 return
 
-            metadata_llm_client = _get_llm_client_or_fail('slow')
+            metadata_llm_client = _get_llm_client_or_fail()
             ec = bound_embedder(backend)
 
             processed = 0
@@ -3885,7 +3969,7 @@ def _graph_rebuild_stale_only(
 @click.option('--stale-only', is_flag=True, default=False,
               help='Re-enrich only rows whose prompt_version no longer'
                    ' matches the active config -- the enrichment prompt'
-                   ' plus the slow model, which is exactly what'
+                   ' plus the LLM model, which is exactly what'
                    ' this command replays. Cross-backend'
                    ' (works on Postgres). NULL provenance rows are not'
                    ' swept; they need a separate backfill.')
@@ -3904,7 +3988,7 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
     from memman.graph.engine import MAX_LINK_BATCH, link_pending
 
     with _active_backend(ctx) as backend:
-        metadata_llm_client = _get_llm_client_or_fail('slow')
+        metadata_llm_client = _get_llm_client_or_fail()
         ec = bound_embedder(backend)
 
         all_ids = backend.nodes.get_active_ids()

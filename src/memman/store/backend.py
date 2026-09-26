@@ -321,7 +321,7 @@ class NodeStore(Protocol):
 
         Stale means `prompt_version` is non-NULL and differs from
         `active_pv`. NULL is not stale. There is no model argument:
-        `active_pv` folds in the `slow` model already, and
+        `active_pv` folds in the LLM model already, and
         that is the only model a rebuild re-runs.
         """
         ...

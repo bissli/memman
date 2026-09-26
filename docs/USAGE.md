@@ -144,7 +144,7 @@ memman graph rebuild --stale-only # re-enrich only rows whose prompt_version
 
 `graph rebuild` re-enriches all insights through the full LLM pipeline (enrichment, re-embedding). Processes in batches of 20. Returns `{"processed": N, "remaining": 0}`. Rejected when the scheduler is stopped.
 
-`--stale-only` is the targeted variant: it only touches rows whose persisted `prompt_version` no longer matches `compute_prompt_version()` -- the enrichment prompt and the `slow` model, which is exactly the set this command replays. Cross-backend (works on Postgres, unlike wholesale `graph rebuild` which remains SQLite-only). Shares the `'rebuild'` advisory lock so it cannot race a wholesale rebuild. NULL-provenance rows are not swept; they need a separate backfill.
+`--stale-only` is the targeted variant: it only touches rows whose persisted `prompt_version` no longer matches `compute_prompt_version()` -- the enrichment prompt and the LLM model, which is exactly the set this command replays. Cross-backend (works on Postgres, unlike wholesale `graph rebuild` which remains SQLite-only). Shares the `'rebuild'` advisory lock so it cannot race a wholesale rebuild. NULL-provenance rows are not swept; they need a separate backfill.
 
 ### Insights lifecycle
 
@@ -265,6 +265,7 @@ memman status                                       # memory statistics; JSON in
 memman doctor                                       # health checks (integrity, schema, partial_index_predicates, enrichment, embeddings, fingerprint, supersession_integrity, queue, scheduler, drain heartbeat, env, no_stale_swap_meta, provenance_drift)
 memman doctor --text                                # human-readable colored table
 memman config show                                  # effective configuration (env + on-disk)
+memman config models                                # up to three OpenRouter model candidates; a TTY picks one
 
 memman log list                                     # operation audit log (default JSON, last 20)
 memman log list --limit 50                          # show more entries
@@ -340,7 +341,7 @@ memman backup restore ~/Dropbox/code/archive/memman-backup-<host>-<stamp>.tar.gz
 
 memman reads config at runtime from one source: `<MEMMAN_DATA_DIR>/env`, a `KEY=VALUE` file at mode 0600 (default `~/.memman/env`). Shell environment variables are not consulted at runtime for installable settings, so a stale shell export cannot override a committed value.
 
-`memman install` performs a one-time pull from the current shell into the env file. Precedence per key: existing file value > wizard prompt (TTY only) > `os.environ` > OpenRouter `/models` resolver (SLOW only) > `INSTALL_DEFAULTS`. Existing file values are sticky; reinstall never lets a shell export override them.
+`memman install` performs a one-time pull from the current shell into the env file. Precedence per key: existing file value > wizard prompt (TTY only) > `os.environ` > `INSTALL_DEFAULTS`. Existing file values are sticky; reinstall never lets a shell export override them. The default `MEMMAN_LLM_MODEL` is an OpenRouter id, so a headless install on any other endpoint refuses until the model is set.
 
 `memman config set KEY VALUE` is the override path. Use it after install to change a backend, rotate an API key, or update a DSN. Conflicts between an `INSTALLABLE_KEYS` flag and an existing env-file value are rejected with the exact `memman config set ...` command to run.
 
@@ -350,7 +351,7 @@ The full variable list lives in [CONTRIBUTING.md § Variable reference](../CONTR
 
 ### Install wizard
 
-Run `memman install` in a TTY to get the interactive wizard. It prompts for the LLM endpoint URL (any OpenAI-compatible endpoint; ships defaulted to `https://openrouter.ai/api/v1`); for OpenRouter endpoints it auto-resolves the `slow` role's model slug (`MEMMAN_LLM_MODEL`) against `/v1/models`, for any other endpoint it prompts for the slug interactively. It then prompts (masked input) for `MEMMAN_LLM_API_KEY` (required for non-loopback endpoints; loopback endpoints like Ollama may leave it blank), then for the embedding provider (any registered provider; ships defaulted to `voyage`) and the matching key for that provider (e.g. `MEMMAN_VOYAGE_API_KEY` for voyage, `MEMMAN_OPENAI_EMBED_API_KEY` for openai; openrouter reuses the LLM key). It also offers a backend selector (sqlite/postgres) when the `memman[postgres]` extra is installed; the wizard probes the DSN, verifies the `pgvector` extension, and (for non-localhost DSNs) emits a hint about PgBouncer transaction pooling. Headless installs bypass the wizard:
+Run `memman install` in a TTY to get the interactive wizard. It prompts for the LLM endpoint URL (any OpenAI-compatible endpoint; ships defaulted to `https://openrouter.ai/api/v1`); when the env file has no `MEMMAN_LLM_MODEL`, it offers up to three OpenRouter candidates to pick from (the list `memman config models` prints), or prompts for the slug on any other endpoint. It then prompts (masked input) for `MEMMAN_LLM_API_KEY` (required for non-loopback endpoints; loopback endpoints like Ollama may leave it blank), then for the embedding provider (any registered provider; ships defaulted to `voyage`) and the matching key for that provider (e.g. `MEMMAN_VOYAGE_API_KEY` for voyage, `MEMMAN_OPENAI_EMBED_API_KEY` for openai; openrouter reuses the LLM key). It also offers a backend selector (sqlite/postgres) when the `memman[postgres]` extra is installed; the wizard probes the DSN, verifies the `pgvector` extension, and (for non-localhost DSNs) emits a hint about PgBouncer transaction pooling. Headless installs bypass the wizard:
 
 - `--backend [sqlite|postgres]` - explicit backend choice; required in non-interactive mode if you want anything other than sqlite.
 - `--pg-dsn URL` - Postgres DSN; required with `--backend postgres` in non-interactive mode. The DSN may omit the password to use `~/.pgpass`, `PGSERVICE`, or `PGPASSWORD`.

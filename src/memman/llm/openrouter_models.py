@@ -1,133 +1,216 @@
-"""OpenRouter model resolution at install time.
+"""OpenRouter model candidates for the operator to pick from.
 
-`memman install` calls `resolve_latest_for_role` once per role to pick
-the current latest slug from OpenRouter's `/v1/models` endpoint when
-the configured LLM endpoint points at OpenRouter. The endpoint is
-public (no API key required) and the resolved id is written to
-`~/.memman/env`; runtime reads from the file. No runtime queries
-against OpenRouter, no on-disk cache.
-
-The wire-format ids returned here keep OR's `vendor/slug` prefix
-unchanged -- non-OR endpoints handle their own slugs via the wizard's
-interactive prompt rather than this resolver.
-
-The TTL cache exists only to dedupe the two intra-install calls
-(one per LLM role) and to absorb a trivial retry during a single
-install command.
+`fetch_candidates` reads two public OpenRouter endpoints, with no API
+key: `/endpoints/zdr` for every zero-data-retention endpoint and its
+price, and `/models` for each model's release date and reasoning
+defaults. `list_candidates` joins them and keeps the models the
+operator may pick. memman never switches a model on its own: the
+install wizard and `memman config models` show the list and write only
+the operator's pick.
 """
 
-import logging
-import re
+import dataclasses
+import datetime
 import time
+from decimal import Decimal
 
-import cachetools
 import httpx
 from memman import trace
 
-logger = logging.getLogger('memman')
-
-MODELS_PATH = '/models'
 FETCH_TIMEOUT_SECONDS = 10.0
-DEFAULT_TTL_SECONDS = 3600
-DEFAULT_ENDPOINT = 'https://openrouter.ai/api/v1'
-
-_inventory_cache: cachetools.TTLCache = cachetools.TTLCache(
-    maxsize=8, ttl=DEFAULT_TTL_SECONDS)
+MAX_CANDIDATES = 3
+SPECIALIST_MARKERS = ('-vl-', 'coder')
+EXCLUDED_SUFFIXES = (':free', ':batch')
 
 
-def _version_sort_key(model_id: str) -> tuple:
-    """Extract a sortable tuple from a vendor-prefixed model id.
+@dataclasses.dataclass(frozen=True)
+class Candidate:
+    """One model the operator may pick.
 
-    Handles `claude-haiku-4.5`, `claude-sonnet-10.0`,
-    `claude-haiku-4.5-v2`. Returns a tuple sorting newer-first under
-    descending sort. Non-numeric suffixes (e.g. `-v2`) outrank the
-    bare base when both parse to the same numeric tuple.
+    Attributes
+    ----------
+    model_id : str
+        OpenRouter model id, e.g. `qwen/qwen3-235b-a22b-2507`.
+    vendor : str
+        Slug of the vendor whose endpoint sets the price, in the form
+        `MEMMAN_LLM_PROVIDER_ONLY` uses, e.g. `google-vertex`.
+    input_per_m : float
+        Dollars per million input tokens on that endpoint.
+    output_per_m : float
+        Dollars per million output tokens on that endpoint.
+    released : datetime.date
+        UTC date of the model's catalog `created` stamp.
+    thinks_by_default : bool
+        True when the catalog marks reasoning mandatory or on by default.
     """
-    tail = model_id.split('/', 1)[-1].lower()
-    nums = tuple(int(n) for n in re.findall(r'\d+', tail))
-    has_suffix = bool(re.search(r'-[a-z]+\d*$', tail))
-    return (nums, 1 if has_suffix else 0, model_id)
+
+    model_id: str
+    vendor: str
+    input_per_m: float
+    output_per_m: float
+    released: datetime.date
+    thinks_by_default: bool
+
+    def label(self) -> str:
+        """One display line: id, vendor, prices, release date, thinking.
+        """
+        thinking = 'yes' if self.thinks_by_default else 'no'
+        return (
+            f'{self.model_id}  {self.vendor}'
+            f'  ${self.input_per_m:g} in / ${self.output_per_m:g} out per M'
+            f'  released {self.released.isoformat()}'
+            f'  thinks by default: {thinking}')
 
 
-# Notes:
-# - The trailing `-\d` anchors on a dated snapshot, which excludes the
-#   `-thinking-` variant of the same line: a reasoning model bills
-#   reasoning tokens on every enrichment call and can return an empty
-#   body at the role's token ceiling.
-_ROLE_PATTERNS: dict[str, re.Pattern] = {
-    'slow': re.compile(r'^qwen/qwen3-235b-a22b-\d'),
-    }
+def list_candidates(
+        models: list[dict],
+        zdr_endpoints: list[dict],
+        *,
+        family: str,
+        max_input_per_m: float,
+        max_output_per_m: float,
+        vendors: frozenset[str]) -> list[Candidate]:
+    """Up to three general-purpose models in `family` the operator may pick.
+
+    Parameters
+    ----------
+    models : list[dict]
+        The `data` rows of `GET /models`.
+    zdr_endpoints : list[dict]
+        The `data` rows of `GET /endpoints/zdr`.
+    family : str
+        Model-id prefix including its slash, e.g. `qwen/`.
+    max_input_per_m : float
+        Input ceiling in dollars per million tokens, inclusive.
+    max_output_per_m : float
+        Output ceiling in dollars per million tokens, inclusive.
+    vendors : frozenset[str]
+        Vendor slugs allowed to serve: the operator's provider pin.
+
+    Returns
+    -------
+    list[Candidate]
+        At most `MAX_CANDIDATES`, dearest first by (output, input)
+        price, newest first on a tie.
+
+    Notes
+    -----
+    - A model qualifies through a ZDR endpoint whose vendor slug (the
+      tag before its first `/`) is in `vendors` and whose prices sit
+      inside both ceilings. With several, the dearest one sets the
+      shown price and vendor.
+    - General-purpose excludes the `-vl-` and `coder` lines and the
+      `:free` and `:batch` variants. A ZDR row with no `/models` entry
+      (embedding, ASR, reranker) drops out at the join.
+    - Thinks-by-default is `reasoning.mandatory or
+      reasoning.default_enabled`; no `reasoning` object means no.
+    """
+    models_by_id = {entry['id']: entry for entry in models}
+    dearest_by_id: dict[str, tuple[float, float, str]] = {}
+    for endpoint in zdr_endpoints:
+        model_id = endpoint['model_id']
+        vendor = endpoint['tag'].split('/', 1)[0]
+        if (not model_id.startswith(family)
+                or model_id not in models_by_id
+                or vendor not in vendors
+                or any(marker in model_id for marker in SPECIALIST_MARKERS)
+                or model_id.endswith(EXCLUDED_SUFFIXES)):
+            continue
+        # Decimal keeps a catalog price equal to a ceiling set at that
+        # price; float multiplication can land a hair above it.
+        input_per_m = float(Decimal(endpoint['pricing']['prompt']) * 1_000_000)
+        output_per_m = float(
+            Decimal(endpoint['pricing']['completion']) * 1_000_000)
+        if input_per_m > max_input_per_m or output_per_m > max_output_per_m:
+            continue
+        price = (output_per_m, input_per_m, vendor)
+        if price > dearest_by_id.get(model_id, (-1.0, -1.0, '')):
+            dearest_by_id[model_id] = price
+    candidates = []
+    for model_id, (output_per_m, input_per_m, vendor) in dearest_by_id.items():
+        entry = models_by_id[model_id]
+        reasoning = entry.get('reasoning') or {}
+        candidates.append(Candidate(
+            model_id=model_id,
+            vendor=vendor,
+            input_per_m=input_per_m,
+            output_per_m=output_per_m,
+            released=datetime.datetime.fromtimestamp(
+                entry['created'], datetime.UTC).date(),
+            thinks_by_default=bool(
+                reasoning.get('mandatory') or reasoning.get('default_enabled'))))
+    candidates.sort(
+        key=lambda c: (c.output_per_m, c.input_per_m, c.released),
+        reverse=True)
+    return candidates[:MAX_CANDIDATES]
 
 
-def _fetch_models(endpoint: str) -> list[dict]:
-    """GET the public model list from OpenRouter (no auth required)."""
-    url = f'{endpoint.rstrip("/")}{MODELS_PATH}'
-    trace.event('openrouter_models_request', url=url)
+def _fetch_rows(client: httpx.Client, url: str) -> list[dict]:
+    """GET a public OpenRouter catalog and return its `data` rows.
+
+    Raises
+    ------
+    httpx.HTTPError
+        On a transport failure or a non-2xx status.
+    RuntimeError
+        When the response carries no `data` list.
+    """
+    trace.event('openrouter_catalog_request', url=url)
     t0 = time.monotonic()
-    with httpx.Client() as client:
-        resp = client.get(url, timeout=FETCH_TIMEOUT_SECONDS)
+    resp = client.get(url, timeout=FETCH_TIMEOUT_SECONDS)
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     resp.raise_for_status()
-    payload = resp.json()
-    data = payload.get('data')
-    if not isinstance(data, list):
-        raise RuntimeError(
-            f'unexpected OpenRouter /models shape: {type(payload).__name__}')
+    rows = resp.json().get('data')
+    if not isinstance(rows, list):
+        raise RuntimeError(f'unexpected OpenRouter catalog shape at {url}')
     trace.event(
-        'openrouter_models_response',
+        'openrouter_catalog_response',
+        url=url,
         status=resp.status_code,
         elapsed_ms=elapsed_ms,
-        model_count=len(data))
-    return data
+        row_count=len(rows))
+    return rows
 
 
-def resolve_latest_for_role(
-        role: str, endpoint: str = DEFAULT_ENDPOINT) -> str | None:
-    """Return the latest OR-formatted model slug for `role`, or None.
+def fetch_candidates(
+        endpoint: str,
+        *,
+        family: str,
+        max_input_per_m: float,
+        max_output_per_m: float,
+        vendors: frozenset[str]) -> list[Candidate]:
+    """Read both public catalogs under `endpoint` and list the candidates.
 
-    `role` is `'slow'`. Returns None when no rule exists,
-    when OR's catalog has no match, or when the network call fails --
-    the caller falls back to `INSTALL_DEFAULTS`. Only fires when the
-    install endpoint points at OpenRouter (callers guard via
-    `config.is_openrouter_endpoint`).
+    Parameters
+    ----------
+    endpoint : str
+        OpenRouter API base, e.g. `https://openrouter.ai/api/v1`.
+    family : str
+        As `list_candidates`.
+    max_input_per_m : float
+        As `list_candidates`.
+    max_output_per_m : float
+        As `list_candidates`.
+    vendors : frozenset[str]
+        As `list_candidates`.
+
+    Returns
+    -------
+    list[Candidate]
+        As `list_candidates`.
+
+    Raises
+    ------
+    httpx.HTTPError
+        When either catalog cannot be fetched.
+    RuntimeError
+        When a catalog response carries no `data` list.
     """
-    pattern = _ROLE_PATTERNS.get(role)
-    if pattern is None:
-        return None
-    cache_key = (endpoint, role)
-    cached = _inventory_cache.get(cache_key)
-    if cached is not None:
-        return cached
-
-    try:
-        models = _fetch_models(endpoint)
-    except (httpx.HTTPError, RuntimeError) as exc:
-        logger.warning(
-            f'openrouter /models fetch failed ({exc}); '
-            f'cannot resolve latest {role!r}')
-        return None
-
-    candidates: list[str] = []
-    seen: set[str] = set()
-    for entry in models:
-        mid = entry.get('id') or entry.get('model_id') or ''
-        if not pattern.match(mid):
-            continue
-        if mid in seen:
-            continue
-        seen.add(mid)
-        candidates.append(mid)
-
-    if not candidates:
-        logger.warning(f'no {role!r} match in openrouter inventory')
-        return None
-
-    candidates.sort(key=_version_sort_key, reverse=True)
-    picked = candidates[0]
-    _inventory_cache[cache_key] = picked
-    return picked
-
-
-def clear_cache() -> None:
-    """Wipe the in-memory cache (used by tests)."""
-    _inventory_cache.clear()
+    base = endpoint.rstrip('/')
+    with httpx.Client() as client:
+        zdr_endpoints = _fetch_rows(client, f'{base}/endpoints/zdr')
+        models = _fetch_rows(client, f'{base}/models')
+    return list_candidates(
+        models, zdr_endpoints, family=family,
+        max_input_per_m=max_input_per_m,
+        max_output_per_m=max_output_per_m, vendors=vendors)

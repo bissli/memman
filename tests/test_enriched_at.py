@@ -36,8 +36,8 @@ class TestEnrichedAtOnLinkPending:
         """An unreachable LLM sets linked_at but leaves enriched_at NULL."""
         from memman.graph import engine as engine_mod
 
-        def _unavailable(role, *args, **kwargs):
-            raise RuntimeError(f'no credential for {role}')
+        def _unavailable(*args, **kwargs):
+            raise RuntimeError('no LLM credential')
 
         monkeypatch.setattr(engine_mod, 'get_llm_client', _unavailable)
         _insert_pending(tmp_db, 'nl-1', 'test without llm')

@@ -354,13 +354,11 @@ def _mock_apis(request, monkeypatch):
     Patches at the method layer: MemmanLLMClient.complete returns
     realistic JSON that the real enrichment code parses.
     Voyage embed returns a deterministic content-hash vector.
-    `openrouter_models.resolve_latest_for_role` is stubbed to a fixed
-    id so install-path tests never hit the network.
 
     Tests that exercise the real MemmanLLMClient.complete method
     should mark themselves with `@pytest.mark.no_mock_llm` to skip
-    the method-level patch while keeping the resolver and embedding
-    stubs in place.
+    the method-level patch while keeping the embedding stubs in
+    place.
     Tests that exercise the real `rerank.voyage.Client.rerank` method
     mark themselves `@pytest.mark.no_mock_rerank` the same way.
     """
@@ -374,12 +372,6 @@ def _mock_apis(request, monkeypatch):
             'memman.llm.client.MemmanLLMClient.complete',
             _mock_llm_complete)
 
-    def _stub_resolve_role(role, endpoint='https://openrouter.ai/api/v1'):
-        return 'anthropic/claude-sonnet-4.5'
-
-    monkeypatch.setattr(
-        'memman.llm.openrouter_models.resolve_latest_for_role',
-        _stub_resolve_role)
     monkeypatch.setattr(
         'memman.embed.voyage.Client.embed', _mock_embed)
     monkeypatch.setattr(
@@ -392,7 +384,7 @@ def _mock_apis(request, monkeypatch):
     from memman import config
     config.reset_file_cache()
     from memman.llm import client as llm_client_mod
-    llm_client_mod.reset_role_cache()
+    llm_client_mod.reset_client_cache()
 
 
 def _mock_llm_complete(self: object, system: str, user: str,

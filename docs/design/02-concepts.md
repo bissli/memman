@@ -92,7 +92,7 @@ meta (
 )
 ```
 
-Provenance columns (`prompt_version`, `embedding_model`) record what produced each insight, and they are read for two different jobs. `embedding_model` is write provenance: the model behind the row's vector. `prompt_version` is the STALENESS KEY, and it hashes exactly what `graph rebuild --stale-only` can replay -- the enrichment prompt and the `slow` model. `embedding_model` powers `memman embed reembed` the same way.
+Provenance columns (`prompt_version`, `embedding_model`) record what produced each insight, and they are read for two different jobs. `embedding_model` is write provenance: the model behind the row's vector. `prompt_version` is the STALENESS KEY, and it hashes exactly what `graph rebuild --stale-only` can replay -- the enrichment prompt and the LLM model. `embedding_model` powers `memman embed reembed` the same way.
 
 ---
 
@@ -126,8 +126,8 @@ memman's architecture is divided into five layers:
 │                       migrate.py (SQLite -> Postgres copy)      │
 ├──────────────────────────────────────────────────────────────┤
 │  External             LLM endpoint (OpenAI-compat URL via       │
-│                         MEMMAN_LLM_ENDPOINT; per-role models    │
-│                         via MEMMAN_LLM_MODEL_*)                 │
+│                         MEMMAN_LLM_ENDPOINT; model via          │
+│                         MEMMAN_LLM_MODEL)                       │
 │                       Embed provider (per-store; voyage /       │
 │                         openai / openrouter / ollama)           │
 │                       Postgres + pgvector (optional backend)    │

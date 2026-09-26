@@ -110,6 +110,19 @@ class TestProvenanceDrift:
         assert result['status'] == 'pass'
         assert result['detail']['stale_rows'] == 0
 
+    def test_reports_the_active_model(self, tmp_db, tmp_backend):
+        """provenance_drift names the configured model as `active_model`.
+
+        Mutation: the key renamed or dropped, or its value read from a
+            variable other than MEMMAN_LLM_MODEL.
+        Oracle: the model the autouse fixture seeds into the env file.
+        """
+        from memman import config
+        from memman.doctor import check_provenance_drift
+        result = check_provenance_drift(tmp_backend)
+        assert result['detail']['active_model'] == \
+            config.INSTALL_DEFAULTS[config.LLM_MODEL]
+
     def test_all_current_pass(self, tmp_db, tmp_backend):
         """All rows stamped with the active prompt_version: pass.
 
@@ -781,7 +794,7 @@ class TestHardening:
         r, data_dir = runner
         monkeypatch.delenv('MEMMAN_OPENROUTER_API_KEY', raising=False)
 
-        def _raise(role):
+        def _raise():
             raise ConfigError('MEMMAN_OPENROUTER_API_KEY must be set')
         monkeypatch.setattr(
             'memman.llm.client.get_llm_client', _raise)

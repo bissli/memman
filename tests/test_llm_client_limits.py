@@ -1,40 +1,41 @@
-"""Per-role LLM client output-token and timeout budgets.
+"""LLM client output-token and timeout budgets.
 
-The `slow` worker role emits JSON that scales with input size and
-must not truncate large insights, so it gets a large token budget and
+Enrichment emits JSON that scales with input size and must not
+truncate large insights, so the client gets a large token budget and
 a long read timeout.
 """
 
 import pytest
 from memman.llm import usage as llm_usage
-from memman.llm.client import MemmanLLMClient, get_llm_client, reset_role_cache
+from memman.llm.client import MemmanLLMClient, get_llm_client
+from memman.llm.client import reset_client_cache
 
 
-def test_slow_role_gets_large_budget():
-    """Enrichment role gets headroom so big inputs are not truncated.
+def test_client_gets_large_budget():
+    """The client gets headroom so big enrichment inputs are not truncated.
     """
-    reset_role_cache()
-    client = get_llm_client('slow')
+    reset_client_cache()
+    client = get_llm_client()
     assert client.max_tokens >= 4096
     assert client.timeout >= 60.0
 
 
-def test_unset_slow_model_var_raises(env_file):
-    """Verify an unset slow model fails loudly instead of falling back.
+def test_unset_model_var_raises(env_file):
+    """Verify an unset model fails loudly instead of falling back.
 
     Mutation: a fallback to a hardcoded default model when
         `MEMMAN_LLM_MODEL` is unset, which bills enrichment on a
         model the operator never chose.
-    Oracle: `ConfigError` raised with the slow var cleared.
+    Oracle: `ConfigError` raised with the model var cleared.
     """
     from memman.config import LLM_API_KEY, LLM_ENDPOINT, LLM_MODEL
     from memman.exceptions import ConfigError
     env_file(LLM_ENDPOINT, 'https://openrouter.ai/api/v1')
     env_file(LLM_API_KEY, 'k')
     env_file(LLM_MODEL, None)
-    reset_role_cache()
+    reset_client_cache()
     with pytest.raises(ConfigError):
-        get_llm_client('slow')
+        get_llm_client()
 
 
 class _RecordingSession:
@@ -61,12 +62,12 @@ class _OkResponse:
 
 @pytest.mark.no_mock_llm
 def test_complete_honors_a_per_call_max_tokens(monkeypatch):
-    """Verify `max_tokens` on `complete` overrides the role ceiling for that call.
+    """Verify `max_tokens` on `complete` overrides the ceiling for one call.
 
-    Mutation: ignoring the keyword and always sending the role ceiling,
+    Mutation: ignoring the keyword and always sending the client ceiling,
         so a caller's per-call budget from `shared.py` never reaches
         the request.
-    Oracle: the recorded request bodies: the role ceiling without the
+    Oracle: the recorded request bodies: the client ceiling without the
         keyword, the override with it.
     """
     session = _RecordingSession()

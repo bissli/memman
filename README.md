@@ -135,7 +135,7 @@ memman config set MEMMAN_LLM_ENDPOINT https://api.openai.com/v1
 memman config set MEMMAN_LLM_API_KEY sk-...
 ```
 
-The model slug for the `slow` role (`MEMMAN_LLM_MODEL`) is auto-resolved against `/v1/models` for OpenRouter endpoints; for any other endpoint, re-run `memman install` and the wizard prompts for the slug interactively.
+`MEMMAN_LLM_MODEL` names the model, and memman never switches it on its own. On an OpenRouter endpoint, `memman config models` and the install wizard list up to three candidates in the current model's family - served under zero data retention by a vendor in `MEMMAN_LLM_PROVIDER_ONLY`, inside `MEMMAN_LLM_MAX_INPUT_PRICE` and `MEMMAN_LLM_MAX_OUTPUT_PRICE` - and write the one the operator picks. On any other endpoint the wizard prompts for the slug, and a headless install without one refuses.
 
 #### Embedding providers
 
@@ -267,7 +267,7 @@ memman install      # deploy integration
 memman uninstall    # remove integration
 ```
 
-**Dependencies**: Python 3.11+, Click, httpx, cachetools, tqdm, numpy. **Keys**: the worker needs whatever the configured LLM endpoint asks for (`MEMMAN_LLM_API_KEY`, blank for a local endpoint) plus the active embedding provider's key. Reranking uses `MEMMAN_VOYAGE_API_KEY`, and skips itself without one. Every side is pluggable with one edit - see [Where keys are needed](#where-keys-are-needed) for what breaks without each key, and [USAGE.md § Configuration](docs/USAGE.md#configuration) for the precedence model.
+**Dependencies**: Python 3.11+, Click, httpx, tqdm, numpy. **Keys**: the worker needs whatever the configured LLM endpoint asks for (`MEMMAN_LLM_API_KEY`, blank for a local endpoint) plus the active embedding provider's key. Reranking uses `MEMMAN_VOYAGE_API_KEY`, and skips itself without one. Every side is pluggable with one edit - see [Where keys are needed](#where-keys-are-needed) for what breaks without each key, and [USAGE.md § Configuration](docs/USAGE.md#configuration) for the precedence model.
 
 ## Documentation
 

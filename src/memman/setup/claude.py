@@ -30,9 +30,8 @@ def check_prereqs(data_dir: str) -> dict[str, str]:
     """Validate install prerequisites; raise ClickException on failure.
 
     Returns the install-time knobs dict (env-or-default for every
-    `INSTALLABLE_KEYS` entry, with model SLOW resolved from the
-    OpenRouter `/models` endpoint when applicable). Mandatory keys are
-    validated by `collect_install_knobs`.
+    `INSTALLABLE_KEYS` entry). Mandatory keys, and a model for a
+    non-OpenRouter endpoint, are validated by `collect_install_knobs`.
     """
     from memman.exceptions import ConfigError
 

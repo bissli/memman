@@ -912,7 +912,7 @@ def check_llm_probe() -> dict[str, Any]:
         from memman.exceptions import ConfigError
         from memman.llm.client import get_llm_client
         try:
-            client = get_llm_client('slow')
+            client = get_llm_client()
         except ConfigError as exc:
             detail['error'] = str(exc)
             detail['elapsed_ms'] = int((_time.monotonic() - t0) * 1000)
@@ -1075,7 +1075,7 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
 
     detail: dict[str, Any] = {
         'active_prompt_version': None,
-        'active_model_slow': None,
+        'active_model': None,
         'stale_rows': 0,
         'breakdown': [],
         }
@@ -1088,10 +1088,9 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
             'detail': detail}
     from memman.exceptions import ConfigError
     try:
-        detail['active_model_slow'] = config.require(
-            config.LLM_MODEL)
+        detail['active_model'] = config.require(config.LLM_MODEL)
     except ConfigError:
-        detail['active_model_slow'] = None
+        detail['active_model'] = None
 
     provenance = backend.nodes.provenance_distribution()
 

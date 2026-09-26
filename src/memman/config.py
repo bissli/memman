@@ -19,10 +19,10 @@ file population.
 
 Install-time resolution (one-time seed): `collect_install_knobs`
 fills the env file using the precedence
-`file > os.environ > OpenRouter resolver > INSTALL_DEFAULTS`. Shell
-environment variables are read at install time only as a seed for
-keys missing from the file -- existing file values are sticky and
-never overridden by a later shell export.
+`file > os.environ > INSTALL_DEFAULTS`. Shell environment variables
+are read at install time only as a seed for keys missing from the
+file -- existing file values are sticky and never overridden by a
+later shell export.
 
 Process-control vars (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`,
 `MEMMAN_WORKER`, `MEMMAN_SCHEDULER_KIND`, `MEMMAN_DEBUG`,
@@ -56,6 +56,8 @@ LLM_MODEL = 'MEMMAN_LLM_MODEL'
 LLM_PROVIDER_ONLY = 'MEMMAN_LLM_PROVIDER_ONLY'
 LLM_DATA_COLLECTION = 'MEMMAN_LLM_DATA_COLLECTION'
 LLM_ZDR = 'MEMMAN_LLM_ZDR'
+LLM_MAX_INPUT_PRICE = 'MEMMAN_LLM_MAX_INPUT_PRICE'
+LLM_MAX_OUTPUT_PRICE = 'MEMMAN_LLM_MAX_OUTPUT_PRICE'
 EMBED_PROVIDER = 'MEMMAN_EMBED_PROVIDER'
 RERANK_PROVIDER = 'MEMMAN_RERANK_PROVIDER'
 RERANK_ENABLED = 'MEMMAN_RERANK_ENABLED'
@@ -161,6 +163,8 @@ INSTALLABLE_KEYS = (
     LLM_PROVIDER_ONLY,
     LLM_DATA_COLLECTION,
     LLM_ZDR,
+    LLM_MAX_INPUT_PRICE,
+    LLM_MAX_OUTPUT_PRICE,
     EMBED_PROVIDER,
     RERANK_PROVIDER,
     RERANK_ENABLED,
@@ -260,6 +264,8 @@ INSTALL_DEFAULTS: dict[str, str] = {
     LLM_PROVIDER_ONLY: 'amazon-bedrock,azure,google-vertex',
     LLM_DATA_COLLECTION: 'deny',
     LLM_ZDR: 'true',
+    LLM_MAX_INPUT_PRICE: '0.25',
+    LLM_MAX_OUTPUT_PRICE: '1.00',
     EMBED_PROVIDER: 'voyage',
     RERANK_PROVIDER: 'voyage',
     RERANK_ENABLED: 'true',
@@ -542,49 +548,21 @@ def effective_source(name: str) -> str:
     return 'unset'
 
 
-_LLM_ROLE_KEYS: tuple[tuple[str, str], ...] = (
-    (LLM_MODEL, 'slow'),
-    )
-
-
-def _resolve_llm_role_slugs(
-        knobs: dict[str, str],
-        needs_resolve: set[str],
-        endpoint: str) -> None:
-    """Populate the LLM role slug from OpenRouter's public catalog.
-
-    Fires only when `endpoint` points at OpenRouter; the role is
-    resolved against OR's `/v1/models` endpoint (no auth required).
-    Non-OR endpoints are handled by the wizard's interactive
-    model-slug prompt: the role key stays in `needs_resolve` here
-    and must be filled by either the file, the shell, or
-    the wizard before install completes.
-    """
-    if not is_openrouter_endpoint(endpoint):
-        return
-    from memman.llm.openrouter_models import resolve_latest_for_role
-    for env_key, role in _LLM_ROLE_KEYS:
-        if env_key not in needs_resolve:
-            continue
-        resolved = resolve_latest_for_role(role, endpoint)
-        if resolved:
-            knobs[env_key] = resolved
-            needs_resolve.discard(env_key)
-
-
 def collect_install_knobs(data_dir: str) -> dict[str, str]:
     """Build the dict of values to persist to `~/.memman/env` at install.
 
-    Precedence per key: existing env file > `os.environ` > OpenRouter
-    live resolver (SLOW only, OR endpoint only) > `INSTALL_DEFAULTS`.
-    The shell environment is consulted at install time only as a
-    one-time seed for keys missing from the file -- existing file
-    values are sticky and a later shell export never overrides them.
-    Once written, runtime resolution reads only the file (`config.get`
-    does not consult `os.environ` for installable keys).
+    Precedence per key: existing env file > `os.environ` >
+    `INSTALL_DEFAULTS`. The shell environment is consulted at install
+    time only as a one-time seed for keys missing from the file --
+    existing file values are sticky and a later shell export never
+    overrides them. Once written, runtime resolution reads only the
+    file (`config.get` does not consult `os.environ` for installable
+    keys).
 
     Raises `ConfigError` (via the caller's import) when a mandatory
-    secret is missing from both the file and the shell env.
+    secret is missing from both the file and the shell env, or when
+    a non-OpenRouter endpoint has no `MEMMAN_LLM_MODEL`: the shipped
+    default is an OpenRouter id that endpoint would reject.
     """
     from memman.exceptions import ConfigError
 
@@ -604,7 +582,11 @@ def collect_install_knobs(data_dir: str) -> dict[str, str]:
         needs_resolve.add(key)
 
     endpoint = knobs.get(LLM_ENDPOINT) or INSTALL_DEFAULTS[LLM_ENDPOINT]
-    _resolve_llm_role_slugs(knobs, needs_resolve, endpoint)
+    if LLM_MODEL in needs_resolve and not is_openrouter_endpoint(endpoint):
+        raise ConfigError(
+            f'{LLM_MODEL} is required for the non-OpenRouter endpoint'
+            f' {endpoint}; export it or add it to'
+            f' {env_file_path(data_dir)} and re-run install')
 
     for key in list(needs_resolve):
         if key in INSTALL_DEFAULTS:

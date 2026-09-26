@@ -1,8 +1,12 @@
 """Tests for the install wizard (`memman.setup.wizard`)."""
 
+import datetime
+import os
 
+import httpx
 import pytest
 from memman import config
+from memman.llm import openrouter_models as om
 from memman.setup import wizard
 
 
@@ -292,3 +296,103 @@ class TestProbeDsn:
         wiz_mod._probe_dsn(pg_dsn)
         captured = capsys.readouterr()
         assert 'PgBouncer' in captured.out
+
+
+def _strip_model(data_dir):
+    """Remove MEMMAN_LLM_MODEL from the seeded test env file."""
+    path = config.env_file_path(data_dir)
+    parsed = config.parse_env_file(path)
+    parsed.pop(config.LLM_MODEL, None)
+    path.write_text(''.join(f'{k}={v}\n' for k, v in parsed.items()))
+    config.reset_file_cache()
+
+
+def _two_candidates():
+    """A dearer, newer candidate, then a cheaper thinking one."""
+    return [
+        om.Candidate(
+            model_id='qwen/first', vendor='google-vertex',
+            input_per_m=0.25, output_per_m=1.00,
+            released=datetime.date(2026, 9, 1), thinks_by_default=False),
+        om.Candidate(
+            model_id='qwen/second', vendor='amazon-bedrock',
+            input_per_m=0.20, output_per_m=0.80,
+            released=datetime.date(2026, 3, 1), thinks_by_default=True),
+        ]
+
+
+class TestModelPick:
+    """The OpenRouter branch offers candidates and writes the pick."""
+
+    def test_openrouter_install_writes_the_picked_candidate(
+            self, tty, monkeypatch):
+        """An interactive OpenRouter install writes the model picked.
+
+        Mutation: the wizard writes the first candidate without asking,
+            or skips the pick and leaves the shipped default.
+        Oracle: two stubbed candidates and a prompt answering 2.
+        """
+        data_dir = os.environ[config.DATA_DIR]
+        _strip_model(data_dir)
+        monkeypatch.setattr(
+            'memman.llm.openrouter_models.fetch_candidates',
+            lambda endpoint, **kwargs: _two_candidates())
+        monkeypatch.setattr(
+            'memman.setup.wizard.click.prompt', lambda *a, **k: 2)
+        out = wizard.run_wizard(data_dir)
+        assert out[config.LLM_MODEL] == 'qwen/second'
+
+    def test_openrouter_pick_lists_by_the_pin_and_the_default_family(
+            self, tty, monkeypatch):
+        """The candidates come from the pin, the default's family and seeds.
+
+        Mutation: the lister given a hardcoded vendor set instead of
+            the pin, a family that keeps the model name, or no ceilings.
+        Oracle: the shipped pin, `qwen/` from the shipped model, and the
+            seeded ceilings of 0.25 and 1.00 dollars per million tokens.
+        """
+        data_dir = os.environ[config.DATA_DIR]
+        _strip_model(data_dir)
+        seen = {}
+
+        def _fetch(endpoint, **kwargs):
+            seen.update(kwargs, endpoint=endpoint)
+            return _two_candidates()
+
+        monkeypatch.setattr(
+            'memman.llm.openrouter_models.fetch_candidates', _fetch)
+        monkeypatch.setattr(
+            'memman.setup.wizard.click.prompt', lambda *a, **k: 1)
+        wizard.run_wizard(data_dir)
+        assert seen == {
+            'endpoint': 'https://openrouter.ai/api/v1',
+            'family': 'qwen/',
+            'max_input_per_m': 0.25,
+            'max_output_per_m': 1.00,
+            'vendors': frozenset(
+                {'amazon-bedrock', 'azure', 'google-vertex'}),
+            }
+
+    def test_unreachable_catalog_leaves_the_default_to_install(
+            self, tty, monkeypatch):
+        """A failed catalog fetch neither aborts the install nor prompts.
+
+        Mutation: the network error propagates and aborts the install,
+            or the wizard prompts over an empty list.
+        Oracle: a fetch raising `httpx.ConnectError` and a prompt that
+            fails the test if called.
+        """
+        data_dir = os.environ[config.DATA_DIR]
+        _strip_model(data_dir)
+
+        def _unreachable(endpoint, **kwargs):
+            raise httpx.ConnectError('no route')
+
+        def _no_prompt(*a, **k):
+            raise AssertionError('prompted with no candidates')
+
+        monkeypatch.setattr(
+            'memman.llm.openrouter_models.fetch_candidates', _unreachable)
+        monkeypatch.setattr('memman.setup.wizard.click.prompt', _no_prompt)
+        out = wizard.run_wizard(data_dir)
+        assert config.LLM_MODEL not in out

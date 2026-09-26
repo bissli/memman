@@ -58,9 +58,9 @@ def compute_prompt_version() -> str:
       re-enrichment cannot address - and `graph rebuild --stale`
       then clears the report by doing unrelated work, which is worse
       than having no remedy at all.
-    - The slow model id IS folded in, because `link_pending` runs
-      the enrichment call on `slow`.
-    - An unresolvable slow model hashes as the empty string, so a
+    - The `MEMMAN_LLM_MODEL` id IS folded in, because `link_pending`
+      runs the enrichment call on it.
+    - An unresolvable model hashes as the empty string, so a
       store with no model configured still yields a stable key rather
       than raising on the `status` path.
     - Cached for the life of the process. Every consumer - `status`,
@@ -142,7 +142,7 @@ def run_remember(
     """
     quality_warnings = check_content_quality(content)
 
-    metadata_llm_client = get_llm_client('slow')
+    metadata_llm_client = get_llm_client()
 
     plan, llm_calls = _plan_fact(
         content, insight, replaced_id, metadata_llm_client, ec)
@@ -178,7 +178,7 @@ def _plan_fact(
     replaced_id : str
         A `replace` target, or `''`.
     metadata_llm_client : Any
-        The slow client for enrichment.
+        The LLM client for enrichment.
     ec : Any
         The store's bound embed provider.
 

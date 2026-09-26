@@ -162,8 +162,8 @@ class TestEnrichWithLLM:
         """
         from memman.graph import engine as engine_mod
 
-        def _unavailable(role, *args, **kwargs):
-            raise RuntimeError(f'no credential for {role}')
+        def _unavailable(*args, **kwargs):
+            raise RuntimeError('no LLM credential')
 
         monkeypatch.setattr(engine_mod, 'get_llm_client', _unavailable)
         insert_insight(tmp_db, make_insight(

@@ -16,6 +16,8 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_LLM_PROVIDER_ONLY',
     'MEMMAN_LLM_DATA_COLLECTION',
     'MEMMAN_LLM_ZDR',
+    'MEMMAN_LLM_MAX_INPUT_PRICE',
+    'MEMMAN_LLM_MAX_OUTPUT_PRICE',
     'MEMMAN_EMBED_PROVIDER',
     'MEMMAN_OPENROUTER_ENDPOINT',
     'MEMMAN_RERANK_PROVIDER',
@@ -169,6 +171,8 @@ def test_constants_match_expected_names():
         config.LLM_PROVIDER_ONLY,
         config.LLM_DATA_COLLECTION,
         config.LLM_ZDR,
+        config.LLM_MAX_INPUT_PRICE,
+        config.LLM_MAX_OUTPUT_PRICE,
         config.EMBED_PROVIDER,
         config.OPENROUTER_ENDPOINT,
         config.RERANK_PROVIDER,
@@ -484,24 +488,24 @@ class TestConfigResolver:
         contents = '\n'.join([
             '# This is a comment',
             '',
-            f'{config.LLM_MODEL}=fast',
+            f'{config.LLM_MODEL}=model-a',
             '   ',
             '# Another comment',
-            f'{config.LLM_ENDPOINT}=slow',
+            f'{config.LLM_ENDPOINT}=endpoint-b',
             ])
         _write_env(env_path, contents + '\n')
-        assert config.get(config.LLM_MODEL) == 'fast'
-        assert config.get(config.LLM_ENDPOINT) == 'slow'
+        assert config.get(config.LLM_MODEL) == 'model-a'
+        assert config.get(config.LLM_ENDPOINT) == 'endpoint-b'
 
     def test_parser_strips_quoted_values(self, env_path):
         """Parser strips single and double quotes from values."""
         contents = '\n'.join([
-            f'{config.LLM_MODEL}="quoted-fast"',
-            f"{config.LLM_ENDPOINT}='quoted-slow'",
+            f'{config.LLM_MODEL}="quoted-model"',
+            f"{config.LLM_ENDPOINT}='quoted-endpoint'",
             ])
         _write_env(env_path, contents + '\n')
-        assert config.get(config.LLM_MODEL) == 'quoted-fast'
-        assert config.get(config.LLM_ENDPOINT) == 'quoted-slow'
+        assert config.get(config.LLM_MODEL) == 'quoted-model'
+        assert config.get(config.LLM_ENDPOINT) == 'quoted-endpoint'
 
     def test_parser_does_not_expand_variables(self, env_path):
         """Parser does not expand shell variable syntax."""
