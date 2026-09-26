@@ -75,7 +75,6 @@ def test_migrate_result_marks_verified_on_count_match(pg_dsn, tmp_path):
                 conn, schema, store,
                 expected={
                     'insights': len(payload.insights),
-                    'edges': len(payload.edges),
                     'oplog': len(payload.oplog),
                     'meta': len(payload.meta),
                     })
@@ -131,7 +130,6 @@ def test_migrate_raises_on_destination_count_mismatch(pg_dsn, tmp_path):
                     conn, schema, store,
                     expected={
                         'insights': len(payload.insights),
-                        'edges': len(payload.edges),
                         'oplog': len(payload.oplog),
                         'meta': len(payload.meta),
                         })

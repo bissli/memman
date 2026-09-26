@@ -215,7 +215,6 @@ def test_maintenance_retries_stale_rows(runner):
         import time as _time
         run_maintenance(
             queue_conn=conn,
-            data_dir=data_dir,
             touched_stores=set(),
             store_contexts={},
             deadline_monotonic=_time.monotonic() + 60)

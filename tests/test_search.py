@@ -157,5 +157,5 @@ class TestRecallRanking:
 
     def test_rerank_general_similarity_highest(self):
         """The surviving GENERAL row weights similarity highest."""
-        w_kw, w_sim, w_gr = RERANK_WEIGHTS
-        assert w_sim > max(w_kw, w_gr)
+        w_kw, w_sim, w_anchor = RERANK_WEIGHTS
+        assert w_sim > max(w_kw, w_anchor)

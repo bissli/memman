@@ -327,7 +327,7 @@ class TestRestore:
         """A pre-0.18.0 v1 bundle is refused, not silently restored.
 
         A v1 bundle restored onto this build would yield a store
-        missing `session_id`/`queue_uuid` that fails at `open_db`.
+        missing `queue_uuid` that fails at `open_db`.
 
         Mutation: forgetting the `BACKUP_FORMAT_VERSION` bump (v1
             would then round-trip as current).

@@ -28,7 +28,6 @@ def test_maintenance_runs_incremental_vacuum_after_link_pending(
     """`_run_per_store_maintenance` issues a PRAGMA incremental_vacuum."""
     ctx = MagicMock()
     ctx.backend = tmp_backend
-    ctx.embed_cache = {}
     ctx.llm_client = MagicMock()
     ctx.ec = MagicMock()
 
@@ -45,7 +44,6 @@ def test_maintenance_skips_vacuum_when_deadline_exceeded(tmp_backend):
     wrapped = MagicMock(wraps=tmp_backend)
     wrapped.oplog = MagicMock(wraps=tmp_backend.oplog)
     ctx.backend = wrapped
-    ctx.embed_cache = {}
     ctx.llm_client = MagicMock()
     ctx.ec = MagicMock()
 
@@ -79,7 +77,6 @@ def test_maintenance_reenriches_stranded_row(tmp_db, tmp_backend):
 
     ctx = MagicMock()
     ctx.backend = tmp_backend
-    ctx.embed_cache = {}
     ctx.ec = bound_embedder(tmp_backend)
     ctx.llm_client = MagicMock()
     ctx.llm_client.complete.return_value = json.dumps({
@@ -94,45 +91,6 @@ def test_maintenance_reenriches_stranded_row(tmp_db, tmp_backend):
         ('strand-1',)).fetchone()
     assert row[0] is not None
     assert row[1] is not None
-
-
-def test_idle_store_relinks_after_constants_drift():
-    """An untouched store whose linked_at was cleared by a constants-hash
-    drift gets relinked by the all-stores maintenance pass.
-
-    Regression: _reindex_all_stores_if_drift reindexed quiet stores
-    (clearing linked_at) but never relinked them, stranding every row.
-    """
-    import os
-    import time
-    from datetime import datetime, timezone
-
-    from memman import config
-    from memman.maintenance import _reindex_all_stores_if_drift
-    from memman.store.factory import open_backend
-    from memman.store.model import format_timestamp
-    from memman.store.node import insert_insight, stamp_enriched, stamp_linked
-
-    data_dir = os.environ[config.DATA_DIR]
-    store = 'idlestore'
-    backend = open_backend(store, data_dir)
-    ts = format_timestamp(datetime.now(timezone.utc))
-    for i in range(3):
-        ins = make_insight(id=f'idle{i}', content=f'idle content {i}')
-        insert_insight(backend._db, ins)
-        stamp_linked(backend._db, ins.id, ts)
-        stamp_enriched(backend._db, ins.id, ts)
-    backend.meta.set('constants_hash', 'STALE-HASH')
-    assert backend.nodes.count_pending_links() == 0
-    backend.close()
-
-    _reindex_all_stores_if_drift(data_dir, {}, time.monotonic() + 60)
-
-    backend2 = open_backend(store, data_dir)
-    try:
-        assert backend2.nodes.count_pending_links() == 0
-    finally:
-        backend2.close()
 
 
 def test_stranded_reenrich_keeps_the_stored_entities(
@@ -161,7 +119,6 @@ def test_stranded_reenrich_keeps_the_stored_entities(
 
     ctx = MagicMock()
     ctx.backend = tmp_backend
-    ctx.embed_cache = {}
     ctx.llm_client = MagicMock()
     ctx.ec = MagicMock()
     ctx.ec.available.return_value = False

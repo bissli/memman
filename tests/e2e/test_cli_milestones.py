@@ -1,18 +1,9 @@
 """End-to-end CLI milestone tests (subset against the queue API).
 
-V4.1 trimmed this file from 68 to 17 tests. The deletions removed
-tests that:
-- asserted on `facts.0.edges_created.X` synchronous-API artifacts that
-  no longer exist under the queue model
-- duplicated unit-suite coverage with weaker `status.edge_count`
-  assertions
-- coupled to LLM-output stability (specific entity strings, edge
-  edge counts) and would re-break on every model swap
-
-The 17 surviving tests exercise unique end-to-end behavior the unit
-suite cannot: CLI subprocess + real env file + drain pipeline. They
-split across 4 milestones (M0 store ops, M1 CRUD read paths, M3
-search, M11 validation) and are surgically gated on
+These tests exercise end-to-end behavior the unit suite cannot: CLI
+subprocess + real env file + drain pipeline. They split across 4
+milestones (M0 store ops, M1 CRUD read paths, M3 search, M11
+validation) and are surgically gated on
 `requires_live_keys` only where drain is exercised.
 """
 

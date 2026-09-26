@@ -3,14 +3,14 @@
 Steps:
 1. `queue.purge_done` -- drop completed queue rows.
 2. `queue.purge_worker_runs` -- prune the heartbeat ledger.
-3. All-stores pass: `reindex_if_constants_changed` for every store
-   on disk (touched or not). Hash matches -> O(1) no-op; drift
-   triggers the chunked reindex here, asynchronously from any user
-   recall on the hot path.
-4. Per touched store with rows_processed > 0:
+3. Per touched store with rows_processed > 0:
    - `trim_oplog_by_age` (once per drain, not per row).
    - `link_pending` with a small batch cap so a backlog of pending
      enrichments cannot blow the maintenance budget.
+
+A store the drain did not touch is never opened, so a row left
+pending in a quiet store waits for that store's next write or a
+`graph rebuild`.
 
 Each step is bounded by the remaining drain timeout; if less than
 30 s remains the entire maintenance phase is skipped and rolled to
@@ -30,7 +30,6 @@ MAINTENANCE_REENRICH_MAX = 3
 
 def run_maintenance(
         queue_conn: Any,
-        data_dir: str,
         touched_stores: set[str],
         store_contexts: dict[str, Any],
         deadline_monotonic: float) -> None:
@@ -66,9 +65,6 @@ def run_maintenance(
     except Exception:
         logger.exception('maintenance: retry_stale failed')
 
-    _reindex_all_stores_if_drift(
-        data_dir, store_contexts, deadline_monotonic)
-
     for store_name in touched_stores:
         if time.monotonic() >= deadline_monotonic:
             logger.debug(
@@ -79,102 +75,6 @@ def run_maintenance(
             continue
         _run_per_store_maintenance(
             ctx, store_name, deadline_monotonic)
-
-
-def _relink_pending_if_any(
-        backend: Any, store_name: str,
-        deadline_monotonic: float, *,
-        embed_client: Any = None) -> None:
-    """Drain a bounded slice of a store's pending-link backlog.
-
-    Quiet stores whose `linked_at` was cleared by a constants-hash
-    reindex are otherwise never relinked. Already-enriched rows relink
-    without an LLM pass (the `enriched_at` guard in `link_pending`), so
-    the batch is the full `MAX_LINK_BATCH`. Bounded by the deadline and
-    gated on a cheap `count_pending_links()` so stores with nothing
-    pending pay O(1).
-    """
-    if time.monotonic() >= deadline_monotonic:
-        return
-    from memman.graph.engine import MAX_LINK_BATCH, link_pending
-    try:
-        if backend.nodes.count_pending_links() == 0:
-            return
-    except Exception:
-        logger.exception(
-            f'maintenance: count_pending_links failed for {store_name!r}')
-        return
-    if embed_client is None:
-        from memman.embed.fingerprint import bound_embedder
-        try:
-            embed_client = bound_embedder(backend)
-        except Exception:
-            embed_client = None
-    try:
-        processed = link_pending(
-            backend, embed_client=embed_client,
-            max_batch=MAX_LINK_BATCH, store_name=store_name)
-        if processed:
-            logger.debug(
-                f'maintenance: relinked {processed} pending rows in'
-                f' {store_name!r}')
-    except Exception:
-        logger.exception(
-            f'maintenance: relink failed for {store_name!r}')
-
-
-def _reindex_all_stores_if_drift(
-        data_dir: str,
-        store_contexts: dict[str, Any],
-        deadline_monotonic: float) -> None:
-    """Reindex auto-edges for every on-disk store whose constants hash drifted.
-
-    Touched stores reuse the open `ctx.backend`; untouched stores are
-    opened transiently with `unchecked=True` so a missing fingerprint
-    (fresh store with no data) is not fatal. Hash-compare is O(1)
-    when nothing has drifted; the chunked reindex only fires on the
-    rare drift event (e.g. after a constants-table edit on deploy).
-    """
-    from memman.graph.engine import reindex_if_constants_changed
-    from memman.session import active_store
-    from memman.store.factory import list_stores
-
-    try:
-        stores = list_stores(data_dir)
-    except Exception:
-        logger.exception('maintenance: list_stores failed')
-        return
-
-    for store_name in stores:
-        if time.monotonic() >= deadline_monotonic:
-            logger.debug(
-                'maintenance: deadline reached mid all-stores reindex pass')
-            return
-        ctx = store_contexts.get(store_name)
-        if ctx is not None:
-            try:
-                reindex_if_constants_changed(
-                    ctx.backend, store_name=store_name)
-                _relink_pending_if_any(
-                    ctx.backend, store_name, deadline_monotonic,
-                    embed_client=ctx.ec)
-            except Exception:
-                logger.exception(
-                    f'maintenance: reindex_if_constants_changed failed'
-                    f' for touched store {store_name!r}')
-            continue
-        try:
-            with active_store(
-                    data_dir=data_dir, store=store_name,
-                    unchecked=True) as backend:
-                reindex_if_constants_changed(
-                    backend, store_name=store_name)
-                _relink_pending_if_any(
-                    backend, store_name, deadline_monotonic)
-        except Exception:
-            logger.exception(
-                f'maintenance: reindex_if_constants_changed failed'
-                f' for quiet store {store_name!r}')
 
 
 def _run_per_store_maintenance(
@@ -221,10 +121,8 @@ def _run_per_store_maintenance(
     try:
         processed = link_pending(
             ctx.backend,
-            embed_cache=ctx.embed_cache,
             embed_client=ctx.ec,
-            max_batch=MAINTENANCE_LINK_PENDING_MAX,
-            store_name=store_name)
+            max_batch=MAINTENANCE_LINK_PENDING_MAX)
         if processed:
             logger.debug(
                 f'maintenance: link_pending processed {processed} insights'

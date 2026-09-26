@@ -54,14 +54,14 @@ One live-read command (called by the SessionStart hook, not by hand):
 memman remember "Chose Qdrant over Milvus for vector search" \
   --cat decision --imp 5 --entity Qdrant --entity Milvus --source agent
 
-# Recall - graph-enhanced retrieval (default), one line per row
+# Recall - smart retrieval (default), one line per row
 memman recall "vector database" --limit 10
 
 # Recall with category/source filter (fills to --limit: the filter
 # runs inside the anchor scans, not as a post-cut)
 memman recall "auth" --cat decision --source agent
 
-# Simple SQL LIKE matching (faster, no graph traversal)
+# Simple SQL LIKE matching (faster, skips ranking)
 memman recall "auth" --basic
 
 # Replace - deterministic replacement by ID (inherits metadata from
@@ -84,23 +84,21 @@ ambiguous prefix is refused with the number of rows it matches.
 
 **Remember flags:**
 
-| Flag        | Default | Description                                                                                                                       |
-| ----------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `--cat`     | `fact`  | Category: `preference`, `decision`, `fact`, `insight`, `context`                                                                  |
-| `--imp`     | `3`     | Importance 1-5, a sort key stored as passed                                                                                       |
-| `--entity`  |         | Entity name (repeatable); the row stores exactly these names                                                                      |
-| `--source`  | `user`  | Source: `user` (default), `agent`, or a locator for imported material; stored verbatim; recall filters by exact match             |
-| `--session` | (env)   | Session id for the temporal chain; defaults to `$MEMMAN_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID`. No session, no backbone edge |
+| Flag       | Default | Description                                                                                                           |
+| ---------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
+| `--cat`    | `fact`  | Category: `preference`, `decision`, `fact`, `insight`, `context`                                                      |
+| `--imp`    | `3`     | Importance 1-5, a sort key stored as passed                                                                           |
+| `--entity` |         | Entity name (repeatable); the row stores exactly these names                                                          |
+| `--source` | `user`  | Source: `user` (default), `agent`, or a locator for imported material; stored verbatim; recall filters by exact match |
 
 **Recall flags:**
 
-| Flag        | Default | Description                                                                                                   |
-| ----------- | ------- | ------------------------------------------------------------------------------------------------------------- |
-| `--limit`   | `20`    | Max results                                                                                                   |
-| `--cat`     |         | Filter by category                                                                                            |
-| `--source`  |         | Filter by source                                                                                              |
-| `--basic`   | `false` | Use simple SQL LIKE matching instead of smart recall; returns before ranking, so each line carries no `score` |
-| `--session` |         | Calling session id, recorded on the `recall-detail` oplog row so a return is attributable to a session        |
+| Flag       | Default | Description                                                                                                   |
+| ---------- | ------- | ------------------------------------------------------------------------------------------------------------- |
+| `--limit`  | `20`    | Max results                                                                                                   |
+| `--cat`    |         | Filter by category                                                                                            |
+| `--source` |         | Filter by source                                                                                              |
+| `--basic`  | `false` | Use simple SQL LIKE matching instead of smart recall; returns before ranking, so each line carries no `score` |
 
 The cross-encoder rerank stage is on by default and auto-skips on 1-2 token
 queries. Provider is selected via `MEMMAN_RERANK_PROVIDER` (any registered
@@ -110,7 +108,7 @@ globally with `memman config set MEMMAN_RERANK_ENABLED false`.
 
 **Telling a weak result set from a strong one.** Smart recall returns
 rows even when nothing matches: a recency channel seeds the newest
-insights as traversal anchors regardless, so a query that matches
+insights as anchors regardless, so a query that matches
 nothing still comes back full. A full page is therefore not evidence
 that anything on it is relevant, and a page that looks thin usually is
 not: a store nearly always holds something bearing on a query drawn
@@ -137,24 +135,14 @@ store does not hold it.
 ### Graph operations
 
 ```bash
-# Link - create a typed edge
-memman graph link <source_id> <target_id> --type semantic --weight 0.85
-memman graph link <source_id> <target_id> --type entity --weight 0.8 \
-  --meta '{"reason":"..."}'
-
-# Related - BFS traversal from an insight
-memman graph related <id> --edge semantic --depth 2
-
-# Rebuild - full LLM re-enrichment + re-embed + edge rebuild
+# Rebuild - full LLM re-enrichment + re-embed
 memman graph rebuild              # process all insights
 memman graph rebuild --dry-run    # preview count without modifying DB
 memman graph rebuild --stale-only # re-enrich only rows whose prompt_version
                                   # no longer matches the active enrichment key
 ```
 
-Auto-reindex of computed edges (semantic, entity, temporal) fires on `open_db()` when graph constants have changed; no operator command for it.
-
-`graph rebuild` re-enriches all insights through the full LLM pipeline (enrichment, re-embedding, edge recreation). Processes in batches of 20. Returns `{"processed": N, "remaining": 0}`. Rejected when the scheduler is stopped.
+`graph rebuild` re-enriches all insights through the full LLM pipeline (enrichment, re-embedding). Processes in batches of 20. Returns `{"processed": N, "remaining": 0}`. Rejected when the scheduler is stopped.
 
 `--stale-only` is the targeted variant: it only touches rows whose persisted `prompt_version` no longer matches `compute_prompt_version()` -- the enrichment prompt and the `slow` model, which is exactly the set this command replays. Cross-backend (works on Postgres, unlike wholesale `graph rebuild` which remains SQLite-only). Shares the `'rebuild'` advisory lock so it cannot race a wholesale rebuild. NULL-provenance rows are not swept; they need a separate backfill.
 
@@ -206,29 +194,6 @@ Two switching paths:
 - **`embed reembed`** is the offline path: every store is rewritten in place with the current `MEMMAN_EMBED_PROVIDER`. Requires the scheduler to be **stopped** (`memman scheduler stop`).
 
 **Per-store embedder sovereignty.** Each store's `meta.embed_fingerprint` is the runtime authority over its embedder. Recall, drain, and graph rebuild all bind the embedder from the store's fingerprint, not from `MEMMAN_EMBED_PROVIDER`. One process can sequentially open two stores fingerprinted to different providers without env mutation - e.g., `MEMMAN_EMBED_PROVIDER=voyage memman --store openai_store recall ...` succeeds against an OpenAI-fingerprinted store. Switching a store's embedder is explicit (`embed swap` or `embed reembed`); there is no silent migration. Implementation details: [05-lifecycle.md § 5.3](design/05-lifecycle.md#53-embedding-support).
-
-#### Using an embedding model not on the calibrated list
-
-The shipped `_thresholds_generated.py` covers 20 `(provider, model)` pairs across `voyage`, `openrouter`, and `ollama` (see [05-lifecycle.md § 5.3.1a](design/05-lifecycle.md#531a-calibrated-embedding-models)). A store bound to a model outside that list falls back to the surface-wide median (`code` = 0.6495, `claw` = 0.6840) and `memman doctor` reports `embed_threshold: warn` with `source: surface_median`. Semantic edges still get created - the fallback is bounded (mean nDCG@5 loss ~0.014 vs calibrated on the shipped triples).
-
-Operators with a quality-critical store running an uncalibrated model can set a per-store override:
-
-```bash
-# Set an explicit cosine cutoff (float in (0.0, 1.0))
-memman config set MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store> 0.72
-
-# Or disable semantic-edge creation entirely for this store
-memman config set MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store> skip
-
-# Inspect the active source for a store
-memman doctor               # embed_threshold detail shows source
-```
-
-The override takes precedence over both the calibrated table and the median fallback. Doctor validates the value: numeric must be in `(0.0, 1.0)`; sentinels `skip` and `none` disable edges; anything else fails the check.
-
-**Upgrading from a version with a single shared `AUTO_SEMANTIC_THRESHOLD`.** Existing stores keep working after the upgrade (no schema migration). Newly remembered insights are linked at the per-fingerprint calibrated threshold, but pre-existing semantic edges keep whatever weights they were created with - so two insights inserted before the upgrade may show a different edge population than two near-identical insights inserted after. To rebalance the whole store at the current threshold, run `memman graph rebuild <store>`. This is optional; existing edges remain valid.
-
-
 
 ### Store management
 
@@ -297,7 +262,7 @@ To revert a single store without re-migrating data, set the backend flag directl
 
 ```bash
 memman status                                       # memory statistics; JSON includes stale_insights count
-memman doctor                                       # health checks (integrity, schema, partial_index_predicates, enrichment, embeddings, fingerprint, orphan and dangling edges, supersession_integrity, queue, scheduler, drain heartbeat, env, no_stale_swap_meta, provenance_drift)
+memman doctor                                       # health checks (integrity, schema, partial_index_predicates, enrichment, embeddings, fingerprint, supersession_integrity, queue, scheduler, drain heartbeat, env, no_stale_swap_meta, provenance_drift)
 memman doctor --text                                # human-readable colored table
 memman config show                                  # effective configuration (env + on-disk)
 
@@ -379,7 +344,7 @@ memman reads config at runtime from one source: `<MEMMAN_DATA_DIR>/env`, a `KEY=
 
 `memman config set KEY VALUE` is the override path. Use it after install to change a backend, rotate an API key, or update a DSN. Conflicts between an `INSTALLABLE_KEYS` flag and an existing env-file value are rejected with the exact `memman config set ...` command to run.
 
-Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`, `MEMMAN_SESSION_ID`, `MEMMAN_AUTHOR`) are not persisted to the file; they are read directly from `os.environ` by the components that own them. `MEMMAN_SESSION_ID` in particular is never written to the env file on purpose - a stale persisted session id would fuse every later write into one false temporal chain. `--session` then falls back to `CLAUDE_CODE_SESSION_ID`. Claude Code owns and exports it; memman only reads it, and never persists it either. `MEMMAN_AUTHOR` names the person or agent issuing the write; when unset, memman falls back to `getpass.getuser()`. It is stamped on the queue row at enqueue time so the scheduler subprocess, which runs without directory environment, carries the correct author into the stored insight. `remember` and `replace` refuse content whose first word matches the resolved author (case-insensitive, word-boundary) - the author field already records who wrote it. The same two commands refuse content that names a line number: a locator after a source, config or doc extension (`scripts/auth.py:88`, `config.yaml:12`, `app.py-1233`, `cli.py ~1190`), the phrase `line N` or `lines N`, or a bare `:N` or `L123` after a space, `(`, `,` or `;` (`at :1774`, `emsx.py L419`). The refusal quotes the locator and asks for the file and the function or symbol instead, since a line number goes stale on the next edit. A host port (`localhost:6379`, `db.example.com:5432`), an image tag (`python:3.11`), a clock time (`14:18`), `code:404`, a slice (`[:80]`) and `DISPLAY=:99` pass unrefused. A port written without its host (`:9222`) is refused, and `localhost:9222` passes. A memory is one thought written as one paragraph that opens on its subject, so the two commands also refuse content that spans several lines, and content that opens with a label of at most three words before a colon and a space (`Fix:`, `AWS gotcha:`, `User decision 2026-09-17:`). A longer run before the colon passes, since it is as often a sentence ("The rule is simple:") as a label.
+Process-control variables (`MEMMAN_DATA_DIR`, `MEMMAN_STORE`, `MEMMAN_WORKER`, `MEMMAN_DEBUG`, `MEMMAN_SCHEDULER_KIND`, `MEMMAN_AUTHOR`) are not persisted to the file; they are read directly from `os.environ` by the components that own them. `MEMMAN_AUTHOR` names the person or agent issuing the write; when unset, memman falls back to `getpass.getuser()`. It is stamped on the queue row at enqueue time so the scheduler subprocess, which runs without directory environment, carries the correct author into the stored insight. `remember` and `replace` refuse content whose first word matches the resolved author (case-insensitive, word-boundary) - the author field already records who wrote it. The same two commands refuse content that names a line number: a locator after a source, config or doc extension (`scripts/auth.py:88`, `config.yaml:12`, `app.py-1233`, `cli.py ~1190`), the phrase `line N` or `lines N`, or a bare `:N` or `L123` after a space, `(`, `,` or `;` (`at :1774`, `emsx.py L419`). The refusal quotes the locator and asks for the file and the function or symbol instead, since a line number goes stale on the next edit. A host port (`localhost:6379`, `db.example.com:5432`), an image tag (`python:3.11`), a clock time (`14:18`), `code:404`, a slice (`[:80]`) and `DISPLAY=:99` pass unrefused. A port written without its host (`:9222`) is refused, and `localhost:9222` passes. A memory is one thought written as one paragraph that opens on its subject, so the two commands also refuse content that spans several lines, and content that opens with a label of at most three words before a colon and a space (`Fix:`, `AWS gotcha:`, `User decision 2026-09-17:`). A longer run before the colon passes, since it is as often a sentence ("The rule is simple:") as a label.
 
 The full variable list lives in [CONTRIBUTING.md § Variable reference](../CONTRIBUTING.md#variable-reference).
 
@@ -440,19 +405,18 @@ The variables below are not installable - they are read from the env file on dem
 
 ### Write pipeline (deferred, two-tier)
 
-`memman remember` appends one row to the queue in ~50 ms on the host session - no LLM calls, no embeddings, no edges. The full pipeline runs out of band:
+`memman remember` appends one row to the queue in ~50 ms on the host session - no LLM calls, no embeddings. The full pipeline runs out of band:
 
 1. **Tier 1 (host)** - append a row to `~/.memman/queue.db` with `status='pending'`, the raw text, and any `--cat`/`--imp`/`--entity` hints. Returns `{action: queued, queue_id, queue_uuid, store}`. The `queue_uuid` is the join key: it is stamped on every insight this write produces and outlives the queue row, which `purge_done` drops about a minute after the drain.
-2. **Tier 2 (worker)** - systemd timer (Linux), launchd agent (macOS), or `memman scheduler serve` PID 1 (containers) invokes `memman scheduler drain --timeout 60` every 60 s under an `flock` on `~/.memman/drain.lock`. Per row: quality gate → enrichment → embed (keyword-enriched text, or content alone) → add, or replace the row `replace <id>` names → edges (temporal + entity + semantic) → mark done.
+2. **Tier 2 (worker)** - systemd timer (Linux), launchd agent (macOS), or `memman scheduler serve` PID 1 (containers) invokes `memman scheduler drain --timeout 60` every 60 s under an `flock` on `~/.memman/drain.lock`. Per row: quality gate → enrichment → embed (keyword-enriched text, or content alone) → add, or replace the row `replace <id>` names → mark done.
 
 The host session never blocks on the network. Newly stored memories become recallable on the next drain tick (default 60 s).
 
 ### Recall pipeline
 
 1. **RRF anchor selection** - keyword + vector + recency fused with K=60.
-2. **Beam search** - graph traversal from anchors over one fixed edge-weight table.
-3. **3-signal blend** - keyword, similarity, graph. A stored entity name reaches the keyword signal because a candidate's token set unions its content tokens with its entity-name tokens.
-4. **Cross-encoder rerank** (on by default; toggle per-store via `MEMMAN_RERANK_ENABLED_<store>`) - the configured reranker (default `voyage` / `rerank-3-lite`) re-scores the top 100 candidates; replaces the multi-signal score for the final ordering. Auto-skips on 1-2 token queries.
-5. **Ordering** - nothing re-sorts after the limit cut: rows come back in relevance order.
+2. **3-signal blend** - keyword, similarity, and the fused anchor score. A stored entity name reaches the keyword signal because a candidate's token set unions its content tokens with its entity-name tokens.
+3. **Cross-encoder rerank** (on by default; toggle per-store via `MEMMAN_RERANK_ENABLED_<store>`) - the configured reranker (default `voyage` / `rerank-3-lite`) re-scores the top 100 candidates; replaces the multi-signal score for the final ordering. Auto-skips on 1-2 token queries.
+4. **Ordering** - nothing re-sorts after the limit cut: rows come back in relevance order.
 
 See [Design & Architecture](DESIGN.md) for the full deep dive.

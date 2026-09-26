@@ -169,7 +169,7 @@ class TestEnrichWithLLM:
         insert_insight(tmp_db, make_insight(
             id='nc-1', content='test content'))
 
-        count = link_pending(tmp_backend, max_batch=1, store_name='test')
+        count = link_pending(tmp_backend, max_batch=1)
         assert count == 1
 
         cols = _read_enrichment_columns(tmp_db, 'nc-1')
@@ -214,11 +214,10 @@ class TestReEmbed:
         mock_embed.embed.return_value = [0.1, 0.2, 0.3]
         mock_embed.model = 'voyage-3-lite'
 
-        embed_cache = dict(tmp_backend.nodes.iter_embeddings_as_vecs())
         link_pending(
-            tmp_backend, embed_cache=embed_cache,
+            tmp_backend,
             metadata_llm_client=mock_llm, embed_client=mock_embed,
-            max_batch=1, store_name='test')
+            max_batch=1)
 
         mock_embed.embed.assert_called_once()
         call_text = mock_embed.embed.call_args[0][0]
@@ -236,7 +235,7 @@ class TestReEmbed:
 
         link_pending(
             tmp_backend, metadata_llm_client=mock_llm, embed_client=None,
-            max_batch=1, store_name='test')
+            max_batch=1)
 
         cols = _read_enrichment_columns(tmp_db, 'rs-1')
         assert cols['keywords'] is not None
@@ -256,7 +255,7 @@ class TestReEmbed:
 
         link_pending(
             tmp_backend, metadata_llm_client=mock_llm, embed_client=mock_embed,
-            max_batch=1, store_name='test')
+            max_batch=1)
 
         row = tmp_db._conn.execute(
             'SELECT linked_at FROM insights WHERE id = ?',
@@ -323,37 +322,6 @@ class TestBuildEnrichedText:
         """No keywords means original content returned."""
         result = build_enriched_text('hello world', [])
         assert result == 'hello world'
-
-
-def test_link_pending_relink_only_skips_enrich(tmp_db, tmp_backend):
-    """An already-enriched pending-link row relinks without an LLM pass.
-
-    Mutation: dropping the `relink_only` guard so `enrich_with_llm`
-        fires on every `link_pending` pass -- a constants-hash
-        clear_linked_at would then re-enrich the whole corpus at LLM
-        cost, charged against the spend ceiling.
-    Oracle: the mock client, asserted never called.
-    """
-    from memman.store.model import format_timestamp
-    from memman.store.node import stamp_enriched
-
-    insight = make_insight(id='relink-1', content='already enriched body')
-    insert_insight(tmp_db, insight)
-    stamp_enriched(
-        tmp_db, 'relink-1',
-        format_timestamp(datetime.now(timezone.utc)))
-
-    mock_llm = MagicMock()
-    link_pending(
-        tmp_backend, metadata_llm_client=mock_llm, embed_client=None, max_batch=5,
-        store_name='test')
-
-    mock_llm.complete.assert_not_called()
-    row = tmp_db._conn.execute(
-        'SELECT linked_at, enriched_at FROM insights WHERE id = ?',
-        ('relink-1',)).fetchone()
-    assert row[0] is not None
-    assert row[1] is not None
 
 
 class TestLengthCaps:

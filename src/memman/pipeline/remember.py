@@ -7,7 +7,7 @@ Structure:
    keyword-enriched text when the enrichment carries keywords, else
    the content alone. **No DB writes.**
 3. Apply phase - one transaction commits the replace link, insert,
-   edges, enrichment update, and stamp.
+   enrichment update, and stamp.
 
 A write adds one row, or replaces the row `replace <id>` names.
 Nothing else retires a row.
@@ -28,15 +28,12 @@ from typing import Any
 import httpx
 from memman.embed import EmbeddingProvider
 from memman.exceptions import EmbedCredentialError
-from memman.graph.engine import _resolve_semantic_threshold, fast_edges
 from memman.graph.enrichment import build_enriched_text, enrich_with_llm
-from memman.graph.entity import create_entity_edges
-from memman.graph.semantic import create_semantic_edges
 from memman.llm.client import get_llm_client
 from memman.search.quality import check_content_quality
 from memman.store.backend import Backend
-from memman.store.model import Edge, Insight, dedupe_entities
-from memman.store.model import format_timestamp, insight_to_delta_dict
+from memman.store.model import Insight, dedupe_entities, format_timestamp
+from memman.store.model import insight_to_delta_dict
 
 logger = logging.getLogger('memman')
 
@@ -119,47 +116,41 @@ def run_remember(
         content: str,
         ec: EmbeddingProvider,
         replaced_id: str = '',
-        embed_cache: dict[str, list[float]] | None = None,
-        *,
-        store_name: str,
         ) -> dict[str, Any]:
-    """Run the full remember pipeline and return the result dict.
+    """Store one write, enriched and embedded, and return the result.
 
-    See module docstring for the overall shape.
+    Parameters
+    ----------
+    backend : Backend
+        The target store.
+    insight : Insight
+        The queued row's metadata: category, importance, entities,
+        source, queue_uuid and author.
+    content : str
+        Stored as written: no model judges it, rewords it, or picks
+        its category, which is `insight.category`.
+    ec : EmbeddingProvider
+        The store-bound embedder, from `bound_embedder`.
+    replaced_id : str, default ''
+        The row a `replace` supersedes; '' for a plain add.
 
-    `ec` is the store-bound embed client (resolved from the store's
-    `meta.embed_fingerprint` via `bound_embedder`); production callers
-    pass `_StoreContext.ec`. `embed_cache` is optional drain-scope
-    state hoisted by `_drain_queue` to amortize setup across rows in
-    one drain pass. When omitted (e.g., direct test use), the function
-    builds it from the backend itself.
-
-    `content` is stored as written: no model judges it, rewords it,
-    or picks its category, which is `insight.category`.
-
-    `store_name` selects the per-store surface
-    (`MEMMAN_SURFACE_<store>`) for the threshold lookup. It is
-    keyword-only and required: an omitted store name silently
-    resolves the code-surface row and skips the
-    `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>` override branch
-    entirely, which is a wrong threshold rather than a missing one.
+    Returns
+    -------
+    dict[str, Any]
+        `{'facts': [result], 'quality_warnings': [...],
+        'llm_calls': int}`, where `result` is `_apply_plan`'s dict.
     """
     quality_warnings = check_content_quality(content)
 
     metadata_llm_client = get_llm_client('slow')
-    if embed_cache is None:
-        embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
 
     plan, llm_calls = _plan_fact(
         content, insight, replaced_id, metadata_llm_client, ec)
     plan.fact_insight.prompt_version = compute_prompt_version()
     plan.fact_insight.embedding_model = ec.model
-    if plan.action == 'replace':
-        embed_cache.pop(replaced_id, None)
 
     with backend.transaction():
-        result = _apply_plan(
-            backend, plan, embed_cache, store_name=store_name)
+        result = _apply_plan(backend, plan)
 
     return {
         'facts': [result],
@@ -209,8 +200,7 @@ def _plan_fact(
         category=parent.category, importance=parent.importance,
         entities=list(parent.entities), source=parent.source,
         created_at=parent.created_at, updated_at=parent.updated_at,
-        session_id=parent.session_id, queue_uuid=parent.queue_uuid,
-        author=parent.author)
+        queue_uuid=parent.queue_uuid, author=parent.author)
 
     calls = 0
     try:
@@ -238,65 +228,13 @@ def _plan_fact(
         ), calls
 
 
-def move_edges(
-        backend: Backend, from_id: str, to_id: str,
-        carried: list[Edge]) -> int:
-    """Re-point a snapshot of a predecessor's edges onto its successor.
-
-    Parameters
-    ----------
-    backend : Backend
-        Open store; the caller holds the transaction.
-    from_id : str
-        The predecessor whose edges were snapshotted.
-    to_id : str
-        The successor that inherits them.
-    carried : list[Edge]
-        The predecessor's edges as read BEFORE its pointer was
-        written, since `supersede` removes them.
-
-    Returns
-    -------
-    int
-        Edges written onto the successor. An edge whose far endpoint
-        is the predecessor itself or the successor is dropped rather
-        than re-pointed into a self-edge.
-    """
-    moved = 0
-    for edge in carried:
-        far_id = edge.target_id if edge.source_id == from_id else edge.source_id
-        if far_id in {from_id, to_id}:
-            continue
-        backend.edges.upsert(Edge(
-            source_id=to_id if edge.source_id == from_id else edge.source_id,
-            target_id=to_id if edge.target_id == from_id else edge.target_id,
-            edge_type=edge.edge_type,
-            weight=edge.weight,
-            metadata=dict(edge.metadata)))
-        moved += 1
-    return moved
-
-
-def _apply_plan(
-        backend: Backend,
-        plan: FactPlan,
-        embed_cache: dict[str, list[float]],
-        *,
-        store_name: str,
-        ) -> dict[str, Any]:
+def _apply_plan(backend: Backend, plan: FactPlan) -> dict[str, Any]:
     """Apply one planned write. Must be invoked inside a transaction.
-
-    `store_name` selects the per-store surface for the calibrated
-    semantic-edge threshold lookup. It is keyword-only and required
-    for the same reason as on `run_remember`: an omitted store name
-    resolves the code-surface row and skips the per-store override,
-    giving a wrong threshold rather than none.
 
     Notes
     -----
-    - A `replace` supersedes its target (never deletes it), moves the
-      target's edges to the successor, and carries the target's recall
-      history onto it. The entity list is the caller's as given.
+    - A `replace` supersedes its target (never deletes it). The entity
+      list is the caller's as given.
     - A target that is not current (forgotten, or superseded by an
       earlier write) is dropped into `targets_gone`, and the plan
       degrades to a plain add.
@@ -306,20 +244,10 @@ def _apply_plan(
     linking = plan.action == 'replace' and bool(plan.targets)
     linked_targets: list[tuple[str, str]] = []
     targets_gone: list[dict[str, str | None]] = []
-    carried: list[tuple[str, list[Edge]]] = []
     predecessors: list[tuple[str, str, Insight]] = []
     if linking:
         for target_id, relation in plan.targets:
             before_target = backend.nodes.get_include_deleted(target_id)
-            # Snapshot before the pointer is written: `supersede` removes
-            # the predecessor's edges, and a later snapshot would also
-            # scoop up the successor's own freshly minted edges.
-            carried_edges = backend.edges.by_node(target_id)
-            # The pointer is written BEFORE `nodes.insert`, and the
-            # position is load-bearing: `create_temporal_edge` reads
-            # `get_latest_by_session` and `get_recent_in_window`, so every
-            # predecessor must already be out of the active set or the
-            # successor chains its backbone to a row it replaced.
             linked = backend.nodes.supersede(target_id, fi.id)
             if not linked or before_target is None:
                 targets_gone.append({
@@ -332,7 +260,6 @@ def _apply_plan(
                     ' dropped from the plan')
                 continue
             linked_targets.append((target_id, relation))
-            carried.append((target_id, carried_edges))
             predecessors.append((target_id, relation, before_target))
         # Every predecessor keeps its content behind `superseded_by`,
         # and the successor copies nothing from it: the CLI already
@@ -370,44 +297,18 @@ def _apply_plan(
     final_vec = plan.embed_vec
     embedded = final_vec is not None
     if final_vec is not None:
-        # The new row is not in the cache yet, and the semantic-edge
-        # builder reads its vector from there, so the inserted row
-        # registers itself here with the vector it stores.
-        embed_cache[fi.id] = final_vec
         backend.nodes.update_embedding(
             fi.id, final_vec, fi.embedding_model or '')
     if fi.entities:
-        # Normalize before the column, the edge builder and the result
-        # dict read it: folding only on the way into the store makes
-        # the write report an entity the store does not hold.
+        # Normalize before the column and the result dict read it:
+        # folding only on the way into the store makes the write
+        # report an entity the store does not hold.
         fi.entities = dedupe_entities(fi.entities)
         backend.nodes.update_entities(fi.id, fi.entities)
 
     backend.oplog.log(
         operation='remember', insight_id=fi.id, detail=fi.content,
         after=insight_to_delta_dict(fi))
-
-    semantic_threshold = _resolve_semantic_threshold(
-        backend, store_name=store_name)
-    edge_stats = fast_edges(backend, fi)
-    edge_stats['entity'] = create_entity_edges(backend, fi)
-    edge_stats['semantic'] = create_semantic_edges(
-        backend, fi, embed_cache, threshold=semantic_threshold)
-
-    if linking:
-        for target_id, carried_edges in carried:
-            move_edges(backend, target_id, fi.id, carried_edges)
-        # Notes:
-        # - Sweeps the edges this write just minted that name a
-        #   target; `supersede` removed only the edges that existed
-        #   before the plan ran, and a target already superseded must
-        #   stay edgeless too.
-        # - The target leaves the drain cache with its edges, or the
-        #   next row of the same drain finds it as a semantic
-        #   neighbor and mints the edge straight back.
-        for target_id, _relation in plan.targets:
-            backend.edges.delete_by_node(target_id)
-            embed_cache.pop(target_id, None)
 
     backend.nodes.stamp_linked(fi.id)
     if plan.enrichment:
@@ -435,7 +336,6 @@ def _apply_plan(
         'created_at': (
             format_timestamp(fi.created_at)
             if fi.created_at is not None else ''),
-        'edges_created': dict(edge_stats),
         'enrichment': {
             'keywords': plan.enrichment.get('keywords', []),
             'summary': plan.enrichment.get('summary', ''),

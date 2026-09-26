@@ -6,10 +6,10 @@ throughout the CLI and any other code path that needs the active
 Backend for the duration of one operation.
 
 Lives at the top level (not under `memman.store/`) because the
-function deliberately composes three subsystems -- store dispatch
-(`store.factory`), embedding fingerprint (`embed.fingerprint`), and
-graph constants (`graph.engine`). Putting the composition at the top
-level keeps each subsystem self-contained.
+function deliberately composes two subsystems -- store dispatch
+(`store.factory`) and embedding fingerprint (`embed.fingerprint`).
+Putting the composition at the top level keeps each subsystem
+self-contained.
 
 Usage:
 
@@ -20,7 +20,7 @@ Usage:
 
 The context manager closes the Backend (and its underlying connection)
 on `__exit__`, even when the body raises. `unchecked=True` skips the
-fingerprint seed/assert and constants reindex, used by diagnostics
+fingerprint seed/assert, used by diagnostics
 (`memman doctor`, `memman embed status`) that must run against a stale
 or fresh store without being aborted by `EmbedFingerprintError`.
 """
@@ -38,14 +38,13 @@ from memman.store.errors import BackendError
 @contextmanager
 def active_store(
         *, data_dir: str, store: str,
-        unchecked: bool = False,
-        reindex_on_open: bool = True) -> Iterator[Backend]:
+        unchecked: bool = False) -> Iterator[Backend]:
     """Yield the active Backend for one operation.
 
     Dispatches on the per-store keys (`MEMMAN_BACKEND_<store>` with
     fallback to `MEMMAN_DEFAULT_BACKEND`) via `factory.open_backend`,
-    runs the constants reindex pass, seeds + asserts the embedding
-    fingerprint, then yields the Backend. Closes on exit even if the
+    seeds + asserts the embedding fingerprint, then yields the
+    Backend. Closes on exit even if the
     body raises.
 
     Parameters
@@ -56,14 +55,8 @@ def active_store(
         Resolved store name; the caller applies `_resolve_store_name`
         before invoking this helper.
     unchecked : bool, default False
-        When True, skip seed/assert/reindex. Used by diagnostics that
+        When True, skip the seed/assert. Used by diagnostics that
         must run against a stale or fresh store.
-    reindex_on_open : bool, default True
-        When False, skip the constants-hash reindex check on open
-        while still running the fingerprint seed/assert. Used by
-        recall to keep a potentially-long reindex off the
-        user-facing hot path; the drainer's maintenance pass picks
-        up the drift instead.
 
     Yields
     ------
@@ -91,7 +84,6 @@ def active_store(
     from memman.embed import fingerprint as fp_mod
     from memman.embed import get_client
     from memman.exceptions import ConfigError, EmbedFingerprintError
-    from memman.graph.engine import reindex_if_constants_changed
     from memman.store.factory import open_backend
 
     try:
@@ -100,8 +92,6 @@ def active_store(
         raise click.ClickException(str(exc)) from exc
     try:
         if not unchecked:
-            if reindex_on_open:
-                reindex_if_constants_changed(backend, store_name=store)
             try:
                 fp_mod.seed_if_fresh(backend, get_client())
                 fp_mod.bound_embedder(backend)

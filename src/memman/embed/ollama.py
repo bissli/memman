@@ -4,10 +4,7 @@ Talks to a local Ollama server's `/api/embeddings` endpoint. Host and
 model are read from the env-or-file resolver (populated at install
 time from `INSTALL_DEFAULTS`).
 
-`dim` is discovered from the first successful embed call. The semantic
-threshold is auto-resolved per-(provider, model) from
-`memman.embed.thresholds`; uncalibrated models skip semantic-edge
-creation rather than apply a wrong-model default.
+`dim` is discovered from the first successful embed call.
 """
 
 import logging

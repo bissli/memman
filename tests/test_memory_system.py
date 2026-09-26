@@ -322,99 +322,8 @@ class TestDeduplication:
         assert second['action'] == 'add'
 
 
-class TestGraphTraversal:
-    """Links are traversable and filtered correctly."""
-
-    def test_link_makes_insight_reachable_via_related(self, runner):
-        """Linked insight appears in related output."""
-        a = remember(runner, 'authentication design with JWT tokens')
-        b = remember(runner, 'token rotation schedule every 24 hours')
-        invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'entity'])
-
-        result = invoke(runner, ['graph', 'related', a['id']])
-        assert b['id'] in result.output
-
-    def test_related_respects_edge_type_filter(self, runner):
-        """Edge type filter includes matching, excludes non-matching.
-
-        Anchors use textually distant content so the auto-semantic
-        edge generator does not fire at the active per-surface
-        threshold - otherwise the explicit edge we add would be
-        shadowed by an automatic one between the same pair.
-        """
-        a = remember(runner, 'chose SQLite because embedded serverless')
-        b = remember(runner, 'preferred color is emerald green')
-        invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'entity'])
-
-        result_entity = invoke(runner, ['graph', 'related', a['id'],
-                                        '--edge', 'entity'])
-        assert b['id'] in result_entity.output
-        result_semantic = invoke(runner, ['graph', 'related', a['id'],
-                                          '--edge', 'semantic'])
-        assert b['id'] not in result_semantic.output
-
-    def test_link_persists_after_other_operations(self, runner):
-        """New inserts don't clobber existing edges."""
-        a = remember(runner, 'microservice communication via gRPC')
-        b = remember(runner, 'protobuf schema evolution rules')
-        invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'entity'])
-
-        remember(runner, 'Kafka topic partitioning strategy uses key-based routing for ordering guarantees')
-
-        result = invoke(runner, ['graph', 'related', a['id']])
-        assert b['id'] in result.output
-
-    def test_related_respects_depth(self, runner):
-        """Depth=1 returns only direct neighbors, not hop-2 nodes.
-
-        Uses --edge semantic on three mutually unrelated anchors:
-        temporal proximity and entity edges are both auto-minted
-        between every pair here and would shortcut a -> c, while the
-        auto-semantic generator does not fire at this distance, so the
-        semantic graph holds exactly the two links this test writes.
-        """
-        a = remember(runner, 'chose SQLite because embedded serverless')
-        b = remember(runner, 'preferred color is emerald green')
-        c = remember(runner, 'the office plant is a fiddle leaf fig')
-        invoke(runner, ['graph', 'link', a['id'], b['id'], '--type', 'semantic'])
-        invoke(runner, ['graph', 'link', b['id'], c['id'], '--type', 'semantic'])
-
-        result_d1 = invoke(runner, ['graph', 'related', a['id'],
-                                    '--edge', 'semantic', '--depth', '1'])
-        data_d1 = json.loads(result_d1.output)
-        ids_d1 = [r['id'] for r in data_d1]
-        assert b['id'] in ids_d1
-        assert c['id'] not in ids_d1
-
-        result_d2 = invoke(runner, ['graph', 'related', a['id'],
-                                    '--edge', 'semantic', '--depth', '2'])
-        data_d2 = json.loads(result_d2.output)
-        ids_d2 = [r['id'] for r in data_d2]
-        assert b['id'] in ids_d2
-        assert c['id'] in ids_d2
-
-
 class TestComposition:
     """Multi-step workflows stay consistent."""
-
-    def test_forget_target_does_not_break_related(self, runner):
-        """Forgetting a linked target does not crash related or leak."""
-        a = remember(runner, 'API design principles REST vs GraphQL')
-        b = remember(runner, 'GraphQL schema stitching federation')
-        c = remember(runner, 'REST pagination cursor-based approach')
-        link_ab = invoke(runner, ['graph', 'link', a['id'], b['id'],
-                                  '--type', 'entity'])
-        assert link_ab.exit_code == 0
-        link_ac = invoke(runner, ['graph', 'link', a['id'], c['id'],
-                                  '--type', 'entity'])
-        assert link_ac.exit_code == 0
-        invoke(runner, ['forget', b['id']])
-
-        result = invoke(runner, ['graph', 'related', a['id'],
-                                 '--edge', 'entity'])
-        assert result.exit_code == 0
-        assert c['id'] in result.output
-        assert b['id'] not in result.output
 
     def test_store_replace_recall_sequence(self, runner):
         """Replace + subsequent inserts don't interfere with each other."""
@@ -852,18 +761,6 @@ class TestResolveId:
         resolved = tmp_backend.nodes.resolve_id('abcd')
         assert resolved == 'abcd'
 
-    def test_graph_related_unknown_id_exits_nonzero(self, runner):
-        """Graph related on an unknown id exits non-zero with 'not found'.
-
-        Mutation: the empty-list fallthrough in graph_related, which
-            returns exit 0 and an empty list when bfs finds no neighbors
-            for an id absent from the store.
-        Oracle: exit_code != 0 and 'not found' in output.
-        """
-        result = invoke(runner, ['graph', 'related', 'no-such-id'])
-        assert result.exit_code != 0
-        assert 'not found' in result.output.lower()
-
     def test_supersede_refuses_a_prefix_and_the_full_id_of_one_row(
             self, runner):
         """Verify the same-row guard compares resolved ids, not raw text.
@@ -880,19 +777,6 @@ class TestResolveId:
         assert 'same insight' in result.output
         shown = invoke(runner, ['insights', 'show', fact['id']])
         assert json.loads(shown.output).get('superseded_by') is None
-
-    def test_graph_link_refuses_a_prefix_and_the_full_id_of_one_row(
-            self, runner):
-        """Verify the self-link guard compares resolved ids, not raw text.
-
-        Mutation: comparing the raw arguments before resolution, which
-            lets a prefix and the full id of one row store a self-edge.
-        Oracle: exit non-zero naming the self-link refusal.
-        """
-        fact = remember(runner, 'Prometheus scrapes every fifteen seconds')
-        result = invoke(runner, ['graph', 'link', fact['id'][:8], fact['id']])
-        assert result.exit_code != 0
-        assert 'itself' in result.output
 
     def test_show_accepts_an_unambiguous_prefix(self, runner):
         """Verify a CLI command resolves an 8-char prefix to the full id.

@@ -19,10 +19,9 @@ from memman.doctor import check_env_permissions, check_queue_schema
 from memman.doctor import check_scheduler_heartbeat, check_scheduler_state
 from memman.doctor import check_schema_columns
 from memman.store.db import open_db
-from memman.store.edge import insert_edge
 from memman.store.node import insert_insight, update_embedding
 from memman.store.node import update_enrichment
-from tests.conftest import make_edge, make_insight
+from tests.conftest import make_insight
 
 
 def _fake_embedding(dim: int = 512) -> bytes:
@@ -36,12 +35,6 @@ def _insert_healthy_insight(db, id: str, content: str = 'Healthy test insight wi
     insert_insight(db, ins)
     update_enrichment(db, id, ['kw1', 'kw2'], 'summary text')
     update_embedding(db, id, _fake_embedding(), 'voyage-3-lite')
-
-
-def _insert_edge_pair(db, id_a: str, id_b: str, edge_type: str = 'semantic') -> None:
-    """Insert a bidirectional edge between two insights."""
-    insert_edge(db, make_edge(source_id=id_a, target_id=id_b, edge_type=edge_type))
-    insert_edge(db, make_edge(source_id=id_b, target_id=id_a, edge_type=edge_type))
 
 
 class TestSqliteIntegrity:
@@ -82,73 +75,6 @@ class TestEnrichmentCoverage:
         result = check_enrichment_coverage(tmp_backend)
         assert result['status'] == 'warn'
         assert result['detail']['missing_embedding'] == 1
-
-
-class TestOrphanInsights:
-
-    def test_none_pass(self, tmp_db, tmp_backend):
-        """No orphans returns pass."""
-        from memman.doctor import check_orphan_insights
-        _insert_healthy_insight(tmp_db, 'o-1')
-        _insert_healthy_insight(tmp_db, 'o-2')
-        _insert_edge_pair(tmp_db, 'o-1', 'o-2')
-        result = check_orphan_insights(tmp_backend)
-        assert result['status'] == 'pass'
-        assert result['detail']['orphan_count'] == 0
-
-    def test_present_fail(self, tmp_db, tmp_backend):
-        """All insights orphaned returns fail."""
-        from memman.doctor import check_orphan_insights
-        _insert_healthy_insight(tmp_db, 'o-1')
-        _insert_healthy_insight(tmp_db, 'o-2')
-        result = check_orphan_insights(tmp_backend)
-        assert result['status'] == 'fail'
-        assert result['detail']['orphan_count'] == 2
-
-
-class TestDanglingEdges:
-
-    def test_none_pass(self, tmp_db, tmp_backend):
-        """Clean edges return pass."""
-        from memman.doctor import check_dangling_edges
-        _insert_healthy_insight(tmp_db, 'd-1')
-        _insert_healthy_insight(tmp_db, 'd-2')
-        _insert_edge_pair(tmp_db, 'd-1', 'd-2')
-        result = check_dangling_edges(tmp_backend)
-        assert result['status'] == 'pass'
-        assert result['detail']['count'] == 0
-
-    def test_present_fail(self, tmp_db, tmp_backend):
-        """Edges pointing to soft-deleted insights return fail."""
-        from memman.doctor import check_dangling_edges
-        _insert_healthy_insight(tmp_db, 'd-1')
-        _insert_healthy_insight(tmp_db, 'd-2')
-        _insert_edge_pair(tmp_db, 'd-1', 'd-2')
-        tmp_db._exec(
-            "UPDATE insights SET deleted_at = '2026-01-01T00:00:00Z'"
-            " WHERE id = 'd-2'")
-        result = check_dangling_edges(tmp_backend)
-        assert result['status'] == 'fail'
-        assert result['detail']['count'] == 2
-
-    def test_edge_to_a_superseded_row_is_dangling(self, tmp_db, tmp_backend):
-        """An edge touching a superseded row counts as dangling.
-
-        Mutation: leaving the `not exists` endpoint tests on
-            `deleted_at` alone, so a supersession that failed to shed
-            its edges passes the doctor.
-        Oracle: two healthy rows, one edge pair, the pointer set by
-            raw SQL without touching the edges -> fail with count 2.
-        """
-        from memman.doctor import check_dangling_edges
-        _insert_healthy_insight(tmp_db, 'd-1')
-        _insert_healthy_insight(tmp_db, 'd-2')
-        _insert_edge_pair(tmp_db, 'd-1', 'd-2')
-        tmp_db._exec(
-            "update insights set superseded_by = 'd-1' where id = 'd-2'")
-        result = check_dangling_edges(tmp_backend)
-        assert result['status'] == 'fail'
-        assert result['detail']['count'] == 2
 
 
 class TestEmbeddingConsistency:
@@ -329,38 +255,13 @@ class TestStaleHelpers:
         assert backend.nodes.count_stale_insights(active_pv) == 0
 
 
-class TestEdgeDegree:
-
-    def test_healthy_pass(self, tmp_db, tmp_backend):
-        """Well-connected graph returns pass."""
-        from memman.doctor import check_edge_degree
-        ids = [f'deg-{i}' for i in range(6)]
-        for id in ids:
-            _insert_healthy_insight(tmp_db, id, f'Content for {id} with enough length')
-        for i, id_a in enumerate(ids):
-            for id_b in ids[i + 1:]:
-                _insert_edge_pair(tmp_db, id_a, id_b)
-        result = check_edge_degree(tmp_backend)
-        assert result['status'] == 'pass'
-        assert result['detail']['median'] >= 5
-
-    def test_sparse_fail(self, tmp_db, tmp_backend):
-        """Insights with no edges returns fail."""
-        from memman.doctor import check_edge_degree
-        _insert_healthy_insight(tmp_db, 'deg-1')
-        _insert_healthy_insight(tmp_db, 'deg-2')
-        result = check_edge_degree(tmp_backend)
-        assert result['status'] == 'fail'
-        assert result['detail']['median'] == 0
-
-
 class TestRunAllChecks:
 
     def test_structure(self, tmp_db, tmp_backend):
         """Verify output shape: status, checks list, total_active."""
         from memman.doctor import run_all_checks
         _insert_healthy_insight(tmp_db, 'all-1')
-        result = run_all_checks(tmp_backend, store_name='test')
+        result = run_all_checks(tmp_backend)
         assert 'status' in result
         assert 'checks' in result
         assert 'total_active' in result
@@ -370,7 +271,7 @@ class TestRunAllChecks:
     def test_empty_db(self, tmp_db, tmp_backend):
         """Empty store returns status 'empty' with no checks."""
         from memman.doctor import run_all_checks
-        result = run_all_checks(tmp_backend, store_name='test')
+        result = run_all_checks(tmp_backend)
         assert result['status'] == 'empty'
         assert result['total_active'] == 0
         assert result['checks'] == []
@@ -381,10 +282,7 @@ class TestRunAllChecks:
         ids = [f'h-{i}' for i in range(6)]
         for id in ids:
             _insert_healthy_insight(tmp_db, id, f'Healthy content for {id} insight')
-        for i, id_a in enumerate(ids):
-            for id_b in ids[i + 1:]:
-                _insert_edge_pair(tmp_db, id_a, id_b)
-        result = run_all_checks(tmp_backend, store_name='test')
+        result = run_all_checks(tmp_backend)
         assert result['status'] == 'pass', [
             (c['name'], c['status'], c.get('detail'))
             for c in result['checks'] if c['status'] != 'pass']
@@ -594,151 +492,6 @@ class TestCheckPerStoreKeys:
         names = [s['store'] for s in out['detail']['stores']
                  if s['store'] is not None]
         assert 'declared_only' in names
-
-    def test_surface_unset_defaults_to_code_without_warn(
-            self, tmp_path, env_file):
-        """A store with no MEMMAN_SURFACE_<store> key passes; surface='code'.
-
-        The runtime default in `config.get_store_surface` is `'code'`,
-        so an unset key is the canonical state for operator stores --
-        no warn, no error.
-        """
-        from memman import config
-        from memman.doctor import check_per_store_keys
-
-        data_dir = str(tmp_path / 'memman')
-        Path(data_dir, 'data', 'unset').mkdir(parents=True, exist_ok=True)
-        Path(data_dir, 'data', 'unset', 'memman.db').write_bytes(b'')
-        env_file(config.BACKEND_FOR('unset'), 'sqlite')
-
-        out = check_per_store_keys(data_dir)
-        assert out['status'] == 'pass'
-        match = next(s for s in out['detail']['stores']
-                     if s['store'] == 'unset')
-        assert match['surface'] == 'code'
-        assert match['surface_source'] == 'default'
-        assert match.get('error') is None
-
-    def test_surface_set_claw_passes(self, tmp_path, env_file):
-        """`MEMMAN_SURFACE_<store>=claw` -> pass with surface='claw'.
-        """
-        from memman import config
-        from memman.doctor import check_per_store_keys
-
-        data_dir = str(tmp_path / 'memman')
-        Path(data_dir, 'data', 'agent').mkdir(parents=True, exist_ok=True)
-        Path(data_dir, 'data', 'agent', 'memman.db').write_bytes(b'')
-        env_file(config.BACKEND_FOR('agent'), 'sqlite')
-        env_file(config.SURFACE_FOR('agent'), 'claw')
-
-        out = check_per_store_keys(data_dir)
-        assert out['status'] == 'pass'
-        match = next(s for s in out['detail']['stores']
-                     if s['store'] == 'agent')
-        assert match['surface'] == 'claw'
-        assert match['surface_source'] == 'per_store'
-        assert match.get('error') is None
-
-    def test_surface_invalid_value_fails(self, tmp_path, env_file):
-        """`MEMMAN_SURFACE_<store>=legal` -> fail (outside closed set).
-        """
-        from memman import config
-        from memman.doctor import check_per_store_keys
-
-        data_dir = str(tmp_path / 'memman')
-        Path(data_dir, 'data', 'badsurf').mkdir(parents=True, exist_ok=True)
-        Path(data_dir, 'data', 'badsurf', 'memman.db').write_bytes(b'')
-        env_file(config.BACKEND_FOR('badsurf'), 'sqlite')
-        env_file(config.SURFACE_FOR('badsurf'), 'legal')
-
-        out = check_per_store_keys(data_dir)
-        assert out['status'] == 'fail'
-        match = next(s for s in out['detail']['stores']
-                     if s['store'] == 'badsurf')
-        assert 'invalid' in match['error'].lower()
-        assert 'legal' in match['error'].lower()
-
-    def test_auto_threshold_override_numeric_passes(
-            self, tmp_path, env_file):
-        """`MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>=0.72` is reported as
-        a numeric override with source 'override'.
-        """
-        from memman import config
-        from memman.doctor import check_per_store_keys
-
-        data_dir = str(tmp_path / 'memman')
-        Path(data_dir, 'data', 'tuned').mkdir(parents=True, exist_ok=True)
-        Path(data_dir, 'data', 'tuned', 'memman.db').write_bytes(b'')
-        env_file(config.BACKEND_FOR('tuned'), 'sqlite')
-        env_file(config.AUTO_THRESHOLD_FOR('tuned'), '0.72')
-
-        out = check_per_store_keys(data_dir)
-        assert out['status'] == 'pass'
-        match = next(s for s in out['detail']['stores']
-                     if s['store'] == 'tuned')
-        assert match['auto_threshold'] == 0.72
-        assert match['auto_threshold_source'] == 'override'
-        assert match.get('error') is None
-
-    def test_auto_threshold_override_skip_sentinel_passes(
-            self, tmp_path, env_file):
-        """`MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>=skip` disables edges.
-        """
-        from memman import config
-        from memman.doctor import check_per_store_keys
-
-        data_dir = str(tmp_path / 'memman')
-        Path(data_dir, 'data', 'noedge').mkdir(parents=True, exist_ok=True)
-        Path(data_dir, 'data', 'noedge', 'memman.db').write_bytes(b'')
-        env_file(config.BACKEND_FOR('noedge'), 'sqlite')
-        env_file(config.AUTO_THRESHOLD_FOR('noedge'), 'skip')
-
-        out = check_per_store_keys(data_dir)
-        assert out['status'] == 'pass'
-        match = next(s for s in out['detail']['stores']
-                     if s['store'] == 'noedge')
-        assert match['auto_threshold'] is None
-        assert match['auto_threshold_source'] == 'override_skip'
-        assert match.get('error') is None
-
-    def test_auto_threshold_invalid_value_fails(
-            self, tmp_path, env_file):
-        """`MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>=garbage` fails.
-        """
-        from memman import config
-        from memman.doctor import check_per_store_keys
-
-        data_dir = str(tmp_path / 'memman')
-        Path(data_dir, 'data', 'bad').mkdir(parents=True, exist_ok=True)
-        Path(data_dir, 'data', 'bad', 'memman.db').write_bytes(b'')
-        env_file(config.BACKEND_FOR('bad'), 'sqlite')
-        env_file(config.AUTO_THRESHOLD_FOR('bad'), 'garbage')
-
-        out = check_per_store_keys(data_dir)
-        assert out['status'] == 'fail'
-        match = next(s for s in out['detail']['stores']
-                     if s['store'] == 'bad')
-        assert match['error'] is not None
-        assert 'garbage' in match['error']
-
-    def test_auto_threshold_out_of_range_fails(
-            self, tmp_path, env_file):
-        """A numeric value outside (0.0, 1.0) fails.
-        """
-        from memman import config
-        from memman.doctor import check_per_store_keys
-
-        data_dir = str(tmp_path / 'memman')
-        Path(data_dir, 'data', 'oor').mkdir(parents=True, exist_ok=True)
-        Path(data_dir, 'data', 'oor', 'memman.db').write_bytes(b'')
-        env_file(config.BACKEND_FOR('oor'), 'sqlite')
-        env_file(config.AUTO_THRESHOLD_FOR('oor'), '1.5')
-
-        out = check_per_store_keys(data_dir)
-        assert out['status'] == 'fail'
-        match = next(s for s in out['detail']['stores']
-                     if s['store'] == 'oor')
-        assert 'range' in match['error'].lower()
 
 
 def _started_scheduler_status(interval=900):
@@ -1270,68 +1023,6 @@ class TestDoctorBackendDispatch:
                 drop_postgres_store(store, pg_dsn)
             except Exception:
                 pass
-
-
-class TestSingleInsightStore:
-    """A store too small to hold an edge must not fail the gate.
-
-    One active insight cannot link to anything, so `orphan_insights`
-    reports 100% and `edge_degree` reports a zero median. Doctor exits
-    1 on fail and is documented as a CI gate, so such a store made the
-    gate permanently red for a condition it could never satisfy.
-    """
-
-    def test_orphan_check_passes_with_one_insight(self, tmp_db,
-                                                  tmp_backend):
-        """A lone insight is not an orphan; it has nothing to link to.
-
-        Mutation: guarding only `total == 0`, which leaves 1/1 orphaned
-        at 100% and returns fail.
-        Oracle: a store holding exactly one insight, where an edge is
-        impossible by construction.
-        """
-        from memman.doctor import check_orphan_insights
-        _insert_healthy_insight(tmp_db, 'solo-1')
-
-        result = check_orphan_insights(tmp_backend)
-
-        assert result['status'] == 'pass', result['detail']
-
-    def test_edge_degree_passes_with_one_insight(self, tmp_db,
-                                                 tmp_backend):
-        """Degree zero is the only possible degree for a lone insight.
-
-        Mutation: guarding only the empty-store case, so a median of 0
-        falls through to the `med >= 2` test and fails.
-        Oracle: the same single-insight store.
-        """
-        from memman.doctor import check_edge_degree
-        _insert_healthy_insight(tmp_db, 'solo-1')
-
-        result = check_edge_degree(tmp_backend)
-
-        assert result['status'] == 'pass', result['detail']
-
-    def test_two_unlinked_insights_still_report_a_problem(self, tmp_db,
-                                                          tmp_backend):
-        """The small-store guard must not mask a real failure.
-
-        Two insights CAN link, so leaving both orphaned is a genuine
-        signal and must survive the guard.
-
-        Mutation: widening the guard past the point where an edge
-        becomes possible (e.g. `total < 5`), which would silence real
-        orphans in small stores.
-        Oracle: two unlinked insights, where one edge was possible and
-        none exists.
-        """
-        from memman.doctor import check_orphan_insights
-        _insert_healthy_insight(tmp_db, 'duo-1')
-        _insert_healthy_insight(tmp_db, 'duo-2')
-
-        result = check_orphan_insights(tmp_backend)
-
-        assert result['status'] == 'fail', result['detail']
 
 
 class TestClaudeHooksCheck:

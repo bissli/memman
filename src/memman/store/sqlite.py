@@ -1,7 +1,7 @@
 """SQLite implementation of the Backend Protocol surface.
 
 Thin facade. Each Protocol verb binds 1:1 to an existing free
-function in `store/{node,edge,oplog,db}.py`.
+function in `store/{node,oplog,db}.py`.
 
 The recall path goes through `Backend.recall_session()`, which yields
 a `SqliteRecallSession` holding one in-process embedding matrix for
@@ -15,8 +15,7 @@ import json
 import logging
 import shutil
 import sqlite3
-from collections import deque
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -29,21 +28,20 @@ import numpy as np
 from memman.embed.fingerprint import Fingerprint
 from memman.embed.vector import deserialize_vector, serialize_vector
 from memman.migrate import PAYLOAD_VERSION, Artifact, BackendFeatures
-from memman.migrate import MigrateEdge, MigrateError, MigrateInsight
-from memman.migrate import MigrateOpLog, MigrationPayload, Migrator
-from memman.migrate import PendingReembed, SwapState, sanitize_identifier
+from memman.migrate import MigrateError, MigrateInsight, MigrateOpLog
+from memman.migrate import MigrationPayload, Migrator, PendingReembed
+from memman.migrate import SwapState, sanitize_identifier
 from memman.store import db as _db
-from memman.store import edge as _edge
 from memman.store import node as _node
 from memman.store import oplog as _oplog
-from memman.store.backend import Backend, EdgeStore, MetaStore, NodeStore
-from memman.store.backend import Oplog, RecallSession
+from memman.store.backend import Backend, MetaStore, NodeStore, Oplog
+from memman.store.backend import RecallSession
 from memman.store.base import BaseNodeStore
 from memman.store.db import DB
-from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
-from memman.store.model import NodeStats, OpLogEntry, OpLogStats
-from memman.store.model import ProvenanceCount, ReembedRow, WorkerRun
-from memman.store.model import format_timestamp, parse_timestamp
+from memman.store.model import EnrichmentCoverage, Id, Insight, NodeStats
+from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
+from memman.store.model import ReembedRow, WorkerRun, format_timestamp
+from memman.store.model import parse_timestamp
 
 logger = logging.getLogger('memman')
 
@@ -82,16 +80,6 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
             return id_or_prefix
         raise ValueError(
             f'prefix {id_or_prefix!r} matches {len(rows)} rows')
-
-    def get_many(self, ids: Sequence[Id]) -> list[Insight]:
-        if not ids:
-            return []
-        by_id: dict[Id, Insight] = {}
-        for iid in ids:
-            ins = _node.get_insight_by_id(self._db, iid)
-            if ins is not None:
-                by_id[iid] = ins
-        return [by_id[i] for i in ids if i in by_id]
 
     def query(
             self, *, keyword: str = '', category: str = '',
@@ -145,27 +133,12 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
             for r in rows
             ]
 
-    def count_orphans(self) -> tuple[int, int]:
-        return _node.count_orphans(self._db)
-
     def provenance_distribution(self) -> list[ProvenanceCount]:
         rows = _node.provenance_distribution(self._db)
         return [
             ProvenanceCount(prompt_version=r[0], count=r[1])
             for r in rows
             ]
-
-    def get_recent_in_window(
-            self, *, exclude_id: Id, window_hours: float,
-            limit: int) -> list[Insight]:
-        return _node.get_recent_insights_in_window(
-            self._db, exclude_id, window_hours, limit)
-
-    def get_latest_by_session(
-            self, *, session_id: str | None,
-            exclude_id: Id) -> Insight | None:
-        return _node.get_latest_insight_by_session(
-            self._db, session_id, exclude_id)
 
     def get_all_active(self) -> list[Insight]:
         return _node.get_all_active_insights(self._db)
@@ -176,7 +149,6 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
             total_insights=d.get('total_insights', 0),
             superseded_insights=d.get('superseded_insights', 0),
             deleted_insights=d.get('deleted_insights', 0),
-            edge_count=d.get('edge_count', 0),
             oplog_count=d.get('oplog_count', 0),
             by_category=d.get('by_category', {}),
             top_entities=d.get('top_entities', []))
@@ -188,9 +160,6 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
 
     def get_embedding(self, id: Id) -> bytes | None:
         return _node.get_embedding(self._db, id)
-
-    def get_all_embeddings(self) -> list[tuple[Id, str, bytes]]:
-        return _node.get_all_embeddings(self._db)
 
     def embedding_stats(self) -> tuple[int, int]:
         return _node.embedding_stats(self._db)
@@ -260,119 +229,6 @@ group by length(embedding)
 
     def reset_for_rebuild(self, ids: list[Id]) -> None:
         _node.reset_for_rebuild(self._db, ids)
-
-    def clear_linked_at(self) -> None:
-        _node.clear_linked_at(self._db)
-
-
-class SqliteEdgeStore(EdgeStore):
-    """Bindings from EdgeStore Protocol verbs to `store.edge` functions.
-    """
-
-    def __init__(self, db: DB) -> None:
-        self._db = db
-
-    def upsert(self, edge: Edge) -> None:
-        _edge.insert_edge(self._db, edge)
-
-    def by_node(self, node_id: Id) -> list[Edge]:
-        return _edge.get_edges_by_node(self._db, node_id)
-
-    def by_node_and_type(
-            self, node_id: Id, edge_type: str) -> list[Edge]:
-        return _edge.get_edges_by_node_and_type(
-            self._db, node_id, edge_type)
-
-    def by_source_and_type(
-            self, source_id: Id, edge_type: str) -> list[Edge]:
-        return _edge.get_edges_by_source_and_type(
-            self._db, source_id, edge_type)
-
-    def find_with_entity(
-            self, entity: str, *, exclude_id: Id,
-            limit: int) -> list[Id]:
-        return _edge.find_insights_with_entity(
-            self._db, entity, exclude_id, limit)
-
-    def count_with_entity(
-            self, entity: str, *, exclude_id: Id) -> int:
-        return _edge.count_insights_with_entity(
-            self._db, entity, exclude_id)
-
-    def all(self) -> list[Edge]:
-        return _edge.get_all_edges(self._db)
-
-    def adjacency(self) -> dict[Id, list[tuple[Id, str, float]]]:
-        return _edge.get_adjacency(self._db)
-
-    def delete_by_node(self, node_id: Id) -> None:
-        _edge.delete_edges_by_node(self._db, node_id)
-
-    def delete_auto_for_node(
-            self, node_id: Id, edge_type: str) -> None:
-        _edge.delete_auto_edges_for_node(
-            self._db, node_id, edge_type)
-
-    def delete_auto_by_type(self, edge_type: str) -> None:
-        _edge.delete_auto_edges_by_type(self._db, edge_type)
-
-    def count_auto_by_type(self, edge_type: str) -> int:
-        return _edge.count_auto_edges_by_type(self._db, edge_type)
-
-    def delete_low_weight_temporal_proximity(
-            self, *, min_weight: float) -> None:
-        _edge.delete_low_weight_temporal_proximity(self._db, min_weight)
-
-    def count_low_weight_temporal_proximity(
-            self, *, min_weight: float) -> int:
-        return _edge.count_low_weight_temporal_proximity(
-            self._db, min_weight)
-
-    def get_weight(
-            self, source_id: Id, target_id: Id,
-            edge_type: str) -> float | None:
-        return _edge.get_edge_weight(
-            self._db, source_id, target_id, edge_type)
-
-    def count_dangling_by_type(self) -> dict[str, int]:
-        return _edge.count_dangling_by_type(self._db)
-
-    def degree_distribution(self) -> dict[Id, int]:
-        return _edge.degree_distribution(self._db)
-
-    def get_neighborhood(
-            self, seed_id: Id, *, depth: int,
-            edge_filter: str = '') -> list[tuple[Id, int, str]]:
-        active_ids = set(_node.get_active_insight_ids(self._db))
-        edges = _edge.get_all_edges(self._db)
-        adj: dict[Id, list[Edge]] = {}
-        for e in edges:
-            adj.setdefault(e.source_id, []).append(e)
-            if e.source_id != e.target_id:
-                adj.setdefault(e.target_id, []).append(e)
-
-        visited = {seed_id}
-        queue: deque[tuple[Id, int]] = deque([(seed_id, 0)])
-        out: list[tuple[Id, int, str]] = []
-
-        while queue:
-            cur_id, hop = queue.popleft()
-            if hop >= depth:
-                continue
-            for edge in adj.get(cur_id, []):
-                if edge_filter and edge.edge_type != edge_filter:
-                    continue
-                neighbor_id = (
-                    edge.target_id if edge.target_id != cur_id
-                    else edge.source_id)
-                if neighbor_id in visited:
-                    continue
-                visited.add(neighbor_id)
-                if neighbor_id not in active_ids:
-                    continue
-                out.append((neighbor_id, hop + 1, edge.edge_type))
-                queue.append((neighbor_id, hop + 1))
-        return out
 
 
 class SqliteMetaStore(MetaStore):
@@ -653,14 +509,12 @@ class SqliteBackend(Backend):
     """
 
     nodes: SqliteNodeStore
-    edges: SqliteEdgeStore
     meta: SqliteMetaStore
     oplog: SqliteOplog
 
     def __init__(self, db: DB) -> None:
         self._db = db
         self.nodes = SqliteNodeStore(db)
-        self.edges = SqliteEdgeStore(db)
         self.meta = SqliteMetaStore(db)
         self.oplog = SqliteOplog(db)
 
@@ -695,13 +549,6 @@ class SqliteBackend(Backend):
             raise
         finally:
             self._db._in_tx = False
-
-    @contextmanager
-    def write_lock(self, name: str) -> Iterator[None]:
-        """No-op on SQLite -- `begin immediate` already serializes
-        per-process. Postgres uses `pg_advisory_xact_lock`.
-        """
-        yield
 
     @contextmanager
     def reembed_lock(self, name: str) -> Iterator[bool]:
@@ -1029,7 +876,7 @@ select id, content, category, importance, entities,
        source, keywords, summary, embedding,
        linked_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, embedding_model,
-       embedding_pending, session_id, queue_uuid,
+       embedding_pending, queue_uuid,
        superseded_by, author
 from insights
 order by id
@@ -1056,28 +903,14 @@ order by id
                         parse_timestamp(r[13]) if r[13] else None),
                     prompt_version=r[14],
                     embedding_model=r[15],
-                    session_id=r[17], queue_uuid=r[18],
-                    superseded_by=r[19],
-                    author=r[20]))
+                    queue_uuid=r[17],
+                    superseded_by=r[18],
+                    author=r[19]))
                 if r[16] is not None:
                     pv = deserialize_vector(r[16])
                     if pv is not None:
                         pending.append(PendingReembed(
                             insight_id=r[0], vector=pv))
-
-            edge_rows = conn.execute("""
-select source_id, target_id, edge_type, weight,
-       metadata, created_at
-from edges
-order by source_id, target_id, edge_type
-""").fetchall()
-            edges = [
-                MigrateEdge(
-                    source_id=e[0], target_id=e[1],
-                    edge_type=e[2], weight=float(e[3]),
-                    metadata=json.loads(e[4]) if e[4] else {},
-                    created_at=parse_timestamp(e[5]))
-                for e in edge_rows]
 
             op_rows = conn.execute("""
 select id, operation, insight_id, detail, created_at,
@@ -1121,7 +954,6 @@ order by id
             embedding_dim=fingerprint.dim,
             embedding_dtype='float64',
             insights=insights,
-            edges=edges,
             oplog=oplog,
             embedding_pending=pending,
             swap_state=swap_state,
@@ -1174,7 +1006,7 @@ order by id
                         if ins.deleted_at else None,
                         ins.prompt_version,
                         ins.embedding_model,
-                        ins.session_id, ins.queue_uuid,
+                        ins.queue_uuid,
                         ins.superseded_by,
                         ins.author))
                 if insight_rows:
@@ -1186,25 +1018,12 @@ order by id
                         ' embedding,'
                         ' linked_at, enriched_at, created_at,'
                         ' updated_at, deleted_at, prompt_version,'
-                        ' embedding_model, session_id,'
+                        ' embedding_model,'
                         ' queue_uuid,'
                         ' superseded_by, author)'
                         ' values (?, ?, ?, ?, ?, ?, ?, ?, ?,'
-                        ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         insight_rows)
-
-                edge_rows = [(
-                    e.source_id, e.target_id, e.edge_type, e.weight,
-                    json.dumps(e.metadata),
-                    format_timestamp(e.created_at))
-                    for e in payload.edges]
-                if edge_rows:
-                    conn.executemany(
-                        'insert into edges ('
-                        ' source_id, target_id, edge_type, weight,'
-                        ' metadata, created_at)'
-                        ' values (?, ?, ?, ?, ?, ?)',
-                        edge_rows)
 
                 max_oplog_id = 0
                 for op in payload.oplog:

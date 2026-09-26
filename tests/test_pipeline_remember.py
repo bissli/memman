@@ -35,7 +35,7 @@ def test_a_write_embeds_once_after_enrichment(tmp_backend, monkeypatch):
         id='embed-once-1', content='Redis backs the session cache')
     res = run_remember(
         tmp_backend, parent, 'Redis backs the session cache',
-        ec=ec, store_name='test')
+        ec=ec)
 
     keywords = res['facts'][0]['enrichment']['keywords']
     expected = build_enriched_text(
@@ -67,7 +67,7 @@ def test_a_write_whose_embed_fails_stays_unenriched(
         ' second zone')
     parent = make_insight(id='embed-fail-1', content=content)
     res = run_remember(
-        tmp_backend, parent, content, ec=ec, store_name='test')
+        tmp_backend, parent, content, ec=ec)
 
     stored = tmp_backend.nodes.get(res['facts'][0]['id'])
     assert stored.summary
@@ -93,7 +93,7 @@ def test_a_write_whose_enrichment_never_decodes_is_stamped(
         id='undecodable-1', content='Redis backs the session cache')
     res = run_remember(
         tmp_backend, parent, 'Redis backs the session cache',
-        ec=ec, store_name='test')
+        ec=ec)
 
     stored = tmp_backend.nodes.get(res['facts'][0]['id'])
     assert stored.enriched_at is not None
@@ -119,7 +119,7 @@ def test_a_write_whose_enrichment_call_fails_stays_unenriched(
         id='enrich-fail-1', content='Redis backs the session cache')
     res = run_remember(
         tmp_backend, parent, 'Redis backs the session cache',
-        ec=ec, store_name='test')
+        ec=ec)
 
     stored = tmp_backend.nodes.get(res['facts'][0]['id'])
     assert stored.enriched_at is None

@@ -61,9 +61,6 @@
         <mxCell id="a_cmd_store" value="&lt;b&gt;store&lt;/b&gt;&lt;br&gt;(group)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="910" y="235" width="50" height="55" as="geometry" />
         </mxCell>
-        <mxCell id="a_cmd_graph" value="&lt;b&gt;graph&lt;/b&gt;&lt;br&gt;(group)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="975" y="235" width="50" height="55" as="geometry" />
-        </mxCell>
         <mxCell id="a_cmd_install" value="&lt;b&gt;install&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="1040" y="235" width="50" height="55" as="geometry" />
         </mxCell>
@@ -76,26 +73,14 @@
         <mxCell id="a_search" value="&lt;b&gt;search/&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=11;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="60" y="370" width="310" height="130" as="geometry" />
         </mxCell>
-        <mxCell id="a_recall" value="&lt;b&gt;recall.py&lt;/b&gt;&lt;br&gt;intent_aware_recall&lt;br&gt;beam_search_from_anchor" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=5;" vertex="1" parent="1">
+        <mxCell id="a_recall" value="&lt;b&gt;recall.py&lt;/b&gt;&lt;br&gt;intent_aware_recall" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=5;" vertex="1" parent="1">
           <mxGeometry x="70" y="395" width="140" height="90" as="geometry" />
         </mxCell>
         <mxCell id="a_kw" value="&lt;b&gt;keyword.py&lt;/b&gt;&lt;br&gt;keyword_search (drain)&lt;br&gt;tokenize (stopwords)&lt;br&gt;recall counts via insights_fts" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;align=left;spacingLeft=5;" vertex="1" parent="1">
           <mxGeometry x="220" y="395" width="140" height="70" as="geometry" />
         </mxCell>
-        <mxCell id="a_graph" value="&lt;b&gt;graph/&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=11;fontStyle=1;" vertex="1" parent="1">
-          <mxGeometry x="390" y="370" width="460" height="130" as="geometry" />
-        </mxCell>
-        <mxCell id="a_engine" value="&lt;b&gt;engine.py&lt;/b&gt;&lt;br&gt;fast_edges&lt;br&gt;(orchestrator)" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
-          <mxGeometry x="400" y="395" width="100" height="55" as="geometry" />
-        </mxCell>
-        <mxCell id="a_temp" value="&lt;b&gt;temporal.py&lt;/b&gt;&lt;br&gt;backbone +&lt;br&gt;proximity(4h)" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6F3FF;strokeColor=#6c8ebf;" vertex="1" parent="1">
-          <mxGeometry x="510" y="395" width="100" height="50" as="geometry" />
-        </mxCell>
-        <mxCell id="a_ent" value="&lt;b&gt;entity.py&lt;/b&gt;&lt;br&gt;caller-supplied&lt;br&gt;IDF-weighted" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6F3FF;strokeColor=#6c8ebf;" vertex="1" parent="1">
-          <mxGeometry x="620" y="395" width="100" height="50" as="geometry" />
-        </mxCell>
-        <mxCell id="a_sem" value="&lt;b&gt;semantic.py&lt;/b&gt;&lt;br&gt;auto: cos≥AUTO_SEMANTIC_THRESHOLD" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#E6FFE6;strokeColor=#82b366;" vertex="1" parent="1">
-          <mxGeometry x="510" y="455" width="100" height="50" as="geometry" />
+        <mxCell id="a_engine" value="&lt;b&gt;graph/engine.py&lt;/b&gt;&lt;br&gt;link_pending&lt;br&gt;(enrichment pass)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="390" y="395" width="180" height="90" as="geometry" />
         </mxCell>
         <mxCell id="a_embed" value="&lt;b&gt;embed/&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=top;fontSize=11;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="870" y="370" width="270" height="130" as="geometry" />
@@ -115,10 +100,7 @@
         <mxCell id="a_node" value="&lt;b&gt;node.py / base.py&lt;/b&gt;&lt;br&gt;insert_insight / get_all_active_insights&lt;br&gt;get_all_embeddings / iter_embeddings_as_vecs" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#fce5cd;strokeColor=#d6b656;align=left;spacingLeft=5;" vertex="1" parent="1">
           <mxGeometry x="250" y="580" width="200" height="75" as="geometry" />
         </mxCell>
-        <mxCell id="a_edge" value="&lt;b&gt;edge.py&lt;/b&gt;&lt;br&gt;insert_edge&lt;br&gt;get_edges_by_node&lt;br&gt;get_recent_insights_in_window" style="rounded=0;whiteSpace=wrap;html=1;fontSize=9;fillColor=#fce5cd;strokeColor=#d6b656;align=left;spacingLeft=5;" vertex="1" parent="1">
-          <mxGeometry x="470" y="580" width="150" height="65" as="geometry" />
-        </mxCell>
-        <mxCell id="a_tables" value="&lt;b&gt;Tables (SQLite + Postgres via Backend Protocol)&lt;/b&gt;&lt;br&gt;insights (id, content, category, importance,&lt;br&gt;  entities, source, embedding, embedding_model, ...)&lt;br&gt;edges (source_id, target_id, edge_type, weight, metadata)&lt;br&gt;oplog (id, operation, insight_id, detail, before, after, created_at)&lt;br&gt;meta (key, value)  -- embed_fingerprint, embed_swap_*, ..." style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#999999;align=left;spacingLeft=5;dashed=1;" vertex="1" parent="1">
+        <mxCell id="a_tables" value="&lt;b&gt;Tables (SQLite + Postgres via Backend Protocol)&lt;/b&gt;&lt;br&gt;insights (id, content, category, importance,&lt;br&gt;  entities, source, embedding, embedding_model, ...)&lt;br&gt;oplog (id, operation, insight_id, detail, before, after, created_at)&lt;br&gt;meta (key, value)  -- embed_fingerprint, embed_swap_*, ..." style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f5f5f5;strokeColor=#999999;align=left;spacingLeft=5;dashed=1;" vertex="1" parent="1">
           <mxGeometry x="700" y="565" width="290" height="100" as="geometry" />
         </mxCell>
         <mxCell id="a_cap" value="&lt;b&gt;Uncapped&lt;/b&gt;&lt;br&gt;no automatic deletion" style="rounded=1;whiteSpace=wrap;html=1;fontSize=9;fillColor=#f8cecc;strokeColor=#b85450;fontColor=#b85450;" vertex="1" parent="1">

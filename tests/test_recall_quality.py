@@ -7,8 +7,7 @@ wrong -- do not weaken assertions to match broken behavior.
 
 Design constraint: ANCHOR_TOP_K=30 means all insights become recency
 anchors when <30 exist. Each fixture inserts 6+ recent fillers to push
-test insights below the top-30 recency cutoff, ensuring graph traversal
-is actually exercised.
+test insights below the top-30 recency cutoff.
 """
 
 import random
@@ -18,7 +17,7 @@ import pytest
 from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
 from memman.search.recall import intent_aware_recall
 from memman.store.model import Insight
-from tests.conftest import EMBEDDING_DIM, make_edge, make_insight
+from tests.conftest import EMBEDDING_DIM, make_insight
 
 OLD = datetime(2024, 1, 1, tzinfo=timezone.utc)
 RECENT = datetime.now(timezone.utc)
@@ -75,51 +74,6 @@ class TestKeywordSignal:
             assert miss1['signals']['keyword'] < 0.1
         if miss2 is not None:
             assert miss2['signals']['keyword'] < 0.1
-
-
-class TestGraphTraversal:
-    """Graph edges discover insights unreachable by keyword or recency."""
-
-    def test_graph_traversal_discovers_unreachable_insight(self, backend):
-        """Insight with no keyword overlap found via graph edges only.
-
-        Mutation: skipping `beam_search_from_anchor`, so a row reached
-            only by an edge never enters the result set.
-        Oracle: `graph-3` present with a zero keyword signal and a
-            positive graph signal -- the pair rules out its arriving
-            by keyword match.
-        """
-        _insert_fillers(backend)
-        backend.nodes.insert(make_insight(
-            id='graph-1',
-            content='FastAPI rate limiting design patterns',
-            entities=['FastAPI'], importance=3))
-        backend.nodes.insert(make_insight(
-            id='graph-2',
-            content='API throttling middleware implementation',
-            importance=3))
-        backend.nodes.insert(make_insight(
-            id='graph-3',
-            content='Redis cache eviction policy tuning',
-            importance=3))
-
-        backend.edges.upsert(make_edge(
-            source_id='graph-1', target_id='graph-2',
-            edge_type='entity', weight=0.8))
-        backend.edges.upsert(make_edge(
-            source_id='graph-2', target_id='graph-3',
-            edge_type='semantic', weight=0.8))
-
-        result = intent_aware_recall(
-            backend,
-            query='API rate limiting design',
-            query_vec=None,
-            limit=20)
-
-        g3 = _find_result(result['results'], 'graph-3')
-        assert g3 is not None, 'graph-3 should be discovered via traversal'
-        assert g3['signals']['keyword'] == 0.0
-        assert g3['signals']['graph'] > 0
 
 
 class TestRelevanceOrderingSurvivesTheLimit:

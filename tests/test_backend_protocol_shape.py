@@ -3,9 +3,9 @@
 Asserts the architectural commitments that static typing cannot
 verify on its own:
 
-1. `Insight.created_at`, `Insight.updated_at`, `Edge.created_at`
-   carry no `default_factory` -- backends stamp these server-side.
-   A PR adding `default_factory=lambda: datetime.now(UTC)` would
+1. `Insight.created_at`, `Insight.updated_at` carry no
+   `default_factory` -- backends stamp these server-side. A PR
+   adding `default_factory=lambda: datetime.now(UTC)` would
    silently break Postgres `now()` parity at the verb boundary.
 2. `NodeStore.update_embedding` takes a `vec` parameter (the
    blob->vec migration must not be reverted).
@@ -16,7 +16,7 @@ import inspect
 
 import pytest
 from memman.store.backend import NodeStore
-from memman.store.model import Edge, Insight, OpLogEntry
+from memman.store.model import Insight, OpLogEntry
 
 
 def test_insight_timestamp_fields_have_no_default_factory():
@@ -27,13 +27,6 @@ def test_insight_timestamp_fields_have_no_default_factory():
         fields['created_at'].default_factory is dataclasses.MISSING)
     assert (
         fields['updated_at'].default_factory is dataclasses.MISSING)
-
-
-def test_edge_created_at_has_no_default_factory():
-    """Edge.created_at: no default_factory."""
-    fields = {f.name: f for f in dataclasses.fields(Edge)}
-    assert (
-        fields['created_at'].default_factory is dataclasses.MISSING)
 
 
 def test_oplog_entry_created_at_is_required():

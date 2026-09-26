@@ -148,7 +148,7 @@ def build_bundle(data_dir: str, target: str) -> dict[str, Any]:
             return True
         return any(
             secret and key.startswith(prefix)
-            for prefix, _validator, secret in config.PER_STORE_KEY_SPECS)
+            for prefix, secret in config.PER_STORE_KEY_SPECS)
 
     try:
         queue_pending: int | None = 0

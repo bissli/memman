@@ -4,7 +4,7 @@
 
 ---
 
-![Insight & Edge Data Model](../diagrams/08-insight-edge-datamodel.drawio.png)
+![Insight Data Model](../diagrams/08-insight-edge-datamodel.drawio.png)
 
 ## 2.1 Insight (memory node)
 
@@ -18,7 +18,6 @@
 │ importance : 5  (1-5)                        │
 │ entities   : ["Qdrant", "Milvus"]            │
 │ source     : "user"     (provenance)         │
-│ session_id : "s-1f2e…"  (temporal chain key) │
 │ queue_uuid : "9b0c…"    (idempotency key)    │
 │ author     : "bob"      (who wrote it)       │
 │ created_at : 2026-02-18T10:00:00Z            │
@@ -27,36 +26,19 @@
 
 Five categories distinguish the nature of a memory:
 
-| Category     | Meaning                          | Example                                             |
-| ------------ | -------------------------------- | --------------------------------------------------- |
-| `preference` | User preference                  | "Prefers communicating in Chinese"                  |
-| `decision`   | Architectural/technical decision | "Chose SQLite over PostgreSQL"                      |
-| `fact`       | Objective fact                   | "API rate limit is 100 req/s"                       |
-| `insight`    | Reasoning conclusion             | "Beam search is more suitable than full BFS for..." |
-| `context`    | Project context                  | "Phase 3 completed, 118 tests passing"              |
+| Category     | Meaning                          | Example                                        |
+| ------------ | -------------------------------- | ---------------------------------------------- |
+| `preference` | User preference                  | "Prefers communicating in Chinese"             |
+| `decision`   | Architectural/technical decision | "Chose SQLite over PostgreSQL"                 |
+| `fact`       | Objective fact                   | "API rate limit is 100 req/s"                  |
+| `insight`    | Reasoning conclusion             | "RRF fusion beats a single ranked signal here" |
+| `context`    | Project context                  | "Phase 3 completed, 118 tests passing"         |
 
 Importance is a sort key: listings order by it, and recall and the keyword rung break score ties on it. The value is the caller's: `--imp` (1-5, default 3) is stored as passed. No retention tier reads it; nothing is protected from or offered for deletion by importance (see [05-lifecycle.md](05-lifecycle.md)).
 
 Exit: the column, its two indexes, the listing-index key, the sort keys and the payload key go in the next schema release when more than 95% of post-release rows carry 3; the column stays when the non-default share is above that.
 
-## 2.2 Edge (relationship)
-
-An Edge connects two insights:
-
-```
-┌────────────────────────────────────────────┐
-│ Edge                                       │
-├────────────────────────────────────────────┤
-│ source_id  : UUID  ──→  target_id : UUID   │
-│ edge_type  : temporal | semantic | entity  │
-│ weight     : 0.0 ~ 1.0                     │
-│ metadata   : {"sub_type": "backbone", ...} │
-└────────────────────────────────────────────┘
-```
-
-memman's graph model has three edge types. [Graph Model](03-graph-model.md) details them.
-
-## 2.3 Database schema
+## 2.2 Database schema
 
 Each named store is physically isolated via its own backend, chosen per store via `MEMMAN_BACKEND_<store>` (falling back to `MEMMAN_DEFAULT_BACKEND` when unset):
 
@@ -78,30 +60,23 @@ insights (
   linked_at, enriched_at,                       -- Pipeline progress timestamps
   prompt_version, embedding_model,              -- Provenance for re-enrichment
   created_at, updated_at, deleted_at,
-  session_id,                                   -- Temporal chain key (nullable; no session, no backbone edge)
   queue_uuid,                                   -- Idempotency key from the queue row (one write stores one row)
   superseded_by,                                -- Successor id once a later write corrected this row (nullable, no FK)
   author                                        -- Who wrote it (nullable; resolved from MEMMAN_AUTHOR or getpass.getuser())
 )
 
 -- A current row is `deleted_at is null and superseded_by is null`;
--- every read, count and edge build applies both clauses. The pointer
--- carries no foreign key: the pipeline writes it before the successor
--- row exists, and the migrators apply rows in id order, so a
--- predecessor can land before its successor. Doctor's
--- `supersession_integrity` is the pointer's only validity check.
+-- every read and count applies both clauses. The pointer carries no
+-- foreign key: the pipeline writes it before the successor row
+-- exists, and the migrators apply rows in id order, so a predecessor
+-- can land before its successor. Doctor's `supersession_integrity`
+-- is the pointer's only validity check.
 
 -- Keyword index over insights (SQLite only; FTS5 external content,
 -- kept in sync by triggers on insert/delete/update-of the two
 -- indexed columns). Postgres counts against the rows themselves.
 insights_fts (
   content, entities                 -- terms only; the text stays in insights
-)
-
--- Relationship edges (composite primary key)
-edges (
-  source_id, target_id, edge_type,  -- PK
-  weight, metadata, created_at
 )
 
 -- Operation log (audit trail, queryable with --since/--stats)
@@ -111,7 +86,7 @@ oplog (
   created_at
 )
 
--- Key/value metadata (e.g., embed/graph constants fingerprints)
+-- Key/value metadata (e.g., embed fingerprints)
 meta (
   key, value
 )
@@ -121,44 +96,42 @@ Provenance columns (`prompt_version`, `embedding_model`) record what produced ea
 
 ---
 
-## 2.4 System architecture
+## 2.3 System architecture
 
 memman's architecture is divided into five layers:
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│  Integration Layer    Hook / Skill / Guide                     │
+┌─────────────────────────────────────────────────────────────────┐
+│  Integration Layer    Hook / Skill / Guide                      │
 ├──────────────────────────────────────────────────────────────┤
-│  CLI Layer            remember · recall · replace · forget     │
-│                       prime · status · doctor · install        │
-│                       graph · scheduler · insights · store     │
-│                       embed · log · config                     │
+│  CLI Layer            remember · recall · replace · forget      │
+│                       prime · status · doctor · install         │
+│                       graph · scheduler · insights · store      │
+│                       embed · log · config                      │
 ├──────────────────────────────────────────────────────────────┤
-│  Pipeline             pipeline/ (remember, drain worker)       │
+│  Pipeline             pipeline/ (remember, drain worker)        │
 ├──────────────────────────────────────────────────────────────┤
-│  Core Engine          search/ (recall, keyword,                │
-│                                quality)                        │
-│                       graph/  (temporal, entity,               │
-│                                semantic, engine, bfs,          │
-│                                enrichment)                     │
-│                       embed/  (voyage, openai_compat,          │
-│                                openrouter, ollama, vector)     │
-│                       llm/    (client, shared,                 │
-│                                openrouter_models)              │
+│  Core Engine          search/ (recall, keyword,                 │
+│                                quality)                         │
+│                       graph/  (engine, enrichment)              │
+│                       embed/  (voyage, openai_compat,           │
+│                                openrouter, ollama, vector)      │
+│                       llm/    (client, shared,                  │
+│                                openrouter_models)               │
 ├──────────────────────────────────────────────────────────────┤
-│  Storage Layer        store/   (backend, base, factory, db,    │
-│                                node, edge, oplog, model,       │
-│                                sqlite, postgres)               │
-│                       queue.py (deferred-write queue)          │
-│                       migrate.py (SQLite -> Postgres copy)     │
+│  Storage Layer        store/   (backend, base, factory, db,     │
+│                                node, oplog, model,              │
+│                                sqlite, postgres)                │
+│                       queue.py (deferred-write queue)           │
+│                       migrate.py (SQLite -> Postgres copy)      │
 ├──────────────────────────────────────────────────────────────┤
-│  External             LLM endpoint (OpenAI-compat URL via      │
-│                         MEMMAN_LLM_ENDPOINT; per-role models   │
-│                         via MEMMAN_LLM_MODEL_*)                │
-│                       Embed provider (per-store; voyage /      │
-│                         openai / openrouter / ollama)          │
-│                       Postgres + pgvector (optional backend)   │
-└────────────────────────────────────────────────────────────────┘
+│  External             LLM endpoint (OpenAI-compat URL via       │
+│                         MEMMAN_LLM_ENDPOINT; per-role models    │
+│                         via MEMMAN_LLM_MODEL_*)                 │
+│                       Embed provider (per-store; voyage /       │
+│                         openai / openrouter / ollama)           │
+│                       Postgres + pgvector (optional backend)    │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 Project code structure:
@@ -171,13 +144,13 @@ memman/
 │   ├── config.py             # Env-file resolver (INSTALLABLE_KEYS)
 │   ├── doctor.py             # Health checks (memman doctor)
 │   ├── drain_lock.py         # Cross-process drain.lock
-│   ├── maintenance.py        # GC, EI recompute, edge reindex
+│   ├── maintenance.py        # GC, EI recompute
 │   ├── migrate.py            # SQLite -> Postgres migration
 │   ├── queue.py              # Deferred-write queue
 │   ├── trace.py              # JSONL debug tracing
 │   ├── pipeline/             # remember (drain worker)
 │   ├── store/                # Storage backends (sqlite, postgres)
-│   ├── graph/                # Graph edges (temporal, entity, semantic)
+│   ├── graph/                # Enrichment link scheduling
 │   ├── search/               # Retrieval algorithms
 │   ├── embed/                # Pluggable embedding providers
 │   ├── rerank/               # Cross-encoder rerank (pluggable)
@@ -190,7 +163,7 @@ memman/
 └── Makefile
 ```
 
-## 2.5 Data directory layout
+## 2.4 Data directory layout
 
 ```
 ~/.memman/
@@ -216,13 +189,13 @@ memman/
 
 That tree is the default layout, where the data directory is `~/.memman`. Under a non-default `--data-dir`, `env`, `active`, `queue.db`, `data/` and `logs/memman.log` all move with it. What stays under `~/.memman` is `compact/` and the four scheduler redirects, `logs/enrich.{log,err}` and `logs/backup.{log,err}`: the systemd unit pins those to `%h/.memman/logs`, and the launchd plist bakes the absolute home in at install time, so neither reads the data dir. `memman scheduler status` prints the enrich and rotated paths, and `memman log worker --stack` reads the rotated one together with its backups.
 
-Each store is fully independent - insights, edges, and oplog do not cross stores. On SQLite this is one `memman.db` per store; on Postgres it is one `store_<name>` schema per store inside one shared database. Shipped assets (`guide.md`, `SKILL.md`) live inside the installed package and are read via `importlib.resources`; nothing memman deploys lives under `~/.memman/`. `~/.memman/` is user state: memory data, API keys, caches, logs, queued work.
+Each store is fully independent - insights and oplog do not cross stores. On SQLite this is one `memman.db` per store; on Postgres it is one `store_<name>` schema per store inside one shared database. Shipped assets (`guide.md`, `SKILL.md`) live inside the installed package and are read via `importlib.resources`; nothing memman deploys lives under `~/.memman/`. `~/.memman/` is user state: memory data, API keys, caches, logs, queued work.
 
 `Backend` is a context manager; CLI and pipeline call sites open it via `with open_backend(store, data_dir) as backend:` so the SQLite handle or Postgres pool checkout releases deterministically. `BaseNodeStore` in `src/memman/store/base.py` holds Python-side computations (effective-importance recomputation, low-retention candidate scoring) shared by both backends.
 
 When a store routes to Postgres, its `~/.memman/data/<store>/memman.db` file is unused at runtime - rows live in `store_<name>` and drain heartbeats in `store_<name>.worker_runs`. The deferred-write queue is always SQLite at `~/.memman/queue.db`. The SQLite store file remains on disk after `memman migrate <store>` as a durable fallback; the operator removes it after verifying the new backend with `memman doctor`.
 
-## 2.6 Store isolation
+## 2.5 Store isolation
 
 memman supports named stores for data isolation between different agents, projects, or scenarios.
 

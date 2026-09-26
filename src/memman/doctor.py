@@ -9,7 +9,6 @@ with an overall worst-status summary. Each per-store check takes a
 import logging
 import os
 import stat
-import statistics
 from pathlib import Path
 from typing import Any
 
@@ -107,53 +106,18 @@ def check_oplog_delta_coverage(backend: Backend) -> dict[str, Any]:
         }
 
 
-def check_orphan_insights(backend: Backend) -> dict[str, Any]:
-    """Find active insights with zero edges.
-
-    Notes
-    -----
-    - Under `MIN_LINKABLE_INSIGHTS` the check passes: an edge needs two
-      endpoints, so a lone insight is orphaned by arithmetic. Doctor
-      exits 1 on fail and is documented as a CI gate, so failing there
-      held the gate red for a condition the store could never satisfy.
-    """
-    orphan_count, total = backend.nodes.count_orphans()
-    if total < MIN_LINKABLE_INSIGHTS:
-        return {'name': 'orphan_insights', 'status': 'pass',
-                'detail': {'orphan_count': orphan_count,
-                           'total_active': total,
-                           'orphan_pct': 0.0,
-                           'note': 'too few insights to link'}}
-    orphan_pct = round(orphan_count / total * 100, 1)
-    if orphan_count == 0:
-        status = 'pass'
-    elif orphan_pct <= 5:
-        status = 'warn'
-    else:
-        status = 'fail'
-    return {
-        'name': 'orphan_insights',
-        'status': status,
-        'detail': {
-            'orphan_count': orphan_count,
-            'total_active': total,
-            'orphan_pct': orphan_pct,
-            },
-        }
-
-
 def check_supersession_integrity(backend: Backend) -> dict[str, Any]:
     """Verify every `superseded_by` pointer is well formed.
 
     The column carries no foreign key, so this check is the only
-    enforcement of pointer validity. Four populations, each empty on a
-    healthy store: a pointer at an id absent from the table (a
-    forgotten target is NOT dangling), a superseded row that still has
-    edges, a self-pointer, and a chain that never reaches a row without
-    a pointer (a cycle, which hides every member from the active view).
-    A successor with two predecessors is a join (`supersede` can point
-    several rows at one successor), not a defect. The detail carries every count and up to 20
-    ids per population.
+    enforcement of pointer validity. Three populations, each empty on
+    a healthy store: a pointer at an id absent from the table (a
+    forgotten target is NOT dangling), a self-pointer, and a chain
+    that never reaches a row without a pointer (a cycle, which hides
+    every member from the active view). A successor with two
+    predecessors is a join (`supersede` can point several rows at one
+    successor), not a defect. The detail carries every count and up
+    to 20 ids per population.
     """
     populations = backend.nodes.supersession_integrity()
     counts = {key: len(ids) for key, ids in populations.items()}
@@ -212,18 +176,6 @@ def check_partial_index_predicates(backend: Backend) -> dict[str, Any]:
         }
 
 
-def check_dangling_edges(backend: Backend) -> dict[str, Any]:
-    """Find edges touching a missing, deleted, or superseded insight."""
-    by_type = backend.edges.count_dangling_by_type()
-    total = sum(by_type.values())
-    status = 'pass' if total == 0 else 'fail'
-    return {
-        'name': 'dangling_edges',
-        'status': status,
-        'detail': {'count': total, 'by_type': by_type},
-        }
-
-
 def check_embedding_consistency(backend: Backend) -> dict[str, Any]:
     """Verify all embeddings have the same size (byte length on SQLite,
     pgvector dimension on Postgres).
@@ -237,46 +189,6 @@ def check_embedding_consistency(backend: Backend) -> dict[str, Any]:
         'detail': {'sizes': sizes},
         }
 
-
-def check_edge_degree(backend: Backend) -> dict[str, Any]:
-    """Compute degree distribution stats across active insights.
-
-    Notes
-    -----
-    - Under `MIN_LINKABLE_INSIGHTS` the check passes: zero is the only
-      degree a lone insight can have, so the median thresholds below
-      describe nothing.
-    """
-    active_ids = backend.nodes.get_active_ids()
-    if len(active_ids) < MIN_LINKABLE_INSIGHTS:
-        return {'name': 'edge_degree', 'status': 'pass',
-                'detail': {'min': 0, 'max': 0, 'median': 0, 'mean': 0.0,
-                           'note': 'too few insights to link'}}
-    degree_by_id = backend.edges.degree_distribution()
-    degrees = sorted(degree_by_id.get(aid, 0) for aid in active_ids)
-    med = statistics.median(degrees)
-    avg = round(statistics.mean(degrees), 1)
-    if med >= 5:
-        status = 'pass'
-    elif med >= 2:
-        status = 'warn'
-    else:
-        status = 'fail'
-    return {
-        'name': 'edge_degree',
-        'status': status,
-        'detail': {
-            'min': degrees[0],
-            'max': degrees[-1],
-            'median': med,
-            'mean': avg,
-            },
-        }
-
-
-# An edge needs two endpoints, so structural link checks do not apply
-# below this many active insights.
-MIN_LINKABLE_INSIGHTS = 2
 
 QUEUE_DEPTH_WARN = 50
 QUEUE_DEPTH_FAIL = 100
@@ -390,7 +302,7 @@ EXPECTED_INSIGHT_COLUMNS = {
     'prompt_version', 'embedding_model',
     'linked_at', 'enriched_at',
     'summary', 'keywords',
-    'session_id', 'queue_uuid',
+    'queue_uuid',
     'superseded_by', 'author',
     }
 EXPECTED_QUEUE_TABLES = {'queue', 'worker_runs'}
@@ -574,20 +486,10 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
             kind = (file_values.get(config.DEFAULT_BACKEND)
                     or 'sqlite').lower()
             source = 'default'
-        surface_key = config.SURFACE_FOR(store)
-        surface_raw = (file_values.get(surface_key) or '').strip()
-        if surface_raw:
-            surface_value = surface_raw.lower()
-            surface_source = 'per_store'
-        else:
-            surface_value = 'code'
-            surface_source = 'default'
         entry: dict[str, Any] = {
             'store': store,
             'backend': kind,
             'source': source,
-            'surface': surface_value,
-            'surface_source': surface_source,
             'error': None,
             'warning': None,
             }
@@ -607,28 +509,6 @@ def check_per_store_keys(data_dir: str) -> dict[str, Any]:
                     f'no DSN: set {config.env_key_for("postgres", "DSN", store)} or'
                     f' {config.DEFAULT_PG_DSN}')
                 _bump('fail')
-        if (surface_source == 'per_store'
-                and surface_value not in config.SURFACE_VALUES):
-            entry['error'] = (
-                f'invalid {surface_key}={surface_raw!r}; must be one'
-                f' of {sorted(config.SURFACE_VALUES)}')
-            _bump('fail')
-        auto_key = config.AUTO_THRESHOLD_FOR(store)
-        auto_raw = (file_values.get(auto_key) or '').strip()
-        if auto_raw:
-            try:
-                parsed = config.get_store_auto_threshold(
-                    store, data_dir=data_dir)
-            except ValueError as exc:
-                entry['error'] = str(exc)
-                _bump('fail')
-                parsed = None
-            if isinstance(parsed, float):
-                entry['auto_threshold'] = parsed
-                entry['auto_threshold_source'] = 'override'
-            elif parsed == 'skip':
-                entry['auto_threshold'] = None
-                entry['auto_threshold_source'] = 'override_skip'
         entries.append(entry)
 
     return {
@@ -1138,108 +1018,6 @@ def check_embed_fingerprint(backend: Backend) -> dict[str, Any]:
         'detail': detail}
 
 
-def check_embed_threshold(
-        backend: Backend,
-        *,
-        store_name: str) -> dict[str, Any]:
-    """Report the AUTO_SEMANTIC_THRESHOLD source for the stored fingerprint.
-
-    Precedence reported in `detail['source']`:
-      - `'override'`: the operator set `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>`
-        to a numeric value; status pass.
-      - `'override_skip'`: the operator set the override to `skip`/`none`;
-        status pass (semantic edges intentionally disabled).
-      - `'calibrated'`: the `(provider, model, surface)` triple is in the
-        shipped table; status pass.
-      - `'surface_median'`: triple is uncalibrated; the surface-wide
-        median fallback is used. Status warn -- the value is bounded
-        but not optimized; operators measuring their own value should
-        set the env override.
-
-    A malformed `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>` is reported as
-    `detail['override_error']` and otherwise ignored, so the reported
-    threshold is the one recall actually uses. `check_per_store_keys`
-    is what fails the run over it.
-    """
-    from memman import config
-    from memman.embed import thresholds as _thresholds
-    from memman.embed.fingerprint import stored_fingerprint
-
-    stored = stored_fingerprint(backend)
-    if stored is None:
-        return {
-            'name': 'embed_threshold', 'status': 'pass',
-            'detail': {
-                'provider': None, 'model': None, 'surface': None,
-                'source': None, 'threshold': None,
-                }}
-
-    surface = config.get_store_surface(store_name)
-    # A malformed override must be REPORTED, not raised: `run_all_checks`
-    # builds its check list eagerly, so propagating here kills the whole
-    # `memman doctor` run before `check_per_store_keys` -- the check whose
-    # job is to name this exact error -- is ever constructed. Swallowing
-    # it to None also matches runtime, where `_resolve_semantic_threshold`
-    # catches the same ValueError and falls through to the table.
-    override_error = None
-    try:
-        override = config.get_store_auto_threshold(store_name)
-    except ValueError as err:
-        override_error = str(err)
-        override = None
-
-    detail: dict[str, Any] = {
-        'provider': stored.provider,
-        'model': stored.model,
-        'surface': surface,
-        }
-    if override_error is not None:
-        detail['override_error'] = override_error
-
-    if override == 'skip':
-        detail['source'] = 'override_skip'
-        detail['threshold'] = None
-        if surface != 'code':
-            detail['hint'] = (
-                f'{config.SURFACE_FOR(store_name)}={surface!r} has no effect'
-                ' when AUTO_SEMANTIC_THRESHOLD override is skip.')
-        return {'name': 'embed_threshold', 'status': 'pass',
-                'detail': detail}
-
-    if isinstance(override, float):
-        detail['source'] = 'override'
-        detail['threshold'] = override
-        calibrated = _thresholds.resolve(
-            stored.provider, stored.model, surface)
-        if calibrated is not None and calibrated != override:
-            detail['masked_calibrated'] = calibrated
-            detail['hint'] = (
-                f'override {override:.4f} is masking the calibrated value'
-                f' {calibrated:.4f} for'
-                f' ({stored.provider}, {stored.model}, {surface}); remove'
-                f' MEMMAN_AUTO_SEMANTIC_THRESHOLD_{store_name} to fall back'
-                ' to the calibrated row.')
-        return {'name': 'embed_threshold', 'status': 'pass',
-                'detail': detail}
-
-    threshold, source = _thresholds.resolve_with_fallback(
-        stored.provider, stored.model, surface)
-    detail['threshold'] = threshold
-    detail['source'] = source
-    if source == 'surface_median':
-        detail['hint'] = (
-            f'no calibrated AUTO_SEMANTIC_THRESHOLD for'
-            f' ({stored.provider}, {stored.model}, {surface});'
-            f' using the {surface}-surface median ({threshold:.4f}) as a'
-            f' fallback. Set MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store> to a'
-            f' measured value for production-grade quality.')
-        status = 'warn'
-    else:
-        status = 'pass'
-    return {'name': 'embed_threshold', 'status': status,
-            'detail': detail}
-
-
 def check_no_stale_swap_meta(backend: Backend) -> dict[str, Any]:
     """Warn when `embed_swap_*` meta keys persist on a non-swapping store.
 
@@ -1346,14 +1124,11 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
 
 def run_all_checks(
         backend: Backend,
-        data_dir: str | None = None,
-        *,
-        store_name: str) -> dict[str, Any]:
+        data_dir: str | None = None) -> dict[str, Any]:
     """Run all health checks and return results with overall status.
 
     Routes every check through the Backend Protocol so SQLite and
-    Postgres are both supported. `store_name` plumbs through to
-    `check_embed_threshold` so the correct surface row is consulted.
+    Postgres are both supported.
     """
     total = backend.nodes.count_active()
     checks = []
@@ -1363,16 +1138,12 @@ def run_all_checks(
             check_schema_columns(backend),
             check_enrichment_coverage(backend),
             check_oplog_delta_coverage(backend),
-            check_orphan_insights(backend),
-            check_dangling_edges(backend),
             check_supersession_integrity(backend),
             check_partial_index_predicates(backend),
             check_embedding_consistency(backend),
             check_embed_fingerprint(backend),
-            check_embed_threshold(backend, store_name=store_name),
             check_no_stale_swap_meta(backend),
             check_provenance_drift(backend),
-            check_edge_degree(backend),
             ])
     else:
         checks.extend([

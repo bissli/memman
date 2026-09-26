@@ -1,12 +1,12 @@
 """Shared dataclasses for backend implementations and pipeline code.
 
-Domain types (Insight, Edge) plus DTOs returned by Backend Protocol
+The domain type (Insight) plus DTOs returned by Backend Protocol
 verbs (OpLogEntry, OpLogStats, NodeStats, ProvenanceCount, QueueRow,
 WorkerRun, ReembedRow). Includes the timestamp helper and importance
 helpers used across the package.
 
-Protocol commitment: `Insight.created_at`, `Insight.updated_at`,
-and `Edge.created_at` carry no `default_factory` -- backends stamp
+Protocol commitment: `Insight.created_at` and `Insight.updated_at`
+carry no `default_factory` -- backends stamp
 these server-side at the verb boundary. In-memory construction without
 a value yields `None`; backends fill them in on insert and reads
 return them populated.
@@ -28,12 +28,10 @@ VALID_CATEGORIES = {
     'insight', 'context',
     }
 
-VALID_EDGE_TYPES = {'temporal', 'semantic', 'entity'}
-
 
 @dataclass
 class Insight:
-    """A memory node in the memman graph."""
+    """One stored memory."""
 
     id: str = ''
     content: str = ''
@@ -49,7 +47,6 @@ class Insight:
     summary: str = ''
     linked_at: datetime | None = None
     enriched_at: datetime | None = None
-    session_id: str | None = None
     queue_uuid: str | None = None
     superseded_by: str | None = None
     author: str | None = None
@@ -66,31 +63,6 @@ class Insight:
             self.entities = []
         if self.entities is None:
             self.entities = []
-
-
-@dataclass
-class Edge:
-    """A directed relationship between two insights."""
-
-    source_id: str = ''
-    target_id: str = ''
-    edge_type: str = 'semantic'
-    weight: float = 0.5
-    metadata: dict[str, Any] = field(default_factory=dict)
-    created_at: datetime | None = None
-
-    def metadata_json(self) -> str:
-        """Return metadata as a JSON string for storage."""
-        return json.dumps(self.metadata, sort_keys=True)
-
-    def parse_metadata(self, s: str) -> None:
-        """Parse a JSON string into the metadata field."""
-        try:
-            self.metadata = json.loads(s)
-        except (json.JSONDecodeError, TypeError):
-            self.metadata = {}
-        if self.metadata is None:
-            self.metadata = {}
 
 
 @dataclass
@@ -133,9 +105,9 @@ def dedupe_entities(entities: list[str]) -> list[str]:
 
     Notes
     -----
-    - The stored column, the entity-edge builder, the result JSON and
-      the oplog delta all read this list. Folding in only one of them
-      makes a write report an entity the store does not hold.
+    - The stored column, the result JSON and the oplog delta all read
+      this list. Folding in only one of them makes a write report an
+      entity the store does not hold.
     """
     seen: set[str] = set()
     deduped: list[str] = []
@@ -220,8 +192,8 @@ def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
     `format_timestamp`; `updated_at` falls back to `created_at` so
     consumers always see a populated value. Optional fields
     (`deleted_at`, `superseded_by`, `summary`, `linked_at`,
-    `enriched_at`) are emitted only when populated; the plumbing keys
-    (`session_id`, `queue_uuid`) are deliberately omitted.
+    `enriched_at`) are emitted only when populated; the plumbing key
+    `queue_uuid` is deliberately omitted.
     """
     out: dict[str, Any] = {
         'id': ins.id,
@@ -274,7 +246,6 @@ class NodeStats:
     total_insights: int = 0
     superseded_insights: int = 0
     deleted_insights: int = 0
-    edge_count: int = 0
     oplog_count: int = 0
     by_category: dict[str, int] = field(default_factory=dict)
     top_entities: list[dict[str, Any]] = field(default_factory=list)
@@ -348,8 +319,3 @@ def parse_timestamp(s: str) -> datetime:
     if s.endswith('Z'):
         s = s[:-1] + '+00:00'
     return datetime.fromisoformat(s)
-
-
-def format_float(value: float) -> str:
-    """Format float to 4 decimal places (Go parity)."""
-    return f'{value:.4f}'

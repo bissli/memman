@@ -36,9 +36,9 @@ STATUS_STALE = 'stale'
 class QueueRow:
     """A single queued blob claimed by a worker.
 
-    `session_id` and `queue_uuid` sit last so no pre-existing
-    positional index shifts; keep that order (`session_id` then
-    `queue_uuid`, then `author`) in every column list.
+    `queue_uuid` sits last so no pre-existing positional index
+    shifts; keep that order (`queue_uuid`, then `author`) in every
+    column list.
     """
 
     id: int
@@ -52,7 +52,6 @@ class QueueRow:
     priority: int
     queued_at: int
     attempts: int
-    session_id: str | None
     queue_uuid: str
     author: str | None
 
@@ -141,7 +140,6 @@ create table if not exists queue (
     hint_source   text,
     hint_entities text,
     hint_replaced_id text,
-    session_id    text,
     queue_uuid    text not null unique,
     priority      integer not null default 0,
     queued_at     integer not null,
@@ -200,7 +198,6 @@ def enqueue(
         hint_source: str | None = None,
         hint_entities: str | None = None,
         hint_replaced_id: str | None = None,
-        session_id: str | None = None,
         priority: int = 0,
         author: str | None = None,
         ) -> tuple[int, str]:
@@ -208,8 +205,7 @@ def enqueue(
 
     `hint_replaced_id` carries the id of the insight to soft-delete
     when the worker commits this row - used by the `replace` command.
-    `session_id` is the temporal chain key (`remember --session`); null means the
-    resulting insights join no backbone chain. `author` is resolved
+    `author` is resolved
     from the agent's shell at enqueue time and carried to the drain;
     the drain never re-resolves it from the environment.
 
@@ -237,13 +233,13 @@ def enqueue(
 insert into queue (
     store, content, hint_cat, hint_imp,
     hint_source, hint_entities, hint_replaced_id,
-    session_id, queue_uuid, priority, queued_at, author
+    queue_uuid, priority, queued_at, author
 )
-values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
     cur = conn.execute(sql, (
         store, content, hint_cat, hint_imp, hint_source,
-        hint_entities, hint_replaced_id, session_id,
+        hint_entities, hint_replaced_id,
         queue_uuid, priority, now, author))
     row_id = cur.lastrowid
     logger.debug(f'queued blob {row_id} for store {store}')
@@ -285,7 +281,7 @@ where id = (
 returning id, store, content, hint_cat, hint_imp,
           hint_source, hint_entities, hint_replaced_id,
           priority, queued_at, attempts,
-          session_id, queue_uuid, author
+          queue_uuid, author
 """
     params = [now, worker_pid, now, stale_after_seconds, *store_params]
     row = conn.execute(sql, params).fetchone()
@@ -297,8 +293,7 @@ returning id, store, content, hint_cat, hint_imp,
         hint_source=row[5], hint_entities=row[6],
         hint_replaced_id=row[7],
         priority=row[8], queued_at=row[9], attempts=row[10],
-        session_id=row[11], queue_uuid=row[12],
-        author=row[13])
+        queue_uuid=row[11], author=row[12])
 
 
 def mark_done(conn: sqlite3.Connection, row_id: int) -> None:
@@ -446,7 +441,7 @@ def get_row(
 select id, store, content, hint_cat, hint_imp,
        hint_source, hint_entities, priority, queued_at, claimed_at,
        worker_pid, attempts, status, last_error, processed_at,
-       session_id, queue_uuid, author
+       queue_uuid, author
 from queue
 where id = ?
 """
@@ -461,8 +456,7 @@ where id = ?
         'claimed_at': row[9], 'worker_pid': row[10],
         'attempts': row[11], 'status': row[12],
         'last_error': row[13], 'processed_at': row[14],
-        'session_id': row[15], 'queue_uuid': row[16],
-        'author': row[17],
+        'queue_uuid': row[15], 'author': row[16],
         }
 
 

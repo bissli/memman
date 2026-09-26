@@ -1,9 +1,8 @@
-"""Recall with beam search and RRF fusion.
+"""Recall over RRF-fused keyword, vector and recency anchors.
 
 Reads live storage on every request. The candidate universe is
-`nodes.get_all_active()` and the graph is one `edges.adjacency()`
-read, so recall cannot serve a row the store has deleted or
-superseded, and cannot miss one it holds as current.
+`nodes.get_all_active()`, so recall cannot serve a row the store has
+deleted or superseded, and cannot miss one it holds as current.
 
 Notes
 -----
@@ -18,10 +17,8 @@ Notes
   `kw_score` directly.
 """
 
-import heapq
 import logging
 from collections import Counter
-from collections.abc import Callable
 from typing import Any
 
 from memman import trace
@@ -32,35 +29,14 @@ from memman.store.model import Insight
 logger = logging.getLogger('memman')
 
 ANCHOR_TOP_K = 30
-LAMBDA1 = 1.0
-LAMBDA2 = 0.4
 RRF_K = 60
 RERANK_SHORTLIST = 100
 MIN_RERANK_TOKENS = 2
 
 # Notes:
-# - The weight per edge type sums to 1.0. That fixes the STRUCTURAL
-#   term's scale against the two terms it is summed with in a
-#   traversal score, `anchor_rrf + LAMBDA1 * structural + LAMBDA2 *
-#   semantic`, neither of which these weights touch.
-# - The balance is load-bearing: scaling only the middle term is not
-#   a transform the min-max normalization of `graph_score` undoes. It
-#   re-ranks rows and changes which nodes the beam keeps at its cut,
-#   so changing a weight here changes retrieved order.
-# - The types weighted are exactly the edge types the store writes. A
-#   type nothing mints would contribute nothing while still consuming
-#   the 1.0 budget, shrinking every other type's share.
-EDGE_WEIGHTS: dict[str, float] = {
-    'temporal': 0.334, 'semantic': 0.333, 'entity': 0.333,
-    }
-
-# `(beam_width, max_depth, max_visited)` for every traversal.
-TRAVERSAL_PARAMS: tuple[int, int, int] = (10, 4, 500)
-
-# Notes:
-# - `(w_kw, w_sim, w_gr)`: the raw row divided by its own sum, so the
-#   weights sum to 1.0 and `score` spans one range. Both hold only to
-#   within a float ulp, and `sim_score` is an unclamped cosine that
+# - `(w_kw, w_sim, w_anchor)`: the raw row divided by its own sum, so
+#   the weights sum to 1.0 and `score` spans one range. Both hold only
+#   to within a float ulp, and `sim_score` is an unclamped cosine that
 #   can exceed 1 by an ulp.
 # - The raw row is the four-weight table's GENERAL row with `w_ent`
 #   deleted and the survivors untouched. It carries that table's
@@ -76,137 +52,6 @@ _RERANK_WEIGHTS_RAW: tuple[float, float, float] = (0.25, 0.45, 0.15)
 
 RERANK_WEIGHTS: tuple[float, float, float] = tuple(
     weight / sum(_RERANK_WEIGHTS_RAW) for weight in _RERANK_WEIGHTS_RAW)
-
-
-def _bidirectional_adjacency(
-        directed: dict[str, list[tuple[str, str, float]]],
-        ) -> dict[str, list[tuple[str, str, float]]]:
-    """Mirror a directional source -> targets map into both directions.
-
-    Beam search walks edges as undirected; `EdgeStore.adjacency()`
-    returns them keyed by source. This helper materializes the reverse
-    direction so `nid -> incoming + outgoing` is one dict lookup.
-    """
-    bidir: dict[str, list[tuple[str, str, float]]] = {}
-    for source_id, edges in directed.items():
-        bidir.setdefault(source_id, []).extend(edges)
-        for target_id, etype, weight in edges:
-            bidir.setdefault(target_id, []).append(
-                (source_id, etype, weight))
-    return bidir
-
-
-def beam_search_from_anchor(
-        start_id: str,
-        start_score: float,
-        weights: dict[str, float],
-        params: tuple[int, int, int],
-        score_map: dict[str, float],
-        via_map: dict[str, str],
-        insight_map: dict[str, Insight],
-        sim_cache: dict[str, float] | None,
-        edges_lookup: Callable[[str], Any],
-        insight_lookup: Callable[[str], Insight | None],
-        phantom_ids: set[str]) -> int:
-    """Perform beam search from a single anchor node.
-
-    Parameters
-    ----------
-    start_id : str
-        Anchor insight id the traversal starts from.
-    start_score : float
-        Anchor's fused RRF score; seeds the running path score.
-    weights : dict[str, float]
-        Weight per edge type.
-    params : tuple[int, int, int]
-        `(beam_width, max_depth, max_visited)`.
-    score_map : dict[str, float]
-        Best path score per node; updated in place.
-    via_map : dict[str, str]
-        Edge type that produced each node's best score; updated in
-        place.
-    insight_map : dict[str, Insight]
-        Node id -> Insight for every scored node; updated in place.
-    sim_cache : dict[str, float] | None
-        Query-cosine per node (None when there is no query vector).
-    edges_lookup : Callable
-        `nid -> iterable of (neighbor_id, edge_type, weight)`,
-        read from the pre-built bidirectional adjacency map.
-    insight_lookup : Callable
-        `nid -> Insight | None`; same encapsulation.
-    phantom_ids : set[str]
-        Ids an edge referenced but `insight_lookup` could not
-        resolve; shared across anchors and updated in place, so one
-        dangling edge costs one lookup per recall rather than one per
-        anchor.
-
-    Returns
-    -------
-    int
-        Nodes visited from this anchor (the anchor included); equal
-        to `max_visited` when the traversal hit its budget.
-    """
-    beam_width, max_depth, max_visited = params
-    visited = {start_id: True}
-    total_visited = 1
-
-    current = [(-start_score, start_id, 0)]
-
-    for depth in range(max_depth):
-        if not current or total_visited >= max_visited:
-            break
-
-        next_items: list[tuple[float, str, int]] = []
-
-        for neg_score, nid, _d in current:
-            cur_score = -neg_score
-
-            for neighbor_id, etype, weight in edges_lookup(nid):
-                if total_visited >= max_visited:
-                    break
-
-                # An edge can outlive its endpoint row. Resolve the
-                # neighbour first: scoring one that does not resolve
-                # would spend a visit budget slot and a beam push on a
-                # node no result can ever carry, and re-resolve the
-                # same miss once per anchor.
-                if neighbor_id in phantom_ids:
-                    continue
-                if neighbor_id not in insight_map:
-                    ins = insight_lookup(neighbor_id)
-                    if ins is None:
-                        phantom_ids.add(neighbor_id)
-                        continue
-                    insight_map[neighbor_id] = ins
-
-                structural = weights.get(etype, 0.0) * weight
-                semantic = (
-                    sim_cache.get(neighbor_id, 0.0)
-                    if sim_cache is not None else 0.0)
-                neighbor_score = (
-                    cur_score + LAMBDA1 * structural
-                    + LAMBDA2 * semantic)
-
-                existing = score_map.get(neighbor_id)
-                if existing is None or neighbor_score > existing:
-                    score_map[neighbor_id] = neighbor_score
-                    via_map[neighbor_id] = etype
-
-                if neighbor_id not in visited:
-                    visited[neighbor_id] = True
-                    total_visited += 1
-                    heapq.heappush(
-                        next_items,
-                        (-neighbor_score, neighbor_id, depth + 1))
-
-        pruned = []
-        count = 0
-        while next_items and count < beam_width:
-            item = heapq.heappop(next_items)
-            pruned.append(item)
-            count += 1
-        current = pruned
-    return total_visited
 
 
 def intent_aware_recall(
@@ -241,30 +86,30 @@ def intent_aware_recall(
     dict[str, Any]
         `{'results': [...], 'meta': {...}}`. Each result carries
         `insight`, `score`, `via` and `signals`; `meta` carries
-        `anchor_count` (filtered), `traversed` (deliberately
-        unfiltered) and `reranked`.
+        `anchor_count` and `reranked`.
 
     Notes
     -----
     - Reads live storage on every call: the candidate universe is
-      `nodes.get_all_active()` and the graph is one
-      `edges.adjacency()` read, so a row the store has deleted or
+      `nodes.get_all_active()`, so a row the store has deleted or
       superseded cannot be returned and a row it holds as current
       cannot be hidden.
-    - `category`/`source` filter the ANCHOR pools and the final result
-      set, never the graph traversal: a hop through a non-matching
-      neighbour is correct, and filtering the candidates loop would
-      perturb the `graph_min`/`graph_max` normalisation.
-    - With a filter and `limit > 0`, the anchor budget becomes
-      `max(ANCHOR_TOP_K, limit)`; unfiltered recall keeps
-      `ANCHOR_TOP_K` untouched so the ablation harness's
-      `anchor_top_k` sweep is never overridden.
+    - The candidates are exactly the fused anchors. `category` and
+      `source` filter every channel before its cut, so each candidate
+      is returnable.
+    - The keyword and recency channels take `ANCHOR_TOP_K` rows each;
+      with a filter and `limit > 0` that becomes
+      `max(ANCHOR_TOP_K, limit)`. The vector channel takes at least
+      `RERANK_SHORTLIST`, so the reranker sees up to a full shortlist
+      of query neighbors.
+    - `signals['anchor']` is the min-max of the fused RRF score: the
+      one term that carries recency into `score`, so a recent row with
+      no keyword or vector match still outranks an older one.
     - When `rerank=True` and the query has more than
       `MIN_RERANK_TOKENS` tokens, the top `RERANK_SHORTLIST`
       candidates by multi-signal score are re-scored by the
-      configured Voyage reranker; the filter runs before the rerank
-      block so the shortlist holds only returnable rows. On reranker
-      failure the baseline ordering is preserved.
+      configured Voyage reranker. On reranker failure the baseline
+      ordering is preserved.
     - Rows come back in relevance order at every `limit`, so the
       first `n` of a `limit`-`m` recall are the `limit`-`n` recall.
       Nothing re-sorts after the limit slice.
@@ -285,26 +130,10 @@ def intent_aware_recall(
     anchor_k = (ANCHOR_TOP_K
                 if (limit <= 0 or not (category or source))
                 else max(ANCHOR_TOP_K, limit))
+    vector_k = max(RERANK_SHORTLIST, anchor_k)
 
     all_insights = backend.nodes.get_all_active()
     insights_by_id = {i.id: i for i in all_insights}
-
-    # Notes:
-    # - One projection-only read of the whole edge table, not one
-    #   query per frontier node. The per-node form re-reads each
-    #   edge several times over and costs a psycopg round-trip
-    #   apiece on Postgres.
-    # - `adjacency()` skips `metadata`, whose per-row json.loads is
-    #   the costliest part of the equivalent `edges.all()` and which
-    #   traversal discards.
-    bidir = _bidirectional_adjacency(backend.edges.adjacency())
-    phantom_ids: set[str] = set()
-
-    def _edges_lookup(nid: str) -> Any:
-        return bidir.get(nid, ())
-
-    def _insight_lookup(nid: str) -> Insight | None:
-        return insights_by_id.get(nid)
 
     query_tokens = tokenize(query)
 
@@ -337,7 +166,7 @@ def intent_aware_recall(
                     f' unavailable: {exc}')
             try:
                 vector_hits = session.vector_anchors(
-                    query_vec, k=anchor_k,
+                    query_vec, k=vector_k,
                     category=category, source=source)
             except Exception as exc:
                 logger.warning(
@@ -347,8 +176,6 @@ def intent_aware_recall(
         else:
             vector_hits = []
 
-    # Anchor selection draws from the filtered pool; traversal keeps
-    # the full `insights_by_id` so hops through non-matching rows work.
     anchor_pool = (all_insights if not (category or source)
                    else [i for i in all_insights if _matches(i)])
 
@@ -367,7 +194,7 @@ def intent_aware_recall(
             anchor_map[vid] = (
                 ins, old_score + rrf_score, 'hybrid')
         else:
-            looked = _insight_lookup(vid)
+            looked = insights_by_id.get(vid)
             if looked is not None:
                 anchor_map[vid] = (looked, rrf_score, 'vector')
 
@@ -402,12 +229,13 @@ def intent_aware_recall(
             f'query={query[:80]}')
 
     if enabled:
-        # vector_hits against anchor_k is the measurement Phase 1
-        # deferred: whether a selective --cat/--source filter makes
-        # the vector scan return fewer than k anchors.
+        # vector_hits against vector_k shows whether a selective
+        # --cat/--source filter makes the vector scan return fewer
+        # than k anchors.
         trace.event(
             'recall_anchors',
             anchor_k=anchor_k,
+            vector_k=vector_k,
             keyword_hits=len(keyword_anchors),
             vector_hits=len(vector_hits),
             time_hits=time_limit,
@@ -416,100 +244,35 @@ def intent_aware_recall(
                 via for _, _, via in anchor_map.values())),
             filtered=bool(category or source))
 
-    score_map: dict[str, float] = {}
-    via_map: dict[str, str] = {}
-    insight_map: dict[str, Insight] = {}
+    anchor_scores = [s for _, s, _ in anchor_map.values()]
+    anchor_min = min(anchor_scores, default=0.0)
+    anchor_range = max(anchor_scores, default=0.0) - anchor_min
+    if anchor_range == 0:
+        anchor_range = 1.0
 
-    for aid, (ins, score, via) in anchor_map.items():
-        score_map[aid] = score
-        via_map[aid] = via
-        insight_map[aid] = ins
-
-    visited_total = 0
-    capped_anchors = 0
-    for aid, (ins, score, via) in anchor_map.items():
-        visited = beam_search_from_anchor(
-            aid, score, EDGE_WEIGHTS, TRAVERSAL_PARAMS,
-            score_map, via_map, insight_map, sim_cache,
-            _edges_lookup, _insight_lookup, phantom_ids)
-        visited_total += visited
-        if visited >= TRAVERSAL_PARAMS[2]:
-            capped_anchors += 1
-
-    traversed_count = len(score_map)
-    if enabled:
-        trace.event(
-            'recall_traversal',
-            visited=visited_total,
-            capped_anchors=capped_anchors,
-            max_visited=TRAVERSAL_PARAMS[2],
-            traversed=traversed_count)
-
-    candidates: list[dict[str, Any]] = []
-    graph_min: float | None = None
-    graph_max: float | None = None
-    for cid, graph_raw in score_map.items():
-        cid_ins = insight_map.get(cid)
-        if cid_ins is None:
-            continue
-        if graph_min is None or graph_max is None:
-            graph_min = graph_raw
-            graph_max = graph_raw
-        else:
-            graph_min = min(graph_min, graph_raw)
-            graph_max = max(graph_max, graph_raw)
-        candidates.append({
-            'id': cid, 'ins': cid_ins, 'via': via_map.get(cid, ''),
-            'graph_raw': graph_raw,
-            })
-
-    if graph_min is None or graph_max is None:
-        graph_min = 0.0
-        graph_max = 0.0
-    graph_range = graph_max - graph_min
-    if graph_range == 0:
-        graph_range = 1.0
-
-    for c in candidates:
-        kw_score = 0.0
-        if query_tokens:
-            kw_score = (keyword_counts.get(c['id'], 0)
-                        / len(query_tokens))
-
-        sim_score = sim_cache.get(c['id'], 0.0)
-
-        graph_score = (c['graph_raw'] - graph_min) / graph_range
-
-        c['kw_score'] = kw_score
-        c['sim_score'] = sim_score
-        c['graph_score'] = graph_score
-
-    w_kw, w_sim, w_gr = RERANK_WEIGHTS
+    w_kw, w_sim, w_anchor = RERANK_WEIGHTS
 
     results: list[dict[str, Any]] = []
-    for c in candidates:
-        final_score = (
-            w_kw * c['kw_score'] + w_sim * c['sim_score']
-            + w_gr * c['graph_score'])
+    for cid, (ins, anchor_raw, via) in anchor_map.items():
+        kw_score = 0.0
+        if query_tokens:
+            kw_score = keyword_counts.get(cid, 0) / len(query_tokens)
+        sim_score = sim_cache.get(cid, 0.0)
+        anchor_score = (anchor_raw - anchor_min) / anchor_range
         results.append({
-            'insight': c['ins'],
-            'score': final_score,
-            'via': c['via'],
+            'insight': ins,
+            'score': (w_kw * kw_score + w_sim * sim_score
+                      + w_anchor * anchor_score),
+            'via': via,
             'signals': {
-                'keyword': c['kw_score'],
-                'similarity': c['sim_score'],
-                'graph': c['graph_score'],
+                'keyword': kw_score,
+                'similarity': sim_score,
+                'anchor': anchor_score,
                 },
             })
 
     results.sort(
         key=lambda r: (-r['score'], -r['insight'].importance))
-
-    # Filter after the weighted-sum sort (so graph_min/graph_max
-    # normalisation saw the full pool) and BEFORE rerank (so the
-    # cross-encoder shortlist holds only returnable rows).
-    if category or source:
-        results = [r for r in results if _matches(r['insight'])]
 
     reranked = False
     if rerank and len(query.split()) > MIN_RERANK_TOKENS:
@@ -552,7 +315,6 @@ def intent_aware_recall(
 
     meta: dict[str, Any] = {
         'anchor_count': anchor_count,
-        'traversed': traversed_count,
         'reranked': reranked,
         }
 

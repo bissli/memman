@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 from memman.queue import queue_db
-from memman.store.model import Edge, Insight
+from memman.store.model import Insight
 
 try:
     import psycopg  # noqa: F401
@@ -96,13 +96,7 @@ def _isolate_env(tmp_path, monkeypatch, request):
     monkeypatch.delenv('MEMMAN_DEBUG', raising=False)
     monkeypatch.delenv('MEMMAN_WORKER', raising=False)
     monkeypatch.delenv('MEMMAN_SCHEDULER_KIND', raising=False)
-    monkeypatch.delenv('MEMMAN_SESSION_ID', raising=False)
     monkeypatch.delenv('MEMMAN_AUTHOR', raising=False)
-    # The harness running the suite may itself be a Claude Code
-    # session, and `--session` falls back to this variable. Leaving it
-    # set would stamp the real session on every unsessioned test write
-    # and make the assertions machine-dependent.
-    monkeypatch.delenv('CLAUDE_CODE_SESSION_ID', raising=False)
     monkeypatch.delenv('MEMMAN_OPENROUTER_API_KEY', raising=False)
     monkeypatch.delenv('MEMMAN_VOYAGE_API_KEY', raising=False)
     monkeypatch.delenv('MEMMAN_OPENAI_EMBED_API_KEY', raising=False)
@@ -714,46 +708,11 @@ def make_insight(**overrides) -> Insight:
     return Insight(**defaults)
 
 
-def make_edge(**overrides) -> Edge:
-    """Factory for test Edge instances."""
-    now = datetime.now(timezone.utc)
-    defaults = {
-        'source_id': 'src',
-        'target_id': 'tgt',
-        'edge_type': 'semantic',
-        'weight': 0.5,
-        'metadata': {},
-        'created_at': now,
-        }
-    defaults.update(overrides)
-    return Edge(**defaults)
-
-
-def mint_edge_into(monkeypatch, target_id: str) -> None:
-    """Make an apply's semantic pass emit one edge at `target_id`.
-
-    The apply phase mints a row's edges after the write has already
-    superseded its targets, so a test that needs an edge aimed at a
-    retired row has to inject it there rather than pre-insert it.
-    Patches `memman.pipeline.remember.create_semantic_edges`, which
-    is the only edge generator the apply calls with a stub-friendly
-    signature.
-    """
-    def _stub(backend, insight, cache, **kw):
-        backend.edges.upsert(Edge(
-            source_id=insight.id, target_id=target_id,
-            edge_type='semantic', weight=1.0))
-        return 1
-
-    monkeypatch.setattr(
-        'memman.pipeline.remember.create_semantic_edges', _stub)
-
-
 def insert_pending(db, insight_id: str, content: str = 'test content',
                    **kw) -> None:
     """Insert an insight with linked_at = NULL.
 
-    Helper for graph/link tests that need pending insights as fixtures.
+    Helper for enrichment tests that need pending insights as fixtures.
     Forwards extra kwargs to `make_insight` for content/category control.
     """
     from memman.store.node import insert_insight

@@ -9,7 +9,6 @@ is what finds that.
 
 from memman.doctor import check_partial_index_predicates
 from memman.doctor import check_supersession_integrity
-from memman.store.model import Edge
 from memman.store.sqlite import SqliteBackend
 from tests.conftest import make_insight
 
@@ -51,8 +50,7 @@ def test_integrity_passes_on_a_clean_chain_with_a_forgotten_target(backend):
     assert result['name'] == 'supersession_integrity'
     assert result['status'] == 'pass'
     assert result['detail']['counts'] == {
-        'dangling': 0, 'superseded_with_edges': 0,
-        'self_pointer': 0, 'unterminated': 0}
+        'dangling': 0, 'self_pointer': 0, 'unterminated': 0}
 
 
 def test_integrity_fails_on_a_dangling_pointer(backend):
@@ -74,25 +72,6 @@ def test_integrity_fails_on_a_dangling_pointer(backend):
     assert result['status'] == 'fail'
     assert result['detail']['dangling'] == ['d-1']
     assert result['detail']['counts']['dangling'] == 1
-
-
-def test_integrity_fails_on_a_superseded_row_with_edges(backend):
-    """Verify a superseded row that kept an edge fails the check.
-
-    Mutation: dropping the edge population, so an entity-edge
-        regression that links into history passes the doctor.
-    Oracle: the pointer set by raw SQL after the edges exist, so the
-        edges survive -> fail naming the row.
-    """
-    for rid in ('e-1', 'e-2'):
-        backend.nodes.insert(make_insight(id=rid, content=f'row {rid}'))
-    backend.edges.upsert(Edge(
-        source_id='e-1', target_id='e-2', edge_type='semantic', weight=0.5))
-    _point(backend, 'e-1', 'e-2')
-
-    result = check_supersession_integrity(backend)
-    assert result['status'] == 'fail'
-    assert result['detail']['superseded_with_edges'] == ['e-1']
 
 
 def test_integrity_fails_on_a_self_pointer_and_passes_a_join(backend):

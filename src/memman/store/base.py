@@ -1,14 +1,11 @@
 """Backend-neutral default implementations for selected NodeStore verbs.
 
 `BaseNodeStore` mixes Python-side defaults that compose from
-`get_all_active` and `get_all_embeddings`. Concrete backends override
-each verb when a SQL pushdown is materially faster.
+`get_all_active`. Concrete backends override each verb when a SQL
+pushdown is materially faster.
 """
 
-from collections.abc import Iterator
 from typing import Any
-
-from memman.store.model import Id
 
 
 class BaseNodeStore:
@@ -35,16 +32,3 @@ class BaseNodeStore:
             key=lambda x: len(x['quality_warnings']),
             reverse=True)
         return flagged[:limit]
-
-    def iter_embeddings_as_vecs(
-            self) -> Iterator[tuple[Id, list[float]]]:
-        """Default: deserialize the blobs from `get_all_embeddings`.
-        """
-        from memman.embed.vector import deserialize_vector
-        for rid, _content, blob in (
-                self.get_all_embeddings()):  # type: ignore[attr-defined]
-            if blob is None:
-                continue
-            vec = deserialize_vector(blob)
-            if vec is not None:
-                yield rid, vec

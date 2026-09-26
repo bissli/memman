@@ -1,7 +1,7 @@
 """Backend Protocol surface.
 
-Defines `Backend`, the four sub-store Protocols (`NodeStore`,
-`EdgeStore`, `MetaStore`, `Oplog`), and `RecallSession`. SQLite
+Defines `Backend`, the three sub-store Protocols (`NodeStore`,
+`MetaStore`, `Oplog`), and `RecallSession`. SQLite
 implements them in `store/sqlite.py`; Postgres in `store/postgres.py`.
 The work queue is process-global and SQLite-only (see
 `memman.queue`).
@@ -9,32 +9,27 @@ The work queue is process-global and SQLite-only (see
 Distributed-shaping commitments baked into this Protocol surface:
 
 1. **Timestamp ownership at the boundary.** `nodes.insert(insight)`,
-   `edges.upsert(edge)`, `oplog.log(...)`, `nodes.stamp_linked(id)`,
+   `oplog.log(...)`, `nodes.stamp_linked(id)`,
    `nodes.stamp_enriched(id)` accept no `created_at` argument.
    Backends stamp these server-side -- SQLite via Python `datetime.now`,
    Postgres via `now()`. Pipeline code never produces a timestamp that
    lands in a database write.
 
-2. **`Backend.write_lock(name)` is a Protocol verb.** SQLite's
-   implementation is a no-op (`BEGIN IMMEDIATE` already serializes
-   per-process). Postgres uses `pg_advisory_xact_lock`.
-
-3. **`Backend.transaction()` nesting contract.** Nested calls reuse
+2. **`Backend.transaction()` nesting contract.** Nested calls reuse
    the outer transaction (SAVEPOINT-like or no-op). Required by the
    nested `apply_all` write pattern.
 
 """
 
 import re
-from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
 from memman.store.errors import ConfigError
-from memman.store.model import Edge, EnrichmentCoverage, Id, Insight
-from memman.store.model import NodeStats, OpLogEntry, OpLogStats
-from memman.store.model import ProvenanceCount, ReembedRow, WorkerRun
+from memman.store.model import EnrichmentCoverage, Id, Insight, NodeStats
+from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
+from memman.store.model import ReembedRow, WorkerRun
 
 if TYPE_CHECKING:
     from memman.embed.fingerprint import Fingerprint
@@ -103,15 +98,6 @@ class NodeStore(Protocol):
         """
         ...
 
-    def get_many(self, ids: Sequence[Id]) -> list[Insight]:
-        """Return active insights for the given ids, in input order.
-
-        Missing ids are silently dropped from the result. Used by the
-        bfs caller to hydrate insights for the bounded neighborhood
-        returned by `EdgeStore.get_neighborhood`.
-        """
-        ...
-
     def query(
             self, *, keyword: str = '', category: str = '',
             source: str = '', limit: int = 20) -> list[Insight]:
@@ -120,7 +106,7 @@ class NodeStore(Protocol):
         ...
 
     def soft_delete(self, id: Id) -> bool:
-        """Soft-delete a non-deleted insight and remove its edges.
+        """Soft-delete a non-deleted insight.
 
         Returns False when the row is missing or already deleted; a
         superseded row may still be deleted.
@@ -128,7 +114,7 @@ class NodeStore(Protocol):
         ...
 
     def supersede(self, predecessor_id: Id, successor_id: Id) -> bool:
-        """Point a current insight at its successor and remove its edges.
+        """Point a current insight at its successor.
 
         Parameters
         ----------
@@ -142,9 +128,9 @@ class NodeStore(Protocol):
         Returns
         -------
         bool
-            True when the pointer was written and the predecessor's
-            edges removed; False when the predecessor is not current,
-            and the caller degrades to a plain add.
+            True when the pointer was written; False when the
+            predecessor is not current, and the caller degrades to a
+            plain add.
 
         Notes
         -----
@@ -162,7 +148,7 @@ class NodeStore(Protocol):
 
         Returns False when the row is missing, deleted, not superseded,
         or superseded by another row since the caller read it. The
-        caller rebuilds the row's edges and vector afterwards.
+        caller re-embeds the row afterwards.
         """
         ...
 
@@ -175,11 +161,10 @@ class NodeStore(Protocol):
         ...
 
     def supersession_integrity(self) -> dict[str, list[Id]]:
-        """The four pointer populations a healthy store leaves empty.
+        """The three pointer populations a healthy store leaves empty.
 
         Keys: `dangling` (pointer at an id absent from the table),
-        `superseded_with_edges` (superseded, non-deleted row with any
-        edge), `self_pointer`, `unterminated` (a chain that never
+        `self_pointer`, `unterminated` (a chain that never
         reaches a row without a pointer, so a cycle). A successor with
         two predecessors is a join, not a defect. The column has no
         foreign key, so the doctor check over this verb is the only
@@ -234,30 +219,8 @@ class NodeStore(Protocol):
         """
         ...
 
-    def count_orphans(self) -> tuple[int, int]:
-        """Return (orphan_count, total_active)."""
-        ...
-
     def provenance_distribution(self) -> list[ProvenanceCount]:
         """Return (prompt_version, count) for active rows."""
-        ...
-
-    def get_recent_in_window(
-            self, *, exclude_id: Id, window_hours: float,
-            limit: int) -> list[Insight]:
-        """Return recent active insights inside a time window."""
-        ...
-
-    def get_latest_by_session(
-            self, *, session_id: str | None,
-            exclude_id: Id) -> Insight | None:
-        """Return the most-recent active insight for a session.
-
-        Accepts `str | None` because the falsy guard lives INSIDE
-        each backend (a falsy session returns None; `'' = ''` would
-        match in SQL and fuse every unsessioned row). Tiebreak is
-        `created_at desc, id desc` on both backends.
-        """
         ...
 
     def get_all_active(self) -> list[Insight]:
@@ -281,33 +244,6 @@ class NodeStore(Protocol):
 
     def get_embedding(self, id: Id) -> bytes | None:
         """Return the raw embedding blob for an active insight."""
-        ...
-
-    def get_all_embeddings(self) -> list[tuple[Id, str, bytes]]:
-        """Return all (id, content, blob) triples for active insights.
-
-        Used by the `BaseNodeStore` default for
-        `iter_embeddings_as_vecs`. Pipeline paths prefer
-        `iter_embeddings_as_vecs` directly; the recall path uses
-        `RecallSession.similarities` instead, which scores without
-        shipping the blobs.
-        """
-        ...
-
-    def iter_embeddings_as_vecs(
-            self) -> Iterator[tuple[Id, list[float]]]:
-        """Yield (id, vec) for every active insight with an embedding.
-
-        SQLite implementation deserializes the blob inside the
-        backend so callers see only `list[float]`. Postgres
-        implementation issues `select id, embedding from
-        {schema}.insights ...` and yields `(id, list[float])` tuples
-        (pgvector binds the column to a Python list when
-        `register_vector` is active on the connection).
-
-        Use `dict(backend.nodes.iter_embeddings_as_vecs())` when a
-        cache is needed; iterate directly when memory matters.
-        """
         ...
 
     def embedding_stats(self) -> tuple[int, int]:
@@ -398,160 +334,9 @@ class NodeStore(Protocol):
         """Clear enriched_at and linked_at for the given ids."""
         ...
 
-    def clear_linked_at(self) -> None:
-        """Set linked_at to NULL for every active insight."""
-        ...
-
     def review_content_quality(
             self, *, limit: int) -> list[dict[str, Any]]:
         """Return active insights flagged by content-quality checks."""
-        ...
-
-
-@runtime_checkable
-class EdgeStore(Protocol):
-    """Edge CRUD + traversal."""
-
-    def upsert(self, edge: Edge) -> None:
-        """Insert or merge an edge, keeping the higher weight.
-
-        Backend stamps `created_at` server-side.
-        """
-        ...
-
-    def by_node(self, node_id: Id) -> list[Edge]:
-        """All edges where node_id is source or target."""
-        ...
-
-    def by_node_and_type(
-            self, node_id: Id, edge_type: str) -> list[Edge]:
-        """Edges for a node filtered by type."""
-        ...
-
-    def by_source_and_type(
-            self, source_id: Id, edge_type: str) -> list[Edge]:
-        """Edges where source_id is source, filtered by type."""
-        ...
-
-    def find_with_entity(
-            self, entity: str, *, exclude_id: Id,
-            limit: int) -> list[Id]:
-        """Active insight ids carrying an entity, newest first.
-
-        Parameters
-        ----------
-        entity : str
-            Name to match, compared case- and space-insensitively
-            against each stored name.
-        exclude_id : Id
-            Insight to leave out, normally the row asking.
-        limit : int
-            Most ids to return.
-
-        Returns
-        -------
-        list[Id]
-            Ids ordered by `created_at` descending, ties broken by
-            ascending id. A row is named once however many of its
-            stored names match. Case and surrounding space are folded,
-            within the limit in the notes below.
-
-        Notes
-        -----
-        - Both backends must answer the same ids in the same order for
-          the same content: `create_entity_edges` writes an edge to
-          every id returned, in both directions, so this ordering is
-          baked into the stored graph and a divergence is permanent.
-        - The tiebreak carries the ordering rather than decorating it.
-          Both insert paths stamp `created_at` from one Python clock
-          read cut to the whole second, so rows written in the same
-          second tie and their ids decide -- which is why the stamp
-          resolution has to match across backends as much as the
-          ordering clause does.
-        - The name fold is the one part that does NOT match. SQLite's
-          `lower()` is ASCII-only and Postgres's is Unicode-aware, so
-          a name whose case differs outside ASCII matches on Postgres
-          and not on SQLite. Folding one way on both sides needs a
-          normalized key decided in Python on the write path, which
-          this contract does not yet require.
-        """
-        ...
-
-    def count_with_entity(
-            self, entity: str, *, exclude_id: Id) -> int:
-        """Count active insights carrying the entity, excluding one row."""
-        ...
-
-    def all(self) -> list[Edge]:
-        """Return every edge in the graph."""
-        ...
-
-    def adjacency(self) -> dict[Id, list[tuple[Id, str, float]]]:
-        """Whole graph as `source_id -> [(target, type, weight)]`.
-
-        One round-trip, projecting only the columns traversal reads.
-        Prefer this over `all()` on any read path that does not need
-        `Edge.metadata` or `Edge.created_at`: building the dataclass
-        and parsing the JSON metadata is the dominant cost of `all()`
-        and traversal discards both.
-        """
-        ...
-
-    def delete_by_node(self, node_id: Id) -> None:
-        """Remove all edges referencing a node."""
-        ...
-
-    def delete_auto_for_node(
-            self, node_id: Id, edge_type: str) -> None:
-        """Delete auto-generated edges for a node, keeping manual."""
-        ...
-
-    def delete_auto_by_type(self, edge_type: str) -> None:
-        """Delete auto-generated edges globally for reindex."""
-        ...
-
-    def count_auto_by_type(self, edge_type: str) -> int:
-        """Count auto-generated edges by type using reindex filters."""
-        ...
-
-    def delete_low_weight_temporal_proximity(
-            self, *, min_weight: float) -> None:
-        """Delete temporal-proximity edges below the weight floor."""
-        ...
-
-    def count_low_weight_temporal_proximity(
-            self, *, min_weight: float) -> int:
-        """Count temporal-proximity edges below the weight floor."""
-        ...
-
-    def get_weight(
-            self, source_id: Id, target_id: Id,
-            edge_type: str) -> float | None:
-        """Return one directed edge's weight, or None when absent."""
-        ...
-
-    def count_dangling_by_type(self) -> dict[str, int]:
-        """{edge_type: count} for edges referencing missing/deleted nodes.
-        """
-        ...
-
-    def degree_distribution(self) -> dict[Id, int]:
-        """{insight_id: total_degree} for all active insights."""
-        ...
-
-    def get_neighborhood(
-            self, seed_id: Id, *, depth: int,
-            edge_filter: str = '') -> list[tuple[Id, int, str]]:
-        """Bounded BFS neighborhood from one seed.
-
-        Returns `(neighbor_id, hop, via_edge_type)` triples ordered by
-        traversal arrival. Depth bound is enforced inside the verb so
-        Postgres can emit just the bounded subgraph via a recursive CTE
-        instead of streaming the full edge set to the client.
-
-        `edge_filter`: when non-empty, only edges of that `edge_type`
-        are followed.
-        """
         ...
 
 
@@ -688,9 +473,6 @@ class RecallSession(Protocol):
         - Computed where the vectors already live -- one matmul on
           SQLite, one `embedding <=>` query on Postgres -- so the
           pipeline never ships N x dim floats to compute N scalars.
-        - Whole-store by design: `beam_search_from_anchor` reads it
-          DURING traversal, so it cannot be narrowed to the visited
-          set without changing traversal scoring.
         """
         ...
 
@@ -746,13 +528,12 @@ class Backend(Protocol):
 
     Yielded by `factory.open_backend(store, data_dir)`. Owns its own
     connection (SQLite file / Postgres connection from a pool). Sub-stores
-    (`nodes`/`edges`/`meta`/`oplog`) are bound to the same connection
+    (`nodes`/`meta`/`oplog`) are bound to the same connection
     so they share the active transaction and read-after-write
     visibility.
     """
 
     nodes: NodeStore
-    edges: EdgeStore
     meta: MetaStore
     oplog: Oplog
 
@@ -769,21 +550,6 @@ class Backend(Protocol):
         Nesting reuses the outer transaction (SAVEPOINT or no-op);
         nested rollback is unsupported. Required because `apply_all`
         runs inside a caller-opened transaction.
-        """
-        ...
-
-    def write_lock(
-            self, name: str) -> AbstractContextManager[None]:
-        """Acquire a named exclusive write lock for the duration of
-        the block.
-
-        SQLite: no-op (`BEGIN IMMEDIATE` already serializes
-        per-process). Postgres: `pg_advisory_xact_lock` (transaction-
-        scoped, reentrant within the same session). Used by
-        `reindex_auto_edges` to
-        serialize read-then-write paths against concurrent writers.
-        Wrong primitive for sweeps that span minutes-to-hours; see
-        `reembed_lock` for that case.
         """
         ...
 
@@ -812,9 +578,9 @@ class Backend(Protocol):
         pool, with TCP keepalives so a hung sweep is detected by the
         kernel. Yields True when acquired, False otherwise (caller
         prints "another <name> in progress" and exits non-zero).
-        Used by `embed reembed` and `graph rebuild`; do NOT use
-        `write_lock` for these because `pg_advisory_xact_lock` would
-        pin a transaction for the entire sweep duration and block
+        Used by `embed reembed` and `graph rebuild`. Session-scoped
+        rather than `pg_advisory_xact_lock`, which would pin a
+        transaction for the entire sweep duration and block
         autovacuum.
         """
         ...

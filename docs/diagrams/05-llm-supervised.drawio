@@ -17,26 +17,20 @@
         <mxCell id="b1" value="&lt;b&gt;Storage&lt;/b&gt;&lt;br&gt;SQLite WAL, ACID, single file" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="55" y="140" width="330" height="38" as="geometry" />
         </mxCell>
-        <mxCell id="b2" value="&lt;b&gt;Graph Indexing&lt;/b&gt;&lt;br&gt;temporal backbone, entity co-occurrence, auto-edges" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="b3" value="&lt;b&gt;Keyword Search&lt;/b&gt;&lt;br&gt;tokenization, stopwords, FTS5 counts, scoring" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="55" y="190" width="330" height="38" as="geometry" />
         </mxCell>
-        <mxCell id="b3" value="&lt;b&gt;Keyword Search&lt;/b&gt;&lt;br&gt;tokenization, stopwords, FTS5 counts, scoring" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="b4" value="&lt;b&gt;RRF Anchor Selection&lt;/b&gt;&lt;br&gt;keyword + vector + recency fusion (K=60)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="55" y="240" width="330" height="38" as="geometry" />
         </mxCell>
-        <mxCell id="b4" value="&lt;b&gt;RRF Anchor Selection&lt;/b&gt;&lt;br&gt;keyword + vector + recency fusion (K=60)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="b6" value="&lt;b&gt;Vector Computation&lt;/b&gt;&lt;br&gt;cosine similarity, embedding serialization" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="55" y="290" width="330" height="38" as="geometry" />
         </mxCell>
-        <mxCell id="b5" value="&lt;b&gt;Beam Search Traversal&lt;/b&gt;&lt;br&gt;fixed-weight graph exploration, multi-signal reranking" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="b7" value="&lt;b&gt;3-Signal Reranking&lt;/b&gt;&lt;br&gt;keyword + similarity + anchor, fixed weights" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="55" y="340" width="330" height="38" as="geometry" />
         </mxCell>
-        <mxCell id="b6" value="&lt;b&gt;Vector Computation&lt;/b&gt;&lt;br&gt;cosine similarity, embedding serialization" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="55" y="390" width="330" height="38" as="geometry" />
-        </mxCell>
-        <mxCell id="b7" value="&lt;b&gt;3-Signal Reranking&lt;/b&gt;&lt;br&gt;keyword + similarity + graph, fixed weights" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="55" y="440" width="330" height="38" as="geometry" />
-        </mxCell>
         <mxCell id="b8" value="&lt;b&gt;Lifecycle&lt;/b&gt;&lt;br&gt;operator-only deletion, content review" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="55" y="490" width="330" height="38" as="geometry" />
+          <mxGeometry x="55" y="390" width="330" height="38" as="geometry" />
         </mxCell>
 
         <mxCell id="haiku_box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;fontSize=11;" vertex="1" parent="1">
@@ -94,7 +88,7 @@
           <mxGeometry x="-0.1" relative="1" as="geometry"><mxPoint as="offset" /></mxGeometry>
         </mxCell>
 
-        <mxCell id="arrow_host_recall" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#82b366;strokeWidth=2;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="l4" target="b5">
+        <mxCell id="arrow_host_recall" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#82b366;strokeWidth=2;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="l4" target="b4">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
         <mxCell id="arrow_host_recall_label" value="&lt;font style=&quot;font-size:9px&quot;&gt;memman recall&lt;/font&gt;" style="edgeLabel;html=1;align=center;verticalAlign=middle;" vertex="1" connectable="0" parent="arrow_host_recall">

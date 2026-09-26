@@ -1,91 +1,12 @@
 """Storage-layer contracts the live recall path depends on.
 
 `intent_aware_recall` reads the store on every request: the candidate
-universe is `nodes.get_all_active()` and the graph is one
-`edges.adjacency()` read. These pin the two verbs that replaced the
-removed recall snapshot.
+universe is `nodes.get_all_active()`.
 """
 
 import pytest
-from memman.search.recall import _bidirectional_adjacency, intent_aware_recall
+from memman.search.recall import intent_aware_recall
 from tests.conftest import make_insight
-
-
-def _seed_graph(backend):
-    """Insert four insights and five edges of mixed type and direction."""
-    from memman.store.model import Edge
-    ids = [f'adj-{c}' for c in 'abcd']
-    for i, iid in enumerate(ids):
-        backend.nodes.insert(
-            make_insight(id=iid, content=f'adjacency body {i}'))
-    specs = [
-        (ids[0], ids[1], 'entity', 0.8),
-        (ids[1], ids[2], 'semantic', 0.6),
-        (ids[2], ids[3], 'semantic', 1.0),
-        (ids[0], ids[3], 'temporal', 0.3),
-        (ids[3], ids[0], 'entity', 0.5),
-        ]
-    for source_id, target_id, edge_type, weight in specs:
-        e = Edge()
-        e.source_id = source_id
-        e.target_id = target_id
-        e.edge_type = edge_type
-        e.weight = weight
-        backend.edges.upsert(e)
-    return ids
-
-
-def test_adjacency_matches_edges_all(backend):
-    """Verify the projection read reproduces `all()`'s graph exactly.
-
-    Mutation: losing `edge_type` or `weight` in the projection, or
-        keying the map on target instead of source - either silently
-        changes which nodes traversal can reach.
-    Oracle: the same adjacency rebuilt independently from
-        `edges.all()`, whose full `Edge` dataclasses carry the columns
-        the projection omits.
-
-    Notes
-    -----
-    - The mirror is asserted separately, in
-      `test_bidirectional_mirror_adds_the_reverse_hop`. Passing both
-      sides of the comparison here through `_bidirectional_adjacency`
-      would make any mutation of the mirror cancel out.
-    """
-    ids = _seed_graph(backend)
-
-    from_projection = backend.edges.adjacency()
-    from_dataclass: dict[str, list[tuple[str, str, float]]] = {}
-    for e in backend.edges.all():
-        from_dataclass.setdefault(e.source_id, []).append(
-            (e.target_id, e.edge_type, e.weight))
-
-    def normalize(adjacency):
-        return {k: sorted(v) for k, v in adjacency.items()}
-
-    assert normalize(from_projection) == normalize(from_dataclass)
-    # Anti-vacuity: an empty projection would satisfy the equality.
-    assert set(from_projection) == {ids[0], ids[1], ids[2], ids[3]}
-
-
-def test_bidirectional_mirror_adds_the_reverse_hop():
-    """Verify the mirror makes a one-way edge reachable from its target.
-
-    Beam search walks edges as undirected, but `EdgeStore.adjacency()`
-    keys every row by its source alone, so without the mirror the
-    traversal can never reach a source from its target.
-
-    Mutation: returning the directed map unchanged, or mirroring only
-        some edge types.
-    Oracle: a hand-built one-way map; the reverse entry is asserted
-        by value, not against another call of the same helper.
-    """
-    directed = {'head': [('tail', 'semantic', 0.9)]}
-
-    mirrored = _bidirectional_adjacency(directed)
-
-    assert mirrored['head'] == [('tail', 'semantic', 0.9)]
-    assert mirrored['tail'] == [('head', 'semantic', 0.9)]
 
 
 def test_similarities_omits_nonpositive_and_unembedded(backend):
@@ -161,66 +82,19 @@ def test_ragged_embedding_widths_do_not_break_recall(tmp_backend):
     assert {a for a, _s in anchors} == {'wide-0', 'wide-1', 'wide-2'}
 
 
-def test_dangling_edge_does_not_enter_the_candidate_pool(tmp_backend):
-    """Verify an edge to a soft-deleted row scores nothing and costs nothing.
-
-    A soft-delete leaves the row's edges in place, so the graph can
-    point at an id `get_all_active()` does not return. Such a
-    neighbour must not take a scored slot, a visit-budget slot, or a
-    beam push, and must not inflate `meta.traversed`.
-
-    Mutation: scoring an unresolvable neighbour anyway - the
-        pre-change shape, where it entered `score_map`, consumed a
-        `max_visited` slot and was pushed onto the beam.
-    Oracle: `meta.traversed` and the returned id set, against a store
-        whose only live rows are the two that were never deleted.
-    """
-    from memman.store.model import Edge
-
-    for n in range(3):
-        tmp_backend.nodes.insert(
-            make_insight(id=f'dang-{n}',
-                         content=f'dangling probe body {n} kombu'))
-    for target in ('dang-1', 'dang-2'):
-        e = Edge()
-        e.source_id, e.target_id = 'dang-0', target
-        e.edge_type, e.weight = 'entity', 0.9
-        tmp_backend.edges.upsert(e)
-
-    # Soft-delete WITHOUT touching edges, exactly as an out-of-band
-    # write or a future soft-delete path would leave the graph.
-    tmp_backend._db._exec(
-        "update insights set deleted_at = '2026-01-01T00:00:00+00:00'"
-        ' where id = ?', ('dang-2',))
-
-    resp = intent_aware_recall(
-        tmp_backend, 'dangling probe kombu', None, 10)
-
-    returned = {r['insight'].id for r in resp['results']}
-    assert returned == {'dang-0', 'dang-1'}
-    assert resp['meta']['traversed'] == 2
-
-
 def test_superseded_row_is_not_returned_by_recall(backend):
     """Verify a superseded row leaves the candidate universe entirely.
 
     Mutation: omitting `superseded_by is null` from `get_all_active`,
         so the predecessor re-enters the pool and ranks beside its
         successor as an equal.
-    Oracle: the returned id set and `meta.traversed` against the
-        three current rows, on both backends.
+    Oracle: the returned id set against the three current rows, on
+        both backends.
     """
-    from memman.store.model import Edge
-
     for n in range(4):
         backend.nodes.insert(
             make_insight(id=f'sup-{n}',
                          content=f'superseded probe body {n} kombu'))
-    for target in ('sup-1', 'sup-2'):
-        e = Edge()
-        e.source_id, e.target_id = 'sup-0', target
-        e.edge_type, e.weight = 'entity', 0.9
-        backend.edges.upsert(e)
     assert backend.nodes.supersede('sup-2', 'sup-3') is True
 
     resp = intent_aware_recall(
@@ -228,7 +102,6 @@ def test_superseded_row_is_not_returned_by_recall(backend):
 
     returned = {r['insight'].id for r in resp['results']}
     assert returned == {'sup-0', 'sup-1', 'sup-3'}
-    assert resp['meta']['traversed'] == 3
 
 
 def test_minority_width_query_still_scores_its_own_rows(tmp_backend):
@@ -320,7 +193,7 @@ def test_similarities_matches_per_pair_cosine(backend, backend_kind):
       so single-precision epsilon is the floor there and demanding
       1e-12 of it would assert something the storage cannot
       represent.
-    - `graph_score` is min-max normalized over the query's own
+    - `anchor_score` is min-max normalized over the query's own
       candidate pool, so a last-bit change in one similarity rescales
       every row. Ordering churn far larger than this tolerance is
       expected from any numeric change on this path, and is

@@ -60,7 +60,7 @@ def test_a_contradicting_write_is_added_and_retires_nothing(
 
     res = run_remember(
         tmp_backend, parent, content,
-        ec=bound_embedder(tmp_backend), store_name='test')
+        ec=bound_embedder(tmp_backend))
 
     fact = res['facts'][0]
     assert [f['action'] for f in res['facts']] == ['add']
@@ -88,7 +88,7 @@ def test_an_identical_write_adds_a_second_row(tmp_backend):
 
     res = run_remember(
         tmp_backend, parent, content,
-        ec=bound_embedder(tmp_backend), store_name='test')
+        ec=bound_embedder(tmp_backend))
 
     assert [f['action'] for f in res['facts']] == ['add']
     current = [

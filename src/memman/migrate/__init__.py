@@ -5,7 +5,7 @@ gather/apply work lives in per-backend `Migrator` subclasses
 (`memman.store.sqlite.SqliteMigrator`,
 `memman.store.postgres.PostgresMigrator`); this module owns the
 backend-agnostic types they exchange (`MigrationPayload`,
-`MigrateInsight`, `MigrateEdge`, `MigrateOpLog`,
+`MigrateInsight`, `MigrateOpLog`,
 `PendingReembed`, `SwapState`, `Artifact`) plus orchestration
 helpers used by the CLI runner (`held_drain_lock`,
 `inspect_target_schemas`, `preflight`,
@@ -31,7 +31,7 @@ from typing import Any, ClassVar, Literal
 
 from memman.embed.fingerprint import Fingerprint
 
-PAYLOAD_VERSION = 7
+PAYLOAD_VERSION = 8
 
 EmbeddingDtype = Literal[
     'float64', 'float32', 'float16', 'int8', 'binary']
@@ -99,22 +99,9 @@ class MigrateInsight:
     deleted_at: datetime | None
     prompt_version: str | None
     embedding_model: str | None
-    session_id: str | None
     queue_uuid: str | None
     superseded_by: str | None
     author: str | None = None
-
-
-@dataclass
-class MigrateEdge:
-    """Full edge row for migration round-trips."""
-
-    source_id: str
-    target_id: str
-    edge_type: str
-    weight: float
-    metadata: dict[str, Any]
-    created_at: datetime
 
 
 @dataclass
@@ -152,7 +139,6 @@ class MigrationPayload:
     embedding_dim: int
     embedding_dtype: EmbeddingDtype
     insights: list[MigrateInsight]
-    edges: list[MigrateEdge]
     oplog: list[MigrateOpLog]
     embedding_pending: list[PendingReembed]
     swap_state: SwapState | None
@@ -321,7 +307,7 @@ def inspect_target_schemas(
     """Classify each `store_<name>` schema as ABSENT / EMPTY / POPULATED.
 
     Single round-trip query joining `pg_namespace` with
-    `information_schema.tables` filtered to the four memman tables.
+    `information_schema.tables` filtered to the three memman tables.
     A schema absent from the result is ABSENT; present with no
     memman tables is EMPTY (likely an aborted prior run); present
     with one or more tables is POPULATED. Raises `MigrateError` on
@@ -337,7 +323,7 @@ select n.nspname, count(t.table_name)
 from pg_namespace n
 left join information_schema.tables t
   on t.table_schema = n.nspname
-  and t.table_name in ('insights', 'edges', 'oplog', 'meta')
+  and t.table_name in ('insights', 'oplog', 'meta')
 where n.nspname = any(%s)
 group by n.nspname
 """
@@ -377,19 +363,17 @@ def _verify_destination_counts(
     sql = (
         f'select '
         f'  (select count(*) from {schema}.insights),'
-        f'  (select count(*) from {schema}.edges),'
         f'  (select count(*) from {schema}.oplog),'
         f'  (select count(*) from {schema}.meta)')
     with pg_conn.cursor() as cur:
         cur.execute(sql)
-        ins, edges, oplog, meta = cur.fetchone()
+        ins, oplog, meta = cur.fetchone()
     actual = {
-        'insights': int(ins), 'edges': int(edges),
-        'oplog': int(oplog), 'meta': int(meta),
+        'insights': int(ins), 'oplog': int(oplog), 'meta': int(meta),
         }
     diffs = [
         (table, expected[table], actual[table])
-        for table in ('insights', 'edges', 'oplog', 'meta')
+        for table in ('insights', 'oplog', 'meta')
         if expected[table] != actual[table]
         ]
     if diffs:

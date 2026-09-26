@@ -151,27 +151,6 @@ class TestRemember:
         raw = json.loads(result.output)
         assert len(raw['quality_warnings']) == 1
 
-    def test_remember_creates_semantic_edges(self, runner):
-        """Worker creates semantic edges for the new insight."""
-        from memman.store.db import open_read_only, store_dir
-
-        invoke(runner, [
-            'remember', 'Go uses SQLite for persistent storage'])
-        invoke(runner, [
-            'remember', 'SQLite WAL mode improves write throughput'])
-
-        _, data_dir = runner
-        db = open_read_only(store_dir(data_dir, 'default'))
-        try:
-            rows = db._query(
-                "SELECT edge_type FROM edges WHERE edge_type = 'semantic'"
-                ).fetchall()
-        finally:
-            db.close()
-        # Either zero or many semantic edges, depending on similarity;
-        # the table exists and the worker reaches the edge-creation step.
-        assert isinstance(rows, list)
-
 
 class TestRecall:
     """`memman recall` smart and basic modes."""
@@ -423,12 +402,10 @@ class TestRecall:
             assert shown['summary'] != shown['content']
 
     def test_recall_detail_oplog_records_the_request(self, runner):
-        """The recall-detail row carries the REQUESTED limit and session.
+        """The recall-detail row carries the REQUESTED limit.
 
         Mutation: recording `len(hits)` in place of the requested
-            `limit` - which cannot tell a thin page from a small ask -
-            or dropping the session key, either of which leaves a
-            return unattributable to the session that asked.
+            `limit`, which cannot tell a thin page from a small ask.
         Oracle: a recall issued with a limit deliberately larger than
             the store can fill, so the requested value and the
             returned count differ.
@@ -436,8 +413,7 @@ class TestRecall:
         invoke(runner, [
             'remember', 'Envoy routes gRPC traffic by header match'])
         invoke(runner, [
-            'recall', 'Envoy gRPC header routing',
-            '--limit', '17', '--session', 'sess-abc'])
+            'recall', 'Envoy gRPC header routing', '--limit', '17'])
 
         entries = json.loads(
             invoke(runner, ['log', 'list', '--limit', '50']).output)['entries']
@@ -447,36 +423,11 @@ class TestRecall:
         assert details, 'expected a recall-detail row'
         row = details[0]
         assert row['limit'] == 17
-        assert row['session'] == 'sess-abc'
         assert 'q' in row
         assert len(row['q']) <= 80
         assert len(row['hits']) < row['limit'], (
             'fixture must under-fill the page so the two cannot be '
             'confused')
-
-    def test_recall_session_falls_back_to_the_environment(
-            self, runner, monkeypatch):
-        """An unflagged recall takes its session from the environment.
-
-        Mutation: dropping the `envvar` list from the `--session`
-            option, which leaves the oplog session blank on every
-            recall an agent issues without the flag - the normal case,
-            since the shipped hooks never pass it explicitly.
-        Oracle: the oplog row from a recall run with no `--session`
-            argument at all, against the exported id.
-        """
-        monkeypatch.setenv('MEMMAN_SESSION_ID', 'env-session-9')
-        invoke(runner, [
-            'remember', 'Redis evicts keys by LRU under maxmemory'])
-        invoke(runner, ['recall', 'Redis LRU maxmemory eviction'])
-
-        entries = json.loads(
-            invoke(runner, ['log', 'list', '--limit', '50']).output)['entries']
-        details = [
-            json.loads(e['detail'])
-            for e in entries if e['operation'] == 'recall-detail']
-        assert details, 'expected a recall-detail row'
-        assert details[0]['session'] == 'env-session-9'
 
     def test_recall_source_filter_smart(self, runner):
         """Smart recall respects --source filter.
@@ -679,16 +630,14 @@ class TestStore:
             'MEMMAN_BACKEND_': 'sqlite',
             config._pg_dsn_prefix(): 'postgresql://u:p@127.0.0.1:1/db',
             'MEMMAN_RERANK_ENABLED_': 'false',
-            'MEMMAN_SURFACE_': 'code',
-            'MEMMAN_AUTO_SEMANTIC_THRESHOLD_': '0.5',
             }
         doomed_keys = {
-            f'{prefix}doomed' for prefix, _, _ in config.PER_STORE_KEY_SPECS}
+            f'{prefix}doomed' for prefix, _ in config.PER_STORE_KEY_SPECS}
         keeper_keys = {
-            f'{prefix}keeper' for prefix, _, _ in config.PER_STORE_KEY_SPECS}
+            f'{prefix}keeper' for prefix, _ in config.PER_STORE_KEY_SPECS}
         seeded = {
             f'{prefix}{store}': value_for[prefix]
-            for prefix, _, _ in config.PER_STORE_KEY_SPECS
+            for prefix, _ in config.PER_STORE_KEY_SPECS
             for store in ('doomed', 'keeper')
             }
         _write_env_keys(
@@ -815,7 +764,7 @@ class TestInsightsReview:
 
 
 class TestReplace:
-    """`memman replace` happy paths, metadata, oplog, edges."""
+    """`memman replace` happy paths, metadata, oplog."""
 
     def test_replace_basic(self, runner):
         """Replace an insight, verify old soft-deleted, new exists."""
@@ -963,162 +912,6 @@ class TestReplace:
         assert data['action'] != 'rejected'
         assert len(data['quality_warnings']) >= 2
 
-    def test_replace_creates_background_edges(self, runner):
-        """Replace passes store context so background edges are created."""
-        r1 = invoke(runner, [
-            'remember', 'Celery task queue configured for async job processing'])
-        orig_id = parse_remember(r1, runner)['id']
-
-        r2 = invoke(runner, [
-            'replace', orig_id,
-            'Celery with Redis broker for distributed task processing'])
-        assert r2.exit_code == 0
-        new_id = parse_remember(r2, runner)['id']
-
-        result = invoke(runner, ['graph', 'related', new_id])
-        assert result.exit_code == 0
-
-
-class TestLink:
-    """`memman graph link` direct edge creation."""
-
-    def test_link_creates_both_directions(self, runner):
-        """Link creates edges in both directions atomically.
-
-        Mutation: writing only the forward row, so a traversal from
-            the target never reaches the source.
-        Oracle: both rows read straight out of the edges table,
-            matched on `created_by = 'claude'`. The enrichment pass
-            mints an entity and a temporal edge between any two
-            insights, so a `graph related` assertion would pass on an
-            auto edge even if `graph link` wrote nothing. The anchors
-            are textually distant, so no auto semantic edge competes.
-        """
-        from memman.store.db import open_read_only, store_dir
-
-        r1 = invoke(runner, [
-            'remember', 'chose SQLite because embedded serverless'])
-        id1 = parse_remember(r1, runner)['id']
-        r2 = invoke(runner, [
-            'remember', 'preferred color is emerald green'])
-        id2 = parse_remember(r2, runner)['id']
-
-        result = invoke(
-            runner, ['graph', 'link', id1, id2, '--type', 'semantic'])
-        assert result.exit_code == 0
-        data = json.loads(result.output)
-        assert data['status'] == 'linked'
-
-        _, data_dir = runner
-        db = open_read_only(store_dir(data_dir, 'default'))
-        try:
-            manual = db._query(
-                "select source_id, target_id from edges"
-                " where json_extract(metadata, '$.created_by') = 'claude'"
-                " and edge_type = 'semantic'").fetchall()
-        finally:
-            db.close()
-        assert (id1, id2) in {(r[0], r[1]) for r in manual}
-        assert (id2, id1) in {(r[0], r[1]) for r in manual}
-
-    def test_link_respects_user_created_by(self, runner):
-        """User-provided --meta['created_by'] is preserved, not clobbered to 'claude'.
-        """
-        import sqlite3
-        r1 = invoke(runner, [
-            'remember', 'Nginx is configured as the reverse proxy'])
-        id1 = parse_remember(r1, runner)['id']
-        r2 = invoke(runner, [
-            'remember', "Let's Encrypt auto-renews TLS certificates"])
-        id2 = parse_remember(r2, runner)['id']
-
-        result = invoke(runner, ['graph', 'link', id1, id2, '--type', 'semantic',
-                                 '--meta', '{"created_by": "research-agent"}'])
-        assert result.exit_code == 0
-
-        _, data_dir = runner
-        store_db = pathlib.Path(data_dir) / 'data' / 'default' / 'memman.db'
-        conn = sqlite3.connect(str(store_db))
-        try:
-            rows = conn.execute(
-                'SELECT metadata FROM edges'
-                ' WHERE source_id = ? AND target_id = ?'
-                ' AND edge_type = ?',
-                (id1, id2, 'semantic')).fetchall()
-        finally:
-            conn.close()
-        assert rows, 'expected one semantic edge source->target'
-        meta = json.loads(rows[0][0])
-        assert meta['created_by'] == 'research-agent'
-
-    def test_link_meta_non_dict_fails(self, runner):
-        """Non-dict JSON metadata is rejected."""
-        r1 = invoke(runner, [
-            'remember', 'Elasticsearch configured for full-text search'])
-        id1 = parse_remember(r1, runner)['id']
-        r2 = invoke(runner, [
-            'remember', 'Kibana dashboards visualize Elasticsearch data'])
-        id2 = parse_remember(r2, runner)['id']
-
-        result = invoke(runner, ['graph', 'link', id1, id2, '--type', 'semantic',
-                                 '--meta', '[1, 2]'])
-        assert result.exit_code != 0
-        assert 'object' in result.output.lower() or 'dict' in result.output.lower()
-
-    def test_link_self_edge_rejected(self, runner):
-        """Linking an insight to itself is rejected."""
-        r1 = invoke(runner, [
-            'remember', 'GraphQL schema stitching combines microservice APIs'])
-        id1 = parse_remember(r1, runner)['id']
-
-        result = invoke(runner, ['graph', 'link', id1, id1, '--type', 'semantic'])
-        assert result.exit_code != 0
-        assert 'itself' in result.output.lower()
-
-    def test_link_warns_when_lower_weight(self, runner):
-        """Link output includes warning when requested weight < existing."""
-        r1 = invoke(runner, [
-            'remember', 'Consul service discovery enables dynamic routing'])
-        id1 = parse_remember(r1, runner)['id']
-        r2 = invoke(runner, [
-            'remember', 'Vault secrets management integrates with Consul'])
-        id2 = parse_remember(r2, runner)['id']
-
-        invoke(runner, ['graph', 'link', id1, id2, '--weight', '0.9'])
-        result = invoke(runner, ['graph', 'link', id1, id2, '--weight', '0.3'])
-        assert result.exit_code == 0
-        data = json.loads(result.output)
-        assert 'warning' in data
-        assert '0.9' in data['warning']
-
-    def test_link_returns_actual_db_weight(self, runner):
-        """Link output weight reflects the DB value, not the user-supplied value.
-
-        Mutation: echoing the requested weight back instead of reading
-            the stored row, which would report 0.3 after the upsert
-            kept 0.9.
-        Oracle: the second call's own output, against the weight the
-            first call stored.
-        """
-        r1 = invoke(runner, [
-            'remember', 'chose SQLite because embedded serverless'])
-        id1 = parse_remember(r1, runner)['id']
-        r2 = invoke(runner, [
-            'remember', 'preferred color is emerald green'])
-        id2 = parse_remember(r2, runner)['id']
-
-        invoke(runner, [
-            'graph', 'link', id1, id2, '--type', 'semantic', '--weight', '0.9'])
-        result = invoke(runner, [
-            'graph', 'link', id1, id2, '--type', 'semantic', '--weight', '0.3'])
-        assert result.exit_code == 0
-        data = json.loads(result.output)
-        assert data['weight'] >= 0.9, (
-            f'Link output shows {data["weight"]} but should be >= 0.9 '
-            f'(MAX preserves higher weight over requested 0.3)')
-        assert data['weight'] != 0.3, (
-            'Link output should not show 0.3 - MAX should preserve higher')
-
 
 class TestSingleTierEnrichment:
     """Remember runs enrichment inline on the drain worker."""
@@ -1208,7 +1001,7 @@ class TestSingleTierEnrichment:
 
 @pytest.mark.scheduler_stopped
 class TestGraphRebuild:
-    """Graph rebuild command tests - dry-run, live, edge preservation."""
+    """Graph rebuild command tests - dry-run, live, entity list."""
 
     def test_rebuild_dry_run_reports_count(self, tmp_path, monkeypatch):
         """Dry run reports total insights without modifying DB."""
@@ -1326,49 +1119,6 @@ class TestGraphRebuild:
         assert pending == 0, 'all insights should be linked after rebuild'
         db.close()
 
-    def test_rebuild_preserves_manual_edges(
-            self, tmp_path, monkeypatch):
-        """Manual claude edges survive rebuild."""
-        monkeypatch.delenv('MEMMAN_STORE', raising=False)
-        data_dir = str(tmp_path)
-        store_path = tmp_path / 'data' / 'default'
-        from memman.store.db import open_db
-        from memman.store.edge import get_all_edges, insert_edge
-        from memman.store.node import insert_insight
-        from tests.conftest import make_edge, make_insight
-        db = open_db(str(store_path))
-        insert_insight(db, make_insight(
-            id='me-1', content='Python web framework',
-            entities=['Python']))
-        insert_insight(db, make_insight(
-            id='me-2', content='Python data pipeline',
-            entities=['Python']))
-        db._conn.execute(
-            "UPDATE insights"
-            " SET linked_at = '2024-01-01T00:00:00+00:00',"
-            "     enriched_at = '2024-01-01T00:00:00+00:00'")
-        manual_edge = make_edge(
-            source_id='me-1', target_id='me-2',
-            edge_type='semantic',
-            metadata={'created_by': 'claude', 'cosine': '0.95'})
-        insert_edge(db, manual_edge)
-        db.close()
-
-        runner = CliRunner()
-        result = runner.invoke(cli, [
-            '--data-dir', data_dir, 'graph', 'rebuild'])
-        assert result.exit_code == 0, result.output
-
-        db = open_db(str(store_path))
-        edges = get_all_edges(db)
-        manual = [e for e in edges
-                  if e.edge_type == 'semantic'
-                  and e.metadata.get('created_by') == 'claude']
-        assert len(manual) == 1, (
-            'rebuild deleted manual claude edge - '
-            'should preserve created_by=claude')
-        db.close()
-
     def test_rebuild_keeps_the_stored_entity_list(
             self, tmp_path, monkeypatch):
         """Rebuild keeps the stored entity list, whatever the LLM returns.
@@ -1427,62 +1177,6 @@ class TestGraphRebuild:
         assert stored == ['Database: Postgres', 'Library: SQLite']
 
 
-@pytest.mark.scheduler_stopped
-class TestGraphRebuildAutoEdges:
-    """A rebuild re-derives the auto edges its own loop disturbed."""
-
-    def test_rebuild_leaves_the_clean_slate_entity_edge_set(
-            self, tmp_path, monkeypatch):
-        """Rebuild's edge set already equals a clean re-derivation.
-
-        Mutation: omitting the end-of-loop re-derive, so a later row's
-            both-direction `delete_auto_for_node` leaves an earlier
-            already-stamped row short of links it earned - eight rows
-            share one entity against `MAX_ENTITY_LINKS = 5`, so the
-            per-row order decides who keeps what. Here it shows as
-            edges an unfinished pass left behind: `Postgres` sits in
-            every row, so its IDF weight is zero and a clean pass
-            writes no edge for it at all.
-        Oracle: a differential re-implementation - `reindex_auto_edges`
-            deletes every auto edge in one pre-pass and rebuilds from
-            the stored entity list, so its output is the set a
-            finished rebuild owes.
-        """
-        monkeypatch.delenv('MEMMAN_STORE', raising=False)
-        data_dir = str(tmp_path)
-        store_path = tmp_path / 'data' / 'default'
-        from memman.graph.engine import reindex_auto_edges
-        from memman.store.db import open_db
-        from memman.store.edge import get_all_edges
-        from memman.store.factory import open_backend
-
-        db = open_db(str(store_path))
-        for n in range(8):
-            group = 'Redis' if n < 4 else 'Kafka'
-            insert_insight(db, make_insight(
-                id=f'ae-{n}',
-                content=f'Postgres carries the {group} ledger, note {n}.',
-                entities=['Postgres', group]))
-        db.close()
-
-        result = CliRunner().invoke(cli, [
-            '--data-dir', data_dir, 'graph', 'rebuild'])
-        assert result.exit_code == 0, result.output
-
-        def _entity_edges() -> set:
-            db = open_db(str(store_path))
-            edges = {(e.source_id, e.target_id) for e in get_all_edges(db)
-                     if e.edge_type == 'entity'}
-            db.close()
-            return edges
-
-        after_rebuild = _entity_edges()
-        reindex_auto_edges(
-            open_backend('default', data_dir), store_name='default')
-        assert after_rebuild == _entity_edges()
-        assert after_rebuild
-
-
 class TestGraphRebuildIsolation:
     """A corpus rebuild refuses to race the scheduler drain."""
 
@@ -1510,15 +1204,8 @@ class TestGraphRebuildStaleOnly:
     """Tests for `graph rebuild --stale-only` flag."""
 
     def _seed_drift(self, store_path, active_pv):
-        """Insert one drifted row and one current row.
-
-        Also primes the per-store constants_hash so that opening via
-        `_active_backend` does not trigger a wholesale reindex that
-        nulls every row's `linked_at` (which would erase the seed's
-        linked-state and mask the test's intent).
-        """
+        """Insert one drifted row and one current row."""
         from memman.embed.fingerprint import Fingerprint, write_fingerprint
-        from memman.graph.engine import compute_constants_hash
         from memman.store.db import open_db
         from memman.store.node import insert_insight, update_enrichment
         from memman.store.sqlite import SqliteBackend
@@ -1526,7 +1213,6 @@ class TestGraphRebuildStaleOnly:
         OLD_PV = 'old-prompt-version-deadbeef'
         db = open_db(str(store_path))
         backend = SqliteBackend(db)
-        backend.meta.set('constants_hash', compute_constants_hash())
         write_fingerprint(backend, Fingerprint(
             provider='voyage', model='voyage-3-lite', dim=512))
         insert_insight(db, make_insight(
@@ -1592,7 +1278,6 @@ class TestGraphRebuildStaleOnly:
             the single row seeded on the active `prompt_version`.
         """
         from memman.embed.fingerprint import Fingerprint, write_fingerprint
-        from memman.graph.engine import compute_constants_hash
         from memman.pipeline.remember import compute_prompt_version
         from memman.store.sqlite import SqliteBackend
 
@@ -1606,7 +1291,6 @@ class TestGraphRebuildStaleOnly:
         from tests.conftest import make_insight
         db = open_db(str(store_path))
         backend = SqliteBackend(db)
-        backend.meta.set('constants_hash', compute_constants_hash())
         write_fingerprint(backend, Fingerprint(
             provider='voyage', model='voyage-3-lite', dim=512))
         insert_insight(db, make_insight(
@@ -1708,65 +1392,12 @@ def _rows_for_queue_id(data_dir, store, queue_id):
         db.close()
 
 
-def test_update_reconciliation_no_dangling_edges(runner):
-    """A retired row leaves no semantic edge behind it.
-
-    A companion row is seeded first so the target picks up a
-    temporal proximity edge before it is retired; `replace <id>`
-    then supersedes it, and the sweep runs over a store that holds a
-    real edge to lose, not an empty one.
-
-    Mutation: dropping the edge cleanup `_apply_plan` runs on the
-        target after `supersede_insight`'s own cleanup, so a
-        predecessor that picked up an edge before the write keeps it.
-    Oracle: `check_dangling_edges`, an independent sweep that
-        counts edges whose endpoint is soft-deleted or
-        superseded.
-    """
-    _r, data_dir = runner
-    invoke(runner, [
-        'remember', 'Onboarding doc lists the required VPN client'])
-    seeded = invoke(runner, [
-        'remember', 'Delta mode dropdown defaults to incremental_sync'])
-    old_id = parse_remember(seeded, runner)['id']
-
-    store_path = pathlib.Path(data_dir) / 'data' / 'default'
-    from memman.store.db import open_db
-    db = open_db(str(store_path))
-    edges_before = db._query(
-        'select count(*) from edges'
-        ' where source_id = ? or target_id = ?',
-        (old_id, old_id)).fetchone()[0]
-    db.close()
-    assert edges_before > 0, 'seeded row has no edge for the sweep to lose'
-
-    result = invoke(runner, [
-        'replace', old_id,
-        ('Delta mode dropdown defaults'
-         ' to incremental_sync with no empty option')])
-    assert result.exit_code == 0, result.output
-
-    from memman.doctor import check_dangling_edges
-    from memman.store.sqlite import SqliteBackend
-    db = open_db(str(store_path))
-    retired = db._query(
-        'select count(*) from insights'
-        ' where superseded_by is not null').fetchone()[0]
-    doctor_result = check_dangling_edges(SqliteBackend(db))
-    db.close()
-
-    assert retired > 0, 'nothing was retired; the sweep proves nothing'
-    assert doctor_result['status'] == 'pass', (
-        f'dangling edges found: {doctor_result["detail"]}')
-    assert doctor_result['detail']['count'] == 0
-
-
 class TestHotPathPurity:
     """Synchronous write commands must be LLM/embed-free.
 
-    `forget` and `graph link` mutate the store DB synchronously and
-    must make zero LLM or embed calls. Any future change that adds
-    such calls to these paths will fail one of these tests loudly.
+    `forget` mutates the store DB synchronously and must make zero
+    LLM or embed calls. Any future change that adds such calls to
+    this path will fail this test loudly.
     """
 
     @pytest.fixture
@@ -1817,20 +1448,6 @@ class TestHotPathPurity:
 
         r, data_dir = runner_with_seed
         out = r.invoke(cli, ['--data-dir', data_dir, 'forget', 'aud-a'])
-        assert out.exit_code == 0, out.output
-
-    def test_graph_link_makes_no_llm_or_embed_calls(
-            self, runner_with_seed, monkeypatch):
-        """`graph link` is pure SQL."""
-        monkeypatch.setattr(
-            'memman.llm.client.MemmanLLMClient.complete',
-            self._make_failing_complete)
-        monkeypatch.setattr(
-            'memman.embed.voyage.Client.embed', self._make_failing_embed)
-
-        r, data_dir = runner_with_seed
-        out = r.invoke(cli, ['--data-dir', data_dir,
-                             'graph', 'link', 'aud-a', 'aud-b'])
         assert out.exit_code == 0, out.output
 
 

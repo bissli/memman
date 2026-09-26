@@ -29,26 +29,25 @@ insert into insights
     (id, content, category, importance, entities,
      source, created_at, updated_at,
      prompt_version, embedding_model,
-     session_id, queue_uuid, author)
-values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     queue_uuid, author)
+values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
     db._exec(sql, (
         i.id, i.content, i.category, i.importance,
         i.entities_json(), i.source,
         now, now,
         i.prompt_version, i.embedding_model,
-        i.session_id, i.queue_uuid,
-        i.author))
+        i.queue_uuid, i.author))
 
 
-# `session_id`, `queue_uuid`, then `superseded_by`, then `author`,
-# appended last -- must stay byte-identical to postgres.py's
-# _INSIGHT_COLS (see test_insight_column_lists_are_identical_across_backends).
+# `queue_uuid`, then `superseded_by`, then `author`, appended last --
+# must stay byte-identical to postgres.py's _INSIGHT_COLS (see
+# test_insight_column_lists_are_identical_across_backends).
 _INSIGHT_COLUMNS = (
     'id, content, category, importance, entities,'
     ' source, created_at, updated_at, deleted_at,'
     ' summary, linked_at, enriched_at,'
-    ' session_id, queue_uuid, superseded_by,'
+    ' queue_uuid, superseded_by,'
     ' author')
 
 
@@ -115,7 +114,7 @@ limit ?
 
 
 def soft_delete_insight(db: 'DB', id: str) -> bool:
-    """Set deleted_at on a non-deleted insight and remove its edges.
+    """Set deleted_at on a non-deleted insight.
 
     Returns True when the row was soft-deleted, False when it is
     missing or already deleted. A superseded row may still be deleted;
@@ -128,16 +127,12 @@ set deleted_at = ?, updated_at = ?
 where id = ? and deleted_at is null
 """
     cursor = db._exec(sql, (now, now, id))
-    if cursor.rowcount == 0:
-        return False
-    from memman.store.edge import delete_edges_by_node
-    delete_edges_by_node(db, id)
-    return True
+    return cursor.rowcount != 0
 
 
 def supersede_insight(
         db: 'DB', predecessor_id: str, successor_id: str) -> bool:
-    """Point a current insight at its successor and remove its edges.
+    """Point a current insight at its successor.
 
     Parameters
     ----------
@@ -151,17 +146,14 @@ def supersede_insight(
     Returns
     -------
     bool
-        True when the pointer was written and the edges removed. False
-        when the predecessor is missing, deleted, or already
-        superseded; the caller degrades to a plain add.
+        True when the pointer was written. False when the predecessor
+        is missing, deleted, or already superseded; the caller
+        degrades to a plain add.
 
     Notes
     -----
     - The guard makes a row superseded at most once, which is what
       rules out forks in the chain.
-    - Edges go with the row, as in `soft_delete_insight`: a
-      superseded row is out of every active read, and an edge into it
-      would be dangling.
     - `kw_tokens` has no SQLite counterpart; on Postgres the verb
       leaves it alone so `unsupersede` need not recompute it.
     """
@@ -172,11 +164,7 @@ set superseded_by = ?, updated_at = ?
 where id = ? and deleted_at is null and superseded_by is null
 """
     cursor = db._exec(sql, (successor_id, now, predecessor_id))
-    if cursor.rowcount == 0:
-        return False
-    from memman.store.edge import delete_edges_by_node
-    delete_edges_by_node(db, predecessor_id)
-    return True
+    return cursor.rowcount != 0
 
 
 def unsupersede_insight(
@@ -238,15 +226,14 @@ def unterminated_chains(pointers: dict[str, str]) -> list[str]:
 
 
 def supersession_integrity(db: 'DB') -> dict[str, list[str]]:
-    """Return the four populations a well-formed pointer set leaves empty.
+    """Return the three populations a well-formed pointer set leaves empty.
 
     Returns
     -------
     dict[str, list[str]]
         `dangling`: rows whose pointer names an id absent from the
         table (a forgotten target is NOT dangling).
-        `superseded_with_edges`: superseded, non-deleted rows that
-        still have an edge. `self_pointer`: rows pointing at themselves.
+        `self_pointer`: rows pointing at themselves.
         `unterminated`: rows whose chain never reaches a row without a
         pointer (a cycle), which no other population sees and which
         removes every member from the active view. A successor with two
@@ -260,13 +247,6 @@ left join insights s on s.id = p.superseded_by
 where p.superseded_by is not null and s.id is null
 order by p.id
 """).fetchall()
-    with_edges = db._query("""
-select distinct i.id
-from insights i
-join edges e on e.source_id = i.id or e.target_id = i.id
-where i.superseded_by is not null and i.deleted_at is null
-order by i.id
-""").fetchall()
     selfp = db._query(
         'select id from insights where superseded_by = id order by id'
         ).fetchall()
@@ -275,7 +255,6 @@ order by i.id
         ' where superseded_by is not null').fetchall())
     return {
         'dangling': [r[0] for r in dangling],
-        'superseded_with_edges': [r[0] for r in with_edges],
         'self_pointer': [r[0] for r in selfp],
         'unterminated': unterminated_chains(pointers),
         }
@@ -421,32 +400,6 @@ limit ?
     return list(rows)
 
 
-def count_orphans(db: 'DB') -> tuple[int, int]:
-    """Return (orphan_count, total_active).
-
-    An orphan is an active insight with zero edges. Used by
-    `doctor.check_orphan_insights`. Composing this from
-    `get_active_insight_ids` + `get_all_edges` is O(N) Python work
-    on SQLite but O(N^2) on Postgres at scale; this helper keeps the
-    set-difference inside the database.
-    """
-    total = db._query(
-        'select count(*) from insights'
-        ' where deleted_at is null and superseded_by is null'
-        ).fetchone()[0]
-    orphan_sql = """
-select count(*)
-from insights i
-where i.deleted_at is null and i.superseded_by is null
-  and not exists (
-      select 1 from edges e
-      where e.source_id = i.id or e.target_id = i.id
-  )
-"""
-    orphan_count = db._query(orphan_sql).fetchone()[0]
-    return orphan_count, total
-
-
 def provenance_distribution(
         db: 'DB') -> list[tuple[str | None, int]]:
     """Return (prompt_version, count) groups for active rows.
@@ -483,53 +436,6 @@ def review_content_quality(
         key=lambda x: len(x['quality_warnings']),  # type: ignore[arg-type]
         reverse=True)
     return flagged[:limit]
-
-
-def get_recent_insights_in_window(
-        db: 'DB', exclude_id: str, window_hours: float,
-        limit: int) -> list[Insight]:
-    """Return non-deleted insights created within the given time window."""
-    cutoff = datetime.now(timezone.utc).timestamp() - window_hours * 3600
-    cutoff_dt = datetime.fromtimestamp(cutoff, tz=timezone.utc)
-    cutoff_str = format_timestamp(cutoff_dt)
-    sql = f"""
-select {_INSIGHT_COLUMNS}
-from insights
-where id != ? and deleted_at is null and superseded_by is null and created_at >= ?
-order by created_at desc
-limit ?
-"""
-    rows = db._query(sql, (exclude_id, cutoff_str, limit)).fetchall()
-    return [_scan_insight(r) for r in rows]
-
-
-def get_latest_insight_by_session(
-        db: 'DB', session_id: str | None,
-        exclude_id: str) -> Insight | None:
-    """Return the most recent non-deleted insight for a session.
-
-    Notes
-    -----
-    - A falsy `session_id` (None or '') returns None here, inside the
-      backend: `'' = ''` matches in SQL and would fuse every
-      unsessioned row into one false chain.
-    - Tiebreak is `created_at desc, id desc` so both backends order
-      identically (SQLite's old source-keyed verb tiebroke on rowid,
-      which Postgres cannot reproduce).
-    """
-    if not session_id:
-        return None
-    sql = f"""
-select {_INSIGHT_COLUMNS}
-from insights
-where session_id = ? and id != ? and deleted_at is null and superseded_by is null
-order by created_at desc, id desc
-limit 1
-"""
-    row = db._query(sql, (session_id, exclude_id)).fetchone()
-    if row is None:
-        return None
-    return _scan_insight(row)
 
 
 def get_all_active_insights(db: 'DB') -> list[Insight]:
@@ -580,9 +486,6 @@ group by category
     rows = db._query(cat_sql).fetchall()
     for cat, count in rows:
         stats['by_category'][cat] = count
-
-    row = db._query('select count(*) from edges').fetchone()
-    stats['edge_count'] = row[0]
 
     row = db._query('select count(*) from oplog').fetchone()
     stats['oplog_count'] = row[0]
@@ -691,21 +594,6 @@ def get_embedding(db: 'DB', id: str) -> bytes | None:
         return None
     blob: bytes = row[0]
     return blob
-
-
-def get_all_embeddings(db: 'DB') -> list[tuple[str, str, bytes]]:
-    """Return all active insights that have embeddings as (id, content, blob)."""
-    sql = """
-select id, content, embedding
-from insights
-where deleted_at is null and superseded_by is null and embedding is not null
-"""
-    rows = db._query(sql).fetchall()
-    results = []
-    for id, content, blob in rows:
-        if blob and len(blob) > 0:
-            results.append((id, content, blob))
-    return results
 
 
 def embedding_stats(db: 'DB') -> tuple[int, int]:
@@ -869,13 +757,6 @@ where id in ({placeholders})
     db._exec(sql, tuple(insight_ids))
 
 
-def clear_linked_at(db: 'DB') -> None:
-    """Set linked_at to NULL for all active insights."""
-    db._exec(
-        'update insights set linked_at = null'
-        ' where deleted_at is null and superseded_by is null')
-
-
 def _scan_insight(row: tuple[Any, ...]) -> Insight:
     """Parse a database row into an Insight dataclass."""
     i = Insight()
@@ -896,11 +777,9 @@ def _scan_insight(row: tuple[Any, ...]) -> Insight:
     if len(row) > 11 and row[11]:
         i.enriched_at = parse_timestamp(row[11])
     if len(row) > 12 and row[12]:
-        i.session_id = row[12]
+        i.queue_uuid = row[12]
     if len(row) > 13 and row[13]:
-        i.queue_uuid = row[13]
+        i.superseded_by = row[13]
     if len(row) > 14 and row[14]:
-        i.superseded_by = row[14]
-    if len(row) > 15 and row[15]:
-        i.author = row[15]
+        i.author = row[14]
     return i

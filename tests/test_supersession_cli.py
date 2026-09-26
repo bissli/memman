@@ -3,7 +3,7 @@
 `insights show <id> --history` walks a chain in both directions;
 `memman supersede` links two rows that both already exist; `memman
 unsupersede` reverses a link whose successor is no longer current and
-brings the predecessor back into the graph.
+restores the predecessor to current.
 """
 
 import json
@@ -68,10 +68,9 @@ def test_history_walks_a_three_row_chain_oldest_first(mm_runner):
 
 
 def test_supersede_command_links_two_current_rows(mm_runner):
-    """Verify `memman supersede` links existing rows and moves the edges.
+    """Verify `memman supersede` links two existing current rows.
 
-    Mutation: not moving the predecessor's edges (its neighborhood
-        vanishes), accepting a non-current predecessor (a fork), or
+    Mutation: accepting a non-current predecessor (a fork), or
         accepting the same id twice (a self-pointer).
     Oracle: the store read directly after the command, and the
         refusal text for each non-current shape.
@@ -80,22 +79,15 @@ def test_supersede_command_links_two_current_rows(mm_runner):
     old = _remember(mm_runner, 'the broker is kombu')
     new = _remember(mm_runner, 'the broker is redis now')
     ctx = _remember(mm_runner, 'the broker feeds the dashboard')
-    assert invoke(mm_runner, ['graph', 'link', old, ctx,
-                              '--type', 'semantic']).exit_code == 0
 
     res = invoke(mm_runner, ['supersede', old, new])
     assert res.exit_code == 0, res.output
     out = json.loads(res.output)
     assert (out['predecessor'], out['successor']) == (old, new)
-    assert out['edges_moved'] >= 2
 
     with _read(data_dir) as backend:
         assert backend.nodes.get_include_deleted(old).superseded_by == new
         assert backend.nodes.get(old) is None
-        assert backend.edges.by_node(old) == []
-        moved = {(e.source_id, e.target_id) for e in backend.edges.by_node(new)
-                 if e.edge_type == 'semantic'}
-        assert moved == {(new, ctx), (ctx, new)}
         ops = [e for e in backend.oplog.recent(limit=20)
                if e.operation == 'supersede']
         assert [(e.insight_id, e.detail) for e in ops] == [
@@ -145,20 +137,18 @@ def test_unsupersede_refuses_while_the_successor_is_current(mm_runner):
 
 
 def test_unsupersede_relinks_reembeds_and_writes_its_oplog_row(mm_runner):
-    """Verify `unsupersede` brings the predecessor back into the graph.
+    """Verify `unsupersede` restores a row to current and re-enriches it.
 
-    Mutation: clearing the pointer without rebuilding edges (a current
-        row with zero degree), without re-embedding (no vector after
-        an embed swap), or without the oplog row.
+    Mutation: clearing the pointer without re-embedding (no vector
+        after an embed swap), without stamping `linked_at` (the row
+        never re-enters a rebuild's pending set), or without the
+        oplog row.
     Oracle: after `forget succ` then `unsupersede pred`: the row is
-        current, its entity edge to a peer exists, no temporal edge was
-        minted, its embedding is present, and the oplog names the
-        successor it was superseded by.
+        current, its embedding is present, `linked_at` is stamped,
+        and the oplog names the successor it was superseded by.
     """
     _, data_dir = mm_runner
     old = _remember(mm_runner, 'the broker is kombu', '--entity', 'kombu')
-    peer = _remember(mm_runner, 'kombu retries are exponential',
-                     '--entity', 'kombu')
     new = _remember(mm_runner, 'the broker is redis now')
     assert invoke(mm_runner, ['supersede', old, new]).exit_code == 0
     assert invoke(mm_runner, ['forget', new]).exit_code == 0
@@ -178,11 +168,8 @@ def test_unsupersede_relinks_reembeds_and_writes_its_oplog_row(mm_runner):
         row = backend.nodes.get(old)
         assert row is not None
         assert row.superseded_by is None
+        assert row.linked_at is not None
         assert backend.nodes.get_embedding(old) is not None
-        edges = backend.edges.by_node(old)
-        assert {e.edge_type for e in edges} <= {'entity', 'semantic'}
-        assert any(e.edge_type == 'entity'
-                   and peer in {e.source_id, e.target_id} for e in edges)
         ops = [(e.insight_id, e.detail) for e in backend.oplog.recent(limit=20)
                if e.operation == 'unsupersede']
         assert ops == [(old, f'was superseded by {new}')]
@@ -355,15 +342,13 @@ def test_unsupersede_refuses_when_the_embed_fails(mm_runner, monkeypatch):
         vector (Postgres) or the stale-width blob an embed swap left
         behind (SQLite), which `check_embedding_consistency` then
         fails on.
-    Oracle: a non-zero exit naming the embed, the pointer still set,
-        and no edges rebuilt.
+    Oracle: a non-zero exit naming the embed, and the pointer still set.
     """
     import httpx
     from memman.embed import fingerprint as fp_mod
 
     _, data_dir = mm_runner
     old = _remember(mm_runner, 'the broker is kombu', '--entity', 'kombu')
-    _remember(mm_runner, 'kombu retries are exponential', '--entity', 'kombu')
     new = _remember(mm_runner, 'the broker is redis now')
     assert invoke(mm_runner, ['supersede', old, new]).exit_code == 0
     assert invoke(mm_runner, ['forget', new]).exit_code == 0
@@ -394,28 +379,3 @@ def test_unsupersede_refuses_when_the_embed_fails(mm_runner, monkeypatch):
     with _read(data_dir) as backend:
         assert backend.nodes.get(old) is None
         assert backend.nodes.get_include_deleted(old).superseded_by == new
-        assert backend.edges.by_node(old) == []
-
-
-def test_supersede_command_drops_a_self_edge_instead_of_moving_it(mm_runner):
-    """Verify a self-edge on the predecessor does not become one on the successor.
-
-    Mutation: re-pointing both endpoints with no far-endpoint check in
-        `move_edges`, which turns old -> old into new -> new.
-    Oracle: the successor's edge list holds no edge with both
-        endpoints equal to it, and `edges_moved` excludes the self-edge.
-    """
-    _, data_dir = mm_runner
-    old = _remember(mm_runner, 'the broker is kombu')
-    new = _remember(mm_runner, 'the broker is redis now')
-    with open_backend('default', data_dir) as backend:
-        from memman.store.model import Edge
-        backend.edges.upsert(Edge(
-            source_id=old, target_id=old, edge_type='semantic', weight=0.7))
-
-    res = invoke(mm_runner, ['supersede', old, new])
-    assert res.exit_code == 0, res.output
-    assert json.loads(res.output)['edges_moved'] == 0
-    with _read(data_dir) as backend:
-        assert not [e for e in backend.edges.by_node(new)
-                    if e.source_id == new and e.target_id == new]

@@ -1,13 +1,13 @@
 ---
 name: memman
-description: Persistent memory CLI for LLM agents. Store facts, recall past knowledge, link related memories, manage lifecycle.
+description: Persistent memory CLI for LLM agents. Store facts, recall past knowledge, manage lifecycle.
 ---
 
 # memman
 
 `memman` is a CLI on PATH. Invoke commands directly via Bash. Memory is
-typed insights and a graph of edges between them. A write goes to a
-queue and a background worker enriches it.
+typed insights. A write goes to a queue and a background worker
+enriches it.
 
 ## Storing what you learn
 
@@ -25,10 +25,7 @@ substantial. When unsure, go smaller. A too-small memory stays
 retrievable and supersedes cleanly. A too-large one forces a rewrite
 and drops clauses.
 
-Pick the most accurate `--cat`. Writes link into one temporal chain
-by session, which recall's graph walk follows. Omit `--session`: it
-reads `$CLAUDE_CODE_SESSION_ID` by itself. Pass it only to pin a
-different id.
+Pick the most accurate `--cat`.
 
 ```bash
 memman remember "<thought>" --cat <category> --imp <1-5> --entity e1 --entity e2 --source agent
@@ -123,41 +120,36 @@ A behavioral rule - universal language such as "never", "always", or
 "mandatory", with no project-specific entity - goes to the project
 CLAUDE.md under a `## Directives` section instead of `memman
 remember`; the agent creates the section if absent. A directive needs
-guaranteed recall, which CLAUDE.md gets by loading every turn, not
-graph connectivity. The user prunes CLAUDE.md periodically, so no
-confirmation is needed.
+guaranteed recall, which CLAUDE.md gets by loading every turn and a
+ranked recall page does not. The user prunes CLAUDE.md periodically,
+so no confirmation is needed.
 
 ### The write pipeline
 
 `memman remember` is a fast queue-append. The full pipeline -
-enrichment, edge creation, embedding - runs out-of-band in a
+enrichment (keywords, summary), embedding - runs out-of-band in a
 worker the scheduler fires on a timer (systemd on Linux, launchd
 on macOS, `memman scheduler serve` in containers).
 A newly stored memory is NOT visible to `memman recall` in the current
 session; it lands for later sessions.
 
 `memman graph rebuild` re-enriches every stored insight through the
-full LLM pipeline, after a model or prompt change or to repair partial
-enrichment. The three auto-created edge types (semantic, entity,
-temporal) are reindexed on DB open when edge constants change; there
-is no operator command for that.
+full LLM pipeline - keywords, summary, vector - after a model or
+prompt change or to repair partial enrichment.
 
 The worker stores the text as written, as one memory; no model
 rewords, splits, or judges it. Every write lands as its own row: a
 second write of the same text is a second row. Nothing a `remember`
 does retires a stored memory; only `replace` and `supersede` do.
 
-To correct a stored insight by ID and keep its edges:
+To correct a stored insight by ID:
 
 ```bash
 memman replace <id> "<new content>"
 ```
 
 `replace` inherits the original's category, importance, entities, and
-source unless a flag overrides one. `--session` does not inherit:
-the successor is written into today's chain. It also keeps the
-replaced row's edges, so it stays linked to the original's chain as
-well, bridging the two.
+source unless a flag overrides one.
 
 The original is superseded, not deleted: it keeps its content behind
 `superseded_by`, leaves every recall and listing, and `memman insights
@@ -186,9 +178,10 @@ conversation. Recall always runs before:
 
 The query is focused and keyword-rich, never the raw user prompt.
 
-Recall: vector + graph traversal + cross-encoder reranker. Every
-query ranks the same way. The reranker runs by default on multi-token
-queries and skips 1-2 token queries.
+Recall fuses keyword, vector, and recency anchors, blends keyword,
+similarity, and the fused-anchor score, and reranks with a
+cross-encoder. Every query ranks the same way. The reranker runs by
+default on multi-token queries and skips 1-2 token queries.
 
 ```bash
 memman recall "<query>"
@@ -203,7 +196,7 @@ else:
 
 - `id8`: the first eight characters of the id. Every id-taking
   command (`memman insights show <id8>`, `replace`, `forget`,
-  `supersede`, `graph related`) resolves an unambiguous prefix.
+  `supersede`) resolves an unambiguous prefix.
 - `score`: two decimals. Compare it only against the other scores on
   the same page, never against a fixed number and never across
   pages: the scale belongs to whichever reranker is configured.
@@ -248,8 +241,8 @@ this repo, since a store can hold rows from several repos; `git log -1
 currency.
 
 Add `--cat <category>` or `--source <source>` to filter; both are
-exact matches. For a fast token-only lookup that skips graph and
-reranking (cheap, no network cost; rows come back ranked by
+exact matches. For a fast token-only lookup that skips vector search
+and reranking (cheap, no network cost; rows come back ranked by
 importance, then recency):
 
 ```bash
@@ -293,26 +286,6 @@ uncapped and a stored insight persists until someone forgets it.
 Supersession (`replace`, `supersede`) hides without
 deleting; `memman unsupersede <id>` brings a superseded row back once
 its successor has been forgotten.
-
-## Working with relationships
-
-The graph holds three edge types between insights: `temporal` (same
-session chain, or close in time), `semantic` (similar content), and
-`entity` (a shared entity). The worker computes all three during
-enrichment. A manual link adds an edge the worker would not find on
-its own:
-
-```bash
-memman graph link <src> <tgt> --type semantic --weight 0.85
-memman graph link <src> <tgt> --type entity --weight 0.8
-```
-
-Traverse from any insight, over every edge type or one of them:
-
-```bash
-memman graph related <id> --depth 2
-memman graph related <id> --edge semantic
-```
 
 ## Inspecting the system
 
@@ -399,8 +372,3 @@ and exits 0.
   script, dataset pull) for imported material; `user`, the default, is
   for the user's words. Recall's `--source` filter is an exact match on
   that string.
-- No session, no temporal chain. Passing one is optional:
-  `--session` reads `$MEMMAN_SESSION_ID`, then
-  `$CLAUDE_CODE_SESSION_ID`. Claude Code exports that second one into
-  every Bash call, a subagent's included, with the parent's id. An
-  explicit `--session <id>` beats both.

@@ -183,7 +183,7 @@ def clean_tables(*table_names: str) -> Callable[[Callable], Callable]:
 
     Usage:
 
-        @clean_tables('insights', 'edges')
+        @clean_tables('insights', 'oplog')
         def test_something(pg_conn):
             ...
     """

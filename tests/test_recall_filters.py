@@ -92,44 +92,6 @@ def test_filtered_recall_above_anchor_top_k(backend):
                for r in resp['results'])
 
 
-def test_filter_does_not_block_graph_traversal(backend):
-    """A matching row reachable only through a non-matching hop returns.
-
-    Traversal is deliberately unfiltered: a hop through a
-    non-matching neighbour is correct, and only the final result set
-    is filtered.
-
-    Mutation: applying the category filter inside the beam-search
-        neighbour loop (or to the traversal lookups), blocking the
-        hop through the non-matching bridge row.
-    Oracle: `p-far` is connected only via the `fact` bridge and is
-        too old to be a time anchor, so its presence proves the
-        traversal crossed the non-matching hop.
-    """
-    from tests.conftest import make_edge
-    _seed(backend, 30, 'preference', 'quiet other subject {i}',
-          prefix='fill-')
-    backend.nodes.insert(make_insight(
-        id='p-near', category='preference', content='p near body'))
-    set_created_at(backend, 'p-near', NOW + timedelta(minutes=5))
-    backend.nodes.insert(make_insight(
-        id='g-bridge', category='fact', content='g bridge body'))
-    backend.nodes.insert(make_insight(
-        id='p-far', category='preference', content='p far body'))
-    set_created_at(backend, 'p-far', NOW - timedelta(days=30))
-    for a, b in [('p-near', 'g-bridge'), ('g-bridge', 'p-far')]:
-        backend.edges.upsert(make_edge(
-            source_id=a, target_id=b, edge_type='semantic', weight=1.0))
-        backend.edges.upsert(make_edge(
-            source_id=b, target_id=a, edge_type='semantic', weight=1.0))
-    resp = intent_aware_recall(
-        backend, 'zzz unmatched query', None, 0,
-        category='preference')
-    ids = {r['insight'].id for r in resp['results']}
-    assert 'p-far' in ids
-    assert 'g-bridge' not in ids
-
-
 def _vec512(second):
     """Unit vector [1, second, 0, ...]/norm at the snapshot dim (512)."""
     n = math.sqrt(1.0 + second * second)

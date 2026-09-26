@@ -51,10 +51,9 @@ def _seed_crowded_store(backend):
     """Fill the time channel with `ANCHOR_TOP_K` recent decoys.
 
     The two rows under test are dated a hundred days back so the
-    recency channel cannot seed them, share no token with `QUERY` so
-    the keyword channel cannot either, and carry no edges so
-    traversal cannot reach them. The vector channel is their only
-    route into the anchor set.
+    recency channel cannot seed them, and share no token with `QUERY`
+    so the keyword channel cannot either. The vector channel is their
+    only route into the anchor set.
     """
     now = datetime.now(timezone.utc)
     for i in range(ANCHOR_TOP_K + 4):

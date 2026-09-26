@@ -9,13 +9,13 @@
 
 ### Memory categories
 
-| Category     | Captures                                | Example                                |
-| ------------ | --------------------------------------- | -------------------------------------- |
-| `preference` | User-stated likes, dislikes, style      | "Prefers snake_case, dislikes ORMs"    |
-| `decision`   | Architectural choices with rationale    | "Chose SQLite - zero deps, embeddable" |
-| `fact`       | Durable truths about systems/domains    | "API rate limit is 100 req/s"          |
-| `insight`    | Conclusions from multi-source reasoning | "Beam search outperforms BFS here"     |
-| `context`    | Project background, user environment    | "Monorepo, deploys to AWS ECS"         |
+| Category     | Captures                                | Example                                        |
+| ------------ | --------------------------------------- | ---------------------------------------------- |
+| `preference` | User-stated likes, dislikes, style      | "Prefers snake_case, dislikes ORMs"            |
+| `decision`   | Architectural choices with rationale    | "Chose SQLite - zero deps, embeddable"         |
+| `fact`       | Durable truths about systems/domains    | "API rate limit is 100 req/s"                  |
+| `insight`    | Conclusions from multi-source reasoning | "RRF fusion beats a single ranked signal here" |
+| `context`    | Project background, user environment    | "Monorepo, deploys to AWS ECS"                 |
 
 See [Design & Architecture](docs/DESIGN.md) for details.
 
@@ -44,7 +44,7 @@ memman splits along a hot-path boundary. The agent's turn does only fast local w
 │                   embed + rerank)   │    │  flock on ~/.memman/drain.lock  │
 │  memman remember (queue append)     │ →  │                                 │
 │                                     │    │                                 │
-│  No graph writes                    │    │  enrich → embed → edges → DB    │
+│  No enrichment                      │    │  enrich → embed → DB            │
 │                                     │    │                                 │
 └─────────────────────────────────────┘    └─────────────────────────────────┘
               │                                          ▲
@@ -56,11 +56,11 @@ memman splits along a hot-path boundary. The agent's turn does only fast local w
 | `memman recall --basic` | inside  | ~50-200 ms    | local read only - no network on a store already stamped                  |
 | `memman recall`         | inside  | network-bound | local read, plus one call to encode the query and one to reorder results |
 | agent reasoning         | inside  | -             | uses recall results as context                                           |
-| `memman remember`       | inside  | ~50 ms        | enqueue only - no LLM, no embed, no edges, no network                    |
+| `memman remember`       | inside  | ~50 ms        | enqueue only - no LLM, no embed, no network                              |
 | drain trigger           | outside | every 60 s+   | systemd/launchd timer or serve loop                                      |
 | enrichment              | outside | network-bound | external LLM provider call                                               |
 | embedding               | outside | network-bound | external embedding provider call                                         |
-| edge inference + DB     | outside | ms            | makes insight visible to *future* turns                                  |
+| DB write                | outside | ms            | makes insight visible to *future* turns                                  |
 
 Two invariants follow from this split:
 
@@ -72,8 +72,7 @@ Two invariants follow from this split:
 - **Built for coding agents** - memory for Claude Code: the decisions, preferences, and facts a coding session settles, recalled in the next one.
 - **Hook-driven** - five lifecycle hooks handle memory operations automatically.
 - **LLM-supervised** - the host LLM decides what to remember and forget; a worker model handles enrichment. No LLM judges a write.
-- **Multi-graph architecture** - temporal, entity, and semantic edges.
-- **Graph-aware recall** - beam search over RRF-fused keyword, vector, and recency anchors, blended with a fixed edge-weight table and reranked by a cross-encoder on longer queries. Results always come back in relevance order.
+- **Multi-signal recall** - RRF-fused keyword, vector, and recency anchors, reranked by a cross-encoder on longer queries. Results always come back in relevance order.
 - **Write once, retire deliberately** - a write adds a row, or replaces the row `replace <id>` names; only `replace` and `supersede` retire a row. A replaced or superseded memory is never deleted: it keeps its content behind `superseded_by`, leaves recall by default, and `memman insights show <id> --history` walks the chain.
 - **Operator-only deletion** - a store is uncapped and nothing expires or is pruned on its own. `memman forget <id>` is the only thing that removes a memory; `memman insights review` surfaces transient content for that decision.
 - **Pluggable embeddings, per-store sovereignty** - registered providers include `voyage`, `openai` (any OpenAI-compatible endpoint: OpenAI, vLLM, LiteLLM, ...), `openrouter`, and `ollama`. Each store's `meta.embed_fingerprint` is the runtime authority over its embedder, so one process can serve multiple stores with different embedders. Switch online via `memman embed swap` or offline via `memman embed reembed`.
@@ -96,7 +95,7 @@ In a TTY, the install wizard prompts for an LLM endpoint URL and an embedding pr
 
 ### Provider setup
 
-memman talks to three external services: an **LLM** (enrichment), an **embedding provider** (vector search, graph connectivity), and a **reranker** (final ordering of recall results). All three are pluggable; the embed side is also per-store via `meta.embed_fingerprint`.
+memman talks to three external services: an **LLM** (enrichment), an **embedding provider** (vector search), and a **reranker** (final ordering of recall results). All three are pluggable; the embed side is also per-store via `meta.embed_fingerprint`.
 
 #### Where keys are needed
 
@@ -108,7 +107,7 @@ The agent's own login is never involved. These are the calls memman makes on its
 | every verb that opens a store, `recall --basic` included | inside the turn | the active embedding provider's key (none for Ollama) | the command stops: `MEMMAN_VOYAGE_API_KEY is not set in <dir>/env` |
 | `recall` - reorder the top results                       | inside the turn | `MEMMAN_VOYAGE_API_KEY`                               | recall keeps its earlier order, and logs why                       |
 | enrichment                                               | worker          | `MEMMAN_LLM_API_KEY` (blank for a local LLM)          | the row still stores, unenriched                                   |
-| embedding, edge inference                                | worker          | the active embedding provider's key                   | no memory is ever stored                                           |
+| embedding                                                | worker          | the active embedding provider's key                   | no memory is ever stored                                           |
 | `embed reembed`, `embed swap`, `migrate`                 | on demand       | the active embedding provider's key                   | the command stops with an error                                    |
 
 Three things worth knowing before picking a provider:
@@ -148,8 +147,6 @@ Four embed providers are registered. Each store records its active `(provider, m
 | `openai`     | `text-embedding-3-small` | `MEMMAN_OPENAI_EMBED_API_KEY` + `MEMMAN_OPENAI_EMBED_ENDPOINT`    |
 | `openrouter` | `baai/bge-m3` (1024d)    | reuses `MEMMAN_OPENROUTER_API_KEY` + `MEMMAN_OPENROUTER_ENDPOINT` |
 | `ollama`     | `nomic-embed-text`       | local; `MEMMAN_OLLAMA_HOST` (default `http://localhost:11434`)    |
-
-20 `(provider, model)` pairs across `voyage`, `openrouter`, and `ollama` ship with a per-surface calibrated `AUTO_SEMANTIC_THRESHOLD` - see [docs/design/05-lifecycle.md § 5.3.1a](docs/design/05-lifecycle.md#531a-calibrated-embedding-models) for the table. A store on any other `(provider, model)` falls back to the surface-wide median (bounded mean nDCG@5 loss ~0.014 against the calibrated triples).
 
 Switch on a new install:
 
@@ -235,7 +232,7 @@ The shipped `guide.md` (behavioral policy) and `SKILL.md` (command reference) li
 
 ### Pausing the scheduler
 
-`memman scheduler stop` sets the persistent state to STOPPED and disables the timer on systemd/launchd hosts. While stopped, memman is recall-only: `remember`, `replace`, `supersede`, `unsupersede`, `forget`, `graph link`, and `graph rebuild` exit with `Scheduler is stopped; cannot <verb>`. Resume with `memman scheduler start`. See [USAGE.md § Scheduler](docs/USAGE.md#scheduler) for the full verb list.
+`memman scheduler stop` sets the persistent state to STOPPED and disables the timer on systemd/launchd hosts. While stopped, memman is recall-only: `remember`, `replace`, `supersede`, `unsupersede`, `forget`, and `graph rebuild` exit with `Scheduler is stopped; cannot <verb>`. Resume with `memman scheduler start`. See [USAGE.md § Scheduler](docs/USAGE.md#scheduler) for the full verb list.
 
 ## Updating
 

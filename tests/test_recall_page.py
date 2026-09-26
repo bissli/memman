@@ -235,18 +235,18 @@ def test_deleted_recall_flags_are_refused(page_rows, flag):
     assert 'No such option' in result.output
 
 
-def test_recall_detail_row_keeps_only_q_limit_session_hits(page_rows):
-    """Verify the recall-detail oplog row carries q, limit, session, hits.
+def test_recall_detail_row_keeps_only_q_limit_hits(page_rows):
+    """Verify the recall-detail oplog row carries q, limit and hits.
 
-    Mutation: leaving `intent` on the row or `via`, `kw`, `sim`, `gr`
-        on each hit; or a leftover access increment after the column
-        drop, whose OperationalError the bookkeeping guard swallows so
-        the row silently never lands.
+    Mutation: leaving `intent` or `session` on the row or `via`, `kw`,
+        `sim`, `gr` on each hit; or a leftover access increment after
+        the column drop, whose OperationalError the bookkeeping guard
+        swallows so the row silently never lands.
     Oracle: the exact key sets read back from the store's oplog after
         one scored recall.
     """
     _, data_dir = page_rows
-    invoke(page_rows, ['recall', 'zulu', '--session', 'sess-p'])
+    invoke(page_rows, ['recall', 'zulu'])
 
     db = open_db(str(pathlib.Path(data_dir) / 'data' / 'default'))
     try:
@@ -257,8 +257,7 @@ def test_recall_detail_row_keeps_only_q_limit_session_hits(page_rows):
         db.close()
     assert row, 'no recall-detail row written'
     detail = json.loads(row[0])
-    assert set(detail) == {'q', 'limit', 'session', 'hits'}
-    assert detail['session'] == 'sess-p'
+    assert set(detail) == {'q', 'limit', 'hits'}
     assert detail['hits']
     assert all(set(hit) == {'id', 'score'} for hit in detail['hits'])
 
@@ -283,10 +282,11 @@ def test_recall_scores_by_the_general_weights(backend):
 def test_recall_return_carries_no_router_keys(backend):
     """Verify the recall return drops per-row intent and the router meta.
 
-    Mutation: leaving `intent` on each row, or `intent`,
-        `intent_source` or `hint` in meta.
-    Oracle: the exact meta key set the traversal still reports, and the
-        absence of `intent` on the one returned row.
+    Mutation: leaving `intent` on each row, `intent`, `intent_source`
+        or `hint` in meta, or the `traversed` count, which only ever
+        differed from `anchor_count` by the rows traversal added.
+    Oracle: the exact meta key set, and the absence of `intent` on the
+        one returned row.
     """
     backend.nodes.insert(make_insight(
         id='router-row', content='router keys row'))
@@ -294,7 +294,7 @@ def test_recall_return_carries_no_router_keys(backend):
     resp = intent_aware_recall(backend, 'router keys', None, 5)
 
     assert 'intent' not in resp['results'][0]
-    assert set(resp['meta']) == {'anchor_count', 'traversed', 'reranked'}
+    assert set(resp['meta']) == {'anchor_count', 'reranked'}
 
 
 def test_insights_show_has_no_access_count(page_rows):
@@ -410,13 +410,13 @@ def test_live_mappers_read_every_trailing_field(backend):
     Mutation: a stale positional index in `node._scan_insight` or
         `postgres._row_to_insight` after a column drop, which reads a
         neighbor's value into a field (summary into deleted_at,
-        session_id into enriched_at) with no error.
+        queue_uuid into superseded_by) with no error.
     Oracle: a distinct hand-set value per column, read back through
         `get_include_deleted` on both backends.
     """
     backend.nodes.insert(make_insight(
         id='fidelity-row', content='fidelity row', category='decision',
-        importance=4, source='fid-source', session_id='sess-f',
+        importance=4, source='fid-source',
         queue_uuid='queue-f', author='carol'))
     stamps = {
         'summary': 'fidelity summary',
@@ -435,5 +435,5 @@ def test_live_mappers_read_every_trailing_field(backend):
     assert got.linked_at == stamps['linked_at']
     assert got.enriched_at == stamps['enriched_at']
     assert got.deleted_at == stamps['deleted_at']
-    assert (got.session_id, got.queue_uuid) == ('sess-f', 'queue-f')
+    assert got.queue_uuid == 'queue-f'
     assert (got.superseded_by, got.author) == ('successor-f', 'carol')

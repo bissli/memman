@@ -1,7 +1,7 @@
 """Phase-level recall trace events (F2).
 
 `intent_aware_recall` hoists one `trace.is_enabled()` read and emits
-per-phase events (anchors, traversal, rerank) behind it. These tests
+per-phase events (anchors, rerank) behind it. These tests
 pin the hoist (the read can fall through to a file read on the
 synchronous hot path) and the id-based rerank movement metric.
 """
@@ -116,38 +116,3 @@ def test_anchor_event_reports_vector_hits_against_anchor_k(
     assert ev
     assert ev[0]['anchor_k'] == 35
     assert ev[0]['vector_hits'] == 6
-
-
-def test_traversal_event_counts_budget_capped_anchors(
-        tmp_backend, monkeypatch):
-    """`recall_traversal.capped_anchors` reflects the visit budget.
-
-    Mutation: dropping the `visited >= max_visited` comparison (or
-        counting every anchor unconditionally).
-    Oracle: with `max_visited` forced to 1 every anchor is capped, so
-        `capped_anchors == fused_pool`; with the default budget on
-        this tiny store none are, so it must read 0.
-    """
-    from memman.search import recall as recall_mod
-    _seed(tmp_backend)
-    events = []
-    monkeypatch.setattr(trace, 'is_enabled', lambda: True)
-    monkeypatch.setattr(
-        trace, 'event',
-        lambda name, **fields: events.append((name, fields)))
-
-    def _run():
-        return intent_aware_recall(
-            tmp_backend, 'alpha shared topic', None, 5)
-
-    _run()
-    uncapped = [f for n, f in events if n == 'recall_traversal'][0]
-    assert uncapped['capped_anchors'] == 0
-
-    events.clear()
-    monkeypatch.setattr(recall_mod, 'TRAVERSAL_PARAMS', (10, 4, 1))
-    _run()
-    capped = [f for n, f in events if n == 'recall_traversal'][0]
-    anchors = [f for n, f in events if n == 'recall_anchors'][0]
-    assert capped['capped_anchors'] == anchors['fused_pool']
-    assert capped['capped_anchors'] >= 1

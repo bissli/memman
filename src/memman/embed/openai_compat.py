@@ -6,10 +6,6 @@ Endpoint, model, and API key are read from the env-or-file resolver
 
 `dim` is discovered from the first successful embed call and
 cached on the client; `available()` performs the discovery probe.
-
-Suggested semantic threshold (0.75) is a starting point only -
-empirical recalibration on real data is required before relying on
-edge density assumptions.
 """
 
 import logging

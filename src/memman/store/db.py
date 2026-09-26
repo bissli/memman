@@ -204,12 +204,7 @@ def set_meta(db: 'DB', key: str, value: str) -> None:
 def open_db(data_dir: str) -> DB:
     """Open (or create) the SQLite database for one store.
 
-    Applies the baseline schema idempotently. Does NOT trigger the
-    edge-constants reindex - callers that want that (the CLI's
-    `_open_store_db`) invoke `reindex_if_constants_changed(backend,
-    store_name=...)` after open. Keeping the graph-reindex out of
-    this module avoids a backward import edge from `memman.store` to
-    `memman.graph`.
+    Applies the baseline schema idempotently.
 
     Parameters
     ----------
@@ -363,22 +358,9 @@ create table if not exists insights (
     deleted_at  text,
     prompt_version text,
     embedding_model text,
-    session_id  text,
     queue_uuid  text,
     superseded_by text,
     author      text
-);
-
-create table if not exists edges (
-    source_id   text not null,
-    target_id   text not null,
-    edge_type   text not null check(edge_type in ('temporal','semantic','entity')),
-    weight      real default 1.0,
-    metadata    text default '{}',
-    created_at  text not null,
-    primary key (source_id, target_id, edge_type),
-    foreign key (source_id) references insights(id) on delete cascade,
-    foreign key (target_id) references insights(id) on delete cascade
 );
 
 create index if not exists idx_insights_category on insights(category);
@@ -386,7 +368,6 @@ create index if not exists idx_insights_importance on insights(importance);
 create index if not exists idx_insights_created on insights(created_at);
 create index if not exists idx_insights_deleted on insights(deleted_at);
 create index if not exists idx_insights_source on insights(source);
-create index if not exists idx_insights_session on insights(session_id);
 create index if not exists idx_insights_queue_uuid on insights(queue_uuid);
 -- `created_at` rides along so the scheduler's pending-link scan
 -- takes its order from the index; without it the planner prefers
@@ -404,12 +385,6 @@ create index if not exists idx_insights_pending_link
 -- partial `(importance, created_at)` for a temp b-tree.
 create index if not exists idx_insights_current_listing
     on insights(deleted_at, superseded_by, importance, created_at);
-
-create index if not exists idx_edges_source on edges(source_id);
-create index if not exists idx_edges_target on edges(target_id);
-create index if not exists idx_edges_type on edges(edge_type);
-create index if not exists idx_edges_source_type on edges(source_id, edge_type);
-create index if not exists idx_edges_target_type on edges(target_id, edge_type);
 
 create table if not exists oplog (
     id          integer primary key autoincrement,

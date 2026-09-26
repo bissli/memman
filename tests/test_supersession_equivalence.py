@@ -3,18 +3,16 @@
 The active predicate gains a second clause at roughly ninety sites.
 Enumerating them in tests would pin the list, not the property. This
 builds the same store twice, supersedes the predecessor in one and
-soft-deletes it in the other, and asserts every read, count and
-edge-build agrees. One predicate site left on `deleted_at is null`
-alone makes the two stores diverge somewhere below.
+soft-deletes it in the other, and asserts every read and count
+agrees. One predicate site left on `deleted_at is null` alone makes
+the two stores diverge somewhere below.
 """
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from memman.graph.entity import create_entity_edges
 from memman.search.recall import intent_aware_recall
-from memman.store.model import Edge
 from tests.conftest import _mock_embed, make_insight, set_created_at
 
 _ROWS = [
@@ -25,12 +23,6 @@ _ROWS = [
     ('t-1', 'alpha deploys ride the tuesday train', ['alpha', 'train']),
     ('t-2', 'delta cache keys rotate hourly', ['delta']),
     ('t-3', 'epsilon exports land in the alpha bucket', ['alpha', 'epsilon']),
-    ]
-_EDGES = [
-    ('p-1', 'q-1', 'entity', 0.8), ('q-1', 'p-1', 'entity', 0.8),
-    ('p-1', 'p-2', 'semantic', 0.6), ('p-2', 'p-1', 'semantic', 0.6),
-    ('q-1', 'r-1', 'semantic', 0.4), ('p-2', 'q-1', 'entity', 0.5),
-    ('t-1', 'q-1', 'entity', 0.7), ('t-3', 't-1', 'semantic', 0.3),
     ]
 
 
@@ -96,10 +88,6 @@ def _build(backend, *, supersede):
         'p-1', keywords=['kombu'], summary='old broker')
     backend.nodes.update_enrichment(
         'q-1', keywords=['beta'], summary='dashboard')
-    for source_id, target_id, edge_type, weight in _EDGES:
-        backend.edges.upsert(Edge(
-            source_id=source_id, target_id=target_id,
-            edge_type=edge_type, weight=weight))
     if supersede:
         assert backend.nodes.supersede('p-1', 'p-2') is True
     else:
@@ -107,12 +95,12 @@ def _build(backend, *, supersede):
 
 
 def _recall_view(backend, query):
-    """Ids, scores and traversal count of one recall, rounded for compare."""
+    """Ids and scores of one recall, rounded for comparison."""
     resp = intent_aware_recall(backend, query, None, 10)
     rows = [(r['insight'].id, round(r['score'], 9),
              {k: round(v, 9) for k, v in r['signals'].items()})
             for r in resp['results']]
-    return rows, resp['meta']['traversed']
+    return rows
 
 
 def test_supersession_reads_identically_to_a_soft_delete(twin_backends):
@@ -120,10 +108,8 @@ def test_supersession_reads_identically_to_a_soft_delete(twin_backends):
 
     Mutation: any one of the active-predicate sites left on
         `deleted_at is null` alone -- `get_all_active` returns the
-        row into the pool, `count_with_entity` inflates `doc_freq` so
-        the fresh entity edge weight drops, `count_orphans` counts a
-        phantom, `keyword_counts` scores it, `provenance_distribution`
-        reports it stale.
+        row into the pool, `keyword_counts` scores it,
+        `provenance_distribution` reports it stale.
     Oracle: store B, where the predecessor is soft-deleted, which is
         the shipped behavior every read already agrees on.
     """
@@ -137,8 +123,6 @@ def test_supersession_reads_identically_to_a_soft_delete(twin_backends):
         superseded, 'alpha broker kombu', None, 10)['results']}.isdisjoint({'p-1'})
 
     assert superseded.nodes.count_active() == deleted.nodes.count_active()
-    assert superseded.nodes.count_orphans() == deleted.nodes.count_orphans()
-    assert superseded.edges.degree_distribution() == deleted.edges.degree_distribution()
     assert superseded.nodes.enrichment_coverage() == deleted.nodes.enrichment_coverage()
     assert superseded.nodes.embedding_stats() == deleted.nodes.embedding_stats()
     assert (superseded.nodes.embedding_size_distribution()
@@ -151,24 +135,9 @@ def test_supersession_reads_identically_to_a_soft_delete(twin_backends):
             == deleted.nodes.count_stale_insights('pv-2'))
     assert (superseded.nodes.stats().total_insights
             == deleted.nodes.stats().total_insights)
-    assert (superseded.edges.count_dangling_by_type()
-            == deleted.edges.count_dangling_by_type())
     assert (superseded.oplog.stats().total_active
             == deleted.oplog.stats().total_active)
     with superseded.recall_session() as sa, deleted.recall_session() as sb:
         assert (sa.keyword_counts({'alpha', 'kombu'})
                 == sb.keyword_counts({'alpha', 'kombu'}))
         assert 'p-1' not in sa.keyword_counts({'kombu'})
-
-    for backend in (superseded, deleted):
-        fresh = make_insight(
-            id='s-1', content='sigma note about alpha', entities=['alpha'])
-        backend.nodes.insert(fresh)
-        create_entity_edges(backend, fresh)
-    weights = [
-        sorted((e.target_id, e.edge_type, round(e.weight, 9))
-               for e in b.edges.by_node('s-1') if e.source_id == 's-1')
-        for b in (superseded, deleted)]
-    assert weights[0] == weights[1]
-    assert weights[0]
-    assert all(target != 'p-1' for target, _, _ in weights[0])

@@ -24,7 +24,7 @@ correction at once, and any conclusion that would stand if the
 exchange stopped here. It defers pure deliberation that has reached
 no conclusion.
 
-    memman remember "<self-contained text>" --cat <category> --session $SESSION_ID
+    memman remember "<self-contained text>" --cat <category>
 
 One thought per call, as one paragraph that opens on its subject and
 keeps its reasoning with it. The text names its subject outright,
@@ -38,8 +38,6 @@ memman refuses text over 1,000 bytes, text naming a line number, and
 text off this shape, and says why. A behavioral rule ("always",
 "never") goes to the project CLAUDE.md `## Directives` section
 instead.
-
-A literal `$SESSION_ID` means the host supplied no id: omit the flag.
 
 The memman skill is the full manual: recall triggers, categories,
 what never to store, corrections, the write pipeline, and scheduler

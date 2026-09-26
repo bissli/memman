@@ -33,8 +33,7 @@ from memman.store.factory import known_backends, list_stores
 _BACKEND_CHOICES = sorted(known_backends())
 
 from memman.embed import SUPPORTED_EMBED_PROVIDERS as _EMBED_PROVIDER_CHOICES
-from memman.store.model import MAX_ROW_ENTITIES, VALID_CATEGORIES
-from memman.store.model import VALID_EDGE_TYPES, Edge, Insight
+from memman.store.model import MAX_ROW_ENTITIES, VALID_CATEGORIES, Insight
 from memman.store.model import format_timestamp, insight_to_full_dict
 from memman.store.model import insight_to_recall_line
 from memman.store.sqlite import open_ro_db
@@ -346,8 +345,7 @@ def _get_llm_client_or_fail(role: str) -> 'MemmanLLMClient':
 
 def _active_backend(
         ctx: click.Context, *,
-        unchecked: bool = False,
-        reindex_on_open: bool = True) -> 'Backend':
+        unchecked: bool = False) -> 'Backend':
     """Click adapter around `memman.session.active_store`.
 
     Resolves data_dir and the active store name from the click context
@@ -358,17 +356,13 @@ def _active_backend(
 
     Pass `unchecked=True` from diagnostics (`doctor`, `embed status`)
     that must run against a stale or fresh store without tripping the
-    fingerprint assert. Pass `reindex_on_open=False` from recall so the
-    on-open constants-hash reindex (potentially seconds of cosine work)
-    stays off the user-facing hot path; the drainer's maintenance pass
-    repairs drift instead.
+    fingerprint assert.
     """
     from memman.session import active_store
     data_dir = ctx.obj['data_dir']
     name = _resolve_store_name(data_dir, ctx.obj['store'])
     return active_store(
-        data_dir=data_dir, store=name,
-        unchecked=unchecked, reindex_on_open=reindex_on_open)
+        data_dir=data_dir, store=name, unchecked=unchecked)
 
 
 def _parse_since(since: str) -> str:
@@ -435,12 +429,6 @@ def _validate_caller_entities(entities: tuple[str, ...]) -> list[str]:
     - MAX_ROW_ENTITIES bounds the typed list. It does NOT bound what
       a row holds: the list a `replace` inherits passes whole however
       long it is.
-    - Neither cap is the binding constraint on usefulness.
-      `graph/entity.py` caps entity edges at MAX_TOTAL_ENTITY_EDGES
-      = 50 and counts two per target (forward and reverse) at
-      MAX_ENTITY_LINKS = 5 targets each, so about FIVE entities
-      exhaust the whole edge budget and later ones produce no edge
-      at all.
     """
     entity_list = [e.strip() for e in entities if e.strip()]
     for e in entity_list:
@@ -613,7 +601,7 @@ def list_claude_permissions() -> list[str]:
 
 @cli.group()
 def graph() -> None:
-    """Graph operations on insights and edges."""
+    """Re-enrichment of stored insights."""
 
 
 @cli.group(name='embed')
@@ -661,14 +649,11 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
     flags remain sticky-seed (they never override an existing file
     value); `config set` is the explicit override path.
 
-    Six shapes of key are accepted:
+    Four shapes of key are accepted:
       * any member of `config.INSTALLABLE_KEYS`
       * `MEMMAN_BACKEND_<store>` (per-store backend routing)
       * `MEMMAN_POSTGRES_DSN_<store>` (per-store DSN)
       * `MEMMAN_RERANK_ENABLED_<store>` (per-store rerank toggle)
-      * `MEMMAN_SURFACE_<store>` (per-store surface: code|claw)
-      * `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>` (per-store override:
-        float in (0,1), or 'skip'/'none' to disable semantic edges)
     Bare canonicals (`MEMMAN_BACKEND`, `MEMMAN_POSTGRES_DSN`) are
     rejected with hints pointing at `MEMMAN_DEFAULT_*` or the
     per-store form.
@@ -688,20 +673,16 @@ def config_set(ctx: click.Context, key: str, value: str) -> None:
 
     accepted = key in config.INSTALLABLE_KEYS
     if not accepted:
-        for prefix, validator, _ in config.PER_STORE_KEY_SPECS:
+        for prefix, _ in config.PER_STORE_KEY_SPECS:
             if not key.startswith(prefix):
                 continue
             if not valid_store_name(key[len(prefix):]):
                 break
-            if validator is not None:
-                err = validator(value)
-                if err is not None:
-                    raise click.ClickException(f'{key}={value!r}: {err}')
             accepted = True
             break
     if not accepted:
         shapes = ', '.join(p + '<store>'
-                           for p, _, _ in config.PER_STORE_KEY_SPECS)
+                           for p, _ in config.PER_STORE_KEY_SPECS)
         raise click.ClickException(
             f'{key!r} is not a recognized config key. Accepted shapes:'
             f' INSTALLABLE_KEYS members or {shapes}.')
@@ -799,7 +780,7 @@ def config_show(ctx: click.Context) -> None:
     for key, value in sorted(parsed.items()):
         if not value:
             continue
-        for prefix, _, secret in config.PER_STORE_KEY_SPECS:
+        for prefix, secret in config.PER_STORE_KEY_SPECS:
             if key.startswith(prefix):
                 per_store[key] = '***REDACTED***' if secret else value
                 break
@@ -840,14 +821,9 @@ def config_show(ctx: click.Context) -> None:
               help='Entity name. Repeat the option per name; the'
                    ' value is never split, so a name may contain a'
                    ' comma.')
-@click.option('--session', default='',
-              envvar=[config.SESSION_ID, config.CLAUDE_SESSION_ID],
-              help='Session id for the temporal chain (defaults to'
-                   ' $MEMMAN_SESSION_ID, then $CLAUDE_CODE_SESSION_ID)')
 @click.pass_context
 def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
-             imp: int, source: str, entities: tuple[str, ...],
-             session: str) -> None:
+             imp: int, source: str, entities: tuple[str, ...]) -> None:
     """Store a new insight via the queue.
 
     Always enqueues. The worker drains the queue (under systemd/launchd
@@ -860,9 +836,8 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
     Notes
     -----
     - `--source` is provenance, stored verbatim (including the
-      `user` default); `--session` is the temporal chain key (no
-      session, no backbone edge); idempotency rides on a queue uuid
-      minted at enqueue. One field per job.
+      `user` default); idempotency rides on a queue uuid minted at
+      enqueue. One field per job.
     """
     _require_started('write')
     content_str = ' '.join(content)
@@ -900,7 +875,6 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str,
             hint_cat=cat, hint_imp=imp,
             hint_source=source,
             hint_entities=entities_json,
-            session_id=session or None,
             priority=0,
             author=author)
     _json_out({
@@ -1289,7 +1263,6 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 if record_run:
                     ctx.begin_drain_run()
 
-            embed_snap = dict(ctx.embed_cache)
             row_usage_snap = llm_usage.snapshot()
             try:
                 row_t0 = _time.monotonic()
@@ -1311,8 +1284,6 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                         f'[enrich] done id={row.id} store={row.store}',
                         err=True)
             except Exception as exc:
-                ctx.embed_cache.clear()
-                ctx.embed_cache.update(embed_snap)
                 mark_failed(conn, row.id, f'{type(exc).__name__}: {exc}')
                 failed += 1
                 trace.event(
@@ -1344,8 +1315,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
         try:
             from memman.maintenance import run_maintenance
             run_maintenance(
-                conn, data_dir_val, touched_stores,
-                store_contexts, deadline)
+                conn, touched_stores, store_contexts, deadline)
         except Exception:
             logger.exception('drain maintenance phase failed')
         if processed > 0:
@@ -1383,10 +1353,9 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
 class _StoreContext:
     """Per-store drain-scope state hoisted out of the row loop.
 
-    One context per store touched in a drain: the open store DB
-    connection, the embedding+insight cache (built lazily on first
-    use), and the slow-role LLM client + embed client. Reused across
-    every row that targets the same store so that scans and HTTP
+    One context per store touched in a drain: the open store
+    connection and the store-bound embed client. Reused across every
+    row that targets the same store so that store opens and HTTP
     setup amortize.
     """
 
@@ -1408,8 +1377,6 @@ class _StoreContext:
                 " contains data; run 'memman embed reembed' to converge.")
         self.ec = _fp_mod.bound_embedder(self.backend)
         self._stored_fp = stored
-        self.embed_cache: dict[str, list[float]] = dict(
-            self.backend.nodes.iter_embeddings_as_vecs())
         self._run_id: int | None = None
 
     def begin_drain_run(self) -> None:
@@ -1487,12 +1454,9 @@ def _process_queue_row(
     The insight's `source` is `row.hint_source` verbatim (provenance
     survives the queue), falling back to `'user'` for programmatic
     enqueues that pass nothing. Crash-recovery idempotency is
-    enforced unconditionally via `row.queue_uuid`; `row.session_id`
-    carries the temporal chain key onto the stored insight.
+    enforced unconditionally via `row.queue_uuid`.
 
-    Hoisted state (db, embed_cache, ec) comes from `ctx`. The drain
-    loop snapshots and restores `ctx.embed_cache` around this call so
-    a transaction failure can't pollute the next row's edges.
+    Hoisted state (the backend and the embed client) comes from `ctx`.
     """
     from memman import trace as _trace
 
@@ -1552,24 +1516,21 @@ def _process_queue_row(
                 and old.id != replaced_id):
             redirected_from = replaced_id
             replaced_id = old.id
-    # Both fields must reach the parent Insight: _plan_fact copies
-    # session_id and queue_uuid off it, so omitting either makes the
-    # whole feature a silent no-op.
+    # `queue_uuid` must reach the parent Insight: _plan_fact copies it
+    # off the parent, so omitting it makes the idempotency check above
+    # a silent no-op.
     insight = Insight(
         id=str(uuid.uuid4()), content=row.content,
         category=category, importance=importance,
         entities=entity_list, source=source,
         created_at=now, updated_at=now,
-        session_id=row.session_id, queue_uuid=row.queue_uuid,
-        author=row.author)
+        queue_uuid=row.queue_uuid, author=row.author)
 
     from memman.pipeline.remember import run_remember
     result = run_remember(
         backend, insight, row.content,
         replaced_id=replaced_id,
-        embed_cache=ctx.embed_cache,
-        ec=ctx.ec,
-        store_name=ctx.store_name)
+        ec=ctx.ec)
     if redirected_from:
         result['redirected_from'] = redirected_from
     _json_out(result)
@@ -1583,15 +1544,9 @@ def _process_queue_row(
 @click.option('--source', default='',
               help='Filter by source (exact match on the stored provenance string)')
 @click.option('--basic', is_flag=True, default=False, help='Simple SQL LIKE matching')
-@click.option('--session', default='',
-              envvar=[config.SESSION_ID, config.CLAUDE_SESSION_ID],
-              help='Calling session id, recorded on the recall-detail '
-                   'oplog row so a return is attributable to a session '
-                   '(defaults to $MEMMAN_SESSION_ID, then '
-                   '$CLAUDE_CODE_SESSION_ID, matching `remember`)')
 @click.pass_context
 def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
-           limit: int, source: str, basic: bool, session: str) -> None:
+           limit: int, source: str, basic: bool) -> None:
     """Print the insights matching a query, one line each, best first.
 
     Each line is `<id8> <score> <created_at> <author> <category> |
@@ -1613,8 +1568,6 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
         Keep only rows with this exact source ('' = no filter).
     basic : bool
         SQL LIKE matching; computes no score.
-    session : str
-        Calling session id, stamped on the `recall-detail` oplog row.
 
     \b
     Notes
@@ -1639,7 +1592,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
     per_store_rerank = config.get_store_rerank_enabled(store_name)
     rerank = (per_store_rerank if per_store_rerank is not None
               else config.get_bool(config.RERANK_ENABLED, default=True))
-    with _active_backend(ctx, reindex_on_open=False) as backend:
+    with _active_backend(ctx) as backend:
         if basic:
             results = backend.nodes.query(
                 keyword=keyword_str, category=cat,
@@ -1683,7 +1636,6 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], cat: str,
                     operation='recall-detail', insight_id='',
                     detail=json.dumps({'q': keyword_str[:80],
                                        'limit': limit,
-                                       'session': session,
                                        'hits': hits}))
         except sqlite3.OperationalError as exc:
             logger.debug(
@@ -1775,14 +1727,10 @@ def forget(ctx: click.Context, id: str) -> None:
               help='Entity name. Repeat the option per name; the'
                    ' value is never split, so a name may contain a'
                    ' comma.')
-@click.option('--session', default='',
-              envvar=[config.SESSION_ID, config.CLAUDE_SESSION_ID],
-              help='Session id for the temporal chain (defaults to'
-                   ' $MEMMAN_SESSION_ID, then $CLAUDE_CODE_SESSION_ID)')
 @click.pass_context
 def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             cat: str, imp: int, source: str,
-            entities: tuple[str, ...], session: str) -> None:
+            entities: tuple[str, ...]) -> None:
     """Replace an insight by ID with new content via the queue.
 
     ID is a full insight id or any unambiguous prefix of one.
@@ -1790,10 +1738,9 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
     Notes
     -----
     - The replaced insight is superseded, not deleted: it keeps its
-      content behind `superseded_by`, leaves every recall and listing,
-      and its edges move to the successor. `insights show <id>
-      --history` reads the chain back; `unsupersede` reverses it once
-      the successor is forgotten.
+      content behind `superseded_by`, and leaves every recall and
+      listing. `insights show <id> --history` reads the chain back;
+      `unsupersede` reverses it once the successor is forgotten.
     - The id must be current. A forgotten or already superseded id is
       refused, the latter naming its successor.
     - Unflagged `--cat` / `--imp` / `--source` / `--entity` inherit
@@ -1804,11 +1751,6 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
       which clears the list, and the successor stores it empty.
     - The content lands as one row exactly as typed; enrichment still
       runs and rebuilds keywords and summary.
-    - `--session` does not inherit: the successor carries the session
-      that wrote it, so it enters that session's backbone chain.
-      It also inherits the replaced insight's edges, including that
-      row's own backbone edge, so a cross-session replace leaves the
-      successor bridging both chains at full weight.
     """
     _require_started('write')
 
@@ -1883,7 +1825,6 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             hint_source=source,
             hint_entities=entities_json,
             hint_replaced_id=id,
-            session_id=session or None,
             priority=0,
             author=author)
     _json_out({
@@ -1908,9 +1849,9 @@ def supersede(ctx: click.Context, predecessor_id: str,
     Ids are full insight ids or any unambiguous prefix of one.
 
     The only way to link two rows that BOTH already exist: `replace`
-    always inserts a new row. Neither row's content changes. The predecessor
-    leaves every recall and listing, keeps its content behind
-    `superseded_by`, and hands its edges to the successor.
+    always inserts a new row. Neither row's content changes. The
+    predecessor leaves every recall and listing and keeps its content
+    behind `superseded_by`.
 
     \b
     Parameters
@@ -1925,7 +1866,7 @@ def supersede(ctx: click.Context, predecessor_id: str,
     Returns
     -------
     JSON
-        `{predecessor, successor, edges_moved}`.
+        `{predecessor, successor}`.
 
     \b
     Notes
@@ -1946,9 +1887,6 @@ def supersede(ctx: click.Context, predecessor_id: str,
     memman insights show 16c6c667-... --history
     """  # noqa: D301, D410, D411
     _require_started('write')
-    # Lazy: the pipeline module imports the LLM and embedding stacks,
-    # which every read-only command would otherwise pay for at start.
-    from memman.pipeline.remember import move_edges
     from memman.store.model import insight_to_delta_dict
     with _active_backend(ctx) as backend, backend.transaction():
         try:
@@ -1968,13 +1906,10 @@ def supersede(ctx: click.Context, predecessor_id: str,
             successor_id)
         if reason:
             raise click.ClickException(reason)
-        carried = backend.edges.by_node(predecessor_id)
         if not backend.nodes.supersede(predecessor_id, successor_id):
             raise click.ClickException(
                 f'insight {predecessor_id} changed under this'
                 ' command; re-read it')
-        moved = move_edges(
-            backend, predecessor_id, successor_id, carried)
         backend.oplog.log(
             operation='supersede', insight_id=predecessor_id,
             detail=f'replaced by {successor_id}',
@@ -1982,7 +1917,6 @@ def supersede(ctx: click.Context, predecessor_id: str,
     _json_out({
         'predecessor': predecessor_id,
         'successor': successor_id,
-        'edges_moved': moved,
         })
 
 
@@ -1996,11 +1930,8 @@ def unsupersede(ctx: click.Context, id: str) -> None:
     ID is a full insight id or any unambiguous prefix of one.
 
     Clears the row's `superseded_by`, re-embeds its content with the
-    store's embedder, refreshes its keyword tokens, and rebuilds its
-    entity and semantic edges, so it re-enters recall as a current
-    row. No temporal edge is minted (the row is not a new event), and
-    the manual edges the supersession moved onto the forgotten
-    successor are not restored.
+    store's embedder, and refreshes its keyword tokens, so it
+    re-enters recall as a current row.
 
     \b
     Parameters
@@ -2012,7 +1943,7 @@ def unsupersede(ctx: click.Context, id: str) -> None:
     Returns
     -------
     JSON
-        `{id, was_superseded_by, edges_created: {entity, semantic}}`.
+        `{id, was_superseded_by}`.
 
     \b
     Notes
@@ -2032,14 +1963,10 @@ def unsupersede(ctx: click.Context, id: str) -> None:
     memman unsupersede 16c6c667-...
     """  # noqa: D301, D410, D411
     _require_started('write')
-    name = _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store'])
-    # Lazy: the embedding and graph stacks are only paid for here.
+    # Lazy: the embedding stack is only paid for here.
     import httpx
     from memman.embed.fingerprint import bound_embedder
     from memman.exceptions import EmbedCredentialError
-    from memman.graph.engine import _resolve_semantic_threshold
-    from memman.graph.entity import create_entity_edges
-    from memman.graph.semantic import create_semantic_edges
     from memman.store.model import insight_to_delta_dict
     with _active_backend(ctx) as backend:
         try:
@@ -2067,7 +1994,6 @@ def unsupersede(ctx: click.Context, id: str) -> None:
                 ' first')
         before = insight_to_delta_dict(row)
         ec = bound_embedder(backend)
-        threshold = _resolve_semantic_threshold(backend, store_name=name)
         # The embed is a network call; it runs before the transaction
         # so a slow provider never holds the store's write lock, and a
         # failure leaves the row superseded rather than current with a
@@ -2087,15 +2013,6 @@ def unsupersede(ctx: click.Context, id: str) -> None:
                     f'insight {id} changed under this command; re-read it')
             backend.nodes.update_embedding(id, vec, ec.model)
             backend.nodes.update_entities(id, row.entities)
-            row.superseded_by = None
-            # Built after the pointer is cleared so the row's own
-            # vector is in the cache the semantic builder reads.
-            embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
-            edges_created = {
-                'entity': create_entity_edges(backend, row),
-                'semantic': create_semantic_edges(
-                    backend, row, embed_cache, threshold=threshold),
-                }
             backend.nodes.stamp_linked(id)
             backend.oplog.log(
                 operation='unsupersede', insight_id=id,
@@ -2103,134 +2020,7 @@ def unsupersede(ctx: click.Context, id: str) -> None:
     _json_out({
         'id': id,
         'was_superseded_by': successor_id,
-        'edges_created': edges_created,
         })
-
-
-@claude_callable
-@graph.command('link')
-@click.argument('source_id')
-@click.argument('target_id')
-@click.option('--type', 'edge_type', default='semantic', help='Edge type')
-@click.option('--weight', default=0.5, type=float, help='Edge weight')
-@click.option('--meta', default='', help='JSON metadata')
-@click.pass_context
-def graph_link(ctx: click.Context, source_id: str, target_id: str,
-               edge_type: str, weight: float, meta: str) -> None:
-    """Create a manual edge between two insights.
-
-    Ids are full insight ids or any unambiguous prefix of one.
-    """
-    _require_started('create edges')
-
-    if edge_type not in VALID_EDGE_TYPES:
-        raise click.ClickException(
-            f'invalid edge type {edge_type!r}')
-
-    if weight < 0.0 or weight > 1.0:
-        raise click.ClickException(
-            'weight must be between 0.0 and 1.0')
-
-    metadata: dict[str, str] = {}
-    if meta:
-        try:
-            metadata = json.loads(meta)
-        except json.JSONDecodeError as e:
-            raise click.ClickException(
-                f'invalid JSON metadata: {e}')
-        if not isinstance(metadata, dict):
-            raise click.ClickException(
-                'metadata must be a JSON object, not '
-                + type(metadata).__name__)
-    metadata.setdefault('created_by', 'claude')
-
-    now = datetime.now(timezone.utc)
-    with _active_backend(ctx) as backend:
-        try:
-            source_id = backend.nodes.resolve_id(source_id)
-            target_id = backend.nodes.resolve_id(target_id)
-        except ValueError as exc:
-            raise click.ClickException(str(exc))
-        if source_id == target_id:
-            raise click.ClickException(
-                'cannot link an insight to itself')
-        with backend.transaction():
-            if backend.nodes.get(source_id) is None:
-                raise click.ClickException(
-                    f'insight {source_id} not found or not current')
-            if backend.nodes.get(target_id) is None:
-                raise click.ClickException(
-                    f'insight {target_id} not found or not current')
-
-            existing_weight = backend.edges.get_weight(
-                source_id, target_id, edge_type)
-
-            backend.edges.upsert(Edge(
-                source_id=source_id, target_id=target_id,
-                edge_type=edge_type, weight=weight,
-                metadata=metadata, created_at=now))
-            backend.edges.upsert(Edge(
-                source_id=target_id, target_id=source_id,
-                edge_type=edge_type, weight=weight,
-                metadata=metadata, created_at=now))
-            backend.oplog.log(
-                operation='link', insight_id=source_id,
-                detail=f'{source_id} <-> {target_id} ({edge_type})')
-
-        actual_weight = (
-            backend.edges.get_weight(source_id, target_id, edge_type)
-            or weight)
-        out = {
-            'status': 'linked',
-            'source_id': source_id,
-            'target_id': target_id,
-            'edge_type': edge_type,
-            'weight': actual_weight,
-            'metadata': metadata,
-            }
-        if existing_weight is not None and existing_weight > weight:
-            out['warning'] = (
-                f'existing weight {existing_weight} > requested'
-                f' {weight}; kept higher')
-        _json_out(out)
-
-
-@claude_callable
-@graph.command('related')
-@click.argument('id')
-@click.option('--edge', default='', help='Filter by edge type')
-@click.option('--depth', default=2, type=int, help='Max traversal depth')
-@click.pass_context
-def graph_related(ctx: click.Context, id: str, edge: str,
-                  depth: int) -> None:
-    """Find connected insights via graph traversal.
-
-    ID is a full insight id or any unambiguous prefix of one.
-    """
-    from memman.graph.bfs import BFSOptions, bfs
-
-    with _active_backend(ctx) as backend:
-        try:
-            id = backend.nodes.resolve_id(id)
-        except ValueError as exc:
-            raise click.ClickException(str(exc))
-        if backend.nodes.get_include_deleted(id) is None:
-            raise click.ClickException(f'insight {id} not found')
-        nodes = bfs(backend, id, BFSOptions(
-            max_depth=depth, max_nodes=0, edge_filter=edge))
-        out = []
-        for n in nodes:
-            entry: dict = {
-                'id': n['insight'].id,
-                'content': n['insight'].content,
-                'category': n['insight'].category,
-                'importance': n['insight'].importance,
-                'depth': n['hop'],
-                }
-            if n.get('via_edge'):
-                entry['via_edge_type'] = n['via_edge']
-            out.append(entry)
-        _json_out(out)
 
 
 @queue.command('list')
@@ -2409,8 +2199,8 @@ def scheduler_start(ctx: click.Context, text_output: bool) -> None:
 def scheduler_stop(text_output: bool) -> None:
     """Stop the scheduler. Trigger files stay; memman becomes recall-only.
 
-    Writes (`remember`/`replace`/`forget`/`graph link`/`graph
-    rebuild`) reject until `scheduler start` re-arms the worker. Use
+    Writes (`remember`/`replace`/`forget`/`graph rebuild`) reject
+    until `scheduler start` re-arms the worker. Use
     `memman uninstall` to remove trigger files entirely.
     """
     from memman.setup.scheduler import stop
@@ -2703,7 +2493,7 @@ def store_remove(ctx: click.Context, name: str, yes: bool) -> None:
     # recall hook -- for a cold-path command.
     from memman.setup.scheduler import _write_env_keys_with_flock
     per_store_keys = {
-        f'{prefix}{name}' for prefix, _, _ in config.PER_STORE_KEY_SPECS}
+        f'{prefix}{name}' for prefix, _ in config.PER_STORE_KEY_SPECS}
     stale = per_store_keys & set(
         config.parse_env_file(config.env_file_path(data_dir)))
     if stale:
@@ -2980,7 +2770,6 @@ def status(ctx: click.Context) -> None:
             'superseded_insights': node_stats.superseded_insights,
             'deleted_insights': node_stats.deleted_insights,
             'stale_insights': stale_insights,
-            'edge_count': node_stats.edge_count,
             'oplog_count': node_stats.oplog_count,
             'by_category': node_stats.by_category,
             'top_entities': node_stats.top_entities,
@@ -3004,9 +2793,7 @@ def doctor(ctx: click.Context, text_output: bool) -> None:
     with _active_backend(ctx, unchecked=True) as backend:
         store_name = _resolve_store_name(
             ctx.obj['data_dir'], ctx.obj['store'])
-        result = run_all_checks(
-            backend, data_dir=ctx.obj['data_dir'],
-            store_name=store_name)
+        result = run_all_checks(backend, data_dir=ctx.obj['data_dir'])
         result['store'] = store_name
         result['db_path'] = backend.path
         if text_output:
@@ -3677,7 +3464,6 @@ def migrate(
                     payload = src_migrator.gather(s)
                     click.echo(
                         f'{s}: insights={len(payload.insights)}'
-                        f' edges={len(payload.edges)}'
                         f' oplog={len(payload.oplog)}'
                         f' meta={len(payload.meta)} (dry-run)')
                 # Notes:
@@ -3723,13 +3509,11 @@ def migrate(
                                 conn, _store_schema(s), s,
                                 expected={
                                     'insights': len(payload.insights),
-                                    'edges': len(payload.edges),
                                     'oplog': len(payload.oplog),
                                     'meta': len(payload.meta),
                                     })
                         click.echo(
                             f'{s}: insights={len(payload.insights)}'
-                            f' edges={len(payload.edges)}'
                             f' oplog={len(payload.oplog)}'
                             f' meta={len(payload.meta)} (verified)')
                         _write_env_keys({
@@ -3836,7 +3620,6 @@ def migrate(
                     tgt_migrator.apply(s, payload)
                     click.echo(
                         f'{s}: insights={len(payload.insights)}'
-                        f' edges={len(payload.edges)}'
                         f' oplog={len(payload.oplog)}'
                         f' meta={len(payload.meta)} (verified)')
                 # Notes:
@@ -3935,8 +3718,7 @@ def prime() -> None:
                 with open_ro_db(store_dir(data_dir, name)) as db:
                     stats = get_stats(db)
                 status_line = (f"[memman] Memory active "
-                               f"({stats['total_insights']} insights, "
-                               f"{stats['edge_count']} edges).")
+                               f"({stats['total_insights']} insights).")
         else:
             from memman.session import active_store
             with active_store(
@@ -3944,8 +3726,7 @@ def prime() -> None:
                     unchecked=True) as backend:
                 s = backend.nodes.stats()
                 status_line = (f'[memman] Memory active '
-                               f'({s.total_insights} insights, '
-                               f'{s.edge_count} edges).')
+                               f'({s.total_insights} insights).')
     except Exception as exc:
         logger.debug('prime status fallback: %s', exc)
     click.echo(status_line)
@@ -3966,53 +3747,7 @@ def prime() -> None:
 
     shipped = (pkg_files('memman.setup.assets')
                .joinpath('claude/guide.md').read_text())
-    if session_id:
-        shipped = shipped.replace('$SESSION_ID', session_id)
     click.echo(shipped, nl=False)
-
-
-def _settle_rebuilt_edges(
-        backend: 'Backend', embed_cache: dict[str, list[float]],
-        metadata_llm_client: object, embed_client: object,
-        *, store_name: str) -> None:
-    """Re-derive a rebuilt store's auto edges and restore linked_at.
-
-    Parameters
-    ----------
-    backend : Backend
-        The store a rebuild loop has just walked.
-    embed_cache : dict[str, list[float]]
-        The loop's embedding cache, reused so the relink pass reads no
-        vector twice.
-    metadata_llm_client : object
-        The `slow` client. Every row is enriched by the time
-        this runs, so the relink pass makes no LLM call, but a row
-        whose enrichment failed mid-loop still reaches the right role.
-    embed_client : object
-        The store-bound embedder.
-    store_name : str
-        Selects the per-store semantic threshold surface.
-
-    Notes
-    -----
-    - A rebuild's per-row pass deletes each row's auto edges in BOTH
-      directions before recreating them, so it leaves edges a clean
-      derivation never writes. One global re-derive repairs the whole
-      store at no LLM cost, which is why no operator command is owed.
-    - `reindex_auto_edges` ends in `clear_linked_at`, so the relink
-      pass here re-stamps what it unstamped. Without it a rebuild
-      returns reporting its whole corpus as pending.
-    """
-    from memman.graph.engine import link_pending, reindex_auto_edges
-
-    reindex_auto_edges(backend, store_name=store_name)
-    while True:
-        if link_pending(
-                backend, embed_cache=embed_cache,
-                metadata_llm_client=metadata_llm_client,
-                embed_client=embed_client,
-                store_name=store_name) == 0:
-            break
 
 
 def _graph_rebuild_stale_only(
@@ -4051,9 +3786,6 @@ def _graph_rebuild_stale_only(
     except Exception:
         enrich_model = None
 
-    data_dir = ctx.obj['data_dir']
-    store_name = _resolve_store_name(data_dir, ctx.obj['store'])
-
     with _active_backend(ctx) as backend:
         if dry_run:
             stale = backend.nodes.count_stale_insights(active_pv)
@@ -4086,7 +3818,6 @@ def _graph_rebuild_stale_only(
             metadata_llm_client = _get_llm_client_or_fail('slow')
             ec = bound_embedder(backend)
 
-            embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
             processed = 0
 
             bar = tqdm(
@@ -4119,21 +3850,16 @@ def _graph_rebuild_stale_only(
 
                 while True:
                     count = link_pending(
-                        backend, embed_cache=embed_cache,
+                        backend,
                         metadata_llm_client=metadata_llm_client,
                         embed_client=ec,
-                        on_progress=_on_progress,
-                        store_name=store_name)
+                        on_progress=_on_progress)
                     processed += count
                     if count == 0:
                         break
 
             bar.set_description('Done')
             bar.close()
-
-            _settle_rebuilt_edges(
-                backend, embed_cache, metadata_llm_client, ec,
-                store_name=store_name)
 
             remaining = backend.nodes.count_pending_links()
 
@@ -4177,9 +3903,6 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
     from memman.embed.fingerprint import bound_embedder
     from memman.graph.engine import MAX_LINK_BATCH, link_pending
 
-    data_dir = ctx.obj['data_dir']
-    store_name = _resolve_store_name(data_dir, ctx.obj['store'])
-
     with _active_backend(ctx) as backend:
         metadata_llm_client = _get_llm_client_or_fail('slow')
         ec = bound_embedder(backend)
@@ -4200,7 +3923,6 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
                 raise click.ClickException(
                     'another graph rebuild is in progress on this store')
 
-            embed_cache = dict(backend.nodes.iter_embeddings_as_vecs())
             processed = 0
 
             bar = tqdm(
@@ -4233,21 +3955,16 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
 
                 while True:
                     count = link_pending(
-                        backend, embed_cache=embed_cache,
+                        backend,
                         metadata_llm_client=metadata_llm_client,
                         embed_client=ec,
-                        on_progress=_on_progress,
-                        store_name=store_name)
+                        on_progress=_on_progress)
                     processed += count
                     if count == 0:
                         break
 
             bar.set_description('Done')
             bar.close()
-
-            _settle_rebuilt_edges(
-                backend, embed_cache, metadata_llm_client, ec,
-                store_name=store_name)
 
             remaining = backend.nodes.count_pending_links()
 
@@ -4322,10 +4039,9 @@ def _reembed_one_store(
     Walk all active insights, comparing each to `target`. Skip rows
     that already match; re-embed rows that differ. Per-row blob +
     cursor advance is one transaction; the final fingerprint write +
-    cursor reset + state=idle + edge reindex is another.
+    cursor reset + state=idle is another.
     """
     from memman.embed.fingerprint import write_fingerprint
-    from memman.graph.engine import reindex_auto_edges
     from memman.store.node import iter_for_reembed
     from memman.store.sqlite import SqliteBackend
 
@@ -4392,13 +4108,10 @@ def _reembed_one_store(
                 backend.meta.set('embed_reembed_cursor', '')
                 backend.meta.set('embed_reembed_state', 'idle')
 
-            edge_stats = reindex_auto_edges(backend, store_name=store_name)
-
             stats = {
                 'store': store_name,
                 'scanned': scanned,
                 'reembedded': reembedded,
-                'edges': edge_stats,
                 }
             backend.oplog.log(
                 operation='embed_reembed', insight_id='',
@@ -4521,7 +4234,7 @@ def embed_swap(
     built CONCURRENTLY, backfilled `WHERE embedding_pending IS NULL`,
     cut over in one transaction (drop + rename). SQLite: shadow
     `embedding_pending BLOB` column populated under
-    `write_lock("embed_swap")`, cutover is `update insights set
+    `swap_lock()`, cutover is `update insights set
     embedding=embedding_pending, embedding_pending=null`. Recall
     keeps reading `embedding` throughout.
 

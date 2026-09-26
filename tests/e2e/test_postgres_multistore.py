@@ -49,7 +49,7 @@ def test_fresh_init_creates_schema_with_all_tables(pg_dsn, request):
                     (schema,))
                 tables = [r[0] for r in cur.fetchall()]
         assert tables == [
-            'edges', 'insights', 'meta', 'oplog', 'worker_runs']
+            'insights', 'meta', 'oplog', 'worker_runs']
     finally:
         backend.close()
         drop_postgres_store(store, pg_dsn)

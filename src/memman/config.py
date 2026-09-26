@@ -75,21 +75,7 @@ EMBED_SWAP_BATCH_SIZE = 'MEMMAN_EMBED_SWAP_BATCH_SIZE'
 EMBED_SWAP_INDEX_TIMEOUT = 'MEMMAN_EMBED_SWAP_INDEX_TIMEOUT'
 REINDEX_TIMEOUT = 'MEMMAN_REINDEX_TIMEOUT'
 
-# Process-control only: read from `os.environ` by the CLI's --session
-# default, never persisted to the env file -- a stale persisted id
-# would fuse every later write into one false backbone chain.
-SESSION_ID = 'MEMMAN_SESSION_ID'
-
 AUTHOR = 'MEMMAN_AUTHOR'
-
-# Notes:
-# - Not memman's variable: Claude Code exports it into every Bash tool
-#   subprocess, subagents included, and owns its lifetime. memman only
-#   reads it, as the second envvar behind SESSION_ID on --session.
-# - Deliberately outside _ALL_VARS and INSTALLABLE_KEYS. It is neither
-#   installable nor ours to report, and the never-persisted rule above
-#   binds it for the same reason.
-CLAUDE_SESSION_ID = 'CLAUDE_CODE_SESSION_ID'
 
 
 def resolve_author() -> str:
@@ -122,27 +108,6 @@ def RERANK_ENABLED_FOR(store: str) -> str:
     return f'MEMMAN_RERANK_ENABLED_{store}'
 
 
-def SURFACE_FOR(store: str) -> str:
-    """Per-store surface env-key name: `MEMMAN_SURFACE_<store>`."""
-    return f'MEMMAN_SURFACE_{store}'
-
-
-def AUTO_THRESHOLD_FOR(store: str) -> str:
-    """Per-store auto-threshold env-key name.
-
-    Returns `MEMMAN_AUTO_SEMANTIC_THRESHOLD_<store>`. Operator override
-    for the cosine cutoff that gates auto-semantic-edge creation. The
-    value is either a float in `(0.0, 1.0)` or the sentinel `'skip'`
-    (also accepted: `'none'`), the latter meaning "do not create
-    semantic edges for this store regardless of model".
-    """
-    return f'MEMMAN_AUTO_SEMANTIC_THRESHOLD_{store}'
-
-
-SURFACE_VALUES: frozenset[str] = frozenset({'code', 'claw'})
-AUTO_THRESHOLD_SENTINELS: frozenset[str] = frozenset({'skip', 'none'})
-
-
 def env_key_for(backend: str, key: str, store: str) -> str:
     """Per-store env-key name for a backend descriptor key.
 
@@ -153,38 +118,14 @@ def env_key_for(backend: str, key: str, store: str) -> str:
     return f'MEMMAN_{backend.upper()}_{key.upper()}_{store}'
 
 
-def _validate_surface(value: str) -> str | None:
-    """Return None when `value` is a valid surface, else an error message."""
-    if value.strip().lower() in SURFACE_VALUES:
-        return None
-    return (f'must be one of {sorted(SURFACE_VALUES)}')
-
-
-def _validate_threshold(value: str) -> str | None:
-    """Return None when `value` is a valid auto-threshold, else an error."""
-    raw = value.strip().lower()
-    if raw in AUTO_THRESHOLD_SENTINELS:
-        return None
-    try:
-        parsed = float(raw)
-    except ValueError:
-        return (f'must be a float in (0.0, 1.0) or'
-                f' one of {sorted(AUTO_THRESHOLD_SENTINELS)}')
-    if not 0.0 < parsed < 1.0:
-        return 'is out of range; must be in (0.0, 1.0)'
-    return None
-
-
 def _pg_dsn_prefix() -> str:
     return f'MEMMAN_{"postgres".upper()}_DSN_'
 
 
-PER_STORE_KEY_SPECS: tuple[tuple[str, Any, bool], ...] = (
-    ('MEMMAN_BACKEND_', None, False),
-    (_pg_dsn_prefix(), None, True),
-    ('MEMMAN_RERANK_ENABLED_', None, False),
-    ('MEMMAN_SURFACE_', _validate_surface, False),
-    ('MEMMAN_AUTO_SEMANTIC_THRESHOLD_', _validate_threshold, False),
+PER_STORE_KEY_SPECS: tuple[tuple[str, bool], ...] = (
+    ('MEMMAN_BACKEND_', False),
+    (_pg_dsn_prefix(), True),
+    ('MEMMAN_RERANK_ENABLED_', False),
     )
 
 
@@ -338,7 +279,7 @@ INSTALL_DEFAULTS: dict[str, str] = {
     }
 
 _PROCESS_CONTROL_VARS = (
-    DATA_DIR, STORE, WORKER, DEBUG, SCHEDULER_KIND, SESSION_ID, AUTHOR)
+    DATA_DIR, STORE, WORKER, DEBUG, SCHEDULER_KIND, AUTHOR)
 
 _TUNING_VARS = (
     EMBED_SWAP_BATCH_SIZE,
@@ -497,62 +438,6 @@ def get_store_backend(
     file_values = parse_env_file(env_file_path(data_dir))
     raw = file_values.get(BACKEND_FOR(store))
     return raw or None
-
-
-def get_store_surface(
-        store: str, data_dir: str | None = None) -> str:
-    """Resolve the surface (`'code'` or `'claw'`) for `store`.
-
-    Reads `MEMMAN_SURFACE_<store>` from the env file; falls back to
-    `'code'` when the key is unset, missing, or set to a value outside
-    `SURFACE_VALUES`. Pairs with `memman.embed.thresholds.resolve(...,
-    surface=...)` so a store without an explicit surface lands on the
-    code-surface threshold row.
-
-    Invalid values (e.g. `'foo'`) silently default to `'code'` here;
-    `memman doctor`'s `check_per_store_keys` is the surface-validation
-    entry point and is where operators see the error.
-    """
-    key = SURFACE_FOR(store)
-    if data_dir is None:
-        raw = get(key)
-    else:
-        raw = parse_env_file(env_file_path(data_dir)).get(key) or None
-    if raw is None:
-        return 'code'
-    value = raw.strip().lower()
-    return value if value in SURFACE_VALUES else 'code'
-
-
-def get_store_auto_threshold(
-        store: str,
-        data_dir: str | None = None) -> float | str | None:
-    """Read the per-store AUTO_SEMANTIC_THRESHOLD override.
-
-    Returns `None` when unset; the literal `'skip'` when the operator
-    set `skip` or `none` to disable semantic edges for this store; a
-    float when the operator set a numeric override.
-
-    Raises `ValueError` if the value is neither a recognized sentinel
-    nor a float in `(0.0, 1.0)`. Doctor's `check_per_store_keys`
-    catches that and reports the error to the operator.
-    """
-    key = AUTO_THRESHOLD_FOR(store)
-    if data_dir is None:
-        raw = get(key)
-    else:
-        raw = parse_env_file(env_file_path(data_dir)).get(key) or None
-    if raw is None or raw.strip() == '':
-        return None
-    value = raw.strip().lower()
-    if value in AUTO_THRESHOLD_SENTINELS:
-        return 'skip'
-    parsed = float(value)
-    if not 0.0 < parsed < 1.0:
-        raise ValueError(
-            f'{key}={raw!r} is out of range; must be a float in (0.0, 1.0)'
-            f' or one of {sorted(AUTO_THRESHOLD_SENTINELS)}')
-    return parsed
 
 
 def get_store_rerank_enabled(

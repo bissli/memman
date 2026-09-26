@@ -190,17 +190,6 @@ def run_swap(
         write_fingerprint(backend, target)
         for key in _META_KEYS:
             backend.meta.delete(key)
-        # Every `semantic` edge carries as its weight a cosine
-        # computed under the model we just retired, and recall reads
-        # that weight directly. Clearing the constants hash makes the
-        # next maintenance pass re-run `reindex_auto_edges`, which is
-        # the existing repair path; recomputing here would run an
-        # O(N^2) cosine sweep inside an interactive command.
-        backend.meta.delete('constants_hash')
-    logger.warning(
-        'embed swap complete: semantic edge weights still reflect the'
-        ' previous model and will be rebuilt on the next drain. Run'
-        ' `memman graph rebuild` to rebuild them now.')
     return SwapProgress(
         state=STATE_DONE,
         cursor='',

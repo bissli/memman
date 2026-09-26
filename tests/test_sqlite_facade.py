@@ -12,7 +12,7 @@ from memman import config
 from memman.store.db import open_db
 from memman.store.errors import ConfigError
 from memman.store.factory import drop_store, list_stores, open_backend
-from memman.store.model import Edge, Insight
+from memman.store.model import Insight
 from memman.store.sqlite import SqliteBackend, drop_sqlite_store
 from memman.store.sqlite import open_sqlite_backend
 
@@ -48,19 +48,6 @@ def test_node_insert_stamps_created_at_when_absent(backend):
     backend.nodes.insert(ins)
     fetched = backend.nodes.get('ts')
     assert fetched.created_at is not None
-
-
-def test_edge_upsert_roundtrip(backend):
-    """edges.upsert + edges.by_node returns the edge."""
-    backend.nodes.insert(Insight(id='a', content='A'))
-    backend.nodes.insert(Insight(id='b', content='B'))
-    edge = Edge(source_id='a', target_id='b', edge_type='semantic',
-                weight=0.7)
-    backend.edges.upsert(edge)
-    edges = backend.edges.by_node('a')
-    assert len(edges) == 1
-    assert edges[0].weight == 0.7
-    assert edges[0].created_at is not None
 
 
 def test_meta_get_set_roundtrip(backend):
@@ -107,13 +94,6 @@ def test_transaction_rollback_failure_does_not_mask_original(backend):
     with pytest.raises(RuntimeError, match='boom'), backend.transaction():
         backend._db._conn.execute('commit')
         raise RuntimeError('boom')
-
-
-def test_write_lock_is_no_op_on_sqlite(backend):
-    """SQLite write_lock() is a no-op context manager."""
-    with backend.write_lock('test'):
-        backend.nodes.insert(Insight(id='wl', content='in lock'))
-    assert backend.nodes.get('wl') is not None
 
 
 def test_open_sqlite_backend_returns_sqlite_backend(tmp_path):

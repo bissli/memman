@@ -46,11 +46,9 @@ def _seed_store(data_dir, store):
     db = open_db(sdir)
     write_fingerprint(SqliteBackend(db), seed_default_fingerprint())
     insert_insight(db, make_insight(
-        id='p-1', content='first statement', session_id='sess-p1',
-        queue_uuid='queue-p1'))
+        id='p-1', content='first statement', queue_uuid='queue-p1'))
     insert_insight(db, make_insight(
-        id='p-2', content='second statement', session_id='sess-p2',
-        queue_uuid='queue-p2'))
+        id='p-2', content='second statement', queue_uuid='queue-p2'))
     db._exec(
         'update insights set superseded_by = ? where id = ?',
         ('p-2', 'p-1'))
@@ -81,8 +79,8 @@ def test_superseded_by_round_trips_through_migration(tmp_path):
         silently drops every pointer, and the fleet's 9,2xx
         supersessions with it.
     Oracle: the payload row carries `p-2` in between, the applied
-        store returns it, and the adjacent `queue_uuid` and
-        `session_id` keep their distinct values.
+        store returns it, and the adjacent `queue_uuid` keeps its
+        distinct value.
     """
     data_dir = str(tmp_path)
     _seed_store(data_dir, 'src')
@@ -95,7 +93,6 @@ def test_superseded_by_round_trips_through_migration(tmp_path):
     again = {i.id: i for i in m.gather('dst').insights}
     assert again['p-1'].superseded_by == 'p-2'
     assert again['p-1'].queue_uuid == 'queue-p1'
-    assert again['p-1'].session_id == 'sess-p1'
     assert again['p-2'].superseded_by is None
 
 

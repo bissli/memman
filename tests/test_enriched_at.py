@@ -45,7 +45,7 @@ class TestEnrichedAtOnLinkPending:
             'UPDATE insights SET enriched_at = NULL'
             " WHERE id = 'nl-1'")
 
-        link_pending(tmp_backend, store_name='test')
+        link_pending(tmp_backend)
 
         row = tmp_db._conn.execute(
             'SELECT linked_at, enriched_at FROM insights'
@@ -75,7 +75,7 @@ class TestEnrichedAtOnLinkPending:
 
         link_pending(
             tmp_backend, metadata_llm_client=mock_llm,
-            embed_client=bound_embedder(tmp_backend), store_name='test')
+            embed_client=bound_embedder(tmp_backend))
 
         row = tmp_db._conn.execute(
             'SELECT linked_at, enriched_at FROM insights'
@@ -113,7 +113,7 @@ class TestEnrichedAtOnLinkPending:
         with caplog.at_level(logging.WARNING, logger='memman'):
             link_pending(
                 tmp_backend, metadata_llm_client=mock_llm,
-                embed_client=_FailingClient(), store_name='test')
+                embed_client=_FailingClient())
 
         warned = [r for r in caplog.records
                   if 'Re-embed failed' in r.getMessage()]
@@ -149,7 +149,7 @@ class TestEnrichedAtOnLinkPending:
 
         link_pending(
             tmp_backend, metadata_llm_client=mock_llm,
-            embed_client=unavailable, store_name='test')
+            embed_client=unavailable)
 
         row = tmp_db._conn.execute(
             'SELECT linked_at, enriched_at FROM insights'
@@ -174,14 +174,17 @@ class TestEnrichedAtOnLinkPending:
         tmp_db._conn.execute(
             'UPDATE insights SET enriched_at = NULL'
             " WHERE id = 'nv-1'")
-        assert 'nv-1' not in dict(
-            tmp_backend.nodes.iter_embeddings_as_vecs())
+        before = tmp_db._conn.execute(
+            "SELECT embedding FROM insights WHERE id = 'nv-1'").fetchone()
+        assert before[0] is None
 
         mock_llm = MagicMock()
         mock_llm.complete.return_value = '{"keywords": [], "summary": "s"}'
 
         link_pending(
             tmp_backend, metadata_llm_client=mock_llm,
-            embed_client=bound_embedder(tmp_backend), store_name='test')
+            embed_client=bound_embedder(tmp_backend))
 
-        assert 'nv-1' in dict(tmp_backend.nodes.iter_embeddings_as_vecs())
+        after = tmp_db._conn.execute(
+            "SELECT embedding FROM insights WHERE id = 'nv-1'").fetchone()
+        assert after[0] is not None

@@ -17,14 +17,12 @@ runs are unaffected.
 
 
 import random
-import threading
 
 import pytest
 
 psycopg = pytest.importorskip('psycopg')
 pytest.importorskip('pgvector')
 
-from memman.store.model import Insight
 from memman.store.postgres import EMBEDDING_DIM, _ensure_baseline_schema
 from memman.store.postgres import _ensure_hnsw_index, _store_schema
 from memman.store.postgres import drop_postgres_store, open_postgres_backend
@@ -425,94 +423,6 @@ def test_reembed_lock_session_scoped_and_releases_on_close(
     finally:
         a.close()
         b.close()
-        with psycopg.connect(pg_dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
-
-
-def test_reindex_concurrent_writers_no_edges_lost(pg_dsn):
-    """Thread A inserts a manual edge inside `write_lock("reindex")`;
-    Thread B runs `reindex_auto_edges` concurrently. The manual edge
-    must survive.
-    """
-    from memman.graph.engine import reindex_auto_edges
-    from memman.store.model import Edge
-
-    store_name = 'pg_concurrent'
-    schema = _store_schema(store_name)
-    with psycopg.connect(pg_dsn, autocommit=True) as conn:
-        with conn.cursor() as cur:
-            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
-
-    seed = open_postgres_backend(store_name, pg_dsn)
-    try:
-        with seed.transaction():
-            for i in range(3):
-                seed.nodes.insert(
-                    Insight(
-                        id=f'seed{i}', content=f'seed {i}',
-                        importance=3))
-                seed.nodes.update_embedding(
-                    f'seed{i}', _pg_vec(i), 'voyage-3-lite')
-    finally:
-        seed.close()
-
-    barrier = threading.Barrier(2)
-    errors: list[Exception] = []
-
-    def thread_a() -> None:
-        backend = open_postgres_backend(store_name, pg_dsn)
-        try:
-            barrier.wait()
-            with backend.transaction():
-                with backend.write_lock('reindex'):
-                    backend.nodes.insert(
-                        Insight(
-                            id='manual1', content='manual',
-                            importance=4))
-                    backend.nodes.update_embedding(
-                        'manual1', _pg_vec(99), 'voyage-3-lite')
-                    backend.edges.upsert(
-                        Edge(
-                            source_id='seed0', target_id='manual1',
-                            edge_type='semantic',
-                            weight=1.0,
-                            metadata={'created_by': 'manual'}))
-        except Exception as e:
-            errors.append(e)
-        finally:
-            backend.close()
-
-    def thread_b() -> None:
-        backend = open_postgres_backend(store_name, pg_dsn)
-        try:
-            barrier.wait()
-            reindex_auto_edges(backend, store_name='pg_concurrent')
-        except Exception as e:
-            errors.append(e)
-        finally:
-            backend.close()
-
-    ta = threading.Thread(target=thread_a)
-    tb = threading.Thread(target=thread_b)
-    ta.start()
-    tb.start()
-    ta.join(timeout=30)
-    tb.join(timeout=30)
-
-    assert not errors, f'thread errors: {errors}'
-
-    check = open_postgres_backend(store_name, pg_dsn)
-    try:
-        with check._conn.cursor() as cur:
-            cur.execute(
-                f"SELECT source_id, target_id FROM {schema}.edges"
-                " WHERE metadata->>'created_by' = 'manual'")
-            preserved = cur.fetchall()
-        assert ('seed0', 'manual1') in preserved, (
-            f'manual edge lost; preserved={preserved}')
-    finally:
-        check.close()
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')

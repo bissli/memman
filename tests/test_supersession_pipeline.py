@@ -11,7 +11,7 @@ import json
 
 import pytest
 from memman.pipeline.remember import FactPlan, _apply_plan
-from tests.conftest import invoke, make_insight, mint_edge_into
+from tests.conftest import invoke, make_insight
 
 
 def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
@@ -41,8 +41,7 @@ def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
             targets=[(target_id, 'replace')], embed_vec=None,
             enrichment={})
 
-    late = _apply_plan(tmp_backend, _replace('late-1', 'old-1'),
-                       embed_cache={}, store_name='test')
+    late = _apply_plan(tmp_backend, _replace('late-1', 'old-1'))
     assert late['action'] == 'add'
     assert late['targets_gone'] == [{'id': 'old-1', 'superseded_by': 'new-1'}]
     assert 'replaced_ids' not in late
@@ -50,8 +49,7 @@ def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
     assert stored.entities == ['own']
     assert tmp_backend.nodes.get_include_deleted('old-1').superseded_by == 'new-1'
 
-    forgotten = _apply_plan(tmp_backend, _replace('late-2', 'gone-1'),
-                            embed_cache={}, store_name='test')
+    forgotten = _apply_plan(tmp_backend, _replace('late-2', 'gone-1'))
     assert forgotten['action'] == 'add'
     assert forgotten['targets_gone'] == [{'id': 'gone-1', 'superseded_by': None}]
 
@@ -105,31 +103,6 @@ def test_drain_redirects_a_replace_to_the_chain_head(mm_runner):
         assert middle.deleted_at is None
 
 
-def test_degraded_replace_leaves_no_edge_into_its_dead_target(
-        tmp_db, tmp_backend, monkeypatch):
-    """Verify a degraded add still sweeps its own edges into the target.
-
-    Mutation: gating the trailing sweep on `not target_already_gone`,
-        so an edge into an already superseded row lands and stays.
-    Oracle: the superseded target read back edgeless after the
-        degraded apply.
-    """
-    tmp_backend.nodes.insert(make_insight(id='old-1', content='first'))
-    tmp_backend.nodes.insert(make_insight(id='new-1', content='second'))
-    assert tmp_backend.nodes.supersede('old-1', 'new-1') is True
-
-    mint_edge_into(monkeypatch, 'old-1')
-    plan = FactPlan(
-        action='replace',
-        fact_insight=make_insight(id='late-1', content='third'),
-        targets=[('old-1', 'replace')], embed_vec=None, enrichment={})
-
-    result = _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
-
-    assert result['action'] == 'add'
-    assert tmp_backend.edges.by_node('old-1') == []
-
-
 def test_a_plain_add_plan_with_a_target_reports_no_replaced_id(
         tmp_db, tmp_backend):
     """Verify `replaced_ids` is reported only when a supersession happened.
@@ -146,7 +119,7 @@ def test_a_plain_add_plan_with_a_target_reports_no_replaced_id(
         fact_insight=make_insight(id='new-1', content='second'),
         targets=[('old-1', 'replace')], embed_vec=None, enrichment={})
 
-    result = _apply_plan(tmp_backend, plan, embed_cache={}, store_name='test')
+    result = _apply_plan(tmp_backend, plan)
 
     assert 'replaced_ids' not in result
     assert tmp_backend.nodes.get('old-1') is not None
