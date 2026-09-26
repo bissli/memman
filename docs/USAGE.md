@@ -39,9 +39,9 @@ memman uninstall --target claude-code
 
 One live-read command (called by the SessionStart hook, not by hand):
 
-| Command        | What it prints                                                                                    |
-| -------------- | ------------------------------------------------------------------------------------------------- |
-| `memman prime` | Reads SessionStart JSON on stdin; emits status + compact-recall hint + guide (called by prime.sh) |
+| Command        | What it prints                                                                                                           |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `memman prime` | Reads SessionStart JSON on stdin; emits status + any LLM model notice + compact-recall hint + guide (called by prime.sh) |
 
 ---
 
@@ -265,7 +265,6 @@ memman status                                       # memory statistics; JSON in
 memman doctor                                       # health checks (integrity, schema, partial_index_predicates, enrichment, embeddings, fingerprint, supersession_integrity, queue, scheduler, drain heartbeat, env, no_stale_swap_meta, provenance_drift)
 memman doctor --text                                # human-readable colored table
 memman config show                                  # effective configuration (env + on-disk)
-memman config models                                # up to three OpenRouter model candidates; a TTY picks one
 
 memman log list                                     # operation audit log (default JSON, last 20)
 memman log list --limit 50                          # show more entries
@@ -351,7 +350,7 @@ The full variable list lives in [CONTRIBUTING.md § Variable reference](../CONTR
 
 ### Install wizard
 
-Run `memman install` in a TTY to get the interactive wizard. It prompts for the LLM endpoint URL (any OpenAI-compatible endpoint; ships defaulted to `https://openrouter.ai/api/v1`); when the env file has no `MEMMAN_LLM_MODEL`, it offers up to three OpenRouter candidates to pick from (the list `memman config models` prints), or prompts for the slug on any other endpoint. It then prompts (masked input) for `MEMMAN_LLM_API_KEY` (required for non-loopback endpoints; loopback endpoints like Ollama may leave it blank), then for the embedding provider (any registered provider; ships defaulted to `voyage`) and the matching key for that provider (e.g. `MEMMAN_VOYAGE_API_KEY` for voyage, `MEMMAN_OPENAI_EMBED_API_KEY` for openai; openrouter reuses the LLM key). It also offers a backend selector (sqlite/postgres) when the `memman[postgres]` extra is installed; the wizard probes the DSN, verifies the `pgvector` extension, and (for non-localhost DSNs) emits a hint about PgBouncer transaction pooling. Headless installs bypass the wizard:
+Run `memman install` in a TTY to get the interactive wizard. It prompts for the LLM endpoint URL (any OpenAI-compatible endpoint; ships defaulted to `https://openrouter.ai/api/v1`); when the env file has no `MEMMAN_LLM_MODEL`, the install seeds the shipped model on OpenRouter, and the wizard prompts for the slug on any other endpoint. It then prompts (masked input) for `MEMMAN_LLM_API_KEY` (required for non-loopback endpoints; loopback endpoints like Ollama may leave it blank), then for the embedding provider (any registered provider; ships defaulted to `voyage`) and the matching key for that provider (e.g. `MEMMAN_VOYAGE_API_KEY` for voyage, `MEMMAN_OPENAI_EMBED_API_KEY` for openai; openrouter reuses the LLM key). It also offers a backend selector (sqlite/postgres) when the `memman[postgres]` extra is installed; the wizard probes the DSN, verifies the `pgvector` extension, and (for non-localhost DSNs) emits a hint about PgBouncer transaction pooling. Headless installs bypass the wizard:
 
 - `--backend [sqlite|postgres]` - explicit backend choice; required in non-interactive mode if you want anything other than sqlite.
 - `--pg-dsn URL` - Postgres DSN; required with `--backend postgres` in non-interactive mode. The DSN may omit the password to use `~/.pgpass`, `PGSERVICE`, or `PGPASSWORD`.

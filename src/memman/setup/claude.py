@@ -7,8 +7,10 @@ import sys
 from pathlib import Path
 
 import click
+import httpx
 from memman import config
 from memman.cli import list_claude_permissions
+from memman.llm import openrouter_models
 from memman.setup.deploy import symlink_asset
 from memman.setup.detect import detect_claude_code
 from memman.setup.markdown import remove_memory_block
@@ -307,7 +309,28 @@ def _run_install_flow(env: dict, target: str,
                       data_dir: str,
                       knobs: dict[str, str],
                       no_wizard: bool = False) -> None:
-    """Install Claude Code integration and the scheduler unit."""
+    """Install Claude Code integration and the scheduler unit, then check
+    the LLM model.
+
+    Parameters
+    ----------
+    env : dict
+        `detect_claude_code` output.
+    target : str
+        CLI target to install; empty installs into whatever is detected.
+    data_dir : str
+        Holds the env file and the model state.
+    knobs : dict[str, str]
+        Install values from `check_prereqs`, handed to the scheduler.
+    no_wizard : bool, default False
+        Passed through to the Claude Code install.
+
+    Notes
+    -----
+    - The model check runs after the scheduler section, once the env
+      file is final. A catalog outage prints an error and the install
+      still finishes.
+    """
     if target:
         _install_claude_code(env, data_dir=data_dir, no_wizard=no_wizard)
     else:
@@ -328,6 +351,22 @@ def _run_install_flow(env: dict, target: str,
     result = install_scheduler(data_dir, knobs)
     for action in result.get('env_actions', []) + result.get('actions', []):
         status_ok(result['platform'], action)
+
+    try:
+        notice = openrouter_models.refresh_model_state(data_dir, force=True)
+    except (httpx.HTTPError, RuntimeError) as exc:
+        print('\n[model]')
+        status_error(
+            'openrouter', f'cannot read the OpenRouter catalogs: {exc}')
+        return
+    if notice is None:
+        return
+    print('\n[model]')
+    if notice:
+        status_error('openrouter', notice)
+    else:
+        model = config.get_scoped(config.LLM_MODEL, data_dir)
+        status_ok('openrouter', f'{model} routes under the provider pin')
 
 
 def _run_uninstall_flow(env: dict, target: str,

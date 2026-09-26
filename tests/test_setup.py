@@ -11,6 +11,7 @@ from importlib.resources import files
 import click
 import pytest
 from click.testing import CliRunner
+from memman import config
 from memman.cli import cli, list_claude_permissions
 from memman.setup.markdown import remove_memory_block
 from memman.setup.settings import add_claude_hooks_selective
@@ -856,6 +857,27 @@ class TestSetupCli:
         shipped = (pkg_files('memman.setup.assets')
                    .joinpath('claude/guide.md').read_text())
         assert shipped.strip() in result.output
+
+    def test_prime_prints_the_recorded_model_notice(
+            self, tmp_path, monkeypatch):
+        """`memman prime` shows the notice the model check recorded.
+
+        Mutation: prime not reading the model state, so a retiring or
+            unroutable model goes unreported at session start.
+        Oracle: a state naming the seeded model with a fixed notice.
+        """
+        monkeypatch.setattr(pathlib.Path, 'home', lambda: tmp_path)
+        notice = 'LLM model under test retires on 2026-10-09'
+        state = {
+            'model': config.INSTALL_DEFAULTS[config.LLM_MODEL],
+            'checked_at': 0,
+            'notice': notice,
+            }
+        state_path = pathlib.Path(os.environ[config.DATA_DIR]) / 'model.state'
+        state_path.write_text(json.dumps(state))
+        result = CliRunner().invoke(cli, ['prime'], input='{}')
+        assert result.exit_code == 0
+        assert f'[memman] {notice}' in result.output
 
     def test_prime_honors_memman_store_env(self, tmp_path, monkeypatch):
         """`memman prime` targets MEMMAN_STORE when set, not just the

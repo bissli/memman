@@ -16,8 +16,6 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_LLM_PROVIDER_ONLY',
     'MEMMAN_LLM_DATA_COLLECTION',
     'MEMMAN_LLM_ZDR',
-    'MEMMAN_LLM_MAX_INPUT_PRICE',
-    'MEMMAN_LLM_MAX_OUTPUT_PRICE',
     'MEMMAN_EMBED_PROVIDER',
     'MEMMAN_OPENROUTER_ENDPOINT',
     'MEMMAN_RERANK_PROVIDER',
@@ -171,8 +169,6 @@ def test_constants_match_expected_names():
         config.LLM_PROVIDER_ONLY,
         config.LLM_DATA_COLLECTION,
         config.LLM_ZDR,
-        config.LLM_MAX_INPUT_PRICE,
-        config.LLM_MAX_OUTPUT_PRICE,
         config.EMBED_PROVIDER,
         config.OPENROUTER_ENDPOINT,
         config.RERANK_PROVIDER,
@@ -392,6 +388,18 @@ class TestConfigGet:
                   config.OPENROUTER_API_KEY])
         assert result.exit_code == 0
         assert 'secret-token-xyz' not in result.output
+
+
+def test_config_models_command_removed():
+    """`memman config models` no longer exists.
+
+    Mutation: the candidate lister left registered after the model
+        check replaced it.
+    Oracle: click's usage error, exit 2 with `No such command`.
+    """
+    result = CliRunner().invoke(cli, ['config', 'models', '--help'])
+    assert result.exit_code == 2
+    assert 'No such command' in result.output
 
 
 class TestConfigSetPgDsn:

@@ -43,10 +43,8 @@ import sys
 from importlib.util import find_spec
 
 import click
-import httpx
 from memman import config, extras
 from memman.embed import SUPPORTED_EMBED_PROVIDERS
-from memman.llm import openrouter_models
 
 DSN_MAX_ATTEMPTS = 3
 DSN_PROBE_TIMEOUT_SEC = 5
@@ -324,26 +322,6 @@ def _collect_llm_api_key(
     return out
 
 
-def pick_candidate(candidates: list[openrouter_models.Candidate]) -> str:
-    """Number `candidates`, prompt for one, and return its model id.
-
-    Parameters
-    ----------
-    candidates : list[openrouter_models.Candidate]
-        Non-empty, in display order; the prompt defaults to the first.
-
-    Returns
-    -------
-    str
-        The picked candidate's `model_id`.
-    """
-    for number, candidate in enumerate(candidates, 1):
-        click.echo(f'  {number}. {candidate.label()}')
-    number = click.prompt(
-        '  model', type=click.IntRange(1, len(candidates)), default=1)
-    return candidates[number - 1].model_id
-
-
 def _collect_llm_model(
         file_values: dict[str, str],
         *,
@@ -364,17 +342,15 @@ def _collect_llm_model(
     -------
     dict[str, str]
         `{MEMMAN_LLM_MODEL: <id>}`, or `{}` when a value exists, the
-        session is headless, or OpenRouter offers no candidate.
+        session is headless, or the endpoint is OpenRouter.
 
     Notes
     -----
-    - On OpenRouter the operator picks from `fetch_candidates`, fed the
-      shipped model's family and the pin and ceilings from the file,
-      the shell, or `INSTALL_DEFAULTS`. A failed fetch or an empty list
-      leaves the key to `INSTALL_DEFAULTS` in `collect_install_knobs`.
-    - Any other endpoint has no catalog memman can read, so the operator
-      types the slug. A headless install there with no model is refused
-      by `collect_install_knobs`.
+    - OpenRouter asks nothing: `collect_install_knobs` seeds the
+      shipped model from `INSTALL_DEFAULTS`.
+    - Any other endpoint has no shipped model, so the operator types the
+      slug. A headless install there with no model is refused by
+      `collect_install_knobs`.
     """
     out: dict[str, str] = {}
     if not interactive:
@@ -383,39 +359,9 @@ def _collect_llm_model(
         return out
     if os.environ.get(config.LLM_MODEL, '').strip():
         return out
-    click.echo('')
     if config.is_openrouter_endpoint(endpoint):
-        seeds = {
-            key: (file_values.get(key, '').strip()
-                  or os.environ.get(key, '').strip()
-                  or config.INSTALL_DEFAULTS[key])
-            for key in (config.LLM_PROVIDER_ONLY,
-                        config.LLM_MAX_INPUT_PRICE,
-                        config.LLM_MAX_OUTPUT_PRICE)}
-        default_model = config.INSTALL_DEFAULTS[config.LLM_MODEL]
-        try:
-            candidates = openrouter_models.fetch_candidates(
-                endpoint,
-                family=default_model.split('/', 1)[0] + '/',
-                max_input_per_m=float(seeds[config.LLM_MAX_INPUT_PRICE]),
-                max_output_per_m=float(seeds[config.LLM_MAX_OUTPUT_PRICE]),
-                vendors=frozenset(
-                    name.strip()
-                    for name in seeds[config.LLM_PROVIDER_ONLY].split(',')
-                    if name.strip()))
-        except (httpx.HTTPError, RuntimeError) as exc:
-            click.echo(click.style(
-                f'  cannot read the OpenRouter catalogs ({exc});'
-                f' installing {default_model}', fg='yellow'))
-            return out
-        if not candidates:
-            click.echo(click.style(
-                f'  no OpenRouter candidate under the pin and ceilings;'
-                f' installing {default_model}', fg='yellow'))
-            return out
-        click.echo(click.style('Pick the LLM model:', bold=True))
-        out[config.LLM_MODEL] = pick_candidate(candidates)
         return out
+    click.echo('')
     click.echo(click.style(
         'Non-OpenRouter endpoint: enter the model slug to use.', bold=True))
     click.echo(click.style(

@@ -84,6 +84,7 @@ testpaths = ["tests"]
 markers = [
     "no_mock_llm: skip the autouse MemmanLLMClient.complete mock; keep ZDR + embedding stubs",
     "no_mock_rerank: skip the autouse Voyage rerank passthrough; the test drives the real client method",
+    "no_mock_catalog: skip the autouse OpenRouter catalog stub; the test drives the real model-check fetch",
     "no_scheduler_started_mock: skip the autouse scheduler-started mock; tests run with the real read_state",
     "scheduler_stopped: force read_state to STATE_STOPPED; for commands such as graph rebuild that require a stopped drain",
     "no_autoseed_fingerprint: skip the autouse meta.embed_fingerprint seed; exercises raw assert_consistent semantics",

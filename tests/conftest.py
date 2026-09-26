@@ -361,6 +361,9 @@ def _mock_apis(request, monkeypatch):
     place.
     Tests that exercise the real `rerank.voyage.Client.rerank` method
     mark themselves `@pytest.mark.no_mock_rerank` the same way.
+    The OpenRouter catalog fetch behind the model check returns a clean
+    verdict, so no drain or install GETs openrouter.ai; a test driving
+    the real fetch marks itself `@pytest.mark.no_mock_catalog`.
     """
     if 'tests/e2e/' in str(request.node.fspath):
         return
@@ -381,6 +384,10 @@ def _mock_apis(request, monkeypatch):
     if 'no_mock_rerank' not in request.keywords:
         monkeypatch.setattr(
             'memman.rerank.voyage.Client.rerank', _mock_rerank)
+    if 'no_mock_catalog' not in request.keywords:
+        monkeypatch.setattr(
+            'memman.llm.openrouter_models.fetch_model_notice',
+            lambda endpoint, *, model, vendors: '')
     from memman import config
     config.reset_file_cache()
     from memman.llm import client as llm_client_mod

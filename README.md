@@ -135,7 +135,7 @@ memman config set MEMMAN_LLM_ENDPOINT https://api.openai.com/v1
 memman config set MEMMAN_LLM_API_KEY sk-...
 ```
 
-`MEMMAN_LLM_MODEL` names the model, and memman never switches it on its own. On an OpenRouter endpoint, `memman config models` and the install wizard list up to three candidates in the current model's family - served under zero data retention by a vendor in `MEMMAN_LLM_PROVIDER_ONLY`, inside `MEMMAN_LLM_MAX_INPUT_PRICE` and `MEMMAN_LLM_MAX_OUTPUT_PRICE` - and write the one the operator picks. On any other endpoint the wizard prompts for the slug, and a headless install without one refuses.
+`MEMMAN_LLM_MODEL` names the model, and memman never switches it on its own. On an OpenRouter endpoint the install seeds `qwen/qwen3-235b-a22b-2507`. memman checks at install, and once a day from the scheduler, that a vendor in `MEMMAN_LLM_PROVIDER_ONLY` serves the model under zero data retention and that OpenRouter lists no retirement date for it. A failed check prints a notice at session start that names the fix, `memman config set MEMMAN_LLM_MODEL <id>`. On any other endpoint the wizard prompts for the slug, and a headless install without one refuses.
 
 #### Embedding providers
 

@@ -741,91 +741,6 @@ def config_set_pg_dsn(
     click.echo(f'set {key}={redact_dsn(dsn)} in {config.env_file_path(data_dir)}')
 
 
-@config_cmd.command('models')
-@click.pass_context
-def config_models(ctx: click.Context) -> None:
-    r"""List up to three OpenRouter models to run on; in a TTY, pick one.
-
-    Candidates share the current model's family, run under zero data
-    retention on a vendor in MEMMAN_LLM_PROVIDER_ONLY, and sit inside
-    MEMMAN_LLM_MAX_INPUT_PRICE and MEMMAN_LLM_MAX_OUTPUT_PRICE (dollars
-    per million tokens). The pick is written to MEMMAN_LLM_MODEL;
-    outside a TTY the command only prints.
-    \f
-
-    Parameters
-    ----------
-    ctx : click.Context
-        Carries `data_dir`, whose env file is read and written.
-
-    Raises
-    ------
-    click.ClickException
-        When the endpoint is not OpenRouter, a lister key is unset, or
-        a catalog cannot be read.
-
-    Examples
-    --------
-    List, then pick in a TTY::
-
-        $ memman config models
-          1. qwen/qwen3-235b-a22b-2507  google-vertex  $0.25 in / ...
-          model [1]: 1
-        set MEMMAN_LLM_MODEL=qwen/qwen3-235b-a22b-2507 in ~/.memman/env
-    """
-    # Lazy: httpx and the catalog module load for this command only,
-    # not on every CLI call.
-    import httpx
-    from memman.llm import openrouter_models
-    from memman.setup.scheduler import _write_env_keys
-    from memman.setup.wizard import pick_candidate
-
-    data_dir = ctx.obj['data_dir']
-    endpoint = config.get_scoped(config.LLM_ENDPOINT, data_dir) or ''
-    if not config.is_openrouter_endpoint(endpoint):
-        raise click.ClickException(
-            f'{config.LLM_ENDPOINT} is {endpoint!r}; candidates come from'
-            f' OpenRouter only. Set a model with `memman config set'
-            f' {config.LLM_MODEL} <id>`')
-    values: dict[str, str] = {}
-    for key in (config.LLM_MODEL, config.LLM_PROVIDER_ONLY,
-                config.LLM_MAX_INPUT_PRICE, config.LLM_MAX_OUTPUT_PRICE):
-        value = config.get_scoped(key, data_dir)
-        if not value:
-            raise click.ClickException(
-                f'{key} is not set in {config.env_file_path(data_dir)};'
-                f' run `memman config set {key} <value>`')
-        values[key] = value
-    try:
-        candidates = openrouter_models.fetch_candidates(
-            endpoint,
-            family=values[config.LLM_MODEL].split('/', 1)[0] + '/',
-            max_input_per_m=float(values[config.LLM_MAX_INPUT_PRICE]),
-            max_output_per_m=float(values[config.LLM_MAX_OUTPUT_PRICE]),
-            vendors=frozenset(
-                name.strip()
-                for name in values[config.LLM_PROVIDER_ONLY].split(',')
-                if name.strip()))
-    except (httpx.HTTPError, RuntimeError) as exc:
-        raise click.ClickException(
-            f'cannot read the OpenRouter catalogs: {exc}') from exc
-    if not candidates:
-        click.echo(
-            f'no candidate in the {values[config.LLM_MODEL]} family under'
-            ' the provider pin and price ceilings')
-        return
-    if not sys.stdin.isatty():
-        for number, candidate in enumerate(candidates, 1):
-            click.echo(f'  {number}. {candidate.label()}')
-        return
-    model_id = pick_candidate(candidates)
-    _write_env_keys({config.LLM_MODEL: model_id}, data_dir=data_dir)
-    config.reset_file_cache()
-    click.echo(
-        f'set {config.LLM_MODEL}={model_id} in'
-        f' {config.env_file_path(data_dir)}')
-
-
 @config_cmd.command('get')
 @click.argument('key')
 @click.pass_context
@@ -1402,6 +1317,13 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 conn, touched_stores, store_contexts, deadline)
         except Exception:
             logger.exception('drain maintenance phase failed')
+        # Lazy: the module loads httpx, which `import memman.cli` does not.
+        import httpx
+        from memman.llm import openrouter_models
+        try:
+            openrouter_models.refresh_model_state(data_dir_val, force=False)
+        except (httpx.HTTPError, RuntimeError) as exc:
+            logger.warning(f'model check could not read the catalogs: {exc}')
         if processed > 0:
             record_run = True
         if record_run:
@@ -3814,6 +3736,12 @@ def prime() -> None:
     except Exception as exc:
         logger.debug('prime status fallback: %s', exc)
     click.echo(status_line)
+    # Lazy: the module loads httpx, which `import memman.cli` does not.
+    from memman.llm import openrouter_models
+    notice = openrouter_models.read_model_notice(
+        os.environ.get(config.DATA_DIR, default_data_dir()))
+    if notice:
+        click.echo(f'[memman] {notice}')
 
     if source == 'compact':
         flag = (pathlib.Path.home() / '.memman' / 'compact'
