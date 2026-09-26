@@ -1,215 +1,291 @@
-# 2. Core Concepts & Architecture
+# 2. Core Concepts and Architecture
 
 [< Back to Design Overview](../DESIGN.md)
 
 ---
 
-![Insight Data Model](../diagrams/08-insight-edge-datamodel.drawio.png)
+## 2.1 The memory record
 
-## 2.1 Insight (memory node)
+A memory is one stored claim. The caller sets its text and metadata. The background worker adds the rest.
 
-```
-┌──────────────────────────────────────────────┐
-│ Insight                                      │
-├──────────────────────────────────────────────┤
-│ id         : UUID                            │
-│ content    : "Chose Qdrant over Milvus..."   │
-│ category   : decision                        │
-│ importance : 5  (1-5)                        │
-│ entities   : ["Qdrant", "Milvus"]            │
-│ source     : "user"     (provenance)         │
-│ queue_uuid : "9b0c…"    (idempotency key)    │
-│ author     : "bob"      (who wrote it)       │
-│ created_at : 2026-02-18T10:00:00Z            │
-└──────────────────────────────────────────────┘
-```
+| Field                 | Set by                                       | Meaning                                                                                                                            |
+| --------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `content`             | the `remember` or `replace` text             | The claim, stored as written. At most 1,000 UTF-8 bytes.                                                                           |
+| `category`            | `--cat`, default `fact`                      | One of the five categories below.                                                                                                  |
+| `importance`          | `--imp`, 1-5, default 3                      | A sort key, stored as passed.                                                                                                      |
+| `entities`            | `--entity`, once per name                    | Names the caller attaches, stored verbatim. At most 50, each at most 200 characters.                                               |
+| `source`              | `--source`, default `user`                   | Source: `user`, `agent`, or a location such as a URL.                                                                              |
+| `author`              | `MEMMAN_AUTHOR`, otherwise the OS login name | Who wrote the memory.                                                                                                              |
+| `id`                  | the worker                                   | A version 4 UUID. Every command that takes an id also accepts an unambiguous prefix.                                               |
+| `keywords`, `summary` | the enrichment model                         | Search aids. The drain and `graph rebuild` embed the keywords with the content. Recall prints the summary in place of the content. |
+| `created_at`          | the worker                                   | When the worker stored the memory.                                                                                                 |
+| `queue_uuid`          | `remember` or `replace`, when queued         | A unique key that prevents retries from creating duplicate memories.                                                               |
 
-Five categories distinguish the nature of a memory:
+`replace` inherits the target's category, importance, source, and entities for each flag it omits. `--entity ''` clears the list.
 
-| Category     | Meaning                          | Example                                        |
-| ------------ | -------------------------------- | ---------------------------------------------- |
-| `preference` | User preference                  | "Prefers communicating in Chinese"             |
-| `decision`   | Architectural/technical decision | "Chose SQLite over PostgreSQL"                 |
-| `fact`       | Objective fact                   | "API rate limit is 100 req/s"                  |
-| `insight`    | Reasoning conclusion             | "RRF fusion beats a single ranked signal here" |
-| `context`    | Project context                  | "Phase 3 completed, 118 tests passing"         |
+[USAGE](../USAGE.md#what-remember-and-replace-refuse) lists every rule `remember` and `replace` enforce on the text.
 
-Importance is a sort key: listings order by it, and recall and the keyword rung break score ties on it. The value is the caller's: `--imp` (1-5, default 3) is stored as passed. No retention tier reads it; nothing is protected from or offered for deletion by importance (see [05-lifecycle.md](05-lifecycle.md)).
+Five categories describe what a memory holds:
 
-Exit: the column, its two indexes, the listing-index key, the sort keys and the payload key go in the next schema release when more than 95% of post-release rows carry 3; the column stays when the non-default share is above that.
+| Category     | Meaning                                              | Example                                                                |
+| ------------ | ---------------------------------------------------- | ---------------------------------------------------------------------- |
+| `preference` | A preference the user stated                         | "Prefers communicating in Chinese"                                     |
+| `decision`   | An architectural or design decision                  | "Chose SQLite over PostgreSQL for the cache"                           |
+| `fact`       | A fact about a system, tool, or domain               | "The billing API rate limit is 100 req/s"                              |
+| `insight`    | A conclusion drawn from several sources              | "The flaky test fails only when the cache is cold"                     |
+| `context`    | Background: project setup, user role, or environment | "The user maintains the billing service and deploys it with Terraform" |
+
+Importance is a sort key. `recall --basic` orders by importance, then by `created_at`, both descending. Keyword results and ranked recall use importance to break score ties. memman never deletes, keeps, or protects a memory because of its importance ([Lifecycle](04-lifecycle.md)).
+
+---
 
 ## 2.2 Database schema
 
-Each named store is physically isolated via its own backend, chosen per store via `MEMMAN_BACKEND_<store>` (falling back to `MEMMAN_DEFAULT_BACKEND` when unset):
+![Memory Data Model](../diagrams/03-insight-datamodel.drawio.png)
 
-- **SQLite (default)** - one `~/.memman/data/<store>/memman.db` file per store, in WAL mode (concurrent reads + serial writer). Schema source of truth: `_BASELINE_SCHEMA` in `src/memman/store/db.py`.
-- **Postgres** - one Postgres schema per store (`store_<name>`) sharing one database; `pgvector` provides the `vector(N)` column type. Schema source of truth: `PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py`. Enabled with the `memman[postgres]` install extra.
+Each store has its own tables. SQLite keeps them in one `memman.db` file per store. Postgres keeps them in one schema per store, named `store_<name>`. The schema has one source per backend, with no in-place migration steps:
 
-Backend choice is per-store, so a `work` store on Postgres can coexist with a `default` store on SQLite under the same data dir. `memman migrate <store>` is symmetric (`--to postgres` / `--to sqlite`) and flips `MEMMAN_BACKEND_<store>` accordingly; `MEMMAN_DEFAULT_BACKEND` only changes what newly-created stores fall back to. See [Migrating between SQLite and Postgres](../USAGE.md#migrating-between-sqlite-and-postgres).
+- SQLite: `_BASELINE_SCHEMA` in `src/memman/store/db.py`, plus `_FTS_STATEMENTS` for the keyword index.
+- Postgres: `PG_BASELINE_SCHEMA` in `src/memman/store/postgres.py`.
+- The write queue: `_BASELINE_SCHEMA` in `src/memman/queue.py`.
 
-The logical column layout below is shared between backends; the type translations are SQLite `TEXT`/`BLOB` ↔ Postgres `TIMESTAMPTZ`/`JSONB`/`vector(N)`.
+Each store has its own backend setting, `MEMMAN_BACKEND_<store>`, so a `work` store on Postgres can share a data directory with a `default` store on SQLite. `memman migrate` moves a store in either direction and updates that setting. `MEMMAN_DEFAULT_BACKEND` picks the backend of a new store. The first drain that serves a store writes its `MEMMAN_BACKEND_<store>` from the default, so a later change to the default leaves that store in place. [USAGE](../USAGE.md#migrating-between-sqlite-and-postgres) covers the workflow.
+
+The maintainer applies a schema change to each live store by hand, once. [CONTRIBUTING](../../CONTRIBUTING.md#baseline-schemas) gives the procedure.
+
+The per-store tables, with SQLite types:
 
 ```sql
--- Memory nodes
 insights (
-  id, content, category, importance,
-  entities, source,
-  embedding,                                    -- embedding vector (active provider)
-  embedding_pending,                            -- shadow vector during online provider swap
-  keywords, summary,                            -- LLM enrichment columns
-  linked_at, enriched_at,                       -- Pipeline progress timestamps
-  prompt_version, embedding_model,              -- Provenance for re-enrichment
-  created_at, updated_at, deleted_at,
-  queue_uuid,                                   -- Idempotency key from the queue row (one write stores one row)
-  superseded_by,                                -- Successor id once a later write corrected this row (nullable, no FK)
-  author                                        -- Who wrote it (nullable; resolved from MEMMAN_AUTHOR or getpass.getuser())
+  id                text primary key,     -- UUID4
+  content           text not null,
+  category          text default 'fact',
+  importance        integer default 3,
+  entities          text default '[]',    -- JSON list
+  source            text default 'user',
+  keywords          text,                 -- JSON list, from enrichment
+  summary           text,                 -- from enrichment
+  embedding         blob,                 -- vector of content plus keywords, or content alone
+  embedding_pending blob,                 -- target vector during embed swap
+  linked_at         text,                 -- set once enrichment was tried
+  enriched_at       text,                 -- set when enrichment and a vector were both saved
+  created_at        text not null,
+  updated_at        text not null,
+  deleted_at        text,                 -- set by forget
+  prompt_version    text,                 -- hash of enrichment prompt and model
+  embedding_model   text,                 -- model that made the vector
+  queue_uuid        text,                 -- the queued write this came from
+  superseded_by     text,                 -- successor id, no foreign key
+  author            text
 )
 
--- A current row is `deleted_at is null and superseded_by is null`;
--- every read and count applies both clauses. The pointer carries no
--- foreign key: the pipeline writes it before the successor row
--- exists, and the migrators apply rows in id order, so a predecessor
--- can land before its successor. Doctor's `supersession_integrity`
--- is the pointer's only validity check.
+insights_fts (content, entities)          -- SQLite only, FTS5
 
--- Keyword index over insights (SQLite only; FTS5 external content,
--- kept in sync by triggers on insert/delete/update-of the two
--- indexed columns). Postgres counts against the rows themselves.
-insights_fts (
-  content, entities                 -- terms only; the text stays in insights
-)
-
--- Operation log (audit trail, queryable with --since/--stats)
 oplog (
-  id, operation, insight_id, detail,
-  before, after,                                -- forensic delta (pre/post payload)
-  created_at
+  id                integer primary key autoincrement,
+  operation         text not null,
+  insight_id        text,
+  detail            text default '',
+  created_at        text not null,
+  before            text,                 -- JSON copy before the change
+  after             text                  -- JSON copy after the change
 )
 
--- Key/value metadata (e.g., embed fingerprints)
 meta (
-  key, value
+  key               text primary key,
+  value             text not null
 )
 ```
 
-Provenance columns (`prompt_version`, `embedding_model`) record what produced each insight, and they are read for two different jobs. `embedding_model` is write provenance: the model behind the row's vector. `prompt_version` is the STALENESS KEY, and it hashes exactly what `graph rebuild --stale-only` can replay -- the enrichment prompt and the LLM model. `embedding_model` powers `memman embed reembed` the same way.
+**Current memories.** A memory is current when `deleted_at is null and superseded_by is null`. Recall and `insights review` read only current memories. `status` and `insights show` also report retired ones. `superseded_by` carries no foreign key. The worker sets the pointer before it inserts the successor. The migrators copy rows in id order, so a predecessor can be inserted before its successor. The `supersession_integrity` check in `memman doctor` is the only check that validates the pointer.
+
+**Keyword index.** On SQLite, `insights_fts` is an FTS5 table (SQLite's full-text search extension) over `content` and `entities`. It holds only the terms. The text stays in `insights`. Triggers keep the index up to date when rows are inserted or deleted or either column changes. It indexes every row, including forgotten and superseded memories. Queries join it with `insights` to return only current rows. Opening a store that lacks the table creates and fills it in one transaction. On Postgres, the `kw_tokens` column plays this role.
+
+**Model-change markers.** `prompt_version` holds the first 16 hex characters of a SHA-256 hash over the enrichment prompt and `MEMMAN_LLM_MODEL`. A memory whose non-null `prompt_version` differs from the current hash is stale, and `memman graph rebuild --stale-only` re-enriches it. `embedding_model` names the model behind the vector. `memman embed reembed` re-embeds each current memory in every SQLite store whose `embedding_model` or vector length differs from the target. [Pipelines](03-pipelines.md) covers both re-runs.
+
+**Meta keys.**
+
+- `embed_fingerprint`: the store's embedding model, as provider, model, and dimension. [Lifecycle](04-lifecycle.md) explains the binding.
+- `embed_swap_state`, `embed_swap_cursor`, `embed_swap_target_provider`, `embed_swap_target_model`, `embed_swap_target_dim`: the progress of an `embed swap`.
+- `embed_reembed_state`, `embed_reembed_cursor`: the progress of an `embed reembed`.
+
+**Postgres differences.** The logical layout matches. These columns differ:
+
+| Column                  | SQLite                        | Postgres                                                           |
+| ----------------------- | ----------------------------- | ------------------------------------------------------------------ |
+| timestamps              | ISO 8601 text                 | `timestamptz`                                                      |
+| `entities`, `keywords`  | JSON text                     | `jsonb`                                                            |
+| `oplog.before`, `after` | JSON text                     | `jsonb`                                                            |
+| `embedding`             | BLOB of little-endian float64 | `vector(N)`, where N is the store's embedding dimension            |
+| `embedding_pending`     | in the baseline               | added by `embed swap`, renamed to `embedding` at cutover           |
+| `kw_tokens`             | absent                        | `text[] not null`: the distinct tokens of `content` and `entities` |
+| `oplog.legacy_id`       | absent                        | `bigint unique`: the SQLite oplog id a migration copied            |
+| `worker_runs`           | absent                        | one row per drain that opens the store, with a heartbeat time      |
+
+**Indexes.** Both backends index `category`, `importance`, `created_at`, `deleted_at`, `source`, `queue_uuid`, and `oplog.created_at`. Two composite indexes serve fixed queries:
+
+- `idx_insights_pending_link` on `(linked_at, created_at)`, limited to current memories with no `linked_at`. The enrichment pass reads pending memories in order from it.
+- `idx_insights_current_listing` on `(deleted_at, superseded_by, importance, created_at)`. `recall --basic` reads its filter and sort order from it.
+
+Postgres adds a GIN index on `kw_tokens` and an HNSW index on `embedding`, both limited to current memories. Opening a Postgres store for reading and writing builds the HNSW index if it is missing.
+
+**The write queue.** `queue.db` sits in the data directory and serves every store. It is always SQLite:
+
+```sql
+queue (
+  id, store, content,
+  hint_cat, hint_imp, hint_source, hint_entities,
+  hint_replaced_id,                       -- replace target, null for remember
+  queue_uuid,                             -- unique
+  priority, queued_at, claimed_at, worker_pid, attempts,
+  status,                                 -- pending, done, failed, or stale
+  last_error, processed_at, author
+)
+
+worker_runs (                             -- drain history, at most one idle row a minute
+  id, started_at, finished_at, worker_pid,
+  rows_claimed, rows_done, rows_failed, duration_ms, error
+)
+```
+
+The worker skips a queued write if a stored memory already has its `queue_uuid`, unless that memory is forgotten. This prevents a retry from creating a duplicate memory.
 
 ---
 
 ## 2.3 System architecture
 
-memman's architecture is divided into five layers:
+memman groups its modules into seven layers:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Integration Layer    Hook / Skill / Guide                      │
-├──────────────────────────────────────────────────────────────┤
-│  CLI Layer            remember · recall · replace · forget      │
-│                       prime · status · doctor · install         │
-│                       graph · scheduler · insights · store      │
-│                       embed · log · config                      │
-├──────────────────────────────────────────────────────────────┤
-│  Pipeline             pipeline/ (remember, drain worker)        │
-├──────────────────────────────────────────────────────────────┤
-│  Core Engine          search/ (recall, keyword,                 │
-│                                quality)                         │
-│                       graph/  (engine, enrichment)              │
-│                       embed/  (voyage, openai_compat,           │
-│                                openrouter, ollama, vector)      │
-│                       llm/    (client, shared,                  │
-│                                openrouter_models)               │
-├──────────────────────────────────────────────────────────────┤
-│  Storage Layer        store/   (backend, base, factory, db,     │
-│                                node, oplog, model,              │
-│                                sqlite, postgres)                │
-│                       queue.py (deferred-write queue)           │
-│                       migrate.py (SQLite -> Postgres copy)      │
-├──────────────────────────────────────────────────────────────┤
-│  External             LLM endpoint (OpenAI-compat URL via       │
-│                         MEMMAN_LLM_ENDPOINT; model via          │
-│                         MEMMAN_LLM_MODEL)                       │
-│                       Embed provider (per-store; voyage /       │
-│                         openai / openrouter / ollama)           │
-│                       Postgres + pgvector (optional backend)    │
-└─────────────────────────────────────────────────────────────────┘
++---------------------------------------------------------------------+
+| Integration  hook scripts, guide.md, SKILL.md (setup/assets/claude) |
+|              setup/   (install, wizard, settings.json merge)        |
++---------------------------------------------------------------------+
+| CLI          cli.py: remember, recall, replace, supersede,          |
+|              unsupersede, forget, insights, graph, embed, store,    |
+|              migrate, scheduler, backup, log, config, status,       |
+|              doctor, install, uninstall, prime (hooks only)         |
++---------------------------------------------------------------------+
+| Write path   the drain loop in cli.py                               |
+|              queue.py (the write queue, SQLite)                     |
+|              drain_lock.py (one drain at a time)                    |
+|              setup/scheduler.py (systemd, launchd, or serve loop)   |
+|              pipeline/remember.py (enrich, embed, one transaction)  |
+|              graph/   (engine, enrichment)                          |
+|              maintenance.py (runs after each drain)                 |
++---------------------------------------------------------------------+
+| Search       search/  (recall, keyword, quality)                    |
++---------------------------------------------------------------------+
+| Providers    embed/   (voyage, openai_compat, openrouter, ollama,   |
+|                        registry, fingerprint, swap, vector)         |
+|              rerank/  (voyage)                                      |
+|              llm/     (client, shared, usage, openrouter_models)    |
++---------------------------------------------------------------------+
+| Storage      store/   (backend, base, config, errors, factory, db,  |
+|                        node, oplog, model, sqlite, postgres)        |
+|              migrate/ (SQLite <-> Postgres)                         |
+|              backup/  (external backups)                            |
++---------------------------------------------------------------------+
+| External     LLM endpoint (MEMMAN_LLM_ENDPOINT, MEMMAN_LLM_MODEL)   |
+|              embedding provider (voyage, openai, openrouter, ollama)|
+|              Voyage reranker                                        |
+|              Postgres + pgvector (optional backend)                 |
++---------------------------------------------------------------------+
 ```
 
-Project code structure:
+The code tree:
 
 ```
 memman/
-├── src/memman/
-│   ├── __init__.py
-│   ├── cli.py                # Click CLI (all commands)
-│   ├── config.py             # Env-file resolver (INSTALLABLE_KEYS)
-│   ├── doctor.py             # Health checks (memman doctor)
-│   ├── drain_lock.py         # Cross-process drain.lock
-│   ├── maintenance.py        # GC, EI recompute
-│   ├── migrate.py            # SQLite -> Postgres migration
-│   ├── queue.py              # Deferred-write queue
-│   ├── trace.py              # JSONL debug tracing
-│   ├── pipeline/             # remember (drain worker)
-│   ├── store/                # Storage backends (sqlite, postgres)
-│   ├── graph/                # Enrichment link scheduling
-│   ├── search/               # Retrieval algorithms
-│   ├── embed/                # Pluggable embedding providers
-│   ├── rerank/               # Cross-encoder rerank (pluggable)
-│   ├── llm/                  # LLM client + enrichment
-│   └── setup/                # LLM CLI integration + install wizard
-├── scripts/
-│   └── rebuild_stale.py       # Operator helper to rebuild stale embeddings
-├── tests/
-├── pyproject.toml            # Poetry package config (memman[postgres] extra)
-└── Makefile
++-- src/memman/
+|   +-- cli.py              # Click CLI: every command and the drain loop
+|   +-- config.py           # env file reader, INSTALL_DEFAULTS
+|   +-- session.py          # opens the active store for one command
+|   +-- queue.py            # the write queue in queue.db
+|   +-- drain_lock.py       # the lock file that serializes drains
+|   +-- maintenance.py      # queue cleanup, oplog trim, re-enrichment
+|   +-- doctor.py           # memman doctor checks
+|   +-- trace.py            # JSON-lines debug trace
+|   +-- extras.py           # detects optional install extras
+|   +-- exceptions.py       # domain errors
+|   +-- _http.py            # HTTP client pools and retry policy
+|   +-- pipeline/           # one queued write: enrich, embed, apply
+|   +-- store/              # Backend Protocol, SQLite and Postgres
+|   +-- search/             # recall, keyword search, quality warnings
+|   +-- graph/              # enrichment pass over pending memories
+|   +-- embed/              # embedding providers, fingerprint, swap
+|   +-- rerank/             # Voyage cross-encoder client
+|   +-- llm/                # LLM client, JSON parsing, usage, model check
+|   +-- migrate/            # shared types for memman migrate
+|   +-- backup/             # memman backup and cron translation
+|   +-- setup/              # install, wizard, scheduler units, assets
++-- scripts/
+|   +-- rebuild_stale.py    # graph rebuild --stale-only over many stores
++-- tests/
++-- pyproject.toml          # Poetry package, memman[postgres] extra
++-- Makefile
 ```
 
 ## 2.4 Data directory layout
 
+The default data directory is `~/.memman`:
+
 ```
 ~/.memman/
-├── active                        # Current default store name (plain text)
-├── env                           # Mode-600 API-key exports for the scheduler
-├── queue.db                      # Deferred-write queue (SQLite)
-├── cache/                        # LLM response cache
-├── compact/                      # Session-compact flag files
-├── logs/                         # Scheduler redirects + rotated worker log
-│   ├── enrich.log
-│   ├── enrich.err
-│   ├── backup.log
-│   ├── backup.err
-│   └── memman.log
-└── data/                         # Each store has its own isolated directory
-    ├── default/
-    │   └── memman.db             # SQLite database (WAL mode)
-    ├── work/
-    │   └── memman.db
-    └── <name>/
-        └── memman.db
++-- env                         # installed settings and API keys, mode 0600
++-- env.lock                    # serializes writes to env
++-- active                      # name of the active store
++-- queue.db                    # the write queue and drain records
++-- drain.lock                  # held by drains, migrate, backup restore
++-- model.state                 # result of the daily model check
++-- scheduler.state             # started or stopped
++-- scheduler.serve_interval    # interval of a running serve loop
++-- debug.state                 # debug trace on or off
++-- backup.state                # last minute a serve-loop backup ran
++-- compact/                    # flag files from the PreCompact hook
++-- bin/                        # launchd wrapper scripts (macOS)
++-- archive/                    # store sources memman migrate set aside
++-- logs/
+|   +-- enrich.log, enrich.err  # scheduler output of each drain
+|   +-- backup.log, backup.err  # scheduler output of each backup
+|   +-- memman.log              # worker log, rotated, three backups
+|   +-- debug.log               # debug trace
++-- data/
+    +-- default/
+    |   +-- memman.db           # one SQLite file per store, WAL mode
+    +-- <name>/
+        +-- memman.db
 ```
 
-That tree is the default layout, where the data directory is `~/.memman`. Under a non-default `--data-dir`, `env`, `active`, `queue.db`, `data/` and `logs/memman.log` all move with it. What stays under `~/.memman` is `compact/` and the four scheduler redirects, `logs/enrich.{log,err}` and `logs/backup.{log,err}`: the systemd unit pins those to `%h/.memman/logs`, and the launchd plist bakes the absolute home in at install time, so neither reads the data dir. `memman scheduler status` prints the enrich and rotated paths, and `memman log worker --stack` reads the rotated one together with its backups.
+`--data-dir` or `MEMMAN_DATA_DIR` sets the data directory. These paths move with it: `env`, `env.lock`, `active`, `queue.db`, `drain.lock`, `model.state`, `archive/`, `data/`, and `logs/memman.log`.
 
-Each store is fully independent - insights and oplog do not cross stores. On SQLite this is one `memman.db` per store; on Postgres it is one `store_<name>` schema per store inside one shared database. Shipped assets (`guide.md`, `SKILL.md`) live inside the installed package and are read via `importlib.resources`; nothing memman deploys lives under `~/.memman/`. `~/.memman/` is user state: memory data, API keys, caches, logs, queued work.
+These paths stay under `~/.memman` regardless of the data directory:
 
-`Backend` is a context manager; CLI and pipeline call sites open it via `with open_backend(store, data_dir) as backend:` so the SQLite handle or Postgres pool checkout releases deterministically. `BaseNodeStore` in `src/memman/store/base.py` holds Python-side computations (effective-importance recomputation, low-retention candidate scoring) shared by both backends.
+- The four state files: `scheduler.state`, `scheduler.serve_interval`, `debug.state`, and `backup.state`.
+- `compact/`, `bin/`, and `logs/debug.log`.
+- The four files that receive scheduler output, `logs/enrich.{log,err}` and `logs/backup.{log,err}`. The systemd units write to `%h/.memman/logs`, and the launchd wrappers hold the absolute home path from install time, so neither uses the data directory setting.
 
-When a store routes to Postgres, its `~/.memman/data/<store>/memman.db` file is unused at runtime - rows live in `store_<name>` and drain heartbeats in `store_<name>.worker_runs`. The deferred-write queue is always SQLite at `~/.memman/queue.db`. The SQLite store file remains on disk after `memman migrate <store>` as a durable fallback; the operator removes it after verifying the new backend with `memman doctor`.
+`memman scheduler status` prints the log paths. `memman log worker --stack` reads the rotated worker log together with its backups.
+
+A Postgres-backed store keeps its rows in its `store_<name>` schema. The write queue stays in `queue.db`. The included files (`guide.md`, `SKILL.md`, and the hook scripts) stay inside the installed package. [Integration](05-integration.md) describes how `memman install` links them into `~/.claude`.
 
 ## 2.5 Store isolation
 
-memman supports named stores for data isolation between different agents, projects, or scenarios.
+A named store is an isolated set of memories. Memories and the oplog never cross stores. All stores in one data directory share one env file and one write queue, and each drain serves them all.
 
-**Why named stores instead of just `--data-dir`?** `--data-dir` overrides the entire base directory - a blunt instrument that requires callers to manage full paths. Named stores give semantic clarity (`MEMMAN_STORE=work` vs `--data-dir ~/.memman-work`) and work naturally with environment variables, the standard isolation mechanism for concurrent processes.
+Named stores isolate memories within one data directory. Changing `--data-dir` also changes the env file and queue, and every caller must pass the full path. A process can select a named store with a single setting. `MEMMAN_STORE=work` points one process at the `work` store, so two Claude Code sessions on one host can use different stores.
 
-Resolution priority (highest to lowest):
+Resolution order, highest first:
 
 ```
---store flag  >  MEMMAN_STORE env  >  ~/.memman/active file  >  "default"
+--store flag  >  MEMMAN_STORE env  >  <data dir>/active file  >  "default"
 ```
 
-| Mechanism          | Scenario                                                      |
-| ------------------ | ------------------------------------------------------------- |
-| `--store` flag     | One-off CLI override, scripting                               |
-| `MEMMAN_STORE` env | Per-process isolation - different agents use different stores |
-| `active` file      | Persistent user preference - `memman store use work`          |
-| `"default"`        | Zero-config fallback                                          |
+| Mechanism          | Scenario                                                              |
+| ------------------ | --------------------------------------------------------------------- |
+| `--store` flag     | One-off override on a single command or script                        |
+| `MEMMAN_STORE` env | Per-process isolation: two sessions on one host use different stores  |
+| `active` file      | Persistent choice, set with `memman store use work`                   |
+| `"default"`        | Fallback when none of the above is set                                |
+
+[USAGE](../USAGE.md#store-management) documents the store commands.

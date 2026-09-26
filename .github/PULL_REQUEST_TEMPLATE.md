@@ -1,14 +1,13 @@
 ## What
 
-Brief description of changes.
+Summary of the change.
 
 ## Why
 
-Link to issue or explain the motivation.
+The motivation, with a link to any related issue.
 
 ## Checklist
 
 - [ ] Tests pass (`make test`)
-- [ ] New/changed behavior is covered by tests
-- [ ] Documentation updated (USAGE.md, DESIGN.md, or README) if applicable
-- [ ] CHANGELOG.md updated under `[Unreleased]` if user-facing
+- [ ] Tests cover the new or changed behavior
+- [ ] Relevant documentation updated (README.md, CONTRIBUTING.md, docs/USAGE.md, docs/design/, docs/diagrams/)

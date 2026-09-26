@@ -1,0 +1,106 @@
+<mxfile host="app.diagrams.net" agent="Claude" version="24.0.0" type="device">
+  <diagram id="recall" name="Recall Pipeline">
+    <mxGraphModel dx="1422" dy="1400" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="1050" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="s_title" value="&lt;b&gt;Recall Pipeline&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;memman recall reads the live store on every call and prints one line per memory, best first.&lt;/font&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=16;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="200" y="10" width="700" height="45" as="geometry" />
+        </mxCell>
+
+        <mxCell id="s_start" value="&lt;b&gt;memman recall &amp;lt;query&amp;gt;&lt;/b&gt;&lt;br&gt;[--limit N, default 20] [--cat C] [--source S] [--basic]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="250" y="70" width="400" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s_basic_q" value="--basic?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="380" y="140" width="140" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="s_basic" value="&lt;b&gt;Basic match&lt;/b&gt;&lt;br&gt;Every query word must appear in content, entities, or keywords (SQL LIKE). Ordered by importance, then newest first. No embedding and no score." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="700" y="130" width="300" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="s_emb" value="&lt;b&gt;Embed the query&lt;/b&gt;&lt;br&gt;With the store's embedding model. On failure, recall goes on with the keyword and recency channels." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="250" y="225" width="400" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="s_getall" value="&lt;b&gt;Read every current memory&lt;/b&gt;&lt;br&gt;Each memory not forgotten or superseded. --cat and --source filter every channel." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="250" y="300" width="400" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="s_anchor_box" value="&lt;b&gt;Three channels&lt;/b&gt;  each returns a ranked list" style="rounded=1;absoluteArcSize=1;arcSize=20;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;fontSize=12;align=left;spacingLeft=10;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="370" width="940" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="s_sig1" value="&lt;b&gt;Keyword&lt;/b&gt;&lt;br&gt;Query tokens counted per memory: FTS5 on SQLite, kw_tokens on Postgres. Top 30." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="80" y="405" width="290" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="s_sig2" value="&lt;b&gt;Vector&lt;/b&gt;&lt;br&gt;Positive cosine similarity only: a matrix product on SQLite, the HNSW index on Postgres. Top 100." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="385" y="405" width="290" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="s_sig3" value="&lt;b&gt;Recency&lt;/b&gt;&lt;br&gt;Newest by created_at. Top 30." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="690" y="405" width="290" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="s_sig_note" value="With --cat or --source and a limit above 30, the keyword and recency channels take limit rows, and the vector channel takes at least as many." style="text;html=1;whiteSpace=wrap;align=left;fontSize=9;fontStyle=2;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="80" y="482" width="900" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="s_rrf" value="&lt;b&gt;RRF fusion&lt;/b&gt; (k=60)&lt;br&gt;fused = Σ 1/(k + r) over the channels that list the memory, r = 1-based rank.&lt;br&gt;Every fused memory is a candidate." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="250" y="545" width="400" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="s_weights" value="&lt;b&gt;Blend&lt;/b&gt;&lt;br&gt;score = w_kw * keyword + w_sim * similarity + w_anchor * anchor&lt;br&gt;Sorted by score. Ties go to the higher importance." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="250" y="630" width="400" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="s_wtable" value="&lt;table style=&quot;font-size:10px; border-collapse:collapse; width:100%&quot;&gt;&lt;tr style=&quot;font-weight:bold;&quot;&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;Term&lt;/td&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;Value&lt;/td&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;Raw weight&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;keyword&lt;/td&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;matched tokens / query tokens&lt;/td&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;0.25&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;similarity&lt;/td&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;positive cosine, else 0&lt;/td&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;0.45&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;anchor&lt;/td&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;min-max of the fused score&lt;/td&gt;&lt;td style=&quot;padding:2px 6px;&quot;&gt;0.15&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;&lt;div style=&quot;font-size:9px; padding:2px 6px;&quot;&gt;Each weight is the raw weight divided by the sum of the three.&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;overflow=fill;verticalAlign=top;align=left;" vertex="1" parent="1">
+          <mxGeometry x="690" y="615" width="310" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="s_rerank" value="&lt;b&gt;Rerank&lt;/b&gt;&lt;br&gt;For a query of three or more words, the Voyage cross-encoder rescores the top 100 candidates. On by default. MEMMAN_RERANK_ENABLED_&amp;lt;store&amp;gt; sets it per store. On failure, the blend order stands." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="250" y="715" width="400" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="s_limit" value="&lt;b&gt;Keep the first --limit rows&lt;/b&gt;&lt;br&gt;Nothing re-sorts after the cut. Recall logs one oplog row." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="250" y="810" width="400" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s_out" value="&lt;b&gt;Plain-text output&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-family:monospace;font-size:9px&quot;&gt;&amp;lt;id8&amp;gt; &amp;lt;score&amp;gt; &amp;lt;created_at&amp;gt; &amp;lt;author&amp;gt; &amp;lt;category&amp;gt; | &amp;lt;text&amp;gt;&lt;/font&gt;&lt;br&gt;&amp;lt;text&amp;gt; is the summary, or a content prefix. --basic omits &amp;lt;score&amp;gt;. No match prints nothing." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="200" y="885" width="500" height="65" as="geometry" />
+        </mxCell>
+
+        <mxCell id="s_e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="s_start" target="s_basic_q">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s_e_basic" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=9;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="s_basic_q" target="s_basic">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s_e2" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=9;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="s_basic_q" target="s_emb">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s_e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="s_emb" target="s_getall">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s_e4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;entryX=0.415;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="s_getall" target="s_anchor_box">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s_e5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=0.415;exitY=1;exitDx=0;exitDy=0;" edge="1" parent="1" source="s_anchor_box" target="s_rrf">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s_e6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="s_rrf" target="s_weights">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s_ew" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;strokeColor=#999999;endArrow=none;" edge="1" parent="1" source="s_weights" target="s_wtable">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s_e7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="s_weights" target="s_rerank">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s_e8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="s_rerank" target="s_limit">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s_e9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;" edge="1" parent="1" source="s_limit" target="s_out">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="s_e_basic_out" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="s_basic" target="s_out">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1030" y="170" />
+              <mxPoint x="1030" y="918" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

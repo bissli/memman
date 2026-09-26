@@ -1,19 +1,19 @@
 ---
 name: Feature Request
-about: Suggest a new feature or improvement
+about: A feature or improvement for memman
 title: ''
 labels: enhancement
 assignees: ''
 ---
 
 **Problem**
-What problem does this feature solve? Describe the pain point.
+The problem this feature solves.
 
 **Proposed solution**
-A clear description of what you'd like to happen.
+The behavior the feature adds.
 
 **Alternatives considered**
-Any alternative solutions or workarounds you've considered.
+Other solutions or workarounds, and why they fall short.
 
 **Additional context**
-Any other context, references, or screenshots.
+References, examples, or screenshots that help explain the request.

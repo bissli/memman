@@ -1,28 +1,29 @@
 ---
 name: Bug Report
-about: Report a bug to help us improve MemMan
+about: A bug in memman
 title: ''
 labels: bug
 assignees: ''
 ---
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+**Bug description**
+What goes wrong.
 
 **To reproduce**
-Steps to reproduce the behavior:
 1. Run `memman ...`
-2. See error
+2. See the error
 
 **Expected behavior**
-A clear description of what you expected to happen.
+The behavior expected instead.
 
 **Environment**
 - OS: [e.g. macOS 15.3, Ubuntu 24.04]
-- memman version: [e.g. 0.1.0 - run `memman --version`]
-- LLM CLI: [e.g. Claude Code 1.x]
+- memman version: [output of `memman --version`]
+- Claude Code version: [output of `claude --version`]
 - LLM endpoint: [value of MEMMAN_LLM_ENDPOINT, e.g. https://openrouter.ai/api/v1]
-- API keys configured: [MEMMAN_LLM_API_KEY, MEMMAN_VOYAGE_API_KEY, ...]
+- Embedding provider: [value of MEMMAN_EMBED_PROVIDER]
+- Storage backend: [sqlite or postgres]
+- API keys set: [names only, e.g. MEMMAN_LLM_API_KEY, MEMMAN_VOYAGE_API_KEY]
 
 **Additional context**
-Paste any relevant output from `memman status` or `memman log`.
+Relevant output of `memman doctor --text`, `memman status`, `memman log list`, `memman log worker --errors`, or `memman log worker --stack`, with API keys and DSN passwords removed.
