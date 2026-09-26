@@ -78,19 +78,35 @@ def model_notice(
 def _fetch_rows(client: httpx.Client, url: str) -> list[dict]:
     """GET a public OpenRouter catalog and return its `data` rows.
 
+    Parameters
+    ----------
+    client : httpx.Client
+        Open client; no API key is sent.
+    url : str
+        Full catalog URL, e.g. `https://openrouter.ai/api/v1/models`.
+
+    Returns
+    -------
+    list[dict]
+        The catalog's `data` rows, unfiltered.
+
     Raises
     ------
     httpx.HTTPError
         On a transport failure or a non-2xx status.
     RuntimeError
-        When the response carries no `data` list.
+        When the body is not a JSON object carrying a `data` list.
     """
     trace.event('openrouter_catalog_request', url=url)
     t0 = time.monotonic()
     resp = client.get(url, timeout=FETCH_TIMEOUT_SECONDS)
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     resp.raise_for_status()
-    rows = resp.json().get('data')
+    try:
+        payload = resp.json()
+    except ValueError as exc:
+        raise RuntimeError(f'OpenRouter catalog at {url} is not JSON') from exc
+    rows = payload.get('data') if isinstance(payload, dict) else None
     if not isinstance(rows, list):
         raise RuntimeError(f'unexpected OpenRouter catalog shape at {url}')
     trace.event(

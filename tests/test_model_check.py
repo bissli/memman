@@ -354,3 +354,46 @@ def test_install_finishes_when_the_catalog_is_unreachable(
     printed = capsys.readouterr().out
     assert 'cannot read the OpenRouter catalogs' in printed
     assert 'no route' in printed
+
+
+@pytest.mark.no_mock_catalog
+@pytest.mark.parametrize(
+    'body', ['<html>maintenance</html>', '[]'], ids=['html', 'json-list'])
+def test_a_drain_survives_a_catalog_reply_that_is_not_a_json_object(
+        mm_runner, monkeypatch, body):
+    """A 200 catalog reply that is not a JSON object ends no drain early.
+
+    Mutation: the reply parsed outside the RuntimeError contract, so a
+        JSONDecodeError or AttributeError escapes the drain's catch and
+        skips its lock release and run record.
+    Oracle: a stubbed 200 reply carrying an HTML page, and one carrying
+        a JSON list.
+    """
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return json.loads(body)
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, **kwargs):
+            return _Resp()
+
+    monkeypatch.setattr('memman.llm.openrouter_models.httpx.Client', _Client)
+    runner, data_dir = mm_runner
+    result = runner.invoke(
+        cli, ['--data-dir', data_dir, 'scheduler', 'drain'])
+    assert result.exit_code == 0, repr(result.exception)
+    assert _read_state()['model'] == MODEL
