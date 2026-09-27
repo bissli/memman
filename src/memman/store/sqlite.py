@@ -169,9 +169,9 @@ group by length(embedding)
         rows = self._db._query(sql).fetchall()
         return {int(size): int(count) for size, count in rows}
 
-    def stamp_linked(self, id: Id) -> None:
+    def stamp_enrich_attempted(self, id: Id) -> None:
         ts = format_timestamp(datetime.now(timezone.utc))
-        _node.stamp_linked(self._db, id, ts)
+        _node.stamp_enrich_attempted(self._db, id, ts)
 
     def stamp_enriched(
             self, id: Id, *,
@@ -180,17 +180,17 @@ group by length(embedding)
         _node.stamp_enriched(
             self._db, id, ts, prompt_version=prompt_version)
 
-    def get_pending_link_ids(self, *, limit: int) -> list[Id]:
-        return _node.get_pending_link_ids(self._db, limit)
+    def get_pending_enrich_ids(self, *, limit: int) -> list[Id]:
+        return _node.get_pending_enrich_ids(self._db, limit)
 
     def get_active_ids(self) -> list[Id]:
         return _node.get_active_insight_ids(self._db)
 
-    def count_pending_links(self) -> int:
-        return _node.count_pending_links(self._db)
+    def count_pending_enrich(self) -> int:
+        return _node.count_pending_enrich(self._db)
 
-    def get_unenriched_linked_ids(self, *, limit: int) -> list[Id]:
-        return _node.get_unenriched_linked_ids(self._db, limit)
+    def get_unenriched_attempted_ids(self, *, limit: int) -> list[Id]:
+        return _node.get_unenriched_attempted_ids(self._db, limit)
 
     def iter_stale_insight_ids(self, active_pv: str) -> list[Id]:
         return _node.iter_stale_insight_ids(self._db, active_pv)
@@ -781,7 +781,7 @@ class SqliteMigrator(Migrator):
 
             rows = conn.execute("""
 select id, content, category, summary, embedding,
-       linked_at, enriched_at, created_at, updated_at,
+       enrich_attempted_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, embedding_model,
        queue_uuid, superseded_by, author
 from insights
@@ -794,7 +794,7 @@ order by id
                     id=r[0], content=r[1], category=r[2],
                     summary=r[3],
                     embedding=emb,
-                    linked_at=(
+                    enrich_attempted_at=(
                         parse_timestamp(r[5]) if r[5] else None),
                     enriched_at=(
                         parse_timestamp(r[6]) if r[6] else None),
@@ -851,8 +851,8 @@ order by id
                         ins.id, ins.content, ins.category,
                         ins.summary,
                         emb_blob,
-                        format_timestamp(ins.linked_at)
-                        if ins.linked_at else None,
+                        format_timestamp(ins.enrich_attempted_at)
+                        if ins.enrich_attempted_at else None,
                         format_timestamp(ins.enriched_at)
                         if ins.enriched_at else None,
                         format_timestamp(ins.created_at),
@@ -869,7 +869,7 @@ order by id
                         'insert into insights ('
                         ' id, content, category, summary,'
                         ' embedding,'
-                        ' linked_at, enriched_at, created_at,'
+                        ' enrich_attempted_at, enriched_at, created_at,'
                         ' updated_at, deleted_at, prompt_version,'
                         ' embedding_model,'
                         ' queue_uuid,'

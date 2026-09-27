@@ -238,13 +238,16 @@ class TestEnrichmentSchema:
         assert 'semantic_facts' not in col_names
 
 
-class TestPendingLinkIndex:
-    """Partial index on (linked_at, created_at) for the pending-link scan."""
+class TestPendingEnrichIndex:
+    """Partial index on (enrich_attempted_at, created_at) for the
+    pending-enrich scan.
+    """
 
-    def test_pending_link_query_uses_index(self, tmp_path):
-        """Verify the scheduler's pending-link scan is served by its index.
+    def test_pending_enrich_query_uses_index(self, tmp_path):
+        """Verify the scheduler's pending-enrich scan is served by its
+        index.
 
-        Mutation: dropping `created_at` from `idx_insights_pending_link`
+        Mutation: dropping `created_at` from `idx_insights_pending_enrich`
             (the planner then takes `idx_insights_current_listing` and
             sorts every current row per tick), or dropping
             `superseded_by is null` from its predicate (the partial
@@ -257,12 +260,62 @@ class TestPendingLinkIndex:
         try:
             plan = db._conn.execute(
                 'explain query plan select id from insights'
-                ' where linked_at is null and deleted_at is null'
+                ' where enrich_attempted_at is null and deleted_at is null'
                 ' and superseded_by is null'
                 ' order by created_at asc limit 10'
                 ).fetchall()
         finally:
             db.close()
         steps = ' | '.join(row[3] for row in plan)
-        assert 'idx_insights_pending_link' in steps, plan
+        assert 'idx_insights_pending_enrich' in steps, plan
         assert 'ORDER BY' not in steps, plan
+
+
+class TestSchemaColumnRename:
+    """The insights table carries `enrich_attempted_at`, never `linked_at`,
+    on a freshly opened store of either backend.
+    """
+
+    def test_schema_has_enrich_attempted_at(self, backend, backend_kind):
+        """A freshly opened store has the renamed column and index.
+
+        Mutation: reverting `enrich_attempted_at` to `linked_at` or
+            `idx_insights_pending_enrich` to `idx_insights_pending_link`
+            in either backend's baseline, or keeping the old name
+            beside the new one.
+        Oracle: the backend's own catalog (`pragma table_info` /
+            `sqlite_master` on SQLite, `information_schema` /
+            `pg_indexes` on Postgres), read directly rather than
+            through the ORM-style accessors in `store/node.py`.
+        """
+        if backend_kind == 'sqlite':
+            db = backend.nodes._db
+            cols = {row[1] for row in db._conn.execute(
+                'pragma table_info(insights)').fetchall()}
+            index_names = {row[0] for row in db._conn.execute(
+                "select name from sqlite_master where type = 'index'"
+                ).fetchall()}
+            assert 'enrich_attempted_at' in cols
+            assert 'linked_at' not in cols
+            assert 'idx_insights_pending_enrich' in index_names
+            assert 'idx_insights_pending_link' not in index_names
+        else:
+            schema = backend.nodes._schema
+            with backend.nodes._conn.cursor() as cur:
+                cur.execute(
+                    'select column_name from information_schema.columns'
+                    ' where table_schema = %s and table_name = %s',
+                    (schema, 'insights'))
+                cols = {row[0] for row in cur.fetchall()}
+                cur.execute(
+                    'select indexname from pg_indexes'
+                    ' where schemaname = %s', (schema,))
+                index_names = {row[0] for row in cur.fetchall()}
+            assert 'enrich_attempted_at' in cols
+            assert 'linked_at' not in cols
+            assert any(
+                n.startswith('idx_insights_pending_enrich')
+                for n in index_names)
+            assert not any(
+                n.startswith('idx_insights_pending_link')
+                for n in index_names)

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from memman.search.recall import intent_aware_recall
+from memman.search.recall import run_recall
 from tests.conftest import _mock_embed, make_insight, set_created_at
 
 _ROWS = [
@@ -93,7 +93,7 @@ def _build(backend, *, supersede):
 
 def _recall_view(backend, query):
     """Ids and scores of one recall, rounded for comparison."""
-    resp = intent_aware_recall(backend, query, None, 10)
+    resp = run_recall(backend, query, None, 10)
     rows = [(r['insight'].id, round(r['score'], 9),
              {k: round(v, 9) for k, v in r['signals'].items()})
             for r in resp['results']]
@@ -116,7 +116,7 @@ def test_supersession_reads_identically_to_a_soft_delete(twin_backends):
 
     for query in ('alpha broker kombu', 'beta dashboard metrics', 'gamma'):
         assert _recall_view(superseded, query) == _recall_view(deleted, query)
-    assert {r['insight'].id for r in intent_aware_recall(
+    assert {r['insight'].id for r in run_recall(
         superseded, 'alpha broker kombu', None, 10)['results']}.isdisjoint({'p-1'})
 
     assert superseded.nodes.count_active() == deleted.nodes.count_active()
@@ -126,8 +126,8 @@ def test_supersession_reads_identically_to_a_soft_delete(twin_backends):
             == deleted.nodes.embedding_size_distribution())
     assert (superseded.nodes.provenance_distribution()
             == deleted.nodes.provenance_distribution())
-    assert (superseded.nodes.count_pending_links()
-            == deleted.nodes.count_pending_links())
+    assert (superseded.nodes.count_pending_enrich()
+            == deleted.nodes.count_pending_enrich())
     assert (superseded.nodes.count_stale_insights('pv-2')
             == deleted.nodes.count_stale_insights('pv-2'))
     assert (superseded.nodes.stats().total_insights

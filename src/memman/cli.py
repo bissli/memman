@@ -1,8 +1,9 @@
 """Click CLI for memman.
 
 This module is the entry point and argument-parsing surface only. Core
-write-path orchestration lives in `memman.pipeline.remember`. Storage,
-graph, search, embed, and LLM primitives live under their own packages.
+write-path orchestration lives in `memman.pipeline.remember`, and
+re-enrichment in `memman.pipeline.enrich`. Storage, search, embed, and
+LLM primitives live under their own packages.
 """
 
 import json
@@ -532,11 +533,6 @@ def list_claude_permissions() -> list[str]:
     return sorted(walk(cli, ()))
 
 
-@cli.group()
-def graph() -> None:
-    """Re-enrichment of stored insights."""
-
-
 @cli.group(name='embed')
 def embed_grp() -> None:
     """Embed-provider operations: status, re-embed on swap."""
@@ -777,7 +773,7 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str) -> None:
     with queue_db(data_dir_val) as conn:
         row_id, queue_uuid = enqueue(
             conn, store=name, content=content_str,
-            hint_cat=cat,
+            category=cat,
             author=author)
     _json_out({
         'action': 'queued',
@@ -1136,7 +1132,7 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 store=row.store,
                 attempts=row.attempts,
                 content_len=len(row.content),
-                hint_cat=row.hint_cat)
+                category=row.category)
 
             ctx = store_contexts.get(row.store)
             if ctx is None:
@@ -1365,7 +1361,7 @@ def _process_queue_row(
 
     ctx.assert_fingerprint_unchanged()
 
-    category = row.hint_cat
+    category = row.category
 
     backend = ctx.backend
 
@@ -1387,7 +1383,7 @@ def _process_queue_row(
         return
 
     now = datetime.now(timezone.utc)
-    replaced_id = row.hint_replaced_id or ''
+    replaced_id = row.replaced_id or ''
     redirected_from = ''
     if replaced_id:
         # Notes:
@@ -1408,9 +1404,9 @@ def _process_queue_row(
                 and old.id != replaced_id):
             redirected_from = replaced_id
             replaced_id = old.id
-    # `queue_uuid` must reach the parent Insight: _plan_fact copies it
-    # off the parent, so omitting it makes the idempotency check above
-    # a silent no-op.
+    # `queue_uuid` must land on the stored insight: run_remember
+    # stores this object directly, so omitting it makes the
+    # idempotency check above a silent no-op.
     insight = Insight(
         id=str(uuid.uuid4()), content=row.content,
         category=category,
@@ -1419,7 +1415,7 @@ def _process_queue_row(
 
     from memman.pipeline.remember import run_remember
     result = run_remember(
-        backend, insight, row.content,
+        backend, insight,
         replaced_id=replaced_id,
         ec=ctx.ec)
     if redirected_from:
@@ -1471,7 +1467,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], limit: int,
     # Deferred: the embed and search stack would load on every other
     # command's startup.
     from memman.embed.fingerprint import bound_embedder
-    from memman.search.recall import intent_aware_recall
+    from memman.search.recall import run_recall
     keyword_str = ' '.join(keyword)
     store_name = _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store'])
     per_store_rerank = config.get_store_rerank_enabled(store_name)
@@ -1503,7 +1499,7 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], limit: int,
                 ' degrading to keyword path',
                 type(exc).__name__, exc)
 
-        resp = intent_aware_recall(
+        resp = run_recall(
             backend, keyword_str, query_vec, limit, rerank=rerank)
 
         hits = [{'id': r['insight'].id[:8],
@@ -1664,8 +1660,8 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
     with queue_db(data_dir_val) as conn:
         row_id, queue_uuid = enqueue(
             conn, store=name, content=content_str,
-            hint_cat=cat,
-            hint_replaced_id=id,
+            category=cat,
+            replaced_id=id,
             author=author)
     _json_out({
         'action': 'queued',
@@ -1852,7 +1848,7 @@ def unsupersede(ctx: click.Context, id: str) -> None:
                 raise click.ClickException(
                     f'insight {id} changed under this command; re-read it')
             backend.nodes.update_embedding(id, vec, ec.model)
-            backend.nodes.stamp_linked(id)
+            backend.nodes.stamp_enrich_attempted(id)
             backend.oplog.log(
                 operation='unsupersede', insight_id=id,
                 detail=f'was superseded by {successor_id}', before=before)
@@ -2038,8 +2034,9 @@ def scheduler_start(ctx: click.Context, text_output: bool) -> None:
 def scheduler_stop(text_output: bool) -> None:
     """Stop the scheduler. Trigger files stay; memman becomes recall-only.
 
-    Writes (`remember`/`replace`/`forget`/`graph rebuild`) reject
-    until `scheduler start` re-arms the worker. Use
+    Writes (`remember`/`replace`/`forget`) reject until
+    `scheduler start` re-arms the worker; `enrich` runs only while
+    the scheduler is stopped. Use
     `memman uninstall` to remove trigger files entirely.
     """
     from memman.setup.scheduler import stop
@@ -3648,23 +3645,20 @@ def prime() -> None:
     click.echo(shipped, nl=False)
 
 
-def _graph_rebuild_stale_only(
+def _enrich_stale_only(
         ctx: click.Context, *, dry_run: bool,
         progress_jsonl: bool) -> None:
-    """Stale-only branch of `graph rebuild`.
+    """Stale-only branch of `enrich`.
 
     Filters work to rows whose persisted `prompt_version` no longer
     matches `compute_prompt_version()` -- the enrichment prompt plus
     the LLM model, which is exactly the set this command
-    replays. Works on SQLite and Postgres
-    (the wholesale rebuild's SQLite-only guard does not apply here:
-    the per-row writes through `link_pending` are the same traffic
-    the `remember` hot path already exercises). Lock + predicate +
+    replays. Works on SQLite and Postgres. Lock + predicate +
     reset run inside a single `reembed_lock('rebuild')` window so
     a concurrent wholesale rebuild cannot race.
     """
     from memman.embed.fingerprint import bound_embedder
-    from memman.graph.engine import MAX_LINK_BATCH, link_pending
+    from memman.pipeline.enrich import MAX_ENRICH_BATCH, enrich_pending
     from memman.pipeline.remember import compute_prompt_version
 
     if not dry_run:
@@ -3697,7 +3691,7 @@ def _graph_rebuild_stale_only(
         with backend.reembed_lock('rebuild') as held:
             if not held:
                 raise click.ClickException(
-                    'another graph rebuild is in progress on this store')
+                    'another enrich run is in progress on this store')
 
             stale_ids = backend.nodes.iter_stale_insight_ids(active_pv)
             total_count = len(stale_ids)
@@ -3713,7 +3707,7 @@ def _graph_rebuild_stale_only(
                 _json_out(stats)
                 return
 
-            metadata_llm_client = _get_llm_client_or_fail()
+            llm_client = _get_llm_client_or_fail()
             ec = bound_embedder(backend)
 
             processed = 0
@@ -3742,14 +3736,14 @@ def _graph_rebuild_stale_only(
                             }) + '\n')
                         sys.stderr.flush()
 
-            for i in range(0, total_count, MAX_LINK_BATCH):
-                batch_ids = stale_ids[i:i + MAX_LINK_BATCH]
+            for i in range(0, total_count, MAX_ENRICH_BATCH):
+                batch_ids = stale_ids[i:i + MAX_ENRICH_BATCH]
                 backend.nodes.reset_for_rebuild(batch_ids)
 
                 while True:
-                    count = link_pending(
+                    count = enrich_pending(
                         backend,
-                        metadata_llm_client=metadata_llm_client,
+                        llm_client=llm_client,
                         embed_client=ec,
                         on_progress=_on_progress)
                     processed += count
@@ -3759,7 +3753,7 @@ def _graph_rebuild_stale_only(
             bar.set_description('Done')
             bar.close()
 
-            remaining = backend.nodes.count_pending_links()
+            remaining = backend.nodes.count_pending_enrich()
 
             stats = {
                 'processed': processed, 'remaining': remaining,
@@ -3773,7 +3767,7 @@ def _graph_rebuild_stale_only(
             _json_out(stats)
 
 
-@graph.command('rebuild')
+@cli.command('enrich')
 @click.option('--dry-run', is_flag=True, default=False,
               help='Show counts without modifying DB')
 @click.option('--progress-jsonl', is_flag=True, default=False,
@@ -3788,21 +3782,21 @@ def _graph_rebuild_stale_only(
                    ' (works on Postgres). NULL provenance rows are not'
                    ' swept; they need a separate backfill.')
 @click.pass_context
-def graph_rebuild(ctx: click.Context, dry_run: bool,
-                  progress_jsonl: bool, stale_only: bool) -> None:
+def enrich(ctx: click.Context, dry_run: bool,
+           progress_jsonl: bool, stale_only: bool) -> None:
     """Re-enrich all insights through the full LLM pipeline."""
     if stale_only:
-        _graph_rebuild_stale_only(
+        _enrich_stale_only(
             ctx, dry_run=dry_run, progress_jsonl=progress_jsonl)
         return
 
     if not dry_run:
         _require_stopped('rebuild')
     from memman.embed.fingerprint import bound_embedder
-    from memman.graph.engine import MAX_LINK_BATCH, link_pending
+    from memman.pipeline.enrich import MAX_ENRICH_BATCH, enrich_pending
 
     with _active_backend(ctx) as backend:
-        metadata_llm_client = _get_llm_client_or_fail()
+        llm_client = _get_llm_client_or_fail()
         ec = bound_embedder(backend)
 
         all_ids = backend.nodes.get_active_ids()
@@ -3819,7 +3813,7 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
         with backend.reembed_lock('rebuild') as held:
             if not held:
                 raise click.ClickException(
-                    'another graph rebuild is in progress on this store')
+                    'another enrich run is in progress on this store')
 
             processed = 0
 
@@ -3847,14 +3841,14 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
                             }) + '\n')
                         sys.stderr.flush()
 
-            for i in range(0, total_count, MAX_LINK_BATCH):
-                batch_ids = all_ids[i:i + MAX_LINK_BATCH]
+            for i in range(0, total_count, MAX_ENRICH_BATCH):
+                batch_ids = all_ids[i:i + MAX_ENRICH_BATCH]
                 backend.nodes.reset_for_rebuild(batch_ids)
 
                 while True:
-                    count = link_pending(
+                    count = enrich_pending(
                         backend,
-                        metadata_llm_client=metadata_llm_client,
+                        llm_client=llm_client,
                         embed_client=ec,
                         on_progress=_on_progress)
                     processed += count
@@ -3864,7 +3858,7 @@ def graph_rebuild(ctx: click.Context, dry_run: bool,
             bar.set_description('Done')
             bar.close()
 
-            remaining = backend.nodes.count_pending_links()
+            remaining = backend.nodes.count_pending_enrich()
 
             stats = {'processed': processed, 'remaining': remaining}
             backend.oplog.log(

@@ -7,7 +7,7 @@ store whose cosines center low - a sparse store, or a weaker provider
 boundary remains, which is model-invariant because an orthogonal row
 is orthogonal under every model.
 
-Both tests here drive `intent_aware_recall` rather than
+Both tests here drive `run_recall` rather than
 `vector_anchors` directly: the deleted constant lived at the recall
 call site, so the verb alone cannot show the behavior either way.
 """
@@ -15,7 +15,7 @@ call site, so the verb alone cannot show the behavior either way.
 import math
 from datetime import datetime, timedelta, timezone
 
-from memman.search.recall import ANCHOR_TOP_K, intent_aware_recall
+from memman.search.recall import ANCHOR_TOP_K, run_recall
 from tests.conftest import EMBEDDING_DIM, make_insight, set_created_at
 
 QUERY = 'orthogonal probe request'
@@ -71,8 +71,8 @@ def _seed_crowded_store(backend):
 
 
 def _returned_ids(backend):
-    """Ids `intent_aware_recall` returns for `QUERY`, unranked."""
-    resp = intent_aware_recall(
+    """Ids `run_recall` returns for `QUERY`, unranked."""
+    resp = run_recall(
         backend, QUERY, QUERY_VEC, ANCHOR_TOP_K + 10)
     return {r['insight'].id for r in resp['results']}
 

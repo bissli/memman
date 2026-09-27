@@ -14,7 +14,7 @@ vector-path assertion would be testing the hash.
 import math
 from datetime import datetime, timedelta, timezone
 
-from memman.search.recall import ANCHOR_TOP_K, intent_aware_recall
+from memman.search.recall import ANCHOR_TOP_K, run_recall
 from tests.conftest import make_insight, set_created_at
 
 NOW = datetime.now(timezone.utc)
@@ -44,7 +44,7 @@ def test_unfiltered_recall_anchor_k_unchanged(backend):
         keyword-dark query, and `limit` above `ANCHOR_TOP_K`.
     """
     _seed(backend, 60, 'fact', 'filler row body {i}')
-    resp = intent_aware_recall(
+    resp = run_recall(
         backend, 'zzz unmatched query', None, 50)
     assert resp['meta']['anchor_count'] == ANCHOR_TOP_K
 
@@ -67,7 +67,7 @@ def test_recall_survives_a_raising_session_verb(backend, monkeypatch):
     computes vector scores, so the degrade path is the only thing
     standing between an operator error and an empty recall.
 
-    Mutation: letting either exception escape `intent_aware_recall`,
+    Mutation: letting either exception escape `run_recall`,
         or returning an empty result set instead of falling through to
         the surviving channels.
     Oracle: the same query run against a healthy session, whose row
@@ -78,7 +78,7 @@ def test_recall_survives_a_raising_session_verb(backend, monkeypatch):
     _seed(backend, 12, 'fact', 'kombu serialization body {i}')
     query_vec = _vec512(0.2)
 
-    healthy = intent_aware_recall(
+    healthy = run_recall(
         backend, 'kombu serialization body', query_vec, 10)
 
     def _raise(self, *args, **kwargs):
@@ -89,7 +89,7 @@ def test_recall_survives_a_raising_session_verb(backend, monkeypatch):
     monkeypatch.setattr(session_cls, 'similarities', _raise)
     monkeypatch.setattr(session_cls, 'vector_anchors', _raise)
 
-    degraded = intent_aware_recall(
+    degraded = run_recall(
         backend, 'kombu serialization body', query_vec, 10)
 
     assert len(degraded['results']) == len(healthy['results']) > 0
@@ -120,7 +120,7 @@ def test_recall_survives_a_failed_keyword_channel(backend, monkeypatch):
     """
     _seed(backend, 12, 'fact', 'kombu serialization body {i}')
 
-    healthy = intent_aware_recall(
+    healthy = run_recall(
         backend, 'kombu serialization body', None, 10)
     assert any(r['signals']['keyword'] > 0.0
                for r in healthy['results'])
@@ -132,7 +132,7 @@ def test_recall_survives_a_failed_keyword_channel(backend, monkeypatch):
         session_cls = type(probe)
     monkeypatch.setattr(session_cls, 'keyword_counts', _raise)
 
-    degraded = intent_aware_recall(
+    degraded = run_recall(
         backend, 'kombu serialization body', None, 10)
 
     assert degraded['results'], 'time anchors should still answer'

@@ -140,12 +140,13 @@ def test_unsupersede_relinks_reembeds_and_writes_its_oplog_row(mm_runner):
     """Verify `unsupersede` restores a row to current and re-enriches it.
 
     Mutation: clearing the pointer without re-embedding (no vector
-        after an embed swap), without stamping `linked_at` (the row
-        never re-enters a rebuild's pending set), or without the
-        oplog row.
+        after an embed swap), without stamping `enrich_attempted_at`
+        (the row never re-enters a rebuild's pending set), or without
+        the oplog row.
     Oracle: after `forget succ` then `unsupersede pred`: the row is
-        current, its embedding is present, `linked_at` is stamped,
-        and the oplog names the successor it was superseded by.
+        current, its embedding is present, `enrich_attempted_at` is
+        stamped, and the oplog names the successor it was superseded
+        by.
     """
     _, data_dir = mm_runner
     old = _remember(mm_runner, 'the broker is kombu')
@@ -168,7 +169,7 @@ def test_unsupersede_relinks_reembeds_and_writes_its_oplog_row(mm_runner):
         row = backend.nodes.get(old)
         assert row is not None
         assert row.superseded_by is None
-        assert row.linked_at is not None
+        assert row.enrich_attempted_at is not None
         (embedding,) = backend._db._query(
             'select embedding from insights where id = ?', (old,)).fetchone()
         assert embedding is not None

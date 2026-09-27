@@ -255,9 +255,10 @@ def check_env_completeness() -> dict[str, Any]:
     Notes
     -----
     - A provider key counts as missing only when a configured provider
-      reads it: the embed provider's own keys, and the Voyage key while
-      Voyage reranking is on for any store. The LLM key is never
-      flagged, since a loopback endpoint needs none.
+      reads it: the embed provider's own keys, and the Voyage key
+      whenever reranking is on for any store -- Voyage is the one
+      shipped reranker, so there is no provider switch to read. The
+      LLM key is never flagged, since a loopback endpoint needs none.
     - Reranking is on for a store as recall reads it: the store's
       `MEMMAN_RERANK_ENABLED_<store>` when set, else the global
       `MEMMAN_RERANK_ENABLED`, which counts as on when unset or
@@ -275,9 +276,8 @@ def check_env_completeness() -> dict[str, Any]:
         if key.startswith(config.RERANK_ENABLED_FOR(''))
         ]
     rerank_switches.append(parsed.get(config.RERANK_ENABLED) or 'true')
-    if (parsed.get(config.RERANK_PROVIDER) == 'voyage'
-            and any(value.strip().lower() in config.TRUTHY
-                    for value in rerank_switches)):
+    if any(value.strip().lower() in config.TRUTHY
+           for value in rerank_switches):
         used_provider_keys.add(config.VOYAGE_API_KEY)
     optional_secrets = {
         config.OPENROUTER_API_KEY,
@@ -987,7 +987,7 @@ def check_provenance_drift(backend: Backend) -> dict[str, Any]:
             'name': 'provenance_drift', 'status': 'pass',
             'detail': detail}
     detail['remediation'] = (
-        "Run 'memman graph rebuild --stale-only' to re-enrich only"
+        "Run 'memman enrich --stale-only' to re-enrich only"
         " drifted rows.")
     return {
         'name': 'provenance_drift', 'status': 'warn',

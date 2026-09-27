@@ -8,23 +8,20 @@ successor does not explicitly copy is missing from the current view.
 These tests pin what the successor carries.
 """
 
-from memman.pipeline.remember import FactPlan, _apply_plan
+from memman.pipeline.remember import _apply_plan
 from memman.store.node import get_insight_by_id, insert_insight
 from tests.conftest import make_insight
 
 
-def _replace_plan(new_id, target_id, **insight_overrides):
-    """Build a replace FactPlan targeting `target_id`."""
+def _replace_apply(backend, new_id, target_id, **insight_overrides):
+    """Apply a replace of `target_id` with a successor built from overrides."""
     overrides = {
         'id': new_id,
         'content': 'merged content',
         }
     overrides.update(insight_overrides)
-    return FactPlan(
-        fact_insight=make_insight(**overrides),
-        replaced_id=target_id,
-        embed_vec=None,
-        enrichment={})
+    return _apply_plan(
+        backend, make_insight(**overrides), target_id, None, {})
 
 
 def test_replace_plan_links_the_predecessor_and_keeps_it(tmp_db, tmp_backend):
@@ -40,9 +37,8 @@ def test_replace_plan_links_the_predecessor_and_keeps_it(tmp_db, tmp_backend):
     insert_insight(tmp_db, make_insight(
         id='old-1', content='the broker is kombu'))
 
-    plan = _replace_plan(
-        'new-1', 'old-1', content='the broker is redis now')
-    result = _apply_plan(tmp_backend, plan)
+    result = _replace_apply(
+        tmp_backend, 'new-1', 'old-1', content='the broker is redis now')
 
     old = tmp_backend.nodes.get_include_deleted('old-1')
     assert old.deleted_at is None
@@ -76,11 +72,9 @@ def test_a_gone_target_is_recorded_in_the_oplog(tmp_db, tmp_backend):
     insert_insight(tmp_db, make_insight(id='gone-1', content='forgotten claim'))
     assert tmp_backend.nodes.soft_delete('gone-1') is True
 
-    plan = FactPlan(
-        fact_insight=make_insight(id='new-1', content='the correction'),
-        replaced_id='gone-1',
-        embed_vec=None, enrichment={})
-    result = _apply_plan(tmp_backend, plan)
+    result = _apply_plan(
+        tmp_backend, make_insight(id='new-1', content='the correction'),
+        'gone-1', None, {})
 
     assert result['action'] == 'add'
     ops = {(e.operation, e.insight_id): e.detail

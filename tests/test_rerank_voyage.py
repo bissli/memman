@@ -1,31 +1,8 @@
-"""Tests for memman.rerank.voyage and the rerank provider registry."""
+"""Tests for memman.rerank.voyage, the one shipped rerank client."""
 
 import pytest
 from memman import config
-from memman.rerank import RERANKERS, get_client, voyage
-
-
-class TestProviderRegistry:
-    """Top-level rerank/__init__ behavior."""
-
-    def test_voyage_registered(self):
-        """The voyage factory is in RERANKERS."""
-        assert 'voyage' in RERANKERS
-
-    def test_get_client_defaults_to_voyage(self, monkeypatch):
-        """When MEMMAN_RERANK_PROVIDER is unset, get_client returns voyage.
-        """
-        monkeypatch.setenv('MEMMAN_VOYAGE_API_KEY', 'rk-defaults')
-        monkeypatch.delenv('MEMMAN_RERANK_PROVIDER', raising=False)
-        client = get_client()
-        assert client.name == 'voyage'
-
-    def test_get_client_unknown_provider_raises(self, env_file):
-        """Unknown provider name surfaces as ConfigError."""
-        from memman.exceptions import ConfigError
-        env_file('MEMMAN_RERANK_PROVIDER', 'nosuch')
-        with pytest.raises(ConfigError, match='nosuch'):
-            get_client()
+from memman.rerank import voyage
 
 
 @pytest.mark.no_mock_rerank

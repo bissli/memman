@@ -382,18 +382,19 @@ class TestEnvCompleteness:
         assert out['status'] == 'pass', out['detail']
 
     def test_warns_when_voyage_rerank_lacks_its_key(self, write_env):
-        """Voyage reranking on with no Voyage key -> warn.
+        """Reranking on with no Voyage key -> warn, with no provider read.
 
         Mutation: deriving the required keys from the embed provider
             alone, so an openai install reranking on Voyage never learns
-            its reranker has no key.
+            its reranker has no key; or a restored
+            `MEMMAN_RERANK_PROVIDER` read, which lands in `missing`
+            beside the Voyage key.
         Oracle: rerank/voyage.py requires `MEMMAN_VOYAGE_API_KEY`.
         """
         from memman import config
         values = dict.fromkeys(config.INSTALLABLE_KEYS, 'v')
         values.update({
             config.EMBED_PROVIDER: 'openai',
-            config.RERANK_PROVIDER: 'voyage',
             config.RERANK_ENABLED: 'true',
             config.VOYAGE_API_KEY: '',
             })
@@ -401,6 +402,26 @@ class TestEnvCompleteness:
         out = check_env_completeness()
         assert out['status'] == 'warn'
         assert out['detail']['missing'] == [config.VOYAGE_API_KEY]
+
+    def test_disabled_rerank_does_not_require_voyage_key(self, write_env):
+        """Reranking off -> the Voyage key is not required on rerank's account.
+
+        Mutation: requiring `MEMMAN_VOYAGE_API_KEY` unconditionally once
+            the provider switch is gone, rather than gating on whether
+            any rerank switch is truthy.
+        Oracle: with `MEMMAN_RERANK_ENABLED=false` and a non-voyage embed
+            provider that owns its own key, `missing` carries neither key.
+        """
+        from memman import config
+        values = dict.fromkeys(config.INSTALLABLE_KEYS, 'v')
+        values.update({
+            config.EMBED_PROVIDER: 'openai',
+            config.RERANK_ENABLED: 'false',
+            config.VOYAGE_API_KEY: '',
+            })
+        write_env(''.join(f'{k}={v}\n' for k, v in values.items()))
+        out = check_env_completeness()
+        assert out['status'] == 'pass', out['detail']
 
     @pytest.mark.parametrize(('global_rerank', 'store_rerank'), [
         ('false', 'true'),
@@ -423,7 +444,6 @@ class TestEnvCompleteness:
         values = dict.fromkeys(config.INSTALLABLE_KEYS, 'v')
         values.update({
             config.EMBED_PROVIDER: 'openai',
-            config.RERANK_PROVIDER: 'voyage',
             config.VOYAGE_API_KEY: '',
             })
         if global_rerank is None:

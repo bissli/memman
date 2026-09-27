@@ -1,8 +1,8 @@
-"""Tests for enriched_at column lifecycle in link_pending."""
+"""Tests for enriched_at column lifecycle in enrich_pending."""
 
 from unittest.mock import MagicMock
 
-from memman.graph.engine import link_pending
+from memman.pipeline.enrich import enrich_pending
 from memman.store.node import insert_insight
 from tests.conftest import insert_pending as _insert_pending
 from tests.conftest import make_insight
@@ -18,37 +18,52 @@ class TestEnrichedAtColumn:
         col_names = {row[1] for row in cols}
         assert 'enriched_at' in col_names
 
-    def test_backfill_from_linked_at(self, tmp_db):
-        """Insights with linked_at get enriched_at backfilled."""
+    def test_backfill_from_enrich_attempted_at(self, tmp_db):
+        """Insights with enrich_attempted_at get enriched_at backfilled.
+
+        Mutation: insert_insight stamping enrich_attempted_at at
+            insert time, silently opting a new row out of enrichment
+            while enriched_at stays NULL.
+        Oracle: enriched_at and enrich_attempted_at read back equal
+            (both NULL) right after insert.
+        """
         insert_insight(tmp_db, make_insight(
             id='bf-1', content='backfill test'))
         row = tmp_db._conn.execute(
-            'SELECT enriched_at, linked_at FROM insights'
+            'SELECT enriched_at, enrich_attempted_at FROM insights'
             " WHERE id = 'bf-1'").fetchone()
         assert row[0] == row[1]
 
 
-class TestEnrichedAtOnLinkPending:
-    """link_pending sets enriched_at only when LLM enrichment succeeds."""
+class TestEnrichedAtOnEnrichPending:
+    """enrich_pending sets enriched_at only when LLM enrichment succeeds."""
 
-    def test_no_llm_sets_linked_at_only(
+    def test_no_llm_sets_enrich_attempted_at_only(
             self, tmp_db, tmp_backend, monkeypatch):
-        """An unreachable LLM sets linked_at but leaves enriched_at NULL."""
-        from memman.graph import engine as engine_mod
+        """An unreachable LLM sets enrich_attempted_at but leaves
+        enriched_at NULL.
+
+        Mutation: dropping the `if enrichment and new_vec is not
+            None` guard before stamp_enriched, so a row with no
+            enrichment still flips to enriched.
+        Oracle: enrich_attempted_at not-None and enriched_at None
+            read back after get_llm_client raises.
+        """
+        from memman.pipeline import enrich as enrich_mod
 
         def _unavailable(*args, **kwargs):
             raise RuntimeError('no LLM credential')
 
-        monkeypatch.setattr(engine_mod, 'get_llm_client', _unavailable)
+        monkeypatch.setattr(enrich_mod, 'get_llm_client', _unavailable)
         _insert_pending(tmp_db, 'nl-1', 'test without llm')
         tmp_db._conn.execute(
             'UPDATE insights SET enriched_at = NULL'
             " WHERE id = 'nl-1'")
 
-        link_pending(tmp_backend)
+        enrich_pending(tmp_backend)
 
         row = tmp_db._conn.execute(
-            'SELECT linked_at, enriched_at FROM insights'
+            'SELECT enrich_attempted_at, enriched_at FROM insights'
             " WHERE id = 'nl-1'").fetchone()
         assert row[0] is not None
         assert row[1] is None
@@ -72,24 +87,28 @@ class TestEnrichedAtOnLinkPending:
         mock_llm = MagicMock()
         mock_llm.complete.return_value = '{"summary": "test"}'
 
-        link_pending(
-            tmp_backend, metadata_llm_client=mock_llm,
+        enrich_pending(
+            tmp_backend, llm_client=mock_llm,
             embed_client=bound_embedder(tmp_backend))
 
         row = tmp_db._conn.execute(
-            'SELECT linked_at, enriched_at FROM insights'
+            'SELECT enrich_attempted_at, enriched_at FROM insights'
             " WHERE id = 'ls-1'").fetchone()
         assert row[0] is not None
         assert row[1] is not None
 
     def test_reembed_failure_skips_stamp_enriched(
             self, tmp_db, tmp_backend, monkeypatch, caplog):
-        """A re-embed failure mid-link must NOT mark the insight enriched.
+        """A re-embed failure mid-pass leaves enriched_at NULL and
+        logs a warning.
 
-        Pre-F.4 the failure was silent at debug level and the insight
-        flipped to `enriched_at != NULL` despite carrying a stale
-        embedding. Now the failure logs at warn and `stamp_enriched`
-        is skipped so the row is retried on the next pass.
+        Mutation: dropping the `new_vec is not None` guard so
+            stamp_enriched runs despite the failed embed, or logging
+            the failure at debug instead of warning so it never
+            surfaces operationally.
+        Oracle: a WARNING-level "Re-embed failed" log record, and
+            enriched_at read back NULL while enrich_attempted_at is
+            not.
         """
         import logging
 
@@ -109,8 +128,8 @@ class TestEnrichedAtOnLinkPending:
                 raise RuntimeError('forced reembed failure')
 
         with caplog.at_level(logging.WARNING, logger='memman'):
-            link_pending(
-                tmp_backend, metadata_llm_client=mock_llm,
+            enrich_pending(
+                tmp_backend, llm_client=mock_llm,
                 embed_client=_FailingClient())
 
         warned = [r for r in caplog.records
@@ -118,7 +137,7 @@ class TestEnrichedAtOnLinkPending:
         assert warned
 
         row = tmp_db._conn.execute(
-            'SELECT linked_at, enriched_at FROM insights'
+            'SELECT enrich_attempted_at, enriched_at FROM insights'
             " WHERE id = 'rf-1'").fetchone()
         assert row[0] is not None
         assert row[1] is None, (
@@ -131,8 +150,8 @@ class TestEnrichedAtOnLinkPending:
         Mutation: stamping whenever the enrichment returned, so an
             embedder whose probe failed mid-outage stamps the row with
             no vector, and the stranded-row sweep never revisits it.
-        Oracle: the row's enriched_at, beside its linked_at, which the
-            pass does set.
+        Oracle: the row's enriched_at, beside its
+            enrich_attempted_at, which the pass does set.
         """
         _insert_pending(tmp_db, 'sk-1', 'skipped embed content')
         tmp_db._conn.execute(
@@ -144,19 +163,19 @@ class TestEnrichedAtOnLinkPending:
         unavailable = MagicMock()
         unavailable.available.return_value = False
 
-        link_pending(
-            tmp_backend, metadata_llm_client=mock_llm,
+        enrich_pending(
+            tmp_backend, llm_client=mock_llm,
             embed_client=unavailable)
 
         row = tmp_db._conn.execute(
-            'SELECT linked_at, enriched_at FROM insights'
+            'SELECT enrich_attempted_at, enriched_at FROM insights'
             " WHERE id = 'sk-1'").fetchone()
         assert row[0] is not None
         assert row[1] is None
 
     def test_vectorless_row_gets_a_vector_on_retry(
             self, tmp_db, tmp_backend):
-        """Verify link_pending embeds a vectorless row on its retry pass.
+        """Verify enrich_pending embeds a vectorless row on its retry pass.
 
         Mutation: embedding only on the row's first enrichment pass, so
             a row the write stored without a vector, retried on a later
@@ -178,8 +197,8 @@ class TestEnrichedAtOnLinkPending:
         mock_llm = MagicMock()
         mock_llm.complete.return_value = '{"summary": "s"}'
 
-        link_pending(
-            tmp_backend, metadata_llm_client=mock_llm,
+        enrich_pending(
+            tmp_backend, llm_client=mock_llm,
             embed_client=bound_embedder(tmp_backend))
 
         after = tmp_db._conn.execute(

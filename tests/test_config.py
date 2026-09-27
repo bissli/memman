@@ -18,7 +18,6 @@ ALL_EXPECTED_NAMES = {
     'MEMMAN_LLM_ZDR',
     'MEMMAN_EMBED_PROVIDER',
     'MEMMAN_OPENROUTER_ENDPOINT',
-    'MEMMAN_RERANK_PROVIDER',
     'MEMMAN_RERANK_ENABLED',
     'MEMMAN_VOYAGE_RERANK_MODEL',
     'MEMMAN_DEBUG',
@@ -161,6 +160,12 @@ def test_log_level_bootstrap_literal_matches_install_default():
 
 def test_constants_match_expected_names():
     """Every memman env var the codebase uses has a constant here.
+
+    Mutation: a config constant's literal env-var string drifting
+        from its name here, or a new constant landing in config.py
+        with no matching literal added to `ALL_EXPECTED_NAMES`.
+    Oracle: `ALL_EXPECTED_NAMES`, a set of literal strings maintained
+        independently of `config.py`.
     """
     actual = {
         config.DATA_DIR, config.STORE,
@@ -171,7 +176,6 @@ def test_constants_match_expected_names():
         config.LLM_ZDR,
         config.EMBED_PROVIDER,
         config.OPENROUTER_ENDPOINT,
-        config.RERANK_PROVIDER,
         config.RERANK_ENABLED,
         config.VOYAGE_RERANK_MODEL,
         config.DEBUG, config.WORKER, config.LOG_LEVEL,

@@ -17,7 +17,7 @@ memman runs commands during the agent's turn and processes queued writes in a ba
 | `recall`                               | in the turn       | one query embedding call and, when enabled, one reranking call |
 
 - **When memories become available.** Recall cannot see a queued write until a drain stores it. Recall reads the live store on every call, so a stored memory is recallable at once, in the same session or any later one.
-- **No write in the turn calls the LLM.** `remember` and `replace` call no model. Recall calls the embedding model and the reranker but never the LLM. The LLM runs in the drain, in `memman graph rebuild`, and in the `memman doctor` probe.
+- **No write in the turn calls the LLM.** `remember` and `replace` call no model. Recall calls the embedding model and the reranker but never the LLM. The LLM runs in the drain, in `memman enrich`, and in the `memman doctor` probe.
 - **Recall-only while stopped.** When the scheduler is stopped, `remember`, `replace`, `forget`, `supersede` and `unsupersede` report that writes are disabled and ask the user to run `memman scheduler start`. `memman scheduler trigger` also refuses to run. Recall keeps working. A drain in progress stops claiming rows once it reads the stopped state.
 
 [USAGE](../USAGE.md#scheduler) covers the scheduler commands and the queue states.
@@ -46,7 +46,7 @@ memman runs commands during the agent's turn and processes queued writes in a ba
 
 - It rejects a target that is not current. If the target is superseded, the error names its successor.
 - When `--cat` is omitted, the replacement inherits the target's value.
-- The queue row carries the target as `hint_replaced_id`, and the output adds `replaced_id`.
+- The queue row carries the target as `replaced_id`, and the output carries the same field.
 
 ### Step 2: process the write in the background worker
 
@@ -72,7 +72,7 @@ A drain claims rows one at a time until it has handled 100 (`--limit`), reaches 
 6. **Embed.** The store's embedding model embeds the content.
 7. **Apply.** One transaction commits the write:
    - For a replacement, supersede the target and write an oplog row `replace` with detail `replaced by <id>`. If the target has been forgotten or superseded by this point, the new memory is stored without replacing it. The oplog records `target-gone` against the new memory and names the target. The result names the target under `target_gone`.
-   - Insert the memory with its `prompt_version` and `embedding_model`, store the vector, write an oplog row `remember`, set `linked_at`, and store the summary.
+   - Insert the memory with its `prompt_version` and `embedding_model`, store the vector, write an oplog row `remember`, set `enrich_attempted_at`, and store the summary.
    - Set `enriched_at` only when both enrichment and the vector were saved.
 8. **Finish.** Mark the row `done`. Any exception in steps 2-7 calls `mark_failed` instead.
 
@@ -107,13 +107,13 @@ After processing rows, the drain runs maintenance. It skips the whole step when 
 3. Return every `stale` queue row to pending.
 4. For each store where the drain finished a row:
    - Delete oplog rows older than 180 days.
-   - Re-enrichment pass: clear `linked_at` on up to 3 memories that carry `linked_at` but no `enriched_at` (`MAINTENANCE_REENRICH_MAX`), so `link_pending` picks them up.
-   - `link_pending`: enrich and embed up to 3 memories with no `linked_at` (`MAINTENANCE_LINK_PENDING_MAX`).
-   - When `link_pending` had work, keep the newest 5,000 oplog rows (`MAX_OPLOG_ENTRIES`). On SQLite, also run one `incremental_vacuum` step.
+   - Re-enrichment pass: clear `enrich_attempted_at` on up to 3 memories that carry `enrich_attempted_at` but no `enriched_at` (`MAINTENANCE_REENRICH_MAX`), so `enrich_pending` picks them up.
+   - `enrich_pending`: enrich and embed up to 3 memories with no `enrich_attempted_at` (`MAINTENANCE_ENRICH_PENDING_MAX`).
+   - When `enrich_pending` had work, keep the newest 5,000 oplog rows (`MAX_OPLOG_ENTRIES`). On SQLite, also run one `incremental_vacuum` step.
 
 Then, regardless of the time remaining, the drain runs the daily model check ([3.3](#daily-model-check)).
 
-Maintenance reaches only the stores where the drain finished a row. An incomplete memory in any other store waits for that store's next write or for `memman graph rebuild`.
+Maintenance reaches only the stores where the drain finished a row. An incomplete memory in any other store waits for that store's next write or for `memman enrich`.
 
 ### Operational controls
 
@@ -130,7 +130,7 @@ Maintenance reaches only the stores where the drain finished a row. An incomplet
 | `memman scheduler interval --seconds N`   | set the systemd or launchd interval, at least 60. Serve mode needs a restart with `--interval N` |
 | `memman scheduler trigger`                | dispatch a drain and return without waiting (refused when stopped or in serve mode)              |
 
-`memman graph rebuild` re-enriches and re-embeds every current memory, for use after a model or prompt change. `--stale-only` limits it to rows whose `prompt_version` differs from the current version. Both forms require a stopped scheduler unless `--dry-run` is set.
+`memman enrich` re-enriches and re-embeds every current memory, for use after a model or prompt change. `--stale-only` limits it to rows whose `prompt_version` differs from the current version. Both forms require a stopped scheduler unless `--dry-run` is set.
 
 ---
 
@@ -138,7 +138,7 @@ Maintenance reaches only the stores where the drain finished a row. An incomplet
 
 ### LLM routing
 
-One client, `MemmanLLMClient`, makes every LLM call: enrichment in the drain and in `memman graph rebuild`, and the connectivity probe in `memman doctor`. One model, `MEMMAN_LLM_MODEL`, serves every call. The client posts to `<MEMMAN_LLM_ENDPOINT>/chat/completions` in the OpenAI chat format. Switching vendors changes `MEMMAN_LLM_ENDPOINT`, `MEMMAN_LLM_API_KEY` and `MEMMAN_LLM_MODEL`, and no code. The default endpoint at installation is `https://openrouter.ai/api/v1`.
+One client, `MemmanLLMClient`, makes every LLM call: enrichment in the drain and in `memman enrich`, and the connectivity probe in `memman doctor`. One model, `MEMMAN_LLM_MODEL`, serves every call. The client posts to `<MEMMAN_LLM_ENDPOINT>/chat/completions` in the OpenAI chat format. Switching vendors changes `MEMMAN_LLM_ENDPOINT`, `MEMMAN_LLM_API_KEY` and `MEMMAN_LLM_MODEL`, and no code. The default endpoint at installation is `https://openrouter.ai/api/v1`.
 
 The client makes up to 3 attempts. After a 429, 500, 502, 503, 504 or 529 response, the client waits 1 second before the first retry and 2 seconds before the second. After an empty reply, the client waits 0.1 seconds before retrying. Each call asks for at most 4,096 output tokens and has a 60-second timeout.
 
@@ -264,7 +264,7 @@ Reranking is on by default. It runs when all three conditions hold:
 - The query has more than 2 whitespace-separated words (`MIN_RERANK_TOKENS = 2`).
 - At least 2 candidates exist.
 
-Recall sends the query and the content of the top `min(100, candidates)` (`RERANK_SHORTLIST`) to the reranker that `MEMMAN_RERANK_PROVIDER` names. The only provider is `voyage`. It uses the model `MEMMAN_VOYAGE_RERANK_MODEL` (default `rerank-3-lite`) and the key `MEMMAN_VOYAGE_API_KEY`. The rerank score replaces the blended score on the shortlist, and the shortlist reorders by it. Any failure, including a missing key, logs a WARNING and preserves the Step 2 order.
+Recall sends the query and the content of the top `min(100, candidates)` (`RERANK_SHORTLIST`) to the Voyage reranker. It uses the model `MEMMAN_VOYAGE_RERANK_MODEL` (default `rerank-3-lite`) and the key `MEMMAN_VOYAGE_API_KEY`. The rerank score replaces the blended score on the shortlist, and the shortlist reorders by it. Any failure, including a missing key, logs a WARNING and preserves the Step 2 order.
 
 `memman config set MEMMAN_RERANK_ENABLED_<store> false` turns rerank off for one store. Recall has no rerank flag, so the agent never makes this choice.
 
@@ -302,8 +302,8 @@ Prompts, models and providers change. memman does not aim for identical output a
 | `embed_fingerprint`                                            | `meta`    | the store's embedding model           | `memman embed swap` or `memman embed reembed` (chapter 4)      |
 | `embed_swap_state`, `embed_swap_cursor`, `embed_swap_target_*` | `meta`    | a swap in progress                    | cutover or `--abort` deletes them. Doctor warns if keys remain |
 | `embedding_model`                                              | per row   | the model behind the row's vector     | `memman embed reembed` re-embeds rows that differ              |
-| `prompt_version`                                               | per row   | enrichment prompt or LLM model change | doctor warns, `memman graph rebuild --stale-only`              |
-| `linked_at`, `enriched_at`                                     | per row   | enrichment progress                   | maintenance retries 3 per drain, or `memman graph rebuild`     |
+| `prompt_version`                                               | per row   | enrichment prompt or LLM model change | doctor warns, `memman enrich --stale-only`                     |
+| `enrich_attempted_at`, `enriched_at`                            | per row   | enrichment progress                   | maintenance retries 3 per drain, or `memman enrich`            |
 
 - The doctor check for leftover swap keys is `no_stale_swap_meta`. The check for a changed prompt version is `provenance_drift`.
 - A null `prompt_version` is not treated as outdated.

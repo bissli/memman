@@ -58,7 +58,7 @@ insights (
   summary           text,                 -- from enrichment
   embedding         blob,                 -- vector of content
   embedding_pending blob,                 -- target vector during embed swap
-  linked_at         text,                 -- set once enrichment was tried
+  enrich_attempted_at text,               -- set on insert, on unsupersede, and after every enrichment pass, whether or not it succeeded
   enriched_at       text,                 -- set when enrichment and a vector were both saved
   created_at        text not null,
   updated_at        text not null,
@@ -92,7 +92,7 @@ meta (
 
 **Keyword index.** On SQLite, `insights_fts` is an FTS5 table (SQLite's full-text search extension) over `content`. It holds only the terms. The text stays in `insights`. Triggers keep the index up to date when rows are inserted or deleted or either column changes. It indexes every row, including forgotten and superseded memories. Queries join it with `insights` to return only current rows. Opening a store that lacks the table creates and fills it in one transaction. On Postgres, the `kw_tokens` column plays this role.
 
-**Model-change markers.** `prompt_version` holds the first 16 hex characters of a SHA-256 hash over the enrichment prompt and `MEMMAN_LLM_MODEL`. A memory whose non-null `prompt_version` differs from the current hash is stale, and `memman graph rebuild --stale-only` re-enriches it. `embedding_model` names the model behind the vector. `memman embed reembed` re-embeds each current memory in every SQLite store whose `embedding_model` or vector length differs from the target. [Pipelines](03-pipelines.md) covers both re-runs.
+**Model-change markers.** `prompt_version` holds the first 16 hex characters of a SHA-256 hash over the enrichment prompt and `MEMMAN_LLM_MODEL`. A memory whose non-null `prompt_version` differs from the current hash is stale, and `memman enrich --stale-only` re-enriches it. `embedding_model` names the model behind the vector. `memman embed reembed` re-embeds each current memory in every SQLite store whose `embedding_model` or vector length differs from the target. [Pipelines](03-pipelines.md) covers both re-runs.
 
 **Meta keys.**
 
@@ -114,7 +114,7 @@ meta (
 
 **Indexes.** Both backends index `category`, `created_at`, `deleted_at`, `queue_uuid`, and `oplog.created_at`. Two composite indexes serve fixed queries:
 
-- `idx_insights_pending_link` on `(linked_at, created_at)`, limited to current memories with no `linked_at`. The enrichment pass reads pending memories in order from it.
+- `idx_insights_pending_enrich` on `(enrich_attempted_at, created_at)`, limited to current memories with no `enrich_attempted_at`. The enrichment pass reads pending memories in order from it.
 - `idx_insights_current_listing` on `(deleted_at, superseded_by, created_at)`. `recall --basic` reads its filter and sort order from it.
 
 Postgres adds a GIN index on `kw_tokens` and an HNSW index on `embedding`, both limited to current memories. Opening a Postgres store for reading and writing builds the HNSW index if it is missing.
@@ -124,8 +124,8 @@ Postgres adds a GIN index on `kw_tokens` and an HNSW index on `embedding`, both 
 ```sql
 queue (
   id, store, content,
-  hint_cat,
-  hint_replaced_id,                       -- replace target, null for remember
+  category,
+  replaced_id,                            -- replace target, null for remember
   queue_uuid,                             -- unique
   queued_at, claimed_at, worker_pid, attempts,
   status,                                 -- pending, done, failed, or stale
@@ -152,7 +152,7 @@ memman groups its modules into seven layers:
 |              setup/   (install, wizard, settings.json merge)        |
 +---------------------------------------------------------------------+
 | CLI          cli.py: remember, recall, replace, supersede,          |
-|              unsupersede, forget, insights, graph, embed, store,    |
+|              unsupersede, forget, insights, enrich, embed, store,   |
 |              migrate, scheduler, backup, log, config, status,       |
 |              doctor, install, uninstall, prime (hooks only)         |
 +---------------------------------------------------------------------+
@@ -161,7 +161,7 @@ memman groups its modules into seven layers:
 |              drain_lock.py (one drain at a time)                    |
 |              setup/scheduler.py (systemd, launchd, or serve loop)   |
 |              pipeline/remember.py (enrich, embed, one transaction)  |
-|              graph/   (engine, enrichment)                          |
+|              pipeline/enrich.py (enrichment pass over pending rows) |
 |              maintenance.py (runs after each drain)                 |
 +---------------------------------------------------------------------+
 | Search       search/  (recall, keyword, quality)                    |
@@ -199,10 +199,10 @@ memman/
 |   +-- extras.py           # detects optional install extras
 |   +-- exceptions.py       # domain errors
 |   +-- _http.py            # HTTP client pools and retry policy
-|   +-- pipeline/           # one queued write: enrich, embed, apply
+|   +-- pipeline/           # one queued write: enrich, embed, apply;
+|   |                       # enrichment pass over pending memories
 |   +-- store/              # Backend Protocol, SQLite and Postgres
 |   +-- search/             # recall, keyword search, quality warnings
-|   +-- graph/              # enrichment pass over pending memories
 |   +-- embed/              # embedding providers, fingerprint, swap
 |   +-- rerank/             # Voyage cross-encoder client
 |   +-- llm/                # LLM client, JSON parsing, usage, model check
@@ -210,7 +210,7 @@ memman/
 |   +-- backup/             # memman backup and cron translation
 |   +-- setup/              # install, wizard, scheduler units, assets
 +-- scripts/
-|   +-- rebuild_stale.py    # graph rebuild --stale-only over many stores
+|   +-- enrich_stale.py     # enrich --stale-only over many stores
 +-- tests/
 +-- pyproject.toml          # Poetry package, memman[postgres] extra
 +-- Makefile

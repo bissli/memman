@@ -1,21 +1,20 @@
 """Backend-namespaced env key validation.
 
-Validates that `factory.open_backend()` rejects typo'd keys that
-fall in the active backend's namespace (`MEMMAN_POSTGRES_*` for postgres,
-`MEMMAN_SQLITE_*` for sqlite) before any connection attempt, with
-a `did you mean` hint pointing at the per-store form. Bare canonical
-keys (e.g. `MEMMAN_POSTGRES_DSN`) are also rejected -- the per-store
-routing model requires the `_<store>` suffix or the
-`MEMMAN_DEFAULT_POSTGRES_DSN` fallback. Cross-backend keys
-(`OPENROUTER_API_KEY`, `MEMMAN_DEFAULT_BACKEND`,
+Validates that `factory.open_backend()` rejects typo'd
+`MEMMAN_POSTGRES_*` keys before any connection attempt, whatever the
+active backend, with a `did you mean` hint pointing at the per-store
+form. Bare canonical keys (e.g. `MEMMAN_POSTGRES_DSN`) are also
+rejected -- the per-store routing model requires the `_<store>`
+suffix or the `MEMMAN_DEFAULT_POSTGRES_DSN` fallback. Cross-backend
+keys (`OPENROUTER_API_KEY`, `MEMMAN_DEFAULT_BACKEND`,
 `MEMMAN_DEFAULT_POSTGRES_DSN`, `MEMMAN_EMBED_PROVIDER`) are never
-scanned by either validator. Inactive-backend keys are tolerated
--- a sqlite-active install may carry `MEMMAN_POSTGRES_DSN_<store>` from
-a prior postgres trial without erroring.
+scanned. Inactive-backend keys are tolerated -- a sqlite-active
+install may carry `MEMMAN_POSTGRES_DSN_<store>` from a prior postgres
+trial without erroring.
 """
 
 import pytest
-from memman.store.config import PostgresBackendConfig, SqliteBackendConfig
+from memman.store.config import PostgresBackendConfig
 from memman.store.errors import ConfigError
 
 
@@ -71,36 +70,8 @@ class TestPostgresValidation:
         PostgresBackendConfig._validate(env)
 
 
-class TestSqliteValidation:
-    """`SqliteBackendConfig._validate` for `MEMMAN_SQLITE_*` keys.
-
-    SqliteBackendConfig owns no keys today. The class exists for
-    symmetry as a future extension point; validation is a no-op
-    unless an unknown `MEMMAN_SQLITE_*` key shows up.
-    """
-
-    def test_no_keys_owned_today(self):
-        """Empty env passes silently.
-        """
-        SqliteBackendConfig._validate({})
-
-    def test_postgres_keys_tolerated_when_sqlite_active(self):
-        """MEMMAN_POSTGRES_* keys are not scanned by SQLite validator.
-        """
-        env = {'MEMMAN_POSTGRES_DSN': 'postgresql://localhost/x'}
-        SqliteBackendConfig._validate(env)
-
-    def test_unknown_sqlite_namespaced_key_errors(self):
-        """Any MEMMAN_SQLITE_* key today is unknown.
-        """
-        env = {'MEMMAN_SQLITE_FOO': 'x'}
-        with pytest.raises(ConfigError) as exc:
-            SqliteBackendConfig._validate(env)
-        assert 'MEMMAN_SQLITE_FOO' in str(exc.value)
-
-
 class TestOpenBackendIntegration:
-    """`factory.open_backend` calls the active backend's _validate."""
+    """`factory.open_backend` runs the Postgres namespace scan on every open."""
 
     def test_open_backend_rejects_postgres_typo(
             self, monkeypatch, tmp_path):
@@ -127,7 +98,7 @@ class TestOpenBackendIntegration:
 
 
 class TestValidateAll:
-    """`validate_all` runs every registered backend's namespace check."""
+    """`validate_all` runs the Postgres namespace scan whatever the backend."""
 
     def test_empty_suffix_rejected(self):
         """`MEMMAN_POSTGRES_DSN_` (no suffix) is an invalid store name.
@@ -154,9 +125,14 @@ class TestValidateAll:
             validate_all(env)
 
     def test_validate_all_catches_inactive_namespace_typo(self):
-        """`validate_all` runs both registered config classes, so a
-        `MEMMAN_POSTGRES_DSN_typo` key is rejected even when the active
-        backend is sqlite.
+        """`validate_all` runs the Postgres namespace scan on every open,
+        so a `MEMMAN_POSTGRES_DSN_typo` key is rejected even when the
+        active backend is sqlite.
+
+        Mutation: `validate_all` gating the namespace scan on
+            `MEMMAN_DEFAULT_BACKEND == 'postgres'`, so a typo in an
+            inactive namespace goes uncaught until a backend switch.
+        Oracle: `ConfigError` raised with sqlite active.
         """
         from memman.store.config import validate_all
         env = {
@@ -180,20 +156,24 @@ class TestValidateAll:
             validate_all(env)
 
     def test_did_you_mean_hints_point_at_per_store_form(self):
-        """Property: every did-you-mean hint produced by either
-        registered config class points at the per-store form
-        (`<canonical>_<store>`), never at a bare canonical.
+        """Property: every did-you-mean hint from `PostgresBackendConfig`
+        points at the per-store form (`<canonical>_<store>`), never at
+        a bare canonical.
+
+        Mutation: the hint built from `suggestions[0]` alone, dropping
+            the `+ '_<store>'` suffix, so it re-suggests the still-
+            rejected bare canonical key.
+        Oracle: every near-miss key's `ConfigError` message contains
+            the literal `<store>` placeholder.
         """
-        from memman.store.config import _REGISTRY
-        for cls in _REGISTRY.values():
-            for owned in cls.OWNED_KEYS:
-                typo = owned + 'L'
-                env = {typo: 'value'}
-                try:
-                    cls._validate(env)
-                except ConfigError as exc:
-                    msg = str(exc)
-                    if 'did you mean' in msg.lower():
-                        assert '<store>' in msg, (
-                            f'hint for {typo!r} should point at the'
-                            f' per-store form: {msg!r}')
+        for owned in PostgresBackendConfig.OWNED_KEYS:
+            typo = owned + 'L'
+            env = {typo: 'value'}
+            try:
+                PostgresBackendConfig._validate(env)
+            except ConfigError as exc:
+                msg = str(exc)
+                if 'did you mean' in msg.lower():
+                    assert '<store>' in msg, (
+                        f'hint for {typo!r} should point at the'
+                        f' per-store form: {msg!r}')

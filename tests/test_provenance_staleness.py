@@ -1,12 +1,12 @@
 """Staleness must key on exactly what the remedy can replay (X11).
 
 `memman status` reports `stale_insights` from `count_stale_insights`,
-and the remedy it points at, `graph rebuild --stale`, routes through
-`link_pending` (`graph/engine.py`), which re-runs ENRICHMENT on the
-`slow` client and nothing else.
+and the remedy it points at, `enrich --stale-only`, routes through
+`enrich_pending` (`pipeline/enrich.py`), which re-runs ENRICHMENT on
+the `slow` client and nothing else.
 
 The invariant these tests pin: `compute_prompt_version` hashes exactly
-the inputs `link_pending` replays, and nothing else. A key covering
+the inputs `enrich_pending` replays, and nothing else. A key covering
 more than that reports rows stale for a change re-enrichment cannot
 address -- and the rebuild then CLEARS the report by doing unrelated
 work, so the operator pays for LLM calls and the signal reads 0.
@@ -23,7 +23,7 @@ import pytest
 from memman import config
 
 REPLAYED_PROMPTS = [
-    ('memman.graph.enrichment', 'ENRICHMENT_SYSTEM_PROMPT'),
+    ('memman.pipeline.enrich', 'ENRICHMENT_SYSTEM_PROMPT'),
     ]
 
 
@@ -37,7 +37,7 @@ def _key():
 @pytest.mark.parametrize(('module', 'attr'), REPLAYED_PROMPTS)
 def test_key_moves_for_a_prompt_the_rebuild_replays(
         module, attr, monkeypatch):
-    """Editing a prompt `link_pending` re-runs marks rows stale.
+    """Editing a prompt `enrich_pending` re-runs marks rows stale.
 
     Mutation: dropping the enrichment prompt from the key -- an edit
         then changes what every rebuilt row gets while
@@ -49,11 +49,11 @@ def test_key_moves_for_a_prompt_the_rebuild_replays(
     base = _key()
     monkeypatch.setattr(f'{module}.{attr}', 'PERTURBED FOR TEST')
     assert _key() != base, (
-        f'{attr} is replayed by link_pending, so it must move the key')
+        f'{attr} is replayed by enrich_pending, so it must move the key')
 
 
-def test_key_moves_for_the_metadata_model(env_file):
-    """The key tracks the metadata model, which link_pending replays on.
+def test_key_moves_for_the_llm_model(env_file):
+    """The key tracks the LLM model, which enrich_pending replays on.
 
     Mutation: leaving `MEMMAN_LLM_MODEL` out of the key,
         which would report a rebuild's own model change as nothing --

@@ -152,7 +152,7 @@ Compare scores only within the same result page. They have no fixed meaning acro
 
 `--basic` keeps memories in which every query word appears in the content, and orders them by creation time, newest first.
 
-**Rerank.** For a query of more than two words, a cross-encoder re-scores the top 100 candidates. The only rerank provider is Voyage (`MEMMAN_RERANK_PROVIDER=voyage`, model `MEMMAN_VOYAGE_RERANK_MODEL`, default `rerank-3-lite`), and it needs `MEMMAN_VOYAGE_API_KEY`. When the rerank call fails, recall logs a warning and keeps the blended order. `MEMMAN_RERANK_ENABLED` (default `true`) enables or disables reranking for every store, and `MEMMAN_RERANK_ENABLED_<store>` overrides it for one store:
+**Rerank.** For a query of more than two words, a cross-encoder re-scores the top 100 candidates. The reranker is Voyage (model `MEMMAN_VOYAGE_RERANK_MODEL`, default `rerank-3-lite`), and it needs `MEMMAN_VOYAGE_API_KEY`. When the rerank call fails, recall logs a warning and keeps the blended order. `MEMMAN_RERANK_ENABLED` (default `true`) enables or disables reranking for every store, and `MEMMAN_RERANK_ENABLED_<store>` overrides it for one store:
 
 ```bash
 memman config set MEMMAN_RERANK_ENABLED_work false
@@ -185,12 +185,12 @@ memman insights review [--limit N]     # memories with quality warnings
 
 ## Re-enrichment
 
-`memman graph rebuild` re-runs enrichment (summary) and the embedding for current memories.
+`memman enrich` re-runs enrichment (summary) and the embedding for current memories.
 
 ```bash
-memman graph rebuild               # every current memory
-memman graph rebuild --stale-only  # only memories enriched under another prompt or model
-memman graph rebuild --dry-run     # print the count and change nothing
+memman enrich               # every current memory
+memman enrich --stale-only  # only memories enriched under another prompt or model
+memman enrich --dry-run     # print the count and change nothing
 ```
 
 - Both modes need a stopped scheduler (`memman scheduler stop`), except with `--dry-run`. Both run on SQLite and Postgres.
@@ -203,7 +203,7 @@ memman graph rebuild --dry-run     # print the count and change nothing
 
 ## Embedding operations
 
-Each store keeps the embedding model it was created with, recorded as its fingerprint. Recall, the background worker, and `graph rebuild` use the model recorded in the fingerprint. Every command that reads a store, except `doctor`, `embed status`, and `embed swap`, also builds the `MEMMAN_EMBED_PROVIDER` client, so that provider's key must be in the env file. [Chapter 4](design/04-lifecycle.md#43-embedding-support) describes the fingerprint.
+Each store keeps the embedding model it was created with, recorded as its fingerprint. Recall, the background worker, and `enrich` use the model recorded in the fingerprint. Every command that reads a store, except `doctor`, `embed status`, and `embed swap`, also builds the `MEMMAN_EMBED_PROVIDER` client, so that provider's key must be in the env file. [Chapter 4](design/04-lifecycle.md#43-embedding-support) describes the fingerprint.
 
 ```bash
 memman embed status                                             # fingerprint, key check, swap progress
@@ -325,7 +325,7 @@ memman log worker [--errors] [--lines N]
 memman log worker --stack [--lines N]
 ```
 
-**`status`** prints the store name, its backend, the backends in use, counts of current, superseded, and forgotten memories, `stale_insights` (the count `graph rebuild --stale-only` would process), the oplog size, counts by category, and the storage path.
+**`status`** prints the store name, its backend, the backends in use, counts of current, superseded, and forgotten memories, `stale_insights` (the count `enrich --stale-only` would process), the oplog size, counts by category, and the storage path.
 
 **`doctor`** exits 1 when any check fails and 0 otherwise. It makes one live LLM call and one live embedding call.
 
@@ -370,7 +370,7 @@ memman scheduler debug on|off|status
 
 **Recall remains available while the scheduler is stopped.** `remember`, `replace`, `forget`, `supersede`, and `unsupersede` exit with status 1 and report that writes are disabled. The error names `memman scheduler start`, which enables writes.
 
-`scheduler trigger` refuses in the same way. A running drain finishes the current memory before stopping, and a `serve` process exits. Three commands require a stopped scheduler: `graph rebuild`, `embed swap`, and `embed reembed`.
+`scheduler trigger` refuses in the same way. A running drain finishes the current memory before stopping, and a `serve` process exits. Three commands require a stopped scheduler: `enrich`, `embed swap`, and `embed reembed`.
 
 - **`trigger`** asks systemd or launchd to start a drain and returns `dispatched` without waiting. `memman log worker` shows the outcome. In serve mode `trigger` refuses, and `memman scheduler serve --once` runs one drain.
 - **`interval`** prints the interval, or sets it with `--seconds N`. systemd and launchd need at least 60 seconds. In serve mode the command only records the value. The serve loop takes its interval from `--interval`, then `MEMMAN_INTERVAL`, so a new value applies only when `memman scheduler serve` restarts with `--interval N`. In serve mode an interval of 0 drains without pause.

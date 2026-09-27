@@ -93,7 +93,7 @@ def test_compute_prompt_version_is_stable():
 def test_compute_prompt_version_changes_with_prompt(monkeypatch):
     """Changing a REPLAYED prompt changes the hash.
 
-    The key covers only what `graph rebuild --stale-only` re-runs, so
+    The key covers only what `enrich --stale-only` re-runs, so
     the enrichment prompt is the right lever here. A write-path-only
     prompt must NOT move it, which
     `tests/test_provenance_staleness.py` pins from the other side.
@@ -105,10 +105,10 @@ def test_compute_prompt_version_changes_with_prompt(monkeypatch):
     """
     original = compute_prompt_version()
     compute_prompt_version.cache_clear()
-    from memman.graph import enrichment
+    from memman.pipeline import enrich
     monkeypatch.setattr(
-        enrichment, 'ENRICHMENT_SYSTEM_PROMPT',
-        enrichment.ENRICHMENT_SYSTEM_PROMPT + '\n# mutated for test')
+        enrich, 'ENRICHMENT_SYSTEM_PROMPT',
+        enrich.ENRICHMENT_SYSTEM_PROMPT + '\n# mutated for test')
     mutated = compute_prompt_version()
     assert mutated != original
     compute_prompt_version.cache_clear()

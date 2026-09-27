@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "memman"
 version = "0.43.2"
-description = "LLM-supervised persistent memory for AI agents - intent-aware graph recall, RAG, and pluggable embeddings for Claude Code."
+description = "LLM-supervised persistent memory for Claude Code - fused keyword, vector and recency recall, with rerank and pluggable embeddings."
 authors = ["bissli"]
 license = "MIT"
 readme = "README.md"
@@ -20,7 +20,6 @@ keywords = [
     "embeddings",
     "vector-search",
     "semantic-search",
-    "knowledge-graph",
     "claude",
     "claude-code",
     "anthropic",
@@ -85,7 +84,7 @@ markers = [
     "no_mock_llm: skip the autouse MemmanLLMClient.complete mock; keep ZDR + embedding stubs",
     "no_mock_rerank: skip the autouse Voyage rerank passthrough; the test drives the real client method",
     "no_mock_catalog: skip the autouse OpenRouter catalog stub; the test drives the real model-check fetch",
-    "scheduler_stopped: force read_state to STATE_STOPPED; for commands such as graph rebuild that require a stopped drain",
+    "scheduler_stopped: force read_state to STATE_STOPPED; for commands such as enrich that require a stopped drain",
     "no_autoseed_fingerprint: skip the autouse meta.embed_fingerprint seed; exercises raw assert_consistent semantics",
     "no_auto_drain: skip the autouse post-write drain wrapper; tests inspect pre-drain queue state",
     "no_default_env: skip the autouse env-file seed; config.get returns None for unset keys",

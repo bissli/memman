@@ -41,7 +41,7 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?)
 # test_insight_column_lists_are_identical_across_backends).
 _INSIGHT_COLUMNS = (
     'id, content, category, created_at, updated_at, deleted_at,'
-    ' summary, linked_at, enriched_at,'
+    ' summary, enrich_attempted_at, enriched_at,'
     ' queue_uuid, superseded_by,'
     ' author')
 
@@ -531,10 +531,10 @@ def embedding_stats(db: 'DB') -> tuple[int, int]:
     return total, embedded
 
 
-def stamp_linked(db: 'DB', insight_id: str, ts: str) -> None:
-    """Set linked_at timestamp for an insight."""
+def stamp_enrich_attempted(db: 'DB', insight_id: str, ts: str) -> None:
+    """Set enrich_attempted_at timestamp for an insight."""
     db._exec(
-        'update insights set linked_at = ? where id = ?',
+        'update insights set enrich_attempted_at = ? where id = ?',
         (ts, insight_id))
 
 
@@ -566,11 +566,14 @@ def stamp_enriched(
         (ts, prompt_version, insight_id))
 
 
-def get_pending_link_ids(db: 'DB', limit: int) -> list[str]:
-    """Return IDs of insights with NULL linked_at, ordered by created_at."""
+def get_pending_enrich_ids(db: 'DB', limit: int) -> list[str]:
+    """Return IDs of insights with NULL enrich_attempted_at, ordered by
+    created_at.
+    """
     sql = """
 select id from insights
-where linked_at is null and deleted_at is null and superseded_by is null
+where enrich_attempted_at is null and deleted_at is null
+  and superseded_by is null
 order by created_at asc
 limit ?
 """
@@ -589,26 +592,26 @@ order by created_at asc
     return [r[0] for r in rows]
 
 
-def count_pending_links(db: 'DB') -> int:
-    """Count insights with NULL linked_at that are not deleted."""
+def count_pending_enrich(db: 'DB') -> int:
+    """Count insights with NULL enrich_attempted_at that are not deleted."""
     row = db._query(
         'select count(*) from insights'
-        ' where linked_at is null and deleted_at is null'
+        ' where enrich_attempted_at is null and deleted_at is null'
         ' and superseded_by is null').fetchone()
     return row[0] if row else 0
 
 
-def get_unenriched_linked_ids(db: 'DB', limit: int) -> list[str]:
-    """Return IDs of linked-but-unenriched insights, oldest first.
+def get_unenriched_attempted_ids(db: 'DB', limit: int) -> list[str]:
+    """Return IDs of attempted-but-unenriched insights, oldest first.
 
-    These rows were stamped `linked_at` (so the pending-link retry
-    path skips them) but never stamped `enriched_at` -- e.g. a prior
-    enrichment LLM call failed. They are otherwise stranded.
+    These rows were stamped `enrich_attempted_at` (so the pending-enrich
+    retry path skips them) but never stamped `enriched_at` -- e.g. a
+    prior enrichment LLM call failed. They are otherwise stranded.
     """
     sql = """
 select id from insights
 where enriched_at is null
-  and linked_at is not null
+  and enrich_attempted_at is not null
   and deleted_at is null and superseded_by is null
 order by created_at asc
 limit ?
@@ -654,13 +657,13 @@ where deleted_at is null and superseded_by is null
 
 def reset_for_rebuild(
         db: 'DB', insight_ids: list[str]) -> None:
-    """Clear enriched_at and linked_at for given insight IDs."""
+    """Clear enriched_at and enrich_attempted_at for given insight IDs."""
     if not insight_ids:
         return
     placeholders = ','.join('?' for _ in insight_ids)
     sql = f"""
 update insights
-set enriched_at = null, linked_at = null
+set enriched_at = null, enrich_attempted_at = null
 where id in ({placeholders})
 """
     db._exec(sql, tuple(insight_ids))
@@ -679,7 +682,7 @@ def _scan_insight(row: tuple[Any, ...]) -> Insight:
     if row[6]:
         i.summary = row[6]
     if row[7]:
-        i.linked_at = parse_timestamp(row[7])
+        i.enrich_attempted_at = parse_timestamp(row[7])
     if row[8]:
         i.enriched_at = parse_timestamp(row[8])
     if row[9]:

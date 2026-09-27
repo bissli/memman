@@ -4,8 +4,7 @@ import json
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
-from memman.graph.engine import link_pending
-from memman.graph.enrichment import enrich_with_llm
+from memman.pipeline.enrich import enrich_pending, enrich_with_llm
 from memman.store.node import insert_insight
 from tests.conftest import make_insight
 
@@ -142,9 +141,9 @@ class TestEnrichWithLLM:
 
         assert any(r.levelno == logging.WARNING for r in caplog.records)
 
-    def test_unresolvable_metadata_role_still_links(
+    def test_unresolvable_metadata_role_still_attempts(
             self, tmp_db, tmp_backend, monkeypatch):
-        """An unavailable metadata client links the row unenriched.
+        """An unavailable metadata client enriches the row unenriched.
 
         Mutation: resolving `slow` before the loop instead of
             at the row that needs it, which turns a missing credential
@@ -153,16 +152,16 @@ class TestEnrichWithLLM:
         Oracle: the enrichment columns, which stay null, beside the
             processed count, which does not.
         """
-        from memman.graph import engine as engine_mod
+        from memman.pipeline import enrich as enrich_mod
 
         def _unavailable(*args, **kwargs):
             raise RuntimeError('no LLM credential')
 
-        monkeypatch.setattr(engine_mod, 'get_llm_client', _unavailable)
+        monkeypatch.setattr(enrich_mod, 'get_llm_client', _unavailable)
         insert_insight(tmp_db, make_insight(
             id='nc-1', content='test content'))
 
-        count = link_pending(tmp_backend, max_batch=1)
+        count = enrich_pending(tmp_backend, max_batch=1)
         assert count == 1
 
         cols = _read_enrichment_columns(tmp_db, 'nc-1')
@@ -173,7 +172,8 @@ class TestReEmbed:
     """Re-embedding a pending row's raw content."""
 
     def test_reembed_embeds_the_raw_content(self, tmp_db, tmp_backend):
-        """Verify link_pending embeds the row's content and nothing else.
+        """Verify enrich_pending embeds the row's content and nothing
+        else.
 
         Mutation: appending enrichment output to the embedded text, so
             a rebuilt row's vector drifts from a fresh write's.
@@ -194,9 +194,9 @@ class TestReEmbed:
         mock_embed.embed.return_value = [0.1, 0.2, 0.3]
         mock_embed.model = 'voyage-3-lite'
 
-        link_pending(
+        enrich_pending(
             tmp_backend,
-            metadata_llm_client=mock_llm, embed_client=mock_embed,
+            llm_client=mock_llm, embed_client=mock_embed,
             max_batch=1)
 
         mock_embed.embed.assert_called_once_with('Python web framework')
@@ -215,19 +215,21 @@ class TestReEmbed:
         mock_llm = MagicMock()
         mock_llm.complete.return_value = _make_enrichment_response()
 
-        link_pending(
-            tmp_backend, metadata_llm_client=mock_llm, embed_client=None,
+        enrich_pending(
+            tmp_backend, llm_client=mock_llm, embed_client=None,
             max_batch=1)
 
         cols = _read_enrichment_columns(tmp_db, 'rs-1')
         assert cols['summary'] == 'test summary'
 
-    def test_embed_failure_still_stamps_linked_at(self, tmp_db, tmp_backend):
-        """Verify an embed crash still stamps `linked_at` and keeps the summary.
+    def test_embed_failure_still_stamps_enrich_attempted_at(
+            self, tmp_db, tmp_backend):
+        """Verify an embed crash still stamps `enrich_attempted_at`
+        and keeps the summary.
 
         Mutation: letting the embed exception abort the transaction,
             which leaves the row pending and re-bills it every pass.
-        Oracle: the stored `linked_at` and summary.
+        Oracle: the stored `enrich_attempted_at` and summary.
         """
         insight = make_insight(
             id='ef-1', content='test content for the pass whose embed fails')
@@ -240,12 +242,12 @@ class TestReEmbed:
         mock_embed.available.return_value = True
         mock_embed.embed.side_effect = RuntimeError('embed crashed')
 
-        link_pending(
-            tmp_backend, metadata_llm_client=mock_llm, embed_client=mock_embed,
+        enrich_pending(
+            tmp_backend, llm_client=mock_llm, embed_client=mock_embed,
             max_batch=1)
 
         row = tmp_db._conn.execute(
-            'SELECT linked_at FROM insights WHERE id = ?',
+            'SELECT enrich_attempted_at FROM insights WHERE id = ?',
             ('ef-1',)).fetchone()
         assert row[0] is not None
 

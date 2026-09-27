@@ -97,15 +97,23 @@ class TestRemember:
         assert 'valid:' in result.output
         assert 'fact' in result.output
 
-    def test_remember_does_not_link_old_pending_insights(self, runner, monkeypatch):
-        """Remember does inline enrichment, never calls link_pending."""
+    def test_remember_does_not_enrich_old_pending_insights(
+            self, runner, monkeypatch):
+        """Remember does inline enrichment, never calls enrich_pending.
+
+        Mutation: `remember` calling `enrich_pending` to sweep the
+            backlog on every write, billing a batch scan on the
+            write path.
+        Oracle: a `side_effect` that raises if `enrich_pending` runs,
+            plus `mock_lp.assert_not_called()`.
+        """
         invoke(runner, [
             'remember', 'Redis cache eviction uses LRU algorithm'])
 
         from unittest.mock import patch
-        with patch('memman.graph.engine.link_pending',
+        with patch('memman.pipeline.enrich.enrich_pending',
                    side_effect=AssertionError(
-                       'link_pending called from remember')) as mock_lp:
+                       'enrich_pending called from remember')) as mock_lp:
             result = invoke(runner, [
                 'remember', 'PostgreSQL MVCC provides snapshot isolation'])
             assert result.exit_code == 0
@@ -155,14 +163,21 @@ class TestRecall:
         result = invoke(runner, ['recall', 'Go SQLite storage'])
         assert result.exit_code == 0
 
-    def test_recall_does_not_call_link_pending(self, runner, monkeypatch):
-        """Recall path must not call link_pending (performance regression guard)."""
+    def test_recall_does_not_call_enrich_pending(self, runner, monkeypatch):
+        """Recall never calls enrich_pending on its read path.
+
+        Mutation: `recall` calling `enrich_pending` to opportunistically
+            sweep the backlog on a read, billing a batch scan on every
+            query.
+        Oracle: a `side_effect` that raises if `enrich_pending` runs,
+            plus `mock_lp.assert_not_called()`.
+        """
         invoke(runner, [
             'remember', 'Go uses SQLite for persistent storage'])
 
         from unittest.mock import patch
-        with patch('memman.graph.engine.link_pending',
-                   side_effect=AssertionError('link_pending called')) as mock_lp:
+        with patch('memman.pipeline.enrich.enrich_pending',
+                   side_effect=AssertionError('enrich_pending called')) as mock_lp:
             result = invoke(runner, ['recall', 'Go SQLite storage'])
             assert result.exit_code == 0
             mock_lp.assert_not_called()
@@ -196,7 +211,7 @@ class TestRecall:
         """Default install seeds MEMMAN_RERANK_ENABLED=true, so rerank fires.
 
         Mutation: dropping the `rerank=rerank` kwarg from the
-            `intent_aware_recall` call, so the config default never
+            `run_recall` call, so the config default never
             reaches the reranker.
         Oracle: a spy on the Voyage client, called once.
         """
@@ -885,16 +900,15 @@ class TestSingleTierEnrichment:
         assert row is not None
         assert 'redis' in row[0].lower()
 
-    def test_no_link_pending_in_output(self, runner):
-        """Output no longer includes link_pending field."""
-        result = invoke(runner, [
-            'remember', 'Docker containers orchestrated via Kubernetes'])
-        assert result.exit_code == 0
-        raw = json.loads(result.output)
-        assert 'link_pending' not in raw
+    def test_enrich_attempted_at_stamped_after_remember(self, runner):
+        """enrich_attempted_at is non-NULL after remember returns.
 
-    def test_linked_at_stamped_after_remember(self, runner):
-        """linked_at is non-NULL after remember returns."""
+        Mutation: the drain worker's `_apply_plan` skipping
+            `stamp_enrich_attempted`, leaving a written row eligible
+            for a second, redundant enrich pass.
+        Oracle: the row's `enrich_attempted_at` column read back
+            through a read-only handle, not-None.
+        """
         from memman.store.db import open_read_only
 
         result = invoke(runner, [
@@ -906,18 +920,37 @@ class TestSingleTierEnrichment:
         _, data_dir = runner
         ro = open_read_only(data_dir + '/data/default')
         row = ro._conn.execute(
-            'SELECT linked_at FROM insights WHERE id = ?',
+            'SELECT enrich_attempted_at FROM insights WHERE id = ?',
             (iid,)).fetchone()
         ro.close()
         assert row is not None
         assert row[0] is not None
 
-    def test_graph_rebuild_zero_pending_after_remember(self, runner):
-        """Graph rebuild processes already-linked insights after remember."""
+    def test_enrich_zero_pending_after_remember(self, runner):
+        """No row is left pending enrichment after remember returns.
+
+        Mutation: `remember` skipping its inline enrichment pass, so
+            a written row waits for the next `memman enrich` or drain
+            instead of stamping `enrich_attempted_at` immediately.
+        Oracle: a direct read-only count of rows with NULL
+            `enrich_attempted_at`, independent of the `enrich
+            --dry-run` JSON (which reports total active rows, not
+            the pending count).
+        """
+        from memman.store.db import open_read_only
+
         invoke(runner, [
             'remember', 'Kafka event streaming configured for microservices'])
-        result = invoke(runner, ['graph', 'rebuild', '--dry-run'])
+        result = invoke(runner, ['enrich', '--dry-run'])
         assert result.exit_code == 0
+
+        _, data_dir = runner
+        ro = open_read_only(data_dir + '/data/default')
+        row = ro._conn.execute(
+            'select count(*) from insights'
+            ' where enrich_attempted_at is null and deleted_at is null').fetchone()
+        ro.close()
+        assert row[0] == 0
 
     def test_enriched_at_stamped_after_remember(self, runner):
         """enriched_at is non-NULL after remember returns."""
@@ -940,11 +973,38 @@ class TestSingleTierEnrichment:
 
 
 @pytest.mark.scheduler_stopped
-class TestGraphRebuild:
-    """Graph rebuild command tests - dry-run, live."""
+def test_enrich_is_top_level_and_graph_rebuild_is_gone(tmp_path):
+    """`memman enrich` answers at the top level and no `graph` group remains.
+
+    Mutation: keeping the `graph` group or leaving `enrich` unwired at
+        the top level, so the old path still answers or the new one
+        does not.
+    Oracle: click's own unknown-command exit code (2) for `graph
+        rebuild`, against `enrich --dry-run`'s exit code (0).
+    """
+    data_dir = str(tmp_path)
+    old = CliRunner().invoke(cli, [
+        '--data-dir', data_dir, 'graph', 'rebuild', '--dry-run'])
+    assert old.exit_code == 2, old.output
+
+    new = CliRunner().invoke(cli, [
+        '--data-dir', data_dir, 'enrich', '--dry-run'])
+    assert new.exit_code == 0, new.output
+
+
+@pytest.mark.scheduler_stopped
+class TestEnrich:
+    """`enrich` command tests - dry-run, live."""
 
     def test_rebuild_dry_run_reports_count(self, tmp_path, monkeypatch):
-        """Dry run reports total insights without modifying DB."""
+        """Dry run reports total insights without modifying DB.
+
+        Mutation: `dry_run` falling through to the reset/enrich loop
+            before its early return, clearing `enriched_at` on every
+            row it reports on.
+        Oracle: `data['total']` against the seeded row count, and a
+            post-run `enriched_at IS NOT NULL` count unchanged at 3.
+        """
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
@@ -956,7 +1016,7 @@ class TestGraphRebuild:
             insert_insight(db, make_insight(
                 id=f'rd-{i}', content=f'Test insight {i}'))
             db._conn.execute(
-                'UPDATE insights SET linked_at = ?, enriched_at = ?'
+                'UPDATE insights SET enrich_attempted_at = ?, enriched_at = ?'
                 ' WHERE id = ?',
                 ('2024-01-01T00:00:00+00:00',
                  '2024-01-01T00:00:00+00:00', f'rd-{i}'))
@@ -964,7 +1024,7 @@ class TestGraphRebuild:
 
         runner = CliRunner()
         result = runner.invoke(cli, [
-            '--data-dir', data_dir, 'graph', 'rebuild', '--dry-run'])
+            '--data-dir', data_dir, 'enrich', '--dry-run'])
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
         assert data['total'] == 3
@@ -1007,7 +1067,7 @@ class TestGraphRebuild:
                 'reporting jobs start')))
         db._conn.execute(
             "UPDATE insights"
-            " SET linked_at = '2024-01-01T00:00:00+00:00',"
+            " SET enrich_attempted_at = '2024-01-01T00:00:00+00:00',"
             "     enriched_at = '2024-01-01T00:00:00+00:00',"
             "     summary = ''"
             " WHERE id IN ('rs-1', 'rs-2')")
@@ -1015,7 +1075,7 @@ class TestGraphRebuild:
 
         runner = CliRunner()
         result = runner.invoke(cli, [
-            '--data-dir', data_dir, 'graph', 'rebuild'])
+            '--data-dir', data_dir, 'enrich'])
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
         assert data['processed'] >= 2
@@ -1028,9 +1088,18 @@ class TestGraphRebuild:
         assert row[1] is not None, 'rebuild should set enriched_at'
         db.close()
 
-    def test_rebuild_handles_mix_of_linked_and_unlinked(
+    def test_rebuild_handles_mix_of_attempted_and_unattempted(
             self, tmp_path, monkeypatch):
-        """Rebuild processes both linked and unlinked insights."""
+        """Rebuild processes both attempted and unattempted insights.
+
+        Mutation: the batch loop stopping after one `enrich_pending`
+            call per slice instead of looping to `count == 0`,
+            leaving a batch half-processed when a row's LLM call
+            takes more than one internal retry to land.
+        Oracle: a direct post-run count of rows with NULL
+            `enrich_attempted_at`, independent of the `processed`
+            figure in the command's own JSON.
+        """
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
         data_dir = str(tmp_path)
         store_path = tmp_path / 'data' / 'default'
@@ -1041,7 +1110,7 @@ class TestGraphRebuild:
         insert_insight(db, make_insight(
             id='mx-1', content='Already linked insight'))
         db._conn.execute(
-            "UPDATE insights SET linked_at = ?, enriched_at = ?"
+            "UPDATE insights SET enrich_attempted_at = ?, enriched_at = ?"
             " WHERE id = 'mx-1'",
             ('2024-01-01T00:00:00+00:00',
              '2024-01-01T00:00:00+00:00'))
@@ -1051,7 +1120,7 @@ class TestGraphRebuild:
 
         runner = CliRunner()
         result = runner.invoke(cli, [
-            '--data-dir', data_dir, 'graph', 'rebuild'])
+            '--data-dir', data_dir, 'enrich'])
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
         assert data['processed'] >= 2
@@ -1059,13 +1128,14 @@ class TestGraphRebuild:
         db = open_db(str(store_path))
         pending = db._conn.execute(
             'SELECT COUNT(*) FROM insights'
-            ' WHERE linked_at IS NULL'
+            ' WHERE enrich_attempted_at IS NULL'
             ' AND deleted_at IS NULL').fetchone()[0]
-        assert pending == 0, 'all insights should be linked after rebuild'
+        assert pending == 0, (
+            'all insights should be enrich-attempted after rebuild')
         db.close()
 
 
-class TestGraphRebuildIsolation:
+class TestEnrichIsolation:
     """A corpus rebuild refuses to race the scheduler drain."""
 
     def test_rebuild_rejected_while_scheduler_started(self, tmp_path):
@@ -1082,14 +1152,14 @@ class TestGraphRebuildIsolation:
         """
         for extra in ([], ['--stale-only']):
             out = CliRunner().invoke(cli, [
-                '--data-dir', str(tmp_path), 'graph', 'rebuild'] + extra)
+                '--data-dir', str(tmp_path), 'enrich'] + extra)
             assert out.exit_code != 0, out.output
             assert 'scheduler stop' in out.output
 
 
 @pytest.mark.scheduler_stopped
-class TestGraphRebuildStaleOnly:
-    """Tests for `graph rebuild --stale-only` flag."""
+class TestEnrichStaleOnly:
+    """Tests for `enrich --stale-only` flag."""
 
     def _seed_drift(self, store_path, active_pv):
         """Insert one drifted row and one current row."""
@@ -1112,7 +1182,7 @@ class TestGraphRebuildStaleOnly:
         for iid in ('drift-1', 'fresh-1'):
             update_enrichment(db, iid, 'sum')
             db._conn.execute(
-                'UPDATE insights SET linked_at = ?, enriched_at = ?'
+                'UPDATE insights SET enrich_attempted_at = ?, enriched_at = ?'
                 ' WHERE id = ?',
                 ('2024-01-01T00:00:00+00:00',
                  '2024-01-01T00:00:00+00:00', iid))
@@ -1147,7 +1217,7 @@ class TestGraphRebuildStaleOnly:
 
         runner = CliRunner()
         result = runner.invoke(cli, [
-            '--data-dir', data_dir, 'graph', 'rebuild',
+            '--data-dir', data_dir, 'enrich',
             '--stale-only', '--dry-run'])
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
@@ -1188,7 +1258,7 @@ class TestGraphRebuildStaleOnly:
 
         runner = CliRunner()
         result = runner.invoke(cli, [
-            '--data-dir', data_dir, 'graph', 'rebuild', '--stale-only'])
+            '--data-dir', data_dir, 'enrich', '--stale-only'])
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
         assert data['mode'] == 'stale-only'
@@ -1223,7 +1293,7 @@ class TestGraphRebuildStaleOnly:
 
         runner = CliRunner()
         result = runner.invoke(cli, [
-            '--data-dir', data_dir, 'graph', 'rebuild', '--stale-only'])
+            '--data-dir', data_dir, 'enrich', '--stale-only'])
         assert result.exit_code == 0, result.output
         data = json.loads(result.output)
         assert data['mode'] == 'stale-only'
@@ -1240,10 +1310,17 @@ class TestGraphRebuildStaleOnly:
         assert after['drift-1'][1] == active_pv
 
     def test_stale_only_accepted_on_postgres_runner(self, cross_backend_runner):
-        """`--stale-only` does not trip the SQLite-only guard on Postgres."""
+        """`--stale-only` does not trip the SQLite-only guard on Postgres.
+
+        Mutation: reintroducing a backend-kind check ahead of the
+            `--stale-only` branch that raises on any non-sqlite
+            backend.
+        Oracle: exit code 0 and no `'SQLite-only'` text in the
+            output against the Postgres-backed runner.
+        """
         r, data_dir = cross_backend_runner
         out = r.invoke(cli, [
-            '--data-dir', data_dir, 'graph', 'rebuild',
+            '--data-dir', data_dir, 'enrich',
             '--stale-only', '--dry-run'])
         assert out.exit_code == 0, out.output
         data = json.loads(out.output)
@@ -1252,10 +1329,18 @@ class TestGraphRebuildStaleOnly:
 
     def test_wholesale_rebuild_accepted_on_postgres_runner(
             self, cross_backend_runner):
-        """Wholesale `graph rebuild` is now cross-backend (gate lifted)."""
+        """Wholesale `enrich` runs on any backend, Postgres included.
+
+        Mutation: reintroducing a backend-kind check ahead of the
+            wholesale (non-stale) enrich path that raises on any
+            non-sqlite backend.
+        Oracle: exit code 0, a `total` and `dry_run` key in the JSON,
+            and no `'SQLite-only'` text in the output against the
+            Postgres-backed runner.
+        """
         r, data_dir = cross_backend_runner
         out = r.invoke(cli, [
-            '--data-dir', data_dir, 'graph', 'rebuild', '--dry-run'])
+            '--data-dir', data_dir, 'enrich', '--dry-run'])
         assert out.exit_code == 0, out.output
         data = json.loads(out.output)
         assert 'total' in data

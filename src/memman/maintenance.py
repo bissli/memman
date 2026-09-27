@@ -5,12 +5,12 @@ Steps:
 2. `queue.purge_worker_runs` -- prune the heartbeat ledger.
 3. Per store where the drain completed a row:
    - `trim_oplog_by_age` (once per drain, not per row).
-   - `link_pending` with a small batch cap so a backlog of pending
+   - `enrich_pending` with a small batch cap so a backlog of pending
      enrichments cannot blow the maintenance budget.
 
 A store the drain did not touch is never opened, so a row left
 pending in a quiet store waits for that store's next write or a
-`graph rebuild`.
+`memman enrich`.
 
 Each step is bounded by the remaining drain timeout; if less than
 30 s remains the entire maintenance phase is skipped and rolled to
@@ -24,7 +24,7 @@ from typing import Any
 logger = logging.getLogger('memman')
 
 MAINTENANCE_MIN_BUDGET_SECONDS = 30
-MAINTENANCE_LINK_PENDING_MAX = 3
+MAINTENANCE_ENRICH_PENDING_MAX = 3
 MAINTENANCE_REENRICH_MAX = 3
 
 
@@ -80,8 +80,8 @@ def run_maintenance(
 def _run_per_store_maintenance(
         ctx: Any, store_name: str,
         deadline_monotonic: float) -> None:
-    """Run oplog trim + bounded link_pending for one store."""
-    from memman.graph.engine import link_pending
+    """Run oplog trim + bounded enrich_pending for one store."""
+    from memman.pipeline.enrich import enrich_pending
 
     try:
         pruned = ctx.backend.oplog.trim_by_age()
@@ -97,39 +97,40 @@ def _run_per_store_maintenance(
         return
 
     try:
-        stranded = ctx.backend.nodes.get_unenriched_linked_ids(
+        stranded = ctx.backend.nodes.get_unenriched_attempted_ids(
             limit=MAINTENANCE_REENRICH_MAX)
         if stranded:
             ctx.backend.nodes.reset_for_rebuild(stranded)
             logger.debug(
                 f'maintenance: re-queued {len(stranded)} stranded'
-                f' (linked-but-unenriched) rows in {store_name!r}')
+                f' (attempted-but-unenriched) rows in {store_name!r}')
     except Exception:
         logger.exception(
             f'maintenance: re-queue stranded rows failed for'
             f' {store_name!r}')
 
     try:
-        pending = ctx.backend.nodes.count_pending_links()
+        pending = ctx.backend.nodes.count_pending_enrich()
     except Exception:
         logger.exception(
-            f'maintenance: count_pending_links failed for {store_name!r}')
+            f'maintenance: count_pending_enrich failed for {store_name!r}')
         return
     if pending == 0:
         return
 
     try:
-        processed = link_pending(
+        processed = enrich_pending(
             ctx.backend,
             embed_client=ctx.ec,
-            max_batch=MAINTENANCE_LINK_PENDING_MAX)
+            max_batch=MAINTENANCE_ENRICH_PENDING_MAX)
         if processed:
             logger.debug(
-                f'maintenance: link_pending processed {processed} insights'
-                f' in {store_name!r} (capped at {MAINTENANCE_LINK_PENDING_MAX})')
+                f'maintenance: enrich_pending processed {processed} insights'
+                f' in {store_name!r} (capped at'
+                f' {MAINTENANCE_ENRICH_PENDING_MAX})')
     except Exception:
         logger.exception(
-            f'maintenance: link_pending failed for {store_name!r}')
+            f'maintenance: enrich_pending failed for {store_name!r}')
 
     if time.monotonic() >= deadline_monotonic:
         return

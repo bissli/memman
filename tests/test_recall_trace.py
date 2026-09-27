@@ -1,13 +1,13 @@
 """Phase-level recall trace events (F2).
 
-`intent_aware_recall` hoists one `trace.is_enabled()` read and emits
+`run_recall` hoists one `trace.is_enabled()` read and emits
 per-phase events (anchors, rerank) behind it. These tests
 pin the hoist (the read can fall through to a file read on the
 synchronous hot path) and the id-based rerank movement metric.
 """
 
 from memman import trace
-from memman.search.recall import ANCHOR_TOP_K, intent_aware_recall
+from memman.search.recall import ANCHOR_TOP_K, run_recall
 from tests.conftest import make_insight
 
 
@@ -43,7 +43,7 @@ def test_is_enabled_read_once_per_recall(tmp_backend, monkeypatch):
     calls = []
     monkeypatch.setattr(
         trace, 'is_enabled', lambda: calls.append(1) or False)
-    resp = intent_aware_recall(
+    resp = run_recall(
         tmp_backend, 'alpha shared topic', None, 5)
     assert resp['results']
     assert len(calls) == 1
@@ -73,8 +73,8 @@ def test_rerank_event_reports_moved_by_id_not_score(
         def rerank(self, query, docs, top_k=None):
             return [(i, 0.9 - 0.001 * i) for i in range(len(docs))]
 
-    monkeypatch.setattr('memman.rerank.get_client', _IdentityRerank)
-    resp = intent_aware_recall(
+    monkeypatch.setattr('memman.rerank.voyage.Client', _IdentityRerank)
+    resp = run_recall(
         tmp_backend, 'alpha shared topic', None, 5,
         rerank=True)
     assert resp['meta']['reranked'] is True
@@ -108,7 +108,7 @@ def test_anchor_event_reports_vector_hits_against_anchor_k(
         lambda name, **fields: events.append((name, fields)))
     qv = [0.0] * 512
     qv[0] = 1.0
-    intent_aware_recall(
+    run_recall(
         tmp_backend, 'zzz unmatched query', qv, 35)
     ev = [f for n, f in events if n == 'recall_anchors']
     assert ev

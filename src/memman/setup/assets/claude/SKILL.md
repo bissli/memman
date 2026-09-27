@@ -131,8 +131,8 @@ on macOS, `memman scheduler serve` in containers).
 A newly stored memory is NOT visible to `memman recall` in the current
 session; it lands for later sessions.
 
-`memman graph rebuild` re-enriches every stored insight - summary
-and vector - after a model or prompt change or to repair partial
+`memman enrich` re-enriches every stored insight - summary and
+vector - after a model or prompt change or to repair partial
 enrichment.
 
 The worker stores the text as written, as one memory; no model

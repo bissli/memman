@@ -1,10 +1,11 @@
 """Backend-namespaced env key validation.
 
-Each backend declares its `MEMMAN_<NS>_` namespace and the explicit
-set of canonical keys it owns within that namespace. `_validate(env)`
-scans the input dict for keys that fall in the backend's namespace
-and raises `ConfigError` on any unknown key, with a `did you mean`
-hint when one is close.
+`PostgresBackendConfig` declares the `MEMMAN_POSTGRES_` namespace and
+the explicit set of canonical keys it owns within it. `_validate(env)`
+scans the input dict for keys that fall in that namespace and raises
+`ConfigError` on any unknown key, with a `did you mean` hint when one
+is close. The scan runs whatever backend a store runs, including
+sqlite, so a typo in an inactive namespace is still caught.
 
 Bare canonical keys (e.g., `MEMMAN_POSTGRES_DSN`) are rejected: the
 per-store routing model requires the per-store suffixed form
@@ -14,9 +15,8 @@ as the difflib candidate set used to build the suggestion.
 
 Cross-backend keys (`MEMMAN_OPENROUTER_API_KEY`, `MEMMAN_DEFAULT_BACKEND`,
 `MEMMAN_DEFAULT_POSTGRES_DSN`, `MEMMAN_EMBED_PROVIDER`, etc.) belong
-to neither dataclass and are never scanned by either validator. They
-remain governed by the flat `INSTALLABLE_KEYS` membership check at
-`config set`.
+to no namespace and are never scanned. They remain governed by the
+flat `INSTALLABLE_KEYS` membership check at `config set`.
 """
 
 import difflib
@@ -43,26 +43,6 @@ class PostgresBackendConfig:
         Pulls a `did you mean` hint from `difflib.get_close_matches`
         when one is sufficiently close. Raises `ConfigError`
         immediately on the first unknown key.
-        """
-        _validate_namespace(
-            env, cls.NAMESPACE_PREFIX, cls.OWNED_KEYS)
-
-
-@dataclass
-class SqliteBackendConfig:
-    """Owns the `MEMMAN_SQLITE_*` namespace.
-
-    Today the namespace is empty -- SQLite has no backend-specific
-    keys. The class exists so a future SQLite-specific knob can be
-    added without changing the validation surface.
-    """
-
-    NAMESPACE_PREFIX = 'MEMMAN_SQLITE_'
-    OWNED_KEYS = frozenset()
-
-    @classmethod
-    def _validate(cls, env: dict) -> None:
-        """Reject unknown `MEMMAN_SQLITE_*` keys in `env`.
         """
         _validate_namespace(
             env, cls.NAMESPACE_PREFIX, cls.OWNED_KEYS)
@@ -129,19 +109,12 @@ def _strip_store_suffix(key: str, owned: frozenset) -> str | None:
     return None
 
 
-_REGISTRY: dict[str, type] = {
-    'postgres': PostgresBackendConfig,
-    'sqlite': SqliteBackendConfig,
-    }
-
-
 def validate_all(env: dict) -> None:
-    """Validate `env` against every registered backend namespace.
+    """Validate `env` against the Postgres backend namespace.
 
-    Catches typos in inactive-backend namespaces (e.g. a
-    `MEMMAN_POSTGRES_DSN_typo=...` while every store is sqlite-backed).
-    Used by `factory.open_backend` so a single open-time call covers
-    both backend kinds.
+    Catches typos in `MEMMAN_POSTGRES_*` (e.g. a
+    `MEMMAN_POSTGRES_DSN_typo=...`) whatever backend a store runs,
+    including sqlite. Used by `factory.open_backend` so a single
+    open-time call covers this regardless of the active backend.
     """
-    for cls in _REGISTRY.values():
-        cls._validate(env)
+    PostgresBackendConfig._validate(env)

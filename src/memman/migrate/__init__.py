@@ -45,7 +45,7 @@ class MigrateInsight:
     category: str
     summary: str | None
     embedding: list[float] | None
-    linked_at: datetime | None
+    enrich_attempted_at: datetime | None
     enriched_at: datetime | None
     created_at: datetime
     updated_at: datetime

@@ -24,7 +24,7 @@
         <mxCell id="r_validate" value="&lt;b&gt;Validate&lt;/b&gt;&lt;br&gt;Refuse text over 1,000 UTF-8 bytes, text naming a line number, text opening with MEMMAN_AUTHOR, text spanning lines, and text opening with a label. Refuse an unknown category. On replace, the target must be current. Add advisory quality warnings." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1">
           <mxGeometry x="60" y="215" width="330" height="120" as="geometry" />
         </mxCell>
-        <mxCell id="r_enqueue" value="&lt;b&gt;Append a row to queue.db&lt;/b&gt;&lt;br&gt;status pending, content, hint_cat, hint_replaced_id (replace only), a new queue_uuid, author" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_enqueue" value="&lt;b&gt;Append a row to queue.db&lt;/b&gt;&lt;br&gt;status pending, content, category, replaced_id (replace only), a new queue_uuid, author" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="420" y="215" width="290" height="120" as="geometry" />
         </mxCell>
         <mxCell id="r_return" value="&lt;b&gt;Print JSON&lt;/b&gt;&lt;br&gt;action: queued, queue_id, queue_uuid, store, quality_warnings, and replaced_id on replace" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
@@ -81,7 +81,7 @@
         <mxCell id="r_plan" value="&lt;b&gt;Plan, with no database write&lt;/b&gt;&lt;br&gt;One enrichment call returns a summary, with a second call when the reply does not parse. One embedding call embeds the content. A failed call leaves the row without that output. A missing embedding key or LLM setting fails the row." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="100" y="795" width="460" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="r_apply" value="&lt;b&gt;Apply in one transaction&lt;/b&gt;&lt;br&gt;Insert the row. On replace, supersede the target. If the target is not current, store a plain add and log target-gone. Write the vector and summary. Stamp linked_at. Stamp enriched_at only when enrichment and a vector both landed." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_apply" value="&lt;b&gt;Apply in one transaction&lt;/b&gt;&lt;br&gt;Insert the row. On replace, supersede the target. If the target is not current, store a plain add and log target-gone. Write the vector and summary. Stamp enrich_attempted_at. Stamp enriched_at only when enrichment and a vector both landed." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="100" y="895" width="460" height="95" as="geometry" />
         </mxCell>
         <mxCell id="r_done" value="&lt;b&gt;Mark the row done&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
@@ -90,7 +90,7 @@
         <mxCell id="r_failed" value="&lt;b&gt;On an error, retry with backoff&lt;/b&gt;&lt;br&gt;The row unlocks after 60, 120, 240, then 480 seconds. After 5 attempts its status is failed." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="640" y="907" width="300" height="70" as="geometry" />
         </mxCell>
-        <mxCell id="r_maint" value="&lt;b&gt;After the row loop&lt;/b&gt;&lt;br&gt;Purge done rows, prune worker_runs, and return stale rows to pending. For each store the drain wrote to: drop oplog rows older than 180 days, reset up to 3 memories that have linked_at but no enriched_at, and enrich up to 3 memories with no linked_at. Then run the daily model check." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_maint" value="&lt;b&gt;After the row loop&lt;/b&gt;&lt;br&gt;Purge done rows, prune worker_runs, and return stale rows to pending. For each store the drain wrote to: drop oplog rows older than 180 days, reset up to 3 memories that have enrich_attempted_at but no enriched_at, and enrich up to 3 memories with no enrich_attempted_at. Then run the daily model check." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="100" y="1090" width="840" height="80" as="geometry" />
         </mxCell>
 

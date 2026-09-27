@@ -307,7 +307,7 @@ def test_postgres_recall_issues_pgvector_distance_operator(
         index answers.
     """
     from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
-    from memman.search.recall import intent_aware_recall
+    from memman.search.recall import run_recall
     from memman.store.model import Insight
 
     try:
@@ -339,7 +339,7 @@ def test_postgres_recall_issues_pgvector_distance_operator(
     monkeypatch.setattr(psycopg.Cursor, 'execute', spy)
 
     try:
-        intent_aware_recall(
+        run_recall(
             backend, query='document alpha',
             query_vec=_voyage_shape_vector(seed=999),
             limit=5)

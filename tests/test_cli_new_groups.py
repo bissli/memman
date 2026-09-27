@@ -128,7 +128,7 @@ def _seed_row(data_dir: str, status: str = 'stale') -> int:
     try:
         cur = conn.execute(
             "insert into queue"
-            ' (store, content, hint_cat, status, queue_uuid, queued_at)'
+            ' (store, content, category, status, queue_uuid, queued_at)'
             " values (?, ?, ?, ?, ?, strftime('%s','now'))",
             ('default', f'{status}-row', 'fact', status, str(uuid.uuid4())))
         conn.commit()

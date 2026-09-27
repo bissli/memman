@@ -32,7 +32,7 @@ import random
 
 import pytest
 from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
-from memman.search.recall import intent_aware_recall
+from memman.search.recall import run_recall
 from memman.store.model import Insight
 from tests.conftest import EMBEDDING_DIM
 
@@ -86,7 +86,7 @@ def _populate(backend, topic_centers: list[list[float]]) -> None:
 
 def _top5_ids(backend, qvec) -> set[str]:
     """Return the top-5 ids by intent-aware recall on the given backend."""
-    result = intent_aware_recall(
+    result = run_recall(
         backend, query='topic insight',
         query_vec=qvec,
         limit=5)

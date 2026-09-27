@@ -323,7 +323,7 @@ class TestRestore:
         res = restore(str(bundle), str(tmp_path / 'out_nq'))
         assert res['queue_restored'] is False
 
-    @pytest.mark.parametrize('version', [1, 2, 3, 4, 5])
+    @pytest.mark.parametrize('version', [1, 2, 3, 4, 5, 6])
     def test_restore_refuses_older_bundle(self, tmp_path, version):
         """A bundle from an older schema is refused, never restored.
 
@@ -349,6 +349,27 @@ class TestRestore:
             tar.add(staging, arcname='.')
         with pytest.raises(RuntimeError, match=f'format_version {version}'):
             restore(str(bundle), str(tmp_path / f'out_v{version}'))
+
+    def test_restore_accepts_current_format_version(self, tmp_path):
+        """A bundle whose manifest carries the current format_version restores.
+
+        Mutation: bumping `BACKUP_FORMAT_VERSION` without keeping the
+            equality check in `restore` intact, so a fresh bundle at
+            the new version is refused too.
+        Oracle: `BACKUP_FORMAT_VERSION == 7` and `restore` raises
+            nothing for a manifest carrying that value.
+        """
+        assert BACKUP_FORMAT_VERSION == 7
+        staging = tmp_path / 'st_v7'
+        staging.mkdir()
+        (staging / 'manifest.json').write_text(json.dumps({
+            'format_version': BACKUP_FORMAT_VERSION, 'stores': [],
+            'active_store': 'default'}))
+        (staging / 'env.nonsecret').write_text('\n')
+        bundle = tmp_path / 'v7.tar.gz'
+        with tarfile.open(bundle, 'w:gz') as tar:
+            tar.add(staging, arcname='.')
+        restore(str(bundle), str(tmp_path / 'out_v7'))
 
     def test_rejects_unknown_format_version(self, tmp_path):
         """A bundle with a newer format_version is refused."""

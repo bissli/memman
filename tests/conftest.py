@@ -223,7 +223,7 @@ def _scheduler_started(request, monkeypatch):
     pre-drain queue should use the `no_auto_drain` mark.
 
     The `scheduler_stopped` mark forces STOPPED instead, for a command
-    such as `graph rebuild` that requires the drain to be down. It has
+    such as `enrich` that requires the drain to be down. It has
     to patch rather than merely stand aside, because `read_state()`
     otherwise reads the developer machine's own scheduler state and a
     started timer there fails the test.
@@ -413,12 +413,12 @@ def _mock_llm_complete(self: object, system: str, user: str, *,
     Returns
     -------
     str
-        The canned JSON response for that stage; a `facts` list
-        echoing the user body when no marker matches.
+        The canned JSON response for that stage; a neutral non-empty
+        reply (the doctor probe needs one) when no marker matches.
     """
-    if 'enrichment' in system.lower() and 'summary' in system.lower():
+    if 'summary' in system.lower():
         return _mock_enrichment(user)
-    return json.dumps({'facts': [{'text': user, 'category': 'fact'}]})
+    return json.dumps({'ok': True})
 
 
 def _mock_enrichment(content: str) -> str:
@@ -699,7 +699,7 @@ def make_insight(**overrides) -> Insight:
 
 def insert_pending(db, insight_id: str, content: str = 'test content',
                    **kw) -> None:
-    """Insert an insight with linked_at = NULL.
+    """Insert an insight with enrich_attempted_at = NULL.
 
     Helper for enrichment tests that need pending insights as fixtures.
     Forwards extra kwargs to `make_insight` for content/category control.
@@ -707,7 +707,7 @@ def insert_pending(db, insight_id: str, content: str = 'test content',
     from memman.store.node import insert_insight
     insert_insight(db, make_insight(id=insight_id, content=content, **kw))
     db._conn.execute(
-        'UPDATE insights SET linked_at = NULL WHERE id = ?',
+        'UPDATE insights SET enrich_attempted_at = NULL WHERE id = ?',
         (insight_id,))
 
 
@@ -855,10 +855,6 @@ def parse_remember(result, runner_tuple=None):
     per-store `MEMMAN_BACKEND_<store>=postgres` resolves.
     """
     raw = json.loads(result.output)
-    if 'facts' in raw and raw['facts']:
-        fact = dict(raw['facts'][0])
-        fact['_raw'] = raw
-        return fact
     if runner_tuple is None:
         return raw
     queue_id = raw.get('queue_id')

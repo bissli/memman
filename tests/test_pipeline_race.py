@@ -1,7 +1,7 @@
 """Tests for race conditions between synchronous mutations and queued writes.
 
 The forget+queued-replace race: a `replace` enqueues with
-hint_replaced_id; a synchronous `forget` runs against the same id
+replaced_id; a synchronous `forget` runs against the same id
 before the worker drains. Without the fix the worker raises ValueError
 from soft_delete_insight, the row's transaction rolls back, and
 eventually the row lands as `failed` with the user's content lost.

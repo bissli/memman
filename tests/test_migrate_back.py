@@ -192,7 +192,8 @@ _FIDELITY_ROW = {
     'content': 'field fidelity round-trip subject',
     'category': 'decision',
     'summary': 'the summary text',
-    'linked_at': datetime(2026, 2, 3, 4, 5, 6, tzinfo=timezone.utc),
+    'enrich_attempted_at': datetime(
+        2026, 2, 3, 4, 5, 6, tzinfo=timezone.utc),
     'enriched_at': datetime(2026, 3, 4, 5, 6, 7, tzinfo=timezone.utc),
     'created_at': datetime(2026, 4, 5, 6, 7, 8, tzinfo=timezone.utc),
     'updated_at': datetime(2026, 5, 6, 7, 8, 9, tzinfo=timezone.utc),
@@ -216,14 +217,14 @@ def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
         db.conn.execute(
             'insert into insights ('
             ' id, content, category, summary,'
-            ' linked_at, enriched_at, created_at,'
+            ' enrich_attempted_at, enriched_at, created_at,'
             ' updated_at, deleted_at, prompt_version,'
             ' embedding_model, queue_uuid, superseded_by,'
             ' author)'
             ' values (?, ?, ?, ?, ?, ?, ?,'
             ' ?, ?, ?, ?, ?, ?, ?)',
             (r['id'], r['content'], r['category'], r['summary'],
-             format_timestamp(r['linked_at']),
+             format_timestamp(r['enrich_attempted_at']),
              format_timestamp(r['enriched_at']),
              format_timestamp(r['created_at']),
              format_timestamp(r['updated_at']), None,
@@ -252,8 +253,8 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
     Mutation: dropping or inserting a column in either migrator's
         `iter_for_swap` select or apply insert without moving the
         `r[N]` indices and the `idx` base offset with it -- e.g.
-        `linked_at` landing in `enriched_at`, or a timestamp landing
-        in `deleted_at` and soft-deleting the row.
+        `enrich_attempted_at` landing in `enriched_at`, or a
+        timestamp landing in `deleted_at` and soft-deleting the row.
     Oracle: `_FIDELITY_ROW`, hand-written with a different value in
         every column, compared field by field after the round-trip.
     """
@@ -293,7 +294,7 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
         try:
             row = db.conn.execute(
                 'select category, summary,'
-                ' linked_at, enriched_at, created_at,'
+                ' enrich_attempted_at, enriched_at, created_at,'
                 ' updated_at, deleted_at, prompt_version,'
                 ' embedding_model, queue_uuid, superseded_by,'
                 ' author from insights where id = ?',

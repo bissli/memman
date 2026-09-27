@@ -1,66 +1,122 @@
-"""The drain stores a write's text as the agent wrote it.
+"""What a write consults a model for, and what it never does.
 
 No model reads a write before it is stored: nothing judges it
-non-durable, rewords it, or picks its category. The stubs below answer
-any extraction-shaped call (a reply carrying a `facts` key) with a
-skip or a rewrite, so a write path that still asks a model shows the
-model's hand in the stored row.
+non-durable, rewords it, or picks its category. And nothing a model
+might say retires an existing row -- only `replace <id>` and
+`supersede` do that.
 """
 
 import json
+import uuid
+from datetime import datetime, timezone
 
-from tests.conftest import _mock_llm_complete, invoke, parse_remember
+from memman.embed.fingerprint import bound_embedder
+from memman.llm import usage as llm_usage
+from memman.pipeline.remember import run_remember
+from memman.store.model import Insight
+from tests.conftest import _mock_llm_complete, make_insight
 
 
-def _answer_extraction_with(reply):
-    """Return a mock `complete` that swaps any extraction reply for `reply`.
+def test_a_write_makes_exactly_one_llm_call_on_enrichment(
+        tmp_backend, monkeypatch):
+    """Verify a write calls the model once, for enrichment, and stores verbatim.
+
+    Mutation: any model call restored on the write path, whatever its
+        prompt text -- a screen, a verdict, a merge, or a second
+        enrichment pass.
+    Oracle: the stage each spied call names, against the stored row's
+        content and category.
     """
-    def complete(self, system, user, **kwargs):
-        answer = _mock_llm_complete(self, system, user, **kwargs)
-        if 'facts' in json.loads(answer):
-            return json.dumps(reply)
-        return answer
-    return complete
+    stages: list[str] = []
+
+    def spy_complete(self, system, user, **kwargs):
+        stages.append(kwargs.get('stage'))
+        return _mock_llm_complete(self, system, user, **kwargs)
+
+    monkeypatch.setattr(
+        'memman.llm.client.MemmanLLMClient.complete', spy_complete)
+    ec = bound_embedder(tmp_backend)
+    content = 'Stored rows in goog and demo-v3 carry bissli.'
+    parent = make_insight(id='one-call-1', content=content, category='fact')
+
+    res = run_remember(tmp_backend, parent, ec=ec)
+
+    assert stages == [llm_usage.STAGE_ENRICHMENT]
+    stored = tmp_backend.nodes.get(res['id'])
+    assert stored.content == content
+    assert stored.category == 'fact'
 
 
-def test_drain_stores_a_write_a_model_would_skip(mm_runner, monkeypatch):
-    """Verify a status-shaped write lands instead of being dropped.
+def _supersede_everything(self, system, user, **kwargs):
+    """Answer every retiring prompt as a supersede, enrichment as usual.
 
-    Mutation: a model call restored on the write path whose empty
-        reply returns the `trivial content` skip.
-    Oracle: the stored row's content against the input string, with
-        every extraction-shaped reply forced to a skip.
+    The screen, verdict and merge prompts each carry a marker of
+    their own, so a write path that still sends any of them gets the
+    answer that retires the stored row.
     """
+    if 'CONTRADICTS|REFINES|RESTATES|UNRELATED' in system:
+        return json.dumps({
+            'relation': 'CONTRADICTS',
+            'contradicted_clauses': ['The message broker is kombu'],
+            'reason': 'the broker changed'})
+    if 'ADD|UPDATE|SUPERSEDE|NONE' in system:
+        return json.dumps({'actions': [{
+            'action': 'SUPERSEDE', 'target_id': 0,
+            'reason': 'the broker changed'}]})
+    if 'SUCCESSOR TEXT' in system:
+        return json.dumps({
+            'merged_text': 'The message broker is redis, not kombu'})
+    return _mock_llm_complete(self, system, user, **kwargs)
+
+
+def test_a_contradicting_write_is_added_and_retires_nothing(
+        tmp_backend, monkeypatch):
+    """Verify a write that contradicts its nearest row lands beside it.
+
+    Mutation: the verdict path still retiring - the stored row gets
+        `superseded_by` and the write reports `supersede`.
+    Oracle: the stored row read back current with `superseded_by`
+        None, and the write's own row added with the agent's text.
+    """
+    tmp_backend.nodes.insert(make_insight(
+        id='old-broker', content='The message broker is kombu'))
     monkeypatch.setattr(
         'memman.llm.client.MemmanLLMClient.complete',
-        _answer_extraction_with({'facts': [], 'skip_reason': 'status'}))
-    text = 'All drives verified after the maintenance window'
+        _supersede_everything)
+    content = 'The message broker is redis, not kombu'
+    now = datetime.now(timezone.utc)
+    parent = Insight(
+        id=str(uuid.uuid4()), content=content, category='fact',
+        created_at=now, updated_at=now)
 
-    stored = parse_remember(invoke(mm_runner, ['remember', text]), mm_runner)
+    res = run_remember(tmp_backend, parent, ec=bound_embedder(tmp_backend))
 
-    assert stored.get('content') == text
+    assert res['action'] == 'add'
+    assert res['content'] == content
+    old = tmp_backend.nodes.get_include_deleted('old-broker')
+    assert old.superseded_by is None
+    assert tmp_backend.nodes.get('old-broker') is not None
 
 
-def test_drain_stores_the_agents_words_and_category(mm_runner, monkeypatch):
-    """Verify the stored row keeps the agent's text and category.
+def test_an_identical_write_adds_a_second_row(tmp_backend):
+    """Verify a write identical to a current row lands as its own row.
 
-    Mutation: the model's rewrite stored in place of the input, or its
-        category kept over the `--cat` default.
-    Oracle: the input string byte for byte, against the CLI's `fact`
-        default.
+    Mutation: the exact-duplicate lookup kept - the write reports
+        `skipped` onto the stored row and adds nothing.
+    Oracle: two current rows carrying the text, the stored one and
+        the write's own.
     """
-    monkeypatch.setattr(
-        'memman.llm.client.MemmanLLMClient.complete',
-        _answer_extraction_with({
-            'facts': [{
-                'text': 'Stored rows in goog, and demo-v3 carry bissli.',
-                'category': 'decision',
-                }],
-            'skip_reason': None,
-            }))
-    text = 'Stored rows in goog and demo-v3 carry bissli.'
+    content = 'Redis caches session tokens'
+    tmp_backend.nodes.insert(make_insight(id='stored', content=content))
+    now = datetime.now(timezone.utc)
+    parent = Insight(
+        id=str(uuid.uuid4()), content=content, category='fact',
+        created_at=now, updated_at=now)
 
-    stored = parse_remember(invoke(mm_runner, ['remember', text]), mm_runner)
+    res = run_remember(tmp_backend, parent, ec=bound_embedder(tmp_backend))
 
-    assert stored.get('content') == text
-    assert stored.get('category') == 'fact'
+    assert res['action'] == 'add'
+    current = [
+        ins for ins in tmp_backend.nodes.get_all_active()
+        if ins.content == content]
+    assert len(current) == 2

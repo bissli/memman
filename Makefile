@@ -24,13 +24,8 @@ typecheck:
 	  src/memman/store/postgres.py \
 	  src/memman/store/db.py \
 	  src/memman/store/node.py \
-	  src/memman/store/edge.py \
 	  src/memman/store/oplog.py \
-	  src/memman/graph/bfs.py \
-	  src/memman/graph/semantic.py \
-	  src/memman/graph/engine.py \
-	  src/memman/graph/temporal.py \
-	  src/memman/graph/entity.py \
+	  src/memman/pipeline/enrich.py \
 	  src/memman/embed/fingerprint.py \
 	  src/memman/search/recall.py \
 	  src/memman/pipeline/remember.py \

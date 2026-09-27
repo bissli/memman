@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-r"""Re-enrich provenance-drifted insights via `graph rebuild --stale-only`.
+r"""Re-enrich provenance-drifted insights via `enrich --stale-only`.
 
-Iterates a list of stores, runs `memman graph rebuild --stale-only`
+Iterates a list of stores, runs `memman enrich --stale-only`
 per store, and streams a tqdm progress bar sized from the *stale*
 row count (rows whose persisted `prompt_version` no longer matches
 the active enrichment key), not the active-row count. Per-store
@@ -26,7 +26,7 @@ Postgres), so cross-store concurrency does not race the per-store
 
 Usage
 -----
-    python scripts/rebuild_stale.py [STORE ...] [--log PATH] \\
+    python scripts/enrich_stale.py [STORE ...] [--log PATH] \\
                                     [--memman PATH] [--parallel N] \\
                                     [--continue-on-error]
 
@@ -123,7 +123,7 @@ def _rebuild_store(memman: str, store: str, log_path: Path,
     Log writes are serialized across worker threads via `_LOG_LOCK`.
     """
     proc = subprocess.Popen(
-        [memman, '--store', store, 'graph', 'rebuild',
+        [memman, '--store', store, 'enrich',
          '--stale-only', '--progress-jsonl'],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, bufsize=1)

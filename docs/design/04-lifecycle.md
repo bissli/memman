@@ -22,7 +22,7 @@ A superseded memory keeps its content but leaves every recall and listing. `memm
 
 - **No size cap.** A store becomes more useful as it accumulates memories. A cap would force memman to delete true claims to make room.
 - **Supersession keeps content.** `replace` never deletes. The old row keeps its text and records its successor in `superseded_by`. `memman insights show <id> --history` shows the chain of replacements.
-- **The oplog is bounded.** The oplog records changes to memories. After each drain, memman deletes oplog rows older than 180 days (`OPLOG_RETENTION_DAYS`) in every store where the drain finished a row. The 5,000-row cap (`MAX_OPLOG_ENTRIES`) runs only when that store still has a current memory without `linked_at`.
+- **The oplog is bounded.** The oplog records changes to memories. After each drain, memman deletes oplog rows older than 180 days (`OPLOG_RETENTION_DAYS`) in every store where the drain finished a row. The 5,000-row cap (`MAX_OPLOG_ENTRIES`) runs only when that store still has a current memory without `enrich_attempted_at`.
 
 ## 4.2 Inspecting memories
 
@@ -52,7 +52,7 @@ The [USAGE guide](../USAGE.md#insights) lists the output of each command.
 
 Recall uses embeddings for vector search. Each store is bound to one embedding model. The store's `meta.embed_fingerprint` row holds that model as JSON: provider, model and vector dimension. This record is the store's **fingerprint**. A store changes model only through an explicit `memman embed swap` or `memman embed reembed` ([4.3.5](#435-changing-the-embedding-model)).
 
-**Model selection.** The fingerprint determines the embedding client for every reader and writer of the store: the background worker, recall, `graph rebuild` and `unsupersede`. Each resolves the client through `bound_embedder`, which reads the fingerprint and builds the client for that provider and model. One process can open stores that use different providers. The [USAGE guide](../USAGE.md#embedding-operations) gives a worked example.
+**Model selection.** The fingerprint determines the embedding client for every reader and writer of the store: the background worker, recall, `enrich` and `unsupersede`. Each resolves the client through `bound_embedder`, which reads the fingerprint and builds the client for that provider and model. One process can open stores that use different providers. The [USAGE guide](../USAGE.md#embedding-operations) gives a worked example.
 
 **What `MEMMAN_EMBED_PROVIDER` controls.**
 
@@ -96,7 +96,7 @@ HNSW (hierarchical navigable small world) is an index for approximate nearest-ne
 | Step                      | Client                  | Text embedded      |
 | ------------------------- | ----------------------- | ------------------ |
 | Drain (remember, replace) | The store's fingerprint | Content alone      |
-| `memman graph rebuild`    | The store's fingerprint | Content alone      |
+| `memman enrich`           | The store's fingerprint | Content alone      |
 | Recall                    | The store's fingerprint | The query as given |
 | `memman unsupersede`      | The store's fingerprint | Content alone      |
 | `memman embed swap`       | The target model        | Content alone      |
@@ -106,7 +106,7 @@ The drain embeds each row once, after LLM enrichment. When the embedding call fa
 
 ### 4.3.4 Recovery
 
-`memman graph rebuild` re-enriches every current memory through the full LLM pipeline and re-embeds it. This adds vectors to rows stored without them. The maintenance step after a later drain that finishes a row in the same store also retries up to 3 such rows ([chapter 3](03-pipelines.md#maintenance-after-each-drain)). It requires `memman scheduler stop` first, except with `--dry-run`. `--stale-only` limits the pass to rows whose enrichment prompt or LLM model changed.
+`memman enrich` re-enriches every current memory through the full LLM pipeline and re-embeds it. This adds vectors to rows stored without them. The maintenance step after a later drain that finishes a row in the same store also retries up to 3 such rows ([chapter 3](03-pipelines.md#maintenance-after-each-drain)). It requires `memman scheduler stop` first, except with `--dry-run`. `--stale-only` limits the pass to rows whose enrichment prompt or LLM model changed.
 
 ### 4.3.5 Changing the embedding model
 

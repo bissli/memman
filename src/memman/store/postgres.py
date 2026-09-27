@@ -117,7 +117,7 @@ create table if not exists {schema}.insights (
     category    text default 'fact',
     summary     text,
     embedding   vector({dim}),
-    linked_at   timestamptz,
+    enrich_attempted_at timestamptz,
     enriched_at timestamptz,
     created_at  timestamptz not null default now(),
     updated_at  timestamptz not null default now(),
@@ -162,9 +162,10 @@ create index if not exists idx_insights_deleted_{schema}
     on {schema}.insights(deleted_at);
 create index if not exists idx_insights_queue_uuid_{schema}
     on {schema}.insights(queue_uuid);
-create index if not exists idx_insights_pending_link_{schema}
-    on {schema}.insights(linked_at, created_at)
-    where linked_at is null and deleted_at is null and superseded_by is null;
+create index if not exists idx_insights_pending_enrich_{schema}
+    on {schema}.insights(enrich_attempted_at, created_at)
+    where enrich_attempted_at is null and deleted_at is null
+      and superseded_by is null;
 create index if not exists idx_insights_kw_tokens_{schema}
     on {schema}.insights using gin (kw_tokens)
     where deleted_at is null and superseded_by is null;
@@ -274,7 +275,7 @@ def _row_to_insight(row: tuple[Any, ...]) -> Insight:
     i.deleted_at = row[5]
     if row[6]:
         i.summary = row[6]
-    i.linked_at = row[7]
+    i.enrich_attempted_at = row[7]
     i.enriched_at = row[8]
     if row[9]:
         i.queue_uuid = row[9]
@@ -290,7 +291,7 @@ def _row_to_insight(row: tuple[Any, ...]) -> Insight:
 # test_insight_column_lists_are_identical_across_backends).
 _INSIGHT_COLS = (
     'id, content, category, created_at, updated_at, deleted_at,'
-    ' summary, linked_at, enriched_at,'
+    ' summary, enrich_attempted_at, enriched_at,'
     ' queue_uuid, superseded_by,'
     ' author')
 
@@ -640,10 +641,11 @@ group by vector_dims(embedding)
             return {
                 int(size): int(count) for size, count in cur.fetchall()}
 
-    def stamp_linked(self, id: Id) -> None:
+    def stamp_enrich_attempted(self, id: Id) -> None:
         with self._conn.cursor() as cur:
             cur.execute(self._q(
-                'update {s}.insights set linked_at = now() where id = %s'),
+                'update {s}.insights set enrich_attempted_at = now()'
+                ' where id = %s'),
                 (id,))
 
     def stamp_enriched(
@@ -661,10 +663,11 @@ group by vector_dims(embedding)
                 ' prompt_version = %s where id = %s'),
                 (prompt_version, id))
 
-    def get_pending_link_ids(self, *, limit: int) -> list[Id]:
+    def get_pending_enrich_ids(self, *, limit: int) -> list[Id]:
         sql = self._q("""
 select id from {s}.insights
-where linked_at is null and deleted_at is null and superseded_by is null
+where enrich_attempted_at is null and deleted_at is null
+  and superseded_by is null
 order by created_at asc
 limit %s
 """)
@@ -682,21 +685,22 @@ order by created_at asc
             cur.execute(sql)
             return [r[0] for r in cur.fetchall()]
 
-    def count_pending_links(self) -> int:
+    def count_pending_enrich(self) -> int:
         sql = self._q("""
 select count(*) from {s}.insights
-where linked_at is null and deleted_at is null and superseded_by is null
+where enrich_attempted_at is null and deleted_at is null
+  and superseded_by is null
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql)
             row = cur.fetchone()
             return int(row[0]) if row else 0
 
-    def get_unenriched_linked_ids(self, *, limit: int) -> list[Id]:
+    def get_unenriched_attempted_ids(self, *, limit: int) -> list[Id]:
         sql = self._q("""
 select id from {s}.insights
 where enriched_at is null
-  and linked_at is not null
+  and enrich_attempted_at is not null
   and deleted_at is null and superseded_by is null
 order by created_at asc
 limit %s
@@ -734,7 +738,7 @@ where deleted_at is null and superseded_by is null
             return
         sql = self._q("""
 update {s}.insights
-set enriched_at = null, linked_at = null
+set enriched_at = null, enrich_attempted_at = null
 where id = any(%s)
 """)
         with self._conn.cursor() as cur:
@@ -1797,7 +1801,7 @@ class PostgresMigrator(Migrator):
 
             cur.execute(f"""
 select id, content, category, summary, embedding,
-       linked_at, enriched_at, created_at, updated_at,
+       enrich_attempted_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, embedding_model,
        queue_uuid, superseded_by,
        author
@@ -1812,7 +1816,7 @@ order by id
                     id=r[0], content=r[1], category=r[2],
                     summary=r[3],
                     embedding=emb,
-                    linked_at=r[5],
+                    enrich_attempted_at=r[5],
                     enriched_at=r[6],
                     created_at=r[7],
                     updated_at=r[8],
@@ -1866,7 +1870,7 @@ order by sqlite_id
                             ins.id, ins.content, ins.category,
                             ins.summary,
                             emb,
-                            ins.linked_at, ins.enriched_at,
+                            ins.enrich_attempted_at, ins.enriched_at,
                             ins.created_at, ins.updated_at,
                             ins.deleted_at, ins.prompt_version,
                             ins.embedding_model,
@@ -1881,7 +1885,7 @@ order by sqlite_id
                             f'insert into {schema}.insights ('
                             ' id, content, category, summary,'
                             ' embedding,'
-                            ' linked_at, enriched_at, created_at,'
+                            ' enrich_attempted_at, enriched_at, created_at,'
                             ' updated_at, deleted_at,'
                             ' prompt_version,'
                             ' embedding_model,'

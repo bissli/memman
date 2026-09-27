@@ -180,7 +180,6 @@ memman includes one reranker, enabled by default. It scores the top recall resul
 | Setting                      | Default         | What it does                                         |
 | ---------------------------- | --------------- | ---------------------------------------------------- |
 | `MEMMAN_RERANK_ENABLED`      | `true`          | `false` skips reranking, so no Voyage key is needed  |
-| `MEMMAN_RERANK_PROVIDER`     | `voyage`        | the only registered provider                         |
 | `MEMMAN_VOYAGE_API_KEY`      | -               | authenticates the reranker, whatever the embedder is |
 | `MEMMAN_VOYAGE_RERANK_MODEL` | `rerank-3-lite` | model id                                             |
 
@@ -225,7 +224,7 @@ The included `guide.md` (instructions for the agent) and `SKILL.md` (full manual
 
 ### Pausing the scheduler
 
-`memman scheduler stop` sets the state to stopped and disables the systemd timer or launchd agent. While stopped, memman is recall-only: `remember`, `replace`, `supersede`, `unsupersede`, and `forget` report that the scheduler is stopped and writes are disabled. `scheduler trigger` reports the same error. `graph rebuild`, `embed reembed`, and `embed swap` run only while the scheduler is stopped. `memman scheduler start` resumes it ([Scheduler](docs/USAGE.md#scheduler)).
+`memman scheduler stop` sets the state to stopped and disables the systemd timer or launchd agent. While stopped, memman is recall-only: `remember`, `replace`, `supersede`, `unsupersede`, and `forget` report that the scheduler is stopped and writes are disabled. `scheduler trigger` reports the same error. `enrich`, `embed reembed`, and `embed swap` run only while the scheduler is stopped. `memman scheduler start` resumes it ([Scheduler](docs/USAGE.md#scheduler)).
 
 ## Updating
 

@@ -42,8 +42,8 @@ class QueueRow:
     id: int
     store: str
     content: str
-    hint_cat: str | None
-    hint_replaced_id: str | None
+    category: str | None
+    replaced_id: str | None
     attempts: int
     queue_uuid: str
     author: str | None
@@ -128,8 +128,8 @@ create table if not exists queue (
     id            integer primary key autoincrement,
     store         text not null,
     content       text not null,
-    hint_cat      text,
-    hint_replaced_id text,
+    category      text,
+    replaced_id   text,
     queue_uuid    text not null unique,
     queued_at     integer not null,
     claimed_at    integer,
@@ -182,8 +182,8 @@ def enqueue(
         conn: sqlite3.Connection,
         store: str,
         content: str,
-        hint_cat: str | None = None,
-        hint_replaced_id: str | None = None,
+        category: str | None = None,
+        replaced_id: str | None = None,
         author: str | None = None,
         ) -> tuple[int, str]:
     """Append a blob to the queue.
@@ -196,9 +196,9 @@ def enqueue(
         Store the drain writes the row into.
     content : str
         The memory text, stored as written.
-    hint_cat : str or None, default None
+    category : str or None, default None
         Category the drain stamps on the insight.
-    hint_replaced_id : str or None, default None
+    replaced_id : str or None, default None
         Id of the insight to soft-delete when the worker commits this
         row; set by the `replace` command.
     author : str or None, default None
@@ -227,13 +227,13 @@ def enqueue(
     queue_uuid = str(uuid.uuid4())
     sql = """
 insert into queue (
-    store, content, hint_cat, hint_replaced_id,
+    store, content, category, replaced_id,
     queue_uuid, queued_at, author
 )
 values (?, ?, ?, ?, ?, ?, ?)
 """
     cur = conn.execute(sql, (
-        store, content, hint_cat, hint_replaced_id,
+        store, content, category, replaced_id,
         queue_uuid, now, author))
     row_id = cur.lastrowid
     logger.debug(f'queued blob {row_id} for store {store}')
@@ -292,7 +292,7 @@ where id = (
     order by queued_at asc
     limit 1
 )
-returning id, store, content, hint_cat, hint_replaced_id,
+returning id, store, content, category, replaced_id,
           attempts, queue_uuid, author
 """
     params = [now, worker_pid, now, STALE_CLAIM_SECONDS, *store_params]
@@ -301,7 +301,7 @@ returning id, store, content, hint_cat, hint_replaced_id,
         return None
     return QueueRow(
         id=row[0], store=row[1], content=row[2],
-        hint_cat=row[3], hint_replaced_id=row[4],
+        category=row[3], replaced_id=row[4],
         attempts=row[5], queue_uuid=row[6], author=row[7])
 
 
@@ -460,7 +460,7 @@ def get_row(
         ) -> dict | None:
     """Return full row (including content) as a dict."""
     sql = """
-select id, store, content, hint_cat, queued_at, claimed_at,
+select id, store, content, category, queued_at, claimed_at,
        worker_pid, attempts, status, last_error, processed_at,
        queue_uuid, author
 from queue
@@ -471,7 +471,7 @@ where id = ?
         return None
     return {
         'id': row[0], 'store': row[1], 'content': row[2],
-        'hint_cat': row[3],
+        'category': row[3],
         'queued_at': row[4],
         'claimed_at': row[5], 'worker_pid': row[6],
         'attempts': row[7], 'status': row[8],

@@ -2,8 +2,8 @@
 
 `remember` enqueues the parsed `cat` value whether or not the caller
 typed the flag, since no model downstream picks a category for the
-stored row: the parent insight's own value is what `_plan_fact`
-carries onto every planned row.
+stored row: the queued row's own category is what `run_remember`
+carries onto the stored row.
 """
 
 import json
@@ -12,11 +12,11 @@ from tests.conftest import invoke, parse_remember
 
 
 def _hints(data_dir, queue_id):
-    """Return `(hint_cat,)` for a queue row."""
+    """Return `(category,)` for a queue row."""
     from memman.queue import queue_db
     with queue_db(data_dir) as conn:
         return conn.execute(
-            'select hint_cat from queue where id = ?',
+            'select category from queue where id = ?',
             (queue_id,)).fetchone()
 
 
@@ -26,7 +26,7 @@ def test_explicit_default_category_reaches_queue_as_hint(mm_runner):
     Mutation: deciding explicitness with `cat if cat != 'fact' else
         None`, which drops an explicitly typed default and hands the
         category back to the LLM extractor.
-    Oracle: the queue row's `hint_cat` column, read directly.
+    Oracle: the queue row's `category` column, read directly.
     """
     _, data_dir = mm_runner
     result = invoke(mm_runner, [

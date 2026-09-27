@@ -9,7 +9,7 @@ The work queue is process-global and SQLite-only (see
 Distributed-shaping commitments baked into this Protocol surface:
 
 1. **Timestamp ownership at the boundary.** `nodes.insert(insight)`,
-   `oplog.log(...)`, `nodes.stamp_linked(id)`,
+   `oplog.log(...)`, `nodes.stamp_enrich_attempted(id)`,
    `nodes.stamp_enriched(id)` accept no `created_at` argument.
    Backends stamp these server-side -- SQLite via Python `datetime.now`,
    Postgres via `now()`. Pipeline code never produces a timestamp that
@@ -256,8 +256,9 @@ class NodeStore(Protocol):
         """
         ...
 
-    def stamp_linked(self, id: Id) -> None:
-        """Mark an insight as linked. Backend stamps `linked_at` now.
+    def stamp_enrich_attempted(self, id: Id) -> None:
+        """Mark an insight enrich-attempted. Backend stamps
+        `enrich_attempted_at` now.
         """
         ...
 
@@ -273,26 +274,27 @@ class NodeStore(Protocol):
         prompt_version : str or None, default None
             The `compute_prompt_version()` key this enrichment ran
             under. Pass it from the driver that knows the active
-            config (the link/rebuild path) so the re-enrichment
+            config (the enrich/rebuild path) so the re-enrichment
             clears the row's staleness, not just its timestamp. The
             write path omits it, having set it at insert.
         """
         ...
 
-    def get_pending_link_ids(self, *, limit: int) -> list[Id]:
-        """Return ids of insights with NULL linked_at."""
+    def get_pending_enrich_ids(self, *, limit: int) -> list[Id]:
+        """Return ids of insights with NULL enrich_attempted_at."""
         ...
 
     def get_active_ids(self) -> list[Id]:
         """Return all active insight ids in creation order."""
         ...
 
-    def count_pending_links(self) -> int:
-        """Count active insights with NULL linked_at."""
+    def count_pending_enrich(self) -> int:
+        """Count active insights with NULL enrich_attempted_at."""
         ...
 
-    def get_unenriched_linked_ids(self, *, limit: int) -> list[Id]:
-        """Return ids of linked-but-unenriched (stranded) active insights.
+    def get_unenriched_attempted_ids(self, *, limit: int) -> list[Id]:
+        """Return ids of attempted-but-unenriched (stranded) active
+        insights.
         """
         ...
 
@@ -310,7 +312,7 @@ class NodeStore(Protocol):
         ...
 
     def reset_for_rebuild(self, ids: list[Id]) -> None:
-        """Clear enriched_at and linked_at for the given ids."""
+        """Clear enriched_at and enrich_attempted_at for the given ids."""
         ...
 
 
@@ -525,7 +527,7 @@ class Backend(Protocol):
         pool, with TCP keepalives so a hung sweep is detected by the
         kernel. Yields True when acquired, False otherwise (caller
         prints "another <name> in progress" and exits non-zero).
-        Used by `embed reembed` and `graph rebuild`. Session-scoped
+        Used by `embed reembed` and `memman enrich`. Session-scoped
         rather than `pg_advisory_xact_lock`, which would pin a
         transaction for the entire sweep duration and block
         autovacuum.

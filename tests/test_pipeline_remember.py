@@ -30,9 +30,7 @@ def test_a_write_embeds_once_after_enrichment(tmp_backend, monkeypatch):
 
     parent = make_insight(
         id='embed-once-1', content='Redis backs the session cache')
-    run_remember(
-        tmp_backend, parent, 'Redis backs the session cache',
-        ec=ec)
+    run_remember(tmp_backend, parent, ec=ec)
 
     assert calls == ['Redis backs the session cache']
 
@@ -60,10 +58,9 @@ def test_a_write_whose_embed_fails_stays_unenriched(
         ' under an LRU policy, and replicates to a standby node in a'
         ' second zone')
     parent = make_insight(id='embed-fail-1', content=content)
-    res = run_remember(
-        tmp_backend, parent, content, ec=ec)
+    res = run_remember(tmp_backend, parent, ec=ec)
 
-    stored = tmp_backend.nodes.get(res['facts'][0]['id'])
+    stored = tmp_backend.nodes.get(res['id'])
     assert stored.summary
     assert stored.enriched_at is None
 
@@ -85,11 +82,9 @@ def test_a_write_whose_enrichment_never_decodes_is_stamped(
 
     parent = make_insight(
         id='undecodable-1', content='Redis backs the session cache')
-    res = run_remember(
-        tmp_backend, parent, 'Redis backs the session cache',
-        ec=ec)
+    res = run_remember(tmp_backend, parent, ec=ec)
 
-    stored = tmp_backend.nodes.get(res['facts'][0]['id'])
+    stored = tmp_backend.nodes.get(res['id'])
     assert stored.enriched_at is not None
 
 
@@ -111,11 +106,9 @@ def test_a_write_whose_enrichment_call_fails_stays_unenriched(
 
     parent = make_insight(
         id='enrich-fail-1', content='Redis backs the session cache')
-    res = run_remember(
-        tmp_backend, parent, 'Redis backs the session cache',
-        ec=ec)
+    res = run_remember(tmp_backend, parent, ec=ec)
 
-    stored = tmp_backend.nodes.get(res['facts'][0]['id'])
+    stored = tmp_backend.nodes.get(res['id'])
     assert stored.enriched_at is None
 
 
@@ -126,7 +119,7 @@ def test_prompt_version_is_pinned():
     hashed input moves it, and re-pinning is the right answer once the
     author has weighed the cost. That cost is what the tripwire
     surfaces -- every stored row in every store goes stale at once,
-    and only a `graph rebuild --stale` clears it.
+    and only an `enrich --stale-only` clears it.
 
     Two inputs move this value: the enrichment prompt, and the
     configured `MEMMAN_LLM_MODEL`, which the key folds in and which
@@ -136,8 +129,8 @@ def test_prompt_version_is_pinned():
     Mutation: an incidental edit to the enrichment prompt, so the hash
         moves and every stored row goes stale for a change nobody
         intended.
-    Oracle: the hash of the replayable prompt plus the seeded
-        metadata model, pinned.
+    Oracle: the hash of the replayable prompt plus the seeded LLM
+        model, pinned.
     """
     from memman.pipeline.remember import compute_prompt_version
-    assert compute_prompt_version() == '9c0274d1260db54b'
+    assert compute_prompt_version() == 'da9c0d1199937f4c'

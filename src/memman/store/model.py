@@ -40,7 +40,7 @@ class Insight:
     prompt_version: str | None = None
     embedding_model: str | None = None
     summary: str = ''
-    linked_at: datetime | None = None
+    enrich_attempted_at: datetime | None = None
     enriched_at: datetime | None = None
     queue_uuid: str | None = None
     superseded_by: str | None = None
@@ -136,7 +136,7 @@ def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
     Timestamps are formatted with
     `format_timestamp`; `updated_at` falls back to `created_at` so
     consumers always see a populated value. Optional fields
-    (`deleted_at`, `superseded_by`, `summary`, `linked_at`,
+    (`deleted_at`, `superseded_by`, `summary`, `enrich_attempted_at`,
     `enriched_at`) are emitted only when populated; the plumbing key
     `queue_uuid` is deliberately omitted.
     """
@@ -153,8 +153,9 @@ def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
         out['superseded_by'] = ins.superseded_by
     if ins.summary:
         out['summary'] = ins.summary
-    if ins.linked_at:
-        out['linked_at'] = format_timestamp(ins.linked_at)
+    if ins.enrich_attempted_at:
+        out['enrich_attempted_at'] = format_timestamp(
+            ins.enrich_attempted_at)
     if ins.enriched_at:
         out['enriched_at'] = format_timestamp(ins.enriched_at)
     if ins.author:

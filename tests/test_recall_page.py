@@ -18,7 +18,7 @@ from importlib.resources import files as pkg_files
 import pytest
 from click.testing import CliRunner
 from memman.cli import cli
-from memman.search.recall import intent_aware_recall
+from memman.search.recall import run_recall
 from memman.store.db import open_db
 from memman.store.model import format_timestamp
 from memman.store.node import insert_insight
@@ -274,7 +274,7 @@ def test_recall_scores_by_the_general_weights(backend):
     backend.nodes.insert(make_insight(
         id='why-row', content='why sqlite stays'))
 
-    resp = intent_aware_recall(backend, 'why sqlite', None, 5)
+    resp = run_recall(backend, 'why sqlite', None, 5)
 
     assert resp['results'][0]['score'] == pytest.approx(0.25 / 0.85)
 
@@ -291,7 +291,7 @@ def test_recall_return_carries_no_router_keys(backend):
     backend.nodes.insert(make_insight(
         id='router-row', content='router keys row'))
 
-    resp = intent_aware_recall(backend, 'router keys', None, 5)
+    resp = run_recall(backend, 'router keys', None, 5)
 
     assert 'intent' not in resp['results'][0]
     assert set(resp['meta']) == {'anchor_count', 'reranked'}
@@ -419,7 +419,8 @@ def test_live_mappers_read_every_trailing_field(backend):
         queue_uuid='queue-f', author='carol'))
     stamps = {
         'summary': 'fidelity summary',
-        'linked_at': datetime(2026, 1, 2, 3, 4, 1, tzinfo=timezone.utc),
+        'enrich_attempted_at': datetime(
+            2026, 1, 2, 3, 4, 1, tzinfo=timezone.utc),
         'enriched_at': datetime(2026, 1, 2, 3, 4, 2, tzinfo=timezone.utc),
         'deleted_at': datetime(2026, 1, 2, 3, 4, 3, tzinfo=timezone.utc),
         'superseded_by': 'successor-f',
@@ -430,7 +431,7 @@ def test_live_mappers_read_every_trailing_field(backend):
 
     assert got.category == 'decision'
     assert got.summary == 'fidelity summary'
-    assert got.linked_at == stamps['linked_at']
+    assert got.enrich_attempted_at == stamps['enrich_attempted_at']
     assert got.enriched_at == stamps['enriched_at']
     assert got.deleted_at == stamps['deleted_at']
     assert got.queue_uuid == 'queue-f'

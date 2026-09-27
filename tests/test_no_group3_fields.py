@@ -11,11 +11,11 @@ from dataclasses import fields
 
 import pytest
 from memman.doctor import check_enrichment_coverage
-from memman.graph.enrichment import ENRICHMENT_SYSTEM_PROMPT, enrich_with_llm
 from memman.migrate import MigrateInsight
+from memman.pipeline.enrich import ENRICHMENT_SYSTEM_PROMPT, enrich_with_llm
 from memman.queue import QueueRow, open_queue_db
 from memman.search.keyword import keyword_search
-from memman.search.recall import intent_aware_recall
+from memman.search.recall import run_recall
 from memman.store.backend import NodeStore, RecallSession
 from memman.store.db import open_db
 from memman.store.model import Insight
@@ -113,10 +113,11 @@ def test_the_sqlite_keyword_index_holds_content_alone(tmp_path):
 
 
 def test_a_fresh_queue_has_no_dropped_hints(tmp_path):
-    """Verify the queue keeps `hint_cat` and drops the other three hints.
+    """Verify the queue carries `category` and `replaced_id` and no hints.
 
     Mutation: leaving `hint_imp`, `hint_source` or `hint_entities` in
-        the queue DDL, so every enqueue writes a column no drain reads.
+        the queue DDL, or keeping `hint_cat` or `hint_replaced_id`
+        beside the columns that replaced them.
     Oracle: `pragma table_info(queue)` on a fresh queue.db.
     """
     conn = open_queue_db(str(tmp_path))
@@ -125,8 +126,8 @@ def test_a_fresh_queue_has_no_dropped_hints(tmp_path):
     finally:
         conn.close()
 
-    assert 'hint_cat' in columns
-    assert columns.isdisjoint(DROPPED_HINTS)
+    assert {'category', 'replaced_id'} <= columns
+    assert columns.isdisjoint(DROPPED_HINTS | {'hint_cat', 'hint_replaced_id'})
 
 
 @pytest.mark.parametrize('args', [
@@ -156,7 +157,7 @@ def test_no_command_takes_a_group3_flag(mm_runner, args):
 def test_remember_still_stores_its_category(mm_runner):
     """Verify `remember --cat` keeps reaching the stored category.
 
-    Mutation: deleting `hint_cat` with the other hints, which drops
+    Mutation: deleting `category` with the other hints, which drops
         every typed category to the `fact` default.
     Oracle: `insights show` on the stored row.
     """
@@ -283,7 +284,7 @@ def test_keyword_search_ties_ignore_importance():
 
 
 @pytest.mark.parametrize('target', [
-    intent_aware_recall,
+    run_recall,
     NodeStore.query,
     SqliteNodeStore.query,
     PostgresNodeStore.query,

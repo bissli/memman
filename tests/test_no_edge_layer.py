@@ -21,8 +21,7 @@ from memman.migrate import MigrateInsight, MigrationPayload
 from memman.pipeline.remember import run_remember
 from memman.queue import open_queue_db
 from memman.search import recall as recall_mod
-from memman.search.recall import ANCHOR_TOP_K, RERANK_SHORTLIST
-from memman.search.recall import intent_aware_recall
+from memman.search.recall import ANCHOR_TOP_K, RERANK_SHORTLIST, run_recall
 from memman.store.factory import open_backend
 from tests.conftest import _vec, invoke, make_insight, parse_remember
 from tests.conftest import set_created_at
@@ -197,9 +196,9 @@ def test_run_remember_reports_no_edges(tmp_backend):
     ec = bound_embedder(tmp_backend)
     parent = make_insight(id='no-edge-1', content='Redis backs the cache')
 
-    res = run_remember(tmp_backend, parent, 'Redis backs the cache', ec=ec)
+    res = run_remember(tmp_backend, parent, ec=ec)
 
-    assert 'edges_created' not in res['facts'][0]
+    assert 'edges_created' not in res
 
 
 def test_the_newest_row_scores_above_an_older_one_on_recency(backend):
@@ -217,7 +216,7 @@ def test_the_newest_row_scores_above_an_older_one_on_recency(backend):
     set_created_at(backend, 'older', now - timedelta(days=2))
     set_created_at(backend, 'newer', now - timedelta(days=1))
 
-    rows = {r['insight'].id: r for r in intent_aware_recall(
+    rows = {r['insight'].id: r for r in run_recall(
         backend, 'zzz', None, 5)['results']}
 
     assert rows['newer']['signals']['anchor'] == pytest.approx(1.0)
@@ -267,7 +266,7 @@ def test_the_vector_channel_alone_widens_to_the_rerank_shortlist(
 
     monkeypatch.setattr(recall_mod, 'keyword_search', spying_keyword)
 
-    intent_aware_recall(backend, 'vector row', _vec(1.0), 5)
+    run_recall(backend, 'vector row', _vec(1.0), 5)
 
     assert calls == {'vector_k': RERANK_SHORTLIST, 'keyword_k': ANCHOR_TOP_K}
 
@@ -283,7 +282,7 @@ def test_the_time_channel_stays_at_anchor_top_k(backend):
     for i in range(ANCHOR_TOP_K + 5):
         backend.nodes.insert(make_insight(id=f't-{i}', content=f'row {i}'))
 
-    resp = intent_aware_recall(backend, 'zzz', None, 0)
+    resp = run_recall(backend, 'zzz', None, 0)
 
     assert len(resp['results']) == ANCHOR_TOP_K
 
@@ -523,12 +522,13 @@ def test_a_rebuild_whose_enrichment_fails_still_terminates(
     """Verify a failing enrichment still ends a rebuild with nothing pending.
 
     Mutation: selecting pending rows on `enriched_at is null` instead
-        of `linked_at is null`, so a row whose enrichment raises stays
-        selectable and the rebuild loop never exits.
+        of `enrich_attempted_at is null`, so a row whose enrichment
+        raises stays selectable and the rebuild loop never exits.
     Oracle: the rebuild's own `remaining`, and the row's two stamps:
-        `linked_at` set by the attempt, `enriched_at` left null.
+        `enrich_attempted_at` set by the attempt, `enriched_at` left
+        null.
     """
-    from memman.graph import enrichment
+    from memman.pipeline import enrich
     from memman.store.db import open_db
     from memman.store.node import insert_insight
     monkeypatch.delenv('MEMMAN_STORE', raising=False)
@@ -540,17 +540,18 @@ def test_a_rebuild_whose_enrichment_fails_still_terminates(
     def failing_enrich(insight, client):
         raise RuntimeError('enrichment down')
 
-    monkeypatch.setattr(enrichment, 'enrich_with_llm', failing_enrich)
+    monkeypatch.setattr(enrich, 'enrich_with_llm', failing_enrich)
 
     result = CliRunner().invoke(cli, [
-        '--data-dir', str(tmp_path), 'graph', 'rebuild'])
+        '--data-dir', str(tmp_path), 'enrich'])
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)['remaining'] == 0
     db = open_db(str(store_path))
-    linked, enriched = db._conn.execute(
-        "select linked_at, enriched_at from insights where id = 'fail-1'"
+    attempted, enriched = db._conn.execute(
+        "select enrich_attempted_at, enriched_at from insights"
+        " where id = 'fail-1'"
         ).fetchone()
     db.close()
-    assert linked is not None
+    assert attempted is not None
     assert enriched is None

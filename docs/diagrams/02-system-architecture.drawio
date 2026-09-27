@@ -33,10 +33,10 @@
         <mxCell id="a_cli_mem" value="&lt;b&gt;Memory verbs&lt;/b&gt;&lt;br&gt;remember, replace, supersede, unsupersede, forget, recall" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="60" y="230" width="360" height="54" as="geometry" />
         </mxCell>
-        <mxCell id="a_cli_groups" value="&lt;b&gt;Command groups&lt;/b&gt;&lt;br&gt;insights, graph, embed, store, scheduler, backup, log, config" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="a_cli_groups" value="&lt;b&gt;Command groups&lt;/b&gt;&lt;br&gt;insights, embed, store, scheduler, backup, log, config" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="440" y="230" width="360" height="54" as="geometry" />
         </mxCell>
-        <mxCell id="a_cli_ops" value="&lt;b&gt;Other verbs&lt;/b&gt;&lt;br&gt;install, uninstall, migrate, status, doctor, and prime (hidden, run by prime.sh)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="a_cli_ops" value="&lt;b&gt;Other verbs&lt;/b&gt;&lt;br&gt;install, uninstall, migrate, status, doctor, enrich, and prime (hidden, run by prime.sh)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="820" y="230" width="360" height="54" as="geometry" />
         </mxCell>
 
@@ -55,7 +55,7 @@
         <mxCell id="a_pipeline" value="&lt;b&gt;pipeline/remember.py&lt;/b&gt;&lt;br&gt;Enrich and embed one write, then apply it in one transaction" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="60" y="436" width="230" height="56" as="geometry" />
         </mxCell>
-        <mxCell id="a_graph" value="&lt;b&gt;graph/&lt;/b&gt;&lt;br&gt;enrichment.py: the model call. engine.py: enriches pending rows." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="a_graph" value="&lt;b&gt;pipeline/enrich.py&lt;/b&gt;&lt;br&gt;The model call, and the pass that enriches pending rows." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="305" y="436" width="230" height="56" as="geometry" />
         </mxCell>
         <mxCell id="a_maint" value="&lt;b&gt;maintenance.py&lt;/b&gt;&lt;br&gt;After each drain: purge done rows, retry stale rows, trim the oplog, re-enrich" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">

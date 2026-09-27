@@ -1,4 +1,4 @@
-"""D1: idempotency keyed on queue_uuid, and column-list parity.
+"""Idempotency keyed on queue_uuid, and column-list parity.
 
 Idempotency rides on a uuid4 minted at enqueue, not the queue row's
 integer id. These tests pin that decomposition end to end through the
@@ -129,7 +129,7 @@ def test_insight_column_lists_are_identical_across_backends():
 
 EXPECTED_INSIGHT_COLUMNS = {
     'prompt_version', 'embedding_model',
-    'linked_at', 'enriched_at',
+    'enrich_attempted_at', 'enriched_at',
     'summary',
     'queue_uuid',
     'superseded_by', 'author',

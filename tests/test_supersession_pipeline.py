@@ -9,7 +9,7 @@ row.
 import json
 
 import pytest
-from memman.pipeline.remember import FactPlan, _apply_plan
+from memman.pipeline.remember import _apply_plan
 from tests.conftest import invoke, make_insight
 
 
@@ -29,17 +29,17 @@ def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
     assert tmp_backend.nodes.soft_delete('gone-1') is True
 
     def _replace(new_id, target_id):
-        return FactPlan(
-            fact_insight=make_insight(id=new_id, content='third'),
-            replaced_id=target_id, embed_vec=None, enrichment={})
+        return _apply_plan(
+            tmp_backend, make_insight(id=new_id, content='third'),
+            target_id, None, {})
 
-    late = _apply_plan(tmp_backend, _replace('late-1', 'old-1'))
+    late = _replace('late-1', 'old-1')
     assert late['action'] == 'add'
     assert late['target_gone'] == {'id': 'old-1', 'superseded_by': 'new-1'}
     assert 'replaced_id' not in late
     assert tmp_backend.nodes.get_include_deleted('old-1').superseded_by == 'new-1'
 
-    forgotten = _apply_plan(tmp_backend, _replace('late-2', 'gone-1'))
+    forgotten = _replace('late-2', 'gone-1')
     assert forgotten['action'] == 'add'
     assert forgotten['target_gone'] == {'id': 'gone-1', 'superseded_by': None}
 

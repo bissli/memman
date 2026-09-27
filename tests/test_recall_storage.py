@@ -1,12 +1,12 @@
 """Storage-layer contracts the live recall path depends on.
 
-`intent_aware_recall` reads the store on every request: the candidate
+`run_recall` reads the store on every request: the candidate
 universe is `nodes.get_all_active()`.
 """
 
 import numpy as np
 import pytest
-from memman.search.recall import intent_aware_recall
+from memman.search.recall import run_recall
 from tests.conftest import make_insight
 
 
@@ -107,7 +107,7 @@ def test_superseded_row_is_not_returned_by_recall(backend):
                          content=f'superseded probe body {n} kombu'))
     assert backend.nodes.supersede('sup-2', 'sup-3') is True
 
-    resp = intent_aware_recall(
+    resp = run_recall(
         backend, 'superseded probe kombu', None, 10)
 
     returned = {r['insight'].id for r in resp['results']}

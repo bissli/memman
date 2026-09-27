@@ -84,22 +84,23 @@ def test_stats_reports_current_superseded_and_deleted_separately(backend):
     assert sum(stats.by_category.values()) == 3
 
 
-def test_pending_link_count_matches_its_id_list_after_supersession(backend):
+def test_pending_enrich_count_matches_its_id_list_after_supersession(
+        backend):
     """Verify the count/iter maintenance pairs move together.
 
-    Mutation: adding the predicate to `get_pending_link_ids` but not
-        `count_pending_links` (or the reverse), so the relink gate
-        never reaches zero.
+    Mutation: adding the predicate to `get_pending_enrich_ids` but not
+        `count_pending_enrich` (or the reverse), so the re-enrich
+        gate never reaches zero.
     Oracle: the count equals the length of the id list on both sides
         of the supersession.
     """
     _seed_pair(backend)
-    assert backend.nodes.count_pending_links() == 2
+    assert backend.nodes.count_pending_enrich() == 2
     assert backend.nodes.supersede('p-1', 'p-2') is True
 
-    ids = backend.nodes.get_pending_link_ids(limit=100)
+    ids = backend.nodes.get_pending_enrich_ids(limit=100)
     assert ids == ['p-2']
-    assert backend.nodes.count_pending_links() == len(ids)
+    assert backend.nodes.count_pending_enrich() == len(ids)
 
 
 def test_predecessors_and_unsupersede_on_both_backends(backend):

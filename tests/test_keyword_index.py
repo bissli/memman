@@ -15,7 +15,7 @@ from unittest import mock
 import memman.store.db as db_module
 import pytest
 from memman.search.keyword import insight_tokens, keyword_search, tokenize
-from memman.search.recall import intent_aware_recall
+from memman.search.recall import run_recall
 from memman.store.db import open_db, open_read_only
 from memman.store.errors import BackendError
 from memman.store.sqlite import SqliteBackend
@@ -214,11 +214,11 @@ def test_recall_stops_tokenizing_every_row(backend, monkeypatch):
     monkeypatch.setattr(
         recall_module, 'insight_tokens', spy, raising=False)
 
-    resp = intent_aware_recall(backend, 'brown adjacency', None, 10)
+    resp = run_recall(backend, 'brown adjacency', None, 10)
     assert resp['results']
     assert calls == []
 
-    resp = intent_aware_recall(
+    resp = run_recall(
         backend, 'zzznomatch qqqnomatch', None, 10)
     assert resp['results'], 'recency anchors should still return rows'
     assert calls == []
@@ -262,7 +262,7 @@ def test_keyword_signal_is_the_overlap_fraction(backend):
         and a denominator swapped for it is invisible.
     """
     _seed(backend)
-    resp = intent_aware_recall(
+    resp = run_recall(
         backend, 'brown fox jumps quantum', None, 10)
     signals = {r['insight'].id: r['signals']['keyword']
                for r in resp['results']}

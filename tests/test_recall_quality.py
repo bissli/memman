@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 import pytest
 from memman.embed.fingerprint import META_KEY, seed_default_fingerprint
-from memman.search.recall import intent_aware_recall
+from memman.search.recall import run_recall
 from memman.store.model import Insight
 from tests.conftest import EMBEDDING_DIM, make_insight
 
@@ -42,7 +42,15 @@ class TestKeywordSignal:
     """Keyword-matching insight gets a positive keyword signal."""
 
     def test_keyword_match_has_positive_keyword_signal(self, backend):
-        """Insight with query keywords scores high keyword signal; others do not."""
+        """Insight with query keywords scores high keyword signal; others do not.
+
+        Mutation: computing `kw_score` from a fixed denominator
+            instead of `len(query_tokens)`, or matching on the wrong
+            insight id, so a keyword hit and a keyword miss score
+            alike.
+        Oracle: the matching insight's keyword signal above 0.5, and
+            each non-matching insight's below 0.1.
+        """
         _insert_fillers(backend)
         backend.nodes.insert(make_insight(
             id='kw-match',
@@ -54,7 +62,7 @@ class TestKeywordSignal:
             id='kw-miss-2',
             content='Docker container orchestration strategy'))
 
-        result = intent_aware_recall(
+        result = run_recall(
             backend,
             query='Prometheus monitoring Grafana dashboards',
             query_vec=None, limit=20)
@@ -92,7 +100,7 @@ class TestRelevanceOrderingSurvivesTheLimit:
             set_created_at(backend, f'ord-{i}',
                            OLD.replace(year=2024 + i))
 
-        result = intent_aware_recall(
+        result = run_recall(
             backend, query='database production migration',
             query_vec=None, limit=20)
 
@@ -150,7 +158,7 @@ def _populate_recall(backend, topic_centers: list) -> None:
 
 def _topk_ids(backend, qvec, k) -> list:
     """Return the top-k ids by intent-aware recall on the given backend."""
-    result = intent_aware_recall(
+    result = run_recall(
         backend, query='topic insight',
         query_vec=qvec,
         limit=k)

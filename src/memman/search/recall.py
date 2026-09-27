@@ -54,7 +54,7 @@ RERANK_WEIGHTS: tuple[float, float, float] = tuple(
     weight / sum(_RERANK_WEIGHTS_RAW) for weight in _RERANK_WEIGHTS_RAW)
 
 
-def intent_aware_recall(
+def run_recall(
         backend: Backend, query: str,
         query_vec: list[float] | None,
         limit: int, *,
@@ -248,8 +248,8 @@ def intent_aware_recall(
         shortlist_size = min(RERANK_SHORTLIST, len(results))
         if shortlist_size >= 2:
             try:
-                from memman.rerank import get_client as get_rerank_client
-                rerank_client = get_rerank_client()
+                from memman.rerank import voyage
+                rerank_client = voyage.Client()
                 shortlist = results[:shortlist_size]
                 docs = [r['insight'].content for r in shortlist]
                 before_ids = [r['insight'].id for r in shortlist]

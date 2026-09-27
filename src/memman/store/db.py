@@ -278,8 +278,8 @@ def open_read_only(data_dir: str) -> DB:
     - Of the four callers, only `_count_active_rows` (under `memman
       embed reembed`) reports the failure: it reaches the CLI root
       group, which catches `BackendError` alone. `memman prime`,
-      `graph.engine.link_pending` and `pipeline.remember` each wrap
-      their call in `except Exception` and carry on without the
+      `pipeline.enrich.enrich_pending` and `pipeline.remember` each
+      wrap their call in `except Exception` and carry on without the
       read-only handle, so on those three a raised error is a silent
       degrade, not a message.
     """
@@ -330,7 +330,7 @@ create table if not exists insights (
     summary     text,
     embedding   blob,
     embedding_pending blob,
-    linked_at   text,
+    enrich_attempted_at text,
     enriched_at text,
     created_at  text not null,
     updated_at  text not null,
@@ -346,16 +346,18 @@ create index if not exists idx_insights_category on insights(category);
 create index if not exists idx_insights_created on insights(created_at);
 create index if not exists idx_insights_deleted on insights(deleted_at);
 create index if not exists idx_insights_queue_uuid on insights(queue_uuid);
--- `created_at` rides along so the scheduler's pending-link scan
+-- `created_at` rides along so the scheduler's pending-enrich scan
 -- takes its order from the index; without it the planner prefers
 -- the listing index below and sorts every current row per tick.
-create index if not exists idx_insights_pending_link
-    on insights(linked_at, created_at)
-    where linked_at is null and deleted_at is null and superseded_by is null;
--- Load-bearing twice: as the schema canary, the statement that
--- makes a store missing `superseded_by` fail at open (see
--- _migrate); and as the carrier of `query_insights`' whole
--- predicate and sort order, so
+-- Also the schema canary: it is the first statement naming the
+-- newest column, `enrich_attempted_at`, so a store without it fails
+-- at open (see _migrate).
+create index if not exists idx_insights_pending_enrich
+    on insights(enrich_attempted_at, created_at)
+    where enrich_attempted_at is null and deleted_at is null
+      and superseded_by is null;
+-- Load-bearing as the carrier of `query_insights`' whole predicate
+-- and sort order, so
 -- `recall --basic` honors its limit from the index instead of
 -- reading every current row into a temp b-tree. Declared as a
 -- plain composite, not a partial index, so the planner searches the
@@ -435,12 +437,11 @@ def _migrate(db: DB) -> None:
     -----
     - A pre-migration store fails here on every open: `create table
       if not exists` no-ops on an existing table, so the tripwire is
-      the baseline's `create index` on the NEWEST schema column
-      (the first `create index` that names `superseded_by`: here
-      `idx_insights_current_listing`, which lists it as a key column;
-      on Postgres the pending-link index, whose predicate is resolved
-      before the if-not-exists check) raising `no such column`. Every
-      schema
+      the baseline's first `create index` on the NEWEST schema
+      column raising `no such column`: `idx_insights_pending_enrich`
+      here and `idx_insights_pending_enrich_<schema>` on Postgres,
+      whose predicate is resolved before the if-not-exists check.
+      Both name `enrich_attempted_at`. Every schema
       change must index its newest column or the old store opens
       silently and fails later with a raw
       OperationalError. This is the primary schema diagnostic:
