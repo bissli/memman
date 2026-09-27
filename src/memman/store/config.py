@@ -135,19 +135,6 @@ _REGISTRY: dict[str, type] = {
     }
 
 
-def validate_for(backend: str, env: dict) -> None:
-    """Validate `env` against the named backend's config dataclass.
-
-    Unknown backends are tolerated -- `factory.open_backend` will
-    surface that itself. This function only validates the namespace
-    when the backend is registered.
-    """
-    cls = _REGISTRY.get(backend.lower())
-    if cls is None:
-        return
-    cls._validate(env)
-
-
 def validate_all(env: dict) -> None:
     """Validate `env` against every registered backend namespace.
 

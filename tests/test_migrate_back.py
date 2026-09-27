@@ -664,3 +664,37 @@ def test_migrate_to_postgres_explicit_flag_matches_default(
         assert f'MEMMAN_BACKEND_{store}=postgres' in result.output
     finally:
         _drop_schema(pg_dsn, store)
+
+
+def test_postgres_preflight_source_refuses_a_store_mid_swap(
+        tmp_path, pg_dsn):
+    """A Postgres store with an embed swap in flight is refused.
+
+    Mutation: dropping the swap check from the Postgres
+        `preflight_source`, so a migrate back to SQLite restarts the
+        swap with its cursor reset.
+    Oracle: `embed_swap_state` set in the schema's meta table, as
+        `run_swap` leaves it until cutover.
+    """
+    from memman.migrate import MigrateError
+    from memman.store.postgres import PostgresMigrator, _store_schema
+    from memman.store.sqlite import SqliteMigrator
+
+    store = 'rb_mid_swap'
+    _seed_sqlite_store(tmp_path, store)
+    _drop_schema(pg_dsn, store)
+    try:
+        src_mig = SqliteMigrator(str(tmp_path))
+        payload = src_mig.gather(store)
+        tgt_mig = PostgresMigrator(str(tmp_path), dsn=pg_dsn)
+        tgt_mig.preflight_target(store)
+        tgt_mig.apply(store, payload)
+        schema = _store_schema(store)
+        with psycopg.connect(pg_dsn, autocommit=True) as conn:
+            conn.execute(
+                f'insert into {schema}.meta (key, value)'
+                " values ('embed_swap_state', 'backfilling')")
+        with pytest.raises(MigrateError, match='embed swap'):
+            tgt_mig.preflight_source(store)
+    finally:
+        _drop_schema(pg_dsn, store)

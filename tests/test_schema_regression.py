@@ -6,8 +6,6 @@ Pins:
   cannot drift past gather/apply silently).
 - `MigrateInsight` field set covers the sqlite baseline schema
   columns identically.
-- `PAYLOAD_VERSION` reminds reviewers to bump the wire format
-  version when adding `MigrationPayload` fields.
 
 These act as canaries against the class of bug v3 was built to
 prevent: a future schema column change that compiles but silently
@@ -17,15 +15,12 @@ from __future__ import annotations
 
 import re
 
-from memman.migrate import PAYLOAD_VERSION, MigrateInsight, MigrationPayload
+from memman.migrate import MigrateInsight
 from memman.queue import _BASELINE_SCHEMA as _QUEUE_BASELINE_SCHEMA
 from memman.store.db import _BASELINE_SCHEMA, _FTS_STATEMENTS
 from memman.store.postgres import PG_BASELINE_SCHEMA
 
 _MIGRATE_INSIGHT_FIELDS = set(MigrateInsight.__dataclass_fields__.keys())
-
-_MIGRATION_PAYLOAD_FIELDS = set(
-    MigrationPayload.__dataclass_fields__.keys())
 
 
 def _columns_under(ddl: str, table: str) -> set[str]:
@@ -57,23 +52,18 @@ def test_migrate_insight_fields_cover_pg_baseline_schema_columns():
     Two columns are excluded, each for the reason below, and no
     exclusion weakens the pin for a third.
 
-    `embedding_pending` is added on demand by the swap path and is
-    not a payload-time field - the gather path probes the column
-    list at runtime.
+    `embedding_pending` is swap-only state: `preflight_source`
+    refuses a store with an embed swap in flight, so the column
+    never carries a value a migrate needs to transport.
 
     `kw_tokens` is DERIVED from `content` and `entities`, which the
     payload does carry, so `PostgresMigrator.apply` recomputes it
     through `keyword.insight_tokens` instead of transporting it.
     Carrying it would put a second copy of the tokenizer in the wire
-    format. `PAYLOAD_VERSION` is deliberately NOT bumped for it: no
-    `MigrateInsight` field changed, and a bump would refuse stale
-    payloads that are in fact still compatible. Removing a
-    `MigrateInsight` field is the opposite case and DOES take a bump
-    -- v4 dropped `effective_importance`. The recompute is not
-    on trust - the column is `not null`, so an `apply` that omitted
-    it raises `NotNullViolation` and takes three tests in
-    `test_migrate_verify.py` and `test_migrate_dim_resolution.py`
-    with it.
+    format. The recompute is not on trust - the column is `not
+    null`, so an `apply` that omitted it raises `NotNullViolation`
+    and takes three tests in `test_migrate_verify.py` and
+    `test_migrate_dim_resolution.py` with it.
 
     Mutation: adding a column to `PG_BASELINE_SCHEMA` without a
         matching `MigrateInsight` field, which drops it silently on
@@ -89,15 +79,14 @@ def test_migrate_insight_fields_cover_pg_baseline_schema_columns():
     assert not missing, (
         f'Postgres baseline insights columns missing from'
         f' MigrateInsight: {sorted(missing)}.'
-        f' Add the field or extend the exclusion list and bump'
-        f' PAYLOAD_VERSION.')
+        f' Add the field or extend the exclusion list.')
 
 
 def test_migrate_insight_fields_cover_sqlite_baseline_schema_columns():
     """Every sqlite `insights` DDL column has a `MigrateInsight` field.
 
-    Excludes `embedding_pending`, carried as a separate
-    `PendingReembed` list in the payload.
+    Excludes `embedding_pending`: swap-only state, never carried in
+    a migrate payload (see the postgres test's docstring).
 
     Mutation: adding a column to `_BASELINE_SCHEMA` without a
         matching `MigrateInsight` field, which drops it silently on
@@ -111,20 +100,7 @@ def test_migrate_insight_fields_cover_sqlite_baseline_schema_columns():
     assert not missing, (
         f'SQLite baseline insights columns missing from'
         f' MigrateInsight: {sorted(missing)}.'
-        f' Add the field or extend the exclusion list and bump'
-        f' PAYLOAD_VERSION.')
-
-
-def test_payload_version_pinned():
-    """`PAYLOAD_VERSION` is a positive int and matches MigrationPayload.
-
-    Bump this constant whenever a `MigrationPayload` field is
-    added/removed/repurposed -- it is the wire-format compat key
-    backends use to refuse stale payloads.
-    """
-    assert isinstance(PAYLOAD_VERSION, int)
-    assert PAYLOAD_VERSION >= 1
-    assert 'payload_version' in _MIGRATION_PAYLOAD_FIELDS
+        f' Add the field or extend the exclusion list.')
 
 
 def test_insight_baselines_name_no_dropped_column():

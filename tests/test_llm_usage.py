@@ -160,11 +160,11 @@ def test_unparseable_200_body_is_booked_and_retried(monkeypatch):
     _install_fake_post(monkeypatch, [
         (200, '<html>bad gateway page</html>'), _valid()])
     assert _client().complete(
-        'sys', 'user', stage=usage.STAGE_HARNESS) == 'ok'
+        'sys', 'user', stage=usage.STAGE_PROBE) == 'ok'
     d = usage.delta(before, usage.snapshot())
-    assert d[usage.STAGE_HARNESS]['calls'] == 2
-    assert d[usage.STAGE_HARNESS]['missing_usage'] == 1
-    assert d[usage.STAGE_HARNESS]['prompt_tokens'] == 7
+    assert d[usage.STAGE_PROBE]['calls'] == 2
+    assert d[usage.STAGE_PROBE]['missing_usage'] == 1
+    assert d[usage.STAGE_PROBE]['prompt_tokens'] == 7
 
 
 @pytest.mark.no_mock_llm
@@ -214,7 +214,7 @@ def test_concurrent_stages_do_not_interleave_usage():
         def _hammer():
             for _ in range(n):
                 usage.record(
-                    usage.STAGE_HARNESS, {'prompt_tokens': 7})
+                    usage.STAGE_PROBE, {'prompt_tokens': 7})
 
         threads = [threading.Thread(target=_hammer) for _ in range(2)]
         for t in threads:
@@ -224,8 +224,8 @@ def test_concurrent_stages_do_not_interleave_usage():
     finally:
         sys.setswitchinterval(old_interval)
     d = usage.delta(before, usage.snapshot())
-    assert d[usage.STAGE_HARNESS]['calls'] == 2 * n
-    assert d[usage.STAGE_HARNESS]['prompt_tokens'] == 2 * n * 7
+    assert d[usage.STAGE_PROBE]['calls'] == 2 * n
+    assert d[usage.STAGE_PROBE]['prompt_tokens'] == 2 * n * 7
 
 
 def test_all_call_sites_use_closed_set_stages():

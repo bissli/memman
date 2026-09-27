@@ -1263,23 +1263,6 @@ class TestGraphRebuildStaleOnly:
         assert 'SQLite-only' not in out.output
 
 
-def _rows_for_queue_id(data_dir, store, queue_id):
-    """Active insight ids stored for one queue row, via its queue_uuid."""
-    from memman.queue import queue_db
-    from memman.store.db import open_read_only, store_dir
-    with queue_db(data_dir) as qconn:
-        queue_uuid = qconn.execute(
-            'select queue_uuid from queue where id = ?',
-            (queue_id,)).fetchone()[0]
-    db = open_read_only(store_dir(data_dir, store))
-    try:
-        return db._query(
-            'SELECT id FROM insights WHERE queue_uuid = ?'
-            ' AND deleted_at IS NULL', (queue_uuid,)).fetchall()
-    finally:
-        db.close()
-
-
 class TestHotPathPurity:
     """Synchronous write commands must be LLM/embed-free.
 

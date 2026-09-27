@@ -116,8 +116,7 @@ def parse_json_response(raw: str) -> dict | None:
 
 def complete_parsed(
         llm_client: 'MemmanLLMClient', system: str, user: str, *,
-        stage: str,
-        max_tokens: int | None = None) -> tuple[dict | None, str]:
+        stage: str) -> tuple[dict | None, str]:
     """The object a completion carries, re-rolling once when none decodes.
 
     Parameters
@@ -130,9 +129,6 @@ def complete_parsed(
         User prompt.
     stage : str
         Pipeline stage both attempts are charged to.
-    max_tokens : int | None, default None
-        Output budget per attempt; None sends the ceiling the client
-        was built with.
 
     Returns
     -------
@@ -155,15 +151,13 @@ def complete_parsed(
       separates a transport failure from an unusable body, and the
       two carry different oplog outcomes.
     """
-    raw = llm_client.complete(
-        system, user, stage=stage, max_tokens=max_tokens)
+    raw = llm_client.complete(system, user, stage=stage)
     parsed = parse_json_response(raw)
     if parsed is not None:
         return parsed, raw
     logger.debug(
         f'{stage} body of {len(raw)} chars did not decode; re-rolling')
-    raw = llm_client.complete(
-        system, user, stage=stage, max_tokens=max_tokens)
+    raw = llm_client.complete(system, user, stage=stage)
     return parse_json_response(raw), raw
 
 

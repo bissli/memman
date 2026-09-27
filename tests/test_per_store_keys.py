@@ -52,8 +52,8 @@ def test_get_store_pg_dsn_returns_value_when_set(env_file):
 def test_validator_accepts_per_store_pg_dsn_keys():
     """`MEMMAN_POSTGRES_DSN_<store>` does not trip the postgres validator.
     """
-    from memman.store.config import validate_for
-    validate_for('postgres', {
+    from memman.store.config import validate_all
+    validate_all({
         'MEMMAN_POSTGRES_DSN_main': 'postgresql://x',
         'MEMMAN_POSTGRES_DSN_shared': 'postgresql://y',
         })
@@ -62,10 +62,10 @@ def test_validator_accepts_per_store_pg_dsn_keys():
 def test_validator_rejects_per_store_pg_key_with_invalid_suffix():
     """An invalid suffix (slashes, spaces) is rejected.
     """
-    from memman.store.config import validate_for
+    from memman.store.config import validate_all
     from memman.store.errors import ConfigError
     with pytest.raises(ConfigError):
-        validate_for('postgres', {
+        validate_all({
             'MEMMAN_POSTGRES_DSN_/etc/passwd': 'oops',
             })
 
@@ -73,10 +73,10 @@ def test_validator_rejects_per_store_pg_key_with_invalid_suffix():
 def test_validator_rejects_unknown_per_store_canonical_key():
     """A `MEMMAN_POSTGRES_<unknown>_<store>` key is still rejected.
     """
-    from memman.store.config import validate_for
+    from memman.store.config import validate_all
     from memman.store.errors import ConfigError
     with pytest.raises(ConfigError):
-        validate_for('postgres', {
+        validate_all({
             'MEMMAN_POSTGRES_FAKE_KEY_main': 'value',
             })
 

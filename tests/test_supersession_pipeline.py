@@ -1,10 +1,9 @@
-"""Pipeline-level supersession: the batch guard, the degraded add, the drain.
+"""Pipeline-level supersession: the degraded add and the drain.
 
-`_plan_fact` may see two facts in one write aim at the same
-predecessor; `_apply_plan` may find its target already superseded by
-an earlier drain; the drain may claim a `replace` whose target was
-superseded between enqueue and claim. None of the three may drop a
-fact or link the wrong row.
+`_apply_plan` may find its target already superseded by an earlier
+drain; the drain may claim a `replace` whose target was superseded
+between enqueue and claim. Neither may drop a write or link the wrong
+row.
 """
 
 import json
@@ -17,11 +16,11 @@ from tests.conftest import invoke, make_insight
 def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
     """Verify a replace whose target is already superseded says so.
 
-    Mutation: reporting the degraded add with no `targets_gone`, so the
+    Mutation: reporting the degraded add with no `target_gone`, so the
         caller cannot find the row that now holds the topic.
     Oracle: the result dict for a superseded target (successor named)
         and for a forgotten target (`superseded_by` None), with no
-        `replaced_ids` on either.
+        `replaced_id` on either.
     """
     tmp_backend.nodes.insert(make_insight(id='old-1', content='first'))
     tmp_backend.nodes.insert(make_insight(id='new-1', content='second'))
@@ -31,20 +30,18 @@ def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
 
     def _replace(new_id, target_id):
         return FactPlan(
-            action='replace',
             fact_insight=make_insight(id=new_id, content='third'),
-            targets=[(target_id, 'replace')], embed_vec=None,
-            enrichment={})
+            replaced_id=target_id, embed_vec=None, enrichment={})
 
     late = _apply_plan(tmp_backend, _replace('late-1', 'old-1'))
     assert late['action'] == 'add'
-    assert late['targets_gone'] == [{'id': 'old-1', 'superseded_by': 'new-1'}]
-    assert 'replaced_ids' not in late
+    assert late['target_gone'] == {'id': 'old-1', 'superseded_by': 'new-1'}
+    assert 'replaced_id' not in late
     assert tmp_backend.nodes.get_include_deleted('old-1').superseded_by == 'new-1'
 
     forgotten = _apply_plan(tmp_backend, _replace('late-2', 'gone-1'))
     assert forgotten['action'] == 'add'
-    assert forgotten['targets_gone'] == [{'id': 'gone-1', 'superseded_by': None}]
+    assert forgotten['target_gone'] == {'id': 'gone-1', 'superseded_by': None}
 
 
 @pytest.mark.no_auto_drain
@@ -94,56 +91,3 @@ def test_drain_redirects_a_replace_to_the_chain_head(mm_runner):
         assert head.superseded_by is None
         assert old.deleted_at is None
         assert middle.deleted_at is None
-
-
-def test_a_plain_add_plan_with_a_target_reports_no_replaced_id(
-        tmp_db, tmp_backend):
-    """Verify `replaced_ids` is reported only when a supersession happened.
-
-    Mutation: emitting `replaced_ids` whenever the plan carries targets,
-        so an `add` plan decorated with a target claims a replace that
-        never ran.
-    Oracle: the result of an `add` plan carrying a target: no
-        `replaced_ids`, and the target still current.
-    """
-    tmp_backend.nodes.insert(make_insight(id='old-1', content='first'))
-    plan = FactPlan(
-        action='add',
-        fact_insight=make_insight(id='new-1', content='second'),
-        targets=[('old-1', 'replace')], embed_vec=None, enrichment={})
-
-    result = _apply_plan(tmp_backend, plan)
-
-    assert 'replaced_ids' not in result
-    assert tmp_backend.nodes.get('old-1') is not None
-
-
-@pytest.mark.no_auto_drain
-def test_drain_passes_a_forgotten_head_through_as_a_named_add(mm_runner):
-    """Verify a replace whose chain head was forgotten degrades, not redirects.
-
-    Mutation: redirecting onto the forgotten head (a replace of a
-        deleted row), or raising instead of degrading.
-    Oracle: the drained result reports `action: add` with the original
-        target and its successor named, no `redirected_from`, and no
-        failed queue row.
-    """
-    from memman.store.factory import open_backend
-
-    r, data_dir = mm_runner
-    res = invoke(mm_runner, ['remember', 'the broker is kombu'])
-    assert res.exit_code == 0, res.output
-    assert invoke(mm_runner, ['scheduler', 'drain']).exit_code == 0
-    with open_backend('default', data_dir, read_only=True) as backend:
-        first = backend.nodes.get_all_active()[0].id
-
-    replaced = invoke(mm_runner, ['replace', first, 'the broker is redis now'])
-    assert replaced.exit_code == 0, replaced.output
-    assert invoke(mm_runner, ['scheduler', 'drain']).exit_code == 0
-    with open_backend('default', data_dir, read_only=True) as backend:
-        head = backend.nodes.get_include_deleted(first).superseded_by
-    assert invoke(mm_runner, ['forget', head]).exit_code == 0
-
-    queued = invoke(mm_runner, ['replace', first, 'the broker is rabbitmq now'])
-    assert queued.exit_code != 0
-    assert f'is superseded by {head}' in queued.output

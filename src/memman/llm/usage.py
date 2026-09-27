@@ -30,12 +30,9 @@ import threading
 
 STAGE_ENRICHMENT = 'enrichment'
 STAGE_PROBE = 'probe'
-# Off-pipeline measurement tooling (experiments/ harnesses, eval
-# judges) -- keeps their traffic out of the pipeline buckets.
-STAGE_HARNESS = 'harness'
 
 VALID_STAGES = frozenset({
-    STAGE_ENRICHMENT, STAGE_PROBE, STAGE_HARNESS,
+    STAGE_ENRICHMENT, STAGE_PROBE,
     })
 
 _COUNTER_KEYS = (

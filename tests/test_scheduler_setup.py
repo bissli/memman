@@ -787,7 +787,7 @@ class TestSchedulerLogs:
         monkeypatch.setattr(
             'memman.setup.claude._init_default_store', lambda dd: None)
         from memman.setup.claude import _install_claude_code
-        env = {'name': 'claude-code', 'config_dir': str(tmp_path / 'claude')}
+        env = {'config_dir': str(tmp_path / 'claude')}
         _install_claude_code(env, data_dir=str(tmp_path / 'data'))
         logs_dir = tmp_path / '.memman' / 'logs'
         assert logs_dir.is_dir()

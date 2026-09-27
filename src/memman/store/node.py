@@ -389,26 +389,6 @@ order by n desc
     return [(r[0], r[1]) for r in rows]
 
 
-def review_content_quality(
-        db: 'DB', limit: int = 50) -> list[dict[str, Any]]:
-    """Review active insights for content quality issues."""
-    from memman.search.quality import check_content_quality
-
-    insights = get_all_active_insights(db)
-    flagged = []
-    for ins in insights:
-        warnings = check_content_quality(ins.content)
-        if warnings:
-            flagged.append({
-                'insight': ins,
-                'quality_warnings': warnings,
-                })
-    flagged.sort(
-        key=lambda x: len(x['quality_warnings']),  # type: ignore[arg-type]
-        reverse=True)
-    return flagged[:limit]
-
-
 def get_all_active_insights(db: 'DB') -> list[Insight]:
     """Return all non-deleted insights."""
     sql = f"""
@@ -538,18 +518,6 @@ where id = ?
     db._exec(sql, (blob, model, now, id))
 
 
-def get_embedding(db: 'DB', id: str) -> bytes | None:
-    """Return the raw embedding blob for an insight."""
-    row = db._query(
-        'select embedding from insights'
-        ' where id = ? and deleted_at is null and superseded_by is null',
-        (id,)).fetchone()
-    if row is None or row[0] is None:
-        return None
-    blob: bytes = row[0]
-    return blob
-
-
 def embedding_stats(db: 'DB') -> tuple[int, int]:
     """Return (total_active, embedded_count)."""
     total = db._query(
@@ -647,15 +615,6 @@ limit ?
 """
     rows = db._query(sql, (limit,)).fetchall()
     return [r[0] for r in rows]
-
-
-def count_unenriched_linked(db: 'DB') -> int:
-    """Count linked-but-unenriched active insights."""
-    row = db._query(
-        'select count(*) from insights'
-        ' where enriched_at is null and linked_at is not null'
-        ' and deleted_at is null and superseded_by is null').fetchone()
-    return row[0] if row else 0
 
 
 def iter_stale_insight_ids(

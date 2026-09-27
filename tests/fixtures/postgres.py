@@ -18,20 +18,16 @@ Layout:
 - `terminate_pg_connections`: cleanup helper (mirrors the database/
   reference fixture).
 - `wait_for(condition, timeout)`: polling helper (jobsync verbatim).
-- `clean_tables(*names)`: decorator that TRUNCATEs named tables in
-  the `store_test` schema before the test body runs.
-- `drain_connection_pair`: spawns two non-pooled psycopg connections
-  for advisory-lock contention tests (memman-native equivalent of
-  jobsync's `cluster()` since memman drains are one-shot, not
-  long-running workers).
-- `simulate_drain_connection_drop`: closes a connection without
-  releasing its advisory lock (drives the "released on connection
-  close" contract test for `pg_try_advisory_lock`).
+- `connection_pair`: spawns two non-pooled psycopg connections for
+  advisory-lock contention tests (memman-native equivalent of
+  jobsync's `cluster()`).
+- `simulate_connection_drop`: closes a connection without releasing
+  its advisory lock (drives the "released on connection close"
+  contract test for `pg_try_advisory_lock`).
 """
 
 from __future__ import annotations
 
-import functools
 import logging
 import time
 from collections.abc import Callable, Iterator
@@ -174,48 +170,14 @@ def wait_for(
     return False
 
 
-def clean_tables(*table_names: str) -> Callable[[Callable], Callable]:
-    """Decorator that TRUNCATEs named tables in `store_test` before the test.
-
-    Adapted from jobsync's clean_tables; the only change is the
-    schema-qualified TRUNCATE (jobsync looked up table names via a
-    schema registry).
-
-    Usage:
-
-        @clean_tables('insights', 'oplog')
-        def test_something(pg_conn):
-            ...
-    """
-    def decorator(func: Callable) -> Callable:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            conn = kwargs.get('pg_conn')
-            if conn is None and args:
-                for arg in args:
-                    if isinstance(arg, psycopg.Connection):
-                        conn = arg
-                        break
-            if conn is None:
-                raise RuntimeError(
-                    '@clean_tables requires a pg_conn fixture')
-            qualified = ', '.join(f'{SCHEMA}.{t}' for t in table_names)
-            with conn.cursor() as cur:
-                cur.execute(f'TRUNCATE {qualified} RESTART IDENTITY CASCADE')
-            return func(*args, **kwargs)
-        return wrapper
-    return decorator
-
-
 @contextmanager
-def drain_connection_pair(
+def connection_pair(
         dsn: str) -> Iterator[tuple[psycopg.Connection, psycopg.Connection]]:
     """Open two non-pooled psycopg connections for contention tests.
 
-    memman-native equivalent of jobsync's `cluster()`: memman drains
-    are one-shot function calls, not long-running workers, so the
-    contention primitive is "two raw connections" rather than "two
-    worker objects." Both connections close cleanly on exit.
+    memman-native equivalent of jobsync's `cluster()`: the contention
+    primitive is "two raw connections" rather than "two worker
+    objects." Both connections close cleanly on exit.
     """
     a = psycopg.connect(dsn, autocommit=True)
     b = psycopg.connect(dsn, autocommit=True)
@@ -229,14 +191,14 @@ def drain_connection_pair(
                 pass
 
 
-def simulate_drain_connection_drop(conn: psycopg.Connection) -> None:
+def simulate_connection_drop(conn: psycopg.Connection) -> None:
     """Close a connection without releasing its advisory locks.
 
     Drives the `test_advisory_lock_released_on_connection_close`
     contract: Postgres releases session-level advisory locks when
     the underlying connection closes, even without an explicit
-    `pg_advisory_unlock`. This is the crash-recovery mechanism the
-    drain-lock contract relies on.
+    `pg_advisory_unlock`. `reembed_lock` and `swap_lock` rely on
+    this to recover from a crashed holder.
     """
     try:
         conn.close()

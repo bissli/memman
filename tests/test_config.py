@@ -559,26 +559,6 @@ class TestConfigResolver:
         _write_env(env_path, f'{config.LOG_LEVEL}=off\n')
         assert config.get_bool(config.LOG_LEVEL) is False
 
-    def test_effective_source_reports_file_only_for_installable(
-            self, env_path, monkeypatch):
-        """Installable keys report 'file' or 'unset'; shell env is invisible."""
-        monkeypatch.setenv(config.LLM_MODEL, 'env-val')
-        assert config.effective_source(config.LLM_MODEL) == 'unset'
-
-        _write_env(env_path, f'{config.LLM_MODEL}=file-val\n')
-        assert config.effective_source(config.LLM_MODEL) == 'file'
-
-        _write_env(env_path, '')
-        assert config.effective_source(config.LLM_MODEL) == 'unset'
-
-    def test_effective_source_reports_env_for_process_control(
-            self, env_path, monkeypatch):
-        """Process-control vars (DEBUG, WORKER) read os.environ directly."""
-        monkeypatch.setenv(config.DEBUG, '1')
-        assert config.effective_source(config.DEBUG) == 'env'
-        monkeypatch.delenv(config.DEBUG, raising=False)
-        assert config.effective_source(config.DEBUG) == 'unset'
-
     def test_enumerate_effective_config_redacts_secrets(self, env_path, monkeypatch):
         """enumerate_effective_config redacts and exposes secrets correctly."""
         _write_env(env_path, f'{config.OPENROUTER_API_KEY}=super-secret\n')

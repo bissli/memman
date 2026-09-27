@@ -76,7 +76,7 @@ FLAGEOF
 
 ## 5.3 Automated setup
 
-`memman install` writes into `~/.claude/` when it detects Claude Code (a `claude` binary on PATH or an existing `~/.claude/`), or when `--target claude-code` is passed. Otherwise it installs the scheduler only. Installation creates the following links and settings:
+`memman install` writes into `~/.claude/` when it detects Claude Code (a `claude` binary on PATH or an existing `~/.claude/`), or when `--claude-code` is passed. Otherwise it installs the scheduler only. Installation creates the following links and settings:
 
 | Target                              | What install writes                                                                       |
 | ----------------------------------- | ----------------------------------------------------------------------------------------- |

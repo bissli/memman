@@ -1,16 +1,14 @@
 """Store layer tests ported from Go store_test.go."""
 
 
-import pytest
 from memman.store.db import DEFAULT_STORE_NAME, list_local_store_dirs, open_db
 from memman.store.db import read_active, store_dir, store_exists
 from memman.store.db import valid_store_name, write_active
 from memman.store.node import count_active_insights, get_all_active_insights
-from memman.store.node import get_embedding, get_insight_by_id
+from memman.store.node import get_insight_by_id
 from memman.store.node import get_insight_by_id_include_deleted
 from memman.store.node import insert_insight, query_insights
-from memman.store.node import review_content_quality, soft_delete_insight
-from memman.store.node import update_embedding
+from memman.store.node import soft_delete_insight
 from memman.store.oplog import get_oplog, log_op
 from tests.conftest import make_insight
 
@@ -83,54 +81,6 @@ class TestQueryInsightsFilters:
 # --- Edges ---
 
 
-# --- Transactions ---
-
-
-class TestInTransactionCommit:
-    """Committed transaction data persists."""
-
-    def test_commit(self, tmp_db):
-        """Insight inserted inside transaction is readable after commit."""
-        def fn():
-            insert_insight(
-                tmp_db,
-                make_insight(id='tx-1', content='in transaction'))
-
-        tmp_db.in_transaction(fn)
-        got = get_insight_by_id(tmp_db, 'tx-1')
-        assert got is not None
-
-
-class TestInTransactionRollback:
-    """Rolled-back transaction data discarded."""
-
-    def test_rollback(self, tmp_db):
-        """Insight inserted inside a failing transaction is not readable."""
-        def fn():
-            insert_insight(
-                tmp_db,
-                make_insight(id='tx-2', content='will be rolled back'))
-            raise RuntimeError('rollback')
-
-        with pytest.raises(RuntimeError):
-            tmp_db.in_transaction(fn)
-
-        got = get_insight_by_id(tmp_db, 'tx-2')
-        assert got is None
-
-
-class TestInTransactionNested:
-    """Nested transactions are rejected."""
-
-    def test_nested(self, tmp_db):
-        """Calling in_transaction inside another raises RuntimeError."""
-        def fn():
-            tmp_db.in_transaction(lambda: None)
-
-        with pytest.raises(RuntimeError):
-            tmp_db.in_transaction(fn)
-
-
 # --- Oplog ---
 
 
@@ -149,22 +99,6 @@ class TestOplog:
 
 
 # --- Embedding ---
-
-
-class TestUpdateAndGetEmbedding:
-    """Store and retrieve embedding blobs."""
-
-    def test_round_trip(self, tmp_db):
-        """Stored embedding blob is returned identically."""
-        insert_insight(tmp_db, make_insight(
-            id='emb-1', content='content'))
-
-        blob = bytes([1, 2, 3, 4, 5, 6, 7, 8])
-        update_embedding(tmp_db, 'emb-1', blob, 'voyage-3-lite')
-
-        got = get_embedding(tmp_db, 'emb-1')
-        assert got is not None
-        assert len(got) == 8
 
 
 # --- GetAllActiveInsights ---
@@ -283,56 +217,6 @@ class TestCountActiveInsights:
 
 
 # --- CountInsightsWithEntity ---
-
-
-# --- ReviewContentQuality ---
-
-
-class TestReviewContentQuality:
-    """Async quality review of stored insights."""
-
-    def test_flags_transient(self, tmp_db):
-        """Transient content is flagged, durable content is not."""
-        insert_insight(tmp_db, make_insight(
-            id='rq-1',
-            content='i-0c220c2402a5245bc deployed via Terraform'))
-        insert_insight(tmp_db, make_insight(
-            id='rq-2',
-            content='SQLite chosen for single-node simplicity'))
-
-        flagged = review_content_quality(tmp_db)
-        assert len(flagged) == 1
-        assert flagged[0]['insight'].id == 'rq-1'
-        assert 'AWS instance ID' in flagged[0]['quality_warnings']
-
-    def test_empty_store(self, tmp_db):
-        """Empty store returns no flagged entries."""
-        flagged = review_content_quality(tmp_db)
-        assert flagged == []
-
-    def test_limit(self, tmp_db):
-        """Limit caps the number of results."""
-        for i in range(5):
-            insert_insight(tmp_db, make_insight(
-                id=f'rl-{i}',
-                content=f'i-0000000000000000{i} deployed via Terraform'))
-
-        flagged = review_content_quality(tmp_db, limit=2)
-        assert len(flagged) == 2
-
-
-class TestInTransactionReturn:
-    """in_transaction should return callback value."""
-
-    def test_in_transaction_returns_callback_value(self, tmp_db):
-        """in_transaction returns the callback's return value."""
-        result = tmp_db.in_transaction(lambda: 42)
-        assert result == 42
-
-    def test_in_transaction_returns_none_from_void(self, tmp_db):
-        """Void callback returns None."""
-        result = tmp_db.in_transaction(lambda: None)
-        assert result is None
 
 
 class TestEnrichmentSchema:

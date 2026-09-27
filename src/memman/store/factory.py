@@ -15,15 +15,11 @@ import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from memman import config
 from memman.store.backend import Backend
 from memman.store.config import validate_all
 from memman.store.errors import ConfigError
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger('memman')
 
@@ -35,16 +31,12 @@ class BackendDescriptor:
     `open_backend` opens a live `Backend`. `list_stores_keys`
     enumerates store names this backend knows about given the env
     file values. `drop_store_fn` removes one store's storage.
-    `migrator_cls` is the class itself (not an instance) so
-    callers can read class-level fields like `snapshot_features`
-    without constructing.
     """
 
     name: str
     open_backend: Callable[..., Backend]
     list_stores_keys: Callable[[str, dict[str, str]], set[str]]
     drop_store_fn: Callable[[str, str], None]
-    migrator_cls: type
     extras_packages: tuple[str, ...]
 
 
@@ -93,13 +85,11 @@ def _build_sqlite_descriptor() -> BackendDescriptor:
         from memman.store.sqlite import drop_sqlite_store
         drop_sqlite_store(store, data_dir)
 
-    from memman.store.sqlite import SqliteMigrator
     return BackendDescriptor(
         name='sqlite',
         open_backend=_open,
         list_stores_keys=_list,
         drop_store_fn=_drop,
-        migrator_cls=SqliteMigrator,
         extras_packages=())
 
 
@@ -165,13 +155,11 @@ def _build_postgres_descriptor() -> BackendDescriptor:
         if dsn:
             drop_postgres_store(store, dsn)
 
-    from memman.store.postgres import PostgresMigrator
     return BackendDescriptor(
         name='postgres',
         open_backend=_open,
         list_stores_keys=_list,
         drop_store_fn=_drop,
-        migrator_cls=PostgresMigrator,
         extras_packages=('psycopg', 'psycopg-pool', 'pgvector'))
 
 

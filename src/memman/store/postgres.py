@@ -32,20 +32,16 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from memman import config
 from memman.embed.fingerprint import Fingerprint
-from memman.embed.vector import pgvector_to_list
-from memman.migrate import PAYLOAD_VERSION, Artifact, BackendFeatures
-from memman.migrate import MigrateError, MigrateInsight, MigrateOpLog
-from memman.migrate import MigrationPayload, Migrator, PendingReembed
-from memman.migrate import SwapState, sanitize_identifier
+from memman.migrate import Artifact, MigrateError, MigrateInsight
+from memman.migrate import MigrateOpLog, MigrationPayload, Migrator
+from memman.migrate import sanitize_identifier
 from memman.search.keyword import insight_tokens
 from memman.store.backend import Backend, MetaStore, NodeStore, Oplog
 from memman.store.backend import RecallSession, _check_identifier
-from memman.store.base import BaseNodeStore
 from memman.store.errors import BackendError, ConfigError
 from memman.store.model import EnrichmentCoverage, Id, Insight, NodeStats
 from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
-from memman.store.model import ReembedRow, WorkerRun, format_timestamp
-from memman.store.model import parse_timestamp
+from memman.store.model import WorkerRun, format_timestamp, parse_timestamp
 from memman.store.node import unterminated_chains
 
 if TYPE_CHECKING:
@@ -155,8 +151,6 @@ create table if not exists {schema}.worker_runs (
     id            bigserial primary key,
     started_at    timestamptz not null default now(),
     ended_at      timestamptz,
-    rows_processed integer not null default 0,
-    error         text not null default '',
     last_heartbeat_at timestamptz
 );
 
@@ -191,7 +185,7 @@ def _open_connection(
         register_vector: bool = True) -> psycopg.Connection:
     """Open a fresh psycopg connection with pgvector adapters.
 
-    `keepalives=True` adds `keepalives_idle=30` for the drain-lock
+    `keepalives=True` adds `keepalives_idle=30` for a lock-holding
     connection so a hung worker is detected by the kernel rather
     than holding the lock indefinitely.
 
@@ -202,8 +196,8 @@ def _open_connection(
     extension is missing; skipping registration lets callers detect
     absence with their own SQL probe.
 
-    Returns a bare connection; lock-holding paths (`drain_lock`,
-    `reembed_lock`) and long-lived backend connections own the
+    Returns a bare connection; lock-holding paths (`reembed_lock`,
+    `swap_lock`) and long-lived backend connections own the
     lifecycle directly. One-shot helpers should use `_connection()`
     below for guaranteed close-on-exit semantics.
     """
@@ -301,43 +295,17 @@ _INSIGHT_COLS = (
     ' author')
 
 
-class PostgresNodeStore(BaseNodeStore, NodeStore):
+class PostgresNodeStore(NodeStore):
     """NodeStore implementation against a per-store Postgres schema."""
 
     def __init__(
             self, conn: psycopg.Connection, schema: str) -> None:
         self._conn = conn
         self._schema = schema
-        self._embedding_dim: int | None = None
 
     def _q(self, sql: str) -> str:
         """Format SQL with the per-store schema interpolated."""
         return sql.format(s=self._schema)
-
-    def _resolve_embedding_dim(self) -> int:
-        """Look up the stored `vector(N)` column width; cached.
-
-        pgvector exposes `N` directly in `pg_attribute.atttypmod`.
-        Cached on first call because `iter_for_reembed` is hot and the
-        schema dim cannot change without an `embed swap` cutover.
-        """
-        if self._embedding_dim is not None:
-            return self._embedding_dim
-        sql = """
-select atttypmod from pg_attribute
-where attrelid = (%s || '.insights')::regclass
-  and attname = 'embedding'
-  and not attisdropped
-"""
-        with self._conn.cursor() as cur:
-            cur.execute(sql, (self._schema,))
-            row = cur.fetchone()
-        if row is None or row[0] is None or int(row[0]) <= 0:
-            raise BackendError(
-                f'schema {self._schema!r} has no resolved embedding'
-                f' dim; was the baseline schema applied?')
-        self._embedding_dim = int(row[0])
-        return self._embedding_dim
 
     def insert(self, ins: Insight) -> None:
         """Insert a new insight, stamping the timestamps server-side.
@@ -555,26 +523,6 @@ order by created_at, id
             cur.execute(sql, (queue_uuid,))
             return [_row_to_insight(r) for r in cur.fetchall()]
 
-    def iter_for_reembed(
-            self, cursor: Id, batch: int) -> list[ReembedRow]:
-        sql = self._q("""
-select id, content, embedding_model,
-       case when embedding is null then null else %s end
-from {s}.insights
-where deleted_at is null and superseded_by is null and id > %s
-order by id
-limit %s
-""")
-        with self._conn.cursor() as cur:
-            cur.execute(
-                sql, (self._resolve_embedding_dim() * 8, cursor, batch))
-            return [
-                ReembedRow(
-                    id=r[0], content=r[1], embedding_model=r[2],
-                    blob_length=r[3])
-                for r in cur.fetchall()
-                ]
-
     def provenance_distribution(self) -> list[ProvenanceCount]:
         sql = self._q("""
 select prompt_version, count(*)
@@ -646,19 +594,6 @@ where id = %s
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (vec, model, id))
-
-    def get_embedding(self, id: Id) -> bytes | None:
-        sql = self._q("""
-select embedding from {s}.insights
-where id = %s and deleted_at is null and superseded_by is null
-""")
-        with self._conn.cursor() as cur:
-            cur.execute(sql, (id,))
-            row = cur.fetchone()
-        if row is None or row[0] is None:
-            return None
-        from memman.embed.vector import serialize_vector
-        return serialize_vector(pgvector_to_list(row[0]))
 
     def embedding_stats(self) -> tuple[int, int]:
         sql = self._q("""
@@ -770,17 +705,6 @@ limit %s
             cur.execute(sql, (limit,))
             return [r[0] for r in cur.fetchall()]
 
-    def count_unenriched_linked(self) -> int:
-        sql = self._q("""
-select count(*) from {s}.insights
-where enriched_at is null and linked_at is not null
-  and deleted_at is null and superseded_by is null
-""")
-        with self._conn.cursor() as cur:
-            cur.execute(sql)
-            row = cur.fetchone()
-            return int(row[0]) if row else 0
-
     def iter_stale_insight_ids(self, active_pv: str) -> list[Id]:
         sql = self._q("""
 select id from {s}.insights
@@ -815,34 +739,6 @@ where id = any(%s)
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (ids,))
-
-    def _bulk_update_embedding(
-            self, rows: list[tuple[Id, list[float], str]]) -> None:
-        """Update embeddings in chunks of <= 1000 rows. Postgres-only.
-
-        Under autocommit=True each `executemany` is its own implicit
-        transaction, keeping WAL bloat bounded and preventing a single
-        long-running statement from holding row-level locks for
-        unrelated readers. Private (underscored) so callers must
-        explicitly isinstance-guard the backend; not part of the
-        cross-backend `Backend` Protocol surface.
-        """
-        if not rows:
-            return
-        sql = self._q("""
-update {s}.insights
-set embedding = %s::vector,
-    embedding_model = %s,
-    updated_at = now()
-where id = %s
-""")
-        chunk = 1000
-        for start in range(0, len(rows), chunk):
-            batch = rows[start:start + chunk]
-            with self._conn.cursor() as cur:
-                cur.executemany(
-                    sql,
-                    [(vec, model, eid) for eid, vec, model in batch])
 
 
 class PostgresMetaStore(MetaStore):
@@ -922,14 +818,14 @@ where id <= (select max(id) from {self._schema}.oplog) - %s
         except Exception as exc:
             logger.warning(f'oplog cap trim failed: {exc}')
 
-    def trim_by_age(self, *, retention_days: int = 180) -> int:
+    def trim_by_age(self) -> int:
         sql = f"""
 delete from {self._schema}.oplog
 where created_at < now() - (%s * interval '1 day')
 """
         try:
             with self._conn.cursor() as cur:
-                cur.execute(sql, (retention_days,))
+                cur.execute(sql, (180,))
                 return int(cur.rowcount or 0)
         except Exception as exc:
             logger.warning(f'oplog age trim failed: {exc}')
@@ -1221,12 +1117,11 @@ class PostgresBackend(Backend):
     def reembed_lock(self, name: str) -> Iterator[bool]:
         """Acquire a per-store session-scoped advisory sweep lock.
 
-        Mirrors `drain_lock`: dedicated `psycopg.connect()` outside
-        any pool, autocommit, with `keepalives_idle=30`. Uses
-        `pg_try_advisory_lock` (non-blocking) so a second sweep
-        agent fails fast with `False` instead of waiting hours.
-        Released on connection close (intended crash-recovery
-        mechanism).
+        Dedicated `psycopg.connect()` outside any pool, autocommit,
+        with `keepalives_idle=30`. Uses `pg_try_advisory_lock`
+        (non-blocking) so a second sweep agent fails fast with
+        `False` instead of waiting hours. Released on connection
+        close (intended crash-recovery mechanism).
         """
         key = _advisory_lock_key(self._schema, f'reembed:{name}')
         conn = _open_connection(
@@ -1323,44 +1218,6 @@ class PostgresBackend(Backend):
     def swap_abort(self) -> None:
         _swap_abort_pg(self._dsn, self._schema)
 
-    @contextmanager
-    def drain_lock(
-            self, store: str | None = None) -> Iterator[bool]:
-        """Acquire a per-store advisory drain lock on a dedicated conn.
-
-        Opens a NEW connection outside any pool (psycopg.connect()
-        directly) with `keepalives_idle=30` so a hung worker is
-        detected by the kernel rather than holding the lock
-        indefinitely. The lock auto-releases when the connection
-        closes -- the intended crash-recovery mechanism.
-
-        Yields True when the lock was acquired, False otherwise.
-        """
-        target = store or self._store
-        key = _lock_id(f'memman_drain:{target}')
-        conn = _open_connection(
-            self._dsn, autocommit=True, keepalives=True)
-        acquired = False
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    'select pg_try_advisory_lock(%s)', (key,))
-                row = cur.fetchone()
-                acquired = bool(row[0]) if row else False
-            yield acquired
-        finally:
-            try:
-                if acquired:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            'select pg_advisory_unlock(%s)', (key,))
-            except Exception:
-                pass
-            try:
-                conn.close()
-            except Exception:
-                pass
-
     def storage_summary(self) -> dict[str, Any]:
         sizes: dict[str, Any] = {}
         try:
@@ -1376,13 +1233,6 @@ class PostgresBackend(Backend):
             logger.warning(f'pg_relation_size failed: {exc}')
         sizes['schema'] = self._schema
         return sizes
-
-    def maintenance_step(self) -> None:
-        """Run per-store maintenance: trim oplog cap.
-
-        Autovacuum handles vacuuming on Postgres; no pragma needed.
-        """
-        self.oplog.maintenance_step()
 
     def integrity_check(self) -> dict[str, Any]:
         with self._conn.cursor() as cur:
@@ -1428,7 +1278,7 @@ class PostgresBackend(Backend):
     def recent_runs(self, *, limit: int) -> list[WorkerRun]:
         """Return the per-store recent `worker_runs` rows (newest first)."""
         sql = (
-            f'select id, started_at, ended_at, rows_processed, error,'
+            f'select id, started_at, ended_at,'
             f' last_heartbeat_at'
             f' from {self._schema}.worker_runs'
             f' order by id desc limit %s')
@@ -1440,9 +1290,7 @@ class PostgresBackend(Backend):
                 id=int(r[0]),
                 started_at=r[1],
                 ended_at=r[2],
-                rows_processed=int(r[3] or 0),
-                error=r[4] or '',
-                last_heartbeat_at=r[5])
+                last_heartbeat_at=r[3])
             for r in rows
             ]
 
@@ -1854,10 +1702,6 @@ where deleted_at is null and superseded_by is null
         cur.execute(create_sql)
 
 
-_POSTGRES_MIGRATOR_FEATURES = BackendFeatures(
-    accepted_embedding_dtypes=frozenset({'float32', 'float64'}))
-
-
 class PostgresMigrator(Migrator):
     """Postgres + pgvector implementation of the Migrator surface.
 
@@ -1865,12 +1709,10 @@ class PostgresMigrator(Migrator):
     `MigrationPayload`. `apply(store, payload)` creates the schema
     (idempotently) and inserts rows in one transaction with
     `ON CONFLICT DO NOTHING`. `archive` invokes `pg_dump -Fc` for
-    a recoverable filesystem artifact. `drop` issues
-    `drop schema cascade`.
+    a recoverable filesystem artifact.
     """
 
     backend_name: ClassVar[str] = 'postgres'
-    snapshot_features: ClassVar[BackendFeatures] = _POSTGRES_MIGRATOR_FEATURES
 
     def __init__(self, data_dir: str, *, dsn: str) -> None:
         self.data_dir = data_dir
@@ -1897,10 +1739,20 @@ class PostgresMigrator(Migrator):
                     f'source schema {schema!r} has no'
                     f' meta.embed_fingerprint; run `memman doctor`'
                     f' on the source store before migrating')
+            cur.execute(
+                f"select value from {schema}.meta"
+                " where key = 'embed_swap_state'")
+            swap_row = cur.fetchone()
+            if swap_row is not None and swap_row[0]:
+                raise MigrateError(
+                    f'store {store!r} has an embed swap in flight'
+                    f' (state={swap_row[0]!r}); run `memman --store'
+                    f' {store} embed swap --resume` to finish it,'
+                    f' or `memman --store {store} embed swap'
+                    f' --abort` to discard it')
 
     def preflight_target(self, store: str) -> None:
-        sanitize_identifier(
-            store, max_len=63, allowed_chars=r'[A-Za-z0-9_]')
+        sanitize_identifier(store)
         _check_identifier(store)
         with _connection(self.dsn, autocommit=True) as conn, \
                 conn.cursor() as cur:
@@ -1943,29 +1795,17 @@ class PostgresMigrator(Migrator):
                     f' meta.embed_fingerprint')
             fingerprint = Fingerprint.from_json(fp_str)
 
-            # `embedding_pending` is the one column the schema adds
-            # on demand (the swap path), so it alone is probed.
-            cur.execute(
-                "select 1 from information_schema.columns"
-                " where table_schema = %s"
-                " and table_name = 'insights'"
-                " and column_name = 'embedding_pending'",
-                (schema,))
-            has_pending = cur.fetchone() is not None
-            pending_select = ', embedding_pending' if has_pending else ''
             cur.execute(f"""
 select id, content, category, summary, embedding,
        linked_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, embedding_model,
        queue_uuid, superseded_by,
        author
-       {pending_select}
 from {schema}.insights
 order by id
 """)
             insight_rows = cur.fetchall()
             insights: list[MigrateInsight] = []
-            pending: list[PendingReembed] = []
             for r in insight_rows:
                 emb = list(r[4]) if r[4] is not None else None
                 insights.append(MigrateInsight(
@@ -1982,9 +1822,6 @@ order by id
                     queue_uuid=r[12],
                     superseded_by=r[13],
                     author=r[14]))
-                if has_pending and r[15] is not None:
-                    pending.append(PendingReembed(
-                        insight_id=r[0], vector=list(r[15])))
 
             cur.execute(f"""
 select coalesce(legacy_id, id) as sqlite_id,
@@ -2003,49 +1840,15 @@ order by sqlite_id
                     legacy_id=int(o[0]))
                 for o in cur.fetchall()]
 
-        swap_state = None
-        if 'embed_swap_state' in meta_dict:
-            try:
-                dim = int(meta_dict.get('embed_swap_target_dim', '0'))
-            except ValueError:
-                dim = 0
-            swap_state = SwapState(
-                target_provider=meta_dict.get(
-                    'embed_swap_target_provider', ''),
-                target_model=meta_dict.get(
-                    'embed_swap_target_model', ''),
-                target_dim=dim,
-                cursor=meta_dict.get('embed_swap_cursor') or None)
-
-        stripped_meta = {
-            k: v for k, v in meta_dict.items()
-            if not k.startswith('embed_swap_')}
-
         return MigrationPayload(
-            payload_version=PAYLOAD_VERSION,
             fingerprint=fingerprint,
             embedding_dim=fingerprint.dim,
-            embedding_dtype='float32',
             insights=insights,
             oplog=oplog,
-            embedding_pending=pending,
-            swap_state=swap_state,
-            meta=stripped_meta)
+            meta=meta_dict)
 
     def apply(
             self, store: str, payload: MigrationPayload) -> None:
-        if payload.payload_version != PAYLOAD_VERSION:
-            raise MigrateError(
-                f'payload version {payload.payload_version} does not'
-                f' match this build ({PAYLOAD_VERSION}); re-gather'
-                ' with the matching memman')
-        if payload.embedding_dtype not in (
-                self.snapshot_features.accepted_embedding_dtypes):
-            raise MigrateError(
-                f'postgres cannot accept embedding_dtype'
-                f' {payload.embedding_dtype!r}; accepted:'
-                f' {sorted(self.snapshot_features.accepted_embedding_dtypes)}')
-
         _check_identifier(store)
         schema = _store_schema(store)
         dim = payload.embedding_dim
@@ -2112,30 +1915,7 @@ order by sqlite_id
                             ' on conflict (legacy_id) do nothing',
                             op_rows)
 
-                if payload.embedding_pending:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            f'alter table {schema}.insights'
-                            ' add column if not exists'
-                            f' embedding_pending vector({dim})')
-                        for p in payload.embedding_pending:
-                            cur.execute(
-                                f'update {schema}.insights'
-                                ' set embedding_pending = %s'
-                                ' where id = %s',
-                                ([float(x) for x in p.vector],
-                                 p.insight_id))
-
                 meta_rows = list(payload.meta.items())
-                if payload.swap_state:
-                    s = payload.swap_state
-                    meta_rows.extend([
-                        ('embed_swap_target_provider',
-                         s.target_provider),
-                        ('embed_swap_target_model', s.target_model),
-                        ('embed_swap_target_dim', str(s.target_dim)),
-                        ('embed_swap_cursor', s.cursor or ''),
-                        ])
                 if meta_rows:
                     with conn.cursor() as cur:
                         cur.executemany(
@@ -2163,8 +1943,4 @@ order by sqlite_id
                 f'archive failed for store {store!r}: {exc}'
                 ) from exc
         return Artifact(
-            kind='filesystem',
-            location=str(path / 'dump.pgdump'), metadata={})
-
-    def drop(self, store: str) -> None:
-        drop_postgres_store(store, self.dsn)
+            kind='filesystem', location=str(path / 'dump.pgdump'))

@@ -237,8 +237,6 @@ def _scheduler_started(request, monkeypatch):
         monkeypatch.setattr(sched_mod, 'read_state',
                             lambda: sched_mod.STATE_STOPPED)
         return
-    if 'no_scheduler_started_mock' in request.keywords:
-        return
     monkeypatch.setattr(sched_mod, 'read_state',
                         lambda: sched_mod.STATE_STARTED)
 
@@ -394,8 +392,8 @@ def _mock_apis(request, monkeypatch):
     llm_client_mod.reset_client_cache()
 
 
-def _mock_llm_complete(self: object, system: str, user: str,
-                       **kwargs: object) -> str:
+def _mock_llm_complete(self: object, system: str, user: str, *,
+                       stage: str) -> str:
     """Route a `complete` call to the mock for its system text.
 
     Parameters
@@ -407,9 +405,10 @@ def _mock_llm_complete(self: object, system: str, user: str,
         the mock.
     user : str
         The user body the mock parses.
-    **kwargs : object
-        Accepted and ignored (`stage`, `max_tokens`, `temperature`) so
-        callers that pass them do not break the mock.
+    stage : str
+        Accepted and ignored. The signature mirrors
+        `MemmanLLMClient.complete`, so a call site passing a keyword
+        the real client lacks fails here as it would in production.
 
     Returns
     -------

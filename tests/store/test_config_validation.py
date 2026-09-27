@@ -131,28 +131,32 @@ class TestValidateAll:
 
     def test_empty_suffix_rejected(self):
         """`MEMMAN_POSTGRES_DSN_` (no suffix) is an invalid store name.
+
+        Mutation: `validate_all` accepting an empty store suffix, so a
+            truncated key routes a DSN to no store.
+        Oracle: `ConfigError` on the bare-underscore key.
         """
-        from memman.store.config import validate_for
+        from memman.store.config import validate_all
         env = {'MEMMAN_POSTGRES_DSN_': 'x'}
         with pytest.raises(ConfigError):
-            validate_for('postgres', env)
+            validate_all(env)
 
     def test_invalid_store_name_suffix_rejected(self):
         """A suffix containing slashes / spaces is rejected.
+
+        Mutation: `validate_all` skipping the store-name check on the
+            per-store suffix.
+        Oracle: `ConfigError` on a suffix holding a slash.
         """
-        from memman.store.config import validate_for
+        from memman.store.config import validate_all
         env = {'MEMMAN_POSTGRES_DSN_bad/name': 'x'}
         with pytest.raises(ConfigError):
-            validate_for('postgres', env)
+            validate_all(env)
 
     def test_validate_all_catches_inactive_namespace_typo(self):
         """`validate_all` runs both registered config classes, so a
         `MEMMAN_POSTGRES_DSN_typo` key is rejected even when the active
         backend is sqlite.
-
-        Closes the validator gap where typos in an inactive backend's
-        namespace passed silently because `validate_for(backend, ...)`
-        only ran one class.
         """
         from memman.store.config import validate_all
         env = {

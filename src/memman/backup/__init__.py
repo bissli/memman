@@ -47,7 +47,7 @@ logger = logging.getLogger('memman')
 # Restore is a byte copy, so a bundle carries its schema with it
 # and a version mismatch is refused outright. An older bundle is
 # read with the pinned install of the release that wrote it.
-BACKUP_FORMAT_VERSION = 5
+BACKUP_FORMAT_VERSION = 6
 DB_FILENAME = 'memman.db'
 QUEUE_FILENAME = 'queue.db'
 DUMP_FILENAME = 'dump.pgdump'

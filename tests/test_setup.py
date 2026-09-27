@@ -985,7 +985,7 @@ class TestInstallConsent:
         from memman.setup import claude as claude_setup
         monkeypatch.setattr(claude_setup, '_init_default_store',
                             lambda data_dir: None)
-        return {'name': 'claude-code', 'config_dir': str(config_dir)}
+        return {'config_dir': str(config_dir)}
 
     def _allow(self, config_dir: str) -> list:
         path = os.path.join(config_dir, 'settings.json')
@@ -1096,10 +1096,65 @@ def test_uninstall_raises_when_claude_code_cleanup_fails(
         claude_setup, 'uninstall_scheduler',
         lambda data_dir: scheduler_calls.append(data_dir) or {})
     env = {
-        'name': 'claude-code', 'display': 'Claude Code', 'detected': True,
+        'display': 'Claude Code', 'detected': True,
         'version': '', 'config_dir': str(tmp_path / '.claude'),
         }
     with pytest.raises(click.ClickException):
         claude_setup._run_uninstall_flow(
-            env, target='', data_dir=str(tmp_path))
+            env, claude_code=False, data_dir=str(tmp_path))
     assert scheduler_calls == []
+
+
+def test_install_flow_forces_claude_code_when_undetected(
+        monkeypatch, tmp_path):
+    """Verify `claude_code=True` installs into Claude Code though undetected.
+
+    Mutation: `_run_install_flow` ignoring `claude_code` and following
+        detection, so `--claude-code` on a host without the `claude`
+        binary installs the scheduler only.
+    Oracle: a spy on `_install_claude_code` proving the install branch
+        ran on the forced config dir.
+    """
+    from memman.setup import claude as claude_setup
+    installs = []
+    monkeypatch.setattr(
+        claude_setup, '_install_claude_code',
+        lambda env, data_dir, no_wizard: installs.append(env['config_dir']))
+    monkeypatch.setattr(
+        claude_setup, 'install_scheduler',
+        lambda data_dir, knobs: {'platform': 'systemd', 'actions': []})
+    monkeypatch.setattr(
+        claude_setup.openrouter_models, 'refresh_model_state',
+        lambda data_dir, force: None)
+    env = {
+        'display': 'Claude Code', 'detected': False,
+        'version': '', 'config_dir': str(tmp_path / '.claude'),
+        }
+    claude_setup._run_install_flow(
+        env, claude_code=True, data_dir=str(tmp_path), knobs={})
+    assert installs == [str(tmp_path / '.claude')]
+
+
+def test_uninstall_flow_forces_claude_code_when_undetected(
+        monkeypatch, tmp_path):
+    """Verify `claude_code=True` cleans up Claude Code though undetected.
+
+    Mutation: `_run_uninstall_flow` ignoring `claude_code` and following
+        detection, so `--claude-code` leaves the hooks and skill behind.
+    Oracle: a spy on `claude_uninstall` proving the cleanup ran on the
+        forced config dir.
+    """
+    from memman.setup import claude as claude_setup
+    cleaned = []
+    monkeypatch.setattr(
+        claude_setup, 'claude_uninstall',
+        lambda config_dir: cleaned.append(config_dir) or [])
+    monkeypatch.setattr(
+        claude_setup, 'uninstall_scheduler', lambda data_dir: {})
+    env = {
+        'display': 'Claude Code', 'detected': False,
+        'version': '', 'config_dir': str(tmp_path / '.claude'),
+        }
+    claude_setup._run_uninstall_flow(
+        env, claude_code=True, data_dir=str(tmp_path))
+    assert cleaned == [str(tmp_path / '.claude')]

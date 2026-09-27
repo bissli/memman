@@ -240,9 +240,9 @@ def test_run_install_rejects_flag_vs_file_conflict(tmp_path, monkeypatch):
         setup_claude, 'memman_binary_path', lambda: '/fake/bin/memman')
     monkeypatch.setattr(
         setup_claude, 'detect_claude_code',
-        lambda: {'name': 'claude-code', 'display': 'Claude Code',
+        lambda: {'display': 'Claude Code',
                  'detected': False, 'bin_path': '',
-                 'installed': False, 'version': '',
+                 'version': '',
                  'config_dir': str(tmp_path / 'memman' / '.claude')})
 
     with pytest.raises(_click.ClickException, match='memman config set'):

@@ -5,8 +5,7 @@ gather/apply work lives in per-backend `Migrator` subclasses
 (`memman.store.sqlite.SqliteMigrator`,
 `memman.store.postgres.PostgresMigrator`); this module owns the
 backend-agnostic types they exchange (`MigrationPayload`,
-`MigrateInsight`, `MigrateOpLog`,
-`PendingReembed`, `SwapState`, `Artifact`) plus orchestration
+`MigrateInsight`, `MigrateOpLog`, `Artifact`) plus orchestration
 helpers used by the CLI runner (`held_drain_lock`,
 `inspect_target_schemas`, `preflight`,
 `_verify_destination_counts`).
@@ -25,51 +24,11 @@ import hashlib
 import re
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, ClassVar, Literal
 
 from memman.embed.fingerprint import Fingerprint
-
-PAYLOAD_VERSION = 9
-
-EmbeddingDtype = Literal[
-    'float64', 'float32', 'float16', 'int8', 'binary']
-
-
-@dataclass(frozen=True)
-class BackendFeatures:
-    """Capability data a backend's migrator advertises.
-
-    `apply()` reads `accepted_embedding_dtypes` to refuse a payload
-    whose embedding dtype the backend cannot store.
-    """
-
-    accepted_embedding_dtypes: frozenset[str] = field(
-        default_factory=lambda: frozenset({'float32', 'float64'}))
-
-
-@dataclass(frozen=True)
-class SwapState:
-    """Mid-reembed swap state captured from `meta.embed_swap_*`.
-
-    `cursor` is the highest insight id whose pending embedding has
-    been written; resuming after a partial swap requires the same
-    cursor to avoid re-embedding completed rows.
-    """
-
-    target_provider: str
-    target_model: str
-    target_dim: int
-    cursor: str | None
-
-
-@dataclass
-class PendingReembed:
-    """In-flight pending embedding for a single insight during a swap."""
-
-    insight_id: str
-    vector: list[float]
 
 
 @dataclass
@@ -78,8 +37,7 @@ class MigrateInsight:
 
     Mirrors the union of SQLite/Postgres column shapes. JSON columns
     arrive as parsed Python objects; timestamps as `datetime`. The
-    embedding is carried as a `list[float]`; precision is governed
-    by the payload's `embedding_dtype` field.
+    embedding is carried as a `list[float]`.
     """
 
     id: str
@@ -129,14 +87,10 @@ class MigrationPayload:
     backends is the invariant.
     """
 
-    payload_version: int
     fingerprint: Fingerprint
     embedding_dim: int
-    embedding_dtype: EmbeddingDtype
     insights: list[MigrateInsight]
     oplog: list[MigrateOpLog]
-    embedding_pending: list[PendingReembed]
-    swap_state: SwapState | None
     meta: dict[str, str]
 
 
@@ -145,21 +99,18 @@ class Artifact:
     """Where a backend's pre-migration source state was archived.
 
     `kind='filesystem'` describes a local archive directory or
-    file. `kind='none'` is used by backends whose `apply` is a
-    full migration (no pre-state to preserve as a snapshot).
-    Other kinds (`'object_store'`, `'dump_job'`) are reserved for
-    future backends and should be treated as opaque by callers.
+    file. `kind='none'` means there was no source state to archive:
+    a SQLite store with no directory on disk.
     """
 
-    kind: Literal['filesystem', 'object_store', 'dump_job', 'none']
+    kind: Literal['filesystem', 'none']
     location: str | None
-    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class Migrator(abc.ABC):
     """Per-backend migration surface.
 
-    Abstract base class for the six migration verbs. Concrete
+    Abstract base class for the five migration verbs. Concrete
     implementations live with their backend (`store/sqlite.py`,
     `store/postgres.py`) and inherit from this class. Stateless
     across calls: each method acquires + releases its own
@@ -171,26 +122,23 @@ class Migrator(abc.ABC):
     """
 
     backend_name: ClassVar[str]
-    snapshot_features: ClassVar[BackendFeatures]
 
     @abc.abstractmethod
     def preflight_source(self, store: str) -> None:
         """Verify the store is in a state that can be migrated FROM.
 
         Raises `MigrateError` on any precondition failure (missing
-        store, schema mismatch, broken connection).
+        store, schema mismatch, broken connection, or an embed swap
+        in flight).
         """
 
+    @abc.abstractmethod
     def preflight_target(self, store: str) -> None:
         """Verify the backend can accept a fresh migration INTO `store`.
 
-        Default checks identifier sanity against the backend's
-        feature flags; subclasses override to add extension /
-        privilege / name-collision checks. Raises `MigrateError`
-        on failure.
+        Raises `MigrateError` on failure (identifier collision,
+        missing extension / privilege).
         """
-        sanitize_identifier(
-            store, max_len=63, allowed_chars=r'[A-Za-z0-9_]')
 
     @abc.abstractmethod
     def gather(self, store: str) -> MigrationPayload:
@@ -200,34 +148,29 @@ class Migrator(abc.ABC):
     def apply(self, store: str, payload: MigrationPayload) -> None:
         """Write `payload` into a fresh `store` on this backend."""
 
-    def archive(self, store: str, data_dir: str) -> Artifact:
-        """Snapshot the source state to a recoverable artifact.
-
-        Default: `Artifact(kind='none', ...)` for backends whose
-        `apply` is a full migration with no pre-state to preserve.
-        Subclasses with filesystem state (sqlite dirs, postgres
-        pg_dump) override to return a `kind='filesystem'` artifact.
-        """
-        return Artifact(
-            kind='none', location=None,
-            metadata={'reason': 'apply is a full migration'})
-
     @abc.abstractmethod
-    def drop(self, store: str) -> None:
-        """Remove this backend's storage for `store`."""
+    def archive(self, store: str, data_dir: str) -> Artifact:
+        """Move or dump the source state into a recoverable archive.
+
+        Returns a `kind='filesystem'` artifact naming the archive: the
+        SQLite store directory, moved under `archive/<store>/`, or the
+        Postgres `pg_dump` file. Returns
+        `Artifact(kind='none', location=None)` when there is no source
+        state to archive. Raises `MigrateError` when the Postgres dump
+        fails.
+        """
 
 
-def sanitize_identifier(
-        name: str, *, max_len: int,
-        allowed_chars: str = r'[A-Za-z0-9_]') -> str:
+def sanitize_identifier(name: str) -> str:
     """Backend-portable identifier sanitizer.
 
-    Postgres/MySQL allow 63/64 chars; SQL Server / Oracle 12.2+
-    allow 128; Oracle legacy caps at 30. When `len(name) > max_len`
-    a deterministic 8-hex-char sha256 suffix replaces the truncated
+    Postgres/MySQL allow 63/64 chars; a name over 63 chars gets a
+    deterministic 8-hex-char sha256 suffix replacing the truncated
     tail so two distinct names with the same prefix don't collide.
     Raises `MigrateError` on illegal characters.
     """
+    allowed_chars = r'[A-Za-z0-9_]'
+    max_len = 63
     if not re.fullmatch(rf'{allowed_chars}+', name):
         raise MigrateError(
             f'identifier {name!r} contains characters outside'

@@ -87,22 +87,18 @@ class FactPlan:
 
     Attributes
     ----------
-    action : str
-        `add` or `replace`.
     fact_insight : Insight
         The row the apply phase inserts.
-    targets : list[tuple[str, str]]
-        `(insight_id, relation)`: the `replace` target; empty for an
-        add.
+    replaced_id : str
+        The row a `replace` supersedes; '' for a plain add.
     embed_vec : list[float] or None
         Vector of the row's content; None when the embed failed.
     enrichment : dict[str, Any]
         `summary`; empty when enrichment failed.
     """
 
-    action: str
     fact_insight: Insight
-    targets: list[tuple[str, str]] = field(default_factory=list)
+    replaced_id: str = ''
     embed_vec: list[float] | None = None
     enrichment: dict[str, Any] = field(default_factory=dict)
 
@@ -214,9 +210,8 @@ def _plan_fact(
             f'fact embed failed; row stored without vector: {exc}')
 
     return FactPlan(
-        action='replace' if replaced_id else 'add',
         fact_insight=fact_insight,
-        targets=[(replaced_id, 'replace')] if replaced_id else [],
+        replaced_id=replaced_id,
         embed_vec=fact_vec,
         enrichment=enrichment,
         ), calls
@@ -229,56 +224,48 @@ def _apply_plan(backend: Backend, plan: FactPlan) -> dict[str, Any]:
     -----
     - A `replace` supersedes its target (never deletes it).
     - A target that is not current (forgotten, or superseded by an
-      earlier write) is dropped into `targets_gone`, and the plan
+      earlier write) is reported under `target_gone`, and the write
       degrades to a plain add.
     """
     fi = plan.fact_insight
 
-    linking = plan.action == 'replace' and bool(plan.targets)
-    linked_targets: list[tuple[str, str]] = []
-    targets_gone: list[dict[str, str | None]] = []
-    predecessors: list[tuple[str, str, Insight]] = []
-    if linking:
-        for target_id, relation in plan.targets:
-            before_target = backend.nodes.get_include_deleted(target_id)
-            linked = backend.nodes.supersede(target_id, fi.id)
-            if not linked or before_target is None:
-                targets_gone.append({
-                    'id': target_id,
-                    'superseded_by': (before_target.superseded_by
-                                      if before_target is not None else None),
-                    })
-                logger.warning(
-                    f'{relation} target {target_id} is not current;'
-                    ' dropped from the plan')
-                continue
-            linked_targets.append((target_id, relation))
-            predecessors.append((target_id, relation, before_target))
-        # Every predecessor keeps its content behind `superseded_by`,
-        # and the successor copies nothing from it: the CLI already
-        # seeded the target's category when `--cat` was omitted.
-        for target_id, _relation, before_target in predecessors:
+    replaced = False
+    target_gone: dict[str, str | None] | None = None
+    if plan.replaced_id:
+        before_target = backend.nodes.get_include_deleted(plan.replaced_id)
+        linked = backend.nodes.supersede(plan.replaced_id, fi.id)
+        if linked and before_target is not None:
+            replaced = True
+            # The predecessor keeps its content behind `superseded_by`,
+            # and the successor copies nothing from it: the CLI already
+            # seeded the target's category when `--cat` was omitted.
             backend.oplog.log(
-                operation='replace', insight_id=target_id,
+                operation='replace', insight_id=plan.replaced_id,
                 detail=f'replaced by {fi.id}',
                 before=insight_to_delta_dict(before_target),
                 after=insight_to_delta_dict(fi))
-        # Notes:
-        # - The row is stored either way, so nothing is lost, but a
-        #   caller who ran `replace` to correct one row otherwise gets
-        #   a new unlinked row and no sign the correction missed.
-        # - The row is filed against the SUCCESSOR, which is readable;
-        #   the requested target may be gone from the table entirely,
-        #   and it is named in the detail instead.
-        for gone in targets_gone:
+        else:
+            target_gone = {
+                'id': plan.replaced_id,
+                'superseded_by': (before_target.superseded_by
+                                  if before_target is not None else None),
+                }
+            logger.warning(
+                f'replace target {plan.replaced_id} is not current;'
+                ' degrading to add')
+            # Notes:
+            # - The row is stored either way, so nothing is lost, but a
+            #   caller who ran `replace` to correct one row otherwise
+            #   gets a new unlinked row and no sign the correction
+            #   missed.
+            # - The row is filed against the SUCCESSOR, which is
+            #   readable; the requested target may be gone from the
+            #   table entirely, and it is named in the detail instead.
             backend.oplog.log(
                 operation='target-gone', insight_id=fi.id,
-                detail=f'{plan.action} target {gone["id"]} was not current;'
-                f' stored without the link',
+                detail=f'replace target {plan.replaced_id} was not'
+                ' current; stored without the link',
                 after=insight_to_delta_dict(fi))
-        if not linked_targets:
-            logger.warning(
-                f'{plan.action}: every target is gone; degrading to add')
 
     backend.nodes.insert(fi)
     stored = backend.nodes.get(fi.id)
@@ -306,27 +293,22 @@ def _apply_plan(backend: Backend, plan: FactPlan) -> dict[str, Any]:
     if plan.enrichment and embedded:
         backend.nodes.stamp_enriched(fi.id)
 
-    if linking and not linked_targets:
-        reported_action = 'add'
-    else:
-        reported_action = plan.action
     result: dict[str, Any] = {
         'id': fi.id,
         'content': fi.content,
         'category': fi.category,
-        'action': reported_action,
+        'action': 'replace' if replaced else 'add',
         'created_at': (
             format_timestamp(fi.created_at)
             if fi.created_at is not None else ''),
         'enrichment': {'summary': plan.enrichment.get('summary', '')},
         'embedded': embedded,
         }
-    if linking:
-        # `replaced_ids` names what this write linked; `targets_gone`
-        # names the rows that now hold the topic, one read away, so a
-        # degraded add cannot hide them.
-        if linked_targets:
-            result['replaced_ids'] = [t for t, _relation in linked_targets]
-        if targets_gone:
-            result['targets_gone'] = targets_gone
+    # `replaced_id` names what this write linked; `target_gone` names
+    # the row that now holds the topic, one read away, so a degraded
+    # add cannot hide it.
+    if replaced:
+        result['replaced_id'] = plan.replaced_id
+    if target_gone is not None:
+        result['target_gone'] = target_gone
     return result

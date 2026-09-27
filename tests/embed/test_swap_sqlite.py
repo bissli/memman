@@ -183,11 +183,6 @@ def test_swap_resume_skips_already_filled_rows(swap_backend, monkeypatch):
 def test_swap_abort_clears_pending_and_meta(swap_backend):
     """abort_swap nulls embedding_pending and clears all swap meta."""
     ids = _seed_insights(swap_backend, 4)
-    ec = _StubEmbedder(dim=768)
-    plan = SwapPlan(
-        target_provider='stub-target',
-        target_model='stub-target-d768',
-        target_dim=768)
     swap_backend.swap_prepare(768)
     with swap_backend.transaction():
         for rid in ids[:2]:
@@ -215,10 +210,6 @@ def test_swap_target_mismatch_in_flight_raises(swap_backend):
     """
     _seed_insights(swap_backend, 3)
     ec_first = _StubEmbedder(dim=768)
-    plan_first = SwapPlan(
-        target_provider='stub-target',
-        target_model='stub-target-d768',
-        target_dim=768)
     swap_backend.swap_prepare(768)
     with swap_backend.transaction():
         swap_backend.meta.set('embed_swap_state', 'backfilling')

@@ -8,8 +8,8 @@ Validates the primitives a future Postgres backend depends on:
 4. `SET search_path` persists across cursor close in autocommit
    mode (pool-reuse hazard documentation).
 5. Advisory lock released on connection close (no explicit unlock
-   needed -- the crash-recovery mechanism the drain-lock contract
-   relies on).
+   needed -- the crash-recovery mechanism `reembed_lock` and
+   `swap_lock` rely on).
 
 Gated behind `@pytest.mark.postgres` so SQLite-only `make test`
 runs are unaffected.
@@ -17,18 +17,19 @@ runs are unaffected.
 
 
 import random
+import socket
 
 import pytest
 
 psycopg = pytest.importorskip('psycopg')
 pytest.importorskip('pgvector')
 
-from memman.store.postgres import EMBEDDING_DIM, _ensure_baseline_schema
-from memman.store.postgres import _ensure_hnsw_index, _store_schema
-from memman.store.postgres import drop_postgres_store, open_postgres_backend
+from memman.store.postgres import _ensure_baseline_schema, _ensure_hnsw_index
+from memman.store.postgres import _store_schema, drop_postgres_store
+from memman.store.postgres import open_postgres_backend
 from pgvector.psycopg import register_vector
-from tests.fixtures.postgres import SCHEMA, drain_connection_pair
-from tests.fixtures.postgres import simulate_drain_connection_drop, wait_for
+from tests.fixtures.postgres import SCHEMA, connection_pair
+from tests.fixtures.postgres import simulate_connection_drop, wait_for
 
 pytestmark = pytest.mark.postgres
 
@@ -114,7 +115,7 @@ def test_hnsw_top5_correctness(pg_conn):
 def test_pg_try_advisory_lock_contention(pg_dsn):
     """Holding pg_try_advisory_lock from one conn blocks a second."""
     lock_id = 9991
-    with drain_connection_pair(pg_dsn) as (conn_a, conn_b):
+    with connection_pair(pg_dsn) as (conn_a, conn_b):
         with conn_a.cursor() as cur_a:
             cur_a.execute(
                 'SELECT pg_try_advisory_lock(%s)', (lock_id,))
@@ -166,10 +167,10 @@ def test_search_path_persists_across_cursor_close_in_autocommit(pg_dsn):
 def test_advisory_lock_released_on_connection_close(pg_dsn):
     """Closing a connection releases its advisory locks without explicit unlock.
 
-    This is the crash-recovery mechanism the drain-lock contract
-    relies on: if a drain worker hangs or the host dies, the lock
-    is released by Postgres detecting the dead TCP session, and
-    another agent can claim the drain.
+    This is the crash-recovery mechanism `reembed_lock` and
+    `swap_lock` rely on: if the holder hangs or its host dies,
+    Postgres releases the lock when it detects the dead TCP session,
+    and another agent can take it.
     """
     lock_id = 9992
     holder = psycopg.connect(pg_dsn, autocommit=True)
@@ -185,7 +186,7 @@ def test_advisory_lock_released_on_connection_close(pg_dsn):
                 assert cur.fetchone()[0] is False, (
                     'lock should still be held by holder')
     finally:
-        simulate_drain_connection_drop(holder)
+        simulate_connection_drop(holder)
     with psycopg.connect(pg_dsn, autocommit=True) as later:
 
         def _can_acquire() -> bool:
@@ -201,11 +202,6 @@ def test_advisory_lock_released_on_connection_close(pg_dsn):
         assert wait_for(_can_acquire, timeout_sec=5.0), (
             'advisory lock should be released within 5s of'
             ' connection close (Postgres detects dead session)')
-
-
-def _pg_vec(seed: int) -> list[float]:
-    """Reproducible synthetic vector for postgres backend tests."""
-    return [(seed + i) * 0.001 for i in range(EMBEDDING_DIM)]
 
 
 @pytest.fixture
@@ -254,33 +250,6 @@ def test_hnsw_partial_index_built_concurrently(
     indexdef = row[2]
     assert 'vector_cosine_ops' in indexdef
     assert 'deleted_at IS NULL' in indexdef
-
-
-def test_bulk_update_embedding_chunks_at_1000(
-        _pg_store_backend, monkeypatch):
-    """_bulk_update_embedding splits >1000 rows into <=1000 commits.
-
-    Pure shape test: stubs `executemany` to record batch sizes without
-    inserting 1001 rows.
-    """
-    backend, _pg_dsn, _store_name = _pg_store_backend
-    sizes: list[int] = []
-    real_executemany = psycopg.Cursor.executemany
-
-    def spy(self, sql, args):
-        rows = list(args)
-        sizes.append(len(rows))
-        return real_executemany(self, sql, rows)
-
-    monkeypatch.setattr(psycopg.Cursor, 'executemany', spy)
-    big_batch = [
-        (f'b-{i}', _pg_vec(i), 'voyage-3-lite') for i in range(1500)
-        ]
-    backend.nodes._bulk_update_embedding(big_batch)
-    assert sizes, 'executemany never called'
-    assert all(n <= 1000 for n in sizes), (
-        f'expected all batches <=1000, got {sizes}')
-    assert sum(sizes) >= 1500
 
 
 def test_reindex_drops_invalid_hnsw_remnant(pg_dsn):
@@ -425,6 +394,53 @@ def test_reembed_lock_session_scoped_and_releases_on_close(
         with psycopg.connect(pg_dsn, autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+
+
+@pytest.mark.parametrize('lock_name', ['reembed_lock', 'swap_lock'])
+def test_lock_connection_sets_client_tcp_keepalive(
+        pg_dsn, monkeypatch, lock_name):
+    """Verify each advisory-lock connection keeps TCP keepalive at 30s.
+
+    Mutation: `reembed_lock` or `swap_lock` opening its connection
+        without `keepalives=True`, or `_open_connection` dropping
+        `keepalives_idle`, so a holder on a dead network path keeps
+        the lock until the kernel default idle of hours runs out.
+    Oracle: `TCP_KEEPIDLE` read from the lock connection's own client
+        socket; the server's `show tcp_keepalives_idle` reports the
+        server socket and reads the same either way.
+    """
+    from memman.store import postgres as pg_mod
+    store_name = 'pg_keepalive'
+    schema = _store_schema(store_name)
+    with psycopg.connect(pg_dsn, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+    original = pg_mod._open_connection
+    keepidle = []
+
+    def spy(dsn, **kwargs):
+        conn = original(dsn, **kwargs)
+        sock = socket.socket(fileno=conn.pgconn.socket)
+        try:
+            keepidle.append(sock.getsockopt(
+                socket.IPPROTO_TCP, socket.TCP_KEEPIDLE))
+        finally:
+            sock.detach()
+        return conn
+
+    backend = open_postgres_backend(store_name, pg_dsn)
+    try:
+        monkeypatch.setattr(pg_mod, '_open_connection', spy)
+        lock = (backend.reembed_lock('reembed') if lock_name == 'reembed_lock'
+                else backend.swap_lock())
+        with lock as got:
+            assert got is True
+    finally:
+        backend.close()
+        with psycopg.connect(pg_dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f'DROP SCHEMA IF EXISTS {schema} CASCADE')
+    assert keepidle == [30]
 
 
 def test_memman_reindex_timeout_caps_hnsw_build(

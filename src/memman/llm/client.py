@@ -28,8 +28,7 @@ logger = logging.getLogger('memman')
 # Enrichment emits JSON that scales with input size (its summary); a
 # small cap truncates large insights mid-JSON and the parse fails, so
 # the client gets a large token budget and, with WORKER_TIMEOUT, a
-# long read timeout. A caller raises the budget for one call through
-# `complete(max_tokens=)`.
+# long read timeout.
 WORKER_MAX_TOKENS = 4096
 
 EMPTY_RETRY_DELAY = 0.1
@@ -79,10 +78,7 @@ class MemmanLLMClient:
         self.timeout = timeout
         self.extra_headers = dict(extra_headers) if extra_headers else {}
 
-    def complete(self, system: str, user: str, *,
-                 temperature: float | None = None,
-                 stage: str,
-                 max_tokens: int | None = None) -> str:
+    def complete(self, system: str, user: str, *, stage: str) -> str:
         """Send a chat-completion request and return the message content.
 
         Parameters
@@ -91,18 +87,11 @@ class MemmanLLMClient:
             System prompt.
         user : str
             User prompt.
-        temperature : float | None, default None
-            Pass a float (typically 0.0) to pin sampling and get
-            deterministic outputs across runs; None uses the provider's
-            default.
         stage : str
             Originating pipeline stage from `llm.usage.VALID_STAGES`;
             every attempt's `usage` block is charged to it. Unknown
             stages raise `ValueError` so a typo cannot create a
             silent phantom bucket.
-        max_tokens : int | None, default None
-            Output budget for this call; None sends the ceiling the
-            client was built with.
 
         Returns
         -------
@@ -136,14 +125,12 @@ class MemmanLLMClient:
         headers.update(self.extra_headers)
         body: dict = {
             'model': self.model,
-            'max_tokens': self.max_tokens if max_tokens is None else max_tokens,
+            'max_tokens': self.max_tokens,
             'messages': [
                 {'role': 'system', 'content': system},
                 {'role': 'user', 'content': user},
                 ],
             }
-        if temperature is not None:
-            body['temperature'] = temperature
         if self.provider_routing:
             body['provider'] = self.provider_routing
 

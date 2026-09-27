@@ -26,7 +26,6 @@ resuming.
 
 import logging
 import os
-from collections.abc import Callable
 from dataclasses import dataclass
 
 from memman import config
@@ -112,8 +111,7 @@ def abort_swap(backend: Backend) -> None:
 
 
 def run_swap(
-        backend: Backend, ec_new: EmbeddingProvider, plan: SwapPlan, *,
-        progress_cb: Callable[[int], None] | None = None
+        backend: Backend, ec_new: EmbeddingProvider, plan: SwapPlan,
         ) -> SwapProgress:
     """Run the full swap workflow end-to-end. Idempotent + resumable.
 
@@ -180,8 +178,6 @@ def run_swap(
                 backend.write_swap_batch(items)
                 backend.meta.set(META_CURSOR, last_id)
             total_filled += len(items)
-            if progress_cb is not None:
-                progress_cb(total_filled)
 
     with backend.transaction():
         backend.meta.set(META_STATE, STATE_CUTOVER)

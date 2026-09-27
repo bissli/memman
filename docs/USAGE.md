@@ -24,17 +24,17 @@ Without `--verbose` or `--debug`, the stderr level is `MEMMAN_LOG_LEVEL` (defaul
 
 ```bash
 memman install                        # interactive wizard in a terminal
-memman install --target claude-code   # install into ~/.claude even when Claude Code is not detected
+memman install --claude-code          # install into ~/.claude even when Claude Code is not detected
 memman install --no-wizard --backend postgres --pg-dsn postgresql://memman@localhost/memman
 memman uninstall
-memman uninstall --target claude-code
+memman uninstall --claude-code
 ```
 
 **Install flags:**
 
 | Flag                    | Effect                                                                                                                                                                    |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--target claude-code`  | Install into `~/.claude`, whether or not Claude Code is detected.                                                                                                         |
+| `--claude-code`         | Install into `~/.claude`, whether or not Claude Code is detected.                                                                                                         |
 | `--backend NAME`        | Default storage backend, `sqlite` or `postgres`. Skips the backend prompt.                                                                                                |
 | `--pg-dsn URL`          | Postgres DSN. Install connects, checks for `pgvector`, and stops when either fails. Required with `--backend postgres` when no prompt runs and the env file holds no DSN. |
 | `--llm-endpoint URL`    | LLM endpoint URL. Skips the endpoint prompt. Must start with `http://` or `https://`.                                                                                     |
@@ -46,7 +46,7 @@ memman uninstall --target claude-code
 1. Refuses a flag whose value differs from the env file, and prints the `memman config set` command that changes it.
 2. Runs the install wizard (below) and writes its answers to the env file.
 3. Checks the host and the required keys, and works out every missing setting (see [Configuration](#configuration)).
-4. When Claude Code is detected (a `claude` binary on `PATH` or a `~/.claude` directory), or with `--target claude-code`:
+4. When Claude Code is detected (a `claude` binary on `PATH` or a `~/.claude` directory), or with `--claude-code`:
    - creates `~/.memman/logs/` at mode 0700,
    - symlinks the skill to `~/.claude/skills/memman/SKILL.md` and the five hook scripts into `~/.claude/hooks/memman/`,
    - registers the hooks in `~/.claude/settings.json`,
@@ -55,7 +55,7 @@ memman uninstall --target claude-code
 5. Writes those settings to the env file and installs the scheduler unit: a systemd timer on Linux or a launchd agent on macOS.
 6. On an OpenRouter endpoint, checks that a zero-data-retention endpoint on a vendor in `MEMMAN_LLM_PROVIDER_ONLY` serves `MEMMAN_LLM_MODEL`, and that OpenRouter lists no retirement date for it. The drain repeats the check once a day. A catalog outage prints an error, and the install still finishes.
 
-Without Claude Code and without `--target`, install sets up the scheduler only. Install needs systemd or launchd. On a host with neither, `MEMMAN_SCHEDULER_KIND=serve` in the environment selects serve mode, where a `memman scheduler serve` process drains the queue.
+Without Claude Code and without `--claude-code`, install sets up the scheduler only. Install needs systemd or launchd. On a host with neither, `MEMMAN_SCHEDULER_KIND=serve` in the environment selects serve mode, where a `memman scheduler serve` process drains the queue.
 
 A new Claude Code session picks up the hooks. [Chapter 5](design/05-integration.md) describes the hooks, the guide, and the skill. The SessionStart hook runs the hidden `memman prime`, which prints the status line, any model notice, a reminder to recall after a compaction, and the guide.
 
@@ -75,7 +75,7 @@ Without the wizard, install refuses to finish when a required value is missing: 
 
 ### Uninstall
 
-`memman uninstall` (with an optional `--target claude-code`) removes:
+`memman uninstall` (with an optional `--claude-code`) removes:
 
 - the scheduled backup timer or agent,
 - `~/.claude/hooks/memman/` and `~/.claude/skills/memman/`,
@@ -303,6 +303,7 @@ memman migrate --all --yes               # every store, no prompt
 - The DSN for `--to postgres` is `MEMMAN_POSTGRES_DSN_<store>`, then `MEMMAN_DEFAULT_POSTGRES_DSN`. `--all` needs `MEMMAN_DEFAULT_POSTGRES_DSN`.
 - The command prints a plan, with the DSN password hidden, and asks for confirmation. For `--to postgres` the plan also names the state of each target schema: `ABSENT` (created), `EMPTY` (recreated), or `POPULATED` (dropped with `CASCADE` and recreated). `--to sqlite` refuses a store whose SQLite directory already exists.
 - A store already on the target backend is skipped with a message.
+- A store with an embedding swap in flight is refused. The message names the fix: `memman --store <store> embed swap --resume` finishes the swap, and `--abort` discards it.
 - A store whose name is not a valid Postgres identifier is refused, or skipped under `--all`, and the message names a fix, such as a portable name to create and migrate.
 - To reverse the change, migrate in the other direction. `memman doctor` checks the result: its `stale_post_migrate_source` check warns when SQLite files remain in a store that routes to Postgres.
 

@@ -71,7 +71,7 @@ A drain claims rows one at a time until it has handled 100 (`--limit`), reaches 
 5. **Enrich.** One LLM call returns a one-sentence summary. A reply with no JSON object gets one more call. memman then drops a summary at least 85% as long as the content. This limit is defined in code. Changing it leaves the prompt and `prompt_version` unchanged.
 6. **Embed.** The store's embedding model embeds the content.
 7. **Apply.** One transaction commits the write:
-   - For a replacement, supersede the target and write an oplog row `replace` with detail `replaced by <id>`. If the target has been forgotten or superseded by this point, the new memory is stored without replacing it. The oplog records `target-gone` against the new memory and names the target. The result lists the target under `targets_gone`.
+   - For a replacement, supersede the target and write an oplog row `replace` with detail `replaced by <id>`. If the target has been forgotten or superseded by this point, the new memory is stored without replacing it. The oplog records `target-gone` against the new memory and names the target. The result names the target under `target_gone`.
    - Insert the memory with its `prompt_version` and `embedding_model`, store the vector, write an oplog row `remember`, set `linked_at`, and store the summary.
    - Set `enriched_at` only when both enrichment and the vector were saved.
 8. **Finish.** Mark the row `done`. Any exception in steps 2-7 calls `mark_failed` instead.
@@ -167,7 +167,7 @@ If the configured model becomes unavailable, memories are still stored. The enri
 
 ### Per-stage token accounting
 
-Each `complete` call names its stage: `enrichment`, `probe`, or `harness` for measurement tools outside the pipeline. An unknown stage raises an exception. The client records the provider's `usage` block once per attempt, inside the retry loop, because every HTTP 200 attempt is billed, even an empty one.
+Each `complete` call names its stage: `enrichment` or `probe`. An unknown stage raises an exception. The client records the provider's `usage` block once per attempt, inside the retry loop, because every HTTP 200 attempt is billed, even an empty one.
 
 - A non-2xx attempt increments only `http_errors`.
 - An HTTP 200 reply with no `usage` block counts under `missing_usage` and adds no tokens.

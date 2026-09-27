@@ -12,7 +12,7 @@ from dataclasses import fields
 import pytest
 from memman.doctor import check_enrichment_coverage
 from memman.graph.enrichment import ENRICHMENT_SYSTEM_PROMPT, enrich_with_llm
-from memman.migrate import PAYLOAD_VERSION, MigrateInsight
+from memman.migrate import MigrateInsight
 from memman.queue import QueueRow, open_queue_db
 from memman.search.keyword import keyword_search
 from memman.search.recall import intent_aware_recall
@@ -307,9 +307,8 @@ def test_no_record_type_carries_a_group3_field():
     """Verify the insight, the migration row and the queue row drop the four.
 
     Mutation: leaving a field on `Insight`, `MigrateInsight` or
-        `QueueRow`, or dropping the migration fields without moving
-        `PAYLOAD_VERSION`, so an older payload passes the version check.
-    Oracle: the dataclass fields, and the version one past 8.
+        `QueueRow`.
+    Oracle: the dataclass fields.
     """
     insight_fields = {f.name for f in fields(Insight)}
     migrate_fields = {f.name for f in fields(MigrateInsight)}
@@ -319,7 +318,6 @@ def test_no_record_type_carries_a_group3_field():
     assert insight_fields.isdisjoint(DROPPED_COLUMNS)
     assert migrate_fields.isdisjoint(DROPPED_COLUMNS)
     assert queue_fields.isdisjoint(DROPPED_HINTS)
-    assert PAYLOAD_VERSION == 9
 
 
 def test_the_node_store_offers_no_entity_verb():

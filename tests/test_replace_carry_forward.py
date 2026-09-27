@@ -21,12 +21,10 @@ def _replace_plan(new_id, target_id, **insight_overrides):
         }
     overrides.update(insight_overrides)
     return FactPlan(
-        action='replace',
         fact_insight=make_insight(**overrides),
-        targets=[(target_id, 'replace')],
+        replaced_id=target_id,
         embed_vec=None,
-        enrichment={},
-        )
+        enrichment={})
 
 
 def test_replace_plan_links_the_predecessor_and_keeps_it(tmp_db, tmp_backend):
@@ -52,7 +50,7 @@ def test_replace_plan_links_the_predecessor_and_keeps_it(tmp_db, tmp_backend):
     assert get_insight_by_id(tmp_db, 'old-1') is None
     assert get_insight_by_id(tmp_db, 'new-1').content == 'the broker is redis now'
     assert result['action'] == 'replace'
-    assert result['replaced_ids'] == ['old-1']
+    assert result['replaced_id'] == 'old-1'
     ops = {(e.operation, e.insight_id, e.detail)
            for e in tmp_backend.oplog.recent(limit=10)}
     assert ('replace', 'old-1', 'replaced by new-1') in ops
@@ -79,9 +77,8 @@ def test_a_gone_target_is_recorded_in_the_oplog(tmp_db, tmp_backend):
     assert tmp_backend.nodes.soft_delete('gone-1') is True
 
     plan = FactPlan(
-        action='replace',
         fact_insight=make_insight(id='new-1', content='the correction'),
-        targets=[('gone-1', 'replace')],
+        replaced_id='gone-1',
         embed_vec=None, enrichment={})
     result = _apply_plan(tmp_backend, plan)
 

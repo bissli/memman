@@ -28,16 +28,14 @@ def detect_claude_code() -> dict:
     Returns
     -------
     dict
-        Environment dict with keys name, display, detected, bin_path,
-        installed, version, config_dir.
+        Environment dict with keys display, detected, bin_path,
+        version, config_dir.
     """
     config_dir = os.path.join(home_dir(), '.claude')
     env = {
-        'name': 'claude-code',
         'display': 'Claude Code',
         'detected': False,
         'bin_path': '',
-        'installed': False,
         'version': '',
         'config_dir': config_dir,
         }
@@ -48,10 +46,6 @@ def detect_claude_code() -> dict:
         env['bin_path'] = bin_path
     if Path(config_dir).exists():
         env['detected'] = True
-
-    skill_path = os.path.join(config_dir, 'skills', 'memman', 'SKILL.md')
-    if Path(skill_path).exists():
-        env['installed'] = True
 
     if env['bin_path']:
         try:

@@ -20,7 +20,6 @@ from memman.store.model import Insight
 from tests.conftest import EMBEDDING_DIM, make_insight
 
 OLD = datetime(2024, 1, 1, tzinfo=timezone.utc)
-RECENT = datetime.now(timezone.utc)
 
 
 def _insert_fillers(backend, count=8):

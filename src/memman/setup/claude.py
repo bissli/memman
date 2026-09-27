@@ -204,14 +204,7 @@ def _uninstall_env(env: dict) -> bool:
     return len(errs) > 0
 
 
-def _validate_target(target: str) -> None:
-    """Raise if target is set and not the known environment."""
-    if target and target != 'claude-code':
-        raise click.ClickException(
-            f'invalid target {target!r} (must be claude-code)')
-
-
-def run_install(data_dir: str, target: str = '',
+def run_install(data_dir: str, claude_code: bool = False,
                 backend: str | None = None,
                 pg_dsn: str | None = None,
                 llm_endpoint: str | None = None,
@@ -219,19 +212,38 @@ def run_install(data_dir: str, target: str = '',
                 no_wizard: bool = False) -> None:
     """Install memman integration. Called by the `memman install` command.
 
-    Order of operations:
+    Parameters
+    ----------
+    data_dir : str
+        Holds the env file, the stores, and the model state.
+    claude_code : bool, default False
+        Install into `~/.claude` even when the `claude` binary is not
+        on `PATH`.
+    backend : str or None, default None
+        `sqlite` or `postgres`; None leaves the choice to the wizard or
+        the env file.
+    pg_dsn : str or None, default None
+        Postgres DSN for `backend='postgres'`.
+    llm_endpoint : str or None, default None
+        OpenAI-compatible LLM endpoint URL.
+    embed_provider : str or None, default None
+        Embed provider name.
+    no_wizard : bool, default False
+        Take flags, the env file, and defaults only; never prompt.
 
-    1. Validate target.
-    2. Reject flag-vs-file conflicts loudly (no silent override).
-    3. Detect LLM-CLI environments.
-    4. Run the wizard (endpoint + provider selectors + secret prompts +
-       backend selector + DSN). Merge its output into the env file via
-       `_write_env_keys` BEFORE the prereq check so any wizard-
-       collected secret is visible to `collect_install_knobs`.
-    5. Check prereqs (platform / binary / mandatory secrets).
-    6. Install CLI integration + scheduler unit.
+    Raises
+    ------
+    click.ClickException
+        A flag disagrees with a value already in the env file, or a
+        prerequisite is missing.
+
+    Notes
+    -----
+    - A flag that disagrees with the env file refuses before anything
+      is written; no flag silently overrides a file value.
+    - The wizard's answers reach the env file before the prereq check,
+      so a secret the wizard collected counts toward it.
     """
-    _validate_target(target)
     _reject_flag_file_conflicts(
         data_dir=data_dir, backend=backend, pg_dsn=pg_dsn,
         llm_endpoint=llm_endpoint, embed_provider=embed_provider)
@@ -246,8 +258,8 @@ def run_install(data_dir: str, target: str = '',
         _write_env_keys(wizard_out, data_dir=data_dir)
         config.reset_file_cache()
     knobs = check_prereqs(data_dir)
-    _run_install_flow(env, target=target, data_dir=data_dir, knobs=knobs,
-                      no_wizard=no_wizard)
+    _run_install_flow(env, claude_code=claude_code, data_dir=data_dir,
+                      knobs=knobs, no_wizard=no_wizard)
 
 
 def _reject_flag_file_conflicts(
@@ -283,9 +295,24 @@ def _reject_flag_file_conflicts(
                 f' {flag_value!r}.\nRun: memman config set {key} {flag_value}')
 
 
-def run_uninstall(data_dir: str, target: str = '') -> None:
-    """Remove memman integration. Called by the `memman uninstall` command."""
-    _validate_target(target)
+def run_uninstall(data_dir: str, claude_code: bool = False) -> None:
+    """Remove memman integration. Called by the `memman uninstall` command.
+
+    Parameters
+    ----------
+    data_dir : str
+        Holds the env file and the stores. The stores stay on disk;
+        the env file loses its secret keys and keeps the rest.
+    claude_code : bool, default False
+        Remove from `~/.claude` even when the `claude` binary is not
+        on `PATH`.
+
+    Raises
+    ------
+    click.ClickException
+        The Claude Code cleanup reported an error; the scheduler unit
+        is left in place.
+    """
     env = detect_claude_code()
     print('\n[backup]')
     try:
@@ -294,10 +321,10 @@ def run_uninstall(data_dir: str, target: str = '') -> None:
             status_ok(backup_result['platform'], action)
     except RuntimeError:
         pass
-    _run_uninstall_flow(env, target=target, data_dir=data_dir)
+    _run_uninstall_flow(env, claude_code=claude_code, data_dir=data_dir)
 
 
-def _run_install_flow(env: dict, target: str,
+def _run_install_flow(env: dict, claude_code: bool,
                       data_dir: str,
                       knobs: dict[str, str],
                       no_wizard: bool = False) -> None:
@@ -308,8 +335,8 @@ def _run_install_flow(env: dict, target: str,
     ----------
     env : dict
         `detect_claude_code` output.
-    target : str
-        CLI target to install; empty installs into whatever is detected.
+    claude_code : bool
+        Force the Claude Code install even when not detected.
     data_dir : str
         Holds the env file and the model state.
     knobs : dict[str, str]
@@ -323,7 +350,7 @@ def _run_install_flow(env: dict, target: str,
       file is final. A catalog outage prints an error and the install
       still finishes.
     """
-    if target:
+    if claude_code:
         _install_claude_code(env, data_dir=data_dir, no_wizard=no_wizard)
     else:
         print('Detecting LLM CLI environments...')
@@ -361,11 +388,11 @@ def _run_install_flow(env: dict, target: str,
         status_ok('openrouter', f'{model} routes under the provider pin')
 
 
-def _run_uninstall_flow(env: dict, target: str,
+def _run_uninstall_flow(env: dict, claude_code: bool,
                         data_dir: str) -> None:
     """Uninstall Claude Code integration and remove the scheduler unit."""
     failed = False
-    if target:
+    if claude_code:
         failed = _uninstall_env(env)
     else:
         print('Detecting LLM CLI environments...')

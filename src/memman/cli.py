@@ -387,10 +387,10 @@ class MemmanGroup(click.Group):
       alternative, a handler per command, would repeat itself at
       every command that opens a store or the queue.
     - The caught type is `BackendError` AND its subclasses, so
-      `store.errors.ConfigError` and `store.errors.IntegrityError`
-      come here too. Their messages are user-facing, but a constraint
-      violation is bug-shaped and now exits as one line like any
-      other; `--debug` is what recovers its stack.
+      `store.errors.ConfigError` comes here too. Its message is
+      user-facing, but a constraint violation is bug-shaped and now
+      exits as one line like any other; `--debug` is what recovers
+      its stack.
     - `session.active_store` keeps its own earlier catch, so a
       read-write store open never reaches here. This seam is what
       covers the paths that bypass it: the queue, the read-only
@@ -404,10 +404,10 @@ class MemmanGroup(click.Group):
     - Translating HERE rather than in `DB._query` / `DB._exec` is what
       keeps the fifteen callers that branch on a driver type intact
       (`queue.claim`'s stale-claim reclaim, `recall`'s bookkeeping
-      skip, `sqlite.py`'s `IntegrityError` arm). Their handlers sit
-      deeper, so they run first and this seam never sees the error --
-      the same ordering the Postgres backend gets by translating at
-      the connection scope instead of at each statement.
+      skip). Their handlers sit deeper, so they run first and this
+      seam never sees the error -- the same ordering the Postgres
+      backend gets by translating at the connection scope instead of
+      at each statement.
     """
 
     def invoke(self, ctx: click.Context) -> Any:
@@ -778,7 +778,6 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str) -> None:
         row_id, queue_uuid = enqueue(
             conn, store=name, content=content_str,
             hint_cat=cat,
-            priority=0,
             author=author)
     _json_out({
         'action': 'queued',
@@ -1135,7 +1134,6 @@ def _drain_queue(ctx: click.Context, limit: int, timeout: int,
                 'queue_claim',
                 row_id=row.id,
                 store=row.store,
-                priority=row.priority,
                 attempts=row.attempts,
                 content_len=len(row.content),
                 hint_cat=row.hint_cat)
@@ -1668,7 +1666,6 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             conn, store=name, content=content_str,
             hint_cat=cat,
             hint_replaced_id=id,
-            priority=0,
             author=author)
     _json_out({
         'action': 'queued',
@@ -3028,8 +3025,9 @@ def insights_by_queue(ctx: click.Context, queue_uuid: str) -> None:
 
 
 @cli.command()
-@click.option('--target', default='',
-              help='Target environment (claude-code)')
+@click.option('--claude-code', is_flag=True,
+              help='Install into ~/.claude even when Claude Code is not'
+                   ' detected.')
 @click.option('--backend', type=click.Choice(_BACKEND_CHOICES),
               default=None,
               help='Storage backend; bypasses the wizard prompt when set.')
@@ -3045,14 +3043,47 @@ def insights_by_queue(ctx: click.Context, queue_uuid: str) -> None:
 @click.option('--no-wizard', is_flag=True,
               help='Disable interactive prompts; flags + defaults only.')
 @click.pass_context
-def install(ctx: click.Context, target: str, backend: str | None,
+def install(ctx: click.Context, claude_code: bool, backend: str | None,
             pg_dsn: str | None, llm_endpoint: str | None,
             embed_provider: str | None, no_wizard: bool) -> None:
-    """Install memman integration: skill, hooks, scheduler."""
+    """Install memman integration: skill, hooks, scheduler.
+
+    \b
+    Parameters
+    ----------
+    claude_code : bool
+        Install into ~/.claude even when the `claude` binary is not on
+        PATH.
+    backend : str or None
+        `sqlite` or `postgres`; unset leaves it to the wizard or the
+        env file.
+    pg_dsn : str or None
+        Postgres DSN for `--backend postgres`; a run that cannot
+        prompt needs it here or already in the env file.
+    llm_endpoint : str or None
+        OpenAI-compatible LLM endpoint URL.
+    embed_provider : str or None
+        Embed provider name.
+    no_wizard : bool
+        Take flags, the env file, and defaults only; never prompt.
+
+    \b
+    Notes
+    -----
+    - A flag never overrides a value already in ~/.memman/env; it
+      refuses and names `memman config set` as the fix.
+
+    \b
+    Examples
+    --------
+    memman install
+    memman install --claude-code --no-wizard
+    memman install --backend postgres --pg-dsn postgresql://host/db
+    """  # noqa: D301, D410, D411
     from memman.setup.claude import run_install
     run_install(
         ctx.obj['data_dir'],
-        target=target,
+        claude_code=claude_code,
         backend=backend,
         pg_dsn=pg_dsn,
         llm_endpoint=llm_endpoint,
@@ -3061,13 +3092,34 @@ def install(ctx: click.Context, target: str, backend: str | None,
 
 
 @cli.command()
-@click.option('--target', default='',
-              help='Target environment (claude-code)')
+@click.option('--claude-code', is_flag=True,
+              help='Remove from ~/.claude even when Claude Code is not'
+                   ' detected.')
 @click.pass_context
-def uninstall(ctx: click.Context, target: str) -> None:
-    """Remove memman integration (reverse of `memman install`)."""
+def uninstall(ctx: click.Context, claude_code: bool) -> None:
+    """Remove memman integration (reverse of `memman install`).
+
+    \b
+    Parameters
+    ----------
+    claude_code : bool
+        Remove from ~/.claude even when the `claude` binary is not on
+        PATH.
+
+    \b
+    Notes
+    -----
+    - The stores stay on disk. The env file loses its secret keys and
+      keeps the rest, so a later install reuses the settings.
+
+    \b
+    Examples
+    --------
+    memman uninstall
+    memman uninstall --claude-code
+    """  # noqa: D301, D410, D411
     from memman.setup.claude import run_uninstall
-    run_uninstall(ctx.obj['data_dir'], target=target)
+    run_uninstall(ctx.obj['data_dir'], claude_code=claude_code)
 
 
 @cli.command()

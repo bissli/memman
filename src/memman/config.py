@@ -440,8 +440,7 @@ def get_store_backend(
     return raw or None
 
 
-def get_store_rerank_enabled(
-        store: str, data_dir: str | None = None) -> bool | None:
+def get_store_rerank_enabled(store: str) -> bool | None:
     """Read `MEMMAN_RERANK_ENABLED_<store>` from the env file; None if absent.
 
     Read-only helper -- no fallback to the global `MEMMAN_RERANK_ENABLED`.
@@ -450,10 +449,7 @@ def get_store_rerank_enabled(
     explicitly so the data flow stays visible.
     """
     key = RERANK_ENABLED_FOR(store)
-    if data_dir is None:
-        raw = get(key)
-    else:
-        raw = parse_env_file(env_file_path(data_dir)).get(key) or None
+    raw = get(key)
     if raw is None or raw == '':
         return None
     return raw.strip().lower() in TRUTHY
@@ -518,28 +514,6 @@ def enumerate_effective_config(redact: bool = True) -> dict[str, Any]:
             continue
         out[name] = raw
     return dict(sorted(out.items()))
-
-
-def effective_source(name: str) -> str:
-    """Return where `name` resolves from: 'env', 'file', or 'unset'.
-
-    Process-control and tuning vars read `os.environ` and report 'env'
-    when set. All other keys (the installable ones) report 'file' when
-    present in the env file, 'unset' otherwise. Shell-env values for
-    installable keys are invisible to the runtime resolver and are
-    NOT reported here.
-
-    Diagnostic helper for `memman doctor` / `memman config show`.
-    """
-    if name in _DIRECT_ENV_VARS:
-        raw = os.environ.get(name)
-        if raw is not None and raw != '':
-            return 'env'
-        return 'unset'
-    file_value = _load_file_cache().get(name)
-    if file_value is not None and file_value != '':
-        return 'file'
-    return 'unset'
 
 
 def collect_install_knobs(data_dir: str) -> dict[str, str]:

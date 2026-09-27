@@ -319,7 +319,7 @@ def _run_install_flow(monkeypatch, refresh):
         'version': '',
         'config_dir': '',
         }
-    claude._run_install_flow(env, target='', data_dir=_data_dir(), knobs={})
+    claude._run_install_flow(env, claude_code=False, data_dir=_data_dir(), knobs={})
 
 
 def test_install_forces_the_check_and_prints_the_notice(monkeypatch, capsys):

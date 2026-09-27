@@ -153,3 +153,28 @@ def test_connect_ro_closes_the_connection_when_the_probe_fails(
     assert captured
     with pytest.raises(sqlite3.ProgrammingError):
         captured[0].execute('select 1')
+
+
+def test_preflight_source_refuses_a_store_mid_swap(tmp_path):
+    """A store with an embed swap in flight is refused before any work.
+
+    Mutation: dropping the swap check from `preflight_source`. The
+        migrators never carried `embed_swap_state`, so a store migrated
+        mid-swap restarted its swap on the target with the cursor
+        reset.
+    Oracle: `run_swap` leaves `embed_swap_state` set from its first
+        backfill batch until cutover clears it, so its presence means a
+        swap is in flight.
+    """
+    sdir = tmp_path / 'data' / 'mid_swap'
+    _seed_with_fingerprint_only(sdir)
+    conn = sqlite3.connect(str(sdir / 'memman.db'))
+    try:
+        conn.execute(
+            'insert into meta (key, value) values (?, ?)',
+            ('embed_swap_state', 'backfilling'))
+        conn.commit()
+    finally:
+        conn.close()
+    with pytest.raises(MigrateError, match='embed swap'):
+        SqliteMigrator(str(tmp_path)).preflight_source('mid_swap')

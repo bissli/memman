@@ -4,9 +4,19 @@
 universe is `nodes.get_all_active()`.
 """
 
+import numpy as np
 import pytest
 from memman.search.recall import intent_aware_recall
 from tests.conftest import make_insight
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Per-pair float64 cosine similarity, the oracle for the matmul path.
+    """
+    av = np.asarray(a, dtype=np.float64)
+    bv = np.asarray(b, dtype=np.float64)
+    return float(np.dot(av, bv)) / float(
+        np.linalg.norm(av) * np.linalg.norm(bv))
 
 
 def test_similarities_omits_nonpositive_and_unembedded(backend):
@@ -169,38 +179,34 @@ def test_malformed_embedding_blob_does_not_break_recall(tmp_backend):
 
 
 def test_similarities_matches_per_pair_cosine(backend, backend_kind):
-    """Verify the matmul agrees with `cosine_similarity` to 1e-12.
+    """Verify the matmul agrees with a per-pair cosine to storage precision.
 
-    The session scores with one matrix-vector product where the old
-    path called `cosine_similarity` per row. Both are float64, but
-    BLAS sums a matrix-vector product in a different order than a
-    per-pair dot, so the two agree to a float ulp rather than
-    exactly. A real defect here -- a missing norm, a transposed
-    matmul, rows misaligned with their ids -- lands far outside 1e-12.
+    The session scores with one matrix-vector product; the oracle is a
+    per-pair dot. Both are float64, but BLAS sums a matrix-vector
+    product in a different order than a per-pair dot, so the two agree
+    to a float ulp rather than exactly. A real defect here -- a missing
+    norm, a transposed matmul, rows misaligned with their ids -- lands
+    far outside the tolerance.
 
     Mutation: dropping the query-norm divisor, dividing by the wrong
         axis's norms, or letting `_row_ids` drift out of step with the
         matrix rows.
-    Oracle: `embed.vector.cosine_similarity` computed per row over
-        the same vectors.
+    Oracle: `_cosine_similarity` computed per row over the same
+        vectors.
 
     Notes
     -----
-    - The tolerance follows the backend's declared storage precision.
+    - The tolerance follows each backend's storage precision.
       SQLite keeps float64 blobs, so it is held to a float ulp;
-      pgvector's `vector` is float4, declared as
-      `embedding_dtype='float32'` in the Postgres migrator features,
-      so single-precision epsilon is the floor there and demanding
-      1e-12 of it would assert something the storage cannot
-      represent.
+      pgvector's `vector` stores float4, so single-precision epsilon
+      is the floor there and demanding 1e-12 of it would assert
+      something the storage cannot represent.
     - `anchor_score` is min-max normalized over the query's own
       candidate pool, so a last-bit change in one similarity rescales
       every row. Ordering churn far larger than this tolerance is
       expected from any numeric change on this path, and is
       amplification rather than a logic difference.
     """
-    from memman.embed.vector import cosine_similarity
-
     tolerance = 1e-6 if backend_kind == 'postgres' else 1e-12
     dim = 512
     query = [0.03 * ((i % 7) - 3) for i in range(dim)]
@@ -218,7 +224,7 @@ def test_similarities_matches_per_pair_cosine(backend, backend_kind):
 
     checked = 0
     for iid, vec in vectors.items():
-        expected = cosine_similarity(query, vec)
+        expected = _cosine_similarity(query, vec)
         if expected > 0:
             assert iid in sims, f'{iid} scored {expected} but is absent'
             assert sims[iid] == pytest.approx(expected, abs=tolerance)

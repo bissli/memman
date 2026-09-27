@@ -459,8 +459,7 @@ def test_the_migration_payload_carries_no_edges_or_sessions():
 
     Mutation: keeping the `edges` payload field or the `session_id`
         insight field, which the target store has no table or column
-        to load. tests/test_no_group3_fields.py pins the version the
-        current shape carries.
+        to load.
     Oracle: the dataclass fields.
     """
     payload_fields = {f.name for f in fields(MigrationPayload)}

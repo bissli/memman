@@ -8,7 +8,7 @@ store, two presentations.
 
 The seam is the root group, not `DB._query`: fifteen callers branch on
 a driver type (the queue's stale-claim reclaim, recall's bookkeeping
-skip, the `IntegrityError` arm in `sqlite.py`), and their handlers sit
+skip, the `sqlite3.IntegrityError` arm in `sqlite.py`), and their handlers sit
 deeper, so translating at the statement would make every one of them
 dead code.
 
@@ -121,7 +121,7 @@ def test_the_db_layer_leaves_driver_errors_driver_typed(tmp_path):
 
     This pins WHERE the seam sits, at the DB layer only. Fifteen
     callers branch on a driver type -- the queue's stale-claim reclaim,
-    recall's bookkeeping skip, the `IntegrityError` arm in `sqlite.py`
+    recall's bookkeeping skip, the `sqlite3.IntegrityError` arm in `sqlite.py`
     -- and every one needs the driver type to survive `DB._query` /
     `DB._exec`. Those two methods are what this test covers; a
     translation added higher, in the node layer or in `queue.py`, would

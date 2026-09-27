@@ -2,7 +2,7 @@
 
 The domain type (Insight) plus DTOs returned by Backend Protocol
 verbs (OpLogEntry, OpLogStats, NodeStats, ProvenanceCount,
-WorkerRun, ReembedRow). Includes the timestamp helper used across the
+WorkerRun). Includes the timestamp helper used across the
 package.
 
 Protocol commitment: `Insight.created_at` and `Insight.updated_at`
@@ -20,7 +20,6 @@ from typing import Any
 logger = logging.getLogger('memman')
 
 Id = str
-Score = float
 
 VALID_CATEGORIES = {
     'preference', 'decision', 'fact',
@@ -222,19 +221,7 @@ class WorkerRun:
     id: int
     started_at: datetime
     ended_at: datetime | None
-    rows_processed: int
-    error: str = ''
     last_heartbeat_at: datetime | None = None
-
-
-@dataclass
-class ReembedRow:
-    """One row returned by `nodes.iter_for_reembed`."""
-
-    id: Id
-    content: str
-    embedding_model: str | None
-    blob_length: int | None
 
 
 def format_timestamp(dt: datetime) -> str:

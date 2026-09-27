@@ -16,12 +16,6 @@ import pytest
 from memman import config
 
 
-def _seed_pg_keys(env_file, store: str, dsn: str) -> None:
-    """Write per-store postgres backend keys for `store`."""
-    env_file(config.BACKEND_FOR(store), 'postgres')
-    env_file(config.env_key_for('postgres', 'DSN', store), dsn)
-
-
 def _seed_sqlite_dir(data_dir: str, store: str) -> None:
     """Materialize a SQLite store dir so `list_stores` finds it."""
     sdir = Path(data_dir) / 'data' / store

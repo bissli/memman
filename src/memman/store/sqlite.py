@@ -27,26 +27,23 @@ from urllib.parse import quote
 import numpy as np
 from memman.embed.fingerprint import Fingerprint
 from memman.embed.vector import deserialize_vector, serialize_vector
-from memman.migrate import PAYLOAD_VERSION, Artifact, BackendFeatures
-from memman.migrate import MigrateError, MigrateInsight, MigrateOpLog
-from memman.migrate import MigrationPayload, Migrator, PendingReembed
-from memman.migrate import SwapState, sanitize_identifier
+from memman.migrate import Artifact, MigrateError, MigrateInsight
+from memman.migrate import MigrateOpLog, MigrationPayload, Migrator
+from memman.migrate import sanitize_identifier
 from memman.store import db as _db
 from memman.store import node as _node
 from memman.store import oplog as _oplog
 from memman.store.backend import Backend, MetaStore, NodeStore, Oplog
 from memman.store.backend import RecallSession
-from memman.store.base import BaseNodeStore
 from memman.store.db import DB
 from memman.store.model import EnrichmentCoverage, Id, Insight, NodeStats
 from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
-from memman.store.model import ReembedRow, WorkerRun, format_timestamp
-from memman.store.model import parse_timestamp
+from memman.store.model import WorkerRun, format_timestamp, parse_timestamp
 
 logger = logging.getLogger('memman')
 
 
-class SqliteNodeStore(BaseNodeStore, NodeStore):
+class SqliteNodeStore(NodeStore):
     """Bindings from NodeStore Protocol verbs to `store.node` functions.
     """
 
@@ -116,16 +113,6 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
     def get_by_queue_uuid(self, queue_uuid: str) -> list[Insight]:
         return _node.get_by_queue_uuid(self._db, queue_uuid)
 
-    def iter_for_reembed(
-            self, cursor: Id, batch: int) -> list[ReembedRow]:
-        rows = _node.iter_for_reembed(self._db, cursor, batch)
-        return [
-            ReembedRow(
-                id=r[0], content=r[1], embedding_model=r[2],
-                blob_length=r[3])
-            for r in rows
-            ]
-
     def provenance_distribution(self) -> list[ProvenanceCount]:
         rows = _node.provenance_distribution(self._db)
         return [
@@ -149,9 +136,6 @@ class SqliteNodeStore(BaseNodeStore, NodeStore):
             self, id: Id, vec: list[float], model: str) -> None:
         _node.update_embedding(
             self._db, id, serialize_vector(vec), model)
-
-    def get_embedding(self, id: Id) -> bytes | None:
-        return _node.get_embedding(self._db, id)
 
     def embedding_stats(self) -> tuple[int, int]:
         return _node.embedding_stats(self._db)
@@ -208,9 +192,6 @@ group by length(embedding)
     def get_unenriched_linked_ids(self, *, limit: int) -> list[Id]:
         return _node.get_unenriched_linked_ids(self._db, limit)
 
-    def count_unenriched_linked(self) -> int:
-        return _node.count_unenriched_linked(self._db)
-
     def iter_stale_insight_ids(self, active_pv: str) -> list[Id]:
         return _node.iter_stale_insight_ids(self._db, active_pv)
 
@@ -259,10 +240,8 @@ class SqliteOplog(Oplog):
     def maintenance_step(self) -> None:
         _oplog.maintenance_step(self._db)
 
-    def trim_by_age(
-            self, *,
-            retention_days: int = _oplog.OPLOG_RETENTION_DAYS) -> int:
-        return _oplog.trim_oplog_by_age(self._db, retention_days)
+    def trim_by_age(self) -> int:
+        return _oplog.trim_oplog_by_age(self._db)
 
     def recent(
             self, *, limit: int = 20,
@@ -302,9 +281,8 @@ class SqliteRecallSession(RecallSession):
 
     Notes
     -----
-    - The matrix is float64 because `embed.vector.cosine_similarity`
-      promotes to float64, so a float64 matmul keeps this path within
-      a float ulp of that helper. The speed comes from
+    - The matrix is float64 because cosine similarity is computed at
+      float64 precision throughout the store. The speed comes from
       `np.frombuffer` over `struct.unpack`, not from a narrower
       dtype.
     - Rows whose blob width differs from the store's modal width are
@@ -329,9 +307,8 @@ class SqliteRecallSession(RecallSession):
           scoring only the modal group would blank the whole vector
           channel for a query at the other width -- including the
           rows that query CAN score. Each row is compared only
-          against a query of its own width, which is
-          `cosine_similarity`'s own 0.0-on-mismatch rule applied per
-          row rather than per store.
+          against a query of its own width: a dimension mismatch
+          scores 0.0, applied per row rather than per store.
         """
         if self._groups is not None:
             return
@@ -482,11 +459,11 @@ class SqliteBackend(Backend):
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
-        """Run a block in a write transaction.
+        """Run a block in one `begin immediate` write transaction.
 
-        Delegates to `db.in_transaction` for `begin immediate`
-        semantics. Nested entry currently raises (see
-        `db.DB.in_transaction`).
+        Commits when the block returns and rolls back when it raises.
+        A nested entry joins the outer transaction and opens no second
+        one.
         """
         if self._db._in_tx:
             yield
@@ -555,19 +532,6 @@ class SqliteBackend(Backend):
         """Null `embedding_pending` on every row."""
         with self.transaction():
             _node.swap_abort_sqlite(self._db)
-
-    @contextmanager
-    def drain_lock(
-            self, store: str | None = None) -> Iterator[bool]:
-        """Always yields True on SQLite (single-process by definition).
-
-        SQLite drains are gated by the process-global fcntl
-        `drain.lock` file at the queue layer (`src/memman/drain_lock.py`),
-        not at the Backend level. This verb is a no-op for Backend
-        Protocol parity; Postgres opens a dedicated connection with
-        keepalives and acquires a per-store advisory lock.
-        """
-        yield True
 
     @contextmanager
     def recall_session(self) -> Iterator[SqliteRecallSession]:
@@ -699,10 +663,6 @@ def drop_sqlite_store(store: str, data_dir: str) -> None:
         shutil.rmtree(sdir)
 
 
-_SQLITE_MIGRATOR_FEATURES = BackendFeatures(
-    accepted_embedding_dtypes=frozenset({'float32', 'float64'}))
-
-
 class SqliteMigrator(Migrator):
     """SQLite implementation of the Migrator surface.
 
@@ -716,7 +676,6 @@ class SqliteMigrator(Migrator):
     """
 
     backend_name: ClassVar[str] = 'sqlite'
-    snapshot_features: ClassVar[BackendFeatures] = _SQLITE_MIGRATOR_FEATURES
 
     def __init__(self, data_dir: str) -> None:
         self.data_dir = data_dir
@@ -778,6 +737,9 @@ class SqliteMigrator(Migrator):
                 fp = conn.execute(
                     "select 1 from meta where key ="
                     " 'embed_fingerprint'").fetchone()
+                swap_state = conn.execute(
+                    "select value from meta where key ="
+                    " 'embed_swap_state'").fetchone()
         except sqlite3.Error as exc:
             raise MigrateError(
                 f'cannot read sqlite store {store!r} at {path}:'
@@ -786,10 +748,16 @@ class SqliteMigrator(Migrator):
             raise MigrateError(
                 f'sqlite store {store!r} is empty (no insights,'
                 f' no embed fingerprint); nothing to migrate')
+        if swap_state and swap_state[0]:
+            raise MigrateError(
+                f'sqlite store {store!r} has an embed swap in'
+                f' flight (state={swap_state[0]!r}); run `memman'
+                f' --store {store} embed swap --resume` to finish'
+                f' it, or `memman --store {store} embed swap'
+                f' --abort` to discard it')
 
     def preflight_target(self, store: str) -> None:
-        sanitize_identifier(
-            store, max_len=63, allowed_chars=r'[A-Za-z0-9_]')
+        sanitize_identifier(store)
         target_root = Path(self.data_dir) / 'data'
         target_root.mkdir(mode=0o755, exist_ok=True, parents=True)
 
@@ -815,13 +783,11 @@ class SqliteMigrator(Migrator):
 select id, content, category, summary, embedding,
        linked_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, embedding_model,
-       embedding_pending, queue_uuid,
-       superseded_by, author
+       queue_uuid, superseded_by, author
 from insights
 order by id
 """).fetchall()
             insights: list[MigrateInsight] = []
-            pending: list[PendingReembed] = []
             for r in rows:
                 emb = deserialize_vector(r[4]) if r[4] else None
                 insights.append(MigrateInsight(
@@ -838,14 +804,9 @@ order by id
                         parse_timestamp(r[9]) if r[9] else None),
                     prompt_version=r[10],
                     embedding_model=r[11],
-                    queue_uuid=r[13],
-                    superseded_by=r[14],
-                    author=r[15]))
-                if r[12] is not None:
-                    pv = deserialize_vector(r[12])
-                    if pv is not None:
-                        pending.append(PendingReembed(
-                            insight_id=r[0], vector=pv))
+                    queue_uuid=r[12],
+                    superseded_by=r[13],
+                    author=r[14]))
 
             op_rows = conn.execute("""
 select id, operation, insight_id, detail, created_at,
@@ -863,50 +824,15 @@ order by id
                     legacy_id=int(o[0]))
                 for o in op_rows]
 
-        swap_state = None
-        if 'embed_swap_state' in meta_dict:
-            try:
-                dim = int(meta_dict.get(
-                    'embed_swap_target_dim', '0'))
-            except ValueError:
-                dim = 0
-            swap_state = SwapState(
-                target_provider=meta_dict.get(
-                    'embed_swap_target_provider', ''),
-                target_model=meta_dict.get(
-                    'embed_swap_target_model', ''),
-                target_dim=dim,
-                cursor=meta_dict.get('embed_swap_cursor') or None)
-
-        stripped_meta = {
-            k: v for k, v in meta_dict.items()
-            if not k.startswith('embed_swap_')}
-
         return MigrationPayload(
-            payload_version=PAYLOAD_VERSION,
             fingerprint=fingerprint,
             embedding_dim=fingerprint.dim,
-            embedding_dtype='float64',
             insights=insights,
             oplog=oplog,
-            embedding_pending=pending,
-            swap_state=swap_state,
-            meta=stripped_meta)
+            meta=meta_dict)
 
     def apply(
             self, store: str, payload: MigrationPayload) -> None:
-        if payload.payload_version != PAYLOAD_VERSION:
-            raise MigrateError(
-                f'payload version {payload.payload_version} does not'
-                f' match this build ({PAYLOAD_VERSION}); re-gather'
-                ' with the matching memman')
-        if payload.embedding_dtype not in (
-                self.snapshot_features.accepted_embedding_dtypes):
-            raise MigrateError(
-                f'sqlite cannot accept embedding_dtype'
-                f' {payload.embedding_dtype!r}; accepted:'
-                f' {sorted(self.snapshot_features.accepted_embedding_dtypes)}')
-
         target_dir = _db.store_dir(self.data_dir, store)
         Path(target_dir).mkdir(
             mode=0o755, exist_ok=True, parents=True)
@@ -984,24 +910,7 @@ order by id
                         " (name, seq) values ('oplog', ?)",
                         (max_oplog_id,))
 
-                for p in payload.embedding_pending:
-                    blob = serialize_vector(p.vector)
-                    conn.execute(
-                        'update insights'
-                        ' set embedding_pending = ?'
-                        ' where id = ?',
-                        (blob, p.insight_id))
-
                 meta_rows = list(payload.meta.items())
-                if payload.swap_state:
-                    s = payload.swap_state
-                    meta_rows.extend([
-                        ('embed_swap_target_provider',
-                         s.target_provider),
-                        ('embed_swap_target_model', s.target_model),
-                        ('embed_swap_target_dim', str(s.target_dim)),
-                        ('embed_swap_cursor', s.cursor or ''),
-                        ])
                 if meta_rows:
                     conn.executemany(
                         'insert or replace into meta'
@@ -1026,12 +935,5 @@ order by id
         from memman.setup.archive import archive_store_dir
         path = archive_store_dir(data_dir, store)
         if path is None:
-            return Artifact(
-                kind='none', location=None,
-                metadata={'reason': 'no source dir to archive'})
-        return Artifact(
-            kind='filesystem',
-            location=str(path), metadata={})
-
-    def drop(self, store: str) -> None:
-        drop_sqlite_store(store, self.data_dir)
+            return Artifact(kind='none', location=None)
+        return Artifact(kind='filesystem', location=str(path))

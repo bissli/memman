@@ -102,10 +102,10 @@ Installation creates or updates these paths:
 | `~/.memman/env` (mode 0600)                            | every setting, including API keys                            | created or updated in place     |
 | `~/.memman/logs/`                                      | worker output                                                | directory                       |
 
-The install needs systemd on Linux, launchd on macOS, or `MEMMAN_SCHEDULER_KIND=serve` on a host that runs `memman scheduler serve` itself. It installs into `~/.claude` when it detects Claude Code, and installs only the scheduler when it does not. `--target` skips the detection:
+The install needs systemd on Linux, launchd on macOS, or `MEMMAN_SCHEDULER_KIND=serve` on a host that runs `memman scheduler serve` itself. It installs into `~/.claude` when it detects Claude Code, and installs only the scheduler when it does not. `--claude-code` skips the detection:
 
 ```bash
-memman install --target claude-code
+memman install --claude-code
 ```
 
 A new Claude Code session picks up the hooks. [Development](#development) covers editable installs and the test suite.

@@ -6,8 +6,6 @@ Pins the load-bearing contract of the `BACKENDS` static registry:
 - `--to` Click choices are dynamic; a synthetic third backend
   added at test time appears in the help output.
 - `extras.detect_active_extras` reads through `extras_packages`.
-- Capability flags are typed (BackendFeatures dataclass), not
-  stringly-typed sets.
 
 These tests guard the abstraction the v3 refactor was for: adding
 a third RDBMS backend should require ONE new entry in the
@@ -17,7 +15,6 @@ edits to factory.py / cli.py / doctor.py / extras.py dispatch.
 from __future__ import annotations
 
 import pytest
-from memman.migrate import BackendFeatures
 from memman.store.factory import BACKENDS, BackendDescriptor, all_descriptors
 from memman.store.factory import descriptor, known_backends
 
@@ -50,24 +47,9 @@ def test_all_descriptors_returns_BackendDescriptor_instances():
     for d in all_descriptors():
         assert isinstance(d, BackendDescriptor)
         assert d.name in known_backends()
-        assert d.migrator_cls is not None
         assert callable(d.open_backend)
         assert callable(d.list_stores_keys)
         assert callable(d.drop_store_fn)
-
-
-def test_descriptor_features_typed_dataclass():
-    """Verify each migrator advertises a typed `BackendFeatures`.
-
-    Mutation: a migrator shipping a bare set or dict as
-        `snapshot_features`, or `accepted_embedding_dtypes` as a list,
-        so `apply()` reads a shape it does not expect.
-    Oracle: `isinstance` against the dataclass and `frozenset`.
-    """
-    for d in all_descriptors():
-        features = d.migrator_cls.snapshot_features
-        assert isinstance(features, BackendFeatures)
-        assert isinstance(features.accepted_embedding_dtypes, frozenset)
 
 
 def test_postgres_descriptor_declares_extras_packages():

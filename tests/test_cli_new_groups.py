@@ -19,15 +19,6 @@ def runner(mm_runner):
     return mm_runner
 
 
-def _fake_run_success(*a, **kw):
-    """subprocess.run stub that pretends every systemctl/launchctl call succeeds."""
-    class _Result:
-        returncode = 0
-        stdout = 'active'
-        stderr = ''
-    return _Result()
-
-
 def _patch_no_subprocess(monkeypatch, *, active: bool = True):
     """Thin wrapper for shared `fake_subprocess` keyed on `sch`."""
     from tests.conftest import fake_subprocess

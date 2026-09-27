@@ -127,7 +127,7 @@ queue (
   hint_cat,
   hint_replaced_id,                       -- replace target, null for remember
   queue_uuid,                             -- unique
-  priority, queued_at, claimed_at, worker_pid, attempts,
+  queued_at, claimed_at, worker_pid, attempts,
   status,                                 -- pending, done, failed, or stale
   last_error, processed_at, author
 )

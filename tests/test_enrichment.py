@@ -307,8 +307,8 @@ class _SequenceClient:
         self.responses = list(responses)
         self.calls = []
 
-    def complete(self, system, user, *, stage, max_tokens=None):
-        self.calls.append({'stage': stage, 'max_tokens': max_tokens})
+    def complete(self, system, user, *, stage):
+        self.calls.append({'stage': stage})
         if not self.responses:
             raise AssertionError(
                 f'complete called {len(self.calls)} times;'

@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 from memman.store.errors import ConfigError
 from memman.store.model import EnrichmentCoverage, Id, Insight, NodeStats
 from memman.store.model import OpLogEntry, OpLogStats, ProvenanceCount
-from memman.store.model import ReembedRow, WorkerRun
+from memman.store.model import WorkerRun
 
 if TYPE_CHECKING:
     from memman.embed.fingerprint import Fingerprint
@@ -207,12 +207,6 @@ class NodeStore(Protocol):
         """
         ...
 
-    def iter_for_reembed(
-            self, cursor: Id, batch: int) -> list[ReembedRow]:
-        """Return a batch of (id, content, embedding_model, blob_length).
-        """
-        ...
-
     def provenance_distribution(self) -> list[ProvenanceCount]:
         """Return (prompt_version, count) for active rows."""
         ...
@@ -234,10 +228,6 @@ class NodeStore(Protocol):
         Postgres). `serialize_vector` / `deserialize_vector` stay
         confined to the SqliteBackend.
         """
-        ...
-
-    def get_embedding(self, id: Id) -> bytes | None:
-        """Return the raw embedding blob for an active insight."""
         ...
 
     def embedding_stats(self) -> tuple[int, int]:
@@ -306,10 +296,6 @@ class NodeStore(Protocol):
         """
         ...
 
-    def count_unenriched_linked(self) -> int:
-        """Count linked-but-unenriched active insights."""
-        ...
-
     def iter_stale_insight_ids(self, active_pv: str) -> list[Id]:
         """Return ids of active insights whose staleness key drifted.
 
@@ -325,11 +311,6 @@ class NodeStore(Protocol):
 
     def reset_for_rebuild(self, ids: list[Id]) -> None:
         """Clear enriched_at and linked_at for the given ids."""
-        ...
-
-    def review_content_quality(
-            self, *, limit: int) -> list[dict[str, Any]]:
-        """Return active insights flagged by content-quality checks."""
         ...
 
 
@@ -375,8 +356,8 @@ class Oplog(Protocol):
         """Per-store backend maintenance pass (vacuum/trim)."""
         ...
 
-    def trim_by_age(self, *, retention_days: int = 180) -> int:
-        """Delete oplog rows older than retention_days. Returns count."""
+    def trim_by_age(self) -> int:
+        """Delete oplog rows older than 180 days. Returns count."""
         ...
 
     def recent(
@@ -532,22 +513,6 @@ class Backend(Protocol):
         Nesting reuses the outer transaction (SAVEPOINT or no-op);
         nested rollback is unsupported. Required because `apply_all`
         runs inside a caller-opened transaction.
-        """
-        ...
-
-    def drain_lock(
-            self, store: str | None = None
-            ) -> AbstractContextManager[bool]:
-        """Acquire a per-store advisory drain lock.
-
-        SQLite: yields True (the SQLite drain path is gated by the
-        process-global fcntl `drain.lock` file; this verb is a no-op
-        for backend-Protocol parity). Postgres: opens a dedicated
-        connection outside any pool with `keepalives_idle=30`, runs
-        `pg_try_advisory_lock`. Yields True when acquired, False
-        otherwise. Lock auto-releases on connection close so a
-        hung worker is detected by TCP keepalives rather than
-        holding the lock indefinitely.
         """
         ...
 

@@ -103,7 +103,7 @@ There are no incremental migrations, rebuild scripts, or checks for columns miss
 3. Apply the change manually to each live store. Drop each index whose definition changed so the baseline recreates it when the store next opens. The queue database is wiped and recreated instead.
 4. Keep the one-off SQL with the rollout notes in the plan's evidence directory.
 5. Update `EXPECTED_INSIGHT_COLUMNS` in `src/memman/doctor.py` for a new `insights` column, and `RETIRED_INSIGHT_INDEXES` for a dropped index. The `schema_columns` and `partial_index_predicates` checks read them.
-6. Increment `PAYLOAD_VERSION` in `src/memman/migrate/__init__.py` when the migration payload changes. Increment `BACKUP_FORMAT_VERSION` in `src/memman/backup/__init__.py` when a backed-up schema changes. Restore copies the data directly and rejects bundles with a different version.
+6. Increment `BACKUP_FORMAT_VERSION` in `src/memman/backup/__init__.py` when a backed-up schema changes. Restore copies the data directly and rejects bundles with a different version.
 7. Include a test that checks the new schema.
 
 ### Migrating between SQLite and Postgres

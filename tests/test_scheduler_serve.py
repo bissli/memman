@@ -61,8 +61,6 @@ def test_serve_writes_interval_file(runner, monkeypatch):
     interval_path = Path(os.environ['HOME']) / '.memman' / 'scheduler.serve_interval'
     captured: dict = {}
 
-    real_drain = sched_mod  # placeholder
-
     def _capture_then_stop(*args, **kwargs):
         captured['interval'] = sched_mod.read_serve_interval()
         captured['exists'] = interval_path.exists()

@@ -13,10 +13,6 @@ class BackendError(Exception):
     """Base class for all backend errors."""
 
 
-class IntegrityError(BackendError):
-    """Raised on constraint violations (FK, unique, check)."""
-
-
 class ConfigError(BackendError, _RuntimeConfigError):
     """Raised when the backend selection or DSN is misconfigured.
 

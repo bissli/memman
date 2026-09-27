@@ -12,6 +12,7 @@ import stat
 from pathlib import Path
 from typing import Any
 
+from memman.embed import PROVIDER_REQUIRED_KEYS
 from memman.llm import usage as llm_usage
 from memman.setup.settings import add_claude_hooks_selective, read_json_file
 from memman.store.backend import Backend
@@ -246,21 +247,44 @@ def check_env_completeness() -> dict[str, Any]:
 
     Catches the upgrade case where a new release adds a key the user's
     existing file lacks. Reports the missing keys so the user can run
-    `memman install` to repopulate. Optional secrets are not flagged
-    when absent (the user may not have configured an alternate provider).
+    `memman install` to repopulate.
 
     Per-store dispatch is validated separately by `check_per_store_keys`;
     this check covers global installable knobs only.
+
+    Notes
+    -----
+    - A provider key counts as missing only when a configured provider
+      reads it: the embed provider's own keys, and the Voyage key while
+      Voyage reranking is on for any store. The LLM key is never
+      flagged, since a loopback endpoint needs none.
+    - Reranking is on for a store as recall reads it: the store's
+      `MEMMAN_RERANK_ENABLED_<store>` when set, else the global
+      `MEMMAN_RERANK_ENABLED`, which counts as on when unset or
+      empty.
     """
     from memman import config
 
     path = config.env_file_path()
     parsed = config.parse_env_file(path)
 
+    used_provider_keys = set(PROVIDER_REQUIRED_KEYS.get(
+        parsed.get(config.EMBED_PROVIDER, ''), ()))
+    rerank_switches = [
+        value for key, value in parsed.items()
+        if key.startswith(config.RERANK_ENABLED_FOR(''))
+        ]
+    rerank_switches.append(parsed.get(config.RERANK_ENABLED) or 'true')
+    if (parsed.get(config.RERANK_PROVIDER) == 'voyage'
+            and any(value.strip().lower() in config.TRUTHY
+                    for value in rerank_switches)):
+        used_provider_keys.add(config.VOYAGE_API_KEY)
     optional_secrets = {
+        config.OPENROUTER_API_KEY,
+        config.VOYAGE_API_KEY,
         config.OPENAI_EMBED_API_KEY,
         config.LLM_API_KEY,
-        }
+        } - used_provider_keys
     default_backend = parsed.get(config.DEFAULT_BACKEND, 'sqlite')
     optional_unless_default_postgres = set()
     if default_backend != 'postgres':

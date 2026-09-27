@@ -4,7 +4,6 @@ import logging
 import os
 import re
 import sqlite3
-from collections.abc import Callable
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
@@ -155,22 +154,6 @@ class DB:
             params: tuple[Any, ...] = ()) -> sqlite3.Cursor:
         """Query SQL using the transaction cursor or connection."""
         return self._conn.execute(sql, params)
-
-    def in_transaction(self, fn: Callable[[], Any]) -> Any:
-        """Run fn inside a single SQL transaction, returning its result."""
-        if self._in_tx:
-            raise RuntimeError('nested transactions not supported')
-        self._in_tx = True
-        try:
-            self._conn.execute('begin immediate')
-            result = fn()
-            self._conn.execute('commit')
-            return result
-        except Exception:
-            self._conn.execute('rollback')
-            raise
-        finally:
-            self._in_tx = False
 
 
 def get_meta(db: 'DB', key: str) -> str | None:

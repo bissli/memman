@@ -77,8 +77,8 @@ class TestPrereqs:
         monkeypatch.setattr(
             setup_claude, 'detect_claude_code',
             lambda: {
-                'name': 'claude-code', 'display': 'Claude Code',
-                'detected': False, 'bin_path': '', 'installed': False,
+                'display': 'Claude Code',
+                'detected': False, 'bin_path': '',
                 'version': '', 'config_dir': str(tmp_path / '.claude'),
                 })
         monkeypatch.setattr(
@@ -88,12 +88,6 @@ class TestPrereqs:
             setup_claude, 'uninstall_backup',
             lambda data_dir=None: {'platform': 'unknown', 'actions': []})
         setup_claude.run_uninstall(data_dir=str(tmp_path))
-
-    def test_invalid_target_fails_loud(self, monkeypatch, tmp_path):
-        """run_install raises on an unknown --target value."""
-        _write_keys(tmp_path, openrouter='x', voyage='y')
-        with pytest.raises(click.ClickException, match='invalid target'):
-            setup_claude.run_install(data_dir=str(tmp_path), target='bogus')
 
     def test_prereq_failure_writes_nothing_to_filesystem(
             self, monkeypatch, tmp_path):
@@ -119,23 +113,26 @@ class TestPrereqs:
 class TestCliCommands:
     """Top-level memman CLI surface for setup verbs."""
 
-    def test_setup_command_removed(self):
-        """The old `memman setup` command must no longer exist."""
-        runner = CliRunner()
-        result = runner.invoke(cli, ['setup', '--help'])
-        assert result.exit_code != 0
-        assert 'No such command' in result.output
+    @pytest.mark.parametrize(('command', 'target'), [
+        ('install', 'run_install'),
+        ('uninstall', 'run_uninstall'),
+        ])
+    @pytest.mark.parametrize('flag', [True, False])
+    def test_claude_code_flag_reaches_the_setup_call(
+            self, monkeypatch, tmp_path, command, target, flag):
+        """Verify `--claude-code` reaches the setup call, and only when given.
 
-    def test_install_command_exists(self):
-        """`memman install --help` should work."""
-        runner = CliRunner()
-        result = runner.invoke(cli, ['install', '--help'])
-        assert result.exit_code == 0
-        assert '--target' in result.output
-
-    def test_uninstall_command_exists(self):
-        """`memman uninstall --help` should work."""
-        runner = CliRunner()
-        result = runner.invoke(cli, ['uninstall', '--help'])
-        assert result.exit_code == 0
-        assert '--target' in result.output
+        Mutation: the handler dropping the flag, hardcoding it, or
+            passing it under a name the setup function does not read.
+        Oracle: a spy on the setup function recording `claude_code`.
+        """
+        calls = []
+        monkeypatch.setattr(
+            f'memman.setup.claude.{target}',
+            lambda data_dir, **kwargs: calls.append(kwargs['claude_code']))
+        args = ['--data-dir', str(tmp_path), command]
+        if flag:
+            args.append('--claude-code')
+        result = CliRunner().invoke(cli, args)
+        assert result.exit_code == 0, result.output
+        assert calls == [flag]

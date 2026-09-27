@@ -41,7 +41,7 @@ class TestOplogTrim:
     """trim_oplog_by_age: age-based retention (B13)."""
 
     def test_trim_deletes_rows_older_than_retention(self, tmp_path):
-        """Rows older than retention_days are removed."""
+        """Rows older than `OPLOG_RETENTION_DAYS` are removed."""
         db = open_db(str(tmp_path))
         try:
             now = datetime.now(timezone.utc)
@@ -76,19 +76,6 @@ class TestOplogTrim:
         db = open_db(str(tmp_path))
         try:
             assert trim_oplog_by_age(db) == 0
-        finally:
-            db.close()
-
-    def test_trim_respects_custom_retention_days(self, tmp_path):
-        """Caller can override retention_days for testing or aggressive trim.
-        """
-        db = open_db(str(tmp_path))
-        try:
-            now = datetime.now(timezone.utc)
-            _insert_at(db, now - timedelta(days=5))
-            _insert_at(db, now - timedelta(days=15))
-            deleted = trim_oplog_by_age(db, retention_days=10)
-            assert deleted == 1
         finally:
             db.close()
 

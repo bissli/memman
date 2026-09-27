@@ -1,6 +1,7 @@
 """Tests for memman.doctor health-check module."""
 
 import json
+import os
 import struct
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -348,6 +349,93 @@ class TestEnvCompleteness:
         assert out['status'] == 'pass'
         assert config.OPENAI_EMBED_API_KEY not in out.get('detail', {}).get(
             'missing', [])
+
+    @pytest.mark.parametrize(('provider', 'key_attr'), [
+        ('voyage', 'VOYAGE_API_KEY'),
+        ('openai', 'OPENAI_EMBED_API_KEY'),
+        ('openrouter', 'OPENROUTER_API_KEY'),
+        ])
+    def test_passes_on_fresh_install(
+            self, write_env, monkeypatch, provider, key_attr):
+        """The env file a fresh install writes passes the check.
+
+        Mutation: requiring every embed provider's key whatever the
+            configured provider (a fresh voyage install warned
+            `MEMMAN_OPENROUTER_API_KEY` missing).
+        Oracle: the file `collect_install_knobs` builds with only the
+            chosen provider's key and the LLM key exported, with Voyage
+            reranking off unless the provider is voyage.
+        """
+        from memman import config
+        for key in (*config.INSTALLABLE_KEYS,
+                    *config.NATIVE_INSTALL_KEY_FALLBACKS.values()):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv(config.EMBED_PROVIDER, provider)
+        monkeypatch.setenv(getattr(config, key_attr), 'provider-key')
+        monkeypatch.setenv(config.LLM_API_KEY, 'llm-key')
+        if provider != 'voyage':
+            monkeypatch.setenv(config.RERANK_ENABLED, 'false')
+        write_env('')
+        knobs = config.collect_install_knobs(os.environ[config.DATA_DIR])
+        write_env(''.join(f'{k}={v}\n' for k, v in knobs.items()))
+        out = check_env_completeness()
+        assert out['status'] == 'pass', out['detail']
+
+    def test_warns_when_voyage_rerank_lacks_its_key(self, write_env):
+        """Voyage reranking on with no Voyage key -> warn.
+
+        Mutation: deriving the required keys from the embed provider
+            alone, so an openai install reranking on Voyage never learns
+            its reranker has no key.
+        Oracle: rerank/voyage.py requires `MEMMAN_VOYAGE_API_KEY`.
+        """
+        from memman import config
+        values = dict.fromkeys(config.INSTALLABLE_KEYS, 'v')
+        values.update({
+            config.EMBED_PROVIDER: 'openai',
+            config.RERANK_PROVIDER: 'voyage',
+            config.RERANK_ENABLED: 'true',
+            config.VOYAGE_API_KEY: '',
+            })
+        write_env(''.join(f'{k}={v}\n' for k, v in values.items()))
+        out = check_env_completeness()
+        assert out['status'] == 'warn'
+        assert out['detail']['missing'] == [config.VOYAGE_API_KEY]
+
+    @pytest.mark.parametrize(('global_rerank', 'store_rerank'), [
+        ('false', 'true'),
+        (None, None),
+        ('', None),
+        ])
+    def test_warns_when_rerank_is_on_only_where_recall_reads_it(
+            self, write_env, global_rerank, store_rerank):
+        """Voyage reranking on for recall, keyless -> the key is missing.
+
+        Mutation: reading only the global `MEMMAN_RERANK_ENABLED` as
+            written, so a store turned on by `MEMMAN_RERANK_ENABLED_<store>`
+            or an unset or empty global (which recall reads as on) passes
+            with no Voyage key, and recall silently keeps the unreranked
+            order.
+        Oracle: `recall` in cli.py reads the per-store key first, then the
+            global with `default=True`.
+        """
+        from memman import config
+        values = dict.fromkeys(config.INSTALLABLE_KEYS, 'v')
+        values.update({
+            config.EMBED_PROVIDER: 'openai',
+            config.RERANK_PROVIDER: 'voyage',
+            config.VOYAGE_API_KEY: '',
+            })
+        if global_rerank is None:
+            del values[config.RERANK_ENABLED]
+        else:
+            values[config.RERANK_ENABLED] = global_rerank
+        if store_rerank is not None:
+            values[config.RERANK_ENABLED_FOR('default')] = store_rerank
+        write_env(''.join(f'{k}={v}\n' for k, v in values.items()))
+        out = check_env_completeness()
+        assert out['status'] == 'warn'
+        assert config.VOYAGE_API_KEY in out['detail']['missing']
 
     def test_ignores_optional_backup_keys(self, write_env):
         """Absent BACKUP_CRON/TARGET (opt-in feature) does not warn."""
@@ -893,8 +981,6 @@ class TestDrainHeartbeatSeverity:
         from contextlib import contextmanager
 
         from memman import doctor as doctor_mod
-        from memman.store.factory import \
-            list_stores as real_list_stores  # noqa: F401
 
         @contextmanager
         def _fake_open_backend(store, data_dir, *, read_only=False):
@@ -911,7 +997,6 @@ class TestDrainHeartbeatSeverity:
                 stale = datetime.now(timezone.utc) - timedelta(minutes=10)
                 return [WorkerRun(
                     id=42, started_at=stale, ended_at=None,
-                    rows_processed=0, error='',
                     last_heartbeat_at=stale)]
 
         monkeypatch.setattr(

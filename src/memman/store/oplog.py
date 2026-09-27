@@ -64,15 +64,27 @@ where id <= (select max(id) from oplog) - ?
     db._exec('pragma incremental_vacuum(200)')
 
 
-def trim_oplog_by_age(
-        db: 'DB', retention_days: int = OPLOG_RETENTION_DAYS) -> int:
-    """Delete oplog rows older than retention_days. Returns deleted count.
+def trim_oplog_by_age(db: 'DB') -> int:
+    """Delete oplog rows older than `OPLOG_RETENTION_DAYS`.
 
-    Called once per worker drain so the table cannot grow unbounded
-    even with sparse writes per day. Bounded by idx_oplog_created for
-    an O(expired) delete.
+    Parameters
+    ----------
+    db : DB
+        The store's SQLite connection.
+
+    Returns
+    -------
+    int
+        Rows deleted; 0 when the delete fails, which logs a warning.
+
+    Notes
+    -----
+    - Called once per worker drain so the table cannot grow unbounded
+      even with sparse writes per day. Bounded by idx_oplog_created
+      for an O(expired) delete.
     """
-    cutoff_dt = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    cutoff_dt = datetime.now(timezone.utc) - timedelta(
+        days=OPLOG_RETENTION_DAYS)
     cutoff = format_timestamp(cutoff_dt)
     try:
         cur = db._exec(

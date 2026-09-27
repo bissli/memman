@@ -44,7 +44,7 @@ e2e-cli:
 	poetry run pytest tests/e2e/ -v -m e2e_cli
 
 e2e-container:
-	poetry run pytest tests/e2e/ -v -m "e2e_container and not systemd"
+	poetry run pytest tests/e2e/ -v -m e2e_container
 
 clean:
 	rm -rf build/ dist/ *.egg-info src/*.egg-info

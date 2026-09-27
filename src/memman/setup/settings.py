@@ -278,7 +278,7 @@ _REMOVE_IF_EMPTY_LEAVES = frozenset({
 def remove_if_empty(dir_path: str) -> None:
     """Remove a directory only if it exists, is empty, AND either is a
     known agent-config root (`.claude`) or a known leaf inside one
-    (`hooks`, `skills`, `memman`).
+    (`hooks`, `skills`).
 
     Raises ValueError on a path outside the allowlist; defensive
     against a future caller passing a surprising path like `/tmp/x`

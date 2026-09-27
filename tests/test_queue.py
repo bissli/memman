@@ -4,11 +4,12 @@ import sqlite3
 import time
 
 import pytest
+from memman import queue as queue_mod
 from memman.queue import MAX_ATTEMPTS, STALE_CLAIM_SECONDS
 from memman.queue import STALE_RESUME_AGE_SECONDS, STATUS_DONE, STATUS_FAILED
-from memman.queue import STATUS_PENDING, claim, enqueue, get_row, list_rows
-from memman.queue import mark_done, mark_failed, mark_stale_on_resume
-from memman.queue import open_queue_db, purge_done, queue_db, retry_row, stats
+from memman.queue import claim, enqueue, get_row, list_rows, mark_done
+from memman.queue import mark_failed, mark_stale_on_resume, open_queue_db
+from memman.queue import purge_done, queue_db, retry_row, stats
 from memman.store.errors import BackendError
 
 
@@ -33,23 +34,21 @@ def test_enqueue_returns_row_id_and_the_uuid_it_stored(queue_conn):
     assert stored[id2] == uuid2
 
 
-def test_claim_respects_priority(queue_conn):
-    """Higher priority rows are claimed before lower priority.
-    """
-    low, _ = enqueue(queue_conn, 'main', 'low', priority=0)
-    high, _ = enqueue(queue_conn, 'main', 'high', priority=5)
-    r = claim(queue_conn, worker_pid=1)
-    assert r.id == high
+def test_claim_fifo_order(queue_conn):
+    """Rows drain in queued_at order, whatever their id order.
 
-
-def test_claim_fifo_within_same_priority(queue_conn):
-    """Same-priority rows drain in queued_at order.
+    Mutation: ordering `claim`'s select by `id` instead of `queued_at`,
+        or reversing the sort.
+    Oracle: two rows whose `queued_at` order is the reverse of their id
+        order; the row with the lower id but the later `queued_at`
+        claims second.
     """
-    first, _ = enqueue(queue_conn, 'main', 'first')
-    time.sleep(1.05)
-    second, _ = enqueue(queue_conn, 'main', 'second')
+    later, _ = enqueue(queue_conn, 'main', 'queued later')
+    earlier, _ = enqueue(queue_conn, 'main', 'queued earlier')
+    queue_conn.execute(
+        'update queue set queued_at = queued_at + 60 where id = ?', (later,))
     r = claim(queue_conn, worker_pid=1)
-    assert r.id == first
+    assert r.id == earlier
 
 
 def test_claim_returns_none_when_empty(queue_conn):
@@ -77,12 +76,18 @@ def test_claim_hides_freshly_claimed_rows(queue_conn):
     assert second is None
 
 
-def test_stale_claim_reclaimable_after_timeout(queue_conn):
+def test_stale_claim_reclaimable_after_timeout(queue_conn, monkeypatch):
     """A claimed row becomes reclaimable once the stale window passes.
+
+    Mutation: `claim` skipping every claimed row whatever its age, so a
+        row whose worker died mid-drain is stranded forever.
+    Oracle: with `STALE_CLAIM_SECONDS` at 0, a second worker claims the
+        row the first still holds.
     """
+    monkeypatch.setattr(queue_mod, 'STALE_CLAIM_SECONDS', 0)
     enqueue(queue_conn, 'main', 'a')
     claim(queue_conn, worker_pid=1)
-    again = claim(queue_conn, worker_pid=2, stale_after_seconds=0)
+    again = claim(queue_conn, worker_pid=2)
     assert again is not None
 
 
@@ -107,7 +112,7 @@ def test_mark_done_sets_status_and_clears_claim(queue_conn):
     assert row['processed_at'] is not None
 
 
-def test_mark_failed_below_threshold_backs_off(queue_conn):
+def test_mark_failed_below_threshold_backs_off(queue_conn, monkeypatch):
     """mark_failed reschedules claimed_at into the past so the row
     becomes reclaimable exactly `backoff_seconds` from now.
 
@@ -115,13 +120,20 @@ def test_mark_failed_below_threshold_backs_off(queue_conn):
     claim timestamp `STALE_CLAIM_SECONDS - 60` seconds in the past, so
     a stale-claim reclaim with the default timeout is held off until
     that wait elapses but a zero-timeout reclaim succeeds immediately.
+
+    Mutation: `mark_failed` clearing `claimed_at` (an instant retry) or
+        leaving it at the claim time (a full stale window) instead of
+        back-dating it to unlock after the backoff.
+    Oracle: hand-computed `claimed_at` within a second of
+        `now - STALE_CLAIM_SECONDS + 60`, a default-timeout reclaim held
+        off, and a zero-timeout reclaim that succeeds.
     """
     enqueue(queue_conn, 'main', 'a')
     r = claim(queue_conn, worker_pid=1)
     before = int(time.time())
     mark_failed(queue_conn, r.id, 'transient')
     row = get_row(queue_conn, r.id)
-    assert row['status'] == STATUS_PENDING
+    assert row['status'] == 'pending'
     assert row['last_error'] == 'transient'
     expected = before - STALE_CLAIM_SECONDS + 60
     assert row['claimed_at'] is not None
@@ -129,13 +141,25 @@ def test_mark_failed_below_threshold_backs_off(queue_conn):
 
     again = claim(queue_conn, worker_pid=2)
     assert again is None
-    again = claim(queue_conn, worker_pid=2, stale_after_seconds=0)
+    monkeypatch.setattr(queue_mod, 'STALE_CLAIM_SECONDS', 0)
+    again = claim(queue_conn, worker_pid=2)
     assert again is not None
     assert again.id == r.id
 
 
 def test_mark_failed_backoff_grows_with_attempts(queue_conn, monkeypatch):
     """Attempt 1 unlocks at +60s, 2 at +120s, 3 at +240s, capped at 600s.
+
+    `claim` reclaims immediately regardless of the real backoff by
+    monkeypatching `STALE_CLAIM_SECONDS` to 0 for the claim alone, then
+    restoring the real value before `mark_failed` computes the next
+    backoff -- otherwise the same constant that gates `claim`'s
+    reclaim window would also flatten the backoff formula under test.
+
+    Mutation: a constant backoff, or an off-by-one exponent in
+        `60 * 2**(attempts-1)`.
+    Oracle: hand-computed unlock times of 60, 120, 240 and 480 seconds
+        under a frozen clock.
     """
     fixed_now = 1_000_000
     monkeypatch.setattr('memman.queue.time.time', lambda: fixed_now)
@@ -143,7 +167,9 @@ def test_mark_failed_backoff_grows_with_attempts(queue_conn, monkeypatch):
 
     expected_backoffs = [60, 120, 240, 480, STALE_CLAIM_SECONDS]
     for attempt_idx, backoff in enumerate(expected_backoffs, start=1):
-        r = claim(queue_conn, worker_pid=1, stale_after_seconds=0)
+        monkeypatch.setattr(queue_mod, 'STALE_CLAIM_SECONDS', 0)
+        r = claim(queue_conn, worker_pid=1)
+        monkeypatch.setattr(queue_mod, 'STALE_CLAIM_SECONDS', STALE_CLAIM_SECONDS)
         assert r is not None, f'attempt {attempt_idx}: nothing to claim'
         assert r.attempts == attempt_idx
         if attempt_idx >= MAX_ATTEMPTS:
@@ -153,7 +179,7 @@ def test_mark_failed_backoff_grows_with_attempts(queue_conn, monkeypatch):
             return
         mark_failed(queue_conn, r.id, f'attempt {attempt_idx}')
         row = get_row(queue_conn, r.id)
-        assert row['status'] == STATUS_PENDING
+        assert row['status'] == 'pending'
         expected = fixed_now - STALE_CLAIM_SECONDS + backoff
         assert row['claimed_at'] == expected, (
             f'attempt {attempt_idx}: expected unlock at {expected},'
@@ -162,39 +188,52 @@ def test_mark_failed_backoff_grows_with_attempts(queue_conn, monkeypatch):
 
 def test_mark_failed_backoff_caps_at_stale_claim_seconds(
         queue_conn, monkeypatch):
-    """The `min(60 * 2**(attempts-1), STALE_CLAIM_SECONDS)` cap fires
-    when max_attempts is high enough for the geometric series to
-    exceed the cap before hitting the failed-state branch.
+    """Backoff never exceeds `STALE_CLAIM_SECONDS`.
 
-    At default MAX_ATTEMPTS=5 the row transitions to failed before
-    the cap is reached. Pass max_attempts=10 so attempt 5
-    (backoff 960s -> capped to 600s) and beyond are observable.
+    The cap is `min(60 * 2**(attempts-1), STALE_CLAIM_SECONDS)`.
+
+    `STALE_CLAIM_SECONDS` is monkeypatched to 0, so the cap fires from
+    the first attempt and `claim` reclaims at once on every iteration;
+    `MAX_ATTEMPTS` is raised so the loop never reaches the
+    failed-state branch.
+
+    Mutation: dropping the `min()` cap, so `claimed_at` drifts away
+        from `fixed_now` by the ever-growing uncapped backoff instead
+        of holding at it.
+    Oracle: hand-computed `claimed_at == fixed_now` at every observed
+        attempt, which only holds when the cap holds the backoff at
+        the monkeypatched `STALE_CLAIM_SECONDS == 0`.
     """
     fixed_now = 1_000_000
     monkeypatch.setattr('memman.queue.time.time', lambda: fixed_now)
+    monkeypatch.setattr(queue_mod, 'STALE_CLAIM_SECONDS', 0)
+    monkeypatch.setattr(queue_mod, 'MAX_ATTEMPTS', 10)
     enqueue(queue_conn, 'main', 'a')
 
     for attempt_idx in range(1, 7):
-        r = claim(queue_conn, worker_pid=1, stale_after_seconds=0)
+        r = claim(queue_conn, worker_pid=1)
         assert r is not None
-        mark_failed(
-            queue_conn, r.id, f'attempt {attempt_idx}',
-            max_attempts=10)
-        if attempt_idx >= 5:
-            row = get_row(queue_conn, r.id)
-            expected = fixed_now
-            assert row['claimed_at'] == expected, (
-                f'attempt {attempt_idx}: backoff cap at'
-                f' STALE_CLAIM_SECONDS expected; got'
-                f' claimed_at={row["claimed_at"]}, expected={expected}')
+        mark_failed(queue_conn, r.id, f'attempt {attempt_idx}')
+        row = get_row(queue_conn, r.id)
+        assert row['claimed_at'] == fixed_now, (
+            f'attempt {attempt_idx}: backoff cap at'
+            f' STALE_CLAIM_SECONDS expected; got'
+            f' claimed_at={row["claimed_at"]}, expected={fixed_now}')
 
 
-def test_mark_failed_at_threshold_transitions_to_failed(queue_conn):
+def test_mark_failed_at_threshold_transitions_to_failed(
+        queue_conn, monkeypatch):
     """Once attempts reaches MAX_ATTEMPTS, the row moves to failed.
+
+    Mutation: an off-by-one threshold (`>` for `>=`), or a failed row
+        left with its claim, so it never leaves the claim path.
+    Oracle: after exactly `MAX_ATTEMPTS` failures the row is `failed`,
+        carries the last error, and holds no `claimed_at`.
     """
+    monkeypatch.setattr(queue_mod, 'STALE_CLAIM_SECONDS', 0)
     enqueue(queue_conn, 'main', 'a')
     for _ in range(MAX_ATTEMPTS):
-        r = claim(queue_conn, worker_pid=1, stale_after_seconds=0)
+        r = claim(queue_conn, worker_pid=1)
         assert r is not None
         mark_failed(queue_conn, r.id, 'kept failing')
     row = get_row(queue_conn, r.id)
@@ -203,16 +242,22 @@ def test_mark_failed_at_threshold_transitions_to_failed(queue_conn):
     assert row['claimed_at'] is None
 
 
-def test_retry_row_resurrects_failed_row(queue_conn):
+def test_retry_row_resurrects_failed_row(queue_conn, monkeypatch):
     """retry_row clears a failed row and returns it to pending.
+
+    Mutation: `retry_row` flipping the status but keeping `attempts`,
+        so the next failure fails the row again at once, or keeping
+        `last_error`.
+    Oracle: the retried row reads `pending`, zero attempts, no error.
     """
+    monkeypatch.setattr(queue_mod, 'STALE_CLAIM_SECONDS', 0)
     enqueue(queue_conn, 'main', 'a')
     for _ in range(MAX_ATTEMPTS):
-        r = claim(queue_conn, worker_pid=1, stale_after_seconds=0)
+        r = claim(queue_conn, worker_pid=1)
         mark_failed(queue_conn, r.id, 'still broken')
     assert retry_row(queue_conn, r.id)
     row = get_row(queue_conn, r.id)
-    assert row['status'] == STATUS_PENDING
+    assert row['status'] == 'pending'
     assert row['attempts'] == 0
     assert row['last_error'] is None
 
@@ -257,22 +302,32 @@ def test_stats_counts_a_row_the_resume_path_marked_stale(queue_conn):
     assert s['pending'] == 1
 
 
-def test_purge_done_deletes_completed_rows(queue_conn):
+def test_purge_done_deletes_completed_rows(queue_conn, monkeypatch):
     """purge_done removes status=done rows older than the grace window.
+
+    Mutation: `purge_done` deleting nothing, or one row only.
+    Oracle: two done rows under a zero retention; both are deleted and
+        `stats` counts no done rows.
     """
+    monkeypatch.setattr(queue_mod, 'DONE_RETENTION_SECONDS', 0)
     enqueue(queue_conn, 'main', 'a')
     enqueue(queue_conn, 'main', 'b')
     r1 = claim(queue_conn, worker_pid=1)
     mark_done(queue_conn, r1.id)
     r2 = claim(queue_conn, worker_pid=1)
     mark_done(queue_conn, r2.id)
-    deleted = purge_done(queue_conn, keep_seconds=0)
+    deleted = purge_done(queue_conn)
     assert deleted == 2
     assert stats(queue_conn)['done'] == 0
 
 
-def test_purge_done_respects_keep_seconds(queue_conn):
-    """purge_done with default keep_seconds leaves recent rows alone."""
+def test_purge_done_keeps_rows_inside_retention(queue_conn):
+    """purge_done with the default retention leaves recent rows alone.
+
+    Mutation: `purge_done` ignoring `DONE_RETENTION_SECONDS`, or its
+        cutoff comparison flipped, so a row finished this instant goes.
+    Oracle: a row marked done just now survives the default retention.
+    """
     enqueue(queue_conn, 'main', 'a')
     r = claim(queue_conn, worker_pid=1)
     mark_done(queue_conn, r.id)

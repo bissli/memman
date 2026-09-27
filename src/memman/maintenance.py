@@ -3,7 +3,7 @@
 Steps:
 1. `queue.purge_done` -- drop completed queue rows.
 2. `queue.purge_worker_runs` -- prune the heartbeat ledger.
-3. Per touched store with rows_processed > 0:
+3. Per store where the drain completed a row:
    - `trim_oplog_by_age` (once per drain, not per row).
    - `link_pending` with a small batch cap so a backlog of pending
      enrichments cannot blow the maintenance budget.

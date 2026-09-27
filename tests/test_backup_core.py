@@ -323,72 +323,32 @@ class TestRestore:
         res = restore(str(bundle), str(tmp_path / 'out_nq'))
         assert res['queue_restored'] is False
 
-    def test_restore_refuses_v1_bundle(self, tmp_path):
-        """A pre-0.18.0 v1 bundle is refused, not silently restored.
+    @pytest.mark.parametrize('version', [1, 2, 3, 4, 5])
+    def test_restore_refuses_older_bundle(self, tmp_path, version):
+        """A bundle from an older schema is refused, never restored.
 
-        A v1 bundle restored onto this build would yield a store
-        missing `queue_uuid` that fails at `open_db`.
+        Restore is a byte copy, so an older bundle lays down its own
+        schema. A format-5 bundle carries entities, keywords,
+        importance and source columns and an entity FTS column, none of
+        which the current schema has, and current code opens such a
+        store silently.
 
-        Mutation: forgetting the `BACKUP_FORMAT_VERSION` bump (v1
-            would then round-trip as current).
-        Oracle: `restore` raises naming the unsupported version 1.
+        Mutation: forgetting the `BACKUP_FORMAT_VERSION` bump when a
+            release changes the stored schema (format 5 would then
+            round-trip as current).
+        Oracle: `restore` raises naming the unsupported version.
         """
-        staging = tmp_path / 'st_v1'
+        staging = tmp_path / f'st_v{version}'
         staging.mkdir()
         (staging / 'manifest.json').write_text(json.dumps({
-            'format_version': 1, 'stores': [],
+            'format_version': version, 'stores': [],
             'active_store': 'default'}))
         (staging / 'env.nonsecret').write_text('\n')
-        bundle = tmp_path / 'v1.tar.gz'
+        bundle = tmp_path / f'v{version}.tar.gz'
         with tarfile.open(bundle, 'w:gz') as tar:
             tar.add(staging, arcname='.')
-        with pytest.raises(RuntimeError, match='format_version 1'):
-            restore(str(bundle), str(tmp_path / 'out_v1'))
-
-    def test_restore_refuses_v2_bundle(self, tmp_path):
-        """A pre-0.19.0 v2 bundle is refused, not silently restored.
-
-        A v2 bundle restored onto this build would yield a store
-        missing `superseded_by` that fails at `open_db`.
-
-        Mutation: forgetting the `BACKUP_FORMAT_VERSION` bump (v2
-            would then round-trip as current).
-        Oracle: `restore` raises naming the unsupported version 2.
-        """
-        staging = tmp_path / 'st_v2'
-        staging.mkdir()
-        (staging / 'manifest.json').write_text(json.dumps({
-            'format_version': 2, 'stores': [],
-            'active_store': 'default'}))
-        (staging / 'env.nonsecret').write_text('\n')
-        bundle = tmp_path / 'v2.tar.gz'
-        with tarfile.open(bundle, 'w:gz') as tar:
-            tar.add(staging, arcname='.')
-        with pytest.raises(RuntimeError, match='format_version 2'):
-            restore(str(bundle), str(tmp_path / 'out_v2'))
-
-    def test_restore_refuses_v3_bundle(self, tmp_path):
-        """A pre-0.33.0 v3 bundle is refused, not silently restored.
-
-        Restore is a byte copy: a v3 bundle laid down under this build
-        yields a store missing `superseded_by` that fails at `open_db`
-        after restore reported success.
-
-        Mutation: forgetting the `BACKUP_FORMAT_VERSION` bump (v3
-            would then round-trip as current).
-        Oracle: `restore` raises naming the unsupported version 3.
-        """
-        staging = tmp_path / 'st_v3'
-        staging.mkdir()
-        (staging / 'manifest.json').write_text(json.dumps({
-            'format_version': 3, 'stores': [],
-            'active_store': 'default'}))
-        (staging / 'env.nonsecret').write_text('\n')
-        bundle = tmp_path / 'v3.tar.gz'
-        with tarfile.open(bundle, 'w:gz') as tar:
-            tar.add(staging, arcname='.')
-        with pytest.raises(RuntimeError, match='format_version 3'):
-            restore(str(bundle), str(tmp_path / 'out_v3'))
+        with pytest.raises(RuntimeError, match=f'format_version {version}'):
+            restore(str(bundle), str(tmp_path / f'out_v{version}'))
 
     def test_rejects_unknown_format_version(self, tmp_path):
         """A bundle with a newer format_version is refused."""

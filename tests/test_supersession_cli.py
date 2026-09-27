@@ -169,7 +169,9 @@ def test_unsupersede_relinks_reembeds_and_writes_its_oplog_row(mm_runner):
         assert row is not None
         assert row.superseded_by is None
         assert row.linked_at is not None
-        assert backend.nodes.get_embedding(old) is not None
+        (embedding,) = backend._db._query(
+            'select embedding from insights where id = ?', (old,)).fetchone()
+        assert embedding is not None
         ops = [(e.insight_id, e.detail) for e in backend.oplog.recent(limit=20)
                if e.operation == 'unsupersede']
         assert ops == [(old, f'was superseded by {new}')]

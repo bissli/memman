@@ -1,8 +1,7 @@
 """Helpers for memman end-to-end tests.
 
 Subprocess wrappers around the installed `memman` CLI and JSON-walk
-assertion helpers (`assert_jq`, `assert_jq_gte`, `assert_contains`,
-`extract_id`).
+assertion helpers (`assert_jq`, `assert_jq_gte`, `assert_contains`).
 
 Every CLI invocation goes through `run_cli` so the HOME redirect, env
 inheritance, and key gating live in exactly one place.
@@ -86,31 +85,10 @@ def assert_jq_gte(data: dict, path: str, expected: int,
         f'{label}: {path}={actual} expected >= {expected}')
 
 
-def assert_jq_lte(data: dict, path: str, expected: int,
-                  label: str = '') -> None:
-    """Assert a JSON-walked path is <= expected (numeric).
-    """
-    actual = _walk(data, path)
-    assert int(actual) <= int(expected), (
-        f'{label}: {path}={actual} expected <= {expected}')
-
-
 def assert_contains(text: str, needle: str, label: str = '') -> None:
     """Assert needle appears somewhere in text.
     """
     assert needle in text, f'{label}: {needle!r} not found in: {text!r}'
-
-
-def assert_not_contains(text: str, needle: str, label: str = '') -> None:
-    """Assert needle does not appear in text.
-    """
-    assert needle not in text, (
-        f'{label}: {needle!r} should not be in: {text!r}')
-
-
-def extract_queue_id(data: dict) -> int:
-    """Return `queue_id` from a queued `remember` response."""
-    return int(data['queue_id'])
 
 
 def find_insight_by_recall(home: Path, data_dir: Path,
@@ -133,12 +111,3 @@ def find_insight_by_recall(home: Path, data_dir: Path,
             f'recall found no insight for keyword {keyword!r}; '
             f'drain may not have run')
     return lines[0].split(' ', 1)[0]
-
-
-def find_result(results: list[dict], insight_id: str) -> dict | None:
-    """Return the result row whose insight.id matches, or None.
-    """
-    for row in results:
-        if row.get('insight', {}).get('id') == insight_id:
-            return row
-    return None
