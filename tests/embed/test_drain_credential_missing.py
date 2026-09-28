@@ -82,23 +82,24 @@ class TestCredentialMissingFailureMode:
         error, and the row falls through to 'done'.
         """
         runner = CliRunner()
-        sdir = store_dir(str(tmp_path), 'unfunded')
+        data_dir = str(tmp_path / 'memman')
+        sdir = store_dir(data_dir, 'unfunded')
         _seed_fingerprint(sdir, Fingerprint(
             provider='unfunded-stub', model='stub-1024', dim=1024))
 
         result = runner.invoke(cli, [
-            '--data-dir', str(tmp_path), '--store', 'unfunded',
+            '--data-dir', data_dir, '--store', 'unfunded',
             'remember',
-            'Production Redis instance evicts keys via the allkeys-lfu'
-            ' policy with a 16GB memory budget per shard.'])
+            ('Production Redis instance evicts keys via the allkeys-lfu'
+             ' policy with a 16GB memory budget per shard.')])
         assert result.exit_code == 0, result.output
 
         drain_result = runner.invoke(cli, [
-            '--data-dir', str(tmp_path),
+            '--data-dir', data_dir,
             'scheduler', 'drain'])
         assert drain_result.exit_code == 0, drain_result.output
 
-        qconn = open_queue_db(str(tmp_path))
+        qconn = open_queue_db(data_dir)
         try:
             status, last_err = qconn.execute(
                 'select status, last_error from queue'

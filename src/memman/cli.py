@@ -496,6 +496,11 @@ def cli(ctx: click.Context, data_dir: str | None, store_name: str,
     """Persistent memory store for LLM agents."""
     if data_dir is None:
         data_dir = os.environ.get(config.DATA_DIR, default_data_dir())
+    else:
+        # config.get(), prime, and every other env_file_path() call
+        # without a data_dir read MEMMAN_DATA_DIR, so the flag must
+        # land there too.
+        os.environ[config.DATA_DIR] = data_dir
     _configure_logging(data_dir, verbose, debug)
     ctx.ensure_object(dict)
     ctx.obj['data_dir'] = data_dir

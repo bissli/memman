@@ -22,11 +22,15 @@ def runner(tmp_path, monkeypatch):
     """Fresh CliRunner with isolated data + home dirs."""
     monkeypatch.setenv('HOME', str(tmp_path / 'home'))
     (tmp_path / 'home').mkdir()
-    return CliRunner(), str(tmp_path / 'data')
+    return CliRunner(), str(tmp_path / 'memman')
 
 
 def test_serve_once_drains_and_exits(runner, monkeypatch):
     """`--once` runs a single drain pass and returns clean.
+
+    Mutation: `--once` returning before the drain pass, or a drain
+        that claims the row but never marks it done.
+    Oracle: the queued row's status reads 'done' after the drain.
     """
     from memman.setup import scheduler as sched_mod
     monkeypatch.setattr(sched_mod, 'read_state',
@@ -46,6 +50,7 @@ def test_serve_once_drains_and_exits(runner, monkeypatch):
     queue_result = r.invoke(
         cli, ['--data-dir', data_dir, 'scheduler', 'queue', 'list'])
     assert queue_result.exit_code == 0, queue_result.output
+    assert '"status": "done"' in queue_result.output, queue_result.output
 
 
 def test_serve_writes_interval_file(runner, monkeypatch):

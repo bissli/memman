@@ -23,7 +23,7 @@ def runner(tmp_path, monkeypatch):
     immediate inline drain. Override the autouse-fixture's
     `is_inline_trigger=True` to False so the queue actually buffers.
     """
-    return CliRunner(), str(tmp_path)
+    return CliRunner(), str(tmp_path / 'memman')
 
 
 def _invoke(r, data_dir, *args):

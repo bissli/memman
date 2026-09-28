@@ -532,7 +532,8 @@ def test_a_rebuild_whose_enrichment_fails_still_terminates(
     from memman.store.db import open_db
     from memman.store.node import insert_insight
     monkeypatch.delenv('MEMMAN_STORE', raising=False)
-    store_path = tmp_path / 'data' / 'default'
+    data_dir = str(tmp_path / 'memman')
+    store_path = tmp_path / 'memman' / 'data' / 'default'
     db = open_db(str(store_path))
     insert_insight(db, make_insight(id='fail-1', content='a row to rebuild'))
     db.close()
@@ -543,7 +544,7 @@ def test_a_rebuild_whose_enrichment_fails_still_terminates(
     monkeypatch.setattr(enrich, 'enrich_with_llm', failing_enrich)
 
     result = CliRunner().invoke(cli, [
-        '--data-dir', str(tmp_path), 'enrich'])
+        '--data-dir', data_dir, 'enrich'])
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)['remaining'] == 0

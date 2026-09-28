@@ -972,6 +972,37 @@ class TestSingleTierEnrichment:
         assert row[0] is not None
 
 
+def test_data_dir_flag_moves_implicit_env_resolution(tmp_path):
+    """`--data-dir` must move every no-argument `config.env_file_path()` read.
+
+    Mutation: the root `cli` callback storing `--data-dir` only in
+        `ctx.obj` without exporting `MEMMAN_DATA_DIR`, so a call site
+        that resolves the env file with no `data_dir` argument (e.g.
+        `session.active_store` -> `embed.get_client()`) keeps reading
+        the directory named by the `MEMMAN_DATA_DIR` env var instead
+        of the one the flag names.
+    Oracle: two data dirs whose `MEMMAN_EMBED_PROVIDER` rows diverge;
+        `status` (which opens the store through `active_store` and
+        eagerly calls `get_client()`) must fail naming the flag's
+        directory's unregistered provider.
+    """
+    from memman import config
+
+    other_dir = tmp_path / 'other'
+    other_dir.mkdir()
+    rows = dict(config.INSTALL_DEFAULTS)
+    rows[config.EMBED_PROVIDER] = 'bogus-provider'
+    rows['MEMMAN_OPENROUTER_API_KEY'] = 'mock-key-for-testing'
+    rows['MEMMAN_LLM_API_KEY'] = 'mock-llm-api-key-for-testing'
+    (other_dir / config.ENV_FILENAME).write_text(
+        '\n'.join(f'{k}={v}' for k, v in rows.items()) + '\n')
+
+    result = CliRunner().invoke(cli, [
+        '--data-dir', str(other_dir), 'status'])
+    assert result.exit_code != 0, result.output
+    assert 'bogus-provider' in result.output
+
+
 @pytest.mark.scheduler_stopped
 def test_enrich_is_top_level_and_graph_rebuild_is_gone(tmp_path):
     """`memman enrich` answers at the top level and no `graph` group remains.
@@ -982,7 +1013,7 @@ def test_enrich_is_top_level_and_graph_rebuild_is_gone(tmp_path):
     Oracle: click's own unknown-command exit code (2) for `graph
         rebuild`, against `enrich --dry-run`'s exit code (0).
     """
-    data_dir = str(tmp_path)
+    data_dir = str(tmp_path / 'memman')
     old = CliRunner().invoke(cli, [
         '--data-dir', data_dir, 'graph', 'rebuild', '--dry-run'])
     assert old.exit_code == 2, old.output
@@ -1006,8 +1037,8 @@ class TestEnrich:
             post-run `enriched_at IS NOT NULL` count unchanged at 3.
         """
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
-        data_dir = str(tmp_path)
-        store_path = tmp_path / 'data' / 'default'
+        data_dir = str(tmp_path / 'memman')
+        store_path = tmp_path / 'memman' / 'data' / 'default'
         from memman.store.db import open_db
         from memman.store.node import insert_insight
         from tests.conftest import make_insight
@@ -1049,8 +1080,8 @@ class TestEnrich:
             summary and a fresh `enriched_at`.
         """
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
-        data_dir = str(tmp_path)
-        store_path = tmp_path / 'data' / 'default'
+        data_dir = str(tmp_path / 'memman')
+        store_path = tmp_path / 'memman' / 'data' / 'default'
         from memman.store.db import open_db
         from memman.store.node import insert_insight
         from tests.conftest import make_insight
@@ -1101,8 +1132,8 @@ class TestEnrich:
             figure in the command's own JSON.
         """
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
-        data_dir = str(tmp_path)
-        store_path = tmp_path / 'data' / 'default'
+        data_dir = str(tmp_path / 'memman')
+        store_path = tmp_path / 'memman' / 'data' / 'default'
         from memman.store.db import open_db
         from memman.store.node import insert_insight
         from tests.conftest import make_insight
@@ -1206,8 +1237,8 @@ class TestEnrichStaleOnly:
         active_pv = compute_prompt_version()
 
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
-        data_dir = str(tmp_path)
-        store_path = tmp_path / 'data' / 'default'
+        data_dir = str(tmp_path / 'memman')
+        store_path = tmp_path / 'memman' / 'data' / 'default'
         self._seed_drift(store_path, active_pv)
         db = open_db(str(store_path))
         insert_insight(db, make_insight(
@@ -1242,8 +1273,8 @@ class TestEnrichStaleOnly:
         active_pv = compute_prompt_version()
 
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
-        data_dir = str(tmp_path)
-        store_path = tmp_path / 'data' / 'default'
+        data_dir = str(tmp_path / 'memman')
+        store_path = tmp_path / 'memman' / 'data' / 'default'
         from memman.store.db import open_db
         from memman.store.node import insert_insight
         from tests.conftest import make_insight
@@ -1280,8 +1311,8 @@ class TestEnrichStaleOnly:
         active_pv = compute_prompt_version()
 
         monkeypatch.delenv('MEMMAN_STORE', raising=False)
-        data_dir = str(tmp_path)
-        store_path = tmp_path / 'data' / 'default'
+        data_dir = str(tmp_path / 'memman')
+        store_path = tmp_path / 'memman' / 'data' / 'default'
         self._seed_drift(store_path, active_pv)
 
         db = open_db(str(store_path))
@@ -1367,7 +1398,7 @@ class TestHotPathPurity:
         from memman.store.db import open_db, store_dir, write_active
         from memman.store.sqlite import SqliteBackend
 
-        data_dir = str(tmp_path)
+        data_dir = str(tmp_path / 'memman')
         name = 'default'
         write_active(data_dir, name)
         sdir = store_dir(data_dir, name)

@@ -127,7 +127,8 @@ class TestReembed:
         without re-embedding rows that already match the active client.
         """
         from memman.store.db import store_dir
-        sdir = store_dir(str(tmp_path), 'default')
+        data_dir = str(tmp_path / 'memman')
+        sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
         try:
             _seed_row_with_embedding(db, id='r1', content='hello')
@@ -136,7 +137,7 @@ class TestReembed:
             db.close()
 
         result = _invoke([
-            '--data-dir', str(tmp_path), 'embed', 'reembed'])
+            '--data-dir', data_dir, 'embed', 'reembed'])
         assert result.exit_code == 0, result.output
         out = json.loads(result.output)
         assert out['total_scanned'] == 2
@@ -159,7 +160,8 @@ class TestReembed:
     def test_dry_run_writes_nothing(self, tmp_path):
         """--dry-run reports counts without DB writes."""
         from memman.store.db import store_dir
-        sdir = store_dir(str(tmp_path), 'default')
+        data_dir = str(tmp_path / 'memman')
+        sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
         try:
             _seed_row_with_embedding(db, id='r1')
@@ -167,7 +169,7 @@ class TestReembed:
             db.close()
 
         result = _invoke([
-            '--data-dir', str(tmp_path), 'embed', 'reembed',
+            '--data-dir', data_dir, 'embed', 'reembed',
             '--dry-run'])
         assert result.exit_code == 0, result.output
         out = json.loads(result.output)
@@ -189,7 +191,7 @@ class TestReembed:
     def test_passes_dry_run_when_started(self, tmp_path):
         """--dry-run is allowed even when scheduler is started."""
         result = _invoke([
-            '--data-dir', str(tmp_path), 'embed', 'reembed',
+            '--data-dir', str(tmp_path / 'memman'), 'embed', 'reembed',
             '--dry-run'])
         assert result.exit_code == 0, result.output
 
@@ -203,8 +205,9 @@ class TestReembed:
         Oracle: an empty page (Section: the recall page's empty-page
             contract) alongside the auto-seeded fingerprint on disk.
         """
+        data_dir = str(tmp_path / 'memman')
         result = _invoke([
-            '--data-dir', str(tmp_path),
+            '--data-dir', data_dir,
             'recall', 'anything', '--limit', '5'])
         assert result.exit_code == 0, (
             f'recall failed: exit={result.exit_code} '
@@ -212,7 +215,7 @@ class TestReembed:
         assert result.output == ''
 
         from memman.store.db import store_dir
-        sdir = store_dir(str(tmp_path), 'default')
+        sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
         try:
             assert stored_fingerprint(SqliteBackend(db)) is not None
@@ -229,7 +232,7 @@ class TestReembed:
         Oracle: an empty page from a store that has never held a row.
         """
         result = _invoke([
-            '--data-dir', str(tmp_path), '--store', 'custom',
+            '--data-dir', str(tmp_path / 'memman'), '--store', 'custom',
             'recall', 'x', '--limit', '5'])
         assert result.exit_code == 0, (
             f'recall failed: exit={result.exit_code} '
@@ -241,17 +244,18 @@ class TestReembed:
         """Remember on a fresh store seeds the fingerprint AND the
         worker drain succeeds.
         """
+        data_dir = str(tmp_path / 'memman')
         result = _invoke([
-            '--data-dir', str(tmp_path), 'remember', 'a fresh memory'])
+            '--data-dir', data_dir, 'remember', 'a fresh memory'])
         assert result.exit_code == 0, result.output
 
         drain_result = _invoke([
-            '--data-dir', str(tmp_path),
+            '--data-dir', data_dir,
             'scheduler', 'drain'])
         assert drain_result.exit_code == 0, drain_result.output
 
         from memman.store.db import store_dir
-        sdir = store_dir(str(tmp_path), 'default')
+        sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
         try:
             assert stored_fingerprint(SqliteBackend(db)) is not None
@@ -283,12 +287,19 @@ class TestReembed:
         """When the embed client reports unavailable on a fresh store,
         recall surfaces the unavailable-client message, not the
         misleading 'embed reembed' hint.
+
+        Mutation: seed_if_fresh swallowing the unavailable-client
+        error and falling through to the corrupted-store message.
+        Oracle: the Voyage-specific 'not available' text the stubbed
+        client's unavailable branch raises.
         """
         monkeypatch.setattr(
             'memman.embed.voyage.Client.available', lambda self: False)
+        data_dir = str(tmp_path / 'memman')
         result = _invoke([
-            '--data-dir', str(tmp_path), 'recall', 'x'])
+            '--data-dir', data_dir, 'recall', 'x'])
         assert result.exit_code != 0
+        assert 'Voyage not available' in result.output
         assert 'embed reembed' not in result.output
 
     @pytest.mark.no_autoseed_fingerprint
@@ -297,7 +308,8 @@ class TestReembed:
         AND insights already exist (real corruption, not a fresh DB).
         """
         from memman.store.db import store_dir
-        sdir = store_dir(str(tmp_path), 'default')
+        data_dir = str(tmp_path / 'memman')
+        sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
         try:
             _seed_row_with_embedding(db, id='r1', content='alpha')
@@ -305,7 +317,7 @@ class TestReembed:
             db.close()
 
         result = _invoke([
-            '--data-dir', str(tmp_path), 'recall', 'anything'])
+            '--data-dir', data_dir, 'recall', 'anything'])
         assert result.exit_code != 0
         assert 'embed reembed' in result.output
 
@@ -315,7 +327,8 @@ class TestReembed:
         assert all rows are re-embedded and the fingerprint advances.
         """
         from memman.store.db import store_dir
-        sdir = store_dir(str(tmp_path), 'default')
+        data_dir = str(tmp_path / 'memman')
+        sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
         try:
             _seed_row_with_embedding(db, id='r1', content='alpha')
@@ -344,7 +357,7 @@ class TestReembed:
         env_file('MEMMAN_EMBED_PROVIDER', 'stub')
 
         result = _invoke([
-            '--data-dir', str(tmp_path), 'embed', 'reembed'])
+            '--data-dir', data_dir, 'embed', 'reembed'])
         assert result.exit_code == 0, result.output
         out = json.loads(result.output)
         assert out['total_scanned'] == 2
@@ -394,7 +407,8 @@ class TestReembed:
         """Embed status reports the stored fingerprint and credential availability.
         """
         from memman.store.db import store_dir
-        sdir = store_dir(str(tmp_path), 'default')
+        data_dir = str(tmp_path / 'memman')
+        sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
         try:
             _seed_voyage(db)
@@ -402,7 +416,7 @@ class TestReembed:
             db.close()
 
         result = _invoke([
-            '--data-dir', str(tmp_path), 'embed', 'status'])
+            '--data-dir', data_dir, 'embed', 'status'])
         assert result.exit_code == 0, result.output
         out = json.loads(result.output)
         assert out['stored']['provider'] == 'voyage'
@@ -481,7 +495,8 @@ class TestReembed:
         second run must report total_reembedded=0.
         """
         from memman.store.db import store_dir
-        sdir = store_dir(str(tmp_path), 'default')
+        data_dir = str(tmp_path / 'memman')
+        sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
         try:
             _seed_row_with_embedding(db, id='r1', content='hello',
@@ -490,13 +505,13 @@ class TestReembed:
             db.close()
 
         first = _invoke([
-            '--data-dir', str(tmp_path), 'embed', 'reembed'])
+            '--data-dir', data_dir, 'embed', 'reembed'])
         assert first.exit_code == 0, first.output
         first_out = json.loads(first.output)
         assert first_out['total_reembedded'] == 1
 
         second = _invoke([
-            '--data-dir', str(tmp_path), 'embed', 'reembed'])
+            '--data-dir', data_dir, 'embed', 'reembed'])
         assert second.exit_code == 0, second.output
         second_out = json.loads(second.output)
         assert second_out['total_reembedded'] == 0
@@ -526,7 +541,7 @@ class TestReembed:
         env_file('MEMMAN_EMBED_PROVIDER', 'fake')
 
         result = _invoke([
-            '--data-dir', str(tmp_path), 'embed', 'reembed'])
+            '--data-dir', str(tmp_path / 'memman'), 'embed', 'reembed'])
         assert result.exit_code != 0
         assert 'fake provider down' in result.output
 
@@ -536,7 +551,8 @@ class TestReembed:
         re-running reembed must skip the first row.
         """
         from memman.store.db import set_meta, store_dir
-        sdir = store_dir(str(tmp_path), 'default')
+        data_dir = str(tmp_path / 'memman')
+        sdir = store_dir(data_dir, 'default')
         db = open_db(sdir)
         try:
             _seed_row_with_embedding(db, id='r1', content='alpha',
@@ -570,7 +586,7 @@ class TestReembed:
             embed_mod.PROVIDERS, 'voyage', _StubClient)
 
         result = _invoke([
-            '--data-dir', str(tmp_path), 'embed', 'reembed'])
+            '--data-dir', data_dir, 'embed', 'reembed'])
         assert result.exit_code == 0, result.output
         assert embed_calls == ['beta']
 
