@@ -35,11 +35,12 @@ memman runs commands during the agent's turn and processes queued writes in a ba
 2. Reject text over 1,000 UTF-8 bytes or text containing a line number, an opening author name, a line break, or a leading label. Reject an unknown category. [USAGE](../USAGE.md#what-remember-and-replace-refuse) lists each refusal.
 3. Run the quality check. Regular expressions flag temporary information, such as an AWS instance id, the word "currently", or a dated observation. The warnings return as `quality_warnings` and never block the write.
 4. Add one row to the queue, `<data dir>/queue.db`, with `status='pending'`, the text, the flag values, and a newly generated random UUID in `queue_uuid`. Every store shares this one SQLite file, in WAL mode, whatever backend the store uses.
-5. Print `{action: queued, id, queue_id, store, quality_warnings}`.
+5. Read the store for the rows the write may correct. Take the current rows of at most 1,000 bytes that share a word with the text, rank them by shared words divided by the square root of the row's distinct words, and keep three, each as `<id8> <content>`. A SQLite store with no database yet gives an empty list. The read sets `PGCONNECT_TIMEOUT` to 3 seconds unless the environment sets it, so an unreachable Postgres host fails fast. Any failure of the read becomes `related_error`: the write is already queued, and the command exits 0.
+6. Print `{action: queued, id, queue_id, store, quality_warnings, related}`, with `related_error` in place of `related` when the read failed.
 
 `queue_id` names the queue row. The maintenance step after a drain deletes done rows older than 60 seconds, so the ID soon becomes unavailable. The drain stores the memory under the write's `queue_uuid`, which is the `id` this step printed, so that id outlives the queue row and resolves once the write lands.
 
-`memman replace <id> "<text>"` runs the same steps, with three differences:
+`memman replace <id> "<text>"` runs steps 1 to 4 and prints the same fields less `related`, with three differences:
 
 - The id may name a current memory or a write still in the queue for the same store. It rejects a target that is neither. If the target is already replaced, the error names its successor. If a replacement of the target is still queued, the error quotes that replacement's id and text, since a second one would retire it on the drain. The drain holds a replacement while its queued target, or an earlier replacement in the same store, is pending.
 - When `--cat` is omitted, the replacement inherits the target's value.

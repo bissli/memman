@@ -107,13 +107,29 @@ keeps this cheap. When a stale row holds more still-true claims than
 fit one 1,000-byte replacement, the replacement carries the corrected
 claim and the others go in as their own `remember` writes in the same
 turn. A settled open question is a correction of the row that left it
-open. `forget` removes a row that should never have existed. A
-correction goes through `replace`. A write still queued is forgotten
-after the drain, since `forget` refuses a queued id. A memory
-recording a change (a migration ran, a value moved, a step finished)
-corrects the row that stated the old state. A later write in the
-same session that adds a claim carries only that claim; one that
-changes an earlier claim is a `replace` of that write.
+open. `forget` removes a row that should never have existed, or a
+stale row whose every still-true claim a queued write already holds.
+Every other correction goes through `replace`. A write still queued
+is forgotten after the drain, since `forget` refuses a queued id. A
+memory recording a change (a migration ran, a value moved, a step
+finished) corrects the row that stated the old state. A later write
+in the same session that adds a claim carries only that claim; one
+that changes an earlier claim is a `replace` of that write.
+
+`remember` replies with `related`: up to three current rows of at
+most 1,000 bytes, each as `<id8> <content>`, ranked by the words
+they share with the new text (a short row outranks a long one on
+equal overlap). A store with no database yet gives an empty list.
+The agent acts on a related row only where one of its sentences is
+now false; a row the new text repeats, narrows, or extends stays.
+The new row is already queued, so a stale related row is forgotten
+(`memman forget <id>`) when the new row holds every claim it still
+has right, and otherwise replaced with only its own still-true
+claims. Either way the new claim lives in one row. A related row
+that itself replaced an earlier row refuses `forget`, and the
+refusal names `replace`; following it leaves the new claim in two
+current rows, which duplicates and loses nothing. When every related
+row is stale, the agent recalls the topic for the rest.
 
 The text stores conclusions AND enough context to understand them. It
 is self-contained: every "that", "this", and "it" is dereferenced into
@@ -138,7 +154,9 @@ so no confirmation is needed.
 
 ### The write pipeline
 
-`memman remember` is a fast queue-append. The full pipeline -
+`memman remember` queues the write, then reads the store to list
+`related`; when that read fails the reply carries `related_error`
+in its place and the write stays queued. The full pipeline -
 summary enrichment, then embedding - runs out-of-band in a
 worker the scheduler fires on a timer (systemd on Linux, launchd
 on macOS, `memman scheduler serve` in containers). A write is visible

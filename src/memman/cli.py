@@ -9,6 +9,7 @@ LLM primitives live under their own packages.
 import json
 import logging
 import logging.handlers
+import math
 import os
 import pathlib
 import re
@@ -760,15 +761,34 @@ def config_show(ctx: click.Context) -> None:
 @click.option('--cat', default='fact', help='Category')
 @click.pass_context
 def remember(ctx: click.Context, content: tuple[str, ...], cat: str) -> None:
-    """Store a new insight via the queue.
+    """Queue a new memory and list the current rows it may correct.
 
-    Always enqueues. The worker drains the queue (under systemd/launchd
-    on a host, or in-process when the trigger is inline). Rejected when
-    the scheduler is stopped (memman is recall-only in that state).
-    Content is screened by `check_content_quality` before enqueue;
-    advisory warnings come back on the JSON response under
-    `quality_warnings` without blocking the write.
-    """
+    \b
+    Parameters
+    ----------
+    content : str
+        The memory text, stored as one row exactly as typed.
+    cat : str
+        Category; `fact` when unflagged.
+
+    \b
+    Notes
+    -----
+    - The JSON reply carries `id`, the id the row takes once the drain
+      lands it, and `related`: up to three current rows of at most
+      1,000 bytes, as `<id8> <content>`, ranked by shared words
+      divided by the square root of the row's distinct words.
+    - The write is queued before the store is read. A read that fails
+      gives `related_error` in place of `related`, and the command
+      still exits 0.
+    - Refused when the scheduler is stopped, and for text the
+      one-memory shape checks reject. `quality_warnings` never block.
+
+    \b
+    Examples
+    --------
+    memman remember "the retry cap is five" --cat decision
+    """  # noqa: D301, D410, D411
     _require_started('write')
     content_str = ' '.join(content)
     author = config.resolve_author()
@@ -793,13 +813,51 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str) -> None:
             conn, store=name, content=content_str,
             category=cat,
             author=author)
-    _json_out({
+    reply = {
         'action': 'queued',
         'id': queue_uuid,
         'queue_id': row_id,
         'store': name,
         'quality_warnings': quality_warnings,
-        })
+        }
+
+    from memman.search.keyword import insight_tokens, tokenize
+
+    # The write is already queued, so no failure of this read may fail
+    # the command: an agent that sees exit 1 writes the memory again.
+    try:
+        database = pathlib.Path(store_dir(data_dir_val, name), 'memman.db')
+        if (factory.resolve_store_backend(name, data_dir_val) == 'sqlite'
+                and not database.exists()):
+            related_rows = []
+        else:
+            # libpq reads this at each connect and a DSN's own
+            # connect_timeout wins. psycopg's default outlasts an
+            # agent's tool timeout, which then retries the write.
+            os.environ.setdefault('PGCONNECT_TIMEOUT', '3')
+            with factory.open_backend(
+                    name, data_dir_val, read_only=True) as backend:
+                with backend.recall_session() as session:
+                    counts = session.keyword_counts(tokenize(content_str))
+                related_rows = [
+                    ins for ins in backend.nodes.get_all_active()
+                    if ins.id in counts
+                    and len(ins.content.encode('utf-8')) <= _MAX_CONTENT_BYTES
+                    ]
+            # A row whose words the ASCII tokenizer drops can still
+            # match the store's own index, so its length floors at one.
+            related_rows.sort(
+                key=lambda ins: counts[ins.id] / math.sqrt(
+                    max(len(insight_tokens(ins)), 1)),
+                reverse=True)
+        reply['related'] = [
+            f"{ins.id[:8]} {' '.join(ins.content.split())}"
+            for ins in related_rows[:3]
+            ]
+    except Exception as exc:
+        logger.debug('related read failed', exc_info=True)
+        reply['related_error'] = f'{type(exc).__name__}: {exc}'
+    _json_out(reply)
 
 
 _STOP_REQUESTED = False

@@ -110,6 +110,10 @@ def _isolate_env(tmp_path, monkeypatch, request):
     monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
     monkeypatch.delenv('VOYAGE_API_KEY', raising=False)
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    # `remember` sets a PGCONNECT_TIMEOUT default in-process. The set
+    # records the prior state, so teardown clears what a test leaves.
+    monkeypatch.setenv('PGCONNECT_TIMEOUT', '3')
+    monkeypatch.delenv('PGCONNECT_TIMEOUT')
     if live_mode and real_secrets:
         for key, val in real_secrets.items():
             monkeypatch.setenv(key, val)

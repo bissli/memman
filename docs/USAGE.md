@@ -104,9 +104,11 @@ Every command that takes a memory id also accepts an unambiguous prefix of one, 
 
 ### remember and replace
 
-`remember` adds the text to the write queue and returns at once. The background worker stores it on its next drain, and recall finds it from then on. The reply is JSON: `action` (`queued`), `id`, `queue_id`, `store`, and `quality_warnings`. `replace` adds `replaced_id`. The `id` is the id the stored memory takes once the drain lands it, so a caller holds it from the moment it writes. `memman insights show <id>` on a write still queued reports that it lands on the next drain.
+`remember` adds the text to the write queue, then reads the store for the rows the text may correct. The background worker stores the write on its next drain, and recall finds it from then on. The reply is one line of JSON: `action` (`queued`), `id`, `queue_id`, `store`, `quality_warnings`, and `related`. `replace` prints the same fields less `related`, and adds `replaced_id`. The `id` is the id the stored memory takes once the drain lands it, so a caller holds it from the moment it writes. `memman insights show <id>` on a write still queued reports that it lands on the next drain.
 
 `quality_warnings` lists phrasing that tends to go stale, such as an instance id or the word "currently". The warnings never block the write.
+
+`related` lists up to three current memories of at most 1,000 bytes, each as `<id8> <content>`: the ones sharing the most words with the new text, divided by the square root of each memory's distinct word count, so a short memory on the same subject ranks above a long one that touches it. A memory over 1,000 bytes is never listed. A store with no database yet gives an empty list. When the store cannot be read, `related_error` names the failure in place of `related`, and the write stays queued. An unreachable Postgres host fails within 3 seconds unless `PGCONNECT_TIMEOUT` or the DSN's `connect_timeout` sets another limit.
 
 | Flag    | `remember` default | `replace` default  | Meaning                                                              |
 | ------- | ------------------ | ------------------ | -------------------------------------------------------------------- |

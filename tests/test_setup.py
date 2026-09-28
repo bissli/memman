@@ -582,11 +582,13 @@ class TestPrimeAndCompactHooks:
 
         Mutation: guide.md grown past the limit, or another line added
             to prime, either of which truncates the payload to a
-            preview and drops the rest without erroring.
+            preview and drops the rest without erroring; or the
+            `replace` line dropped from guide.md, which leaves the
+            agent no correction verb.
         Oracle: HOOK_STDOUT_LIMIT, the byte count above which the host
             replaces the payload with a preview, checked against the
-            emitted bytes; plus both halves of the contract, which sit
-            past the cut today.
+            emitted bytes; plus the recall, remember, and replace
+            commands of the contract.
         """
         result = CliRunner().invoke(
             cli, ['prime'], input='{}',
@@ -596,6 +598,7 @@ class TestPrimeAndCompactHooks:
         assert len(result.output.encode()) < HOOK_STDOUT_LIMIT
         assert 'memman recall' in result.output
         assert 'memman remember' in result.output
+        assert 'memman replace' in result.output
 
 
 class TestUserPromptHook:

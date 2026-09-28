@@ -8,5 +8,5 @@
 if [ ! -t 0 ]; then
   cat > /dev/null
 fi
-printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "[memman] Plan-to-execute transition: store any conclusions, decisions, or preferences from this planning session via Bash (memman remember ...) before proceeding."}}\n'
+printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "[memman] Plan-to-execute transition: store any conclusions, decisions, or preferences from this planning session via Bash (memman remember ..., or memman replace <id> ... to correct a stored row) before proceeding."}}\n'
 exit 0

@@ -53,7 +53,7 @@ During a turn, the agent queues writes and recalls stored memories. A background
 | ----------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
 | `memman recall --basic` | inside  | no query embed and no rerank; opening the store sends one probe embed when the store is new, and one when its model's vector size is not built in | keyword match on the local store, no score            |
 | `memman recall`         | inside  | query embedding and reranking                                                                                                                     | rerank skips a query of two words or fewer            |
-| `memman remember`       | inside  | none                                                                                                                                              | appends to `queue.db`                                 |
+| `memman remember`       | inside  | none on SQLite; the store read on Postgres                                                                                                        | appends to `queue.db`, then lists related rows        |
 | drain trigger           | outside | none                                                                                                                                              | systemd or launchd timer, or `memman scheduler serve` |
 | enrichment              | outside | one LLM call                                                                                                                                      | adds a summary                                        |
 | embedding               | outside | one embedding call                                                                                                                                | vector for semantic search                            |
@@ -61,7 +61,7 @@ During a turn, the agent queues writes and recalls stored memories. A background
 
 This split determines when model calls run and when memories become available:
 
-- **Model calls.** The agent's turn never enriches or embeds a write. `remember` appends to the queue and makes no network call. `recall` reads the local store and, on its default path, embeds the query and reranks the top results. `--basic` makes neither call. Opening a store needs the `MEMMAN_EMBED_PROVIDER` key when that provider is `voyage` or `openrouter`, including with `--basic` ([Where keys are needed](#where-keys-are-needed)).
+- **Model calls.** The agent's turn never enriches or embeds a write. `remember` appends to the queue, then reads the store for the rows the write may correct; the read calls no model. `recall` reads the local store and, on its default path, embeds the query and reranks the top results. `--basic` makes neither call. Opening a store needs the `MEMMAN_EMBED_PROVIDER` key when that provider is `voyage` or `openrouter`, including with `--basic` ([Where keys are needed](#where-keys-are-needed)).
 - **Recallable after a drain.** A queued write is not recallable until a drain stores it. After that, recall returns it in the same session or any later one.
 
 ## Features
@@ -118,7 +118,7 @@ memman calls three outside services: an LLM for enrichment, an embedding provide
 
 | What runs                                                    | Where                      | Key it needs                                                | Without that key                                                                                                                                                                                             |
 | ------------------------------------------------------------ | -------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `memman remember`                                            | inside the turn            | none                                                        | works: it is the only memory command that opens no store                                                                                                                                                     |
+| `memman remember`                                            | inside the turn            | none                                                        | works: its store read needs no key, and a failed read never blocks the write                                                                                                                                 |
 | every command that opens a store, including `recall --basic` | inside the turn            | the key of `MEMMAN_EMBED_PROVIDER` (`voyage`, `openrouter`) | the command stops. Voyage reports `MEMMAN_VOYAGE_API_KEY is not set in <dir>/env`. `embed status`, `embed swap`, `migrate`, and `backup` skip this client, and `doctor` reports it as a failed `embed_probe` |
 | `recall` and the drain on one store                          | inside the turn and worker | the key of the provider the store's fingerprint names       | recall ranks by keyword and recency only, and the drain fails that store's queued writes                                                                                                                     |
 | `recall`: rerank the top results                             | inside the turn            | `MEMMAN_VOYAGE_API_KEY`                                     | recall keeps the order it had before reranking and logs a warning                                                                                                                                            |
@@ -213,7 +213,7 @@ The included `guide.md` (instructions for the agent) and `SKILL.md` (full manual
 
 ### What `memman remember` does
 
-`memman remember` appends a row to `queue.db` and returns. It refuses text over 1,000 bytes, text that spans lines, and other text that fails the single-memory format checks ([What remember and replace refuse](docs/USAGE.md#what-remember-and-replace-refuse)). The scheduler drains every 60 s by default (`memman scheduler interval` changes it), and a write becomes recallable once a drain stores it ([Inside Claude Code vs outside](#inside-claude-code-vs-outside)).
+`memman remember` appends a row to `queue.db`, lists under `related` the current memories the text may correct, and returns. It refuses text over 1,000 bytes, text that spans lines, and other text that fails the single-memory format checks ([What remember and replace refuse](docs/USAGE.md#what-remember-and-replace-refuse)). The scheduler drains every 60 s by default (`memman scheduler interval` changes it), and a write becomes recallable once a drain stores it ([Inside Claude Code vs outside](#inside-claude-code-vs-outside)).
 
 ### Pausing the scheduler
 

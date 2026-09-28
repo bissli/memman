@@ -21,7 +21,7 @@ query, never against a fixed score, and opens one with
 
 After responding, the agent stores a user preference or decision at
 once, and any conclusion that would stand if the exchange stopped
-here. It defers pure deliberation that has reached no conclusion.
+here. It defers deliberation that has reached no conclusion.
 
     memman remember "<self-contained text>" --cat <category>
 
@@ -33,8 +33,7 @@ wrote it or when: `author` and `created_at` carry those.
     BAD   Decision (alice, 2026-09-24): retry cap stays at three.
     GOOD  The retry cap stays at three, since a fourth try only adds load.
 
-A correction, stored at once, replaces the row it corrects.
-`remember` only adds and leaves the stale row in recall. A write
+A correction, stored at once, replaces the row it corrects. A write
 saying something changed (a migration ran, a value moved, a step
 finished) corrects the row that stated the old state. The new text
 restates every claim of the old row still true.
@@ -44,11 +43,15 @@ restates every claim of the old row still true.
 The id is on a recall page or is the `id` an earlier write printed,
 even one still queued. With neither in hand, recall the topic first.
 
-memman refuses text over 1,000 bytes, text naming a line number, and
-text off this shape, and says why. A behavioral rule ("always",
-"never") goes to the project CLAUDE.md `## Directives` section
-instead.
+`remember` replies with `related`, current rows sharing the most
+words with the new text. The agent acts only on one with a sentence
+now false: the new row is already queued, so it forgets that row
+when the new row holds all its still-true claims, else replaces it
+with only those claims.
 
-The memman skill is the full manual: recall triggers, categories,
-what never to store, corrections, the write pipeline, and scheduler
-controls.
+memman refuses text over 1,000 bytes and says why. A behavioral rule
+("always", "never") goes to the project CLAUDE.md `## Directives`
+section instead.
+
+The memman skill is the full manual: categories, what never to
+store, corrections, `related`, the pipeline, and scheduler.
