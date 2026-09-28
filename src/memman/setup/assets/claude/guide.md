@@ -19,10 +19,9 @@ query, never against a fixed score, and opens one with
 
 ## Remember
 
-After responding, the agent stores a user preference, decision, or
-correction at once, and any conclusion that would stand if the
-exchange stopped here. It defers pure deliberation that has reached
-no conclusion.
+After responding, the agent stores a user preference or decision at
+once, and any conclusion that would stand if the exchange stopped
+here. It defers pure deliberation that has reached no conclusion.
 
     memman remember "<self-contained text>" --cat <category>
 
@@ -34,9 +33,11 @@ wrote it or when: `author` and `created_at` carry those.
     BAD   Decision (alice, 2026-09-24): retry cap stays at three.
     GOOD  The retry cap stays at three, since a fourth try only adds load.
 
-A correction replaces the row it corrects. `remember` only adds and
-leaves the stale row in recall. The new text restates every claim of
-the old row still true.
+A correction, stored at once, replaces the row it corrects.
+`remember` only adds and leaves the stale row in recall. A write
+saying something changed (a migration ran, a value moved, a step
+finished) corrects the row that stated the old state. The new text
+restates every claim of the old row still true.
 
     memman replace <id> "<corrected text>"
 

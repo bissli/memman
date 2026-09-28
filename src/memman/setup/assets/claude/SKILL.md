@@ -110,9 +110,10 @@ turn. A settled open question is a correction of the row that left it
 open. `forget` removes a row that should never have existed. A
 correction goes through `replace`. A write still queued is forgotten
 after the drain, since `forget` refuses a queued id. A memory
-recording a change names what it replaces. A later write in the same
-session that adds a claim carries only that claim; one that changes
-an earlier claim is a `replace` of that write.
+recording a change (a migration ran, a value moved, a step finished)
+corrects the row that stated the old state. A later write in the
+same session that adds a claim carries only that claim; one that
+changes an earlier claim is a `replace` of that write.
 
 The text stores conclusions AND enough context to understand them. It
 is self-contained: every "that", "this", and "it" is dereferenced into
