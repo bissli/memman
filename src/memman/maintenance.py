@@ -139,4 +139,4 @@ def _run_per_store_maintenance(
         ctx.backend.oplog.maintenance_step()
     except Exception:
         logger.exception(
-            f'maintenance: incremental_vacuum failed for {store_name!r}')
+            f'maintenance: oplog maintenance_step failed for {store_name!r}')

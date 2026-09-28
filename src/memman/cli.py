@@ -679,11 +679,12 @@ def config_set_pg_dsn(
 @click.argument('key')
 @click.pass_context
 def config_get(ctx: click.Context, key: str) -> None:
-    """Print the value of `KEY` from the env file (empty line if unset).
+    """Print the value of `KEY` from the env file.
 
     Reads from `<MEMMAN_DATA_DIR>/env` only, matching the runtime
-    resolver. DSN values are redacted; all other values print as
-    stored. Exits 1 if the key is unset.
+    resolver. A POSTGRES_DSN key is redacted with `redact_dsn`; an
+    API_KEY key prints as `***REDACTED***`; every other key prints
+    as stored. Exits 1 if the key is unset.
     """
     data_dir = ctx.obj['data_dir']
     parsed = config.parse_env_file(config.env_file_path(data_dir))

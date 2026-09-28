@@ -128,18 +128,19 @@ def test_postgres_migrator_names_replaced_by_on_both_halves():
 
 
 def test_open_db_refuses_a_store_missing_replaced_by(tmp_path):
-    """A 0.32.x-shape store fails at open with the schema diagnostic.
+    """A store missing `replaced_by` fails at open with the schema diagnostic.
 
-    `create table if not exists` no-ops on an existing table, so the
-    ONLY statement that raises for a store already carrying
-    `queue_uuid` is the baseline index on the newest column.
+    `create table if not exists` no-ops on an existing table, and SQLite
+    resolves nothing for an index name the store already has.
+    `_drop_column` drops every index naming the column, so the baseline
+    recreates them and the first one naming `replaced_by` raises.
 
-    Mutation: dropping `idx_insights_current_listing` from
-        `_BASELINE_SCHEMA`, or declaring it without `replaced_by`
-        among its columns -- the 0.32.x store opens silently and
-        fails later with a raw OperationalError deep in a read path.
-    Oracle: `open_db` raises BackendError naming the schema and the
-        missing column.
+    Mutation: no baseline index naming `replaced_by` -- the column
+        dropped from both the `idx_insights_pending_enrich` predicate
+        and `idx_insights_current_listing` -- so the store opens
+        silently and fails later with a raw OperationalError deep in a
+        read path.
+    Oracle: `open_db` raises BackendError naming the missing column.
     """
     data_dir = str(tmp_path)
     db_path = _seed_store(data_dir, 'v032')

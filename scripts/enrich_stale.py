@@ -286,7 +286,7 @@ def _wrapped_rebuild(memman, store, expected, log_path, bar,
     Reconciles the bar at the end so each store contributes exactly
     `expected` units regardless of how many `done` events streamed
     (e.g., if the child processed fewer rows than the pre-flight
-    `_store_active_count` snapshot suggested).
+    `_store_stale_count` snapshot suggested).
     """
     with in_flight_lock:
         in_flight.add(store)

@@ -385,7 +385,7 @@ def start() -> dict:
     """Activate the scheduler trigger. Idempotent.
 
     systemd: `systemctl --user enable --now`. launchd: `launchctl load -w`.
-    inline: no-op beyond writing the state file.
+    serve: no-op beyond writing the state file.
     Raises FileNotFoundError if the trigger isn't installed (run
     `memman install` first).
     """
@@ -437,7 +437,7 @@ def stop() -> dict:
     """Deactivate the scheduler trigger. Trigger files stay on disk.
 
     systemd: stop + disable timer (unit file kept). launchd: unload
-    plist (plist kept). inline: no-op beyond writing the state file.
+    plist (plist kept). serve: no-op beyond writing the state file.
     Use `uninstall` to remove trigger files.
     """
     kind = detect_scheduler()

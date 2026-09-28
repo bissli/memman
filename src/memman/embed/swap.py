@@ -12,9 +12,9 @@ cutover transaction, abort cleanup) lives on each backend instance:
   `embedding_pending is null`, ordered by id, after `cursor`
 - `backend.write_swap_batch(items)` -- batch update of
   `embedding_pending` for each (id, vec)
-- `backend.swap_cutover(provider, model, dim)` -- atomic switch
-  (drop+rename on Postgres, copy+null on SQLite); writes the new
-  fingerprint
+- `backend.swap_cutover(target)` -- atomic switch to the `target`
+  `Fingerprint` (drop+rename on Postgres, copy+null on SQLite); the
+  orchestrator writes the new fingerprint after it returns
 - `backend.swap_abort()` -- drop/clear `embedding_pending` and clear
   swap meta
 

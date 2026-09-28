@@ -528,10 +528,10 @@ class Backend(Protocol):
     def swap_prepare(self, target_dim: int) -> None:
         """Add the `embedding_pending` shadow column for a swap.
 
-        SQLite: `alter table insights add column embedding_pending
-        BLOB`. Postgres: `alter table {schema}.insights add column
-        embedding_pending vector(N)` plus a CONCURRENTLY-built HNSW
-        index. Idempotent.
+        SQLite: no-op; `embedding_pending BLOB` already sits in the
+        baseline schema. Postgres: `alter table {schema}.insights add
+        column embedding_pending vector(N)` plus a
+        CONCURRENTLY-built HNSW index. Idempotent.
         """
         ...
 

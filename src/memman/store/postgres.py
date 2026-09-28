@@ -5,7 +5,8 @@ each memman store maps to a Postgres schema named `store_<name>`,
 holding the per-store tables (insights, oplog, meta, worker_runs).
 
 Vector storage:
-- `embedding vector(512)` (pgvector); pgvector adapter binds
+- `embedding vector(N)` (pgvector), `N` sized to the active embedding
+  provider's dim (default 512 via `EMBEDDING_DIM`); pgvector adapter binds
   `list[float]` directly with no per-call serialization.
 - HNSW index built `create index concurrently ... vector_cosine_ops
   where deleted_at is null and replaced_by is null`. Built outside
@@ -1416,13 +1417,13 @@ def apply_baseline_schema(
         except psycopg.errors.UndefinedColumn as exc:
             # Mirrors the SQLite diagnostic in store/db.py::_migrate:
             # `create table if not exists` no-ops on an existing
-            # table, so a pre-migration store trips the baseline's
-            # index on the newest column.
+            # table, so a store missing a column trips the first
+            # baseline index that names it.
             raise BackendError(
                 f'postgres schema {schema} predates the current'
-                f' schema ({exc}); add the missing column to the'
-                ' live schema and drop its stale partial indexes,'
-                ' then reopen') from exc
+                f' schema ({exc}); add or rename the missing column'
+                ' in the live schema, drop by name every index whose'
+                ' definition changed, then reopen') from exc
 
 
 def _ensure_baseline_schema(

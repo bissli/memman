@@ -167,7 +167,6 @@ def storage_summary(db: 'DB') -> dict[str, Any]:
     """Return backend-specific storage information for the active DB.
 
     SQLite-specific: {'db_path': <file path>, 'db_size_bytes': <int>}.
-    Used by the `memman status` command.
     """
     summary: dict[str, Any] = {'db_path': db.path}
     try:
@@ -275,13 +274,12 @@ def open_read_only(data_dir: str) -> DB:
 
     Notes
     -----
-    - Of the four callers, only `_count_active_rows` (under `memman
+    - Of the two callers, only `_count_active_rows` (under `memman
       embed reembed`) reports the failure: it reaches the CLI root
-      group, which catches `BackendError` alone. `memman prime`,
-      `pipeline.enrich.enrich_pending` and `pipeline.remember` each
-      wrap their call in `except Exception` and carry on without the
-      read-only handle, so on those three a raised error is a silent
-      degrade, not a message.
+      group, which catches `BackendError` alone. `memman prime`'s
+      status line wraps its call in `except Exception` and carries on
+      without the read-only handle, so a raised error there is a
+      silent degrade, not a message.
     """
     db_path = os.path.join(data_dir, 'memman.db')
     try:
@@ -349,9 +347,8 @@ create index if not exists idx_insights_queue_uuid on insights(queue_uuid);
 -- `created_at` rides along so the scheduler's pending-enrich scan
 -- takes its order from the index; without it the planner prefers
 -- the listing index below and sorts every current row per tick.
--- Also the schema canary: it is the first statement naming the
--- newest column, `enrich_attempted_at`, so a store without it fails
--- at open (see _migrate).
+-- Also the schema canary (see _migrate): it is the first statement
+-- naming `enrich_attempted_at` and `replaced_by`.
 create index if not exists idx_insights_pending_enrich
     on insights(enrich_attempted_at, created_at)
     where enrich_attempted_at is null and deleted_at is null
@@ -435,17 +432,19 @@ def _migrate(db: DB) -> None:
 
     Notes
     -----
-    - A pre-migration store fails here on every open: `create table
-      if not exists` no-ops on an existing table, so the tripwire is
-      the baseline's first `create index` on the NEWEST schema
-      column raising `no such column`: `idx_insights_pending_enrich`
-      here and `idx_insights_pending_enrich_<schema>` on Postgres,
-      whose predicate is resolved before the if-not-exists check.
-      Both name `enrich_attempted_at`. Every schema
-      change must index its newest column or the old store opens
-      silently and fails later with a raw
-      OperationalError. This is the primary schema diagnostic:
-      nothing that needs a live Backend can report on such a store.
+    - `create table if not exists` no-ops on an existing table, so a
+      store missing a baseline column fails here only through a
+      baseline `create index` that names the column. This is the
+      primary schema diagnostic: nothing that needs a live Backend
+      can report on such a store.
+    - Postgres resolves an index's columns and predicate before its
+      if-not-exists check, so every baseline index naming the column
+      raises. SQLite resolves nothing for an index name the store
+      already has, so only an index the store lacks raises.
+    - So on SQLite only a new index name catches a store the hand DDL
+      missed. A renamed column keeps its index names, and a SQLite
+      store the rename missed opens without error, then fails at its
+      first read of the column with a raw OperationalError.
     - Creating `insights_fts` also populates it, in ONE transaction.
       The triggers only carry rows written after the table exists, so
       a store with no `insights_fts` table, including one restored
@@ -464,8 +463,9 @@ def _migrate(db: DB) -> None:
             name = Path(db.path).parent.name
             raise BackendError(
                 f'store {name} predates the current schema ({exc});'
-                ' add the missing column to the live store and drop'
-                ' its stale partial indexes, then reopen') from exc
+                ' add or rename the missing column in the live store,'
+                ' drop by name every index whose definition changed,'
+                ' then reopen') from exc
         raise
     has_fts = db._conn.execute(
         "select 1 from sqlite_master"

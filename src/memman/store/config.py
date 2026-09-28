@@ -38,7 +38,7 @@ class PostgresBackendConfig:
 
     @classmethod
     def _validate(cls, env: dict) -> None:
-        """Reject unknown `MEMMAN_PG_*` keys in `env`.
+        """Reject unknown `MEMMAN_POSTGRES_*` keys in `env`.
 
         Pulls a `did you mean` hint from `difflib.get_close_matches`
         when one is sufficiently close. Raises `ConfigError`
