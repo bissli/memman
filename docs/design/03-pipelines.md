@@ -41,7 +41,7 @@ memman runs commands during the agent's turn and processes queued writes in a ba
 
 `memman replace <id> "<text>"` runs the same steps, with three differences:
 
-- The id may name a current memory or a write still in the queue for the same store. It rejects a target that is neither. If the target is already replaced, the error names its successor. The drain holds a replacement while its queued target, or an earlier replacement in the same store, is pending.
+- The id may name a current memory or a write still in the queue for the same store. It rejects a target that is neither. If the target is already replaced, the error names its successor. If a replacement of the target is still queued, the error quotes that replacement's id and text, since a second one would retire it on the drain. The drain holds a replacement while its queued target, or an earlier replacement in the same store, is pending.
 - When `--cat` is omitted, the replacement inherits the target's value.
 - The queue row carries the target as `replaced_id`, and the output carries the same field.
 
@@ -77,14 +77,14 @@ A drain claims rows one at a time until it has handled 100 (`--limit`), reaches 
 
 A replacement never edits a memory in place. It retires the target and stores one successor. The target keeps its content and records its successor in `replaced_by`. Recall and listings skip it.
 
-| Field                         | Value used                               | Why                                                       |
-| ----------------------------- | ---------------------------------------- | --------------------------------------------------------- |
-| `content`                     | incoming                                 | the replacement text, stored as written                   |
-| `category`                    | flag value if supplied, otherwise target | omitted flag inherits the target's metadata               |
-| `queue_uuid`, `author`        | incoming                                 | identifies the write that produced the row and its author |
-| `summary`, vector             | fresh                                    | enrichment and embedding use the replacement text         |
-| `created_at`                  | successor's own                          | the successor is a new row                                |
-| `replaced_by` on the target   | the successor's id                       | `insights show --history` reads the link                  |
+| Field                       | Value used                               | Why                                                       |
+| --------------------------- | ---------------------------------------- | --------------------------------------------------------- |
+| `content`                   | incoming                                 | the replacement text, stored as written                   |
+| `category`                  | flag value if supplied, otherwise target | omitted flag inherits the target's metadata               |
+| `queue_uuid`, `author`      | incoming                                 | identifies the write that produced the row and its author |
+| `summary`, vector           | fresh                                    | enrichment and embedding use the replacement text         |
+| `created_at`                | successor's own                          | the successor is a new row                                |
+| `replaced_by` on the target | the successor's id                       | `insights show --history` reads the link                  |
 
 ### Failure and retry
 
