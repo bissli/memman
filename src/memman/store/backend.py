@@ -216,9 +216,9 @@ class NodeStore(Protocol):
         Returns
         -------
         EnrichmentCoverage
-            `total_active`, `missing_embedding` and `missing_summary`
-            over active rows; doctor's enrichment-coverage check reads
-            it.
+            `total_active`, `missing_embedding`, `missing_summary`
+            and `stranded` over active rows; doctor's
+            enrichment-coverage check reads it.
         """
         ...
 
@@ -275,16 +275,18 @@ class NodeStore(Protocol):
         ...
 
     def iter_stale_insight_ids(self, active_pv: str) -> list[Id]:
-        """Return ids of active insights whose staleness key drifted.
+        """Return ids of the active insights `enrich --stale-only` replays.
 
-        Stale means `prompt_version` differs from `active_pv`. There
-        is no model argument: `active_pv` folds in the LLM model
-        already, and that is the only model a rebuild re-runs.
+        Stale means a present `prompt_version` that differs from
+        `active_pv`, or a stranded row (attempted, never enriched)
+        whatever its key. There is no model argument: `active_pv`
+        folds in the LLM model already, and that is the only model a
+        rebuild re-runs.
         """
         ...
 
     def count_stale_insights(self, active_pv: str) -> int:
-        """Count active insights whose staleness key drifted."""
+        """Count the rows `iter_stale_insight_ids` returns."""
         ...
 
     def reset_for_rebuild(self, ids: list[Id]) -> None:

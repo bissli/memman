@@ -140,6 +140,9 @@ select count(*),
        sum(case when embedding is null then 1 else 0 end),
        sum(case when (summary is null or summary = '')
                  and enriched_at is null
+                then 1 else 0 end),
+       sum(case when enrich_attempted_at is not null
+                 and enriched_at is null
                 then 1 else 0 end)
 from insights
 where deleted_at is null and replaced_by is null
@@ -147,11 +150,12 @@ where deleted_at is null and replaced_by is null
         row = self._db._query(sql).fetchone()
         if row is None:
             return EnrichmentCoverage()
-        total, miss_emb, miss_sum = row
+        total, miss_emb, miss_sum, stranded = row
         return EnrichmentCoverage(
             total_active=int(total or 0),
             missing_embedding=int(miss_emb or 0),
-            missing_summary=int(miss_sum or 0))
+            missing_summary=int(miss_sum or 0),
+            stranded=int(stranded or 0))
 
     def embedding_size_distribution(self) -> dict[int, int]:
         sql = """

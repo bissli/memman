@@ -43,15 +43,21 @@ def check_enrichment_coverage(backend: Backend) -> dict[str, Any]:
     -------
     dict[str, Any]
         `name` is `enrichment_coverage`. `status` is `pass` when no
-        active row misses a field, `warn` at 90 percent coverage or
-        above, `fail` below. `detail` carries `total_active`, the
-        two `missing_*` counts and `coverage_pct`; an empty store
-        passes at 100.0.
+        active row misses a field and none is stranded, `warn` at 90
+        percent coverage or above, `fail` below. `detail` carries
+        `total_active`, the two `missing_*` counts, `stranded` and
+        `coverage_pct`, plus a `remediation` naming the fixing
+        command when a row is stranded; an empty store passes at
+        100.0.
 
     Notes
     -----
     - coverage_pct = (total_active - max(missing_*)) / total_active *
       100, so the worst single field decides the grade.
+    - A stranded row (attempted, never enriched) warns even at full
+      coverage: a failed call after a reset leaves the old summary
+      and vector in place, and only `enrich --stale-only` retries it
+      outside the drain's stranded sweep.
     """
     cov = backend.nodes.enrichment_coverage()
     total = cov.total_active
@@ -60,21 +66,27 @@ def check_enrichment_coverage(backend: Backend) -> dict[str, Any]:
                 'detail': {'total_active': 0, 'coverage_pct': 100.0}}
     missing_any = max(cov.missing_embedding, cov.missing_summary)
     coverage_pct = round((total - missing_any) / total * 100, 1)
-    if missing_any == 0:
+    if missing_any == 0 and cov.stranded == 0:
         status = 'pass'
     elif coverage_pct >= 90:
         status = 'warn'
     else:
         status = 'fail'
+    detail: dict[str, Any] = {
+        'total_active': total,
+        'missing_embedding': cov.missing_embedding,
+        'missing_summary': cov.missing_summary,
+        'stranded': cov.stranded,
+        'coverage_pct': coverage_pct,
+        }
+    if cov.stranded:
+        detail['remediation'] = (
+            "Run 'memman enrich --stale-only' to re-enrich stranded"
+            " rows.")
     return {
         'name': 'enrichment_coverage',
         'status': status,
-        'detail': {
-            'total_active': total,
-            'missing_embedding': cov.missing_embedding,
-            'missing_summary': cov.missing_summary,
-            'coverage_pct': coverage_pct,
-            },
+        'detail': detail,
         }
 
 
@@ -928,10 +940,13 @@ def _is_provenance_stale(row_pv: str | None, active_pv: str) -> bool:
 
     Notes
     -----
-    - The same predicate is encoded in SQL by `count_stale_insights`
-      and `iter_stale_insight_ids` (`store/node.py`,
-      `store/postgres.py`); keep those WHERE clauses aligned with
-      this function when the rule changes.
+    - `count_stale_insights` and `iter_stale_insight_ids`
+      (`store/node.py`, `store/postgres.py`) encode this predicate
+      in SQL; keep their key term aligned with this function when
+      the rule changes.
+    - Those queries also take stranded rows (attempted, never
+      enriched), which carry no drifted key. `enrichment_coverage`
+      reports those, so `stale_rows` here excludes them.
     """
     return row_pv is not None and row_pv != active_pv
 

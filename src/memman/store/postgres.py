@@ -593,6 +593,10 @@ select count(*),
        count(*) filter (
            where (summary is null or summary = '')
              and enriched_at is null
+       ),
+       count(*) filter (
+           where enrich_attempted_at is not null
+             and enriched_at is null
        )
 from {s}.insights
 where deleted_at is null and replaced_by is null
@@ -605,7 +609,8 @@ where deleted_at is null and replaced_by is null
         return EnrichmentCoverage(
             total_active=int(row[0] or 0),
             missing_embedding=int(row[1] or 0),
-            missing_summary=int(row[2] or 0))
+            missing_summary=int(row[2] or 0),
+            stranded=int(row[3] or 0))
 
     def embedding_size_distribution(self) -> dict[int, int]:
         sql = self._q("""
@@ -691,8 +696,8 @@ limit %s
         sql = self._q("""
 select id from {s}.insights
 where deleted_at is null and replaced_by is null
-  and prompt_version is not null
-  and prompt_version != %s
+  and ((prompt_version is not null and prompt_version != %s)
+       or (enrich_attempted_at is not null and enriched_at is null))
 order by created_at asc
 """)
         with self._conn.cursor() as cur:
@@ -703,8 +708,8 @@ order by created_at asc
         sql = self._q("""
 select count(*) from {s}.insights
 where deleted_at is null and replaced_by is null
-  and prompt_version is not null
-  and prompt_version != %s
+  and ((prompt_version is not null and prompt_version != %s)
+       or (enrich_attempted_at is not null and enriched_at is null))
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (active_pv,))

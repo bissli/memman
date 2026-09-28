@@ -1340,6 +1340,61 @@ class TestEnrichStaleOnly:
         assert after['drift-1'][0] != before['drift-1'][0]
         assert after['drift-1'][1] == active_pv
 
+    def test_stale_only_re_enriches_stranded_rows(self, tmp_path, monkeypatch):
+        """`--stale-only` re-enriches a stranded row and skips an enriched one.
+
+        Mutation: the stale predicate skipping every null
+            `prompt_version`, which leaves the stranded row behind; or
+            taking every null key, which re-bills `legacy-1`.
+        Oracle: `enriched_at` and `prompt_version` read back per row
+            against a stranded row and an enriched row, both seeded
+            with a null `prompt_version`.
+        """
+        from memman.embed.fingerprint import Fingerprint, write_fingerprint
+        from memman.pipeline.remember import compute_prompt_version
+        from memman.store.db import open_db
+        from memman.store.node import insert_insight, update_enrichment
+        from memman.store.sqlite import SqliteBackend
+        from tests.conftest import make_insight
+
+        monkeypatch.delenv('MEMMAN_STORE', raising=False)
+        data_dir = str(tmp_path / 'memman')
+        store_path = tmp_path / 'memman' / 'data' / 'default'
+        db = open_db(str(store_path))
+        write_fingerprint(SqliteBackend(db), Fingerprint(
+            provider='voyage', model='voyage-3-lite', dim=512))
+        insert_insight(db, make_insight(
+            id='strand-1', content='Stranded insight whose enrichment failed'))
+        insert_insight(db, make_insight(
+            id='legacy-1', content='Enriched insight from before provenance'))
+        update_enrichment(db, 'legacy-1', 'sum')
+        db._conn.execute(
+            'UPDATE insights SET enrich_attempted_at = ? WHERE id = ?',
+            ('2024-01-01T00:00:00+00:00', 'strand-1'))
+        db._conn.execute(
+            'UPDATE insights SET enrich_attempted_at = ?, enriched_at = ?'
+            ' WHERE id = ?',
+            ('2024-01-01T00:00:00+00:00',
+             '2024-01-01T00:00:00+00:00', 'legacy-1'))
+        db.close()
+
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            '--data-dir', data_dir, 'enrich', '--stale-only'])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)
+        assert data['processed'] == 1
+
+        db = open_db(str(store_path))
+        after = {
+            row[0]: (row[1], row[2]) for row in db._conn.execute(
+                'SELECT id, enriched_at, prompt_version FROM insights')
+            }
+        db.close()
+        assert after['legacy-1'] == ('2024-01-01T00:00:00+00:00', None)
+        assert after['strand-1'][0] is not None
+        assert after['strand-1'][1] == compute_prompt_version()
+
     def test_stale_only_accepted_on_postgres_runner(self, cross_backend_runner):
         """`--stale-only` does not trip the SQLite-only guard on Postgres.
 

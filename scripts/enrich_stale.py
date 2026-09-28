@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-r"""Re-enrich provenance-drifted insights via `enrich --stale-only`.
+r"""Re-enrich stale insights via `enrich --stale-only`.
 
 Iterates a list of stores, runs `memman enrich --stale-only`
 per store, and streams a tqdm progress bar sized from the *stale*
 row count (rows whose persisted `prompt_version` no longer matches
-the active enrichment key), not the active-row count. Per-store
-output is captured and appended to a log file under `/tmp` so the
-rebuild can run in the background and the operator can tail it later.
+the active enrichment key, plus stranded rows), not the active-row
+count. Per-store output is captured and appended to a log file under
+`/tmp` so the rebuild can run in the background and the operator can
+tail it later.
 
 Stores with zero stale rows are skipped entirely (no LLM acquisition,
 no lock, no oplog entry). The pre-flight stale count comes from the

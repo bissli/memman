@@ -183,13 +183,13 @@ memman insights review [--limit N]     # memories with quality warnings
 
 ```bash
 memman enrich               # every current memory
-memman enrich --stale-only  # only memories enriched under another prompt or model
+memman enrich --stale-only  # only stale memories: another prompt or model, or a failed call
 memman enrich --dry-run     # print the count and change nothing
 ```
 
 - Both modes need a stopped scheduler (`memman scheduler stop`), except with `--dry-run`. Both run on SQLite and Postgres.
 - The command works in batches of 20 and prints `{processed, remaining}`. `remaining` counts memories still waiting for enrichment after the run.
-- `--stale-only` selects current memories whose `prompt_version` differs from the active one. The `prompt_version` is a hash of the enrichment prompt and `MEMMAN_LLM_MODEL`. A memory with no `prompt_version` is skipped. `memman status` reports the same count as `stale_insights`.
+- `--stale-only` selects current memories whose `prompt_version` differs from the active one, plus stranded memories. The `prompt_version` is a hash of the enrichment prompt and `MEMMAN_LLM_MODEL`. A stranded memory carries `enrich_attempted_at` but no `enriched_at`: its enrichment call failed, as on a rate limit, and the drain's pending pass no longer takes it. An enriched memory with no `prompt_version` is skipped. `memman status` reports the same count as `stale_insights`.
 - `--progress-jsonl` writes one JSON progress line per memory to stderr.
 - A second rebuild on the same store is refused while one runs.
 
@@ -329,6 +329,8 @@ memman log worker --stack [--lines N]
 | Providers          | `llm_probe`, `embed_probe`                                                                                                                           |
 
 A store with no memories skips `integrity`, `enrichment_coverage`, `embedding_consistency`, and `provenance_drift`.
+
+`enrichment_coverage` warns on any stranded memory, reports the count as `stranded`, and names `memman enrich --stale-only` as the fix.
 
 **`log list`** prints the operation log as JSON, 20 entries by default. `--since` takes a count and a unit: `7d`, `24h`, or `30m`. `--stats` groups the entries by operation. `--text` prints a table.
 

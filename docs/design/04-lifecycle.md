@@ -90,7 +90,7 @@ The drain embeds each row once, after LLM enrichment. When the embedding call fa
 
 ### 4.3.4 Recovery
 
-`memman enrich` re-enriches every current memory through the full LLM pipeline and re-embeds it. This adds vectors to rows stored without them. The maintenance step after a later drain that finishes a row in the same store also retries up to 3 such rows ([chapter 3](03-pipelines.md#maintenance-after-each-drain)). It requires `memman scheduler stop` first, except with `--dry-run`. `--stale-only` limits the pass to rows whose enrichment prompt or LLM model changed.
+`memman enrich` re-enriches every current memory through the full LLM pipeline and re-embeds it. This adds vectors to rows stored without them. The maintenance step after a later drain that finishes a row in the same store also retries up to 3 such rows ([chapter 3](03-pipelines.md#maintenance-after-each-drain)). It requires `memman scheduler stop` first, except with `--dry-run`. `--stale-only` limits the pass to rows whose enrichment prompt or LLM model changed, and to stranded rows. A stranded row carries `enrich_attempted_at` but no `enriched_at`, because its enrichment call failed, as on a rate limit. `memman doctor` counts stranded rows under `enrichment_coverage` and warns on any.
 
 ### 4.3.5 Changing the embedding model
 

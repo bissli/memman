@@ -204,15 +204,26 @@ class ProvenanceCount:
 
 @dataclass
 class EnrichmentCoverage:
-    """Per-field NULL counts for the enrichment columns on `insights`.
+    """Enrichment gaps among active insights, read by `memman doctor`.
 
-    `memman doctor` consumes this to report which enrichment fields
-    (embedding, summary) have unfilled values among active insights.
+    Attributes
+    ----------
+    total_active : int
+        Current rows: not forgotten, not replaced.
+    missing_embedding : int
+        Current rows with no vector.
+    missing_summary : int
+        Current rows with an empty summary and no `enriched_at`.
+    stranded : int
+        Current rows with `enrich_attempted_at` set and `enriched_at`
+        null: an enrichment call failed and the pending path skips
+        them.
     """
 
     total_active: int = 0
     missing_embedding: int = 0
     missing_summary: int = 0
+    stranded: int = 0
 
 
 @dataclass

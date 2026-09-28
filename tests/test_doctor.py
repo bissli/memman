@@ -77,6 +77,32 @@ class TestEnrichmentCoverage:
         assert result['status'] == 'warn'
         assert result['detail']['missing_embedding'] == 1
 
+    def test_stranded_row_warns_and_names_the_fix(self, backend):
+        """Verify a stranded row warns by count and names its fix.
+
+        Mutation: the coverage check grading only the `missing_*`
+            counts, so a row whose enrichment call failed after a
+            reset passes; or the stranded predicate dropping either
+            timestamp term, which counts the pending or the enriched
+            row too.
+        Oracle: three rows that all carry a summary and a vector, so
+            the `missing_*` counts are zero, and exactly one of them
+            attempted and never enriched.
+        """
+        from memman.doctor import check_enrichment_coverage
+        for rid in ('ok-1', 'strand-1', 'pend-1'):
+            backend.nodes.insert(make_insight(
+                id=rid, content=f'content for {rid} long enough'))
+            backend.nodes.update_enrichment(rid, summary='summary text')
+            backend.nodes.update_embedding(rid, [0.1] * 512, 'test-model')
+        for rid in ('ok-1', 'strand-1'):
+            backend.nodes.stamp_enrich_attempted(rid)
+        backend.nodes.stamp_enriched('ok-1')
+        result = check_enrichment_coverage(backend)
+        assert result['status'] == 'warn'
+        assert result['detail']['stranded'] == 1
+        assert 'memman enrich --stale-only' in result['detail']['remediation']
+
 
 class TestEmbeddingConsistency:
 
@@ -274,6 +300,30 @@ class TestStaleHelpers:
         helper_count = backend.nodes.count_stale_insights(active_pv)
         doctor_result = check_provenance_drift(backend)
         assert helper_count == doctor_result['detail']['stale_rows']
+
+    def test_stranded_row_is_stale(self, backend):
+        """Verify a stranded row is stale while an enriched one is not.
+
+        Mutation: the stale predicate keeping its `prompt_version is
+            not null` guard alone, which skips a stranded row since
+            a failed enrichment stamps no key; or widening it to
+            every null key, which takes the enriched and the pending
+            row too; or the count and the iteration disagreeing.
+        Oracle: three rows with a null `prompt_version`, of which only
+            `strand-1` is attempted and never enriched.
+        """
+        from memman.pipeline.remember import compute_prompt_version
+
+        active_pv = compute_prompt_version()
+        for rid in ('strand-1', 'legacy-1', 'pend-1'):
+            backend.nodes.insert(make_insight(
+                id=rid, content=f'content for {rid} long enough'))
+        for rid in ('strand-1', 'legacy-1'):
+            backend.nodes.stamp_enrich_attempted(rid)
+        backend.nodes.stamp_enriched('legacy-1')
+
+        assert backend.nodes.iter_stale_insight_ids(active_pv) == ['strand-1']
+        assert backend.nodes.count_stale_insights(active_pv) == 1
 
     def test_empty_store(self, backend):
         """Empty store returns 0 / [] from both helpers."""

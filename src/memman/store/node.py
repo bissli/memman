@@ -549,18 +549,35 @@ limit ?
 
 def iter_stale_insight_ids(
         db: 'DB', active_pv: str) -> list[str]:
-    """Return ids of active insights whose staleness key has drifted.
+    """Return ids of the active insights `enrich --stale-only` replays.
+
+    Parameters
+    ----------
+    db : DB
+        The open SQLite store.
+    active_pv : str
+        The active `compute_prompt_version()` key.
+
+    Returns
+    -------
+    list[str]
+        Ids oldest first: rows whose `prompt_version` is present and
+        differs from `active_pv`, plus stranded rows (attempted,
+        never enriched), whatever their key.
 
     Notes
     -----
-    - Keep this predicate aligned with
-      `doctor._is_provenance_stale` and the Postgres copy.
+    - Keep the key term aligned with `doctor._is_provenance_stale`,
+      and the whole predicate aligned with `count_stale_insights`
+      and the Postgres copies.
+    - An enriched row with a null key stays out: the active config
+      may never have run on it, but nothing says it drifted.
     """
     sql = """
 select id from insights
 where deleted_at is null and replaced_by is null
-  and prompt_version is not null
-  and prompt_version != ?
+  and ((prompt_version is not null and prompt_version != ?)
+       or (enrich_attempted_at is not null and enriched_at is null))
 order by created_at asc
 """
     rows = db._query(sql, (active_pv,)).fetchall()
@@ -568,15 +585,15 @@ order by created_at asc
 
 
 def count_stale_insights(db: 'DB', active_pv: str) -> int:
-    """Count active insights whose staleness key has drifted.
+    """Count the active insights `enrich --stale-only` replays.
 
     Same predicate as `iter_stale_insight_ids`.
     """
     sql = """
 select count(*) from insights
 where deleted_at is null and replaced_by is null
-  and prompt_version is not null
-  and prompt_version != ?
+  and ((prompt_version is not null and prompt_version != ?)
+       or (enrich_attempted_at is not null and enriched_at is null))
 """
     row = db._query(sql, (active_pv,)).fetchone()
     return row[0] if row else 0

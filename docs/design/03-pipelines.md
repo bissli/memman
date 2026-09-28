@@ -273,15 +273,15 @@ Prompts, models and providers change. memman does not aim for identical output a
 
 ### Records used to detect changes
 
-| Record                                                         | Stored at | Detects                               | Operator action                                                |
-| -------------------------------------------------------------- | --------- | ------------------------------------- | -------------------------------------------------------------- |
-| `embed_fingerprint`                                            | `meta`    | the store's embedding model           | `memman embed swap` or `memman embed reembed` (chapter 4)      |
-| `embed_swap_state`, `embed_swap_cursor`, `embed_swap_target_*` | `meta`    | a swap in progress                    | cutover or `--abort` deletes them. Doctor warns if keys remain |
-| `embedding_model`                                              | per row   | the model behind the row's vector     | `memman embed reembed` re-embeds rows that differ              |
-| `prompt_version`                                               | per row   | enrichment prompt or LLM model change | doctor warns, `memman enrich --stale-only`                     |
-| `enrich_attempted_at`, `enriched_at`                           | per row   | enrichment progress                   | maintenance retries 3 per drain, or `memman enrich`            |
+| Record                                                         | Stored at | Detects                               | Operator action                                                  |
+| -------------------------------------------------------------- | --------- | ------------------------------------- | ---------------------------------------------------------------- |
+| `embed_fingerprint`                                            | `meta`    | the store's embedding model           | `memman embed swap` or `memman embed reembed` (chapter 4)        |
+| `embed_swap_state`, `embed_swap_cursor`, `embed_swap_target_*` | `meta`    | a swap in progress                    | cutover or `--abort` deletes them. Doctor warns if keys remain   |
+| `embedding_model`                                              | per row   | the model behind the row's vector     | `memman embed reembed` re-embeds rows that differ                |
+| `prompt_version`                                               | per row   | enrichment prompt or LLM model change | doctor warns, `memman enrich --stale-only`                       |
+| `enrich_attempted_at`, `enriched_at`                           | per row   | enrichment progress                   | maintenance retries 3 per drain, or `memman enrich --stale-only` |
 
-- The doctor check for leftover swap keys is `no_stale_swap_meta`. The check for a changed prompt version is `provenance_drift`.
-- A null `prompt_version` is not treated as outdated.
+- The doctor check for leftover swap keys is `no_stale_swap_meta`. The check for a changed prompt version is `provenance_drift`. The check for a stranded row, one attempted and never enriched, is `enrichment_coverage`.
+- A null `prompt_version` on an enriched row is not treated as outdated.
 
 A per-row marker shows the scope of a change. `provenance_drift` reports how many memories each prompt version produced, so a rebuild can target only rows with outdated versions.

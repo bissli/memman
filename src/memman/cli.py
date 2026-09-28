@@ -3490,9 +3490,10 @@ def _enrich_stale_only(
     Filters work to rows whose persisted `prompt_version` no longer
     matches `compute_prompt_version()` -- the enrichment prompt plus
     the LLM model, which is exactly the set this command
-    replays. Works on SQLite and Postgres. Lock + predicate +
-    reset run inside a single `reembed_lock('rebuild')` window so
-    a concurrent wholesale rebuild cannot race.
+    replays -- and to stranded rows, whose enrichment call failed
+    after the attempt stamp. Works on SQLite and Postgres. Lock +
+    predicate + reset run inside a single `reembed_lock('rebuild')`
+    window so a concurrent wholesale rebuild cannot race.
     """
     from memman.embed.fingerprint import bound_embedder
     from memman.pipeline.enrich import MAX_ENRICH_BATCH, enrich_pending
@@ -3615,9 +3616,11 @@ def _enrich_stale_only(
               help='Re-enrich only rows whose prompt_version no longer'
                    ' matches the active config -- the enrichment prompt'
                    ' plus the LLM model, which is exactly what'
-                   ' this command replays. Cross-backend'
-                   ' (works on Postgres). NULL provenance rows are not'
-                   ' swept; they need a separate backfill.')
+                   ' this command replays -- and stranded rows, whose'
+                   ' enrichment call failed. Cross-backend'
+                   ' (works on Postgres). An enriched row with NULL'
+                   ' provenance is not swept; it needs a separate'
+                   ' backfill.')
 @click.pass_context
 def enrich(ctx: click.Context, dry_run: bool,
            progress_jsonl: bool, stale_only: bool) -> None:
