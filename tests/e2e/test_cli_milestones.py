@@ -45,7 +45,7 @@ def home_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 def _data_dir(home: Path, name: str, seed: bool = True) -> Path:
-    """Per-test data dir, optionally pre-seeded with a fingerprint.
+    """Per-test data dir with its env file, optionally pre-seeded.
 
     Pre-seeding lets `seed_if_fresh` short-circuit on the existing
     fingerprint, avoiding the Voyage availability probe on every
@@ -54,6 +54,9 @@ def _data_dir(home: Path, name: str, seed: bool = True) -> Path:
     """
     d = home / 'data' / name
     d.mkdir(parents=True, exist_ok=True)
+    # `--data-dir` points memman at `<data dir>/env`, never at
+    # `$HOME/.memman/env`.
+    (d / 'env').write_text(build_e2e_env_body())
     if seed:
         seed_fingerprint(d / 'data' / 'default' / 'memman.db')
     return d
