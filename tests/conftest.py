@@ -51,10 +51,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 @pytest.fixture(autouse=True)
 def _isolate_env(tmp_path, monkeypatch, request):
-    """Pin MEMMAN_DATA_DIR to tmp and seed the env file.
+    """Pin MEMMAN_DATA_DIR and the home directory to tmp and seed the env file.
 
     Prevents the user's real `~/.memman/env` from leaking into the
-    config resolver during unit tests. By default, seeds a fresh env
+    config resolver during unit tests. The home redirect keeps a live
+    `~/.memman/debug.state` or scheduler state out of the test, and the
+    trace log out of the live `~/.memman/logs/`. By default, seeds a fresh env
     file with `INSTALL_DEFAULTS` so runtime call sites resolve cleanly
     (no code-default fallback exists at runtime). Tests that need to
     assert "absent key" behavior mark themselves
@@ -92,6 +94,9 @@ def _isolate_env(tmp_path, monkeypatch, request):
                     real_secrets[key] = val
     data_dir = tmp_path / 'memman'
     monkeypatch.setenv('MEMMAN_DATA_DIR', str(data_dir))
+    home_dir = tmp_path / 'isolated-home'
+    home_dir.mkdir()
+    monkeypatch.setenv('HOME', str(home_dir))
     monkeypatch.delenv('MEMMAN_STORE', raising=False)
     monkeypatch.delenv('MEMMAN_DEBUG', raising=False)
     monkeypatch.delenv('MEMMAN_WORKER', raising=False)

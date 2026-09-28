@@ -11,6 +11,7 @@ strips secret values while keeping bodies verbatim.
 import json
 import logging
 import os
+import pwd
 import stat
 from pathlib import Path
 
@@ -153,6 +154,19 @@ def test_setup_is_idempotent(fake_home, debug_on):
     trace_handlers = [h for h in logger.handlers
                       if getattr(h, '_memman_trace', False)]
     assert len(trace_handlers) == 1
+
+
+def test_autouse_isolation_keeps_trace_log_off_the_real_home():
+    """With no fake_home, the trace log still resolves outside the real home.
+
+    Mutation: _isolate_env leaving Path.home() at the real home, so a
+      live debug.state of 'on' sends test log lines into the developer's
+      ~/.memman/logs/debug.log.
+    Oracle: the password-database home directory, which no fixture
+      patches.
+    """
+    real_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    assert not trace._trace_path().is_relative_to(real_home)
 
 
 class TestRedaction:
