@@ -55,6 +55,24 @@ def test_replace_prints_the_id_of_the_replacement(mm_runner):
     assert _row(data_dir, first['id'])[2] == json.loads(r.output)['id']
 
 
+def test_remember_and_replace_print_the_id_on_one_line(mm_runner):
+    """Verify the printed id survives `| tail -1`.
+
+    Mutation: `_json_out` indenting its output, so the last line is
+        `}` and an agent that tails the reply loses the id.
+    Oracle: the reply's last line parsed alone, against the id the
+        whole reply carries.
+    """
+    first = invoke(mm_runner, ['remember', 'kafka keeps seven days'])
+    second = invoke(mm_runner, [
+        'replace', json.loads(first.output)['id'],
+        'kafka keeps three days'])
+
+    for r in (first, second):
+        last_line = r.output.strip().splitlines()[-1]
+        assert json.loads(last_line)['id'] == json.loads(r.output)['id']
+
+
 @pytest.mark.no_auto_drain
 def test_replace_of_a_queued_write_retires_it_once_it_lands(mm_runner):
     """A replace aimed at a write still in the queue links on one drain.

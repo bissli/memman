@@ -261,8 +261,11 @@ def _configure_logging(data_dir: str, verbose: bool, debug: bool) -> None:
 
 
 def _json_out(obj: object) -> None:
-    """Write JSON to stdout with 2-space indent, sorted keys."""
-    click.echo(json.dumps(obj, indent=2, sort_keys=True))
+    """Write JSON to stdout as one line with sorted keys.
+
+    One line keeps every key on the line `| tail -1` shows.
+    """
+    click.echo(json.dumps(obj, sort_keys=True))
 
 
 def _require_started(action: str) -> None:

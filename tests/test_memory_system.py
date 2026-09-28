@@ -398,16 +398,26 @@ class TestOplogChronology:
     """Operation log entries are in chronological order."""
 
     def test_oplog_order_is_chronological(self, runner):
-        """Log --limit N returns most-recent-first ordering."""
+        """Verify `log list` returns the newest write first.
+
+        Mutation: the oplog read ordered oldest first.
+        Oracle: the stored ids in reverse of the order they were
+            written.
+        """
         techs = ['Redis', 'Kafka', 'Consul', 'Vault', 'Envoy']
-        for tech in techs:
-            remember(runner,
-                     f'{tech} cluster deployed across three availability zones for resilience')
-        result = invoke(runner, ['log', 'list', '--limit', '5'])
-        assert result.exit_code == 0
-        lines = [l for l in result.output.strip().split('\n')
-                 if l.strip() and not l.startswith('TIME')]
-        assert len(lines) >= 5
+        ids = [
+            remember(runner, f'{tech} cluster deployed across three'
+                     ' availability zones for resilience')['id']
+            for tech in techs
+            ]
+        result = invoke(runner, ['log', 'list', '--limit', '50'])
+        assert result.exit_code == 0, result.output
+        remembered = [
+            entry['insight_id']
+            for entry in json.loads(result.output)['entries']
+            if entry['operation'] == 'remember'
+            ]
+        assert remembered == ids[::-1]
 
 
 class TestStatusAfterMutations:
