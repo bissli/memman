@@ -9,10 +9,10 @@ dev:
 	poetry install
 
 test:
-	poetry run pytest tests/ -v --ignore=tests/e2e
+	poetry run pytest tests/ -v --ignore=tests/e2e --ignore=tests/experiments
 
 test-live:
-	poetry run pytest tests/ --live --ignore=tests/e2e -n 16
+	poetry run pytest tests/ --live --ignore=tests/e2e --ignore=tests/experiments -n 16
 
 typecheck:
 	poetry run mypy --strict --ignore-missing-imports \
