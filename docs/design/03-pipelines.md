@@ -24,8 +24,6 @@ memman runs commands during the agent's turn and processes queued writes in a ba
 
 ---
 
-<a id="32-write-pipeline-remember-deferred-two-tier"></a>
-
 ## 3.2 Write pipeline: remember
 
 ![Write Pipeline](../diagrams/04-remember-pipeline.drawio.png)
@@ -113,24 +111,7 @@ After processing rows, the drain runs maintenance. It skips the whole step when 
 
 Then, regardless of the time remaining, the drain runs the daily model check ([3.3](#daily-model-check)).
 
-Maintenance reaches only the stores where the drain finished a row. An incomplete memory in any other store waits for that store's next write or for `memman enrich`.
-
-### Operational controls
-
-| Command                                   | Effect                                                                                           |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `memman scheduler queue list [--limit N]` | list recent queue rows and their status                                                          |
-| `memman scheduler queue failed`           | list failed rows                                                                                 |
-| `memman scheduler queue show <id>`        | print a queue row's full content                                                                 |
-| `memman scheduler queue retry <id>`       | return a failed row to pending (`--all-stale` for every stale row)                               |
-| `memman scheduler queue purge --done`     | delete done rows older than 60 seconds (`--stale` deletes stale rows)                            |
-| `memman scheduler status`                 | install state, interval, next run, log paths, last drain summary                                 |
-| `memman scheduler start`                  | accept writes and resume drains. Repeated calls have no additional effect                        |
-| `memman scheduler stop`                   | make memman recall-only. The unit files stay on disk                                             |
-| `memman scheduler interval --seconds N`   | set the systemd or launchd interval, at least 60. Serve mode needs a restart with `--interval N` |
-| `memman scheduler trigger`                | dispatch a drain and return without waiting (refused when stopped or in serve mode)              |
-
-`memman enrich` re-enriches and re-embeds every current memory, for use after a model or prompt change. `--stale-only` limits it to rows whose `prompt_version` differs from the current version. Both forms require a stopped scheduler unless `--dry-run` is set.
+Maintenance reaches only the stores where the drain finished a row. An incomplete memory in any other store waits for that store's next write or for `memman enrich` ([USAGE](../USAGE.md#re-enrichment)).
 
 ---
 
@@ -169,13 +150,11 @@ If the configured model becomes unavailable, memories are still stored. The enri
 
 Each `complete` call names its stage: `enrichment` or `probe`. An unknown stage raises an exception. The client records the provider's `usage` block once per attempt, inside the retry loop, because every HTTP 200 attempt is billed, even an empty one.
 
-- A non-2xx attempt increments only `http_errors`.
+- A non-2xx attempt counts under `http_errors`, never under `calls` or `missing_usage`. A `usage` block in its error body still adds its tokens.
 - An HTTP 200 reply with no `usage` block counts under `missing_usage` and adds no tokens.
 - The tally is process-wide. The drain records the current tally before processing each row. Each `queue_done` and `queue_failed` trace event carries that row's usage. The drain's JSON output (`llm_usage`) and its `llm_usage_summary` trace event carry the drain total.
 
 ---
-
-<a id="34-read-pipeline-smart-recall"></a>
 
 ## 3.4 Read pipeline: recall
 
@@ -281,7 +260,7 @@ A positive `--limit` is applied last, with no further sorting. Increasing the li
 
 With tracing on (`MEMMAN_DEBUG=1`, or `memman scheduler debug on`), recall emits two events:
 
-- `recall_anchors`: `anchor_k`, `vector_k`, each channel's hit count, the number of combined candidates, the candidate count per `via` label, and whether a filter was set. `vector_hits` below `vector_k` means the filter or the store left fewer positive-cosine rows than the channel asked for.
+- `recall_anchors`: `anchor_k`, `vector_k`, each channel's hit count (`keyword_hits`, `vector_hits`, `time_hits`), the number of combined candidates (`fused_pool`), and the candidate count per `via` label (`via_counts`). `vector_hits` below `vector_k` means the store held fewer positive-cosine rows than the channel asked for, or the query had no vector and the channel ran empty.
 - `recall_rerank`: the shortlist size and `moved`, the number of shortlist positions whose memory changed. The count compares ids, because the reranker replaces every score.
 
 Only the drain and `memman scheduler serve` attach the trace file handler (`~/.memman/logs/debug.log`). A `memman recall` process does not, so its events are not written to a file.
@@ -303,7 +282,7 @@ Prompts, models and providers change. memman does not aim for identical output a
 | `embed_swap_state`, `embed_swap_cursor`, `embed_swap_target_*` | `meta`    | a swap in progress                    | cutover or `--abort` deletes them. Doctor warns if keys remain |
 | `embedding_model`                                              | per row   | the model behind the row's vector     | `memman embed reembed` re-embeds rows that differ              |
 | `prompt_version`                                               | per row   | enrichment prompt or LLM model change | doctor warns, `memman enrich --stale-only`                     |
-| `enrich_attempted_at`, `enriched_at`                            | per row   | enrichment progress                   | maintenance retries 3 per drain, or `memman enrich`            |
+| `enrich_attempted_at`, `enriched_at`                           | per row   | enrichment progress                   | maintenance retries 3 per drain, or `memman enrich`            |
 
 - The doctor check for leftover swap keys is `no_stale_swap_meta`. The check for a changed prompt version is `provenance_drift`.
 - A null `prompt_version` is not treated as outdated.

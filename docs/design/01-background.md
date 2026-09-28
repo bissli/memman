@@ -22,7 +22,7 @@ memman stores decisions, preferences, and project context across Claude Code ses
 
 ## 1.3 LLM-supervised pattern
 
-The agent supervises memory from outside the pipeline. It decides what to store, what to query, and what to retire. memman runs deterministic code, and one LLM (`MEMMAN_LLM_MODEL`) adds search aids. The work splits three ways:
+The agent supervises memory from outside the pipeline. It decides what to store, what to query, and what to retire. memman runs deterministic code, and one LLM (`MEMMAN_LLM_MODEL`) adds a summary that recall prints in place of the content. The work splits three ways:
 
 | Part                                      | Role               | Work                                                                                |
 | ----------------------------------------- | ------------------ | ----------------------------------------------------------------------------------- |
@@ -66,7 +66,7 @@ Each write adds one memory. A `replace <id>` write also supersedes the memory it
 
 `memman forget` sets `deleted_at` and keeps the row. memman never deletes a memory row. `memman store remove`, which removes a whole store, is the only exception.
 
-- **Current memories.** A current memory is one where `deleted_at is null and superseded_by is null`. Recall and `insights review` read only current memories. `status` and `insights show` also report superseded and forgotten ones.
+- **Current memories.** [Chapter 2](02-concepts.md#22-database-schema) defines a current memory and which commands read retired ones.
 - **Supersession is not deletion.** A corrected memory keeps its content and records its successor in `superseded_by`. It leaves the current view, just as a forgotten memory does.
 - **The supersede link stays valid.** Forgetting a successor keeps its row, so the predecessor's pointer still resolves.
 

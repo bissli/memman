@@ -31,13 +31,13 @@ Each part has a separate role:
 
 ## 5.2 Hook details
 
-| Hook        | Event                     | Matcher        | Script                    | Output                   | Role                                                  |
-| ----------- | ------------------------- | -------------- | ------------------------- | ------------------------ | ----------------------------------------------------- |
-| `prime`     | SessionStart              | none           | `prime.sh`                | Plain text               | Status line, model notice, compaction reminder, guide |
-| `remind`    | UserPromptSubmit          | none           | `user_prompt.sh`          | Plain text               | Recall reminder                                       |
-| `compact`   | PreCompact + SessionStart | none           | `compact.sh` + `prime.sh` | Flag file                | Recall reminder after compaction                      |
-| `recall`    | PreToolUse                | `Agent\        | Task`                     | `task_recall.sh`         | `additionalContext` JSON                              | Recall reminder before delegation |
-| `exit_plan` | PreToolUse                | `ExitPlanMode` | `exit_plan.sh`            | `additionalContext` JSON | Reminder to store conclusions before execution        |
+| Hook        | Event                     | Matcher           | Script                    | Output                   | Role                                                  |
+| ----------- | ------------------------- | ----------------- | ------------------------- | ------------------------ | ----------------------------------------------------- |
+| `prime`     | SessionStart              | none              | `prime.sh`                | Plain text               | Status line, model notice, compaction reminder, guide |
+| `remind`    | UserPromptSubmit          | none              | `user_prompt.sh`          | Plain text               | Recall reminder                                       |
+| `compact`   | PreCompact + SessionStart | none              | `compact.sh` + `prime.sh` | Flag file                | Recall reminder after compaction                      |
+| `recall`    | PreToolUse                | `Agent` or `Task` | `task_recall.sh`          | `additionalContext` JSON | Recall reminder before delegation                     |
+| `exit_plan` | PreToolUse                | `ExitPlanMode`    | `exit_plan.sh`            | `additionalContext` JSON | Reminder to store conclusions before execution        |
 
 The Hook column gives the label `memman install` prints. Claude Code passes plain hook stdout to the agent only on SessionStart and UserPromptSubmit, so the two PreToolUse hooks print `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "..."}}` instead.
 

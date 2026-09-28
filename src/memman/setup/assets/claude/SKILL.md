@@ -127,9 +127,9 @@ so no confirmation is needed.
 `memman remember` is a fast queue-append. The full pipeline -
 summary enrichment, then embedding - runs out-of-band in a
 worker the scheduler fires on a timer (systemd on Linux, launchd
-on macOS, `memman scheduler serve` in containers).
-A newly stored memory is NOT visible to `memman recall` in the current
-session; it lands for later sessions.
+on macOS, `memman scheduler serve` in containers). A write is visible
+to `memman recall` once a drain stores it, in this session or a later
+one.
 
 `memman enrich` re-enriches every stored insight - summary and
 vector - after a model or prompt change or to repair partial
@@ -211,8 +211,8 @@ else:
 The page is for choosing which row to open, not for reading the rows
 themselves: `memman insights show <id8>` reads the rest of any row
 worth more than a scan. `--limit` defaults to 20. A wide page costs
-little and carries several times the relevant material of a narrow
-one, so scan wide and open what earns it. Rows come back in relevance
+little and carries more relevant material than a narrow one, so scan
+wide and open what earns it. Rows come back in relevance
 order at every `--limit`, so the first `n` of a page of `m` are
 exactly a page of `n`.
 
@@ -239,7 +239,7 @@ this repo, since a store can hold rows from several repos; `git log -1
 currency.
 
 For a fast token-only lookup that skips vector search and reranking
-(cheap, no network cost; rows come back newest first):
+(cheap: no query embed and no rerank; rows come back newest first):
 
 ```bash
 memman recall "<keyword>" --basic
@@ -263,11 +263,11 @@ once the scheduler has drained:
 memman insights by-queue <queue_uuid>
 ```
 
-`count: 0` has two causes: the write is still queued, or it went to a
-different store -- the queue is global while this reads one store. A
-row that fails every drain attempt stays queued with its text;
-`memman doctor` warns on it, and `memman scheduler queue retry <id>`
-requeues it.
+`count: 0` has three causes: the write is still queued, it went to a
+different store (the queue is global while this reads one store), or
+its memory was since forgotten. A row that fails every drain attempt
+stays queued with its text; `memman doctor` warns on it, and `memman
+scheduler queue retry <id>` requeues it.
 
 ## Forgetting
 
@@ -286,7 +286,7 @@ its successor has been forgotten.
 ## Inspecting the system
 
 ```bash
-memman status                         # insight count, store, scheduler state
+memman status                         # store, backend, insight counts, stale_insights, oplog size
 memman doctor                         # health check (sqlite, queue, keys, scheduler, env_completeness)
 ```
 
@@ -295,8 +295,7 @@ memman doctor                         # health check (sqlite, queue, keys, sched
 memman has a single write path: every `remember` / `replace` enqueues,
 and a worker drains the queue. The trigger varies by environment: a
 systemd timer on Linux, a launchd agent on macOS, and a long-running
-`memman scheduler serve` process inside containers (set
-`MEMMAN_SCHEDULER_KIND=serve` and run the command as PID 1).
+`memman scheduler serve` process inside containers.
 
 When the scheduler is stopped, memman is recall-only: every write
 exits 1 with `Scheduler is stopped; cannot <verb>. Run 'memman
@@ -304,13 +303,13 @@ scheduler start' to enable.` The serve loop polls the state file every
 iteration and mid-drain, so a pause takes effect within seconds even
 during a long drain.
 
-Drains never overlap: a lock on `~/.memman/drain.lock` gates entry to
+Drains never overlap: a lock on `<data dir>/drain.lock` gates entry to
 the drain. A manual `scheduler trigger` fired while a timer-driven
 drain is running logs `drain: another drain is in progress, skipping`
 and exits 0.
 
 - `memman scheduler serve [--interval N] [--once]` - long-running
-  drain loop (PID 1 in containers). `--interval 0` means continuous:
+  drain loop. `--interval 0` means continuous:
   drains run back-to-back, with a 100 ms idle backoff when the queue
   is empty.
 - `memman scheduler status` - platform, interval, next run, state,
@@ -320,12 +319,13 @@ and exits 0.
 - `memman scheduler stop` - flip state to STOPPED (pause drains and
   reject writes).
 - `memman scheduler interval --seconds N` - change cadence (min 60 s
-  for systemd/launchd; serve mode accepts any value `>= 0`, with `0`
-  meaning continuous).
+  for systemd/launchd). In serve mode it only records the value; the
+  serve loop reads `--interval`, then `MEMMAN_INTERVAL`, then 60 when
+  it starts.
 - `memman scheduler trigger` - dispatch a drain on systemd/launchd and
-  return at once. It does not wait for the drain, so a `dispatched`
-  response means the run started, not that it finished; `memman log
-  worker` reports the outcome. Not applicable in serve mode.
+  return at once. It does not wait, so `dispatched` means the run is
+  queued; `memman log worker` reports whether it ran and its outcome.
+  Not applicable in serve mode.
 - `memman log worker [--errors|--stack]` - tail one worker log target;
   the two flags are mutually exclusive. `--errors` reads `enrich.err`,
   the worker's own ERROR-level tracebacks. `--stack` reads the rotated

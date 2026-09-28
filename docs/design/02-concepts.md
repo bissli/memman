@@ -14,11 +14,11 @@ A memory is one stored claim. The caller sets its text and metadata. The backgro
 | `category`   | `--cat`, default `fact`                      | One of the five categories below.                                                    |
 | `author`     | `MEMMAN_AUTHOR`, otherwise the OS login name | Who wrote the memory.                                                                |
 | `id`         | the worker                                   | A version 4 UUID. Every command that takes an id also accepts an unambiguous prefix. |
-| `summary`    | the enrichment model                         | Search aid. Recall prints the summary in place of the content.                       |
+| `summary`    | the enrichment model                         | Display text. Recall prints it in place of the content. Search reads `content`.      |
 | `created_at` | the worker                                   | When the worker stored the memory.                                                   |
 | `queue_uuid` | `remember` or `replace`, when queued         | A unique key that prevents retries from creating duplicate memories.                 |
 
-`replace` inherits the target's category for each flag it omits.
+`replace` inherits the target's category when `--cat` is omitted.
 
 [USAGE](../USAGE.md#what-remember-and-replace-refuse) lists every rule `remember` and `replace` enforce on the text.
 
@@ -90,7 +90,7 @@ meta (
 
 **Current memories.** A memory is current when `deleted_at is null and superseded_by is null`. Recall and `insights review` read only current memories. `status` and `insights show` also report retired ones. `superseded_by` carries no foreign key. The worker sets the pointer before it inserts the successor. The migrators copy rows in id order, so a predecessor can be inserted before its successor. The `supersession_integrity` check in `memman doctor` is the only check that validates the pointer.
 
-**Keyword index.** On SQLite, `insights_fts` is an FTS5 table (SQLite's full-text search extension) over `content`. It holds only the terms. The text stays in `insights`. Triggers keep the index up to date when rows are inserted or deleted or either column changes. It indexes every row, including forgotten and superseded memories. Queries join it with `insights` to return only current rows. Opening a store that lacks the table creates and fills it in one transaction. On Postgres, the `kw_tokens` column plays this role.
+**Keyword index.** On SQLite, `insights_fts` is an FTS5 table (SQLite's full-text search extension) over `content`. It holds only the terms. The text stays in `insights`. Triggers keep the index up to date when a row is inserted or deleted or its `content` changes. It indexes every row, including forgotten and superseded memories. Queries join it with `insights` to return only current rows. Opening a store that lacks the table creates and fills it in one transaction. On Postgres, the `kw_tokens` column plays this role.
 
 **Model-change markers.** `prompt_version` holds the first 16 hex characters of a SHA-256 hash over the enrichment prompt and `MEMMAN_LLM_MODEL`. A memory whose non-null `prompt_version` differs from the current hash is stale, and `memman enrich --stale-only` re-enriches it. `embedding_model` names the model behind the vector. `memman embed reembed` re-embeds each current memory in every SQLite store whose `embedding_model` or vector length differs from the target. [Pipelines](03-pipelines.md) covers both re-runs.
 
@@ -171,7 +171,7 @@ memman groups its modules into seven layers:
 |              rerank/  (voyage)                                      |
 |              llm/     (client, shared, usage, openrouter_models)    |
 +---------------------------------------------------------------------+
-| Storage      store/   (backend, base, config, errors, factory, db,  |
+| Storage      store/   (backend, config, errors, factory, db,        |
 |                        node, oplog, model, sqlite, postgres)        |
 |              migrate/ (SQLite <-> Postgres)                         |
 |              backup/  (external backups)                            |

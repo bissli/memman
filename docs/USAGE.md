@@ -6,13 +6,13 @@ This page lists every memman command and setting. [DESIGN.md](DESIGN.md) explain
 
 A global flag goes before the subcommand: `memman --store work recall "retry cap"`. The `--store` option of `memman migrate` and `memman config set-pg-dsn` is a separate subcommand option with its own meaning.
 
-| Flag                | Default     | Description                                                                                                                                                                                           |
-| ------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--store <name>`    | none        | Store to use. Takes precedence over `MEMMAN_STORE` and the active-store file (see [Store management](#store-management)).                                                                             |
-| `--data-dir <path>` | `~/.memman` | Data directory for the stores, the queue, and `memman.log`. Falls back to `MEMMAN_DATA_DIR`, then `~/.memman`. Settings still come from `$MEMMAN_DATA_DIR/env` (see [Configuration](#configuration)). |
-| `--verbose` / `-v`  | off         | INFO-level logging to stderr.                                                                                                                                                                         |
-| `--debug`           | off         | DEBUG-level logging to stderr. Takes precedence over `--verbose`.                                                                                                                                     |
-| `--version`         |             | Print the version and exit.                                                                                                                                                                           |
+| Flag                | Default     | Description                                                                                                                                                        |
+| ------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--store <name>`    | none        | Store to use. Takes precedence over `MEMMAN_STORE` and the active-store file (see [Store management](#store-management)).                                          |
+| `--data-dir <path>` | `~/.memman` | Data directory for the stores, the queue, `memman.log`, and the env file. Falls back to `MEMMAN_DATA_DIR`, then `~/.memman` (see [Configuration](#configuration)). |
+| `--verbose` / `-v`  | off         | INFO-level logging to stderr.                                                                                                                                      |
+| `--debug`           | off         | DEBUG-level logging to stderr. Takes precedence over `--verbose`.                                                                                                  |
+| `--version`         |             | Print the version and exit.                                                                                                                                        |
 
 Without `--verbose` or `--debug`, the stderr level is `MEMMAN_LOG_LEVEL` (default `WARNING`).
 
@@ -203,7 +203,7 @@ memman enrich --dry-run     # print the count and change nothing
 
 ## Embedding operations
 
-Each store keeps the embedding model it was created with, recorded as its fingerprint. Recall, the background worker, and `enrich` use the model recorded in the fingerprint. Every command that reads a store, except `doctor`, `embed status`, and `embed swap`, also builds the `MEMMAN_EMBED_PROVIDER` client, so that provider's key must be in the env file. [Chapter 4](design/04-lifecycle.md#43-embedding-support) describes the fingerprint.
+Each store keeps the embedding model it was created with, recorded as its fingerprint. Recall, the background worker, and `enrich` use the model recorded in the fingerprint. Every command that reads a store, except `doctor`, `embed status`, `embed swap`, `migrate`, and `backup`, also builds the `MEMMAN_EMBED_PROVIDER` client, so that provider's key must be in the env file. [Chapter 4](design/04-lifecycle.md#43-embedding-support) describes the fingerprint.
 
 ```bash
 memman embed status                                             # fingerprint, key check, swap progress
@@ -301,15 +301,13 @@ memman migrate --all --yes               # every store, no prompt
 
 - Both directions need `pg_dump` on `PATH` and hold the drain lock, so a scheduled drain cannot run during the copy.
 - The DSN for `--to postgres` is `MEMMAN_POSTGRES_DSN_<store>`, then `MEMMAN_DEFAULT_POSTGRES_DSN`. `--all` needs `MEMMAN_DEFAULT_POSTGRES_DSN`.
-- The command prints a plan, with the DSN password hidden, and asks for confirmation. For `--to postgres` the plan also names the state of each target schema: `ABSENT` (created), `EMPTY` (recreated), or `POPULATED` (dropped with `CASCADE` and recreated). `--to sqlite` refuses a store whose SQLite directory already exists.
+- The command prints a plan, with the DSN password hidden, and asks for confirmation. For `--to postgres` the plan also labels each target schema `[will create]`, `[EMPTY, will recreate]`, or `[POPULATED, will DROP CASCADE and recreate]`. `--to sqlite` refuses a store whose SQLite directory already exists.
 - A store already on the target backend is skipped with a message.
 - A store with an embedding swap in flight is refused. The message names the fix: `memman --store <store> embed swap --resume` finishes the swap, and `--abort` discards it.
 - A store whose name is not a valid Postgres identifier is refused, or skipped under `--all`, and the message names a fix, such as a portable name to create and migrate.
 - To reverse the change, migrate in the other direction. `memman doctor` checks the result: its `stale_post_migrate_source` check warns when SQLite files remain in a store that routes to Postgres.
 
 ---
-
-<a id="observability"></a>
 
 ## Status and logs
 
@@ -327,7 +325,7 @@ memman log worker --stack [--lines N]
 
 **`status`** prints the store name, its backend, the backends in use, counts of current, superseded, and forgotten memories, `stale_insights` (the count `enrich --stale-only` would process), the oplog size, counts by category, and the storage path.
 
-**`doctor`** exits 1 when any check fails and 0 otherwise. It makes one live LLM call and one live embedding call.
+**`doctor`** exits 1 when any check fails and 0 otherwise. It makes one live LLM call and two to four live embedding calls: `embed_probe` sends an availability probe and a test embed, and `embed_fingerprint` sends an availability probe for the store's recorded model, plus a size probe when that model's vector size is not built in.
 
 | Group              | Checks                                                                                                                                               |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -445,7 +443,7 @@ memman backup restore ~/Dropbox/code/archive/memman-backup-<host>-<stamp>.tar.gz
 
 ## Configuration
 
-**The env file.** memman reads every installed setting from `$MEMMAN_DATA_DIR/env` (default `~/.memman/env`), a `KEY=VALUE` file at mode 0600. The `--data-dir` flag moves the stores, the queue, and `memman.log`, but settings are still read from this file. Blank lines and `#` comments are skipped, one pair of surrounding quotes is stripped, and `${VAR}` is not expanded. At run time memman ignores the shell for these keys, so a stale export cannot override the file. Each command reads the file when it starts, and a `serve` process reads it again before each drain.
+**The env file.** memman reads every installed setting from `<data dir>/env` (default `~/.memman/env`), a `KEY=VALUE` file at mode 0600. The `--data-dir` flag moves this file together with the stores, the queue, and `memman.log`. Blank lines and `#` comments are skipped, one pair of surrounding quotes is stripped, and `${VAR}` is not expanded. At run time memman ignores the shell for these keys, so a stale export cannot override the file. Each command reads the file when it starts, and a `serve` process reads it again before each drain.
 
 **Install precedence.** `memman install` sets each key from the first source that has a value:
 
@@ -489,8 +487,6 @@ A DSN is a libpq connection URI: `postgresql://[user[:password]@][host][:port]/[
 | TLS required | `postgresql://memman@db.internal/memman?sslmode=require` | Any libpq parameter works, such as `application_name`    |
 
 > **Security.** memman stores every DSN in plain text in the env file at mode 0600. Root and any process running as the same user can read it.
-
-<a id="runtime-tunables"></a>
 
 ### Runtime settings
 

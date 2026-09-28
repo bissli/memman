@@ -26,21 +26,7 @@ A superseded memory keeps its content but leaves every recall and listing. `memm
 
 ## 4.2 Inspecting memories
 
-The `memman insights` commands inspect memories:
-
-```bash
-# Read a single insight by ID (a superseded row shows its successor)
-memman insights show <id>
-
-# Walk the supersession chain through an id, oldest first
-memman insights show <id> --history
-
-# List the insights one queued write produced
-memman insights by-queue <queue_uuid>
-
-# Scan stored insights for transient content
-memman insights review
-```
+The `memman insights` commands inspect memories.
 
 `insights review` scans current memories, newest first, for the temporary information flagged by `quality_warnings`, including an AWS instance id, a resource count, a line count, a state observation ("state is clean"), the word "currently" and an "as of <date>" statement. It stops at `--limit` flagged memories (default 20) and returns each with its `quality_warnings`. The user or agent decides what to forget. `remember` and `replace` run the same scan at write time and store the text anyway, so `review` finds temporary information that was stored. Both commands reject text that names a line number.
 
@@ -56,11 +42,11 @@ Recall uses embeddings for vector search. Each store is bound to one embedding m
 
 **What `MEMMAN_EMBED_PROVIDER` controls.**
 
-| Role                | Effect                                                                                                                                                                                         |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| New stores          | When a store has no fingerprint and no rows, the first open writes this provider's fingerprint. `memman install` configures a new SQLite default store this way.                               |
-| Target              | It names the target of `memman embed reembed` and the default provider of `memman embed swap`.                                                                                                 |
-| Startup requirement | Every command that reads a store first builds this provider's client. A missing Voyage or OpenRouter key causes the command to fail. `doctor`, `embed status` and `embed swap` skip this step. |
+| Role                | Effect                                                                                                                                                                                                               |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| New stores          | When a store has no fingerprint and no rows, the first open writes this provider's fingerprint. `memman install` configures a new SQLite default store this way.                                                     |
+| Target              | It names the target of `memman embed reembed` and the default provider of `memman embed swap`.                                                                                                                       |
+| Startup requirement | Every command that reads a store first builds this provider's client. A missing Voyage or OpenRouter key causes the command to fail. `doctor`, `embed status`, `embed swap`, `migrate`, and `backup` skip this step. |
 
 **Missing credentials for the bound provider.** Recall logs a warning and ranks with the keyword and recency channels only. The background worker marks the queued write as failed after retries are exhausted. `memman unsupersede` refuses to run.
 

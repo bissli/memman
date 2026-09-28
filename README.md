@@ -49,19 +49,19 @@ During a turn, the agent queues writes and recalls stored memories. A background
 +----------------------------------+     +-----------------------------------+
 ```
 
-| Step                    | Where   | Network calls                                 | Notes                                                 |
-| ----------------------- | ------- | --------------------------------------------- | ----------------------------------------------------- |
-| `memman recall --basic` | inside  | none on a store with an embedding fingerprint | keyword match on the local store, no score            |
-| `memman recall`         | inside  | query embedding and reranking                 | rerank skips a query of two words or fewer            |
-| `memman remember`       | inside  | none                                          | appends to `queue.db`                                 |
-| drain trigger           | outside | none                                          | systemd or launchd timer, or `memman scheduler serve` |
-| enrichment              | outside | one LLM call                                  | adds a summary                                        |
-| embedding               | outside | one embedding call                            | vector for semantic search                            |
-| DB write                | outside | none                                          | makes the memory recallable                           |
+| Step                    | Where   | Network calls                                                                                                                                     | Notes                                                 |
+| ----------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `memman recall --basic` | inside  | no query embed and no rerank; opening the store sends one probe embed when the store is new, and one when its model's vector size is not built in | keyword match on the local store, no score            |
+| `memman recall`         | inside  | query embedding and reranking                                                                                                                     | rerank skips a query of two words or fewer            |
+| `memman remember`       | inside  | none                                                                                                                                              | appends to `queue.db`                                 |
+| drain trigger           | outside | none                                                                                                                                              | systemd or launchd timer, or `memman scheduler serve` |
+| enrichment              | outside | one LLM call                                                                                                                                      | adds a summary                                        |
+| embedding               | outside | one embedding call                                                                                                                                | vector for semantic search                            |
+| DB write                | outside | none                                                                                                                                              | makes the memory recallable                           |
 
 This split determines when model calls run and when memories become available:
 
-- **Model calls.** The agent's turn never enriches or embeds a write. `remember` appends to the queue and makes no network call. `recall` reads the local store and, on its default path, embeds the query and reranks the top results. `--basic` makes neither call. Opening a store needs the Voyage or OpenRouter key when either provider is in use, including with `--basic` ([Where keys are needed](#where-keys-are-needed)).
+- **Model calls.** The agent's turn never enriches or embeds a write. `remember` appends to the queue and makes no network call. `recall` reads the local store and, on its default path, embeds the query and reranks the top results. `--basic` makes neither call. Opening a store needs the `MEMMAN_EMBED_PROVIDER` key when that provider is `voyage` or `openrouter`, including with `--basic` ([Where keys are needed](#where-keys-are-needed)).
 - **Recallable after a drain.** A queued write is not recallable until a drain stores it. After that, recall returns it in the same session or any later one.
 
 ## Features
@@ -116,17 +116,18 @@ memman calls three outside services: an LLM for enrichment, an embedding provide
 
 #### Where keys are needed
 
-| What runs                                                    | Where           | Key it needs                                                                                | Without that key                                                                  |
-| ------------------------------------------------------------ | --------------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `memman remember`                                            | inside the turn | none                                                                                        | works: it is the only memory command that opens no store                          |
-| every command that opens a store, including `recall --basic` | inside the turn | the key of `MEMMAN_EMBED_PROVIDER` and of the store's own provider (`voyage`, `openrouter`) | the command stops. Voyage reports `MEMMAN_VOYAGE_API_KEY is not set in <dir>/env` |
-| `recall`: rerank the top results                             | inside the turn | `MEMMAN_VOYAGE_API_KEY`                                                                     | recall keeps the order it had before reranking and logs a warning                 |
-| enrichment                                                   | worker          | `MEMMAN_LLM_API_KEY` (blank for a local endpoint)                                           | the memory is stored without a summary                                            |
-| embedding                                                    | worker          | the active embedding provider's key                                                         | the queued write fails, retries, and after 5 attempts stays queued as `failed`    |
+| What runs                                                    | Where                      | Key it needs                                                | Without that key                                                                                                                                                                                             |
+| ------------------------------------------------------------ | -------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `memman remember`                                            | inside the turn            | none                                                        | works: it is the only memory command that opens no store                                                                                                                                                     |
+| every command that opens a store, including `recall --basic` | inside the turn            | the key of `MEMMAN_EMBED_PROVIDER` (`voyage`, `openrouter`) | the command stops. Voyage reports `MEMMAN_VOYAGE_API_KEY is not set in <dir>/env`. `embed status`, `embed swap`, `migrate`, and `backup` skip this client, and `doctor` reports it as a failed `embed_probe` |
+| `recall`, `unsupersede`, and the drain on one store          | inside the turn and worker | the key of the provider the store's fingerprint names       | recall ranks by keyword and recency only, `unsupersede` refuses, and the drain fails that store's queued writes                                                                                              |
+| `recall`: rerank the top results                             | inside the turn            | `MEMMAN_VOYAGE_API_KEY`                                     | recall keeps the order it had before reranking and logs a warning                                                                                                                                            |
+| enrichment                                                   | worker                     | `MEMMAN_LLM_API_KEY` (blank for a local endpoint)           | the memory is stored without a summary                                                                                                                                                                       |
+| embedding                                                    | worker                     | the active embedding provider's key                         | the queued write fails, retries, and after 5 attempts stays queued as `failed`                                                                                                                               |
 
-- **Opening a store builds two embedding clients.** One is for `MEMMAN_EMBED_PROVIDER`. The other is for the provider the store's fingerprint names. The `voyage` and `openrouter` clients refuse to start without their key. The `openai` client starts without a key, and its first embedding call fails.
+- **Opening a store builds two embedding clients.** One is for `MEMMAN_EMBED_PROVIDER`. The other is for the provider the store's fingerprint names. Without their key, the `voyage` and `openrouter` clients raise a configuration error: for the `MEMMAN_EMBED_PROVIDER` client the command stops, and for the store's client a placeholder takes its place, whose embedding calls fail. The `openai` client starts without a key, and its first embedding call fails.
 - **Every key lives in `~/.memman/env`.** memman reads its settings from that file and ignores the shell. `memman config set KEY VALUE` writes a key ([Configuration](docs/USAGE.md#configuration)).
-- **Reranking uses a Voyage key whatever the embedding provider is.** Voyage is the only reranker, and reranking is on by default. `memman config set MEMMAN_RERANK_ENABLED false` turns it off. `MEMMAN_RERANK_ENABLED_<store>` sets it for one store. This is the one key whose absence degrades recall instead of stopping it.
+- **Reranking uses a Voyage key whatever the embedding provider is.** Voyage is the only reranker, and reranking is on by default. `memman config set MEMMAN_RERANK_ENABLED false` turns it off. `MEMMAN_RERANK_ENABLED_<store>` sets it for one store.
 
 #### LLM providers
 
@@ -163,15 +164,7 @@ Each store records the provider, model, and vector dimension of its embeddings i
 
 The wizard and `--embed-provider` offer `voyage`, `openai`, and `openrouter`. `ollama` is set only with `memman config set MEMMAN_EMBED_PROVIDER ollama`.
 
-A store stays bound to the model its fingerprint records. A change of `MEMMAN_EMBED_PROVIDER` reaches a store only after `memman embed reembed` rewrites every SQLite store, or `memman embed swap` moves one store. Both need a stopped scheduler ([Embedding operations](docs/USAGE.md#embedding-operations)):
-
-```bash
-memman config set MEMMAN_EMBED_PROVIDER openai
-memman config set MEMMAN_OPENAI_EMBED_API_KEY sk-...
-memman scheduler stop
-memman embed reembed
-memman scheduler start
-```
+A store stays bound to the model its fingerprint records. A change of `MEMMAN_EMBED_PROVIDER` reaches a store only after `memman embed reembed` rewrites every SQLite store, or `memman embed swap` moves one store. Both need a stopped scheduler ([Embedding operations](docs/USAGE.md#embedding-operations)).
 
 #### Reranker
 
