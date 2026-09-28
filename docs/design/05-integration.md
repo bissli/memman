@@ -21,13 +21,13 @@ The integration runs at these points in a session:
 
 Each part has a separate role:
 
-| Layer     | What                                         | Where                                            | Role                                                        |
-| --------- | -------------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------- |
-| **Hooks** | Five shell scripts run on Claude Code events | `~/.claude/hooks/memman/`                        | Print the guide and remind the agent to recall and to store |
-| **Skill** | `SKILL.md`, the full manual                  | `~/.claude/skills/memman/`                       | When to recall, what to remember, how to use each command   |
-| **Guide** | `guide.md`, the recall and remember commands | The installed package, printed by `memman prime` | Shows the two commands in every session and names the skill |
+| Layer     | What                                                   | Where                                            | Role                                                          |
+| --------- | ------------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------------------- |
+| **Hooks** | Five shell scripts run on Claude Code events           | `~/.claude/hooks/memman/`                        | Print the guide and remind the agent to recall and to store   |
+| **Skill** | `SKILL.md`, the full manual                            | `~/.claude/skills/memman/`                       | When to recall, what to remember, how to use each command     |
+| **Guide** | `guide.md`, the recall, remember, and replace commands | The installed package, printed by `memman prime` | Shows the three commands in every session and names the skill |
 
-**Why the guide stays small.** Claude Code truncates hook stdout above 10,000 bytes. It keeps a short preview, writes the rest to a file it never reads back, and reports no error. The injected text also adds to the cost of every later request in the session. The guide contains only what each session needs. The skill provides details when loaded on demand. `tests/test_setup.py::TestPrimeAndCompactHooks::test_prime_payload_reaches_the_model_whole` fails when the `memman prime` output reaches 10,000 bytes or loses either command.
+**Why the guide stays small.** Claude Code truncates hook stdout above 10,000 bytes. It keeps a short preview, writes the rest to a file it never reads back, and reports no error. The injected text also adds to the cost of every later request in the session. The guide contains only what each session needs. The skill provides details when loaded on demand. `tests/test_setup.py::TestPrimeAndCompactHooks::test_prime_payload_reaches_the_model_whole` fails when the `memman prime` output reaches 10,000 bytes or loses any of the recall, remember, or replace commands.
 
 ## 5.2 Hook details
 
@@ -45,7 +45,7 @@ The reminder each hook delivers:
 
 - `user_prompt.sh`: `[memman] Recall: memman recall "<focused query>"`
 - `task_recall.sh`: `[memman] Before the next delegation, run memman recall "<focused query>" and carry anything relevant into its brief.` PreToolUse fires after the agent has written the brief, so the reminder applies to the next delegation.
-- `exit_plan.sh`: `[memman] Plan-to-execute transition: store any conclusions, decisions, or preferences from this planning session via Bash (memman remember ...) before proceeding.`
+- `exit_plan.sh`: `[memman] Plan-to-execute transition: store any conclusions, decisions, or preferences from this planning session via Bash (memman remember ..., or memman replace <id> ... to correct a stored row) before proceeding.`
 
 **Prime hook.** `prime.sh` pipes the SessionStart JSON to the hidden command `memman prime`. When `memman` is not on PATH, it prints a warning that the hooks are inactive. `memman prime` prints, in order:
 
@@ -105,6 +105,6 @@ The [USAGE guide](../USAGE.md#install-and-uninstall) gives the full flag list.
 
 `SKILL.md` requires the agent to run `memman remember` directly through Bash in its own turn without delegating to a sub-agent. There are three reasons:
 
-- **The command only queues a write.** It checks the text, appends one row to `queue.db` and returns. It makes no network call and opens no store. Enrichment and embedding run later in the background worker, so there is no slow work to delegate.
+- **The command queues a write and reads the store once.** It checks the text, appends one row to `queue.db`, reads the store for `related`, and returns. It calls no model. Enrichment and embedding run later in the background worker, so there is no slow work to delegate.
 - **The agent holds the context.** It already knows the right `--cat`, and what each "this" or "it" refers to. Passing that context to a sub-agent would use more tokens.
-- **A sub-agent learns nothing more.** `remember` returns `action: queued`, `id`, `queue_id`, `store` and `quality_warnings` once the write is queued. The memory reaches recall after the next drain. A sub-agent would get the same reply the agent gets from one Bash call.
+- **A sub-agent learns nothing more, and `related` needs the agent.** `remember` returns `action: queued`, `id`, `queue_id`, `store`, `quality_warnings`, and `related` (or `related_error` when the store read fails) once the write is queued. The memory reaches recall after the next drain. Acting on `related` in the same turn takes the context the agent holds, which a sub-agent lacks.

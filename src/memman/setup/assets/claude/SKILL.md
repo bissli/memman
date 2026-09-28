@@ -126,10 +126,11 @@ The new row is already queued, so a stale related row is forgotten
 (`memman forget <id>`) when the new row holds every claim it still
 has right, and otherwise replaced with only its own still-true
 claims. Either way the new claim lives in one row. A related row
-that itself replaced an earlier row refuses `forget`, and the
-refusal names `replace`; following it leaves the new claim in two
-current rows, which duplicates and loses nothing. When every related
-row is stale, the agent recalls the topic for the rest.
+that replaced a row not yet forgotten refuses `forget` (see
+Forgetting), and the refusal names `replace`; following it leaves
+the new claim in two current rows, which duplicates and loses
+nothing. When every related row is stale, the agent recalls the
+topic for the rest.
 
 The text stores conclusions AND enough context to understand them. It
 is self-contained: every "that", "this", and "it" is dereferenced into

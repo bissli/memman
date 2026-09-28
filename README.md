@@ -42,7 +42,7 @@ During a turn, the agent queues writes and recalls stored memories. A background
 +----------------------------------+     +-----------------------------------+
 | memman remember                  |     | a drain runs every 60 s (default) |
 |   append the write to queue.db --+---->|   claim each queued write         |
-|                                  |     |   enrich it with the LLM          |
+|   then list related rows         |     |   enrich it with the LLM          |
 | memman recall                    |     |   embed it                        |
 |   read the store <---------------+-----+-- store the memory                |
 |   embed the query, rerank        |     |                                   |
@@ -213,7 +213,7 @@ The included `guide.md` (instructions for the agent) and `SKILL.md` (full manual
 
 ### What `memman remember` does
 
-`memman remember` appends a row to `queue.db`, lists under `related` the current memories the text may correct, and returns. It refuses text over 1,000 bytes, text that spans lines, and other text that fails the single-memory format checks ([What remember and replace refuse](docs/USAGE.md#what-remember-and-replace-refuse)). The scheduler drains every 60 s by default (`memman scheduler interval` changes it), and a write becomes recallable once a drain stores it ([Inside Claude Code vs outside](#inside-claude-code-vs-outside)).
+`memman remember` appends a row to `queue.db`, lists under `related` the current memories the text may correct, and returns. When the store cannot be read, the reply carries `related_error` in place of `related`, and the write stays queued. It refuses text over 1,000 bytes, text that spans lines, and other text that fails the single-memory format checks ([What remember and replace refuse](docs/USAGE.md#what-remember-and-replace-refuse)). The scheduler drains every 60 s by default (`memman scheduler interval` changes it), and a write becomes recallable once a drain stores it ([Inside Claude Code vs outside](#inside-claude-code-vs-outside)).
 
 ### Pausing the scheduler
 

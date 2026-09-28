@@ -10,12 +10,10 @@ decision, or a delegation, the agent runs
 
     memman recall "<focused query>"
 
-The query is focused keywords, never the raw user prompt. The one
+The query is focused keywords, never the raw user prompt. The
 exception is a direct follow-up whose topic is already in context.
-The page is one line per row, best first: id, score, date, author,
-category, then the text. The agent judges each row against the
-query, never against a fixed score, and opens one with
-`memman insights show <id>`.
+The agent judges each row against the query, never against a fixed
+score, and opens one with `memman insights show <id>`.
 
 ## Remember
 
@@ -43,15 +41,16 @@ restates every claim of the old row still true.
 The id is on a recall page or is the `id` an earlier write printed,
 even one still queued. With neither in hand, recall the topic first.
 
-`remember` replies with `related`, current rows sharing the most
-words with the new text. The agent acts only on one with a sentence
-now false: the new row is already queued, so it forgets that row
-when the new row holds all its still-true claims, else replaces it
-with only those claims.
+`remember` replies with `related`, rows sharing the most words with
+the new text. The agent acts only on one with a sentence now false:
+the new row is already queued, so `memman forget <id>` retires that
+row when the new row holds all its still-true claims, else `replace`
+it with only those claims. When every listed row is stale, the agent
+recalls the topic: the list stops at three.
 
 memman refuses text over 1,000 bytes and says why. A behavioral rule
 ("always", "never") goes to the project CLAUDE.md `## Directives`
 section instead.
 
 The memman skill is the full manual: categories, what never to
-store, corrections, `related`, the pipeline, and scheduler.
+store, corrections, `related`, pipeline, scheduler.

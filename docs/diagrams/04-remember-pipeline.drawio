@@ -21,13 +21,13 @@
           <mxGeometry x="640" y="112" width="290" height="60" as="geometry" />
         </mxCell>
 
-        <mxCell id="r_validate" value="&lt;b&gt;Validate&lt;/b&gt;&lt;br&gt;Refuse text over 1,000 UTF-8 bytes, text naming a line number, text opening with MEMMAN_AUTHOR, text spanning lines, and text opening with a label. Refuse an unknown category. On replace, the target must be current or a write still queued for this store. Add advisory quality warnings." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1">
+        <mxCell id="r_validate" value="&lt;b&gt;Validate&lt;/b&gt;&lt;br&gt;Refuse text over 1,000 UTF-8 bytes, text naming a line number, text opening with MEMMAN_AUTHOR, text spanning lines, and text opening with a label. Refuse an unknown category. On replace, the target must be current or a write still queued for this store, with no replacement of it queued. Add advisory quality warnings." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1">
           <mxGeometry x="60" y="215" width="330" height="120" as="geometry" />
         </mxCell>
         <mxCell id="r_enqueue" value="&lt;b&gt;Append a row to queue.db&lt;/b&gt;&lt;br&gt;status pending, content, category, replaced_id (replace only), a new queue_uuid, author" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="420" y="215" width="290" height="120" as="geometry" />
         </mxCell>
-        <mxCell id="r_return" value="&lt;b&gt;Print JSON&lt;/b&gt;&lt;br&gt;action: queued, id, queue_id, store, quality_warnings, and replaced_id on replace" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_return" value="&lt;b&gt;Read related, print JSON&lt;/b&gt;&lt;br&gt;remember reads the store for up to three rows the text may correct. It prints action: queued, id, queue_id, store, quality_warnings, and related, or related_error when the read fails. replace prints replaced_id in place of related." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="740" y="215" width="300" height="120" as="geometry" />
         </mxCell>
         <mxCell id="r_t1_note" value="No LLM call and no embedding run in the turn." style="text;html=1;align=left;fontSize=10;fontStyle=2;fillColor=none;strokeColor=none;fontColor=#9673a6;" vertex="1" parent="1">

@@ -108,7 +108,7 @@ Every command that takes a memory id also accepts an unambiguous prefix of one, 
 
 `quality_warnings` lists phrasing that tends to go stale, such as an instance id or the word "currently". The warnings never block the write.
 
-`related` lists up to three current memories of at most 1,000 bytes, each as `<id8> <content>`: the ones sharing the most words with the new text, divided by the square root of each memory's distinct word count, so a short memory on the same subject ranks above a long one that touches it. A memory over 1,000 bytes is never listed. A store with no database yet gives an empty list. When the store cannot be read, `related_error` names the failure in place of `related`, and the write stays queued. An unreachable Postgres host fails within 3 seconds unless `PGCONNECT_TIMEOUT` or the DSN's `connect_timeout` sets another limit.
+`related` lists up to three current memories of at most 1,000 bytes, each as `<id8> <content>`, ranked by the words each shares with the new text divided by the square root of its distinct word count, so a short memory on the same subject ranks above a long one that touches it. A memory over 1,000 bytes is never listed. A store with no database yet gives an empty list. When the store cannot be read, `related_error` names the failure in place of `related`, and the write stays queued. An unreachable Postgres host fails within 3 seconds unless `PGCONNECT_TIMEOUT` or the DSN's `connect_timeout` sets another limit.
 
 | Flag    | `remember` default | `replace` default  | Meaning                                                              |
 | ------- | ------------------ | ------------------ | -------------------------------------------------------------------- |

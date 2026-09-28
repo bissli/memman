@@ -39,10 +39,10 @@
         <mxCell id="i_c1" value="&lt;b&gt;Recall&lt;/b&gt;&lt;br&gt;Before a new message, task, topic switch, design decision, or delegation. Focused keywords, never the raw prompt. Skip only a direct follow-up." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="60" y="390" width="235" height="100" as="geometry" />
         </mxCell>
-        <mxCell id="i_c2" value="&lt;b&gt;Remember&lt;/b&gt;&lt;br&gt;After responding, store a preference, decision, or correction at once, and any conclusion that would stand if the exchange stopped." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="i_c2" value="&lt;b&gt;Remember&lt;/b&gt;&lt;br&gt;Store a preference or decision at once. A correction replaces the row it corrects, and a related row with a sentence now false is forgotten or replaced." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="305" y="390" width="235" height="100" as="geometry" />
         </mxCell>
-        <mxCell id="i_c3" value="&lt;b&gt;Shape of a memory&lt;/b&gt;&lt;br&gt;One thought per call, one paragraph, subject first. memman refuses text over 1,000 bytes, text naming a line number, and text off this shape." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="i_c3" value="&lt;b&gt;Shape of a memory&lt;/b&gt;&lt;br&gt;One thought per call, one paragraph, subject first. memman refuses text over 1,000 bytes." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="550" y="390" width="235" height="100" as="geometry" />
         </mxCell>
         <mxCell id="i_c4" value="&lt;b&gt;Elsewhere&lt;/b&gt;&lt;br&gt;A behavioral rule goes to the project CLAUDE.md. The skill is the full manual." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E6FFE6;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
@@ -75,7 +75,7 @@
         <mxCell id="i_d_host" value="&lt;b&gt;Claude Code, this turn&lt;/b&gt;&lt;br&gt;Holds the context. Picks --cat. Replaces every &quot;this&quot; and &quot;it&quot; with its subject." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="60" y="815" width="280" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="i_d_bash" value="&lt;b&gt;memman remember&lt;/b&gt;&lt;br&gt;Appends to the queue and prints action: queued, id, queue_id, store, quality_warnings. The worker stores the row later under that id." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="i_d_bash" value="&lt;b&gt;memman remember&lt;/b&gt;&lt;br&gt;Appends to the queue, lists the related rows it may correct, and prints action: queued, id, queue_id, store, quality_warnings, related. The worker stores the row later under that id." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="420" y="815" width="300" height="80" as="geometry" />
         </mxCell>
         <mxCell id="i_d_why" value="&lt;b&gt;Why direct&lt;/b&gt;&lt;br&gt;The agent already holds the context. A sub-agent would pay for it again. The slow work runs in the worker." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontSize=10;fontStyle=2;" vertex="1" parent="1">
