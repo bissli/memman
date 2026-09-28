@@ -25,8 +25,9 @@ def log_op(db: 'DB', operation: str, insight_id: str,
     Bounded growth is enforced by `maintenance_step` once per drain,
     not on every write. This keeps the hot path insert-only so
     Postgres `oplog.log` can be a single statement with no delete.
-    `before` / `after` carry pre/post insight content for replace,
-    supersede, unsupersede and forget.
+    `before` carries the prior insight content on a replace or forget
+    row, and `after` the new content on a remember, replace or
+    target-gone row.
     """
     now = format_timestamp(datetime.now(timezone.utc))
     before_s = json.dumps(before) if before is not None else None
@@ -151,7 +152,7 @@ order by count(*) desc
 
     total_row = db._query(
         'select count(*) from insights'
-        ' where deleted_at is null and superseded_by is null',
+        ' where deleted_at is null and replaced_by is null',
         ()).fetchone()
     total_active = total_row[0] if total_row else 0
 

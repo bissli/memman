@@ -1,8 +1,8 @@
-"""Supersession reads identically to a soft delete, for the same history.
+"""Replacement reads identically to a soft delete, for the same history.
 
 The active predicate gains a second clause at roughly ninety sites.
 Enumerating them in tests would pin the list, not the property. This
-builds the same store twice, supersedes the predecessor in one and
+builds the same store twice, replaces the predecessor in one and
 soft-deletes it in the other, and asserts every read and count
 agrees. One predicate site left on `deleted_at is null` alone makes
 the two stores diverge somewhere below.
@@ -69,7 +69,7 @@ def twin_backends(request, backend_kind, tmp_path):
                 pass
 
 
-def _build(backend, *, supersede):
+def _build(backend, *, replace):
     """Seed rows, vectors, enrichment and edges, then retire `p-1`."""
     embedder = SimpleNamespace(dim=512)
     # Distinct, fixed timestamps: the anchor pool orders on
@@ -85,8 +85,8 @@ def _build(backend, *, supersede):
             rid, _mock_embed(embedder, content), 'test-model')
     backend.nodes.update_enrichment('p-1', summary='old broker')
     backend.nodes.update_enrichment('q-1', summary='dashboard')
-    if supersede:
-        assert backend.nodes.supersede('p-1', 'p-2') is True
+    if replace:
+        assert backend.nodes.mark_replaced('p-1', 'p-2') is True
     else:
         assert backend.nodes.soft_delete('p-1') is True
 
@@ -100,8 +100,8 @@ def _recall_view(backend, query):
     return rows
 
 
-def test_supersession_reads_identically_to_a_soft_delete(twin_backends):
-    """Verify every read agrees between a superseded and a deleted predecessor.
+def test_replacement_reads_identically_to_a_soft_delete(twin_backends):
+    """Verify every read agrees between a replaced and a deleted predecessor.
 
     Mutation: any one of the active-predicate sites left on
         `deleted_at is null` alone -- `get_all_active` returns the
@@ -110,31 +110,31 @@ def test_supersession_reads_identically_to_a_soft_delete(twin_backends):
     Oracle: store B, where the predecessor is soft-deleted, which is
         the shipped behavior every read already agrees on.
     """
-    superseded, deleted = twin_backends
-    _build(superseded, supersede=True)
-    _build(deleted, supersede=False)
+    replaced, deleted = twin_backends
+    _build(replaced, replace=True)
+    _build(deleted, replace=False)
 
     for query in ('alpha broker kombu', 'beta dashboard metrics', 'gamma'):
-        assert _recall_view(superseded, query) == _recall_view(deleted, query)
+        assert _recall_view(replaced, query) == _recall_view(deleted, query)
     assert {r['insight'].id for r in run_recall(
-        superseded, 'alpha broker kombu', None, 10)['results']}.isdisjoint({'p-1'})
+        replaced, 'alpha broker kombu', None, 10)['results']}.isdisjoint({'p-1'})
 
-    assert superseded.nodes.count_active() == deleted.nodes.count_active()
-    assert superseded.nodes.enrichment_coverage() == deleted.nodes.enrichment_coverage()
-    assert superseded.nodes.embedding_stats() == deleted.nodes.embedding_stats()
-    assert (superseded.nodes.embedding_size_distribution()
+    assert replaced.nodes.count_active() == deleted.nodes.count_active()
+    assert replaced.nodes.enrichment_coverage() == deleted.nodes.enrichment_coverage()
+    assert replaced.nodes.embedding_stats() == deleted.nodes.embedding_stats()
+    assert (replaced.nodes.embedding_size_distribution()
             == deleted.nodes.embedding_size_distribution())
-    assert (superseded.nodes.provenance_distribution()
+    assert (replaced.nodes.provenance_distribution()
             == deleted.nodes.provenance_distribution())
-    assert (superseded.nodes.count_pending_enrich()
+    assert (replaced.nodes.count_pending_enrich()
             == deleted.nodes.count_pending_enrich())
-    assert (superseded.nodes.count_stale_insights('pv-2')
+    assert (replaced.nodes.count_stale_insights('pv-2')
             == deleted.nodes.count_stale_insights('pv-2'))
-    assert (superseded.nodes.stats().total_insights
+    assert (replaced.nodes.stats().total_insights
             == deleted.nodes.stats().total_insights)
-    assert (superseded.oplog.stats().total_active
+    assert (replaced.oplog.stats().total_active
             == deleted.oplog.stats().total_active)
-    with superseded.recall_session() as sa, deleted.recall_session() as sb:
+    with replaced.recall_session() as sa, deleted.recall_session() as sb:
         assert (sa.keyword_counts({'alpha', 'kombu'})
                 == sb.keyword_counts({'alpha', 'kombu'}))
         assert 'p-1' not in sa.keyword_counts({'kombu'})

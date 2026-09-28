@@ -199,8 +199,10 @@ def enqueue(
     category : str or None, default None
         Category the drain stamps on the insight.
     replaced_id : str or None, default None
-        Id of the insight to soft-delete when the worker commits this
-        row; set by the `replace` command.
+        Id of the insight this write replaces when the worker
+        commits it; set by the `replace` command. It may name a write
+        still in the queue, and `claim` holds this row while that
+        write is pending.
     author : str or None, default None
         Resolved from the agent's shell at enqueue time and carried to
         the drain; the drain never re-resolves it from the environment.
@@ -220,8 +222,8 @@ def enqueue(
     - Both halves are returned because they answer different
       questions: `row_id` addresses the queue row, which
       `purge_done` drops a minute after the drain, while
-      `queue_uuid` is stamped on every insight the write produces
-      and is the only key that outlives the queue.
+      `queue_uuid` becomes the id of the insight the drain stores,
+      so a caller holds the row's id before the row exists.
     """
     now = int(time.time())
     queue_uuid = str(uuid.uuid4())
@@ -238,6 +240,52 @@ values (?, ?, ?, ?, ?, ?, ?)
     row_id = cur.lastrowid
     logger.debug(f'queued blob {row_id} for store {store}')
     return row_id, queue_uuid
+
+
+def find_pending(
+        conn: sqlite3.Connection,
+        store: str,
+        id_or_prefix: str,
+        ) -> tuple[str, str | None] | None:
+    """Resolve an id or unambiguous prefix to a write still in the queue.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open queue.db connection.
+    store : str
+        Only writes queued for this store match.
+    id_or_prefix : str
+        A full write id, as `remember` and `replace` print it, or any
+        prefix of one.
+
+    Returns
+    -------
+    tuple[str, str | None] or None
+        `(id, category)` of the one pending write that matches; None
+        when none does.
+
+    Raises
+    ------
+    ValueError
+        When the prefix matches more than one pending write.
+
+    Notes
+    -----
+    - A pending write stays pending while a worker holds its claim, so
+      a write the drain is storing right now still matches.
+    """
+    sql = """
+select queue_uuid, category from queue
+where store = ? and status = 'pending'
+  and substr(queue_uuid, 1, length(?)) = ?
+"""
+    rows = conn.execute(
+        sql, (store, id_or_prefix, id_or_prefix)).fetchall()
+    if len(rows) > 1:
+        raise ValueError(
+            f'prefix {id_or_prefix!r} matches {len(rows)} queued writes')
+    return (rows[0][0], rows[0][1]) if rows else None
 
 
 def claim(
@@ -266,6 +314,10 @@ def claim(
     Notes
     -----
     - Rows claim in `queued_at` order.
+    - A replace waits while an earlier pending write in its store is
+      its target or is itself a replace, so replaces land in the order
+      they were queued, whatever retries they take. A write that
+      fails or goes stale stops holding the rows behind it.
     - A claimed row is reclaimable once its claim is older than
       `STALE_CLAIM_SECONDS`, so a worker that dies mid-row strands
       nothing.
@@ -285,10 +337,19 @@ set claimed_at = ?,
     worker_pid = ?,
     attempts   = attempts + 1
 where id = (
-    select id from queue
+    select id from queue candidate
     where status = 'pending'
       and (claimed_at is null or claimed_at <= ? - ?)
       {store_filter}
+      and not exists (
+        select 1 from queue earlier
+        where earlier.status = 'pending'
+          and earlier.store = candidate.store
+          and earlier.id < candidate.id
+          and (earlier.queue_uuid = candidate.replaced_id
+               or (candidate.replaced_id is not null
+                   and earlier.replaced_id is not null))
+      )
     order by queued_at asc
     limit 1
 )

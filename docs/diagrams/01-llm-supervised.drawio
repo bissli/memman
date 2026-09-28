@@ -26,7 +26,7 @@
         <mxCell id="l4" value="&lt;b&gt;Reading the results&lt;/b&gt;&lt;br&gt;Judges each recalled row against the query and the conversation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="50" y="307" width="320" height="46" as="geometry" />
         </mxCell>
-        <mxCell id="l5" value="&lt;b&gt;Upkeep&lt;/b&gt;&lt;br&gt;Decides when to replace, supersede, or forget a memory" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="l5" value="&lt;b&gt;Upkeep&lt;/b&gt;&lt;br&gt;Decides when to replace or forget a memory" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="50" y="361" width="320" height="46" as="geometry" />
         </mxCell>
         <mxCell id="agent_note" value="The judgment runs inside the agent's own turns and needs no extra API call." style="text;html=1;whiteSpace=wrap;align=center;verticalAlign=middle;fontSize=10;fontStyle=2;fillColor=none;strokeColor=none;" vertex="1" parent="1">
@@ -60,7 +60,7 @@
         <mxCell id="b7" value="&lt;b&gt;Rerank&lt;/b&gt;&lt;br&gt;Voyage cross-encoder over the top 100, for queries of three or more words" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="520" y="469" width="320" height="46" as="geometry" />
         </mxCell>
-        <mxCell id="b8" value="&lt;b&gt;Retention&lt;/b&gt;&lt;br&gt;No cap and no automatic deletion. Rows leave recall only by forget or supersede." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="b8" value="&lt;b&gt;Retention&lt;/b&gt;&lt;br&gt;No cap and no automatic deletion. Rows leave recall only by forget or replace." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F3FF;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="520" y="523" width="320" height="46" as="geometry" />
         </mxCell>
 

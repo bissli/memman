@@ -1197,7 +1197,7 @@ class TestClaudeHooksCheck:
         Mutation: comparing event and command but dropping the matcher,
             so a pre-0.40.1 registration keeps a narrower matcher with
             no warning.
-        Oracle: the superseded matcher value Task against the
+        Oracle: the replaced matcher value Task against the
             installer's own current value.
         """
         monkeypatch.setattr(Path, 'home', lambda: tmp_path)

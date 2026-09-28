@@ -1,7 +1,7 @@
-"""Pipeline-level supersession: the degraded add and the drain.
+"""Pipeline-level replacement: the degraded add and the drain.
 
-`_apply_plan` may find its target already superseded by an earlier
-drain; the drain may claim a `replace` whose target was superseded
+`_apply_plan` may find its target already replaced by an earlier
+drain; the drain may claim a `replace` whose target was replaced
 between enqueue and claim. Neither may drop a write or link the wrong
 row.
 """
@@ -14,17 +14,17 @@ from tests.conftest import invoke, make_insight
 
 
 def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
-    """Verify a replace whose target is already superseded says so.
+    """Verify a replace whose target is already replaced says so.
 
     Mutation: reporting the degraded add with no `target_gone`, so the
         caller cannot find the row that now holds the topic.
-    Oracle: the result dict for a superseded target (successor named)
-        and for a forgotten target (`superseded_by` None), with no
+    Oracle: the result dict for a replaced target (successor named)
+        and for a forgotten target (`replaced_by` None), with no
         `replaced_id` on either.
     """
     tmp_backend.nodes.insert(make_insight(id='old-1', content='first'))
     tmp_backend.nodes.insert(make_insight(id='new-1', content='second'))
-    assert tmp_backend.nodes.supersede('old-1', 'new-1') is True
+    assert tmp_backend.nodes.mark_replaced('old-1', 'new-1') is True
     tmp_backend.nodes.insert(make_insight(id='gone-1', content='gone'))
     assert tmp_backend.nodes.soft_delete('gone-1') is True
 
@@ -35,13 +35,13 @@ def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
 
     late = _replace('late-1', 'old-1')
     assert late['action'] == 'add'
-    assert late['target_gone'] == {'id': 'old-1', 'superseded_by': 'new-1'}
+    assert late['target_gone'] == {'id': 'old-1', 'replaced_by': 'new-1'}
     assert 'replaced_id' not in late
-    assert tmp_backend.nodes.get_include_deleted('old-1').superseded_by == 'new-1'
+    assert tmp_backend.nodes.get_include_deleted('old-1').replaced_by == 'new-1'
 
     forgotten = _replace('late-2', 'gone-1')
     assert forgotten['action'] == 'add'
-    assert forgotten['target_gone'] == {'id': 'gone-1', 'superseded_by': None}
+    assert forgotten['target_gone'] == {'id': 'gone-1', 'replaced_by': None}
 
 
 @pytest.mark.no_auto_drain
@@ -49,7 +49,7 @@ def test_drain_redirects_a_replace_to_the_chain_head(mm_runner):
     """Verify a queued replace follows the chain to the current head.
 
     Two replaces of one id are queued before either drains; the first
-    supersedes the id, so the second's target is superseded by the
+    replaces the id, so the second's target was replaced by the
     time the drain claims it.
 
     Mutation: leaving the drain preflight on `nodes.get`, so the second
@@ -85,9 +85,9 @@ def test_drain_redirects_a_replace_to_the_chain_head(mm_runner):
         assert [i.content for i in current] == ['the broker is rabbitmq now']
         head = current[0]
         old = backend.nodes.get_include_deleted(first)
-        middle = backend.nodes.get_include_deleted(old.superseded_by)
+        middle = backend.nodes.get_include_deleted(old.replaced_by)
         assert middle.content == 'the broker is redis now'
-        assert middle.superseded_by == head.id
-        assert head.superseded_by is None
+        assert middle.replaced_by == head.id
+        assert head.replaced_by is None
         assert old.deleted_at is None
         assert middle.deleted_at is None

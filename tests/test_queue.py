@@ -100,6 +100,111 @@ def test_store_filter(queue_conn):
     assert r.store == 'beta'
 
 
+def test_claim_holds_a_replace_while_its_queued_target_backs_off(
+        queue_conn):
+    """A replace waits in the queue until the write it targets leaves it.
+
+    Mutation: `claim` ignoring `replaced_id`, so a replace queued behind
+        a target in backoff drains first and degrades to an unlinked
+        add.
+    Oracle: the target backing off after one failed attempt; the
+        replace claims only once the target is done.
+    """
+    _, target_uuid = enqueue(queue_conn, 'main', 'limit is 24 hours')
+    replace_id, _ = enqueue(
+        queue_conn, 'main', 'limit is 30 days', replaced_id=target_uuid)
+    target = claim(queue_conn, worker_pid=1)
+    mark_failed(queue_conn, target.id, 'transient')
+
+    assert claim(queue_conn, worker_pid=1) is None
+    mark_done(queue_conn, target.id)
+    assert claim(queue_conn, worker_pid=1).id == replace_id
+
+
+def test_claim_holds_a_second_replace_of_one_id_behind_the_first(
+        queue_conn):
+    """Two replaces of one id land in the order they were queued.
+
+    Mutation: `claim` holding a replace only behind its queued target,
+        so while the first replace of a stored id backs off the second
+        drains, and the retried first then retires the newer text.
+    Oracle: the first replace backing off; the second claims only
+        once the first is done.
+    """
+    first_id, _ = enqueue(
+        queue_conn, 'main', 'limit is 30 days', replaced_id='stored-id')
+    second_id, _ = enqueue(
+        queue_conn, 'main', 'limit is 7 days', replaced_id='stored-id')
+    first = claim(queue_conn, worker_pid=1)
+    mark_failed(queue_conn, first.id, 'transient')
+
+    assert claim(queue_conn, worker_pid=1) is None
+    mark_done(queue_conn, first_id)
+    assert claim(queue_conn, worker_pid=1).id == second_id
+
+
+def test_claim_holds_a_replace_behind_an_earlier_replace_in_its_chain(
+        queue_conn):
+    """A replace waits behind every earlier pending replace in its store.
+
+    Mutation: `claim` comparing only direct targets, so while a replace
+        of a queued replacement backs off, a later replace of the
+        original drains first, and the retried write then retires the
+        newer text.
+    Oracle: C1 replaces a stored id, C2 replaces C1, C3 replaces the
+        stored id; with C2 backing off, C3 claims only once C2 is done.
+    """
+    first_id, first_uuid = enqueue(
+        queue_conn, 'main', 'limit is 30 days', replaced_id='stored-id')
+    middle_id, _ = enqueue(
+        queue_conn, 'main', 'limit is 60 days', replaced_id=first_uuid)
+    last_id, _ = enqueue(
+        queue_conn, 'main', 'limit is 7 days', replaced_id='stored-id')
+    mark_done(queue_conn, claim(queue_conn, worker_pid=1).id)
+    middle = claim(queue_conn, worker_pid=1)
+    mark_failed(queue_conn, middle.id, 'transient')
+
+    assert claim(queue_conn, worker_pid=1) is None
+    mark_done(queue_conn, middle_id)
+    assert claim(queue_conn, worker_pid=1).id == last_id
+
+
+def test_claim_does_not_hold_a_plain_write_behind_a_backed_off_replace(
+        queue_conn):
+    """A plain write claims while an earlier replace backs off.
+
+    Mutation: the replace-behind-replace hold applied to every
+        candidate, so one retrying replace stalls every later write in
+        its store.
+    Oracle: a replace backing off; the plain write queued after it
+        claims.
+    """
+    enqueue(queue_conn, 'main', 'limit is 30 days', replaced_id='stored-id')
+    plain_id, _ = enqueue(queue_conn, 'main', 'kafka retains by age')
+    replacement = claim(queue_conn, worker_pid=1)
+    mark_failed(queue_conn, replacement.id, 'transient')
+
+    assert claim(queue_conn, worker_pid=1).id == plain_id
+
+
+def test_claim_does_not_hold_a_write_behind_an_unrelated_backoff(
+        queue_conn):
+    """A plain write claims while an earlier, unrelated write backs off.
+
+    Mutation: the hold covering every later write in the store rather
+        than a replace of the same id, which stalls the store behind
+        any failure.
+    Oracle: two plain writes; the second claims while the first
+        backs off.
+    """
+    enqueue(queue_conn, 'main', 'redis evicts on maxmemory')
+    later_id, _ = enqueue(queue_conn, 'main', 'kafka retains by age')
+    first = claim(queue_conn, worker_pid=1)
+    mark_failed(queue_conn, first.id, 'transient')
+
+    assert claim(queue_conn, worker_pid=1).id == later_id
+
+
 def test_mark_done_sets_status_and_clears_claim(queue_conn):
     """mark_done transitions a row to status=done and frees the claim.
     """

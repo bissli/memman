@@ -80,7 +80,7 @@ class NodeStore(Protocol):
         str
             The full id when the argument is an exact id or a prefix
             that matches exactly one row (including deleted and
-            superseded rows). Returns the argument unchanged when no
+            replaced rows). Returns the argument unchanged when no
             row matches, so the caller's existing not-found path fires.
 
         Raises
@@ -93,7 +93,7 @@ class NodeStore(Protocol):
         -----
         - Exact match takes priority over prefix match: a full id that
           is also a prefix of another row resolves to itself.
-        - Resolution scans all rows including deleted and superseded
+        - Resolution scans all rows including deleted and replaced
           ones; each command's own get applies its state filter.
         """
         ...
@@ -108,18 +108,18 @@ class NodeStore(Protocol):
         """Soft-delete a non-deleted insight.
 
         Returns False when the row is missing or already deleted; a
-        superseded row may still be deleted.
+        replaced row may still be deleted.
         """
         ...
 
-    def supersede(self, predecessor_id: Id, successor_id: Id) -> bool:
+    def mark_replaced(self, predecessor_id: Id, successor_id: Id) -> bool:
         """Point a current insight at its successor.
 
         Parameters
         ----------
         predecessor_id : Id
-            The row being superseded; must be neither deleted nor
-            already superseded.
+            The row being replaced; must be neither deleted nor
+            already replaced.
         successor_id : Id
             The row that replaces it; not checked, since the pipeline
             writes the pointer before the successor row exists.
@@ -133,33 +133,23 @@ class NodeStore(Protocol):
 
         Notes
         -----
-        - The guard makes a row superseded at most once, which rules
+        - The guard makes a row replaced at most once, which rules
           out forks in the chain.
-        - A superseded row leaves every active read exactly as a
-          soft-deleted one does; `get_include_deleted`,
-          `get_by_queue_uuid` and `has_active_with_queue_uuid` still
-          see it.
-        """
-        ...
-
-    def unsupersede(self, id: Id, expected_successor: Id) -> bool:
-        """Clear a supersession pointer while it still names the successor.
-
-        Returns False when the row is missing, deleted, not superseded,
-        or superseded by another row since the caller read it. The
-        caller re-embeds the row afterwards.
+        - A replaced row leaves every active read exactly as a
+          soft-deleted one does; `get_include_deleted` and
+          `has_row_with_queue_uuid` still see it.
         """
         ...
 
     def predecessors(self, successor_id: Id) -> list[Insight]:
-        """Every row whose `superseded_by` names `successor_id`.
+        """Every row whose `replaced_by` names `successor_id`.
 
         Deleted rows included, oldest first; the history walk's
         backward step.
         """
         ...
 
-    def supersession_integrity(self) -> dict[str, list[Id]]:
+    def replacement_integrity(self) -> dict[str, list[Id]]:
         """The three pointer populations a healthy store leaves empty.
 
         Keys: `dangling` (pointer at an id absent from the table),
@@ -176,34 +166,20 @@ class NodeStore(Protocol):
         ...
 
     def count_active(self) -> int:
-        """Count current insights: neither deleted nor superseded."""
+        """Count current insights: neither deleted nor replaced."""
         ...
 
     def count_total(self) -> int:
         """Count all insights, including soft-deleted."""
         ...
 
-    def has_active_with_queue_uuid(self, queue_uuid: str) -> bool:
-        """Return True if a non-deleted insight carries this queue uuid.
+    def has_row_with_queue_uuid(self, queue_uuid: str) -> bool:
+        """Return True if any insight, forgotten ones included, carries it.
 
         The idempotency check for queue replays; runs unconditionally
         for every drained row and answers "did this write land", so a
-        superseded row counts. Backends implement it in SQL so a null
-        `queue_uuid` can never match.
-        """
-        ...
-
-    def get_by_queue_uuid(self, queue_uuid: str) -> list[Insight]:
-        """Return the non-deleted insights one queued write produced.
-
-        The write-to-read join: `remember` and `replace` hand the
-        caller a `queue_uuid`, and this resolves it to the rows that
-        write stored, oldest first, tiebroken on `id` so siblings
-        sharing one transaction timestamp order identically on both
-        backends. A row a later write superseded is still returned,
-        with `superseded_by` set. Empty when the write stored nothing.
-        Backends implement it in SQL for the same NULL-matching
-        reason as `has_active_with_queue_uuid`.
+        replaced or forgotten row counts. Backends implement it in
+        SQL so a null `queue_uuid` can never match.
         """
         ...
 
@@ -348,9 +324,10 @@ class Oplog(Protocol):
         """Record one operation. Backend stamps `created_at` now.
 
         Insert-only on both backends; trimming is performed by
-        `maintenance_step`. `before` / `after` carry pre/post
-        insight content for replace / supersede / unsupersede /
-        forget so the oplog alone is forensic-complete.
+        `maintenance_step`. `before` carries the prior insight
+        content on a replace or forget row, and `after` the new
+        content on a remember, replace or target-gone row, so the
+        oplog alone is forensic-complete.
         """
         ...
 

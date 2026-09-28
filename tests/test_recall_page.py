@@ -410,7 +410,7 @@ def test_live_mappers_read_every_trailing_field(backend):
     Mutation: a stale positional index in `node._scan_insight` or
         `postgres._row_to_insight` after a column drop, which reads a
         neighbor's value into a field (summary into deleted_at,
-        queue_uuid into superseded_by) with no error.
+        queue_uuid into replaced_by) with no error.
     Oracle: a distinct hand-set value per column, read back through
         `get_include_deleted` on both backends.
     """
@@ -423,7 +423,7 @@ def test_live_mappers_read_every_trailing_field(backend):
             2026, 1, 2, 3, 4, 1, tzinfo=timezone.utc),
         'enriched_at': datetime(2026, 1, 2, 3, 4, 2, tzinfo=timezone.utc),
         'deleted_at': datetime(2026, 1, 2, 3, 4, 3, tzinfo=timezone.utc),
-        'superseded_by': 'successor-f',
+        'replaced_by': 'successor-f',
         }
     _stamp(backend, 'fidelity-row', stamps)
 
@@ -435,4 +435,4 @@ def test_live_mappers_read_every_trailing_field(backend):
     assert got.enriched_at == stamps['enriched_at']
     assert got.deleted_at == stamps['deleted_at']
     assert got.queue_uuid == 'queue-f'
-    assert (got.superseded_by, got.author) == ('successor-f', 'carol')
+    assert (got.replaced_by, got.author) == ('successor-f', 'carol')

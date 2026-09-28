@@ -85,18 +85,15 @@ class SqliteNodeStore(NodeStore):
     def soft_delete(self, id: Id) -> bool:
         return _node.soft_delete_insight(self._db, id)
 
-    def supersede(self, predecessor_id: Id, successor_id: Id) -> bool:
-        return _node.supersede_insight(
+    def mark_replaced(self, predecessor_id: Id, successor_id: Id) -> bool:
+        return _node.mark_insight_replaced(
             self._db, predecessor_id, successor_id)
-
-    def unsupersede(self, id: Id, expected_successor: Id) -> bool:
-        return _node.unsupersede_insight(self._db, id, expected_successor)
 
     def predecessors(self, successor_id: Id) -> list[Insight]:
         return _node.get_predecessors(self._db, successor_id)
 
-    def supersession_integrity(self) -> dict[str, list[Id]]:
-        return _node.supersession_integrity(self._db)
+    def replacement_integrity(self) -> dict[str, list[Id]]:
+        return _node.replacement_integrity(self._db)
 
     def update_enrichment(self, id: Id, *, summary: str) -> None:
         _node.update_enrichment(self._db, id, summary)
@@ -107,11 +104,8 @@ class SqliteNodeStore(NodeStore):
     def count_total(self) -> int:
         return _node.count_total_insights(self._db)
 
-    def has_active_with_queue_uuid(self, queue_uuid: str) -> bool:
-        return _node.has_active_with_queue_uuid(self._db, queue_uuid)
-
-    def get_by_queue_uuid(self, queue_uuid: str) -> list[Insight]:
-        return _node.get_by_queue_uuid(self._db, queue_uuid)
+    def has_row_with_queue_uuid(self, queue_uuid: str) -> bool:
+        return _node.has_row_with_queue_uuid(self._db, queue_uuid)
 
     def provenance_distribution(self) -> list[ProvenanceCount]:
         rows = _node.provenance_distribution(self._db)
@@ -127,7 +121,7 @@ class SqliteNodeStore(NodeStore):
         d = _node.get_stats(self._db)
         return NodeStats(
             total_insights=d.get('total_insights', 0),
-            superseded_insights=d.get('superseded_insights', 0),
+            replaced_insights=d.get('replaced_insights', 0),
             deleted_insights=d.get('deleted_insights', 0),
             oplog_count=d.get('oplog_count', 0),
             by_category=d.get('by_category', {}))
@@ -148,7 +142,7 @@ select count(*),
                  and enriched_at is null
                 then 1 else 0 end)
 from insights
-where deleted_at is null and superseded_by is null
+where deleted_at is null and replaced_by is null
 """
         row = self._db._query(sql).fetchone()
         if row is None:
@@ -163,7 +157,7 @@ where deleted_at is null and superseded_by is null
         sql = """
 select length(embedding), count(*)
 from insights
-where deleted_at is null and superseded_by is null and embedding is not null
+where deleted_at is null and replaced_by is null and embedding is not null
 group by length(embedding)
 """
         rows = self._db._query(sql).fetchall()
@@ -315,7 +309,7 @@ class SqliteRecallSession(RecallSession):
         sql = """
 select id, embedding
 from insights
-where deleted_at is null and superseded_by is null and embedding is not null
+where deleted_at is null and replaced_by is null and embedding is not null
 """
         rows = [(rid, blob) for rid, blob in self.db._query(sql) if blob]
 
@@ -407,7 +401,7 @@ where deleted_at is null and superseded_by is null and embedding is not null
 select i.id
 from insights_fts f
 join insights i on i.rowid = f.rowid
-where insights_fts match ? and i.deleted_at is null and i.superseded_by is null
+where insights_fts match ? and i.deleted_at is null and i.replaced_by is null
 """
         counts: dict[Id, int] = {}
         for token in query_tokens:
@@ -783,7 +777,7 @@ class SqliteMigrator(Migrator):
 select id, content, category, summary, embedding,
        enrich_attempted_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, embedding_model,
-       queue_uuid, superseded_by, author
+       queue_uuid, replaced_by, author
 from insights
 order by id
 """).fetchall()
@@ -805,7 +799,7 @@ order by id
                     prompt_version=r[10],
                     embedding_model=r[11],
                     queue_uuid=r[12],
-                    superseded_by=r[13],
+                    replaced_by=r[13],
                     author=r[14]))
 
             op_rows = conn.execute("""
@@ -862,7 +856,7 @@ order by id
                         ins.prompt_version,
                         ins.embedding_model,
                         ins.queue_uuid,
-                        ins.superseded_by,
+                        ins.replaced_by,
                         ins.author))
                 if insight_rows:
                     conn.executemany(
@@ -873,7 +867,7 @@ order by id
                         ' updated_at, deleted_at, prompt_version,'
                         ' embedding_model,'
                         ' queue_uuid,'
-                        ' superseded_by, author)'
+                        ' replaced_by, author)'
                         ' values (?, ?, ?, ?, ?,'
                         ' ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                         insight_rows)

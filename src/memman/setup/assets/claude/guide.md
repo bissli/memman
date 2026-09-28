@@ -34,6 +34,15 @@ wrote it or when: `author` and `created_at` carry those.
     BAD   Decision (alice, 2026-09-24): retry cap stays at three.
     GOOD  The retry cap stays at three, since a fourth try only adds load.
 
+A correction replaces the row it corrects. `remember` only adds and
+leaves the stale row in recall. The new text restates every claim of
+the old row still true.
+
+    memman replace <id> "<corrected text>"
+
+The id is on a recall page or is the `id` an earlier write printed,
+even one still queued. With neither in hand, recall the topic first.
+
 memman refuses text over 1,000 bytes, text naming a line number, and
 text off this shape, and says why. A behavioral rule ("always",
 "never") goes to the project CLAUDE.md `## Directives` section

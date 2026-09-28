@@ -98,7 +98,7 @@ def run_remember(
     ec : EmbeddingProvider
         The store-bound embedder, from `bound_embedder`.
     replaced_id : str, default ''
-        The row a `replace` supersedes; '' for a plain add.
+        The row a `replace` retires; '' for a plain add.
 
     Returns
     -------
@@ -151,10 +151,10 @@ def _apply_plan(
 
     Notes
     -----
-    - A `replace` supersedes its target (never deletes it).
-    - A target that is not current (forgotten, or superseded by an
-      earlier write) is reported under `target_gone`, and the write
-      degrades to a plain add.
+    - A `replace` retires its target (never deletes it).
+    - A target that is not current (forgotten, replaced by an earlier
+      write, or never stored) is reported under `target_gone`, and the
+      write degrades to a plain add.
     """
     fi = insight
 
@@ -162,10 +162,10 @@ def _apply_plan(
     target_gone: dict[str, str | None] | None = None
     if replaced_id:
         before_target = backend.nodes.get_include_deleted(replaced_id)
-        linked = backend.nodes.supersede(replaced_id, fi.id)
+        linked = backend.nodes.mark_replaced(replaced_id, fi.id)
         if linked and before_target is not None:
             replaced = True
-            # The predecessor keeps its content behind `superseded_by`,
+            # The predecessor keeps its content behind `replaced_by`,
             # and the successor copies nothing from it: the CLI already
             # seeded the target's category when `--cat` was omitted.
             backend.oplog.log(
@@ -176,8 +176,8 @@ def _apply_plan(
         else:
             target_gone = {
                 'id': replaced_id,
-                'superseded_by': (before_target.superseded_by
-                                  if before_target is not None else None),
+                'replaced_by': (before_target.replaced_by
+                                if before_target is not None else None),
                 }
             logger.warning(
                 f'replace target {replaced_id} is not current;'

@@ -810,12 +810,12 @@ class TestReplace:
         assert result.exit_code != 0
         assert 'was forgotten' in result.output
 
-    def test_replace_refuses_a_superseded_id_and_names_the_successor(
+    def test_replace_refuses_a_replaced_id_and_names_the_successor(
             self, runner):
-        """Verify replacing a superseded id points at its successor.
+        """Verify replacing a replaced id points at its successor.
 
         Mutation: preflighting with `nodes.get` (a bare not-found), or
-            accepting the superseded id and forking the chain.
+            accepting the replaced id and forking the chain.
         Oracle: the error text carries the successor's id and the
             history command; the successor stays the one current row.
         """
@@ -829,7 +829,7 @@ class TestReplace:
         result = invoke(runner, [
             'replace', old_id, 'Kafka retention is ninety days'])
         assert result.exit_code != 0
-        assert f'is superseded by {new_id}' in result.output
+        assert f'was replaced by {new_id}' in result.output
         assert '--history' in result.output
         active = _parse_recall_lines(
             invoke(runner, ['recall', '--basic', 'Kafka']).output,

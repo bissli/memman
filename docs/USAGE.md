@@ -95,18 +95,16 @@ memman remember "The retry cap stays at three, since a fourth try only adds load
 memman recall "retry cap" --limit 10
 memman recall "auth" --basic
 memman replace <id> "The retry cap is four for batch jobs and three elsewhere."
-memman supersede <old_id> <new_id>
-memman unsupersede <old_id>
 memman forget <id>
 ```
 
 Every command that takes a memory id also accepts an unambiguous prefix of one, such as the 8-character id that recall prints. An ambiguous prefix is refused, and the error names how many ids it matches.
 
-`remember`, `replace`, `forget`, `supersede`, and `unsupersede` refuse to run while the scheduler is stopped (see [Scheduler](#scheduler)).
+`remember`, `replace`, and `forget` refuse to run while the scheduler is stopped (see [Scheduler](#scheduler)).
 
 ### remember and replace
 
-`remember` adds the text to the write queue and returns at once. The background worker stores it on its next drain, and recall finds it from then on. The reply is JSON: `action` (`queued`), `queue_id`, `queue_uuid`, `store`, and `quality_warnings`. `replace` adds `replaced_id`. `memman insights by-queue <queue_uuid>` finds the memories a write produced.
+`remember` adds the text to the write queue and returns at once. The background worker stores it on its next drain, and recall finds it from then on. The reply is JSON: `action` (`queued`), `id`, `queue_id`, `store`, and `quality_warnings`. `replace` adds `replaced_id`. The `id` is the id the stored memory takes once the drain lands it, so a caller holds it from the moment it writes. `memman insights show <id>` on a write still queued reports that it lands on the next drain.
 
 `quality_warnings` lists phrasing that tends to go stale, such as an instance id or the word "currently". The warnings never block the write.
 
@@ -114,7 +112,7 @@ Every command that takes a memory id also accepts an unambiguous prefix of one, 
 | ------- | ------------------ | ------------------ | -------------------------------------------------------------------- |
 | `--cat` | `fact`             | the target's value | Category: `preference`, `decision`, `fact`, `insight`, or `context`. |
 
-`replace <id>` queues a successor for a current memory. When the drain stores the successor, the target becomes superseded: it keeps its content and leaves recall and every listing. A forgotten or superseded target is refused, and the error for a superseded one names its successor. Each flag left off inherits the target's value.
+`replace <id>` queues a successor for a current memory, or for a write still queued for the same store. The drain holds a replacement while its queued target, or an earlier replacement in the same store, is pending, so replacements land in the order they were queued. A target that fails or goes stale releases its replacement, which lands as a plain add, and the result names the target under `target_gone`. When the drain stores the successor, the target becomes replaced: it keeps its content and leaves recall and every listing. A forgotten or replaced target is refused, and the error for a replaced one names its successor. Each flag left off inherits the target's value. Another `replace` on the correction's id fixes a wrong correction, and `memman insights show <id> --history` reads back the earlier text.
 
 ### What remember and replace refuse
 
@@ -158,11 +156,9 @@ Compare scores only within the same result page. They have no fixed meaning acro
 memman config set MEMMAN_RERANK_ENABLED_work false
 ```
 
-### supersede, unsupersede, and forget
+### forget
 
-- `supersede <old_id> <new_id>` marks one current memory as superseded by another. Both keep their content. It is the only way to link two memories that both exist, since `replace` always writes a new one. Both ids must be current and different. One successor can supersede several predecessors.
-- `unsupersede <old_id>` returns a superseded memory to recall. Its successor must be forgotten first. The command re-embeds the content with the store's embedding model and stops if that call fails. The memory remains superseded.
-- `forget <id>` soft-deletes a memory: it sets `deleted_at`, and the memory leaves recall and every listing. No command reverses a forget. A superseded memory can be forgotten.
+- `forget <id>` soft-deletes a memory: it sets `deleted_at`, and the memory leaves recall and every listing. No command reverses a forget. A replaced memory can be forgotten. `forget` refuses a current memory that replaced one not yet forgotten, because that memory stays retired, and the error names `replace <id> "<new text>"`. It also refuses the id of a write still queued.
 
 Nothing deletes a memory on its own. The store has no cap and no retention score, so a memory stays until an operator forgets it.
 
@@ -171,14 +167,12 @@ Nothing deletes a memory on its own. The store has no cap and no retention score
 ## Insights
 
 ```bash
-memman insights show <id>              # one memory as JSON, including superseded memories
-memman insights show <id> --history    # the supersession chain through <id>, oldest first
-memman insights by-queue <queue_uuid>  # the memories one queued write produced
+memman insights show <id>              # one memory as JSON, including replaced memories
+memman insights show <id> --history    # the replacement chain through <id>, oldest first
 memman insights review [--limit N]     # memories with quality warnings
 ```
 
-- `show` accepts a forgotten memory ID only with `--history`. It then lists every memory in the chain with its `state`: `current`, `superseded`, or `forgotten`. A forgotten entry omits the content.
-- `by-queue` returns `{queue_uuid, store, count, results}` for the store it searched. `count: 0` has three causes: the write is still queued, it went to another store, or its memory was forgotten. An invalid UUID is rejected.
+- `show` accepts a forgotten memory ID only with `--history`. It then lists every memory in the chain with its `state`: `current`, `replaced`, or `forgotten`. A forgotten entry omits the content. An id still in the write queue reports that it lands on the next drain.
 - `review` checks current memories, newest first, against the same patterns as `quality_warnings`, and stops after `--limit` flagged memories (default 20).
 
 ---
@@ -323,13 +317,13 @@ memman log worker [--errors] [--lines N]
 memman log worker --stack [--lines N]
 ```
 
-**`status`** prints the store name, its backend, the backends in use, counts of current, superseded, and forgotten memories, `stale_insights` (the count `enrich --stale-only` would process), the oplog size, counts by category, and the storage path.
+**`status`** prints the store name, its backend, the backends in use, counts of current, replaced, and forgotten memories, `stale_insights` (the count `enrich --stale-only` would process), the oplog size, counts by category, and the storage path.
 
 **`doctor`** exits 1 when any check fails and 0 otherwise. It makes one live LLM call and two to four live embedding calls: `embed_probe` sends an availability probe and a test embed, and `embed_fingerprint` sends an availability probe for the store's recorded model, plus a size probe when that model's vector size is not built in.
 
 | Group              | Checks                                                                                                                                               |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Store              | `integrity`, `enrichment_coverage`, `supersession_integrity`, `embedding_consistency`, `embed_fingerprint`, `no_stale_swap_meta`, `provenance_drift` |
+| Store              | `integrity`, `enrichment_coverage`, `replacement_integrity`, `embedding_consistency`, `embed_fingerprint`, `no_stale_swap_meta`, `provenance_drift` |
 | Queue and schedule | `queue_backlog`, `scheduler_heartbeat`, `drain_heartbeat`, `scheduler_state`                                                                         |
 | Configuration      | `env_completeness`, `per_store_keys`, `env_permissions`, `stale_post_migrate_source`, `claude_hooks`, `optional_extras`                              |
 | Providers          | `llm_probe`, `embed_probe`                                                                                                                           |
@@ -366,7 +360,7 @@ memman scheduler serve [--interval N] [--once]
 memman scheduler debug on|off|status
 ```
 
-**Recall remains available while the scheduler is stopped.** `remember`, `replace`, `forget`, `supersede`, and `unsupersede` exit with status 1 and report that writes are disabled. The error names `memman scheduler start`, which enables writes.
+**Recall remains available while the scheduler is stopped.** `remember`, `replace`, and `forget` exit with status 1 and report that writes are disabled. The error names `memman scheduler start`, which enables writes.
 
 `scheduler trigger` refuses in the same way. A running drain finishes the current memory before stopping, and a `serve` process exits. Three commands require a stopped scheduler: `enrich`, `embed swap`, and `embed reembed`.
 

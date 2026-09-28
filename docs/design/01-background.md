@@ -24,11 +24,11 @@ memman stores decisions, preferences, and project context across Claude Code ses
 
 The agent supervises memory from outside the pipeline. It decides what to store, what to query, and what to retire. memman runs deterministic code, and one LLM (`MEMMAN_LLM_MODEL`) adds a summary that recall prints in place of the content. The work splits three ways:
 
-| Part                                      | Role               | Work                                                                                |
-| ----------------------------------------- | ------------------ | ----------------------------------------------------------------------------------- |
-| The agent (Claude Code)                   | Judgment           | Decides what to remember, when to recall, and what to replace, supersede, or forget |
-| The memman CLI and background worker      | Deterministic code | Storage, the write queue, keyword search, vector math, rank fusion                  |
-| The enrichment model (`MEMMAN_LLM_MODEL`) | Enrichment         | Adds a short summary to each memory                                                 |
+| Part                                      | Role               | Work                                                                    |
+| ----------------------------------------- | ------------------ | ----------------------------------------------------------------------- |
+| The agent (Claude Code)                   | Judgment           | Decides what to remember, when to recall, and what to replace or forget |
+| The memman CLI and background worker      | Deterministic code | Storage, the write queue, keyword search, vector math, rank fusion      |
+| The enrichment model (`MEMMAN_LLM_MODEL`) | Enrichment         | Adds a short summary to each memory                                     |
 
 The agent writes the content of every memory. The enrichment model never rewrites, merges, or categorizes a memory. Its output is stored in the `summary` column.
 
@@ -42,7 +42,7 @@ The agent writes the content of every memory. The enrichment model never rewrite
 
 Recall combines three ranked lists (keyword, vector, and recency) with Reciprocal Rank Fusion (RRF). Each list that contains a memory contributes `1/(k + rank)` to its combined score, with k=60 and ranks counted from 1. The combined lists form the candidate set. A weighted sum of keyword overlap, cosine similarity, and the normalized RRF score orders it. When reranking is on, the Voyage reranker rescores the top 100. [Pipelines](03-pipelines.md#34-read-pipeline-recall) documents the constants.
 
-Each write adds one memory. A `replace <id>` write also supersedes the memory it names.
+Each write adds one memory. A `replace <id>` write also replaces the memory it names.
 
 ---
 
@@ -58,7 +58,7 @@ Each write adds one memory. A `replace <id>` write also supersedes the memory it
 ### Why SQLite WAL for storage
 
 - **One file per store.** Each store is one `memman.db` file, easy to copy and back up.
-- **Transactions.** The worker commits each write in one transaction: the new memory, its enrichment, its vector, and any supersession link are saved together. If any part fails, none is saved.
+- **Transactions.** The worker commits each write in one transaction: the new memory, its enrichment, its vector, and any replacement link are saved together. If any part fails, none is saved.
 - **Concurrent reads.** Write-ahead logging (WAL) lets readers run while one writer commits. Recall reads a store while the background worker writes to it.
 - **No server.** SQLite ships with Python. A SQLite store needs no database server and no separate vector store.
 
@@ -67,8 +67,8 @@ Each write adds one memory. A `replace <id>` write also supersedes the memory it
 `memman forget` sets `deleted_at` and keeps the row. memman never deletes a memory row. `memman store remove`, which removes a whole store, is the only exception.
 
 - **Current memories.** [Chapter 2](02-concepts.md#22-database-schema) defines a current memory and which commands read retired ones.
-- **Supersession is not deletion.** A corrected memory keeps its content and records its successor in `superseded_by`. It leaves the current view, just as a forgotten memory does.
-- **The supersede link stays valid.** Forgetting a successor keeps its row, so the predecessor's pointer still resolves.
+- **Replacement retires a row and keeps it.** A corrected memory keeps its content and records its successor in `replaced_by`. It leaves the current view, just as a forgotten memory does.
+- **The replacement pointer stays valid.** Forgetting a successor keeps its row, so the predecessor's pointer still resolves.
 
 ### Retrieval and storage decisions
 
@@ -77,10 +77,10 @@ Each write adds one memory. A `replace <id>` write also supersedes the memory it
 | RRF weighting        | Unweighted. The keyword, vector, and recency lists each add `1/(k + rank)`.                                                                                                   |
 | Candidate limit      | No cap on the union of the three lists. Keyword and recency each take `ANCHOR_TOP_K` = 30. Vector takes `RERANK_SHORTLIST` = 100.                                             |
 | Similarity threshold | The vector list keeps every positive cosine and has no other floor. A fixed cosine means different things under different embedding models, while the sign boundary does not. |
-| Deduplication        | Not automatic. Only `replace <id>` and `supersede` retire a memory. A retried queued write stores one memory, keyed by its `queue_uuid`.                                      |
+| Deduplication        | Not automatic. Only `replace <id>` retires a memory. A retried queued write stores one memory, keyed by its `queue_uuid`.                                                     |
 | Recency ranking      | No date parsing. The recency list ranks by `created_at`, whatever the query says.                                                                                             |
 | Result ordering      | Relevance order at every `--limit`. Nothing re-sorts after the cut, because a date sort would make the results read as a timeline.                                            |
-| Current facts        | Superseded and forgotten memories leave recall. `replace` stores the caller's text unchanged as the successor.                                                                |
+| Current facts        | Replaced and forgotten memories leave recall. `replace` stores the caller's text unchanged as the successor.                                                                |
 | Embeddings           | voyage, openai, openrouter, or ollama (ollama only through `memman config set`). `meta.embed_fingerprint` binds each store to one provider, model, and dimension.             |
 | Quality review       | `remember` and `replace` return pattern-based `quality_warnings` and store the text anyway. `memman insights review` runs the same patterns on stored memories.               |
 

@@ -92,10 +92,10 @@ def test_ragged_embedding_widths_do_not_break_recall(tmp_backend):
     assert {a for a, _s in anchors} == {'wide-0', 'wide-1', 'wide-2'}
 
 
-def test_superseded_row_is_not_returned_by_recall(backend):
-    """Verify a superseded row leaves the candidate universe entirely.
+def test_replaced_row_is_not_returned_by_recall(backend):
+    """Verify a replaced row leaves the candidate universe entirely.
 
-    Mutation: omitting `superseded_by is null` from `get_all_active`,
+    Mutation: omitting `replaced_by is null` from `get_all_active`,
         so the predecessor re-enters the pool and ranks beside its
         successor as an equal.
     Oracle: the returned id set against the three current rows, on
@@ -104,11 +104,11 @@ def test_superseded_row_is_not_returned_by_recall(backend):
     for n in range(4):
         backend.nodes.insert(
             make_insight(id=f'sup-{n}',
-                         content=f'superseded probe body {n} kombu'))
-    assert backend.nodes.supersede('sup-2', 'sup-3') is True
+                         content=f'replaced probe body {n} kombu'))
+    assert backend.nodes.mark_replaced('sup-2', 'sup-3') is True
 
     resp = run_recall(
-        backend, 'superseded probe kombu', None, 10)
+        backend, 'replaced probe kombu', None, 10)
 
     returned = {r['insight'].id for r in resp['results']}
     assert returned == {'sup-0', 'sup-1', 'sup-3'}

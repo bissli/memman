@@ -8,7 +8,7 @@ Vector storage:
 - `embedding vector(512)` (pgvector); pgvector adapter binds
   `list[float]` directly with no per-call serialization.
 - HNSW index built `create index concurrently ... vector_cosine_ops
-  where deleted_at is null and superseded_by is null`. Built outside
+  where deleted_at is null and replaced_by is null`. Built outside
   any transaction; reindex drops invalid remnants
   (`pg_index.indisvalid`) before retrying.
 - Similarity returned as `1 - (embedding <=> :q)` (cosine in
@@ -126,7 +126,7 @@ create table if not exists {schema}.insights (
     embedding_model text,
     queue_uuid  text,
     kw_tokens   text[] not null,
-    superseded_by text,
+    replaced_by text,
     author      text
 );
 
@@ -165,12 +165,12 @@ create index if not exists idx_insights_queue_uuid_{schema}
 create index if not exists idx_insights_pending_enrich_{schema}
     on {schema}.insights(enrich_attempted_at, created_at)
     where enrich_attempted_at is null and deleted_at is null
-      and superseded_by is null;
+      and replaced_by is null;
 create index if not exists idx_insights_kw_tokens_{schema}
     on {schema}.insights using gin (kw_tokens)
-    where deleted_at is null and superseded_by is null;
+    where deleted_at is null and replaced_by is null;
 create index if not exists idx_insights_current_listing_{schema}
-    on {schema}.insights(deleted_at, superseded_by, created_at);
+    on {schema}.insights(deleted_at, replaced_by, created_at);
 
 create index if not exists idx_oplog_created_{schema}
     on {schema}.oplog(created_at);
@@ -280,19 +280,19 @@ def _row_to_insight(row: tuple[Any, ...]) -> Insight:
     if row[9]:
         i.queue_uuid = row[9]
     if row[10]:
-        i.superseded_by = row[10]
+        i.replaced_by = row[10]
     if row[11]:
         i.author = row[11]
     return i
 
 
-# `queue_uuid`, then `superseded_by`, then `author`, appended last --
+# `queue_uuid`, then `replaced_by`, then `author`, appended last --
 # must stay byte-identical to node.py's _INSIGHT_COLUMNS (see
 # test_insight_column_lists_are_identical_across_backends).
 _INSIGHT_COLS = (
     'id, content, category, created_at, updated_at, deleted_at,'
     ' summary, enrich_attempted_at, enriched_at,'
-    ' queue_uuid, superseded_by,'
+    ' queue_uuid, replaced_by,'
     ' author')
 
 
@@ -345,7 +345,7 @@ values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         sql = self._q(f"""
 select {_INSIGHT_COLS}
 from {{s}}.insights
-where id = %s and deleted_at is null and superseded_by is null
+where id = %s and deleted_at is null and replaced_by is null
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (id,))
@@ -387,7 +387,7 @@ where id = %s
 
     def query(
             self, *, keyword: str = '', limit: int = 20) -> list[Insight]:
-        conditions = ['deleted_at is null and superseded_by is null']
+        conditions = ['deleted_at is null and replaced_by is null']
         args: list[Any] = []
         if keyword:
             for word in keyword.split():
@@ -419,53 +419,43 @@ where id = %s and deleted_at is null
             cur.execute(update_sql, (id,))
             return cur.rowcount != 0
 
-    def supersede(self, predecessor_id: Id, successor_id: Id) -> bool:
+    def mark_replaced(self, predecessor_id: Id, successor_id: Id) -> bool:
         # `kw_tokens` stays populated, unlike `soft_delete`: the GIN
-        # predicate and `keyword_counts` already exclude superseded
-        # rows, and `unsupersede` must not have to recompute it.
+        # predicate and `keyword_counts` already exclude replaced
+        # rows.
         update_sql = self._q("""
 update {s}.insights
-set superseded_by = %s, updated_at = now()
-where id = %s and deleted_at is null and superseded_by is null
+set replaced_by = %s, updated_at = now()
+where id = %s and deleted_at is null and replaced_by is null
 """)
         with self._conn.cursor() as cur:
             cur.execute(update_sql, (successor_id, predecessor_id))
             return cur.rowcount != 0
 
-    def unsupersede(self, id: Id, expected_successor: Id) -> bool:
-        sql = self._q("""
-update {s}.insights
-set superseded_by = null, updated_at = now()
-where id = %s and deleted_at is null and superseded_by = %s
-""")
-        with self._conn.cursor() as cur:
-            cur.execute(sql, (id, expected_successor))
-            return bool(cur.rowcount == 1)
-
     def predecessors(self, successor_id: Id) -> list[Insight]:
         sql = self._q(f"""
 select {_INSIGHT_COLS}
 from {{s}}.insights
-where superseded_by = %s
+where replaced_by = %s
 order by created_at, id
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (successor_id,))
             return [_row_to_insight(r) for r in cur.fetchall()]
 
-    def supersession_integrity(self) -> dict[str, list[Id]]:
+    def replacement_integrity(self) -> dict[str, list[Id]]:
         dangling_sql = self._q("""
 select p.id
 from {s}.insights p
-left join {s}.insights s on s.id = p.superseded_by
-where p.superseded_by is not null and s.id is null
+left join {s}.insights s on s.id = p.replaced_by
+where p.replaced_by is not null and s.id is null
 order by p.id
 """)
         self_sql = self._q("""
-select id from {s}.insights where superseded_by = id order by id
+select id from {s}.insights where replaced_by = id order by id
 """)
         pointers_sql = self._q("""
-select id, superseded_by from {s}.insights where superseded_by is not null
+select id, replaced_by from {s}.insights where replaced_by is not null
 """)
         out: dict[str, list[Id]] = {}
         with self._conn.cursor() as cur:
@@ -489,7 +479,7 @@ where id = %s
 
     def count_active(self) -> int:
         sql = self._q("""
-select count(*) from {s}.insights where deleted_at is null and superseded_by is null
+select count(*) from {s}.insights where deleted_at is null and replaced_by is null
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql)
@@ -502,33 +492,21 @@ select count(*) from {s}.insights where deleted_at is null and superseded_by is 
             row = cur.fetchone()
             return int(row[0]) if row else 0
 
-    def has_active_with_queue_uuid(self, queue_uuid: str) -> bool:
+    def has_row_with_queue_uuid(self, queue_uuid: str) -> bool:
         sql = self._q("""
 select 1 from {s}.insights
-where queue_uuid = %s and deleted_at is null
+where queue_uuid = %s
 limit 1
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql, (queue_uuid,))
             return cur.fetchone() is not None
 
-    def get_by_queue_uuid(self, queue_uuid: str) -> list[Insight]:
-        sql = self._q(f"""
-select {_INSIGHT_COLS}
-from {{s}}.insights
-where queue_uuid = %s
-  and deleted_at is null
-order by created_at, id
-""")
-        with self._conn.cursor() as cur:
-            cur.execute(sql, (queue_uuid,))
-            return [_row_to_insight(r) for r in cur.fetchall()]
-
     def provenance_distribution(self) -> list[ProvenanceCount]:
         sql = self._q("""
 select prompt_version, count(*)
 from {s}.insights
-where deleted_at is null and superseded_by is null
+where deleted_at is null and replaced_by is null
 group by prompt_version
 order by count(*) desc
 """)
@@ -543,7 +521,7 @@ order by count(*) desc
         sql = self._q(f"""
 select {_INSIGHT_COLS}
 from {{s}}.insights
-where deleted_at is null and superseded_by is null
+where deleted_at is null and replaced_by is null
 order by created_at desc
 """)
         with self._conn.cursor() as cur:
@@ -552,11 +530,11 @@ order by created_at desc
 
     def stats(self) -> NodeStats:
         active_sql = self._q("""
-select count(*) from {s}.insights where deleted_at is null and superseded_by is null
+select count(*) from {s}.insights where deleted_at is null and replaced_by is null
 """)
-        superseded_sql = self._q("""
+        replaced_sql = self._q("""
 select count(*) from {s}.insights
-where deleted_at is null and superseded_by is not null
+where deleted_at is null and replaced_by is not null
 """)
         deleted_sql = self._q("""
 select count(*) from {s}.insights where deleted_at is not null
@@ -564,14 +542,14 @@ select count(*) from {s}.insights where deleted_at is not null
         cat_sql = self._q("""
 select category, count(*)
 from {s}.insights
-where deleted_at is null and superseded_by is null
+where deleted_at is null and replaced_by is null
 group by category
 """)
         with self._conn.cursor() as cur:
             cur.execute(active_sql)
             total = int(cur.fetchone()[0])
-            cur.execute(superseded_sql)
-            superseded = int(cur.fetchone()[0])
+            cur.execute(replaced_sql)
+            replaced = int(cur.fetchone()[0])
             cur.execute(deleted_sql)
             deleted = int(cur.fetchone()[0])
             cur.execute(cat_sql)
@@ -579,7 +557,7 @@ group by category
             cur.execute(self._q('select count(*) from {s}.oplog'))
             oplog = int(cur.fetchone()[0])
         return NodeStats(
-            total_insights=total, superseded_insights=superseded,
+            total_insights=total, replaced_insights=replaced,
             deleted_insights=deleted,
             oplog_count=oplog,
             by_category=by_category)
@@ -601,7 +579,7 @@ where id = %s
 select count(*),
        count(*) filter (where embedding is not null)
 from {s}.insights
-where deleted_at is null and superseded_by is null
+where deleted_at is null and replaced_by is null
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql)
@@ -617,7 +595,7 @@ select count(*),
              and enriched_at is null
        )
 from {s}.insights
-where deleted_at is null and superseded_by is null
+where deleted_at is null and replaced_by is null
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql)
@@ -633,7 +611,7 @@ where deleted_at is null and superseded_by is null
         sql = self._q("""
 select vector_dims(embedding), count(*)
 from {s}.insights
-where deleted_at is null and superseded_by is null and embedding is not null
+where deleted_at is null and replaced_by is null and embedding is not null
 group by vector_dims(embedding)
 """)
         with self._conn.cursor() as cur:
@@ -667,7 +645,7 @@ group by vector_dims(embedding)
         sql = self._q("""
 select id from {s}.insights
 where enrich_attempted_at is null and deleted_at is null
-  and superseded_by is null
+  and replaced_by is null
 order by created_at asc
 limit %s
 """)
@@ -678,7 +656,7 @@ limit %s
     def get_active_ids(self) -> list[Id]:
         sql = self._q("""
 select id from {s}.insights
-where deleted_at is null and superseded_by is null
+where deleted_at is null and replaced_by is null
 order by created_at asc
 """)
         with self._conn.cursor() as cur:
@@ -689,7 +667,7 @@ order by created_at asc
         sql = self._q("""
 select count(*) from {s}.insights
 where enrich_attempted_at is null and deleted_at is null
-  and superseded_by is null
+  and replaced_by is null
 """)
         with self._conn.cursor() as cur:
             cur.execute(sql)
@@ -701,7 +679,7 @@ where enrich_attempted_at is null and deleted_at is null
 select id from {s}.insights
 where enriched_at is null
   and enrich_attempted_at is not null
-  and deleted_at is null and superseded_by is null
+  and deleted_at is null and replaced_by is null
 order by created_at asc
 limit %s
 """)
@@ -712,7 +690,7 @@ limit %s
     def iter_stale_insight_ids(self, active_pv: str) -> list[Id]:
         sql = self._q("""
 select id from {s}.insights
-where deleted_at is null and superseded_by is null
+where deleted_at is null and replaced_by is null
   and prompt_version is not null
   and prompt_version != %s
 order by created_at asc
@@ -724,7 +702,7 @@ order by created_at asc
     def count_stale_insights(self, active_pv: str) -> int:
         sql = self._q("""
 select count(*) from {s}.insights
-where deleted_at is null and superseded_by is null
+where deleted_at is null and replaced_by is null
   and prompt_version is not null
   and prompt_version != %s
 """)
@@ -896,7 +874,7 @@ order by count(*) desc
                 op_counts[op] = int(cnt)
             total_sql = f"""
 select count(*) from {self._schema}.insights
-where deleted_at is null and superseded_by is null
+where deleted_at is null and replaced_by is null
 """
             cur.execute(total_sql)
             total = int(cur.fetchone()[0])
@@ -984,7 +962,7 @@ class PostgresRecallSession(RecallSession):
         sql = f"""
 select id, 1 - (embedding <=> %s::vector) as sim
 from {self._schema}.insights
-where deleted_at is null and superseded_by is null and embedding is not null
+where deleted_at is null and replaced_by is null and embedding is not null
 order by embedding <=> %s::vector
 limit %s
 """
@@ -1011,7 +989,7 @@ limit %s
         sql = f"""
 select id, 1 - (embedding <=> %s::vector) as sim
 from {self._schema}.insights
-where deleted_at is null and superseded_by is null and embedding is not null
+where deleted_at is null and replaced_by is null and embedding is not null
 """
         with self._conn.cursor() as cur:
             cur.execute(sql, (query_vec,))
@@ -1057,7 +1035,7 @@ select i.id, cardinality(array(
         select unnest(i.kw_tokens)
         )) as matched
 from {self._schema}.insights i
-where i.deleted_at is null and i.superseded_by is null and i.kw_tokens && %(q)s::text[]
+where i.deleted_at is null and i.replaced_by is null and i.kw_tokens && %(q)s::text[]
 """
         with self._conn.cursor() as cur:
             cur.execute(sql, {'q': sorted(query_tokens)})
@@ -1196,7 +1174,7 @@ class PostgresBackend(Backend):
             self, cursor: str, batch: int) -> list[tuple[str, str]]:
         sql = (
             f'select id, content from {self._schema}.insights'
-            f' where deleted_at is null and superseded_by is null'
+            f' where deleted_at is null and replaced_by is null'
             f'   and embedding_pending is null'
             f'   and id > %s'
             f' order by id limit %s')
@@ -1593,7 +1571,7 @@ def _swap_prepare_pg(
         f'create index concurrently if not exists {index_name}'
         f' on {schema}.insights using hnsw'
         f' (embedding_pending vector_cosine_ops)'
-        f' where deleted_at is null and superseded_by is null')
+        f' where deleted_at is null and replaced_by is null')
     with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
         cur.execute(f"set statement_timeout = '{timeout_s}s'")
         cur.execute(create_idx_sql)
@@ -1605,7 +1583,7 @@ def _swap_cutover_pg(
 
     Single transaction with `statement_timeout=0`:
       1. Verify count(embedding_pending) >= count(embedding)
-         where deleted_at is null and superseded_by is null.
+         where deleted_at is null and replaced_by is null.
       2. Drop old HNSW index.
       3. Drop column embedding.
       4. Rename embedding_pending -> embedding.
@@ -1620,7 +1598,7 @@ def _swap_cutover_pg(
     verify_sql = (
         f'select count(*) filter (where embedding is not null),'
         f' count(*) filter (where embedding_pending is not null)'
-        f' from {schema}.insights where deleted_at is null and superseded_by is null')
+        f' from {schema}.insights where deleted_at is null and replaced_by is null')
     with _connection(dsn, autocommit=False) as conn:
         try:
             with conn.cursor() as cur:
@@ -1672,7 +1650,7 @@ def _ensure_hnsw_index(dsn: str, schema: str) -> None:
        column; drop it if invalid (an aborted CONCURRENTLY build
        leaves an invalid remnant).
     2. `create index concurrently if not exists` with
-       `vector_cosine_ops where deleted_at is null and superseded_by is null`.
+       `vector_cosine_ops where deleted_at is null and replaced_by is null`.
 
     Runs on a dedicated autocommit connection because
     `create index concurrently` cannot run inside a transaction.
@@ -1693,7 +1671,7 @@ where c.relname = %s
 create index concurrently if not exists {index_name}
 on {schema}.insights
 using hnsw (embedding vector_cosine_ops)
-where deleted_at is null and superseded_by is null
+where deleted_at is null and replaced_by is null
 """
     with _connection(dsn, autocommit=True) as conn, conn.cursor() as cur:
         cur.execute(f"set statement_timeout = '{timeout_s}s'")
@@ -1803,7 +1781,7 @@ class PostgresMigrator(Migrator):
 select id, content, category, summary, embedding,
        enrich_attempted_at, enriched_at, created_at, updated_at,
        deleted_at, prompt_version, embedding_model,
-       queue_uuid, superseded_by,
+       queue_uuid, replaced_by,
        author
 from {schema}.insights
 order by id
@@ -1824,7 +1802,7 @@ order by id
                     prompt_version=r[10],
                     embedding_model=r[11],
                     queue_uuid=r[12],
-                    superseded_by=r[13],
+                    replaced_by=r[13],
                     author=r[14]))
 
             cur.execute(f"""
@@ -1878,7 +1856,7 @@ order by sqlite_id
                             [] if ins.deleted_at else sorted(
                                 insight_tokens(Insight(
                                     content=ins.content))),
-                            ins.superseded_by,
+                            ins.replaced_by,
                             ins.author))
                     with conn.cursor() as cur:
                         cur.executemany(
@@ -1890,7 +1868,7 @@ order by sqlite_id
                             ' prompt_version,'
                             ' embedding_model,'
                             ' queue_uuid,'
-                            ' kw_tokens, superseded_by, author)'
+                            ' kw_tokens, replaced_by, author)'
                             ' values (%s, %s, %s, %s,'
                             ' %s, %s, %s, %s, %s, %s, %s, %s,'
                             ' %s, %s, %s, %s)'

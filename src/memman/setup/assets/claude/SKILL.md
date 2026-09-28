@@ -22,7 +22,7 @@ they stay together in the one paragraph, however many sentences it
 takes. Several calls per turn is normal. Unrelated thoughts are not
 merged to look tidy, and one thought is not padded to look
 substantial. When unsure, go smaller. A too-small memory stays
-retrievable and supersedes cleanly. A too-large one forces a rewrite
+retrievable and replaces cleanly. A too-large one forces a rewrite
 and drops clauses.
 
 Pick the most accurate `--cat`.
@@ -92,14 +92,27 @@ Mixed content: strip line numbers, counts, sizes, and other state
 snapshots; keep the file path or symbol that locates the claim, and
 keep the reasoning and conclusions.
 
-A correction of a memory the agent recalled goes through `memman
-insights show <id>`, then `memman replace <id> "<new text>"`. Any
-other correction names what is no longer true and what is true now,
-and goes in with `memman remember`: the stale memory stays in recall
-beside it. A settled open question is a correction of the row that
-left it open. A memory recording a change names what it replaces. A
-later write in the same session carries only the new claim, never an
-earlier write restated plus the change.
+A correction goes through `memman replace <id> "<new text>"` on the
+row it corrects. `remember` only adds a row and retires nothing, so a
+correction written with it leaves the stale row current in recall.
+When that has happened, replace the stale row with what it should
+now say. The id is the row's id8 on a recall page this session, or
+the `id` an earlier `remember` or `replace` printed, which addresses
+the agent's own write even while it is still queued. With neither in
+hand, recall the corrected topic first. When no row holds the stale
+claim, the correction goes in with `remember`. The replacement
+restates every claim of the old row that is still true, because the
+old row leaves recall whole. A stored memory is one claim, which
+keeps this cheap. When a stale row holds more still-true claims than
+fit one 1,000-byte replacement, the replacement carries the corrected
+claim and the others go in as their own `remember` writes in the same
+turn. A settled open question is a correction of the row that left it
+open. `forget` removes a row that should never have existed. A
+correction goes through `replace`. A write still queued is forgotten
+after the drain, since `forget` refuses a queued id. A memory
+recording a change names what it replaces. A later write in the same
+session that adds a claim carries only that claim; one that changes
+an earlier claim is a `replace` of that write.
 
 The text stores conclusions AND enough context to understand them. It
 is self-contained: every "that", "this", and "it" is dereferenced into
@@ -138,26 +151,30 @@ enrichment.
 The worker stores the text as written, as one memory; no model
 rewords, splits, or judges it. Every write lands as its own row: a
 second write of the same text is a second row. Nothing a `remember`
-does retires a stored memory; only `replace` and `supersede` do.
+does retires a stored memory; only `replace` does.
 
-To correct a stored insight by ID:
+To correct a stored memory by id:
 
 ```bash
 memman replace <id> "<new content>"
 ```
 
-`replace` inherits the original's category unless `--cat` overrides
-it.
+`<id>` is a current stored row's id or an unambiguous prefix of one,
+or the `id` of a write still queued for the same store, so the agent
+can replace its own write before the drain runs. `replace` inherits
+the target's category, a queued target's included, unless `--cat`
+overrides it. It refuses a forgotten target. It refuses a target
+already replaced, and the message names its successor, which is the
+row to replace instead.
 
-The original is superseded, not deleted: it keeps its content behind
-`superseded_by`, leaves every recall and listing, and `memman insights
-show <id> --history` reads the chain back. When the correction was
-stored as its own insight before the link was noticed, link the two
-existing rows instead of writing a third:
-
-```bash
-memman supersede <old_id> <new_id>
-```
+On the drain the replacement is stored under the `id` that `replace`
+printed, and the old row is replaced: it keeps its content behind
+`replaced_by` and drops out of every recall and listing. A `replace`
+waits behind its queued target and behind every earlier `replace` in
+the store, so replaces land in queue order whatever retries they
+take. `memman insights show <id> --history` walks the chain of
+replacements through a row, old text included. A wrong correction is
+itself a stale row: replace it with the right text.
 
 ## Recalling what you know
 
@@ -193,8 +210,8 @@ else:
 ```
 
 - `id8`: the first eight characters of the id. Every id-taking
-  command (`memman insights show <id8>`, `replace`, `forget`,
-  `supersede`) resolves an unambiguous prefix.
+  command (`memman insights show <id8>`, `replace`, `forget`)
+  resolves an unambiguous prefix.
 - `score`: two decimals. Compare it only against the other scores on
   the same page, never against a fixed number and never across
   pages: the scale belongs to whichever reranker is configured.
@@ -255,19 +272,21 @@ Read a single insight by ID:
 memman insights show <id>
 ```
 
-`remember` and `replace` return a `queue_uuid`. It is stamped on every
-insight that write produces, so it answers "where did my write land"
-once the scheduler has drained:
-
-```bash
-memman insights by-queue <queue_uuid>
-```
-
-`count: 0` has three causes: the write is still queued, it went to a
-different store (the queue is global while this reads one store), or
-its memory was since forgotten. A row that fails every drain attempt
-stays queued with its text; `memman doctor` warns on it, and `memman
-scheduler queue retry <id>` requeues it.
+`remember` and `replace` print the `id` the drain stores the row
+under, and a `queue_id` that addresses the queue row only. `memman
+insights show <id>` answers where a write landed once the scheduler
+has drained. For a write still queued it answers that the write is
+still queued and lands on the next drain. A write that fails every
+drain attempt moves to queue status `failed`. For a failed write,
+`insights show <id>` and `replace <id>` answer `insight <id> not
+found`. A `replace` queued behind a target that then fails lands as
+a plain add with no link, and its result names the target under
+`target_gone`. `memman doctor` warns on failed rows. `memman scheduler
+queue retry <queue_id>` requeues one, where `<queue_id>` is the
+`queue_id` that `remember` or `replace` printed. Once it lands, the
+row is stored under the printed `id`. When the retried target of an
+unlinked `replace` lands, the topic has two current rows, so replace
+one of them.
 
 ## Forgetting
 
@@ -279,9 +298,11 @@ memman insights review                # scan for content quality issues
 `insights review` only surfaces rows. It deletes nothing. Use
 `forget <id>` to remove. Nothing else deletes: the store is
 uncapped and a stored insight persists until someone forgets it.
-Supersession (`replace`, `supersede`) hides without
-deleting; `memman unsupersede <id>` brings a superseded row back once
-its successor has been forgotten.
+`replace` retires without deleting: the old row keeps its content
+behind `replaced_by`, and `memman insights show <id> --history`
+reads it back. `forget` refuses a current row that replaced a row not
+yet forgotten, because that row stays retired either way. Once every
+row it replaced is forgotten, `forget` takes it.
 
 ## Inspecting the system
 

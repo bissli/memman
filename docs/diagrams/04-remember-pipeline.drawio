@@ -21,13 +21,13 @@
           <mxGeometry x="640" y="112" width="290" height="60" as="geometry" />
         </mxCell>
 
-        <mxCell id="r_validate" value="&lt;b&gt;Validate&lt;/b&gt;&lt;br&gt;Refuse text over 1,000 UTF-8 bytes, text naming a line number, text opening with MEMMAN_AUTHOR, text spanning lines, and text opening with a label. Refuse an unknown category. On replace, the target must be current. Add advisory quality warnings." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1">
+        <mxCell id="r_validate" value="&lt;b&gt;Validate&lt;/b&gt;&lt;br&gt;Refuse text over 1,000 UTF-8 bytes, text naming a line number, text opening with MEMMAN_AUTHOR, text spanning lines, and text opening with a label. Refuse an unknown category. On replace, the target must be current or a write still queued for this store. Add advisory quality warnings." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;align=left;spacingLeft=6;spacingRight=6;" vertex="1" parent="1">
           <mxGeometry x="60" y="215" width="330" height="120" as="geometry" />
         </mxCell>
         <mxCell id="r_enqueue" value="&lt;b&gt;Append a row to queue.db&lt;/b&gt;&lt;br&gt;status pending, content, category, replaced_id (replace only), a new queue_uuid, author" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="420" y="215" width="290" height="120" as="geometry" />
         </mxCell>
-        <mxCell id="r_return" value="&lt;b&gt;Print JSON&lt;/b&gt;&lt;br&gt;action: queued, queue_id, queue_uuid, store, quality_warnings, and replaced_id on replace" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_return" value="&lt;b&gt;Print JSON&lt;/b&gt;&lt;br&gt;action: queued, id, queue_id, store, quality_warnings, and replaced_id on replace" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="740" y="215" width="300" height="120" as="geometry" />
         </mxCell>
         <mxCell id="r_t1_note" value="No LLM call and no embedding run in the turn." style="text;html=1;align=left;fontSize=10;fontStyle=2;fillColor=none;strokeColor=none;fontColor=#9673a6;" vertex="1" parent="1">
@@ -66,22 +66,22 @@
         <mxCell id="r_lock" value="&lt;b&gt;Take the flock on drain.lock&lt;/b&gt;&lt;br&gt;If another drain holds it, exit at once." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="100" y="475" width="460" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="r_claim" value="&lt;b&gt;Claim the next pending row&lt;/b&gt;&lt;br&gt;Oldest first. Adds 1 to attempts. Stops at 100 rows, the timeout, an empty queue, or a STOPPED scheduler." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_claim" value="&lt;b&gt;Claim the next pending row&lt;/b&gt;&lt;br&gt;Oldest first. A replace waits while its target, or any earlier replace in its store, is still pending. Adds 1 to attempts. Stops at 100 rows, the timeout, an empty queue, or a STOPPED scheduler." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="100" y="545" width="460" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="r_idem" value="A memory not forgotten&lt;br&gt;holds this queue_uuid?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_idem" value="Any stored memory&lt;br&gt;holds this queue_uuid?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="220" y="625" width="220" height="80" as="geometry" />
         </mxCell>
         <mxCell id="r_skip" value="&lt;b&gt;Mark the row done, store nothing&lt;/b&gt;&lt;br&gt;A crashed drain already stored it." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="640" y="640" width="260" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="r_redirect" value="&lt;b&gt;On replace, find the current target&lt;/b&gt;&lt;br&gt;Follow superseded_by from the named row to the head of its chain." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_redirect" value="&lt;b&gt;On replace, find the current target&lt;/b&gt;&lt;br&gt;Follow replaced_by from the named row to the head of its chain." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="100" y="725" width="460" height="50" as="geometry" />
         </mxCell>
         <mxCell id="r_plan" value="&lt;b&gt;Plan, with no database write&lt;/b&gt;&lt;br&gt;One enrichment call returns a summary, with a second call when the reply does not parse. One embedding call embeds the content. A failed call leaves the row without that output. A missing embedding key or LLM setting fails the row." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="100" y="795" width="460" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="r_apply" value="&lt;b&gt;Apply in one transaction&lt;/b&gt;&lt;br&gt;Insert the row. On replace, supersede the target. If the target is not current, store a plain add and log target-gone. Write the vector and summary. Stamp enrich_attempted_at. Stamp enriched_at only when enrichment and a vector both landed." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="r_apply" value="&lt;b&gt;Apply in one transaction&lt;/b&gt;&lt;br&gt;Insert the row. On replace, retire the target. If the target is not current, store a plain add and log target-gone. Write the vector and summary. Stamp enrich_attempted_at. Stamp enriched_at only when enrichment and a vector both landed." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFF5EB;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="100" y="895" width="460" height="95" as="geometry" />
         </mxCell>
         <mxCell id="r_done" value="&lt;b&gt;Mark the row done&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">

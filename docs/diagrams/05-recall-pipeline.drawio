@@ -20,7 +20,7 @@
         <mxCell id="s_emb" value="&lt;b&gt;Embed the query&lt;/b&gt;&lt;br&gt;With the store's embedding model. On failure, recall goes on with the keyword and recency channels." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="250" y="225" width="400" height="55" as="geometry" />
         </mxCell>
-        <mxCell id="s_getall" value="&lt;b&gt;Read every current memory&lt;/b&gt;&lt;br&gt;Each memory not forgotten or superseded." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
+        <mxCell id="s_getall" value="&lt;b&gt;Read every current memory&lt;/b&gt;&lt;br&gt;Each memory not forgotten or replaced." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fce5cd;strokeColor=#d6b656;fontSize=10;" vertex="1" parent="1">
           <mxGeometry x="250" y="300" width="400" height="50" as="geometry" />
         </mxCell>
 

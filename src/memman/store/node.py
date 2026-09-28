@@ -36,13 +36,13 @@ values (?, ?, ?, ?, ?, ?, ?, ?, ?)
         i.queue_uuid, i.author))
 
 
-# `queue_uuid`, then `superseded_by`, then `author`, appended last --
+# `queue_uuid`, then `replaced_by`, then `author`, appended last --
 # must stay byte-identical to postgres.py's _INSIGHT_COLS (see
 # test_insight_column_lists_are_identical_across_backends).
 _INSIGHT_COLUMNS = (
     'id, content, category, created_at, updated_at, deleted_at,'
     ' summary, enrich_attempted_at, enriched_at,'
-    ' queue_uuid, superseded_by,'
+    ' queue_uuid, replaced_by,'
     ' author')
 
 
@@ -51,7 +51,7 @@ def get_insight_by_id(db: 'DB', id: str) -> Insight | None:
     sql = f"""
 select {_INSIGHT_COLUMNS}
 from insights
-where id = ? and deleted_at is null and superseded_by is null
+where id = ? and deleted_at is null and replaced_by is null
 """
     row = db._query(sql, (id,)).fetchone()
     if row is None:
@@ -75,7 +75,7 @@ where id = ?
 def query_insights(
         db: 'DB', keyword: str = '', limit: int = 20) -> list[Insight]:
     """Return current insights holding every keyword word, newest first."""
-    conditions = ['deleted_at is null and superseded_by is null']
+    conditions = ['deleted_at is null and replaced_by is null']
     args: list[Any] = []
 
     if keyword:
@@ -103,7 +103,7 @@ def soft_delete_insight(db: 'DB', id: str) -> bool:
     """Set deleted_at on a non-deleted insight.
 
     Returns True when the row was soft-deleted, False when it is
-    missing or already deleted. A superseded row may still be deleted;
+    missing or already deleted. A replaced row may still be deleted;
     `memman forget` turns False into its not-found error.
     """
     now = format_timestamp(datetime.now(timezone.utc))
@@ -116,15 +116,15 @@ where id = ? and deleted_at is null
     return cursor.rowcount != 0
 
 
-def supersede_insight(
+def mark_insight_replaced(
         db: 'DB', predecessor_id: str, successor_id: str) -> bool:
     """Point a current insight at its successor.
 
     Parameters
     ----------
     predecessor_id : str
-        The row being superseded. Must be current: neither deleted nor
-        already superseded.
+        The row being replaced. Must be current: neither deleted nor
+        already replaced.
     successor_id : str
         The row that replaces it. Not checked here; the pipeline
         writes the pointer before the successor row exists.
@@ -133,53 +133,22 @@ def supersede_insight(
     -------
     bool
         True when the pointer was written. False when the predecessor
-        is missing, deleted, or already superseded; the caller
+        is missing, deleted, or already replaced; the caller
         degrades to a plain add.
 
     Notes
     -----
-    - The guard makes a row superseded at most once, which is what
+    - The guard makes a row replaced at most once, which is what
       rules out forks in the chain.
-    - `kw_tokens` has no SQLite counterpart; on Postgres the verb
-      leaves it alone so `unsupersede` need not recompute it.
     """
     now = format_timestamp(datetime.now(timezone.utc))
     sql = """
 update insights
-set superseded_by = ?, updated_at = ?
-where id = ? and deleted_at is null and superseded_by is null
+set replaced_by = ?, updated_at = ?
+where id = ? and deleted_at is null and replaced_by is null
 """
     cursor = db._exec(sql, (successor_id, now, predecessor_id))
     return cursor.rowcount != 0
-
-
-def unsupersede_insight(
-        db: 'DB', id: str, expected_successor: str) -> bool:
-    """Clear a supersession pointer, compare-and-swap on the successor.
-
-    Parameters
-    ----------
-    id : str
-        The superseded row to bring back.
-    expected_successor : str
-        The successor the caller read; the update applies only while
-        the pointer still names it.
-
-    Returns
-    -------
-    bool
-        True when the pointer was cleared. False when the row is
-        missing, deleted, not superseded, or superseded by another row
-        since the caller read it.
-    """
-    now = format_timestamp(datetime.now(timezone.utc))
-    sql = """
-update insights
-set superseded_by = null, updated_at = ?
-where id = ? and deleted_at is null and superseded_by = ?
-"""
-    cursor = db._exec(sql, (now, id, expected_successor))
-    return cursor.rowcount == 1
 
 
 def unterminated_chains(pointers: dict[str, str]) -> list[str]:
@@ -188,7 +157,7 @@ def unterminated_chains(pointers: dict[str, str]) -> list[str]:
     Parameters
     ----------
     pointers : dict[str, str]
-        `{row id: superseded_by}` for every row carrying a pointer.
+        `{row id: replaced_by}` for every row carrying a pointer.
 
     Returns
     -------
@@ -211,7 +180,7 @@ def unterminated_chains(pointers: dict[str, str]) -> list[str]:
     return sorted(row for row, ok in terminates.items() if not ok)
 
 
-def supersession_integrity(db: 'DB') -> dict[str, list[str]]:
+def replacement_integrity(db: 'DB') -> dict[str, list[str]]:
     """Return the three populations a well-formed pointer set leaves empty.
 
     Returns
@@ -223,22 +192,22 @@ def supersession_integrity(db: 'DB') -> dict[str, list[str]]:
         `unterminated`: rows whose chain never reaches a row without a
         pointer (a cycle), which no other population sees and which
         removes every member from the active view. A successor with two
-        predecessors is a join (`supersede` can point several rows at
-        one successor), not a defect. Each list is sorted by id.
+        predecessors passes: stored rows may hold one.
+        Each list is sorted by id.
     """
     dangling = db._query("""
 select p.id
 from insights p
-left join insights s on s.id = p.superseded_by
-where p.superseded_by is not null and s.id is null
+left join insights s on s.id = p.replaced_by
+where p.replaced_by is not null and s.id is null
 order by p.id
 """).fetchall()
     selfp = db._query(
-        'select id from insights where superseded_by = id order by id'
+        'select id from insights where replaced_by = id order by id'
         ).fetchall()
     pointers = dict(db._query(
-        'select id, superseded_by from insights'
-        ' where superseded_by is not null').fetchall())
+        'select id, replaced_by from insights'
+        ' where replaced_by is not null').fetchall())
     return {
         'dangling': [r[0] for r in dangling],
         'self_pointer': [r[0] for r in selfp],
@@ -247,7 +216,7 @@ order by p.id
 
 
 def get_predecessors(db: 'DB', successor_id: str) -> list[Insight]:
-    """Return every row whose `superseded_by` names `successor_id`.
+    """Return every row whose `replaced_by` names `successor_id`.
 
     Deleted rows are included: the history walk shows a forgotten
     predecessor as forgotten rather than dropping it from the chain.
@@ -255,7 +224,7 @@ def get_predecessors(db: 'DB', successor_id: str) -> list[Insight]:
     sql = f"""
 select {_INSIGHT_COLUMNS}
 from insights
-where superseded_by = ?
+where replaced_by = ?
 order by created_at, id
 """
     rows = db._query(sql, (successor_id,)).fetchall()
@@ -268,10 +237,10 @@ def update_enrichment(db: 'DB', id: str, summary: str) -> None:
 
 
 def count_active_insights(db: 'DB') -> int:
-    """Return the number of current insights, neither deleted nor superseded."""
+    """Return the number of current insights, neither deleted nor replaced."""
     row = db._query(
         'select count(*) from insights'
-        ' where deleted_at is null and superseded_by is null'
+        ' where deleted_at is null and replaced_by is null'
         ).fetchone()
     return int(row[0])
 
@@ -288,67 +257,25 @@ def count_total_insights(db: 'DB') -> int:
     return int(row[0])
 
 
-def has_active_with_queue_uuid(db: 'DB', queue_uuid: str) -> bool:
-    """Return True if a non-deleted insight carries the given queue uuid.
-
-    The idempotency check for queue replays answers "did this write
-    land", so a superseded row counts: a row a later `replace`
-    retired still carries this write's uuid, and excluding superseded
-    rows would re-insert a fact the store already corrected. SQL `= ?`
-    never matches NULL, so a row with a null `queue_uuid` can never
-    satisfy it -- do not add a Python-side default that would.
-    """
-    row = db._query(
-        'select 1 from insights where queue_uuid = ?'
-        ' and deleted_at is null limit 1',
-        (queue_uuid,)).fetchone()
-    return row is not None
-
-
-def get_by_queue_uuid(db: 'DB', queue_uuid: str) -> list[Insight]:
-    """Return the non-deleted insights one queued write produced.
-
-    Parameters
-    ----------
-    db : DB
-        Open store connection.
-    queue_uuid : str
-        The write's idempotency key, as returned by `remember` /
-        `replace` and by `memman scheduler queue show`.
-
-    Returns
-    -------
-    list[Insight]
-        Non-deleted rows carrying this key, oldest first, superseded
-        rows included with their pointer set. Empty when the write
-        stored nothing.
+def has_row_with_queue_uuid(db: 'DB', queue_uuid: str) -> bool:
+    """Return True if any insight, forgotten ones included, carries the uuid.
 
     Notes
     -----
-    - Ordering tiebreaks on `id`, and the tiebreak is load-bearing:
-      siblings of one write often share a `created_at`, but nothing
-      guarantees it. Both backends stamp server-side, and only
-      Postgres is constant across a transaction (`now()` is
-      `transaction_timestamp()`); SQLite stamps each row from its own
-      clock read, cut to whole seconds. Without the tiebreak the
-      order is the query plan's, and Postgres does not sort stably.
-    - Superseded rows are returned: a fact a later write superseded
-      is still where THIS write landed, and the caller reads the
-      successor off `superseded_by`. A forgotten row is not returned.
-      SQL `= ?` never matches the NULL `queue_uuid` of a row with no
-      queue uuid.
-    - Empty is a real answer, not an error: a write that stored
-      nothing produces no rows here.
+    - The idempotency check for queue replays answers "did this write
+      land". A replaced row counts: a later `replace` retired it, and
+      a re-insert would bring back a fact the store already corrected.
+    - A forgotten row counts too: the agent dropped the write after it
+      landed, and the row still holds the write's id, so a re-insert
+      would collide on the primary key.
+    - SQL `= ?` never matches NULL, so a row with a null `queue_uuid`
+      can never satisfy it. Do not add a Python-side default that
+      would.
     """
-    sql = f"""
-select {_INSIGHT_COLUMNS}
-from insights
-where queue_uuid = ?
-  and deleted_at is null
-order by created_at, id
-"""
-    rows = db._query(sql, (queue_uuid,)).fetchall()
-    return [_scan_insight(r) for r in rows]
+    row = db._query(
+        'select 1 from insights where queue_uuid = ? limit 1',
+        (queue_uuid,)).fetchone()
+    return row is not None
 
 
 def iter_for_reembed(
@@ -363,7 +290,7 @@ def iter_for_reembed(
     sql = """
 select id, content, embedding_model, length(embedding)
 from insights
-where deleted_at is null and superseded_by is null and id > ?
+where deleted_at is null and replaced_by is null and id > ?
 order by id
 limit ?
 """
@@ -381,7 +308,7 @@ def provenance_distribution(
     sql = """
 select prompt_version, count(*) as n
 from insights
-where deleted_at is null and superseded_by is null
+where deleted_at is null and replaced_by is null
 group by prompt_version
 order by n desc
 """
@@ -394,7 +321,7 @@ def get_all_active_insights(db: 'DB') -> list[Insight]:
     sql = f"""
 select {_INSIGHT_COLUMNS}
 from insights
-where deleted_at is null and superseded_by is null
+where deleted_at is null and replaced_by is null
 order by created_at desc
 """
     rows = db._query(sql).fetchall()
@@ -405,23 +332,23 @@ def get_stats(db: 'DB') -> dict[str, Any]:
     """Return aggregate statistics.
 
     The three row counts partition the table: `total_insights` is the
-    current rows (neither deleted nor superseded),
-    `superseded_insights` the superseded rows not deleted, and
-    `deleted_insights` every deleted row, superseded or not.
+    current rows (neither deleted nor replaced),
+    `replaced_insights` the replaced rows not deleted, and
+    `deleted_insights` every deleted row, replaced or not.
     """
     stats: dict[str, Any] = {'by_category': {}}
 
     row = db._query(
         'select count(*) from insights'
-        ' where deleted_at is null and superseded_by is null'
+        ' where deleted_at is null and replaced_by is null'
         ).fetchone()
     stats['total_insights'] = row[0]
 
     row = db._query(
         'select count(*) from insights'
-        ' where deleted_at is null and superseded_by is not null'
+        ' where deleted_at is null and replaced_by is not null'
         ).fetchone()
-    stats['superseded_insights'] = row[0]
+    stats['replaced_insights'] = row[0]
 
     row = db._query(
         'select count(*) from insights where deleted_at is not null'
@@ -431,7 +358,7 @@ def get_stats(db: 'DB') -> dict[str, Any]:
     cat_sql = """
 select category, count(*)
 from insights
-where deleted_at is null and superseded_by is null
+where deleted_at is null and replaced_by is null
 group by category
 """
     rows = db._query(cat_sql).fetchall()
@@ -456,7 +383,7 @@ def iter_for_swap(
     sql = """
 select id, content
 from insights
-where deleted_at is null and superseded_by is null
+where deleted_at is null and replaced_by is null
   and embedding_pending is null
   and id > ?
 order by id
@@ -522,11 +449,11 @@ def embedding_stats(db: 'DB') -> tuple[int, int]:
     """Return (total_active, embedded_count)."""
     total = db._query(
         'select count(*) from insights'
-        ' where deleted_at is null and superseded_by is null'
+        ' where deleted_at is null and replaced_by is null'
         ).fetchone()[0]
     embedded = db._query(
         'select count(*) from insights'
-        ' where deleted_at is null and superseded_by is null and embedding is not null'
+        ' where deleted_at is null and replaced_by is null and embedding is not null'
         ).fetchone()[0]
     return total, embedded
 
@@ -573,7 +500,7 @@ def get_pending_enrich_ids(db: 'DB', limit: int) -> list[str]:
     sql = """
 select id from insights
 where enrich_attempted_at is null and deleted_at is null
-  and superseded_by is null
+  and replaced_by is null
 order by created_at asc
 limit ?
 """
@@ -585,7 +512,7 @@ def get_active_insight_ids(db: 'DB') -> list[str]:
     """Return all active insight IDs in creation order."""
     sql = """
 select id from insights
-where deleted_at is null and superseded_by is null
+where deleted_at is null and replaced_by is null
 order by created_at asc
 """
     rows = db._query(sql).fetchall()
@@ -597,7 +524,7 @@ def count_pending_enrich(db: 'DB') -> int:
     row = db._query(
         'select count(*) from insights'
         ' where enrich_attempted_at is null and deleted_at is null'
-        ' and superseded_by is null').fetchone()
+        ' and replaced_by is null').fetchone()
     return row[0] if row else 0
 
 
@@ -612,7 +539,7 @@ def get_unenriched_attempted_ids(db: 'DB', limit: int) -> list[str]:
 select id from insights
 where enriched_at is null
   and enrich_attempted_at is not null
-  and deleted_at is null and superseded_by is null
+  and deleted_at is null and replaced_by is null
 order by created_at asc
 limit ?
 """
@@ -631,7 +558,7 @@ def iter_stale_insight_ids(
     """
     sql = """
 select id from insights
-where deleted_at is null and superseded_by is null
+where deleted_at is null and replaced_by is null
   and prompt_version is not null
   and prompt_version != ?
 order by created_at asc
@@ -647,7 +574,7 @@ def count_stale_insights(db: 'DB', active_pv: str) -> int:
     """
     sql = """
 select count(*) from insights
-where deleted_at is null and superseded_by is null
+where deleted_at is null and replaced_by is null
   and prompt_version is not null
   and prompt_version != ?
 """
@@ -688,7 +615,7 @@ def _scan_insight(row: tuple[Any, ...]) -> Insight:
     if row[9]:
         i.queue_uuid = row[9]
     if row[10]:
-        i.superseded_by = row[10]
+        i.replaced_by = row[10]
     if row[11]:
         i.author = row[11]
     return i

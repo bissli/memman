@@ -14,7 +14,6 @@ import pathlib
 import re
 import sqlite3
 import sys
-import uuid
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from importlib.resources import files as pkg_files
@@ -558,7 +557,7 @@ def queue(ctx: click.Context) -> None:
 
 @cli.group()
 def insights() -> None:
-    """Operations on stored insights (read, review, resolve)."""
+    """Operations on stored insights (show, review)."""
 
 
 @cli.group()
@@ -782,8 +781,8 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str) -> None:
             author=author)
     _json_out({
         'action': 'queued',
+        'id': queue_uuid,
         'queue_id': row_id,
-        'queue_uuid': queue_uuid,
         'store': name,
         'quality_warnings': quality_warnings,
         })
@@ -1377,7 +1376,7 @@ def _process_queue_row(
         data_dir=ctx.data_dir,
         category=category)
 
-    if backend.nodes.has_active_with_queue_uuid(row.queue_uuid):
+    if backend.nodes.has_row_with_queue_uuid(row.queue_uuid):
         logger.info(
             f'queue row {row.id} already committed to store'
             f' {row.store!r}; skipping re-processing')
@@ -1392,28 +1391,29 @@ def _process_queue_row(
     redirected_from = ''
     if replaced_id:
         # Notes:
-        # - The target may have been superseded between enqueue and
-        #   claim, by an earlier queued replace of the same id. The
+        # - The target may have been replaced between enqueue and
+        #   claim, by an earlier queued replace. The
         #   replace follows the chain to its current head, so the
         #   topic ends with one current row instead of two.
         # - A forgotten or missing head passes the original id
         #   through, and `_apply_plan` degrades to a named add.
         old = backend.nodes.get_include_deleted(replaced_id)
         seen: set[str] = set()
-        while (old is not None and old.superseded_by
+        while (old is not None and old.replaced_by
                 and old.id not in seen):
             seen.add(old.id)
-            old = backend.nodes.get_include_deleted(old.superseded_by)
+            old = backend.nodes.get_include_deleted(old.replaced_by)
         if (old is not None and old.deleted_at is None
-                and old.superseded_by is None
+                and old.replaced_by is None
                 and old.id != replaced_id):
             redirected_from = replaced_id
             replaced_id = old.id
-    # `queue_uuid` must land on the stored insight: run_remember
-    # stores this object directly, so omitting it makes the
-    # idempotency check above a silent no-op.
+    # The row takes the write's `queue_uuid` as its id, the id
+    # `remember` and `replace` printed, and carries it as `queue_uuid`
+    # too: run_remember stores this object directly, so omitting it
+    # makes the idempotency check above a silent no-op.
     insight = Insight(
-        id=str(uuid.uuid4()), content=row.content,
+        id=row.queue_uuid, content=row.content,
         category=category,
         created_at=now, updated_at=now,
         queue_uuid=row.queue_uuid, author=row.author)
@@ -1529,36 +1529,62 @@ def recall(ctx: click.Context, keyword: tuple[str, ...], limit: int,
             click.echo(insight_to_recall_line(r['insight'], r['score']))
 
 
-def _not_current_reason(ins: 'Insight | None', id: str) -> str:
-    """Return why `ins` is not a current row, or `''` when it is.
+def _resolve_queued_or_stored(
+        backend: 'Backend', data_dir: str, store: str,
+        id: str) -> tuple['tuple[str, str | None] | None', 'Insight | None']:
+    """Resolve an id or prefix across a store's queued writes and rows.
 
     Parameters
     ----------
-    ins : Insight | None
-        The row as read through `get_include_deleted`, or None.
+    backend : Backend
+        The open store `store` names.
+    data_dir : str
+        Data dir whose queue.db holds the queued writes.
+    store : str
+        Only writes queued for this store match.
     id : str
-        The id the caller asked for, for the message.
+        A full id or any prefix of one.
 
     Returns
     -------
-    str
-        `''` for a current row; otherwise one of `not found`,
-        `was forgotten`, or `is superseded by <successor>`.
+    tuple
+        `(queued, stored)`: the `(id, category)` of the pending write
+        that matches or None, and the stored row that matches, read
+        through `get_include_deleted`, or None.
+
+    Raises
+    ------
+    click.ClickException
+        When the prefix matches two queued writes, two stored rows, or
+        a queued write and a different stored row.
     """
-    if ins is None:
-        return f'insight {id} not found'
-    if ins.deleted_at is not None:
-        return f'insight {id} was forgotten'
-    if ins.superseded_by:
-        return f'insight {id} is superseded by {ins.superseded_by}'
-    return ''
+    from memman.queue import find_pending, queue_db
+
+    # A write leaves the queue only after it lands, so reading the
+    # queue first finds a write that lands mid-command in one place or
+    # the other.
+    with queue_db(data_dir) as conn:
+        try:
+            queued = find_pending(conn, store, id)
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
+    try:
+        stored = backend.nodes.get_include_deleted(
+            backend.nodes.resolve_id(id))
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
+    if queued is not None and stored is not None and stored.id != queued[0]:
+        raise click.ClickException(
+            f'prefix {id!r} matches a queued write and a stored row')
+    return queued, stored
 
 
 def _forget_insight(backend: 'Backend', id: str) -> None:
     """Soft-delete `id` and write a forget oplog row carrying `before`.
 
-    A superseded row may be forgotten; a missing or already forgotten
-    one is refused with the reason.
+    A replaced row may be forgotten. A missing or already forgotten
+    row is refused with the reason, and so is a current row that
+    replaced another, with the `replace` that corrects it.
     """
     from memman.store.model import insight_to_delta_dict
     with backend.transaction():
@@ -1567,6 +1593,16 @@ def _forget_insight(backend: 'Backend', id: str) -> None:
             raise click.ClickException(f'insight {id} not found')
         if before_ins.deleted_at is not None:
             raise click.ClickException(f'insight {id} was forgotten')
+        # An agent forgetting a wrong correction expects the row it
+        # replaced to come back, but that row stays retired, so the
+        # topic would leave recall for good.
+        if (before_ins.replaced_by is None
+                and any(p.deleted_at is None
+                        for p in backend.nodes.predecessors(id))):
+            raise click.ClickException(
+                f'insight {id} replaced an earlier row, and forgetting'
+                ' it does not bring that row back; correct it with'
+                f' replace {id} "<new text>"')
         if not backend.nodes.soft_delete(id):
             raise click.ClickException(f'insight {id} not found')
         backend.oplog.log(
@@ -1581,15 +1617,39 @@ def _forget_insight(backend: 'Backend', id: str) -> None:
 def forget(ctx: click.Context, id: str) -> None:
     """Soft-delete an insight. Rejected when the scheduler is stopped.
 
-    ID is a full insight id or any unambiguous prefix of one.
-    """
+    \b
+    Parameters
+    ----------
+    id : str
+        A full insight id or any unambiguous prefix of one. The id of
+        a write still queued is refused as still queued.
+
+    \b
+    Notes
+    -----
+    - A current row that replaced another is refused: the row it
+      replaced stays retired, so forgetting it drops the topic from
+      recall. `replace` on its id corrects it instead.
+    - A replaced row may be forgotten. A missing or already
+      forgotten row is refused.
+
+    \b
+    Examples
+    --------
+    memman forget 16c6c667
+    """  # noqa: D301, D410, D411
     _require_started('write')
 
+    name = _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store'])
     with _active_backend(ctx) as backend:
-        try:
-            id = backend.nodes.resolve_id(id)
-        except ValueError as exc:
-            raise click.ClickException(str(exc))
+        queued, ins = _resolve_queued_or_stored(
+            backend, ctx.obj['data_dir'], name, id)
+        if ins is None and queued is not None:
+            raise click.ClickException(
+                f'insight {queued[0]} is still queued; it lands on'
+                ' the next drain')
+        if ins is not None:
+            id = ins.id
         _forget_insight(backend, id)
         _json_out({
             'id': id,
@@ -1606,23 +1666,37 @@ def forget(ctx: click.Context, id: str) -> None:
 @click.pass_context
 def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             cat: str) -> None:
-    """Replace an insight by ID with new content via the queue.
+    """Correct a stale insight: store new text in its place via the queue.
 
-    ID is a full insight id or any unambiguous prefix of one.
+    \b
+    Parameters
+    ----------
+    id : str
+        A full insight id or any unambiguous prefix of one, current or
+        still queued, such as the `id` an earlier `remember` printed.
+    content : str
+        The corrected text, stored as one row exactly as typed.
+    cat : str
+        Category. Unflagged, it inherits the replaced insight's.
 
+    \b
     Notes
     -----
-    - The replaced insight is superseded, not deleted: it keeps its
-      content behind `superseded_by`, and leaves every recall and
-      listing. `insights show <id> --history` reads the chain back;
-      `unsupersede` reverses it once the successor is forgotten.
-    - The id must be current. A forgotten or already superseded id is
-      refused, the latter naming its successor.
-    - An unflagged `--cat` inherits the replaced insight's category;
-      a typed one overrides it.
-    - The content lands as one row exactly as typed; enrichment still
-      runs and rebuilds the summary.
-    """
+    - The target is retired: it keeps its content behind
+      `replaced_by` and leaves every recall and listing.
+      `insights show <id> --history` reads the chain back.
+    - A forgotten or already replaced id is refused, the latter
+      naming its successor.
+    - The drain holds a replace while its queued target, or an
+      earlier replace in the same store, is pending. A target that
+      fails or goes stale releases it, and it lands as a plain add.
+    - Enrichment still runs and rebuilds the summary.
+
+    \b
+    Examples
+    --------
+    memman replace 16c6c667 "the retry cap is five"
+    """  # noqa: D301, D410, D411
     _require_started('write')
 
     content_str = ' '.join(content)
@@ -1637,21 +1711,27 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
     data_dir_val = ctx.obj['data_dir']
     name = _resolve_store_name(data_dir_val, ctx.obj['store'])
 
+    from memman.queue import enqueue, queue_db
+
     with _active_backend(ctx) as backend:
-        try:
-            id = backend.nodes.resolve_id(id)
-        except ValueError as exc:
-            raise click.ClickException(str(exc))
-        old = backend.nodes.get_include_deleted(id)
-    reason = _not_current_reason(old, id)
-    if reason:
-        if old is not None and old.superseded_by:
-            reason += (f'; replace {old.superseded_by}, or run'
-                       f' insights show {id} --history')
-        raise click.ClickException(reason)
+        queued, old = _resolve_queued_or_stored(
+            backend, data_dir_val, name, id)
+    if queued is not None:
+        id, inherited_cat = queued
+    elif old is None:
+        raise click.ClickException(f'insight {id} not found')
+    elif old.deleted_at is not None:
+        raise click.ClickException(f'insight {old.id} was forgotten')
+    elif old.replaced_by:
+        raise click.ClickException(
+            f'insight {old.id} was replaced by {old.replaced_by};'
+            f' replace {old.replaced_by}, or run'
+            f' insights show {old.id} --history')
+    else:
+        id, inherited_cat = old.id, old.category
 
     if ctx.get_parameter_source('cat') != click.core.ParameterSource.COMMANDLINE:
-        cat = old.category
+        cat = inherited_cat
 
     # Validate what is actually ENQUEUED, not only what the caller
     # typed: a caller-typed --cat reaches this same check, and an
@@ -1661,7 +1741,6 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
         raise click.ClickException(
             f'invalid category {cat!r}; valid: {valid}')
 
-    from memman.queue import enqueue, queue_db
     with queue_db(data_dir_val) as conn:
         row_id, queue_uuid = enqueue(
             conn, store=name, content=content_str,
@@ -1670,196 +1749,11 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             author=author)
     _json_out({
         'action': 'queued',
+        'id': queue_uuid,
         'queue_id': row_id,
-        'queue_uuid': queue_uuid,
         'store': name,
         'replaced_id': id,
         'quality_warnings': quality_warnings,
-        })
-
-
-@claude_callable
-@cli.command()
-@click.argument('predecessor_id')
-@click.argument('successor_id')
-@click.pass_context
-def supersede(ctx: click.Context, predecessor_id: str,
-              successor_id: str) -> None:
-    """Mark one current insight as superseded by another current one.
-
-    Ids are full insight ids or any unambiguous prefix of one.
-
-    The only way to link two rows that BOTH already exist: `replace`
-    always inserts a new row. Neither row's content changes. The
-    predecessor leaves every recall and listing and keeps its content
-    behind `superseded_by`.
-
-    \b
-    Parameters
-    ----------
-    predecessor_id : str
-        The row being superseded; must be current.
-    successor_id : str
-        The row that now holds the topic; must be current and a
-        different row.
-
-    \b
-    Returns
-    -------
-    JSON
-        `{predecessor, successor}`.
-
-    \b
-    Notes
-    -----
-    - Refused, naming the reason, when either id is missing, forgotten
-      or already superseded, or when both name the same row. A
-      successor may take a second predecessor: curating a sibling
-      claim onto a row that already replaced one joins the two
-      chains.
-    - `insights show <predecessor_id> --history` reads the link back;
-      `unsupersede <predecessor_id>` reverses it once the successor is
-      forgotten.
-
-    \b
-    Examples
-    --------
-    memman supersede 16c6c667-... b2b971ae-...
-    memman insights show 16c6c667-... --history
-    """  # noqa: D301, D410, D411
-    _require_started('write')
-    from memman.store.model import insight_to_delta_dict
-    with _active_backend(ctx) as backend, backend.transaction():
-        try:
-            predecessor_id = backend.nodes.resolve_id(predecessor_id)
-            successor_id = backend.nodes.resolve_id(successor_id)
-        except ValueError as exc:
-            raise click.ClickException(str(exc))
-        if predecessor_id == successor_id:
-            raise click.ClickException(
-                'predecessor and successor are the same insight')
-        old = backend.nodes.get_include_deleted(predecessor_id)
-        reason = _not_current_reason(old, predecessor_id)
-        if reason:
-            raise click.ClickException(reason)
-        reason = _not_current_reason(
-            backend.nodes.get_include_deleted(successor_id),
-            successor_id)
-        if reason:
-            raise click.ClickException(reason)
-        if not backend.nodes.supersede(predecessor_id, successor_id):
-            raise click.ClickException(
-                f'insight {predecessor_id} changed under this'
-                ' command; re-read it')
-        backend.oplog.log(
-            operation='supersede', insight_id=predecessor_id,
-            detail=f'replaced by {successor_id}',
-            before=insight_to_delta_dict(old))
-    _json_out({
-        'predecessor': predecessor_id,
-        'successor': successor_id,
-        })
-
-
-@claude_callable
-@cli.command()
-@click.argument('id')
-@click.pass_context
-def unsupersede(ctx: click.Context, id: str) -> None:
-    """Bring a superseded insight back once its successor is gone.
-
-    ID is a full insight id or any unambiguous prefix of one.
-
-    Clears the row's `superseded_by` and re-embeds its content with
-    the store's embedder, so it re-enters recall as a current row. Its
-    keyword tokens were never cleared, so they need no refresh.
-
-    \b
-    Parameters
-    ----------
-    id : str
-        A superseded row whose successor has been forgotten.
-
-    \b
-    Returns
-    -------
-    JSON
-        `{id, was_superseded_by}`.
-
-    \b
-    Notes
-    -----
-    - Refused while the successor is current: two current rows for
-      one fact is the state supersession removes. Forget or supersede
-      the successor first. Refused likewise when the successor was
-      itself superseded; the chain unwinds from its head.
-    - Refused for a missing, forgotten, or not-superseded row, and
-      when the embed fails: the row then stays superseded instead of
-      returning current with a missing or stale-width vector.
-
-    \b
-    Examples
-    --------
-    memman forget b2b971ae-...
-    memman unsupersede 16c6c667-...
-    """  # noqa: D301, D410, D411
-    _require_started('write')
-    # Lazy: the embedding stack is only paid for here.
-    import httpx
-    from memman.embed.fingerprint import bound_embedder
-    from memman.exceptions import EmbedCredentialError
-    from memman.store.model import insight_to_delta_dict
-    with _active_backend(ctx) as backend:
-        try:
-            id = backend.nodes.resolve_id(id)
-        except ValueError as exc:
-            raise click.ClickException(str(exc))
-        row = backend.nodes.get_include_deleted(id)
-        if row is None:
-            raise click.ClickException(f'insight {id} not found')
-        if row.deleted_at is not None:
-            raise click.ClickException(f'insight {id} was forgotten')
-        if not row.superseded_by:
-            raise click.ClickException(f'insight {id} is not superseded')
-        successor_id = row.superseded_by
-        successor = backend.nodes.get_include_deleted(successor_id)
-        if successor is not None and successor.deleted_at is None:
-            if successor.superseded_by is None:
-                raise click.ClickException(
-                    f'insight {id} is superseded by {successor_id}, which'
-                    f' is current; forget or supersede {successor_id}'
-                    ' first')
-            raise click.ClickException(
-                f'insight {id} is superseded by {successor_id}, which was'
-                ' itself superseded; unsupersede the chain from its head'
-                ' first')
-        before = insight_to_delta_dict(row)
-        ec = bound_embedder(backend)
-        # The embed is a network call; it runs before the transaction
-        # so a slow provider never holds the store's write lock, and a
-        # failure leaves the row superseded rather than current with a
-        # missing or stale-width vector.
-        try:
-            vec = ec.embed(row.content)
-        except EmbedCredentialError:
-            raise
-        except (httpx.HTTPError, RuntimeError) as exc:
-            raise click.ClickException(
-                f'insight {id} not restored: embedding failed ({exc});'
-                ' the row stays superseded, retry when the provider'
-                ' answers')
-        with backend.transaction():
-            if not backend.nodes.unsupersede(id, successor_id):
-                raise click.ClickException(
-                    f'insight {id} changed under this command; re-read it')
-            backend.nodes.update_embedding(id, vec, ec.model)
-            backend.nodes.stamp_enrich_attempted(id)
-            backend.oplog.log(
-                operation='unsupersede', insight_id=id,
-                detail=f'was superseded by {successor_id}', before=before)
-    _json_out({
-        'id': id,
-        'was_superseded_by': successor_id,
         })
 
 
@@ -2608,7 +2502,7 @@ def status(ctx: click.Context) -> None:
             'backend': resolve_store_backend(store_name, data_dir),
             'backends_in_use': backends_in_use,
             'total_insights': node_stats.total_insights,
-            'superseded_insights': node_stats.superseded_insights,
+            'replaced_insights': node_stats.replaced_insights,
             'deleted_insights': node_stats.deleted_insights,
             'stale_insights': stale_insights,
             'oplog_count': node_stats.oplog_count,
@@ -2859,15 +2753,15 @@ def insights_review(ctx: click.Context, limit: int) -> None:
 @insights.command('show')
 @click.argument('id')
 @click.option('--history', is_flag=True,
-              help='Walk the supersession chain through this id.')
+              help='Walk the replacement chain through this id.')
 @click.pass_context
 def insights_show(ctx: click.Context, id: str, history: bool) -> None:
-    """Read one insight by id, or walk its supersession chain.
+    """Read one insight by id, or walk its replacement chain.
 
     ID is a full insight id or any unambiguous prefix of one.
 
-    Without `--history`: the full insight, including a superseded
-    row (its `superseded_by` names the successor). A forgotten row is
+    Without `--history`: the full insight, including a replaced
+    row (its `replaced_by` names the successor). A forgotten row is
     refused. With `--history`: every row in the chain through this
     id, oldest first, forgotten rows included and marked.
 
@@ -2876,7 +2770,8 @@ def insights_show(ctx: click.Context, id: str, history: bool) -> None:
     ----------
     id : str
         Any stored id. With `--history` a forgotten id is accepted so
-        a chain whose oldest row was forgotten stays walkable.
+        a chain whose oldest row was forgotten stays walkable. The id
+        of a write still queued is refused as still queued.
 
     \b
     Returns
@@ -2884,16 +2779,16 @@ def insights_show(ctx: click.Context, id: str, history: bool) -> None:
     JSON
         Without `--history`, the insight dict. With it,
         `{requested, chain}` where each chain entry is `{id,
-        created_at, state, superseded_by, content}`; `state` is one of
-        `current`, `superseded`, `forgotten`, and a forgotten entry
+        created_at, state, replaced_by, content}`; `state` is one of
+        `current`, `replaced`, `forgotten`, and a forgotten entry
         carries no `content`.
 
     \b
     Notes
     -----
-    - The walk follows `superseded_by` forward and every row pointing
-      at a chain member backward, so a successor with two predecessors
-      (a replace joined by a curated sibling) lists both.
+    - The walk follows `replaced_by` forward and every row pointing
+      at a chain member backward, so a successor with two predecessors,
+      which stored rows may hold, lists both.
     - Order is chain order, not timestamp order: rows written within
       one second still list predecessor first.
 
@@ -2903,14 +2798,17 @@ def insights_show(ctx: click.Context, id: str, history: bool) -> None:
     memman insights show 16c6c667-...
     memman insights show 16c6c667-... --history
     """  # noqa: D301, D410, D411
+    name = _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store'])
     with _active_backend(ctx) as backend:
-        try:
-            id = backend.nodes.resolve_id(id)
-        except ValueError as exc:
-            raise click.ClickException(str(exc))
-        ins = backend.nodes.get_include_deleted(id)
+        queued, ins = _resolve_queued_or_stored(
+            backend, ctx.obj['data_dir'], name, id)
+        if ins is None and queued is not None:
+            raise click.ClickException(
+                f'insight {queued[0]} is still queued; it lands on'
+                ' the next drain')
         if ins is None:
             raise click.ClickException(f'insight {id} not found')
+        id = ins.id
         if not history:
             if ins.deleted_at is not None:
                 raise click.ClickException(f'insight {id} was forgotten')
@@ -2921,9 +2819,9 @@ def insights_show(ctx: click.Context, id: str, history: bool) -> None:
         while frontier:
             row = frontier.pop()
             found = list(backend.nodes.predecessors(row.id))
-            if row.superseded_by and row.superseded_by not in rows:
+            if row.replaced_by and row.replaced_by not in rows:
                 successor = backend.nodes.get_include_deleted(
-                    row.superseded_by)
+                    row.replaced_by)
                 if successor is not None:
                     found.append(successor)
             for other in found:
@@ -2933,9 +2831,9 @@ def insights_show(ctx: click.Context, id: str, history: bool) -> None:
 
     def depth(row: Insight) -> int:
         steps, seen = 0, set()
-        while (row.superseded_by in rows and row.id not in seen):
+        while (row.replaced_by in rows and row.id not in seen):
             seen.add(row.id)
-            row = rows[row.superseded_by]
+            row = rows[row.replaced_by]
             steps += 1
         return steps
 
@@ -2944,86 +2842,20 @@ def insights_show(ctx: click.Context, id: str, history: bool) -> None:
                       key=lambda r: (-depth(r), r.created_at or '', r.id)):
         if row.deleted_at is not None:
             state = 'forgotten'
-        elif row.superseded_by:
-            state = 'superseded'
+        elif row.replaced_by:
+            state = 'replaced'
         else:
             state = 'current'
         entry: dict[str, Any] = {
             'id': row.id,
             'created_at': format_timestamp(row.created_at),
             'state': state,
-            'superseded_by': row.superseded_by,
+            'replaced_by': row.replaced_by,
             }
         if state != 'forgotten':
             entry['content'] = row.content
         chain.append(entry)
     _json_out({'requested': id, 'chain': chain})
-
-
-@claude_callable
-@insights.command('by-queue')
-@click.argument('queue_uuid')
-@click.pass_context
-def insights_by_queue(ctx: click.Context, queue_uuid: str) -> None:
-    """List the insights one queued write produced.
-
-    Resolves the `queue_uuid` that `remember` and `replace` return
-    into the rows that write actually stored, once the scheduler has
-    drained it. This is the write-to-read join: the queue row itself
-    is purged about a minute after the drain, while the uuid is
-    stamped on every insight the write produced and survives.
-
-    \b
-    Parameters
-    ----------
-    queue_uuid : str
-        The `queue_uuid` from a `remember` / `replace` response, or
-        from `memman scheduler queue show <row_id>`.
-
-    \b
-    Returns
-    -------
-    JSON
-        `{queue_uuid, store, count, results}`. `store` is the store
-        SEARCHED, not the store the write targeted. `results` holds
-        one full insight dict per row, oldest first; a row a later
-        write superseded is included with its `superseded_by` set,
-        since it is still where THIS write landed.
-
-    \b
-    Notes
-    -----
-    - `count: 0` is a real answer, not an error, and has three
-      causes: the write is still queued, it went to a different
-      store, or its row was since forgotten. The queue is
-      process-global while this command reads one store, so a uuid
-      from `remember --store shop` resolves to nothing under any
-      other store.
-    - After the drain, one write resolves to one row.
-    - A malformed uuid is rejected rather than answered `count: 0`,
-      so grabbing `queue_id` instead of `queue_uuid` fails loudly.
-
-    \b
-    Examples
-    --------
-    memman remember "a durable fact"
-    memman insights by-queue 7f3c1e00-0d1a-4f7e-9c2b-2a1d5b8e4c60
-    """  # noqa: D301, D410, D411
-    try:
-        uuid.UUID(queue_uuid)
-    except ValueError:
-        raise click.ClickException(
-            f'{queue_uuid!r} is not a queue uuid. Pass the `queue_uuid`'
-            ' from a remember/replace response, not the `queue_id`.')
-    name = _resolve_store_name(ctx.obj['data_dir'], ctx.obj['store'])
-    with _active_backend(ctx) as backend:
-        rows = backend.nodes.get_by_queue_uuid(queue_uuid)
-    _json_out({
-        'queue_uuid': queue_uuid,
-        'store': name,
-        'count': len(rows),
-        'results': [insight_to_full_dict(r) for r in rows],
-        })
 
 
 @cli.command()

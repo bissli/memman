@@ -8,15 +8,15 @@
 
 A memory is one stored claim. The caller sets its text and metadata. The background worker adds the rest.
 
-| Field        | Set by                                       | Meaning                                                                              |
-| ------------ | -------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `content`    | the `remember` or `replace` text             | The claim, stored as written. At most 1,000 UTF-8 bytes.                             |
-| `category`   | `--cat`, default `fact`                      | One of the five categories below.                                                    |
-| `author`     | `MEMMAN_AUTHOR`, otherwise the OS login name | Who wrote the memory.                                                                |
-| `id`         | the worker                                   | A version 4 UUID. Every command that takes an id also accepts an unambiguous prefix. |
-| `summary`    | the enrichment model                         | Display text. Recall prints it in place of the content. Search reads `content`.      |
-| `created_at` | the worker                                   | When the worker stored the memory.                                                   |
-| `queue_uuid` | `remember` or `replace`, when queued         | A unique key that prevents retries from creating duplicate memories.                 |
+| Field        | Set by                                       | Meaning                                                                                                                                     |
+| ------------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `content`    | the `remember` or `replace` text             | The claim, stored as written. At most 1,000 UTF-8 bytes.                                                                                    |
+| `category`   | `--cat`, default `fact`                      | One of the five categories below.                                                                                                           |
+| `author`     | `MEMMAN_AUTHOR`, otherwise the OS login name | Who wrote the memory.                                                                                                                       |
+| `id`         | `remember` or `replace`, when queued         | A version 4 UUID, equal to the write's `queue_uuid` and printed as `id`. Every command that takes an id also accepts an unambiguous prefix. |
+| `summary`    | the enrichment model                         | Display text. Recall prints it in place of the content. Search reads `content`.                                                             |
+| `created_at` | the worker                                   | When the worker stored the memory.                                                                                                          |
+| `queue_uuid` | `remember` or `replace`, when queued         | A unique key that prevents retries from creating duplicate memories.                                                                        |
 
 `replace` inherits the target's category when `--cat` is omitted.
 
@@ -58,7 +58,7 @@ insights (
   summary           text,                 -- from enrichment
   embedding         blob,                 -- vector of content
   embedding_pending blob,                 -- target vector during embed swap
-  enrich_attempted_at text,               -- set on insert, on unsupersede, and after every enrichment pass, whether or not it succeeded
+  enrich_attempted_at text,               -- set on insert and after every enrichment pass, whether or not it succeeded
   enriched_at       text,                 -- set when enrichment and a vector were both saved
   created_at        text not null,
   updated_at        text not null,
@@ -66,7 +66,7 @@ insights (
   prompt_version    text,                 -- hash of enrichment prompt and model
   embedding_model   text,                 -- model that made the vector
   queue_uuid        text,                 -- the queued write this came from
-  superseded_by     text,                 -- successor id, no foreign key
+  replaced_by       text,                 -- successor id, no foreign key
   author            text
 )
 
@@ -88,9 +88,9 @@ meta (
 )
 ```
 
-**Current memories.** A memory is current when `deleted_at is null and superseded_by is null`. Recall and `insights review` read only current memories. `status` and `insights show` also report retired ones. `superseded_by` carries no foreign key. The worker sets the pointer before it inserts the successor. The migrators copy rows in id order, so a predecessor can be inserted before its successor. The `supersession_integrity` check in `memman doctor` is the only check that validates the pointer.
+**Current memories.** A memory is current when `deleted_at is null and replaced_by is null`. Recall and `insights review` read only current memories. `status` and `insights show` also report retired ones. `replaced_by` carries no foreign key. The worker sets the pointer before it inserts the successor. The migrators copy rows in id order, so a predecessor can be inserted before its successor. The `replacement_integrity` check in `memman doctor` is the only check that validates the pointer.
 
-**Keyword index.** On SQLite, `insights_fts` is an FTS5 table (SQLite's full-text search extension) over `content`. It holds only the terms. The text stays in `insights`. Triggers keep the index up to date when a row is inserted or deleted or its `content` changes. It indexes every row, including forgotten and superseded memories. Queries join it with `insights` to return only current rows. Opening a store that lacks the table creates and fills it in one transaction. On Postgres, the `kw_tokens` column plays this role.
+**Keyword index.** On SQLite, `insights_fts` is an FTS5 table (SQLite's full-text search extension) over `content`. It holds only the terms. The text stays in `insights`. Triggers keep the index up to date when a row is inserted or deleted or its `content` changes. It indexes every row, including forgotten and replaced memories. Queries join it with `insights` to return only current rows. Opening a store that lacks the table creates and fills it in one transaction. On Postgres, the `kw_tokens` column plays this role.
 
 **Model-change markers.** `prompt_version` holds the first 16 hex characters of a SHA-256 hash over the enrichment prompt and `MEMMAN_LLM_MODEL`. A memory whose non-null `prompt_version` differs from the current hash is stale, and `memman enrich --stale-only` re-enriches it. `embedding_model` names the model behind the vector. `memman embed reembed` re-embeds each current memory in every SQLite store whose `embedding_model` or vector length differs from the target. [Pipelines](03-pipelines.md) covers both re-runs.
 
@@ -115,7 +115,7 @@ meta (
 **Indexes.** Both backends index `category`, `created_at`, `deleted_at`, `queue_uuid`, and `oplog.created_at`. Two composite indexes serve fixed queries:
 
 - `idx_insights_pending_enrich` on `(enrich_attempted_at, created_at)`, limited to current memories with no `enrich_attempted_at`. The enrichment pass reads pending memories in order from it.
-- `idx_insights_current_listing` on `(deleted_at, superseded_by, created_at)`. `recall --basic` reads its filter and sort order from it.
+- `idx_insights_current_listing` on `(deleted_at, replaced_by, created_at)`. `recall --basic` reads its filter and sort order from it.
 
 Postgres adds a GIN index on `kw_tokens` and an HNSW index on `embedding`, both limited to current memories. Opening a Postgres store for reading and writing builds the HNSW index if it is missing.
 
@@ -138,7 +138,7 @@ worker_runs (                             -- drain history, at most one idle row
 )
 ```
 
-The worker skips a queued write if a stored memory already has its `queue_uuid`, unless that memory is forgotten. This prevents a retry from creating a duplicate memory.
+The worker skips a queued write if any stored memory, forgotten or not, already has its `queue_uuid`. This prevents a retry from creating a duplicate memory.
 
 ---
 
@@ -151,10 +151,10 @@ memman groups its modules into seven layers:
 | Integration  hook scripts, guide.md, SKILL.md (setup/assets/claude) |
 |              setup/   (install, wizard, settings.json merge)        |
 +---------------------------------------------------------------------+
-| CLI          cli.py: remember, recall, replace, supersede,          |
-|              unsupersede, forget, insights, enrich, embed, store,   |
-|              migrate, scheduler, backup, log, config, status,       |
-|              doctor, install, uninstall, prime (hooks only)         |
+| CLI          cli.py: remember, recall, replace, forget, insights,   |
+|              enrich, embed, store, migrate, scheduler, backup, log, |
+|              config, status, doctor, install, uninstall, prime      |
+|              (hooks only)                                           |
 +---------------------------------------------------------------------+
 | Write path   the drain loop in cli.py                               |
 |              queue.py (the write queue, SQLite)                     |

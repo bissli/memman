@@ -201,7 +201,7 @@ _FIDELITY_ROW = {
     'prompt_version': 'pv-aaaa',
     'embedding_model': 'em-cccc',
     'queue_uuid': 'quuid-eeee',
-    'superseded_by': 'rb-fid-successor',
+    'replaced_by': 'rb-fid-successor',
     'author': 'author-ffff',
     }
 
@@ -219,7 +219,7 @@ def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
             ' id, content, category, summary,'
             ' enrich_attempted_at, enriched_at, created_at,'
             ' updated_at, deleted_at, prompt_version,'
-            ' embedding_model, queue_uuid, superseded_by,'
+            ' embedding_model, queue_uuid, replaced_by,'
             ' author)'
             ' values (?, ?, ?, ?, ?, ?, ?,'
             ' ?, ?, ?, ?, ?, ?, ?)',
@@ -229,7 +229,7 @@ def _seed_fidelity_store(data_dir: Path, store: str) -> Path:
              format_timestamp(r['created_at']),
              format_timestamp(r['updated_at']), None,
              r['prompt_version'], r['embedding_model'],
-             r['queue_uuid'], r['superseded_by'],
+             r['queue_uuid'], r['replaced_by'],
              r['author']))
         db.conn.commit()
         set_meta(db, 'embed_fingerprint',
@@ -296,7 +296,7 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
                 'select category, summary,'
                 ' enrich_attempted_at, enriched_at, created_at,'
                 ' updated_at, deleted_at, prompt_version,'
-                ' embedding_model, queue_uuid, superseded_by,'
+                ' embedding_model, queue_uuid, replaced_by,'
                 ' author from insights where id = ?',
                 (_FIDELITY_ROW['id'],)).fetchone()
         finally:
@@ -308,7 +308,7 @@ def test_round_trip_preserves_every_insight_field(tmp_path, pg_dsn):
             '2026-02-03T04:05:06Z', '2026-03-04T05:06:07Z',
             '2026-04-05T06:07:08Z', '2026-05-06T07:08:09Z', None,
             r['prompt_version'], r['embedding_model'],
-            r['queue_uuid'], r['superseded_by'],
+            r['queue_uuid'], r['replaced_by'],
             r['author'])
     finally:
         _drop_schema(pg_dsn, store)

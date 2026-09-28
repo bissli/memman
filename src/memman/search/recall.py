@@ -2,7 +2,7 @@
 
 Reads live storage on every request. The candidate universe is
 `nodes.get_all_active()`, so recall cannot serve a row the store has
-deleted or superseded, and cannot miss one it holds as current.
+deleted or replaced, and cannot miss one it holds as current.
 
 Notes
 -----
@@ -86,7 +86,7 @@ def run_recall(
     -----
     - Reads live storage on every call: the candidate universe is
       `nodes.get_all_active()`, so a row the store has deleted or
-      superseded cannot be returned and a row it holds as current
+      replaced cannot be returned and a row it holds as current
       cannot be hidden.
     - The candidates are exactly the fused anchors.
     - The keyword and recency channels take `ANCHOR_TOP_K` rows each.

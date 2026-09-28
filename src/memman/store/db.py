@@ -338,7 +338,7 @@ create table if not exists insights (
     prompt_version text,
     embedding_model text,
     queue_uuid  text,
-    superseded_by text,
+    replaced_by text,
     author      text
 );
 
@@ -355,7 +355,7 @@ create index if not exists idx_insights_queue_uuid on insights(queue_uuid);
 create index if not exists idx_insights_pending_enrich
     on insights(enrich_attempted_at, created_at)
     where enrich_attempted_at is null and deleted_at is null
-      and superseded_by is null;
+      and replaced_by is null;
 -- Load-bearing as the carrier of `query_insights`' whole predicate
 -- and sort order, so
 -- `recall --basic` honors its limit from the index instead of
@@ -363,7 +363,7 @@ create index if not exists idx_insights_pending_enrich
 -- plain composite, not a partial index, so the planner searches the
 -- two leading null columns as equalities.
 create index if not exists idx_insights_current_listing
-    on insights(deleted_at, superseded_by, created_at);
+    on insights(deleted_at, replaced_by, created_at);
 
 create table if not exists oplog (
     id          integer primary key autoincrement,
@@ -386,7 +386,7 @@ create table if not exists meta (
 # Keyword channel index, applied by `_migrate` in one transaction
 # rather than from `_BASELINE_SCHEMA`. External content: FTS5 holds
 # the terms, the text stays in `insights`. Every row is indexed,
-# soft-deleted and superseded ones included, and the active
+# soft-deleted and replaced ones included, and the active
 # predicate is applied by joining `insights` at read -- an
 # active-only index would need conditional delete triggers, and a
 # 'delete' whose old values are not exactly

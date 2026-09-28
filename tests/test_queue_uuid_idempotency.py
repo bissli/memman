@@ -9,7 +9,7 @@ import json
 import sqlite3
 
 from memman.store.db import store_dir
-from tests.conftest import force_drain, invoke
+from tests.conftest import force_drain, invoke, make_insight
 
 
 def _queue_row(data_dir, queue_id):
@@ -65,6 +65,45 @@ def test_idempotency_keyed_on_queue_uuid(mm_runner):
     rows_after = _stored(data_dir, raw1['store'],
                          'queue_uuid in (?, ?)', (u1, u2))
     assert len(rows_after) == 2
+
+
+def test_replay_of_a_forgotten_write_stores_nothing(mm_runner):
+    """A replay of a write whose row was since forgotten is skipped.
+
+    Mutation: the replay check counting only rows not forgotten, so the
+        replay inserts under the id the forgotten row still holds and
+        fails on the primary key.
+    Oracle: the replayed queue row read back as `done` with no error.
+    """
+    from memman.queue import queue_db
+    _, data_dir = mm_runner
+    raw = json.loads(invoke(
+        mm_runner, ['remember', 'etcd compacts revisions']).output)
+    assert invoke(mm_runner, ['forget', raw['id']]).exit_code == 0
+
+    _requeue(data_dir, raw['queue_id'])
+    force_drain(data_dir)
+
+    with queue_db(data_dir) as conn:
+        replayed = conn.execute(
+            'select status, last_error from queue where id = ?',
+            (raw['queue_id'],)).fetchone()
+    assert replayed == ('done', None)
+
+
+def test_replay_check_counts_a_forgotten_row(backend):
+    """The replay check sees a forgotten row on both backends.
+
+    Mutation: either backend keeping `deleted_at is null` in the
+        check, so a replay after a forget re-inserts under an id the
+        store already holds.
+    Oracle: one row stored under a known uuid, then soft-deleted.
+    """
+    backend.nodes.insert(make_insight(
+        id='u-1', content='etcd compacts revisions', queue_uuid='u-1'))
+    assert backend.nodes.soft_delete('u-1') is True
+
+    assert backend.nodes.has_row_with_queue_uuid('u-1') is True
 
 
 def test_queue_uuid_survives_counter_rewind(mm_runner):
@@ -132,7 +171,7 @@ EXPECTED_INSIGHT_COLUMNS = {
     'enrich_attempted_at', 'enriched_at',
     'summary',
     'queue_uuid',
-    'superseded_by', 'author',
+    'replaced_by', 'author',
     }
 
 

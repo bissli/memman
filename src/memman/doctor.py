@@ -78,8 +78,8 @@ def check_enrichment_coverage(backend: Backend) -> dict[str, Any]:
         }
 
 
-def check_supersession_integrity(backend: Backend) -> dict[str, Any]:
-    """Verify every `superseded_by` pointer is well formed.
+def check_replacement_integrity(backend: Backend) -> dict[str, Any]:
+    """Verify every `replaced_by` pointer is well formed.
 
     The column carries no foreign key, so this check is the only
     enforcement of pointer validity. Three populations, each empty on
@@ -87,17 +87,16 @@ def check_supersession_integrity(backend: Backend) -> dict[str, Any]:
     forgotten target is NOT dangling), a self-pointer, and a chain
     that never reaches a row without a pointer (a cycle, which hides
     every member from the active view). A successor with two
-    predecessors is a join (`supersede` can point several rows at one
-    successor), not a defect. The detail carries every count and up
-    to 20 ids per population.
+    predecessors passes: stored rows may hold one. The detail carries
+    every count and up to 20 ids per population.
     """
-    populations = backend.nodes.supersession_integrity()
+    populations = backend.nodes.replacement_integrity()
     counts = {key: len(ids) for key, ids in populations.items()}
     status = 'pass' if not any(counts.values()) else 'fail'
     detail: dict[str, Any] = {'counts': counts}
     detail.update({key: ids[:20] for key, ids in populations.items()})
     return {
-        'name': 'supersession_integrity',
+        'name': 'replacement_integrity',
         'status': status,
         'detail': detail,
         }
@@ -1008,7 +1007,7 @@ def run_all_checks(
         checks.extend([
             check_integrity(backend),
             check_enrichment_coverage(backend),
-            check_supersession_integrity(backend),
+            check_replacement_integrity(backend),
             check_embedding_consistency(backend),
             check_embed_fingerprint(backend),
             check_no_stale_swap_meta(backend),
@@ -1016,7 +1015,7 @@ def run_all_checks(
             ])
     else:
         checks.extend([
-            check_supersession_integrity(backend),
+            check_replacement_integrity(backend),
             check_embed_fingerprint(backend),
             check_no_stale_swap_meta(backend),
             ])

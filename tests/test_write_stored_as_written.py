@@ -2,8 +2,7 @@
 
 No model reads a write before it is stored: nothing judges it
 non-durable, rewords it, or picks its category. And nothing a model
-might say retires an existing row -- only `replace <id>` and
-`supersede` do that.
+might say retires an existing row -- only `replace <id>` does that.
 """
 
 import json
@@ -47,8 +46,8 @@ def test_a_write_makes_exactly_one_llm_call_on_enrichment(
     assert stored.category == 'fact'
 
 
-def _supersede_everything(self, system, user, **kwargs):
-    """Answer every retiring prompt as a supersede, enrichment as usual.
+def _retire_everything(self, system, user, **kwargs):
+    """Answer every retiring prompt with a SUPERSEDE, enrichment as usual.
 
     The screen, verdict and merge prompts each carry a marker of
     their own, so a write path that still sends any of them gets the
@@ -74,15 +73,15 @@ def test_a_contradicting_write_is_added_and_retires_nothing(
     """Verify a write that contradicts its nearest row lands beside it.
 
     Mutation: the verdict path still retiring - the stored row gets
-        `superseded_by` and the write reports `supersede`.
-    Oracle: the stored row read back current with `superseded_by`
+        `replaced_by`.
+    Oracle: the stored row read back current with `replaced_by`
         None, and the write's own row added with the agent's text.
     """
     tmp_backend.nodes.insert(make_insight(
         id='old-broker', content='The message broker is kombu'))
     monkeypatch.setattr(
         'memman.llm.client.MemmanLLMClient.complete',
-        _supersede_everything)
+        _retire_everything)
     content = 'The message broker is redis, not kombu'
     now = datetime.now(timezone.utc)
     parent = Insight(
@@ -94,7 +93,7 @@ def test_a_contradicting_write_is_added_and_retires_nothing(
     assert res['action'] == 'add'
     assert res['content'] == content
     old = tmp_backend.nodes.get_include_deleted('old-broker')
-    assert old.superseded_by is None
+    assert old.replaced_by is None
     assert tmp_backend.nodes.get('old-broker') is not None
 
 

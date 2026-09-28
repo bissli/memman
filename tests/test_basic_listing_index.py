@@ -1,7 +1,7 @@
 """The shipped SQLite schema has to order the `--basic` listing from an index.
 
 `query_insights` (`store/node.py`) filters on `deleted_at is null and
-superseded_by is null`, matches content alone, and sorts `created_at
+replaced_by is null`, matches content alone, and sorts `created_at
 desc` under a limit. Its one caller is `recall --basic` (`cli.py`), not
 the default scored path. Without an index carrying that order SQLite
 reads every active row into a temp b-tree before honoring the limit,
@@ -44,7 +44,7 @@ def _plan_of(db, sql):
 def test_the_basic_listing_takes_its_order_from_an_index(tmp_path):
     """Verify the shipped schema sorts the `--basic` listing in the index.
 
-    Mutation: dropping the `(deleted_at, superseded_by, created_at)`
+    Mutation: dropping the `(deleted_at, replaced_by, created_at)`
         declaration from `_BASELINE_SCHEMA`, reordering it so
         `created_at` leads, or keeping an `importance` term in the
         verb's `order by`, which the index cannot serve. Each one puts

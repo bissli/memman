@@ -53,7 +53,7 @@ class MigrateInsight:
     prompt_version: str | None
     embedding_model: str | None
     queue_uuid: str | None
-    superseded_by: str | None
+    replaced_by: str | None
     author: str | None
 
 

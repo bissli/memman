@@ -37,7 +37,7 @@ class TestGetPendingEnrichIds:
         """Insights with NULL enrich_attempted_at are returned.
 
         Mutation: get_pending_enrich_ids dropping the `deleted_at is
-            null` or `superseded_by is null` clause, or its select
+            null` or `replaced_by is null` clause, or its select
             list dropping a freshly inserted id.
         Oracle: the returned id set equals both freshly inserted ids.
         """

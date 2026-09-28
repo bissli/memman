@@ -43,7 +43,7 @@ class Insight:
     enrich_attempted_at: datetime | None = None
     enriched_at: datetime | None = None
     queue_uuid: str | None = None
-    superseded_by: str | None = None
+    replaced_by: str | None = None
     author: str | None = None
 
 
@@ -51,12 +51,12 @@ class Insight:
 class OpLogEntry:
     """One row from the oplog table.
 
-    `before` and `after` capture the insight content before and
-    after the logged operation. Populated by replace, supersede,
-    unsupersede and forget so forensic questions can be answered
-    from the oplog alone. A `recall:basic`, `recall-detail`,
-    `rebuild` or `embed_reembed` row carries no deltas, so both
-    stay None.
+    `before` carries the prior insight content on a replace or forget
+    row, and `after` the new content on a remember, replace or
+    target-gone row, so forensic questions can be answered from the
+    oplog alone. A
+    `recall:basic`, `recall-detail`, `rebuild` or `embed_reembed` row
+    carries no deltas, so both stay None.
     """
 
     id: int
@@ -136,7 +136,7 @@ def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
     Timestamps are formatted with
     `format_timestamp`; `updated_at` falls back to `created_at` so
     consumers always see a populated value. Optional fields
-    (`deleted_at`, `superseded_by`, `summary`, `enrich_attempted_at`,
+    (`deleted_at`, `replaced_by`, `summary`, `enrich_attempted_at`,
     `enriched_at`) are emitted only when populated; the plumbing key
     `queue_uuid` is deliberately omitted.
     """
@@ -149,8 +149,8 @@ def insight_to_full_dict(ins: 'Insight') -> dict[str, Any]:
         }
     if ins.deleted_at:
         out['deleted_at'] = format_timestamp(ins.deleted_at)
-    if ins.superseded_by:
-        out['superseded_by'] = ins.superseded_by
+    if ins.replaced_by:
+        out['replaced_by'] = ins.replaced_by
     if ins.summary:
         out['summary'] = ins.summary
     if ins.enrich_attempted_at:
@@ -178,16 +178,16 @@ class NodeStats:
     Attributes
     ----------
     total_insights : int
-        Current rows: neither deleted nor superseded.
-    superseded_insights : int
-        Rows with `superseded_by` set and `deleted_at` null.
+        Current rows: neither deleted nor replaced.
+    replaced_insights : int
+        Rows with `replaced_by` set and `deleted_at` null.
     deleted_insights : int
-        Rows with `deleted_at` set, superseded or not. The three
+        Rows with `deleted_at` set, replaced or not. The three
         counts partition `count_total`.
     """
 
     total_insights: int = 0
-    superseded_insights: int = 0
+    replaced_insights: int = 0
     deleted_insights: int = 0
     oplog_count: int = 0
     by_category: dict[str, int] = field(default_factory=dict)

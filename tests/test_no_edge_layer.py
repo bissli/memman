@@ -287,38 +287,6 @@ def test_the_time_channel_stays_at_anchor_top_k(backend):
     assert len(resp['results']) == ANCHOR_TOP_K
 
 
-def test_supersede_reports_no_edge_count(mm_runner):
-    """Verify `supersede` output names only the two rows.
-
-    Mutation: keeping `edges_moved` in the JSON.
-    Oracle: the exact output key set.
-    """
-    old = _remember(mm_runner, 'the broker is kombu')
-    new = _remember(mm_runner, 'the broker is redis now')
-
-    res = invoke(mm_runner, ['supersede', old, new])
-
-    assert res.exit_code == 0, res.output
-    assert set(json.loads(res.output)) == {'predecessor', 'successor'}
-
-
-def test_unsupersede_reports_no_edge_count(mm_runner):
-    """Verify `unsupersede` output names only the row and its old successor.
-
-    Mutation: keeping `edges_created` in the JSON.
-    Oracle: the exact output key set.
-    """
-    old = _remember(mm_runner, 'the broker is kombu')
-    new = _remember(mm_runner, 'the broker is redis now')
-    assert invoke(mm_runner, ['supersede', old, new]).exit_code == 0
-    assert invoke(mm_runner, ['forget', new]).exit_code == 0
-
-    res = invoke(mm_runner, ['unsupersede', old])
-
-    assert res.exit_code == 0, res.output
-    assert set(json.loads(res.output)) == {'id', 'was_superseded_by'}
-
-
 def test_status_reports_no_edge_count(mm_runner):
     """Verify `status` carries no edge count.
 
@@ -441,14 +409,14 @@ def test_doctor_runs_no_edge_checks(backend):
         'embed_threshold'})
 
 
-def test_supersession_integrity_reports_three_populations(backend):
+def test_replacement_integrity_reports_three_populations(backend):
     """Verify the integrity report has no edge population.
 
-    Mutation: keeping `superseded_with_edges`, whose query joins a
+    Mutation: keeping `replaced_with_edges`, whose query joins a
         table the store no longer holds.
     Oracle: the exact key set.
     """
-    counts = backend.nodes.supersession_integrity()
+    counts = backend.nodes.replacement_integrity()
 
     assert set(counts) == {'dangling', 'self_pointer', 'unterminated'}
 

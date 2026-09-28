@@ -1,8 +1,8 @@
 """Metadata a replace must carry from its predecessor.
 
-A replace is not an in-place edit: `_apply_plan` supersedes the target
+A replace is not an in-place edit: `_apply_plan` retires the target
 and inserts a successor built from the incoming write. The predecessor
-keeps its content behind `superseded_by`, but every field the
+keeps its content behind `replaced_by`, but every field the
 successor does not explicitly copy is missing from the current view.
 
 These tests pin what the successor carries.
@@ -25,13 +25,13 @@ def _replace_apply(backend, new_id, target_id, **insight_overrides):
 
 
 def test_replace_plan_links_the_predecessor_and_keeps_it(tmp_db, tmp_backend):
-    """Verify a replace plan supersedes the target instead of deleting it.
+    """Verify a replace plan retires the target instead of deleting it.
 
     Mutation: routing `replace` through `soft_delete`, which drops the
         predecessor's content instead of keeping it behind
-        `superseded_by`.
+        `replaced_by`.
     Oracle: the predecessor read back with `deleted_at` null and
-        `superseded_by` naming the successor, the successor's stored
+        `replaced_by` naming the successor, the successor's stored
         content, and a `replace` oplog row naming both.
     """
     insert_insight(tmp_db, make_insight(
@@ -42,7 +42,7 @@ def test_replace_plan_links_the_predecessor_and_keeps_it(tmp_db, tmp_backend):
 
     old = tmp_backend.nodes.get_include_deleted('old-1')
     assert old.deleted_at is None
-    assert old.superseded_by == 'new-1'
+    assert old.replaced_by == 'new-1'
     assert get_insight_by_id(tmp_db, 'old-1') is None
     assert get_insight_by_id(tmp_db, 'new-1').content == 'the broker is redis now'
     assert result['action'] == 'replace'
@@ -56,7 +56,7 @@ def test_a_gone_target_is_recorded_in_the_oplog(tmp_db, tmp_backend):
     """Verify a dropped target leaves an operator-readable record.
 
     A target can vanish between the plan and the apply, and the write
-    then degrades to a plain add: no pointer, no supersession, and the
+    then degrades to a plain add: no pointer, no replacement, and the
     caller's correction silently does not attach. The row IS stored,
     so nothing is lost, but without a record the operator who ran
     `replace` has no way to learn the correction did not land.

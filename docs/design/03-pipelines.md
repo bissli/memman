@@ -12,13 +12,12 @@ memman runs commands during the agent's turn and processes queued writes in a ba
 | -------------------------------------- | ----------------- | -------------------------------------------------------------- |
 | `remember`, `replace`: check and queue | in the turn       | none                                                           |
 | Enrich, embed and store a queued write | background worker | one LLM call (two if parsing fails) and one embedding call     |
-| `forget`, `supersede`                  | in the turn       | none                                                           |
-| `unsupersede`                          | in the turn       | one embedding call                                             |
+| `forget`                               | in the turn       | none                                                           |
 | `recall`                               | in the turn       | one query embedding call and, when enabled, one reranking call |
 
 - **When memories become available.** Recall cannot see a queued write until a drain stores it. Recall reads the live store on every call, so a stored memory is recallable at once, in the same session or any later one.
 - **No write in the turn calls the LLM.** `remember` and `replace` call no model. Recall calls the embedding model and the reranker but never the LLM. The LLM runs in the drain, in `memman enrich`, and in the `memman doctor` probe.
-- **Recall-only while stopped.** When the scheduler is stopped, `remember`, `replace`, `forget`, `supersede` and `unsupersede` report that writes are disabled and ask the user to run `memman scheduler start`. `memman scheduler trigger` also refuses to run. Recall keeps working. A drain in progress stops claiming rows once it reads the stopped state.
+- **Recall-only while stopped.** When the scheduler is stopped, `remember`, `replace`, and `forget` report that writes are disabled and ask the user to run `memman scheduler start`. `memman scheduler trigger` also refuses to run. Recall keeps working. A drain in progress stops claiming rows once it reads the stopped state.
 
 [USAGE](../USAGE.md#scheduler) covers the scheduler commands and the queue states.
 
@@ -36,13 +35,13 @@ memman runs commands during the agent's turn and processes queued writes in a ba
 2. Reject text over 1,000 UTF-8 bytes or text containing a line number, an opening author name, a line break, or a leading label. Reject an unknown category. [USAGE](../USAGE.md#what-remember-and-replace-refuse) lists each refusal.
 3. Run the quality check. Regular expressions flag temporary information, such as an AWS instance id, the word "currently", or a dated observation. The warnings return as `quality_warnings` and never block the write.
 4. Add one row to the queue, `<data dir>/queue.db`, with `status='pending'`, the text, the flag values, and a newly generated random UUID in `queue_uuid`. Every store shares this one SQLite file, in WAL mode, whatever backend the store uses.
-5. Print `{action: queued, queue_id, queue_uuid, store, quality_warnings}`.
+5. Print `{action: queued, id, queue_id, store, quality_warnings}`.
 
-`queue_id` names the queue row. The maintenance step after a drain deletes done rows older than 60 seconds, so the ID soon becomes unavailable. The drain records `queue_uuid` on every memory created by the write, so the UUID outlives the queue row. `memman insights by-queue <uuid>` returns those memories.
+`queue_id` names the queue row. The maintenance step after a drain deletes done rows older than 60 seconds, so the ID soon becomes unavailable. The drain stores the memory under the write's `queue_uuid`, which is the `id` this step printed, so that id outlives the queue row and resolves once the write lands.
 
 `memman replace <id> "<text>"` runs the same steps, with three differences:
 
-- It rejects a target that is not current. If the target is superseded, the error names its successor.
+- The id may name a current memory or a write still in the queue for the same store. It rejects a target that is neither. If the target is already replaced, the error names its successor. The drain holds a replacement while its queued target, or an earlier replacement in the same store, is pending.
 - When `--cat` is omitted, the replacement inherits the target's value.
 - The queue row carries the target as `replaced_id`, and the output carries the same field.
 
@@ -62,21 +61,21 @@ Drains never overlap. Each drain takes an exclusive flock on `<data dir>/drain.l
 
 A drain claims rows one at a time until it has handled 100 (`--limit`), reaches its timeout, empties the queue, or reads the stopped state. The drain processes each row as follows:
 
-1. **Claim.** One `update ... returning` statement takes the oldest pending row and adds 1 to `attempts`. A claim older than 600 seconds (`STALE_CLAIM_SECONDS`) can be claimed again, so a crashed drain loses no row.
+1. **Claim.** One `update ... returning` statement takes the oldest pending row and adds 1 to `attempts`. A replacement waits while an earlier pending write in its store is its target or is itself a replacement, so replacements land in the order they were queued, whatever retries they take. A write that fails or goes stale stops holding the rows behind it. A claim older than 600 seconds (`STALE_CLAIM_SECONDS`) can be claimed again, so a crashed drain loses no row.
 2. **Open the store.** The first row for a store opens it, checks its embedding fingerprint, and builds its embedding client ([chapter 4](04-lifecycle.md)). If the store cannot be opened, the row fails. Before each row the drain checks that the fingerprint has not changed, because a swap that finished mid-drain would make the cached client write vectors of the wrong size.
-3. **Check for an earlier attempt.** When the store holds a memory with the row's `queue_uuid`, the drain marks the row done and stores nothing. A superseded memory counts. A forgotten one does not. This check makes a replay after a crash safe. The UUID identifies the write across retries. Restoring a backup can reset the queue's row ID counter.
-4. **Redirect a replacement.** If an earlier queued replacement has already superseded the target, the new replacement follows the `superseded_by` chain to the current memory and targets it. The result carries `redirected_from`.
+3. **Check for an earlier attempt.** When the store holds a memory with the row's `queue_uuid`, the drain marks the row done and stores nothing. A replaced or forgotten memory counts, because either one still holds the write's id. This check makes a replay after a crash safe. The UUID identifies the write across retries. Restoring a backup can reset the queue's row ID counter.
+4. **Redirect a replacement.** If an earlier queued replacement has already replaced the target, the new replacement follows the `replaced_by` chain to the current memory and targets it. The result carries `redirected_from`.
 5. **Enrich.** One LLM call returns a one-sentence summary. A reply with no JSON object gets one more call. memman then drops a summary at least 85% as long as the content. This limit is defined in code. Changing it leaves the prompt and `prompt_version` unchanged.
 6. **Embed.** The store's embedding model embeds the content.
 7. **Apply.** One transaction commits the write:
-   - For a replacement, supersede the target and write an oplog row `replace` with detail `replaced by <id>`. If the target has been forgotten or superseded by this point, the new memory is stored without replacing it. The oplog records `target-gone` against the new memory and names the target. The result names the target under `target_gone`.
+   - For a replacement, retire the target and write an oplog row `replace` with detail `replaced by <id>`. If the target has been forgotten, replaced, or never stored by this point, the new memory is stored without replacing it. The oplog records `target-gone` against the new memory and names the target. The result names the target under `target_gone`.
    - Insert the memory with its `prompt_version` and `embedding_model`, store the vector, write an oplog row `remember`, set `enrich_attempted_at`, and store the summary.
    - Set `enriched_at` only when both enrichment and the vector were saved.
 8. **Finish.** Mark the row `done`. Any exception in steps 2-7 calls `mark_failed` instead.
 
 ### Metadata used in a replacement
 
-A replacement never edits a memory in place. It supersedes the target and stores one successor. The target keeps its content and records its successor in `superseded_by`. Recall and listings skip it.
+A replacement never edits a memory in place. It retires the target and stores one successor. The target keeps its content and records its successor in `replaced_by`. Recall and listings skip it.
 
 | Field                         | Value used                               | Why                                                       |
 | ----------------------------- | ---------------------------------------- | --------------------------------------------------------- |
@@ -85,9 +84,7 @@ A replacement never edits a memory in place. It supersedes the target and stores
 | `queue_uuid`, `author`        | incoming                                 | identifies the write that produced the row and its author |
 | `summary`, vector             | fresh                                    | enrichment and embedding use the replacement text         |
 | `created_at`                  | successor's own                          | the successor is a new row                                |
-| `superseded_by` on the target | the successor's id                       | `insights show --history` and `unsupersede` read the link |
-
-`memman supersede <predecessor> <successor>` links two memories that both exist. It runs in the turn, in one transaction, with no queue and no model call. Both memories must be current and different. It writes an oplog row `supersede`. One successor can supersede several predecessors.
+| `replaced_by` on the target   | the successor's id                       | `insights show --history` reads the link                  |
 
 ### Failure and retry
 

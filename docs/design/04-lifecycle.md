@@ -4,24 +4,23 @@
 
 ---
 
-No memory expires. A memory stays in recall until a `forget`, `replace` or `supersede` call takes it out.
+No memory expires. A memory stays in recall until a `forget` or `replace` call takes it out.
 
 ## 4.1 Retention
 
-A store has no size cap and no retention score. Deletion is always an operator or agent action. Three calls take a memory out of recall:
+A store has no size cap and no retention score. Deletion is always an operator or agent action. Two calls take a memory out of recall:
 
 | Call                           | Effect                                                                                               |
 | ------------------------------ | ---------------------------------------------------------------------------------------------------- |
 | `memman forget <id>`           | Soft delete: sets `deleted_at`. The row stays in the table, and no command restores it.              |
-| `memman replace <id> "<text>"` | Queues a successor. The drain stores it and sets the target's `superseded_by` to the successor's id. |
-| `memman supersede <old> <new>` | Sets `superseded_by` on one current memory to point at another current memory. Neither text changes. |
+| `memman replace <id> "<text>"` | Queues a successor. The drain stores it and sets the target's `replaced_by` to the successor's id.   |
 
-A superseded memory keeps its content but leaves every recall and listing. `memman unsupersede <id>` returns it to recall once its successor is forgotten, and re-embeds it with the store's embedding model. `forget`, `replace`, `supersede` and `unsupersede` are writes, so none can run while the scheduler is stopped.
+A replaced memory keeps its content but leaves every recall and listing. Nothing returns a replaced memory to recall. Another `replace` on the correction's id fixes a wrong correction, and `memman insights show <id> --history` still shows the earlier text. `forget` refuses a current memory that replaced one not yet forgotten, and the error names `replace`. `forget` and `replace` are writes, so neither can run while the scheduler is stopped.
 
 **Rationale.**
 
 - **No size cap.** A store becomes more useful as it accumulates memories. A cap would force memman to delete true claims to make room.
-- **Supersession keeps content.** `replace` never deletes. The old row keeps its text and records its successor in `superseded_by`. `memman insights show <id> --history` shows the chain of replacements.
+- **Replacement keeps content.** `replace` never deletes. The old row keeps its text and records its successor in `replaced_by`. `memman insights show <id> --history` shows the chain of replacements.
 - **The oplog is bounded.** The oplog records changes to memories. After each drain, memman deletes oplog rows older than 180 days (`OPLOG_RETENTION_DAYS`) in every store where the drain finished a row. The 5,000-row cap (`MAX_OPLOG_ENTRIES`) runs only when that store still has a current memory without `enrich_attempted_at`.
 
 ## 4.2 Inspecting memories
@@ -38,7 +37,7 @@ The [USAGE guide](../USAGE.md#insights) lists the output of each command.
 
 Recall uses embeddings for vector search. Each store is bound to one embedding model. The store's `meta.embed_fingerprint` row holds that model as JSON: provider, model and vector dimension. This record is the store's **fingerprint**. A store changes model only through an explicit `memman embed swap` or `memman embed reembed` ([4.3.5](#435-changing-the-embedding-model)).
 
-**Model selection.** The fingerprint determines the embedding client for every reader and writer of the store: the background worker, recall, `enrich` and `unsupersede`. Each resolves the client through `bound_embedder`, which reads the fingerprint and builds the client for that provider and model. One process can open stores that use different providers. The [USAGE guide](../USAGE.md#embedding-operations) gives a worked example.
+**Model selection.** The fingerprint determines the embedding client for every reader and writer of the store: the background worker, recall, and `enrich`. Each resolves the client through `bound_embedder`, which reads the fingerprint and builds the client for that provider and model. One process can open stores that use different providers. The [USAGE guide](../USAGE.md#embedding-operations) gives a worked example.
 
 **What `MEMMAN_EMBED_PROVIDER` controls.**
 
@@ -48,7 +47,7 @@ Recall uses embeddings for vector search. Each store is bound to one embedding m
 | Target              | It names the target of `memman embed reembed` and the default provider of `memman embed swap`.                                                                                                                       |
 | Startup requirement | Every command that reads a store first builds this provider's client. A missing Voyage or OpenRouter key causes the command to fail. `doctor`, `embed status`, `embed swap`, `migrate`, and `backup` skip this step. |
 
-**Missing credentials for the bound provider.** Recall logs a warning and ranks with the keyword and recency channels only. The background worker marks the queued write as failed after retries are exhausted. `memman unsupersede` refuses to run.
+**Missing credentials for the bound provider.** Recall logs a warning and ranks with the keyword and recency channels only. The background worker marks the queued write as failed after retries are exhausted.
 
 `memman embed status` reports the stored fingerprint, any swap in progress, and whether credentials for the fingerprint's provider are available. The `embed_fingerprint` check in `memman doctor` passes when the store has a fingerprint and its provider's key is present. It fails when the key is missing, and it fails on a store that holds memories but has no fingerprint.
 
@@ -84,7 +83,6 @@ HNSW (hierarchical navigable small world) is an index for approximate nearest-ne
 | Drain (remember, replace) | The store's fingerprint | Content alone      |
 | `memman enrich`           | The store's fingerprint | Content alone      |
 | Recall                    | The store's fingerprint | The query as given |
-| `memman unsupersede`      | The store's fingerprint | Content alone      |
 | `memman embed swap`       | The target model        | Content alone      |
 | `memman embed reembed`    | `MEMMAN_EMBED_PROVIDER` | Content alone      |
 
@@ -126,7 +124,7 @@ A swap that stops early keeps its state and cursor:
 - **Postgres.** Before filling the new column, memman adds `embedding_pending vector(N)` and builds its HNSW index concurrently. `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT` caps that build in seconds (default 0, no limit). The cutover runs in one transaction and replaces the old column and index with the pending ones. On Postgres older than 12, memman refuses the swap before the backfill starts.
 - **SQLite.** The cutover copies `embedding_pending` into `embedding` and clears the pending column in one transaction.
 - **Both.** One transaction writes the target fingerprint and deletes every `embed_swap_*` key. When these keys are absent, no swap is in progress. Returning to the old model requires another full swap. A swap to the model the fingerprint already names does nothing.
-- **Superseded and forgotten memories.** Only current memories receive new vectors. At cutover, a forgotten or superseded memory loses its vector on Postgres and keeps its old vector on SQLite. `memman unsupersede` re-embeds a memory when it returns to recall.
+- **Replaced and forgotten memories.** Only current memories receive new vectors. At cutover, a forgotten or replaced memory loses its vector on Postgres and keeps its old vector on SQLite.
 
 **Abort.** `--abort` discards the pending vectors and deletes the swap meta keys. It does not need a stopped scheduler. The `no_stale_swap_meta` check in `memman doctor` warns while any `embed_swap_*` key remains, which includes a swap that stopped and waits for `--resume` or `--abort`.
 
@@ -137,7 +135,7 @@ memman reads `MEMMAN_EMBED_SWAP_BATCH_SIZE` and `MEMMAN_EMBED_SWAP_INDEX_TIMEOUT
 `memman embed reembed` rewrites vectors in place, store by store, with the `MEMMAN_EMBED_PROVIDER` client. To change providers for all SQLite stores, run `memman config set MEMMAN_EMBED_PROVIDER <name>` followed by `memman embed reembed`. For a Postgres store, use `embed swap`.
 
 - It refuses to run when the active store uses Postgres. Otherwise, it skips any Postgres stores.
-- It re-embeds a current memory whose model or vector width differs from the target, or that has no vector, and skips the rest. A superseded or forgotten memory keeps its old vector. `unsupersede` re-embeds a memory when it returns to recall.
+- It re-embeds a current memory whose model or vector width differs from the target, or that has no vector, and skips the rest. A replaced or forgotten memory keeps its old vector.
 - It keeps a per-store cursor, so a second run resumes where the first stopped.
 - At the end of each store it writes the fingerprint.
 - `--dry-run` scans the current memories and writes nothing. It does not need a stopped scheduler.

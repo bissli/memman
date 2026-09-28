@@ -250,7 +250,7 @@ class TestPendingEnrichIndex:
         Mutation: dropping `created_at` from `idx_insights_pending_enrich`
             (the planner then takes `idx_insights_current_listing` and
             sorts every current row per tick), or dropping
-            `superseded_by is null` from its predicate (the partial
+            `replaced_by is null` from its predicate (the partial
             index no longer matches the query and is unusable).
         Oracle: sqlite's own `explain query plan` naming the partial
             index and reporting no sort step.
@@ -261,7 +261,7 @@ class TestPendingEnrichIndex:
             plan = db._conn.execute(
                 'explain query plan select id from insights'
                 ' where enrich_attempted_at is null and deleted_at is null'
-                ' and superseded_by is null'
+                ' and replaced_by is null'
                 ' order by created_at asc limit 10'
                 ).fetchall()
         finally:

@@ -78,16 +78,16 @@ FLAGEOF
 
 `memman install` writes into `~/.claude/` when it detects Claude Code (a `claude` binary on PATH or an existing `~/.claude/`), or when `--claude-code` is passed. Otherwise it installs the scheduler only. Installation creates the following links and settings:
 
-| Target                              | What install writes                                                                       |
-| ----------------------------------- | ----------------------------------------------------------------------------------------- |
-| `skills/memman/SKILL.md`            | Symlink to `memman/setup/assets/claude/SKILL.md` in the installed package                 |
-| `hooks/memman/<script>.sh`          | One symlink per hook script into the same package directory                               |
-| `settings.json` `hooks`             | One entry per script, with the events and matchers above                                  |
-| `settings.json` `permissions.allow` | One `Bash(memman <verb>:*)` entry for each of 11 commands the agent runs without a prompt |
-| `guide.md`                          | Nothing. `memman prime` reads it from the package on every SessionStart                   |
+| Target                              | What install writes                                                                      |
+| ----------------------------------- | ---------------------------------------------------------------------------------------- |
+| `skills/memman/SKILL.md`            | Symlink to `memman/setup/assets/claude/SKILL.md` in the installed package                |
+| `hooks/memman/<script>.sh`          | One symlink per hook script into the same package directory                              |
+| `settings.json` `hooks`             | One entry per script, with the events and matchers above                                 |
+| `settings.json` `permissions.allow` | One `Bash(memman <verb>:*)` entry for each of 8 commands the agent runs without a prompt |
+| `guide.md`                          | Nothing. `memman prime` reads it from the package on every SessionStart                  |
 
 - Install first removes every hook entry that mentions `memman`, so a second run leaves one set. Other hooks stay as they are.
-- The 11 permitted commands are `doctor`, `forget`, `insights by-queue`, `insights review`, `insights show`, `recall`, `remember`, `replace`, `status`, `supersede` and `unsupersede`. In a terminal, install lists the entries and asks first. With `--no-wizard` or without a terminal, it adds them without asking.
+- The 8 permitted commands are `doctor`, `forget`, `insights review`, `insights show`, `recall`, `remember`, `replace`, and `status`. In a terminal, install lists the entries and asks first. With `--no-wizard` or without a terminal, it adds them without asking.
 
 **Upgrades.** `pipx upgrade memman` refreshes the hook scripts and `SKILL.md` through the symlinks, and `memman prime` reads the new `guide.md`. A change confined to those assets needs no reinstall. A change to a hook registration or the permission list does: only `memman install` rewrites `settings.json`. The `claude_hooks` check in `memman doctor` warns when the registrations differ from what install writes, and fails when a registered script is missing.
 
@@ -107,4 +107,4 @@ The [USAGE guide](../USAGE.md#install-and-uninstall) gives the full flag list.
 
 - **The command only queues a write.** It checks the text, appends one row to `queue.db` and returns. It makes no network call and opens no store. Enrichment and embedding run later in the background worker, so there is no slow work to delegate.
 - **The agent holds the context.** It already knows the right `--cat`, and what each "this" or "it" refers to. Passing that context to a sub-agent would use more tokens.
-- **A sub-agent learns nothing more.** `remember` returns `action: queued`, `queue_id`, `queue_uuid`, `store` and `quality_warnings` once the write is queued. The memory reaches recall after the next drain. A sub-agent would get the same reply the agent gets from one Bash call.
+- **A sub-agent learns nothing more.** `remember` returns `action: queued`, `id`, `queue_id`, `store` and `quality_warnings` once the write is queued. The memory reaches recall after the next drain. A sub-agent would get the same reply the agent gets from one Bash call.
