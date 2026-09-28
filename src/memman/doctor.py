@@ -934,7 +934,7 @@ def _is_provenance_stale(row_pv: str | None, active_pv: str) -> bool:
       `store/postgres.py`); keep those WHERE clauses aligned with
       this function when the rule changes.
     """
-    return row_pv != active_pv
+    return row_pv is not None and row_pv != active_pv
 
 
 def check_provenance_drift(backend: Backend) -> dict[str, Any]:

@@ -146,6 +146,25 @@ class TestProvenanceDrift:
         assert result['status'] == 'pass'
         assert result['detail']['stale_rows'] == 0
 
+    def test_null_prompt_version_not_stale(self, tmp_db, tmp_backend):
+        """A row with no `prompt_version` never counts as stale.
+
+        Mutation: `_is_provenance_stale` comparing `None != active_pv`
+            as True, so a never-enriched row counts as drifted even
+            though `count_stale_insights` excludes it with its
+            `prompt_version is not null` clause.
+        Oracle: a row inserted with `prompt_version=None`, checked
+            against `check_provenance_drift`'s `stale_rows` output.
+        """
+        from memman.doctor import check_provenance_drift
+
+        ins = make_insight(id='p-null', prompt_version=None)
+        insert_insight(tmp_db, ins)
+
+        result = check_provenance_drift(tmp_backend)
+        assert result['status'] == 'pass'
+        assert result['detail']['stale_rows'] == 0
+
     def test_drift_warns(self, tmp_db, tmp_backend):
         """A drifted prompt_version surfaces as warn with a remedy.
 
