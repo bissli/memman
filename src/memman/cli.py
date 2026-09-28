@@ -148,13 +148,18 @@ def _author_refusal_message(content: str) -> str | None:
         ' start with the subject instead')
 
 
-def _content_refusal_message(content: str) -> str | None:
+def _content_refusal_message(
+        content: str, verb: str = 'remember') -> str | None:
     """Return the refusal for text not shaped as one memory, or None.
 
     Parameters
     ----------
     content : str
         The write text, as `remember` or `replace` received it.
+    verb : str, default 'remember'
+        The command refused. For `replace`, the size refusal keeps the
+        corrected claim in the replace, since a `remember` retires
+        nothing.
 
     Returns
     -------
@@ -172,10 +177,15 @@ def _content_refusal_message(content: str) -> str | None:
     """
     content_bytes = len(content.encode('utf-8'))
     if content_bytes > _MAX_CONTENT_BYTES:
+        if verb == 'replace':
+            advice = (
+                'keep the corrected claim in the replace, and store'
+                ' the other claims with remember, one thought each')
+        else:
+            advice = 'split it into several remember calls, one thought each'
         return (
             f'content too long ({content_bytes} bytes, max'
-            f' {_MAX_CONTENT_BYTES}); split it into several remember'
-            ' calls, one thought each')
+            f' {_MAX_CONTENT_BYTES}); {advice}')
     refusal = (_line_locator_refusal_message(content)
                or _author_refusal_message(content))
     if refusal:
@@ -1707,7 +1717,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
 
     content_str = ' '.join(content)
     author = config.resolve_author()
-    refusal = _content_refusal_message(content_str)
+    refusal = _content_refusal_message(content_str, verb='replace')
     if refusal:
         raise click.ClickException(refusal)
 

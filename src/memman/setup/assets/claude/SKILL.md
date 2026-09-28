@@ -378,17 +378,22 @@ and exits 0.
 
 - Never store secrets, passwords, or tokens.
 - `remember` and `replace` refuse text over 1,000 bytes, counted as
-  UTF-8 bytes, and never truncate it. Split the text into several
-  calls, one thought each. A long literal goes in a repo file, and
-  the memory names the path. They also refuse text whose first word
-  is the author's name (`author` carries that) or that names a line
-  number (`auth.py:88`, `line 88`), which goes stale on the next
-  edit: name the file and symbol instead. They refuse text spanning
-  several lines: write one thought as one paragraph, and give each
-  further thought its own call. They refuse text opening with a
-  label of at most three words before a colon and a space (`Fix:`,
-  `AWS gotcha:`): open on the subject and write the thought as a
-  sentence.
+  UTF-8 bytes, and never truncate it. An oversized `remember` splits
+  into several `remember` calls, one thought each. An oversized
+  `replace` keeps the corrected claim in the replace and stores the
+  other claims with `remember`, as the correction rule above says: a
+  `remember` retires nothing, and a second `replace` of a target is
+  refused while the first is queued, so a split replace leaves the
+  stale row current or trips that refusal. A long literal goes in a
+  repo file, and the memory names the path. They also refuse text
+  whose first word is the author's name (`author` carries that) or
+  that names a line number (`auth.py:88`, `line 88`), which goes
+  stale on the next edit: name the file and symbol instead. They
+  refuse text spanning several lines: write one thought as one
+  paragraph, and give each further thought its own call. They refuse
+  text opening with a label of at most three words before a colon
+  and a space (`Fix:`, `AWS gotcha:`): open on the subject and write
+  the thought as a sentence.
 - One thought per `remember` call. The worker stores each call as
   one memory, so a second unrelated subject rides along and goes
   stale with the first; give it its own call.

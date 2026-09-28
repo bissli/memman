@@ -80,3 +80,21 @@ def test_replace_refuses_text_over_the_cap(mm_runner):
     assert result.exit_code != 0
     assert 'content too long' in result.output
     assert queued_contents(data_dir) == before
+
+
+def test_replace_size_refusal_keeps_the_correction_in_the_replace(mm_runner):
+    """Verify an oversized replace is told to keep its correction a replace.
+
+    Mutation: the shared refusal that sends a replace caller to split
+        into several `remember` calls, none of which retires the
+        target.
+    Oracle: the refusal text after the kept size prefix, naming the
+        replace for the corrected claim.
+    """
+    first = invoke(mm_runner, ['remember', 'a note that will be replaced'])
+    old = parse_remember(first, mm_runner)
+
+    result = invoke(mm_runner, ['replace', old['id'], 'x' * 1001])
+
+    assert ('content too long (1001 bytes, max 1000); keep the corrected'
+            ' claim in the replace') in result.output
