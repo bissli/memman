@@ -576,10 +576,6 @@ class Backend(Protocol):
         """
         ...
 
-    def storage_summary(self) -> dict[str, Any]:
-        """Backend-specific storage info for `memman status`."""
-        ...
-
     def integrity_check(self) -> dict[str, Any]:
         """Run a backend-specific integrity probe for `memman doctor`.
 

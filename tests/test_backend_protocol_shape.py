@@ -14,6 +14,7 @@ verify on its own:
 import dataclasses
 import inspect
 
+from memman.store import db
 from memman.store.backend import NodeStore
 from memman.store.model import Insight, OpLogEntry
 
@@ -41,6 +42,18 @@ def test_node_update_embedding_takes_vec_not_blob():
     sig = inspect.signature(NodeStore.update_embedding)
     assert 'vec' in sig.parameters
     assert 'blob' not in sig.parameters
+
+
+def test_no_layer_keeps_storage_summary(backend):
+    """Verify no layer keeps `storage_summary`, which nothing called.
+
+    Mutation: deleting the Protocol method but keeping the SQLite or
+        Postgres binding, or the SQLite helper in store/db.py.
+    Oracle: the attribute list on a live backend of each kind, which
+        covers the Protocol defaults as well as each binding.
+    """
+    assert not hasattr(backend, 'storage_summary')
+    assert not hasattr(db, 'storage_summary')
 
 
 class TestBackendIntrospection:

@@ -105,30 +105,6 @@ def test_a_fresh_queue_has_no_session_column(tmp_path):
     assert 'session_id' not in columns
 
 
-@pytest.mark.postgres
-def test_postgres_storage_summary_sizes_every_table(pg_dsn):
-    """Verify `storage_summary` sizes insights, oplog and meta, and no edges.
-
-    Mutation: leaving 'edges' in the summary loop, whose regclass cast
-        raises on a store without the table and drops the oplog and
-        meta sizes with it.
-    Oracle: the exact set of size keys on a fresh schema.
-    """
-    from memman.store.postgres import drop_postgres_store
-    from memman.store.postgres import open_postgres_backend
-    name = 'no_edge_summary'
-    drop_postgres_store(name, pg_dsn)
-    backend = open_postgres_backend(name, pg_dsn)
-    try:
-        summary = backend.storage_summary()
-    finally:
-        backend.close()
-        drop_postgres_store(name, pg_dsn)
-
-    assert {k for k in summary if k.endswith('_bytes')} == {
-        'insights_bytes', 'oplog_bytes', 'meta_bytes'}
-
-
 def test_the_backend_exposes_no_edge_or_session_verbs(backend):
     """Verify no verb that served edges or sessions survives.
 

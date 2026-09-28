@@ -545,9 +545,6 @@ class SqliteBackend(Backend):
         finally:
             session.close()
 
-    def storage_summary(self) -> dict[str, Any]:
-        return _db.storage_summary(self._db)
-
     def integrity_check(self) -> dict[str, Any]:
         """Report page-level integrity and keyword-index drift.
 

@@ -1206,22 +1206,6 @@ class PostgresBackend(Backend):
     def swap_abort(self) -> None:
         _swap_abort_pg(self._dsn, self._schema)
 
-    def storage_summary(self) -> dict[str, Any]:
-        sizes: dict[str, Any] = {}
-        try:
-            with self._conn.cursor() as cur:
-                for table in ('insights', 'oplog', 'meta'):
-                    cur.execute(
-                        'select pg_relation_size(%s::regclass)',
-                        (f'{self._schema}.{table}',))
-                    row = cur.fetchone()
-                    sizes[f'{table}_bytes'] = (
-                        int(row[0]) if row else 0)
-        except Exception as exc:
-            logger.warning(f'pg_relation_size failed: {exc}')
-        sizes['schema'] = self._schema
-        return sizes
-
     def integrity_check(self) -> dict[str, Any]:
         with self._conn.cursor() as cur:
             cur.execute(
