@@ -826,9 +826,8 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str) -> None:
     # The write is already queued, so no failure of this read may fail
     # the command: an agent that sees exit 1 writes the memory again.
     try:
-        database = pathlib.Path(store_dir(data_dir_val, name), 'memman.db')
         if (factory.resolve_store_backend(name, data_dir_val) == 'sqlite'
-                and not database.exists()):
+                and not store_exists(data_dir_val, name)):
             related_rows = []
         else:
             # libpq reads this at each connect and a DSN's own
@@ -839,9 +838,11 @@ def remember(ctx: click.Context, content: tuple[str, ...], cat: str) -> None:
                     name, data_dir_val, read_only=True) as backend:
                 with backend.recall_session() as session:
                     counts = session.keyword_counts(tokenize(content_str))
+                # A timer drain can land this write before the read,
+                # and a row shares every word with itself.
                 related_rows = [
                     ins for ins in backend.nodes.get_all_active()
-                    if ins.id in counts
+                    if ins.id in counts and ins.id != queue_uuid
                     and len(ins.content.encode('utf-8')) <= _MAX_CONTENT_BYTES
                     ]
             # A row whose words the ASCII tokenizer drops can still
@@ -1804,18 +1805,6 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
     else:
         id, inherited_cat = old.id, old.category
 
-    # The drain would chain this write behind the pending one and
-    # retire it, so the first correction is lost unless this text
-    # restates it.
-    with queue_db(data_dir_val) as conn:
-        pending = find_pending_replace(conn, name, id)
-    if pending is not None:
-        pending_id, pending_text = pending
-        raise click.ClickException(
-            f'insight {id} already has a replace pending as'
-            f' {pending_id}: "{pending_text}"; replace {pending_id}'
-            ' with text that keeps it and adds yours')
-
     if ctx.get_parameter_source('cat') != click.core.ParameterSource.COMMANDLINE:
         cat = inherited_cat
 
@@ -1828,6 +1817,16 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             f'invalid category {cat!r}; valid: {valid}')
 
     with queue_db(data_dir_val) as conn:
+        # The drain would chain this write behind the pending one and
+        # retire it, so the first correction is lost unless this text
+        # restates it.
+        pending = find_pending_replace(conn, name, id)
+        if pending is not None:
+            pending_id, pending_text = pending
+            raise click.ClickException(
+                f'insight {id} already has a replace pending as'
+                f' {pending_id}: "{pending_text}"; replace {pending_id}'
+                ' with text that keeps it and adds yours')
         row_id, queue_uuid = enqueue(
             conn, store=name, content=content_str,
             category=cat,

@@ -5,9 +5,12 @@ read costs the write.
 """
 
 import json
+import os
 from pathlib import Path
 
 import pytest
+from memman.queue import queue_db
+from memman.store import factory
 from memman.store.db import store_dir
 from memman.store.factory import open_backend
 from tests.conftest import invoke, make_insight, queued_contents
@@ -54,6 +57,29 @@ def test_related_ranks_a_short_stale_row_above_a_longer_one(mm_runner):
         ]
 
 
+def test_related_lists_three_rows_with_whitespace_folded(mm_runner):
+    """Verify related stops at three rows and prints each on one line.
+
+    Mutation: the three-row cap dropped, which lists the fourth
+        matching row, or the content printed unfolded, which keeps the
+        double space.
+    Oracle: four rows sharing words with the new text, the weakest
+        (two of four words) left out, and a stored double space read
+        back as one.
+    """
+    doubled_id = _remember_id(mm_runner, 'The retry cap  for batch jobs is three.')
+    _remember_id(mm_runner, 'Batch jobs retry on the worker queue.')
+    _remember_id(mm_runner, 'The worker queue holds batch jobs.')
+    weakest_id = _remember_id(mm_runner, 'The retry cap stays at three.')
+
+    related = json.loads(invoke(
+        mm_runner, ['remember', _CORRECTION]).output)['related']
+
+    assert len(related) == 3
+    assert f'{doubled_id[:8]} The retry cap for batch jobs is three.' in related
+    assert not any(row.startswith(weakest_id[:8]) for row in related)
+
+
 def test_related_never_lists_a_row_over_the_cap(mm_runner):
     """Verify a row over 1,000 bytes stays out of related.
 
@@ -68,6 +94,42 @@ def test_related_never_lists_a_row_over_the_cap(mm_runner):
     assert len(oversized.encode()) > 1000
     with open_backend('default', data_dir) as backend:
         backend.nodes.insert(make_insight(id='oversized-row', content=oversized))
+
+    result = invoke(mm_runner, ['remember', _CORRECTION])
+
+    assert json.loads(result.output)['related'] == [
+        f'{stale_id[:8]} {_SHORT_STALE}',
+        ]
+
+
+@pytest.mark.no_auto_drain
+def test_related_leaves_out_the_write_itself(mm_runner, monkeypatch):
+    """Verify a write a drain lands mid-command is not its own related row.
+
+    Mutation: no guard on the new write's id, so a drain that lands the
+        row before the read lists it first, since it shares every word
+        with itself, and pushes a real candidate out.
+    Oracle: a store open that first lands the queued write, as the
+        timer drain does, and the one stale row listed alone.
+    """
+    _, data_dir = mm_runner
+    stale_id = _remember_id(mm_runner, _SHORT_STALE)
+    assert invoke(mm_runner, ['scheduler', 'drain']).exit_code == 0
+    real_open = factory.open_backend
+
+    def open_after_the_drain_lands_the_write(name, dir_arg, *, read_only=False):
+        with queue_db(data_dir) as conn:
+            queue_uuid, content = conn.execute(
+                'select queue_uuid, content from queue'
+                " where status = 'pending' order by id desc limit 1"
+                ).fetchone()
+        with real_open(name, dir_arg) as backend:
+            backend.nodes.insert(make_insight(
+                id=queue_uuid, content=content, queue_uuid=queue_uuid))
+        return real_open(name, dir_arg, read_only=read_only)
+
+    monkeypatch.setattr(
+        factory, 'open_backend', open_after_the_drain_lands_the_write)
 
     result = invoke(mm_runner, ['remember', _CORRECTION])
 
@@ -134,7 +196,6 @@ def test_remember_bounds_the_postgres_connect_and_still_queues(
     seen_timeouts = []
 
     def refuse(*args, **kwargs):
-        import os
         seen_timeouts.append(os.environ.get('PGCONNECT_TIMEOUT'))
         raise psycopg.OperationalError('connection refused')
 
