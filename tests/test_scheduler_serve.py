@@ -184,6 +184,40 @@ def test_serve_interval_zero_idle_backoff(runner, monkeypatch):
         f' got {elapsed:.3f}s - backoff missing')
 
 
+@pytest.mark.no_auto_drain
+def test_a_drain_after_a_stopped_serve_stores_its_row(runner, monkeypatch):
+    """Verify serve leaves no stop behind for a later drain in its process.
+
+    Mutation: serve returning with the stop flag still set, so every
+        later in-process drain exits before its first claim.
+    Oracle: the queued row's status reads 'done' after the drain.
+    """
+    from memman.setup import scheduler as sched_mod
+    monkeypatch.setattr(sched_mod, 'read_state',
+                        lambda: sched_mod.STATE_STARTED)
+
+    import memman.cli as cli_mod
+
+    def _stopping_drain(*args, **kwargs):
+        cli_mod._request_stop()
+        return {'claimed': 0, 'processed': 0, 'failed': 0}
+
+    r, data_dir = runner
+    with monkeypatch.context() as serve_patch:
+        serve_patch.setattr(cli_mod, '_drain_queue', _stopping_drain)
+        serve_result = r.invoke(
+            cli,
+            ['--data-dir', data_dir, 'scheduler', 'serve', '--interval', '0'])
+    assert serve_result.exit_code == 0, serve_result.output
+
+    r.invoke(cli, ['--data-dir', data_dir, 'remember', 'hello world'])
+    r.invoke(cli, ['--data-dir', data_dir, 'scheduler', 'drain'])
+
+    queue_result = r.invoke(
+        cli, ['--data-dir', data_dir, 'scheduler', 'queue', 'list'])
+    assert '"status": "done"' in queue_result.output, queue_result.output
+
+
 def test_serve_default_interval_runs_one_drain(runner, monkeypatch):
     """interval=60 with --once still works and writes one heartbeat."""
     from memman.setup import scheduler as sched_mod

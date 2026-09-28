@@ -808,8 +808,9 @@ def _stop_requested() -> bool:
     return _STOP_REQUESTED
 
 
-def _reset_stop_for_tests() -> None:
-    """Test-only: clear the stop flag between in-process serve invocations."""
+def _clear_stop() -> None:
+    """Clear the stop flag, so a later drain in this process claims rows.
+    """
     global _STOP_REQUESTED
     _STOP_REQUESTED = False
 
@@ -949,7 +950,6 @@ def scheduler_serve(ctx: click.Context, interval: int | None,
     _configure_logging(
         ctx.obj['data_dir'], ctx.obj.get('verbose', False),
         ctx.obj.get('debug', False))
-    _reset_stop_for_tests()
 
     def _handle_stop(signum: int, frame: object) -> None:
         logger.info(
@@ -1015,6 +1015,7 @@ def scheduler_serve(ctx: click.Context, interval: int | None,
     finally:
         signal.signal(signal.SIGTERM, prior_term)
         signal.signal(signal.SIGINT, prior_int)
+        _clear_stop()
         try:
             clear_serve_interval()
         except OSError:
