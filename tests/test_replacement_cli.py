@@ -6,7 +6,8 @@
 
 import json
 
-from tests.conftest import invoke, parse_remember
+import pytest
+from tests.conftest import invoke, parse_remember, queued_contents
 
 
 def _remember(runner, text, *flags):
@@ -155,3 +156,36 @@ def test_status_reports_the_replaced_bucket(mm_runner):
     out = json.loads(res.output)
     assert (out['total_insights'], out['replaced_insights'],
             out['deleted_insights']) == (2, 1, 0)
+
+
+@pytest.mark.no_auto_drain
+@pytest.mark.parametrize('drained', [False, True],
+                         ids=['queued-target', 'stored-target'])
+def test_replace_refuses_a_target_with_a_replace_pending(mm_runner, drained):
+    """Verify a second replace of one target is refused with the first's text.
+
+    Mutation: no pending-replace check, the check in only the queued or
+        only the stored branch, or a refusal without the first
+        replace's text. Each lets the drain retire the first correction
+        under a second one written from the original row.
+    Oracle: the first replace's printed id and text in the refusal,
+        and a queue that never holds the second text.
+    """
+    _, data_dir = mm_runner
+    target = json.loads(invoke(mm_runner, [
+        'remember', 'the broker is kombu and the retry cap is three',
+        ]).output)['id']
+    if drained:
+        assert invoke(mm_runner, ['scheduler', 'drain']).exit_code == 0
+    first = invoke(mm_runner, [
+        'replace', target, 'the broker is kombu and the retry cap is five'])
+    assert first.exit_code == 0, first.output
+
+    second = invoke(mm_runner, [
+        'replace', target, 'the broker is redis and the retry cap is three'])
+
+    assert second.exit_code == 1
+    assert json.loads(first.output)['id'] in second.output
+    assert 'the broker is kombu and the retry cap is five' in second.output
+    assert ('the broker is redis and the retry cap is three'
+            not in queued_contents(data_dir))

@@ -165,7 +165,14 @@ can replace its own write before the drain runs. `replace` inherits
 the target's category, a queued target's included, unless `--cat`
 overrides it. It refuses a forgotten target. It refuses a target
 already replaced, and the message names its successor, which is the
-row to replace instead.
+row to replace instead. It refuses a target, stored or queued, that
+a queued `replace` in the same store already names, and the message
+quotes that replace's id and full text, so an agent in another
+session or past a compaction sees the first correction. The fix is
+to `replace` the queued replace's id with text that keeps its
+correction and adds the second: on the drain, a second replace of
+the same target retires the first, and any claim only the first text
+held is lost.
 
 On the drain the replacement is stored under the `id` that `replace`
 printed, and the old row is replaced: it keeps its content behind

@@ -112,7 +112,7 @@ Every command that takes a memory id also accepts an unambiguous prefix of one, 
 | ------- | ------------------ | ------------------ | -------------------------------------------------------------------- |
 | `--cat` | `fact`             | the target's value | Category: `preference`, `decision`, `fact`, `insight`, or `context`. |
 
-`replace <id>` queues a successor for a current memory, or for a write still queued for the same store. The drain holds a replacement while its queued target, or an earlier replacement in the same store, is pending, so replacements land in the order they were queued. A target that fails or goes stale releases its replacement, which lands as a plain add, and the result names the target under `target_gone`. When the drain stores the successor, the target becomes replaced: it keeps its content and leaves recall and every listing. A forgotten or replaced target is refused, and the error for a replaced one names its successor. Each flag left off inherits the target's value. Another `replace` on the correction's id fixes a wrong correction, and `memman insights show <id> --history` reads back the earlier text.
+`replace <id>` queues a successor for a current memory, or for a write still queued for the same store. The drain holds a replacement while its queued target, or an earlier replacement in the same store, is pending, so replacements land in the order they were queued. A target that fails or goes stale releases its replacement, which lands as a plain add, and the result names the target under `target_gone`. When the drain stores the successor, the target becomes replaced: it keeps its content and leaves recall and every listing. A forgotten or replaced target is refused, and the error for a replaced one names its successor. A target with a replacement still queued is refused as well, and the error quotes that replacement's id and text: a second replacement would retire the first on the drain, so the fix is a `replace` of the queued id with text that keeps both corrections. Each flag left off inherits the target's value. Another `replace` on the correction's id fixes a wrong correction, and `memman insights show <id> --history` reads back the earlier text.
 
 ### What remember and replace refuse
 
@@ -321,12 +321,12 @@ memman log worker --stack [--lines N]
 
 **`doctor`** exits 1 when any check fails and 0 otherwise. It makes one live LLM call and two to four live embedding calls: `embed_probe` sends an availability probe and a test embed, and `embed_fingerprint` sends an availability probe for the store's recorded model, plus a size probe when that model's vector size is not built in.
 
-| Group              | Checks                                                                                                                                               |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Group              | Checks                                                                                                                                              |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Store              | `integrity`, `enrichment_coverage`, `replacement_integrity`, `embedding_consistency`, `embed_fingerprint`, `no_stale_swap_meta`, `provenance_drift` |
-| Queue and schedule | `queue_backlog`, `scheduler_heartbeat`, `drain_heartbeat`, `scheduler_state`                                                                         |
-| Configuration      | `env_completeness`, `per_store_keys`, `env_permissions`, `stale_post_migrate_source`, `claude_hooks`, `optional_extras`                              |
-| Providers          | `llm_probe`, `embed_probe`                                                                                                                           |
+| Queue and schedule | `queue_backlog`, `scheduler_heartbeat`, `drain_heartbeat`, `scheduler_state`                                                                        |
+| Configuration      | `env_completeness`, `per_store_keys`, `env_permissions`, `stale_post_migrate_source`, `claude_hooks`, `optional_extras`                             |
+| Providers          | `llm_probe`, `embed_probe`                                                                                                                          |
 
 A store with no memories skips `integrity`, `enrichment_coverage`, `embedding_consistency`, and `provenance_drift`.
 

@@ -288,6 +288,38 @@ where store = ? and status = 'pending'
     return (rows[0][0], rows[0][1]) if rows else None
 
 
+def find_pending_replace(
+        conn: sqlite3.Connection,
+        store: str,
+        replaced_id: str,
+        ) -> tuple[str, str] | None:
+    """Return the newest pending replace of one target, or None.
+
+    Parameters
+    ----------
+    conn : sqlite3.Connection
+        Open queue.db connection.
+    store : str
+        Only writes queued for this store match.
+    replaced_id : str
+        Full id of the target, stored or queued.
+
+    Returns
+    -------
+    tuple[str, str] or None
+        `(id, content)` of the newest pending write whose
+        `replaced_id` is `replaced_id`; None when none is pending.
+    """
+    sql = """
+select queue_uuid, content from queue
+where store = ? and status = 'pending' and replaced_id = ?
+order by id desc
+limit 1
+"""
+    row = conn.execute(sql, (store, replaced_id)).fetchone()
+    return (row[0], row[1]) if row else None
+
+
 def claim(
         conn: sqlite3.Connection,
         worker_pid: int,

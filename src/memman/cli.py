@@ -1691,7 +1691,8 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
       `replaced_by` and leaves every recall and listing.
       `insights show <id> --history` reads the chain back.
     - A forgotten or already replaced id is refused, the latter
-      naming its successor.
+      naming its successor. So is an id with a replace still queued:
+      the refusal quotes that replace, the one to replace instead.
     - The drain holds a replace while its queued target, or an
       earlier replace in the same store, is pending. A target that
       fails or goes stale releases it, and it lands as a plain add.
@@ -1716,7 +1717,7 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
     data_dir_val = ctx.obj['data_dir']
     name = _resolve_store_name(data_dir_val, ctx.obj['store'])
 
-    from memman.queue import enqueue, queue_db
+    from memman.queue import enqueue, find_pending_replace, queue_db
 
     with _active_backend(ctx) as backend:
         queued, old = _resolve_queued_or_stored(
@@ -1734,6 +1735,18 @@ def replace(ctx: click.Context, id: str, content: tuple[str, ...],
             f' insights show {old.id} --history')
     else:
         id, inherited_cat = old.id, old.category
+
+    # The drain would chain this write behind the pending one and
+    # retire it, so the first correction is lost unless this text
+    # restates it.
+    with queue_db(data_dir_val) as conn:
+        pending = find_pending_replace(conn, name, id)
+    if pending is not None:
+        pending_id, pending_text = pending
+        raise click.ClickException(
+            f'insight {id} already has a replace pending as'
+            f' {pending_id}: "{pending_text}"; replace {pending_id}'
+            ' with text that keeps it and adds yours')
 
     if ctx.get_parameter_source('cat') != click.core.ParameterSource.COMMANDLINE:
         cat = inherited_cat

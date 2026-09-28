@@ -48,9 +48,10 @@ def test_degraded_replace_names_the_target_and_its_successor(tmp_backend):
 def test_drain_redirects_a_replace_to_the_chain_head(mm_runner):
     """Verify a queued replace follows the chain to the current head.
 
-    Two replaces of one id are queued before either drains; the first
-    replaces the id, so the second's target was replaced by the
-    time the drain claims it.
+    Two replaces of one id are queued before either drains, as two
+    concurrent `replace` calls do when both pass the pending check
+    before either inserts; the first replaces the id, so the second's
+    target was replaced by the time the drain claims it.
 
     Mutation: leaving the drain preflight on `nodes.get`, so the second
         row degrades to a plain add and the topic ends with two
@@ -59,6 +60,7 @@ def test_drain_redirects_a_replace_to_the_chain_head(mm_runner):
         current head, the drain output naming `redirected_from`, and
         no failed queue row.
     """
+    from memman.queue import enqueue, queue_db
     from memman.store.factory import open_backend
 
     _, data_dir = mm_runner
@@ -69,9 +71,11 @@ def test_drain_redirects_a_replace_to_the_chain_head(mm_runner):
     with open_backend('default', data_dir, read_only=True) as backend:
         first = backend.nodes.get_all_active()[0].id
 
-    for text in ('the broker is redis now', 'the broker is rabbitmq now'):
-        res = invoke(mm_runner, ['replace', first, text])
-        assert res.exit_code == 0, res.output
+    with queue_db(data_dir) as conn:
+        for text in ('the broker is redis now', 'the broker is rabbitmq now'):
+            enqueue(
+                conn, store='default', content=text,
+                category='fact', replaced_id=first)
     res = invoke(mm_runner, ['scheduler', 'drain'])
     assert res.exit_code == 0, res.output
     assert '"redirected_from"' in res.output
